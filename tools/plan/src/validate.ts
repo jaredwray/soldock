@@ -1,5 +1,6 @@
 import { effectiveDependencies, expandDependency, openDependencies } from "./graph.ts";
 import { isSettled, type Plan, type Problem, TASK_ID, type Task } from "./model.ts";
+import { pendingRefinements } from "./schedule.ts";
 
 const KICKOFF_LINE = /^- \d{4}-\d{2}-\d{2} · kickoff · /;
 const EXIT_LINE = /^- \d{4}-\d{2}-\d{2} · exit · /;
@@ -120,6 +121,15 @@ export function validatePlan(plan: Plan): Problem[] {
 					});
 				}
 			}
+		}
+	}
+
+	for (const { stage, after } of pendingRefinements(plan)) {
+		if (plan.stages.find((s) => s.id === after)?.status === "done") {
+			problems.push({
+				file: stage.file,
+				message: `stage ${stage.id} was kicked off partially pending ${after}, which is done; re-refine it (stage-gate kickoff) and add a kickoff line`,
+			});
 		}
 	}
 

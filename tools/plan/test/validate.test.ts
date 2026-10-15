@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { readyTasks, stagesAwaitingExit, stagesAwaitingKickoff } from "../src/schedule.ts";
+import {
+	pendingRefinements,
+	readyTasks,
+	spikesUnlockedByKickoff,
+	stagesAwaitingExit,
+	stagesAwaitingKickoff,
+} from "../src/schedule.ts";
 import { validatePlan } from "../src/validate.ts";
 import { planFrom, STAGE_A, STAGE_B } from "./fixtures.ts";
 
@@ -100,6 +106,11 @@ describe("validatePlan", () => {
 		expect(messages([largeDone, STAGE_B]).some((m) => m.includes("S00.T01 is size L"))).toBe(true);
 	});
 
+	it("reports a partial kickoff whose dependency stage is done but was never re-refined", () => {
+		const partial = STAGE_B_ACTIVE.replace("approved\n", "approved · partial: re-refine after S00\n");
+		expect(messages([STAGE_A_DONE, partial]).some((m) => m.includes("kicked off partially pending S00"))).toBe(true);
+	});
+
 	it("rejects done tasks with unticked acceptance boxes", () => {
 		const unticked = STAGE_A.replace("- [x] it works", "- [ ] it works");
 		expect(messages([unticked, STAGE_B]).some((m) => m.includes("S00.T01 is done but has unticked"))).toBe(true);
@@ -126,5 +137,21 @@ describe("scheduling", () => {
 
 	it("offers an active stage's tasks once its dependency stages are done", () => {
 		expect(readyTasks(planFrom(STAGE_A_DONE, STAGE_B_ACTIVE)).map((t) => t.id)).toEqual(["S01.T01"]);
+	});
+
+	it("tracks partial kickoffs until a later full kickoff line appears", () => {
+		const partial = STAGE_B_ACTIVE.replace("approved\n", "approved · partial: re-refine after S00\n");
+		expect(pendingRefinements(planFrom(STAGE_A_DONE, partial)).map((r) => [r.stage.id, r.after])).toEqual([
+			["S01", "S00"],
+		]);
+		const refined = partial.concat("- 2026-10-25 · kickoff · plan-reviewer (Fable): re-refined after S00\n");
+		expect(pendingRefinements(planFrom(STAGE_A_DONE, refined))).toEqual([]);
+	});
+
+	it("lists the spikes a kickoff would unlock", () => {
+		const withSpike = STAGE_B.replace("- kind: feature\n- size: M", "- kind: spike\n- size: M");
+		const plan = planFrom(STAGE_A_DONE, withSpike);
+		const stage = plan.stages[1];
+		expect(stage && spikesUnlockedByKickoff(plan, stage).map((t) => t.id)).toEqual(["S01.T01"]);
 	});
 });

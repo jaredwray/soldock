@@ -10,7 +10,10 @@ Arguments: `<kickoff|exit> <stage id>`, for example `kickoff S04`. If no stage i
 
 - **Exit gates due** (mandatory): `active` stages with every task settled.
 - **Next kickoff** (when no task is ready): the lowest-numbered `planned` stage whose dependency
-  stages are all `done`. Run one kickoff at a time.
+  stages are all `done`. Run one kickoff at a time. A kickoff can be proposed earlier when it
+  would unlock a spike for an open risk rated H (process §3).
+- **Re-refinement due:** listed under the dependency stage's exit gate, and as "overdue" once that
+  stage is done. `pnpm plan check` fails until a later full `kickoff` line is added.
 
 Gate-log lines must use this exact format, which `pnpm plan check` enforces:
 

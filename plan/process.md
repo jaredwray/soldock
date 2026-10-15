@@ -92,6 +92,10 @@ skill walks an agent through it.
      `next` only ever lists tasks from active stages.
    - If no task is ready, run **one kickoff**: the lowest-numbered available stage, or the one the
      user names. Kickoffs are optional and one at a time. Never kick off every available stage at once.
+   - **Long-lead spikes.** `next` shows which spikes each available kickoff would unlock. If one of
+     them de-risks an open risk rated **H** in [`risks.md`](risks.md) (for example S09.T01 for R-05,
+     or S07.T01 for R-04), **propose a partial kickoff to the user** even while other work is
+     ready. Don't wait until nothing else is.
 2. **Understand.** Run `pnpm plan show <id>`. Read the stage's goal and design notes, the ADRs it
    links, the architecture sections it touches, and the READMEs of the modules involved. If the
    task is not [ready](#definition-of-ready), fix the task first: split it, clarify it, or add a

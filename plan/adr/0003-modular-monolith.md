@@ -25,6 +25,10 @@ Worker. Agents implementing the plan benefit from clear module boundaries.
 - **Satellite Workers or Containers** are allowed only when a spike shows that something cannot
   run in the main isolate, for example heavy document conversion or meeting recording. They are reached
   through service bindings, stay on the same origin, and are deployed by the same command.
+- **Operational Workers in the disaster-recovery account** (the S03.T14 janitor) are a deliberate
+  exception. They must run in that separate account with its own credentials, which the primary
+  deployment must never hold ([ADR-0007](0007-backup-and-archive.md)). They serve no user traffic.
+  `soldock init` deploys them, and they are documented in the disaster-recovery runbook.
 
 ## Consequences
 

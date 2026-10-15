@@ -1,5 +1,12 @@
 import { isSettled, type Plan, type Stage, type Task } from "./model.ts";
-import { readyTasks, stagesAwaitingExit, stagesAwaitingKickoff, tasksWithStatus } from "./schedule.ts";
+import {
+	pendingRefinements,
+	readyTasks,
+	spikesUnlockedByKickoff,
+	stagesAwaitingExit,
+	stagesAwaitingKickoff,
+	tasksWithStatus,
+} from "./schedule.ts";
 
 function progress(stage: Stage): { settled: number; total: number } {
 	const live = stage.tasks.filter((t) => t.status !== "dropped");
@@ -52,11 +59,23 @@ export function renderStatus(plan: Plan): string {
 	}
 
 	const exits = stagesAwaitingExit(plan).map((s) => `- ${stageLink(s)} · ${s.title}: every task is settled`);
-	const kickoffs = stagesAwaitingKickoff(plan).map((s) => `- ${stageLink(s)} · ${s.title}`);
+	const kickoffs = stagesAwaitingKickoff(plan).map((s) => {
+		const spikes = spikesUnlockedByKickoff(plan, s).map((t) => t.id);
+		return `- ${stageLink(s)} · ${s.title}${spikes.length > 0 ? ` (would unlock spike ${spikes.join(", ")})` : ""}`;
+	});
+	const refinements = pendingRefinements(plan).map(
+		(r) => `- ${stageLink(r.stage)} · partial kickoff; re-refine at the exit gate of ${r.after}`,
+	);
 	out.push("");
 	out.push("## Exit gates due");
 	out.push("");
 	out.push(exits.length > 0 ? exits.join("\n") : "_None._");
+	if (refinements.length > 0) {
+		out.push("");
+		out.push("**Partial kickoffs awaiting re-refinement:**");
+		out.push("");
+		out.push(refinements.join("\n"));
+	}
 	out.push("");
 	out.push("## Kickoffs available");
 	out.push("");

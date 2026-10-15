@@ -4,7 +4,15 @@ import { openDependencies } from "./graph.ts";
 import { loadPlan } from "./load.ts";
 import type { Plan, Problem } from "./model.ts";
 import { renderStatus } from "./render.ts";
-import { findTask, readyTasks, stagesAwaitingExit, stagesAwaitingKickoff, tasksWithStatus } from "./schedule.ts";
+import {
+	findTask,
+	pendingRefinements,
+	readyTasks,
+	spikesUnlockedByKickoff,
+	stagesAwaitingExit,
+	stagesAwaitingKickoff,
+	tasksWithStatus,
+} from "./schedule.ts";
 import { validatePlan } from "./validate.ts";
 
 const USAGE = `Usage: pnpm plan <command>
@@ -66,17 +74,34 @@ function main(argv: string[]): number {
 				for (const t of doing) console.log(line(t));
 				console.log("");
 			}
+			const refinements = pendingRefinements(plan);
 			if (exits.length > 0) {
 				console.log("Exit gates due (run these first, with the stage-gate skill):");
-				for (const s of exits) console.log(`  ${s.id}  every task is settled  (${s.title})`);
+				for (const s of exits) {
+					console.log(`  ${s.id}  every task is settled  (${s.title})`);
+					for (const r of refinements.filter((x) => x.after === s.id)) {
+						console.log(`        re-refine ${r.stage.id} at this exit (partial kickoff pending ${s.id})`);
+					}
+				}
 				console.log("");
 			}
+			const overdue = refinements.filter((r) => plan.stages.find((s) => s.id === r.after)?.status === "done");
+			if (overdue.length > 0) {
+				console.log("Re-refinement overdue (run stage-gate kickoff):");
+				for (const r of overdue) console.log(`  ${r.stage.id}  partial kickoff pending ${r.after}, which is done`);
+				console.log("");
+			}
+			const unlocks = (s: { id: string }) => {
+				const stage = plan.stages.find((x) => x.id === s.id);
+				const spikes = stage ? spikesUnlockedByKickoff(plan, stage).map((t) => t.id) : [];
+				return spikes.length > 0 ? `${s.id} (would unlock spike ${spikes.join(", ")})` : s.id;
+			};
 			if (ready.length === 0) {
 				console.log("No task is ready in an active stage.");
 				if (kickoffs.length > 0) {
 					const [first, ...rest] = kickoffs;
-					console.log(`Next kickoff gate: ${first?.id}  (${first?.title})`);
-					if (rest.length > 0) console.log(`Also available, one at a time: ${rest.map((s) => s.id).join(", ")}`);
+					if (first) console.log(`Next kickoff gate: ${unlocks(first)}  (${first.title})`);
+					if (rest.length > 0) console.log(`Also available, one at a time: ${rest.map(unlocks).join(", ")}`);
 				}
 				return 0;
 			}
@@ -90,7 +115,8 @@ function main(argv: string[]): number {
 				console.log(line(t));
 			}
 			if (kickoffs.length > 0) {
-				console.log(`\nKickoffs available (optional, one at a time): ${kickoffs.map((s) => s.id).join(", ")}`);
+				console.log(`\nKickoffs available (optional, one at a time): ${kickoffs.map(unlocks).join(", ")}`);
+				console.log("Propose a kickoff to the user when it unlocks a spike for an open risk rated H (process §3).");
 			}
 			return 0;
 		}

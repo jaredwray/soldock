@@ -255,8 +255,10 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - **Staging mail domain:** a dedicated **apex** zone (for example `soldock-staging.dev`). Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
   rules ([R-20](../risks.md)).
-- **Docs:** `docs/self-hosting.md` (first draft) lists the account prerequisites (the Workers Paid
-  plan and a zone on Cloudflare) and the secrets.
+- **Docs:** `docs/self-hosting.md` (first draft) lists the account prerequisites and the secrets:
+  - the Workers Paid plan and a zone on Cloudflare
+  - a **second Cloudflare account** for disaster-recovery copies ([ADR-0007](../adr/0007-backup-and-archive.md)).
+    `provision` documents it and checks for it but does not create it. S03.T08 and S14.T08 wire it up.
 
 Needs the maintainer to supply `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repository
 secrets. Set the task to `blocked` with a reason if they are missing.
@@ -339,7 +341,4 @@ uploaded on failure.
 
 ## Gate log
 
-- 2026-10-15 · kickoff · plan bootstrap. S00.T01–T03 were delivered with the plan itself. Fable
-  (`plan-reviewer`) reviewed the whole plan, the implementation system and the repo structure over
-  several rounds until it reported no blocking findings. See
-  [plan/README.md › Review history](../README.md#review-history) and [jaredwray/soldock#1](https://github.com/jaredwray/soldock/pull/1).
+- 2026-10-15 · kickoff · plan-reviewer (Fable): plan bootstrap reviewed over 3 rounds plus a confirmation pass, APPROVE with every finding addressed. S00.T01–T03 were delivered with the plan ([review history](../README.md#review-history)) · [jaredwray/soldock#1](https://github.com/jaredwray/soldock/pull/1)

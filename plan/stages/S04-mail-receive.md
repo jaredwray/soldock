@@ -179,6 +179,9 @@ for large Gmail imports ([R-18](../risks.md)).
   are quarantined to Spam.
 - **Spam scoring:** rule-based, with an optional Workers AI classifier behind a setting.
 - **Feedback:** "report spam" and "not spam" train the per-org allow and block lists.
+- **Forward-compatibility:** keep the authentication-verdict step pluggable. S05.T23 adds
+  trusted forwarders, whose validated ARC chain overrides the SPF and DMARC verdicts on ingest
+  alias domains.
 
 **Acceptance**
 - [ ] Corpus messages with failing authentication land in Spam, and the explanation is shown in the UI and API (tested).

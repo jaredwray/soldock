@@ -17,6 +17,9 @@ skip the plan updates: they are how the next session knows what happened.
   - Otherwise take the first ready task. `next` lists only tasks from active stages, in plan order.
   - If no task is ready, run **one** kickoff, for the stage `next` names or the one the user asks
     for. Never run every available kickoff at once.
+  - If `next` shows a kickoff that would unlock a spike for an open risk rated **H** in
+    `plan/risks.md`, tell the user and propose a partial kickoff for it, even when other tasks are ready.
+  - If `next` reports a **re-refinement overdue**, run `stage-gate kickoff` for that stage before anything else in it.
 - Never flip a stage to `active` yourself to unblock a task. That is what the kickoff gate is for.
 - Check open PRs for the task id so you don't duplicate work in flight.
 
