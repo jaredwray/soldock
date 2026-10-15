@@ -2,7 +2,7 @@
 
 # Build status
 
-**3 / 191 tasks done (2%)** · active stage(s): S00
+**3 / 193 tasks done (2%)** · active stage(s): S00
 
 The stage files in [`stages/`](stages/) are the source of truth; this page is regenerated from them.
 Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for how.
@@ -12,9 +12,9 @@ Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for h
 | [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 3/14 | — |
 | [S01](stages/S01-identity-access.md) | Identity, access and directory | planned | `░░░░░░░░░░` 0/17 | S00 |
 | [S02](stages/S02-agent-api-surface.md) | Agent and API surface (MCP, OAuth, events) | planned | `░░░░░░░░░░` 0/12 | S01 |
-| [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, backup and restore framework, search) | planned | `░░░░░░░░░░` 0/13 | S01 |
+| [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, backup and restore framework, search) | planned | `░░░░░░░░░░` 0/14 | S01 |
 | [S04](stages/S04-mail-receive.md) | Mail I — receive, store, read, search | planned | `░░░░░░░░░░` 0/14 | S01 |
-| [S05](stages/S05-mail-send-manage.md) | Mail II — compose, send, manage | planned | `░░░░░░░░░░` 0/22 | S04 |
+| [S05](stages/S05-mail-send-manage.md) | Mail II — compose, send, manage | planned | `░░░░░░░░░░` 0/23 | S04 |
 | [S06](stages/S06-drive.md) | Drive — files, folders, sharing | planned | `░░░░░░░░░░` 0/13 | S01 |
 | [S07](stages/S07-collaboration-engine.md) | Collaboration engine | planned | `░░░░░░░░░░` 0/10 | S01 |
 | [S08](stages/S08-docs.md) | Docs | planned | `░░░░░░░░░░` 0/10 | S01 |
@@ -25,7 +25,11 @@ Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for h
 | [S13](stages/S13-scale-security-hardening.md) | Scale, security and hardening | planned | `░░░░░░░░░░` 0/10 | S05, S06 |
 | [S14](stages/S14-release-v1.md) | v1.0 release and production cutover | planned | `░░░░░░░░░░` 0/8 | S12, S13 |
 
-## Gates due
+## Exit gates due
+
+_None._
+
+## Kickoffs available
 
 _None._
 
@@ -49,9 +53,9 @@ graph LR
   S00["S00 Foundation<br/>3/14"]:::active
   S01["S01 Identity, access and directory<br/>0/17"]:::planned
   S02["S02 Agent and API surface (MCP, OAuth, events)<br/>0/12"]:::planned
-  S03["S03 Platform services (blobs, jobs, backup and restore framework, search)<br/>0/13"]:::planned
+  S03["S03 Platform services (blobs, jobs, backup and restore framework, search)<br/>0/14"]:::planned
   S04["S04 Mail I — receive, store, read, search<br/>0/14"]:::planned
-  S05["S05 Mail II — compose, send, manage<br/>0/22"]:::planned
+  S05["S05 Mail II — compose, send, manage<br/>0/23"]:::planned
   S06["S06 Drive — files, folders, sharing<br/>0/13"]:::planned
   S07["S07 Collaboration engine<br/>0/10"]:::planned
   S08["S08 Docs<br/>0/10"]:::planned

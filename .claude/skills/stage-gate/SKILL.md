@@ -6,8 +6,11 @@ description: Run a Soldock stage gate — "kickoff" (planned → active) or "exi
 # Stage gate
 
 Arguments: `<kickoff|exit> <stage id>`, for example `kickoff S04`. If no stage is given, run
-`pnpm plan next`. Its "Gates due" section lists the stages that need a kickoff (`planned`, with
-every dependency stage `done`) or an exit (`active`, with every task settled).
+`pnpm plan next`:
+
+- **Exit gates due** (mandatory): `active` stages with every task settled.
+- **Next kickoff** (when no task is ready): the lowest-numbered `planned` stage whose dependency
+  stages are all `done`. Run one kickoff at a time.
 
 Gate-log lines must use this exact format, which `pnpm plan check` enforces:
 
@@ -22,7 +25,9 @@ Gate-log lines must use this exact format, which `pnpm plan check` enforces:
    - Skim the code those stages produced.
    - Check the Cloudflare changelog for products this stage relies on
      ([R-14](../../../plan/risks.md)).
-2. **Refine the stage.**
+2. **Refine the stage.** If most tasks depend on stages that aren't done yet, do a **partial
+   kickoff**: refine and review only the tasks that can start (spikes, pure model packages), and
+   append `partial: re-refine after <stage>` to the gate-log line.
    - Split every `L` task.
    - Fix dependencies.
    - Add missing work: migrations, backup coverage, operations and MCP tools, authorization-matrix
@@ -54,11 +59,14 @@ Gate-log lines must use this exact format, which `pnpm plan check` enforces:
    - **Backup:** the restore drill includes every new object type, and the round-trip tests are green.
    - **Threat model:** `docs/security/threat-model.md` is updated for the new surface.
    - **Docs:** user, admin and agent docs exist for the new features.
-4. **Review loop.** Spawn the **`impl-reviewer`** agent (Fable) with the stage file and
+4. **Re-refine partial kickoffs.** For every stage whose kickoff line says
+   `partial: re-refine after <this stage>`, re-run the kickoff refinement and the `plan-reviewer`
+   loop for its remaining tasks, and append a `kickoff` line recording the re-refinement.
+5. **Review loop.** Spawn the **`impl-reviewer`** agent (Fable) with the stage file and
    `git log`/`git diff` since the kickoff gate. Ask for a stage-level review against the exit
    criteria and the Definition of Done. Fix the blocking findings, through tasks if they are large,
    and repeat until it reports none.
-5. **Close.**
+6. **Close.**
    - Set `status: done`, and append the `exit` gate-log line. Dependent stages unlock only now:
      `pnpm plan next` treats a stage dependency as satisfied only once the stage is `done`.
    - Update `plan/risks.md` (close, retire or add risks) and `plan/architecture.md` if reality diverged.

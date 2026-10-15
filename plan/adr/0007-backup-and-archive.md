@@ -37,9 +37,12 @@ Mechanics:
   `exportSnapshot()`, `exportChanges(sinceSeq)` and `importSnapshot()`, and keeps a `changes` table
   with a monotonic `seq`. A new object type cannot be merged without a round-trip test. That is in
   the [Definition of Done](../process.md#definition-of-done).
-- **Dirty tracking.** The first change after an object's last backup sets a `dirty` flag and sends
-  one outbox effect, which adds the object to the current run's dirty set. Unchanged objects are
-  never woken for incremental backups.
+- **Dirty tracking.** The first change after an object's last backup sets a local `dirty` flag and
+  sends one outbox effect. The effect sets `objects.dirty_since` on the object's row in the D1
+  registry. That is at most one D1 write per object per backup period, well within D1's write budget.
+  The nightly run pages through `WHERE dirty_since IS NOT NULL OR full_shard = <today's shard>`. An
+  export job clears `dirty_since` only if it is still older than the job's start, so a change that
+  races the export is not lost. Unchanged objects are never woken for incremental backups.
 - **Sharded runs.** The nightly `BackupRun` workflow:
   1. pages through the dirty set, plus a staggered seventh of the object registry for weekly fulls
   2. enqueues **one export job per object** on the `backup` queue

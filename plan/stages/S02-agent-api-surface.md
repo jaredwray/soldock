@@ -118,7 +118,7 @@ Integrate `@cloudflare/workers-oauth-provider`:
 - status: todo
 - kind: feature
 - size: S
-- depends: S02.T03
+- depends: S02.T03, S02.T10
 
 - **Clients:** an admin or sponsor can create an OAuth client bound to an agent, using a client
   secret or `private_key_jwt` (JWKS).
@@ -129,12 +129,13 @@ Integrate `@cloudflare/workers-oauth-provider`:
 **Acceptance**
 - [ ] An agent obtains a token with client credentials and calls `directory_whoami` as itself (tested).
 - [ ] Suspending the agent invalidates outstanding client-credentials tokens (tested).
+- [ ] Client-credentials tokens are registered as a credential type in the S02.T10 harness, so every operation is tested with them.
 
 ### S02.T12 · "Connect as my agent" (OAuth for agent identity)
 - status: todo
 - kind: feature
 - size: M
-- depends: S02.T03, S01.T06
+- depends: S02.T03, S01.T06, S02.T10
 
 Some clients support only authorization code + PKCE, with no headers and no secrets (claude.ai and
 Claude Desktop connectors, many hosted agents). For these, the consent screen offers **"as one of
@@ -149,6 +150,7 @@ my agents"** to the agent's sponsor or to an admin.
 - [ ] A claude.ai or Claude Desktop connector, or the SDK OAuth client standing in for one, connects
   as agent Ada. `directory_whoami` reports Ada, with the client as actor and the sponsor as authorizer.
 - [ ] A non-sponsor cannot pick another person's agent. Scopes above Ada's policy are dropped from the grant (tested).
+- [ ] "Connect as my agent" tokens are registered as a credential type in the S02.T10 harness.
 
 ### S02.T05 · REST API v1 conventions and reference
 - status: todo
@@ -240,15 +242,15 @@ token), pagination iterators, a webhook signature verifier and examples. It is p
 - status: todo
 - kind: test
 - size: M
-- depends: S02.T02, S02.T03, S02.T04, S02.T12
+- depends: S02.T02, S02.T03
 
 - **Generated tests:** for every operation, the same call is made through REST and MCP with:
   - a human session
   - a human personal access token
   - an agent key
-  - an agent's client-credentials token
-  - an agent token from "connect as my agent"
   - a delegated OAuth token
+  - each credential type added later (client-credentials tokens in S02.T04, "connect as my agent"
+    tokens in S02.T12), registered with the harness
 
   The results must be equivalent, and the authorization outcomes must match the operation's declared policy.
 - **Fixture builders:** every operation implementation registers a fixture builder (seed owner,

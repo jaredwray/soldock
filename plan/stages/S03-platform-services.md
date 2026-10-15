@@ -101,7 +101,7 @@ Build the shared machinery every product needs before any product data exists:
 - status: todo
 - kind: feature
 - size: S
-- depends: S03.T01
+- depends: S03.T01, S03.T12
 
 - **Accounting:** storage per principal (mail and drive bytes, counting deduplicated blobs once per owner), summarized in D1.
 - **Defaults:** org-level defaults and per-principal overrides.
@@ -133,8 +133,14 @@ Build the shared machinery every product needs before any product data exists:
 - size: S
 
 `SoldockObject` registers itself in the D1 `objects` table when it is first created (type, id,
-owner, created). Includes listing and paging APIs for admin tools and backups, and soft-delete
-markers.
+owner, created). The table also holds:
+
+- `full_shard` (0–6): which night of the week gets the object's full export
+- `dirty_since`: set through the outbox on the first change after a backup ([ADR-0007](../adr/0007-backup-and-archive.md))
+- the backup cursor
+
+Includes listing and paging APIs for admin tools and backups, indexed on `dirty_since` and
+`full_shard`, and soft-delete markers.
 
 **Acceptance**
 - [ ] Creating 10k test objects registers each exactly once, even when first requests are concurrent (tested at smaller scale).
@@ -150,8 +156,8 @@ markers.
 - **Manifest:** schema version, seq range, row counts, SHA-256 per segment, blob references.
 - **Encryption:** optional AES-256-GCM envelope encryption.
 - **Specification:** the format is documented in `docs/operations/backup-format.md`.
-- **Dirty tracking:** the first change after a backup sets `dirty` and sends one outbox effect to
-  the current run's dirty set.
+- **Dirty tracking:** the first change after a backup sets a local `dirty` flag and sends one
+  outbox effect that sets `objects.dirty_since` (S03.T04).
 - **Compaction:** the `changes` table is compacted below the lowest seq that the backup cursor and every indexer have passed.
 
 **Acceptance**
@@ -181,8 +187,8 @@ markers.
 - size: M
 - depends: S03.T06
 
-- **Nightly workflow (cron):** pages through the dirty set, plus a staggered seventh of the
-  registry for weekly fulls, and enqueues export jobs in batches. Each step stays well under the
+- **Nightly workflow (cron):** pages through the registry
+  (`WHERE dirty_since IS NOT NULL OR full_shard = <today>`) and enqueues export jobs in batches. Each step stays well under the
   Workflow step and result limits.
 - **D1:** dumped with paged `SELECT`s, with the Time Travel bookmark recorded at the start.
 - **Locking:** the bucket-lock configuration (retention) is applied by `soldock provision`.
@@ -190,6 +196,7 @@ markers.
 
 **Acceptance**
 - [ ] A run over 1,000 synthetic objects completes, and resumes correctly after an injected failure in the middle of the run (staging).
+- [ ] A change that lands while its object is being exported keeps `dirty_since` set, and the next run exports it (tested).
 - [ ] **Scale benchmark:** a synthetic registry of 1M objects (10% dirty) finishes inside the 6 h
   SLO, extrapolated from a measured run of at least 50k objects. The numbers are recorded in `plan/spikes/`.
 - [ ] Locked backup objects can't be deleted before retention ends (verified on staging).
@@ -224,6 +231,10 @@ markers.
   using an object-scoped token.
 - **Verification:** confirm and document that the token cannot remove that bucket's lock
   ([R-10](../risks.md)). Add an alert when a lock configuration changes.
+- **Cross-account writes:** bindings only reach the same account, so the copy uses R2's
+  S3-compatible API with SigV4 signing (candidate: `aws4fetch`, MIT).
+- **DR growth:** primary GC deletions don't propagate, so the DR account only grows until S03.T14
+  adds DR-side GC. Document the expected growth and cost.
 
 **Acceptance**
 - [ ] A GC dry run over seeded references deletes only unreferenced, out-of-grace blobs (tested).
@@ -257,6 +268,21 @@ markers.
 
 **Acceptance**
 - [ ] A notification appears live in the SPA, and in `events_poll` for an agent (tested).
+
+### S03.T14 · DR-side retention and GC
+- status: todo
+- kind: ops
+- size: S
+- depends: S03.T08
+
+A small janitor Worker runs **in the DR account**, with that account's own credentials, so the
+primary never gains delete rights there. It deletes DR blobs and backup sets only when both hold:
+the lock retention has passed, and the replicated backup manifests (as held in the DR account) no
+longer reference them under the retention policy.
+
+**Acceptance**
+- [ ] On staging, DR storage stops growing monotonically under a synthetic churn workload. The
+  janitor never deletes anything referenced by a retained manifest (tested).
 
 ## Exit criteria
 

@@ -66,14 +66,18 @@ function main(argv: string[]): number {
 				for (const t of doing) console.log(line(t));
 				console.log("");
 			}
-			if (exits.length > 0 || kickoffs.length > 0) {
-				console.log("Gates due (use the stage-gate skill):");
-				for (const s of exits) console.log(`  ${s.id}  exit gate: every task is settled  (${s.title})`);
-				for (const s of kickoffs) console.log(`  ${s.id}  kickoff gate: dependency stages are done  (${s.title})`);
+			if (exits.length > 0) {
+				console.log("Exit gates due (run these first, with the stage-gate skill):");
+				for (const s of exits) console.log(`  ${s.id}  every task is settled  (${s.title})`);
 				console.log("");
 			}
 			if (ready.length === 0) {
 				console.log("No task is ready in an active stage.");
+				if (kickoffs.length > 0) {
+					const [first, ...rest] = kickoffs;
+					console.log(`Next kickoff gate: ${first?.id}  (${first?.title})`);
+					if (rest.length > 0) console.log(`Also available, one at a time: ${rest.map((s) => s.id).join(", ")}`);
+				}
 				return 0;
 			}
 			let current = "";
@@ -84,6 +88,9 @@ function main(argv: string[]): number {
 					console.log(`Ready in ${current} (${s?.status}): ${s?.title}`);
 				}
 				console.log(line(t));
+			}
+			if (kickoffs.length > 0) {
+				console.log(`\nKickoffs available (optional, one at a time): ${kickoffs.map((s) => s.id).join(", ")}`);
 			}
 			return 0;
 		}

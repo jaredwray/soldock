@@ -101,6 +101,12 @@ this before any Mail work starts:
   and agents sending as themselves) is acceptable use, and at what volume.
 - **Findings:** record them in `plan/spikes/S00.T13-email-service.md`.
 
+Needs the maintainer to supply: a throwaway apex domain on the Cloudflare account (with Email
+Service enabled), seed Gmail and Outlook accounts, and a Cloudflare contact for the acceptable-use
+question. If any of these is missing, set the task to `blocked` with a `reason:` naming it. A
+throwaway Worker on a scratch branch is fine for the queue consumer
+([process §7](../process.md#7-spikes)).
+
 **Acceptance**
 - [ ] The findings note is committed with the test evidence and Cloudflare's written answer (or the open request, with a date).
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
@@ -319,8 +325,9 @@ uploaded on failure.
 - `pnpm dev` runs the SPA and the Worker on one local origin. `pnpm verify` and `pnpm e2e` are green in CI.
 - Staging serves the SPA plus `system.ping` and `system.version` (through the registry) at its own host.
 - `SoldockObject` with migrations, changes, outbox and idempotency is tested in workerd.
-- The viability of Email Service for mailbox traffic is answered (S00.T13). Any contingency the
-  maintainer chose is recorded in an ADR.
+- S00.T13's findings note is committed, with Cloudflare's answer or the dated open request. A
+  pending answer does **not** block this exit. The answer, or a contingency ADR, is required at
+  the **S04 kickoff gate**.
 
 **Exit demo**
 

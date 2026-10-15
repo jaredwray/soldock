@@ -12,9 +12,11 @@ skip the plan updates: they are how the next session knows what happened.
 
 - If the user named a task id, use it. Otherwise run `pnpm plan next`:
   - If anything is **in progress**, continue it, unless the user asked for something else.
-  - If it lists **gates due**, run the [`stage-gate`](../stage-gate/SKILL.md) skill for them
-    first (exit before kickoff), and tell the user.
+  - If it lists **exit gates due**, run the [`stage-gate`](../stage-gate/SKILL.md) skill with
+    `exit` for them first, and tell the user.
   - Otherwise take the first ready task. `next` lists only tasks from active stages, in plan order.
+  - If no task is ready, run **one** kickoff, for the stage `next` names or the one the user asks
+    for. Never run every available kickoff at once.
 - Never flip a stage to `active` yourself to unblock a task. That is what the kickoff gate is for.
 - Check open PRs for the task id so you don't duplicate work in flight.
 

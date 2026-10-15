@@ -51,18 +51,20 @@ export function renderStatus(plan: Plan): string {
 		);
 	}
 
-	const gates = [
-		...stagesAwaitingExit(plan).map(
-			(s) => `- ${stageLink(s)} · ${s.title}: every task is settled; run the **exit gate**`,
-		),
-		...stagesAwaitingKickoff(plan).map(
-			(s) => `- ${stageLink(s)} · ${s.title}: dependencies done; run the **kickoff gate**`,
-		),
-	];
+	const exits = stagesAwaitingExit(plan).map((s) => `- ${stageLink(s)} · ${s.title}: every task is settled`);
+	const kickoffs = stagesAwaitingKickoff(plan).map((s) => `- ${stageLink(s)} · ${s.title}`);
 	out.push("");
-	out.push("## Gates due");
+	out.push("## Exit gates due");
 	out.push("");
-	out.push(gates.length > 0 ? gates.join("\n") : "_None._");
+	out.push(exits.length > 0 ? exits.join("\n") : "_None._");
+	out.push("");
+	out.push("## Kickoffs available");
+	out.push("");
+	out.push(
+		kickoffs.length > 0
+			? `Dependencies are done for these stages. Kick off one at a time, lowest first, when no task is ready.\n\n${kickoffs.join("\n")}`
+			: "_None._",
+	);
 
 	const sections: Array<[string, Task[]]> = [
 		["In progress", tasksWithStatus(plan, "in-progress")],

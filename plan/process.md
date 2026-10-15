@@ -84,12 +84,14 @@ Rules:
 Every unit of work follows this loop. The [`implement-task`](../.claude/skills/implement-task/SKILL.md)
 skill walks an agent through it.
 
-1. **Pick.** Run `pnpm plan next`. Finish `in-progress` tasks first. If it lists **gates due**,
-   run them before starting new work in those stages: an exit gate for a stage whose tasks are all
-   settled, or a kickoff gate for a stage whose dependencies are done. Otherwise take the first
-   ready task in the lowest-numbered active stage. Ready tasks in **other active** stages can be
-   picked when that stage has none ready, or when the user asks for one. `next` only ever lists
-   tasks from active stages.
+1. **Pick.** Run `pnpm plan next`. Finish `in-progress` tasks first. Then, in order:
+   - **Exit gates due** are mandatory. Run them before anything else, because dependent stages
+     unlock only when a stage is `done`.
+   - Take the first **ready task**, in the lowest-numbered active stage. Ready tasks in **other
+     active** stages can be picked when that stage has none ready, or when the user asks for one.
+     `next` only ever lists tasks from active stages.
+   - If no task is ready, run **one kickoff**: the lowest-numbered available stage, or the one the
+     user names. Kickoffs are optional and one at a time. Never kick off every available stage at once.
 2. **Understand.** Run `pnpm plan show <id>`. Read the stage's goal and design notes, the ADRs it
    links, the architecture sections it touches, and the READMEs of the modules involved. If the
    task is not [ready](#definition-of-ready), fix the task first: split it, clarify it, or add a
@@ -119,6 +121,12 @@ Each stage has two gates. Record the outcome of each in the stage file's `## Gat
 **Kickoff gate** (the stage moves from `planned` to `active`). Run the
 [`stage-gate`](../.claude/skills/stage-gate/SKILL.md) skill with `kickoff`.
 
+A **partial kickoff** is allowed when most of a stage's tasks depend on stages that aren't done
+yet. For example, S08–S11 can kick off right after S01 to start their spikes and pure model
+packages. Refine and review only the tasks that can start. Add `partial: re-refine after <stage>`
+to the kickoff gate-log line. The exit gate of that dependency stage must then re-run the review
+for the stages it lists.
+
 1. Re-read the stage spec against the current codebase, ADRs and risks. Things learned in earlier
    stages usually change the plan.
 2. Refine the tasks: split anything `L`, fix dependencies, add missing work (migrations, docs,
@@ -132,15 +140,17 @@ Each stage has two gates. Record the outcome of each in the stage file's `## Gat
 1. Every task is `done` or `dropped`, with reasons.
 2. Run the stage's **exit demo** (scripted in the stage file) against local and staging. Record
    evidence: test names, e2e runs, screenshots.
-3. Run the cross-cutting audits:
+3. List the partial kickoffs that named this stage (`partial: re-refine after Sxx`) and re-run
+   their kickoff review before closing this gate.
+4. Run the cross-cutting audits:
    - **parity**: every new operation is reachable through REST, MCP and the UI
    - **authorization matrix**: every operation × role × principal kind
    - **backup coverage**: the restore drill includes the stage's new object types and data
    - **threat model**: updated for the new surface
    - **docs**: updated
-4. Have the **`impl-reviewer`** agent (Fable) review the stage as a whole, from the diff since the
+5. Have the **`impl-reviewer`** agent (Fable) review the stage as a whole, from the diff since the
    kickoff gate, against the exit criteria. Fix what it finds blocking.
-5. Set `status: done`, add the exit line to the gate log, and update `risks.md`.
+6. Set `status: done`, add the exit line to the gate log, and update `risks.md`.
 
 ## 5. Definition of Ready
 

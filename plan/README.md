@@ -13,7 +13,8 @@ built by.
 4. [**STATUS.md**](STATUS.md): live progress, generated from the stage files
 5. [**stages/**](stages/): one file per stage, with tasks and acceptance criteria
 6. [**adr/**](adr/): architecture decisions and why they were made
-7. [**risks.md**](risks.md) and [**backlog.md**](backlog.md)
+7. [**spikes/**](spikes/): evidence from spikes, benchmarks and dogfood reports
+8. [**risks.md**](risks.md) and [**backlog.md**](backlog.md)
 
 ## Stages
 

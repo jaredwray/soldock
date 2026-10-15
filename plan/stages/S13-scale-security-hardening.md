@@ -166,6 +166,7 @@ derived from load-test metrics and current pricing. It identifies the cost drive
 - status: todo
 - kind: feature
 - size: S
+- depends: S07.T09
 
 A web app manifest, icons, a service worker with an offline shell and asset caching (never
 caching API responses that contain user data), an install prompt, and an update flow. This

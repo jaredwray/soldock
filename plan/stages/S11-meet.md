@@ -278,7 +278,7 @@ All of them go through the contract harness and the authorization matrix.
 - status: todo
 - kind: test
 - size: S
-- depends: S11.T03
+- depends: S11.T13
 
 Use synthetic participants (headless browsers through Browser Run, or the load generator) to run
 20 concurrent meetings, and a single meeting with the maximum number of participants. Measure

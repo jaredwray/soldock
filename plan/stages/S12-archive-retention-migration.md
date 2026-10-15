@@ -105,6 +105,10 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - **Rules:** set per org, group, mail label or Drive location: keep for N, delete after N, or keep forever.
 - **Enforcement:** the `RetentionSweep` workflow runs with `dry_run` reports first.
 - **Integration:** trash purges and GC consult the rules.
+- **What deletion means:** retention deletion is **logical**. The bytes stay in locked backups and
+  in the blob store (and the DR copy) for up to the backup retention, one year by default, before
+  GC removes them. The admin UI and docs say this explicitly, because it's the first thing a
+  compliance reviewer will ask.
 
 **Acceptance**
 - [ ] The policy engine tests cover rule conflicts (the most protective rule wins). A `dry_run` report matches the actual sweep (tested).
@@ -148,10 +152,13 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - **Workflow:** `ImportMailbox` pages through messages through the Gmail API (with IMAP as a
   fallback). Labels are preserved and mapped, threads are preserved, and the import is resumable
   and rate-aware.
+- **Dedup against production-lite:** messages already delivered by forwarding (same
+  `Message-ID` in the target mailbox) are linked to the imported labels, not duplicated.
 - **Progress:** shown in the UI.
 
 **Acceptance**
-- [ ] Importing a seeded Gmail test account reproduces label and thread structure. Re-running the import is idempotent (staging).
+- [ ] Importing a seeded Gmail test account reproduces label and thread structure. Re-running the
+  import is idempotent, and messages that already arrived by forwarding are not duplicated (staging).
 
 ### S12.T12 · Google OAuth app setup for imports
 - status: todo

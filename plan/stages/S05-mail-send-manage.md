@@ -174,7 +174,9 @@ Messages over the size limit become links (S05.T21) until S06.T12 upgrades them 
 - depends: S05.T15, S05.T19
 
 The approval notification email carries a signed, single-use reply token. A reply of
-"approve" or "reject", from the sponsor's own address with DMARC passing, resolves the request.
+"approve" or "reject" resolves the request when it comes from the sponsor: either an
+authenticated local sender (the sponsor's own Soldock mailbox, delivered internally) or an
+external reply that passes DMARC.
 
 **Acceptance**
 - [ ] A forged or replayed reply, or a reply from another address, is rejected and audited (tested).
@@ -382,21 +384,47 @@ upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-
 **Acceptance**
 - [ ] Sending a 20 MiB attachment to an external recipient delivers a message whose link downloads the file until it expires (staging).
 
+### S05.T23 · Ingest alias domain and trusted forwarders
+- status: todo
+- kind: feature
+- size: M
+- depends: S04.T02, S04.T07
+
+Production-lite receives copies of `@jaredwray.com` mail that Google forwards to an ingest
+domain, before the MX switch.
+
+- **Alias domains:** in `addresses`, an alias domain resolves `user@<alias>` to `user@<canonical>`.
+  It is **receive-only** (nobody can send as it), it is shown in `admin.domains`, and it uses
+  S04.T02's per-address rule management when it is a subdomain.
+- **Trusted forwarders:** a per-domain setting names a forwarder (for example Google Workspace for
+  the org). For mail arriving on that domain, the SPF and DMARC verdicts come from the
+  forwarder's **ARC chain** when that chain validates, rather than from the broken direct SPF. The
+  original authentication results are still shown.
+
+**Acceptance**
+- [ ] Mail forwarded through Google from a sender without DKIM lands in the Inbox, not Spam,
+  and shows the ARC-derived verdict (tested with ARC fixtures and once on staging).
+- [ ] Sending as an alias-domain address is rejected (tested).
+
 ### S05.T22 · Production-lite deployment
 - status: todo
 - kind: ops
 - size: M
-- depends: S05.T14, S05.T20, S05.T21
+- depends: S05.T05, S05.T14, S05.T15, S05.T20, S05.T21, S05.T23, S03.T08
 
 Provision the production environment at `dock.jaredwray.com`, with production resources, nightly
 backups and the DR copy ([architecture §16](../architecture.md#16-environments-deployment-and-configuration)):
 
 - **Sending:** as `@jaredwray.com` through Email Service. SPF covers both senders, and DKIM uses separate selectors.
-- **Receiving:** MX stays at Google, which forwards copies to an ingest alias domain mapped onto the `@jaredwray.com` mailboxes.
+- **Receiving:** MX stays at Google, which forwards copies to an ingest alias domain (S05.T23)
+  mapped onto the `@jaredwray.com` mailboxes. Google's ARC chain is trusted for that domain.
+- **Agents:** they send only under outbound policy (S05.T05) and sponsor approvals (S05.T15).
 - **Users:** the maintainer and the first agents use it daily.
 
 **Acceptance**
-- [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail. Forwarded inbound mail lands in the right mailboxes.
+- [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail. Forwarded
+  inbound mail lands in the right mailboxes, and mail from senders without DKIM lands in the Inbox, not Spam.
+- [ ] The DR copy to the second account is live for production (S03.T08).
 - [ ] Production backups and drills run nightly, and a rollback to Google-only is documented.
 
 ## Exit criteria
