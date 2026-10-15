@@ -5,7 +5,9 @@ description: Create or supersede an Architecture Decision Record in plan/adr/ us
 
 # New ADR
 
-1. Find the next number: `ls plan/adr | sort | tail -1`. Numbers are never reused.
+1. Find the next number: `ls plan/adr | sort | tail -1`. Numbers are never reused. Task text never
+   pre-assigns numbers. If a task says "an ADR titled 'X'", use that title, take the next free
+   number, and update any task or architecture text that refers to the title so it links the file.
 2. Copy `plan/adr/0000-template.md` to `plan/adr/NNNN-<kebab-title>.md`. Use an imperative title,
    for example "Use IronCalc for spreadsheet calculation".
 3. Fill in Context (with evidence: benchmarks, links, spike results), Decision, Consequences and

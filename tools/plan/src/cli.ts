@@ -1,9 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { openDependencies } from "./graph.ts";
 import { loadPlan } from "./load.ts";
 import type { Plan, Problem } from "./model.ts";
 import { renderStatus } from "./render.ts";
-import { findTask, openDependencies, readyTasks, tasksWithStatus } from "./schedule.ts";
+import { findTask, readyTasks, stagesAwaitingExit, stagesAwaitingKickoff, tasksWithStatus } from "./schedule.ts";
 import { validatePlan } from "./validate.ts";
 
 const USAGE = `Usage: pnpm plan <command>
@@ -51,18 +52,38 @@ function main(argv: string[]): number {
 		}
 		case "next": {
 			const stage = flag(args, "--stage");
-			const inScope = (id: string) => stage === undefined || id.startsWith(`${stage}.`);
+			const inScope = (id: string) => stage === undefined || id === stage || id.startsWith(`${stage}.`);
+			const line = (t: { id: string; title: string; kind: string; size: string }) => {
+				const warning = t.size === "L" ? "  ⚠ size L: split it before starting" : "";
+				return `  ${t.id}  ${t.title}  [${t.kind}, ${t.size}]${warning}`;
+			};
 			const doing = tasksWithStatus(plan, "in-progress").filter((t) => inScope(t.id));
+			const exits = stagesAwaitingExit(plan).filter((s) => inScope(s.id));
+			const kickoffs = stagesAwaitingKickoff(plan).filter((s) => inScope(s.id));
 			const ready = readyTasks(plan).filter((t) => inScope(t.id));
 			if (doing.length > 0) {
 				console.log("In progress (finish these first):");
-				for (const t of doing) console.log(`  ${t.id}  ${t.title}  [${t.kind}, ${t.size}]`);
+				for (const t of doing) console.log(line(t));
 				console.log("");
 			}
-			console.log(ready.length > 0 ? "Ready to start:" : "Nothing is ready to start.");
+			if (exits.length > 0 || kickoffs.length > 0) {
+				console.log("Gates due (use the stage-gate skill):");
+				for (const s of exits) console.log(`  ${s.id}  exit gate: every task is settled  (${s.title})`);
+				for (const s of kickoffs) console.log(`  ${s.id}  kickoff gate: dependency stages are done  (${s.title})`);
+				console.log("");
+			}
+			if (ready.length === 0) {
+				console.log("No task is ready in an active stage.");
+				return 0;
+			}
+			let current = "";
 			for (const t of ready) {
-				const warning = t.size === "L" ? "  ⚠ size L: split it before starting" : "";
-				console.log(`  ${t.id}  ${t.title}  [${t.kind}, ${t.size}]${warning}`);
+				if (t.stageId !== current) {
+					current = t.stageId;
+					const s = plan.stages.find((x) => x.id === current);
+					console.log(`Ready in ${current} (${s?.status}): ${s?.title}`);
+				}
+				console.log(line(t));
 			}
 			return 0;
 		}

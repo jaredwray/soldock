@@ -2,7 +2,7 @@
 id: S14
 title: v1.0 release and production cutover
 status: planned
-depends: [S13]
+depends: [S12, S13]
 ---
 
 # S14 · v1.0 release and production cutover
@@ -43,16 +43,32 @@ The docs site is served on Cloudflare, from Workers Static Assets on `soldock.or
 **Acceptance**
 - [ ] Every page has an owner module. Broken-link and code-sample checks run in CI.
 
-### S14.T02 · One-click deploy and `soldock init`
+### S14.T02 · "Deploy to Cloudflare" button
+- status: todo
+- kind: ops
+- size: S
+
+A deploy button that provisions D1, R2, KV, Queues and Durable Objects for the single `dock`
+Worker. Steps the button can't do (Workflows, Email Routing, Email Service onboarding, Realtime
+app, bucket locks) are handed off to `soldock init`, or documented.
+
+**Acceptance**
+- [ ] The button deploys a working instance to a fresh account, and the remaining steps are listed on the post-deploy page.
+
+### S14.T08 · `soldock init` interactive setup
 - status: todo
 - kind: ops
 - size: M
+- depends: S14.T02
 
-- **Deploy button:** a "Deploy to Cloudflare" button. It provisions D1, R2, KV, Queues and
-  Durable Objects, and documents any manual steps for Workflows, Email Routing and Realtime.
-- **`soldock init`:** an interactive CLI. It picks the domains, provisions resources, creates DNS
-  records, configures Email Routing and Email Service onboarding, generates secrets, and prints the
-  setup token.
+An interactive CLI that:
+
+1. picks the dock host and mail domains, warning if a mail domain isn't apex
+2. provisions resources, including bucket locks and the disaster-recovery account
+3. creates DNS records
+4. configures Email Routing and Email Service onboarding
+5. generates secrets
+6. prints the setup token
 
 **Acceptance**
 - [ ] A fresh account with a zone reaches first-run setup in under an hour by following only the docs. Tested by someone (or an agent) new to the project.
@@ -109,16 +125,15 @@ same-origin surfaces. Fix the findings.
 - status: todo
 - kind: ops
 - size: M
-- depends: S14.T02, S14.T03
+- depends: S14.T03
 
-Follow `docs/operations/cutover.md`:
+Production-lite has been running since M2 (S05.T22). Follow `docs/operations/cutover.md`:
 
-1. Provision production.
-2. Import Gmail and Drive (S12.T06 and S12.T07) for all users.
-3. Run Google and Soldock in parallel, with Soldock receiving through a subdomain.
-4. Switch MX to Email Routing in a low-traffic window.
-5. Run a final delta import.
-6. Monitor for 30 days, with a rollback plan (restore MX to Google).
+1. Import Gmail and Drive history (S12.T06 and S12.T07) for all users.
+2. Confirm the parallel run (Google forwarding into Soldock) has been clean for at least two weeks.
+3. Switch the `jaredwray.com` MX to Email Routing in a low-traffic window. It is an apex zone, so catch-all works.
+4. Run a final delta import.
+5. Monitor for 30 days, with a rollback plan (restore MX to Google).
 
 **Acceptance**
 - [ ] All users and agents are on Soldock. MX is switched. No mail is lost (verified by

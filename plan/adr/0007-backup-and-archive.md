@@ -37,14 +37,33 @@ Mechanics:
   `exportSnapshot()`, `exportChanges(sinceSeq)` and `importSnapshot()`, and keeps a `changes` table
   with a monotonic `seq`. A new object type cannot be merged without a round-trip test. That is in
   the [Definition of Done](../process.md#definition-of-done).
-- **Registry-driven runs.** The `BackupRun` workflow enumerates the D1 object registry in batches.
-  For each object it writes NDJSON segments plus a manifest (schema version, seq range, row counts,
-  SHA-256 checksums) to `backups/<run>/<type>/<id>/`. The run is incremental by default and full
-  weekly. D1 is dumped with paged `SELECT`s.
-- **Blobs are immutable and content-addressed.** Backups reference blobs by hash, and GC never
-  deletes a blob referenced by a retained backup or held by legal hold.
+- **Dirty tracking.** The first change after an object's last backup sets a `dirty` flag and sends
+  one outbox effect, which adds the object to the current run's dirty set. Unchanged objects are
+  never woken for incremental backups.
+- **Sharded runs.** The nightly `BackupRun` workflow:
+  1. pages through the dirty set, plus a staggered seventh of the object registry for weekly fulls
+  2. enqueues **one export job per object** on the `backup` queue
+  3. records progress in a `BackupRunDO`
+  4. finishes when the `BackupRunDO` reports completion
+
+  This keeps every Workflow instance far below its 25k-step limit. The design target is
+  **1M registered objects in a run under 6 hours**, verified by a benchmark in S03.T13.
+- **What each export job writes:** NDJSON segments plus a manifest (schema version, seq range, row
+  counts, SHA-256 checksums, referenced blob hashes) under `backups/<run>/<type>/<id>/`.
+- **D1** is dumped with paged `SELECT`s, which is not a point-in-time snapshot. The run records the
+  D1 Time Travel bookmark taken at the start of the dump, so a fully consistent restore is possible
+  within 30 days. After that, restores rely on the logical dump plus the low write rate of the directory.
+- **The `changes` table is compacted** once the backup cursor and every indexer have passed a seq.
+- **Blobs are immutable and deduplicated.** They are stored under opaque keys, and `BlobIndexDO`
+  (256 shards by hash prefix) maps hashes to keys, with reference counts per owning object that are
+  maintained through the outbox. GC walks the index, never the owning objects. A blob is deleted
+  only when its count has been zero for longer than the longest backup retention plus a grace
+  period, and no legal hold pins it.
 - **Encryption** is optional: AES-256-GCM envelope encryption with a key from Worker secrets or
-  Secrets Store, stored outside the backup account.
+  Secrets Store, held outside the backup account.
+- **Disaster-recovery copies.** R2 event notifications copy **all four durable buckets** (`blobs`,
+  `backups`, `audit`, `archive`) to locked buckets in a separate Cloudflare account. The primary
+  writes there with an object-scoped token that cannot change the lock.
 - **Restore** works three ways:
   - object-level into a new id or in place: logical (T2) or PITR (T1)
   - principal-level: every object a user owns
@@ -54,12 +73,28 @@ Mechanics:
   scripted (S12.T08).
 - **Archive.** Retention policies, legal holds and eDiscovery (S12) use the same registry and export
   machinery. Exports are packaged as zip archives (mbox and EML, original files with Office, PDF,
-  Markdown and CSV conversions, recordings, JSON metadata) in the `archive` bucket and downloaded through `/dl/`.
+  Markdown and CSV conversions, recordings, JSON metadata) in the `archive` bucket and downloaded
+  through `/dl/`.
+
+## Store coverage
+
+| Store | Durable data? | Covered by |
+| --- | --- | --- |
+| Durable Objects (all classes) | yes | T1 PITR, T2 logical backups, T3 disaster-recovery copy of the backups |
+| D1 `directory` | yes | T1 Time Travel, T2 paged dump with a recorded bookmark |
+| R2 `blobs`, `audit`, `archive` | yes | Immutable objects, T3 copy to the disaster-recovery account. `audit` and `archive` are locked. |
+| R2 `backups` | yes | Locked, with the T3 copy |
+| KV | **caches only** | Not backed up; rebuilt on demand. Durable state in KV is **not allowed** unless the backup run dumps it. S01.T01 decides this for OAuth grants. |
+| Queues | in-flight work | Not backed up. At-least-once delivery from sources that are themselves backed up. |
+| Analytics Engine, Workers Logs | metrics and logs | Ephemeral by design (about 3 months and 7 days). Not records. |
+| Secrets | keys | Stored in the deployment's secret store. Recovery is a step in the disaster-recovery runbook. Backup encryption keys are escrowed separately. |
 
 ## Consequences
 
 - S03 builds the framework before any product data exists. Each product stage then extends coverage.
-- Backup cost grows with change volume (incrementals) plus weekly fulls. S13 measures it.
+- Backup cost grows with change volume (dirty objects) plus a seventh of all objects each night. S13 measures it.
+- The blob index is a shared service. With 256 shards and outbox batching, it scales with the
+  number of blobs, but deletion is slow on purpose: storage for deleted data lingers for up to a year.
 - Restores are tested continuously, not only on bad days.
 
 ## Alternatives considered

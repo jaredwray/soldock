@@ -24,7 +24,7 @@ built by.
 | [S02](stages/S02-agent-api-surface.md) Agent and API surface | MCP endpoint, OAuth 2.1, `client_credentials`, events and webhooks, SDK, contract and authorization harness | **M1: agents can connect as themselves** |
 | [S03](stages/S03-platform-services.md) Platform services | Blobs, quotas, jobs, object registry, **backup, restore and drill framework**, disaster-recovery copy, search, notifications | |
 | [S04](stages/S04-mail-receive.md) Mail I | Receive, store, thread, search, safe rendering, Mail UI, agent mail tools | |
-| [S05](stages/S05-mail-send-manage.md) Mail II | Compose, send, agent outbound policy, bounces, filters, groups, delegation, dogfooding | **M2: mail daily driver (staging)** |
+| [S05](stages/S05-mail-send-manage.md) Mail II | Compose, send, agent outbound policy and approvals, bounces, filters, groups, delegation, platform mail, production-lite | **M2: mail daily driver on dock.jaredwray.com (production-lite)** |
 | [S06](stages/S06-drive.md) Drive | Files, folders, sharing, shared drives, search, previews, Mail ↔ Drive | |
 | [S07](stages/S07-collaboration-engine.md) Collaboration engine | `DocumentDO`, CRDT sync, presence, comments, versions, server-side agent edits | |
 | [S08](stages/S08-docs.md) Docs | Editor, suggestions, DOCX/PDF/Markdown, agent Markdown editing | **M3: mail + drive + docs** |
@@ -35,9 +35,16 @@ built by.
 | [S13](stages/S13-scale-security-hardening.md) Scale and hardening | 5k-user load tests, ASVS L2 review, agent red-team, a11y, cost model | |
 | [S14](stages/S14-release-v1.md) v1.0 release | Docs site, one-click deploy, upgrades, pentest, production cutover | **M5: v1.0, jaredwray.com in production** |
 
-Stage dependencies form a DAG, so several streams run in parallel: S02 ∥ S03, Mail ∥ Drive, and
-Meet after S03. The stage map in [STATUS.md](STATUS.md#stage-map) shows the graph. `pnpm plan next`
-lists the tasks you can start right now.
+Stage dependencies are kept minimal. A stage depends only on the stages whose *whole* output it
+builds on, usually S01 (identity), and finer-grained needs are task-level dependencies. Once S01
+passes its exit gate, these streams can run in parallel, each gated only by the specific tasks it uses:
+
+- S02 (MCP and API), S03 (platform), S04 (Mail I), S06 (Drive), S07 (collaboration engine)
+- the long-lead spikes in S08, S09, S10 and S11
+
+M2 needs S04 and S05. S12 and S13 start after the daily-driver products (S05 and S06). The stage map in
+[STATUS.md](STATUS.md#stage-map) shows the graph. `pnpm plan next` lists what you can start right now,
+and any gates that are due.
 
 ## Review history
 

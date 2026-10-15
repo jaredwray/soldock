@@ -58,7 +58,9 @@ tool. Exercise it with:
 - Claude Code (with a bearer header and with OAuth)
 - claude.ai connectors (Claude Desktop)
 
-Record the results in a client-compatibility matrix in `docs/agents/compatibility.md`. Record
+Record the results in a client-compatibility matrix in `docs/agents/compatibility.md`. For each
+client, the matrix records which agent-identity path it can use: a bearer API key,
+`client_credentials`, or "connect as my agent" through OAuth (S02.T12). Record
 the decisions (structured output, resource links, how pagination is exposed, and whether async
 tasks are worth adopting) in an ADR.
 
@@ -79,6 +81,8 @@ tasks are worth adopting) in an ADR.
   - name, description and JSON Schema for input and output, taken from Zod
   - annotations mapped from the operation's annotations
   - tools filtered by token scopes, agent-policy toolsets and the `?toolsets=` parameter
+  - **default toolset:** with no `?toolsets=`, the product toolsets the caller can use. Admin and
+    key-management tools appear only with an explicit `?toolsets=admin`.
 - **Results:** `structuredContent` plus a concise text rendering. Errors map to MCP tool errors
   with catalogue codes.
 - **Resources:** a resource registry hook for URI-addressable entities, used by later stages.
@@ -126,6 +130,26 @@ Integrate `@cloudflare/workers-oauth-provider`:
 - [ ] An agent obtains a token with client credentials and calls `directory_whoami` as itself (tested).
 - [ ] Suspending the agent invalidates outstanding client-credentials tokens (tested).
 
+### S02.T12 · "Connect as my agent" (OAuth for agent identity)
+- status: todo
+- kind: feature
+- size: M
+- depends: S02.T03, S01.T06
+
+Some clients support only authorization code + PKCE, with no headers and no secrets (claude.ai and
+Claude Desktop connectors, many hosted agents). For these, the consent screen offers **"as one of
+my agents"** to the agent's sponsor or to an admin.
+
+- **Token:** `{ subject: agent, actor: client, authorized_by: sponsor }`, with scopes capped by the
+  agent's policy.
+- **Visibility:** the grant appears on the agent's page and can be revoked there, and it is audited.
+- **Spec:** [ADR-0012](../adr/0012-auth-architecture.md) §4.
+
+**Acceptance**
+- [ ] A claude.ai or Claude Desktop connector, or the SDK OAuth client standing in for one, connects
+  as agent Ada. `directory_whoami` reports Ada, with the client as actor and the sponsor as authorizer.
+- [ ] A non-sponsor cannot pick another person's agent. Scopes above Ada's policy are dropped from the grant (tested).
+
 ### S02.T05 · REST API v1 conventions and reference
 - status: todo
 - kind: feature
@@ -146,10 +170,12 @@ Integrate `@cloudflare/workers-oauth-provider`:
 - size: M
 
 - **`PrincipalDO`:** a `SoldockObject` per principal. It holds user settings, an event feed
-  (append-only, with cursors and retention), notification state and idempotency keys.
+  (append-only, with cursors and retention), notification state, webhook subscriptions and agent
+  counters, and nothing else ([ADR-0013](../adr/0013-per-principal-state.md)).
 - **Event registry:** event types live in contracts and are typed.
-- **Operations:** `events.poll` (cursor) and `events.wait` (long-poll with a type and filter, up
-  to 60 s, returning early on match).
+- **Operations:** `events.poll` (cursor) and `events.wait` (long-poll with a type and filter). The
+  wait defaults to 25 s, allows at most 55 s, and returns early on a match. The cap keeps it inside
+  common MCP client tool timeouts, and agents loop on the cursor.
 - **Browser:** `/ws/events` gives the SPA live updates through hibernatable WebSockets.
 
 **Acceptance**
@@ -194,7 +220,9 @@ token), pagination iterators, a webhook signature verifier and examples. It is p
 - size: M
 - depends: S02.T02, S02.T06
 
-- **Idempotency:** a shared middleware for REST and MCP, stored in `PrincipalDO`.
+- **Idempotency:** a shared middleware for REST and MCP that parses the key and passes it in the
+  request context. The owning object stores it with the result in the mutation's transaction
+  ([ADR-0013](../adr/0013-per-principal-state.md)).
 - **Dry runs:** a `dry_run` convention for destructive and bulk operations. The operation returns a
   plan instead of acting.
 - **Untrusted content:** an `untrusted` envelope type in contracts (`{ untrusted: true, source,
@@ -211,30 +239,38 @@ token), pagination iterators, a webhook signature verifier and examples. It is p
 - status: todo
 - kind: test
 - size: M
-- depends: S02.T02, S02.T03
+- depends: S02.T02, S02.T03, S02.T04, S02.T12
 
-- **Generated tests:** for every operation, the same call is made through REST and MCP with a
-  human session, a human personal access token, an agent key, an agent's client-credentials token
-  and a delegated OAuth token. The results must be equivalent, and the authorization outcomes must
-  match the operation's declared policy.
+- **Generated tests:** for every operation, the same call is made through REST and MCP with:
+  - a human session
+  - a human personal access token
+  - an agent key
+  - an agent's client-credentials token
+  - an agent token from "connect as my agent"
+  - a delegated OAuth token
+
+  The results must be equivalent, and the authorization outcomes must match the operation's declared policy.
+- **Fixture builders:** every operation implementation registers a fixture builder (seed owner,
+  resource and grantees) next to its handler. The harness uses it to construct each case.
 - **Authorization matrix:** an authoring format for the operation × role × principal kind ×
   resource relationship matrix, reported in CI.
 
 **Acceptance**
-- [ ] Adding an operation without matrix entries fails CI.
+- [ ] Adding an operation without matrix entries, or without a fixture builder, fails CI.
 - [ ] Parity failures (an operation reachable through REST but not MCP, or the reverse) fail CI.
 
 ### S02.T11 · Docs for connecting agents
 - status: todo
 - kind: docs
 - size: S
-- depends: S02.T04, S02.T03
+- depends: S02.T04, S02.T03, S02.T12
 
 `docs/agents/` holds:
 
 - creating an agent principal and choosing a policy
 - connecting Claude Code (`claude mcp add --transport http …` with a header or OAuth)
-- connecting claude.ai and Claude Desktop connectors, the MCP Inspector, and generic clients
+- connecting claude.ai and Claude Desktop connectors (as yourself, or as an agent with "connect
+  as my agent"), the MCP Inspector, and generic clients
 - `client_credentials` setup
 - events and webhooks
 - safety guidance for sponsors

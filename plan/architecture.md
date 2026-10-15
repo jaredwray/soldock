@@ -65,7 +65,7 @@ Email Routing and is handled by the same Worker's `email()` handler.
 | Realtime SFU + TURN | Meet media. The `dock` Worker mints sessions and TURN credentials, and `MeetingDO` coordinates the room. **[spike S11.T01]** decides between using the SFU directly and RealtimeKit. |
 | Workers AI | Speech-to-text for captions and transcripts, optional summaries, embeddings, spam classification. |
 | Vectorize | Optional semantic search over mail and Drive content, filtered by ACL metadata (post-S13 enhancement). |
-| Browser Run (formerly Browser Rendering) | PDF export of Docs, Sheets and Slides. Slide thumbnails, which also let agents see a slide as an image. |
+| Browser Run (formerly Browser Rendering) | PDF export of Docs, Sheets and Slides, and slide images for agents (`slides.render_thumbnail`). The UI renders its own thumbnails in the browser, because Browser Run bills per concurrent browser above the included 10 ([R-19](risks.md)). |
 | Images | Thumbnails and previews of uploaded images. |
 | Containers | An optional converter and recorder sidecar for jobs that cannot run in an isolate (for example a LibreOffice-grade conversion or composite meeting recording). It is used only if a spike shows it is needed. |
 | Worker secrets (+ Secrets Store when it leaves beta) | Signing keys, backup encryption keys, API tokens. |
@@ -86,6 +86,7 @@ use SPA fallback, and `run_worker_first` sends the paths below to the Worker:
 | `/oauth/*`, `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]` | OAuth 2.1 authorization server and protected-resource metadata |
 | `/auth/*` | Passkey ceremonies, sign-in and sign-out, first-run setup |
 | `/ws/doc/:id`, `/ws/meet/:id`, `/ws/events` | WebSocket upgrades, forwarded to `DocumentDO`, `MeetingDO` and `PrincipalDO` |
+| `/ws/sfu/:token` | Inbound WebSocket from the Realtime SFU's WebSocket media adapter (audio for captions, an agent's voice). It authenticates with a short-lived signed token minted by `MeetingDO` (S11.T07). |
 | `/blob/*`, `/dl/:token` | Streaming upload (single-shot, or chunked multipart sessions because zone plans cap request bodies at 100–500 MB) and signed, expiring download URLs. R2 presigned URLs only work on `*.r2.cloudflarestorage.com`, so all transfer goes through the Worker to stay on one origin. |
 | `/hooks/*` | Inbound callbacks (for example Email Service events and Realtime webhooks) |
 
@@ -111,16 +112,18 @@ points to Email Routing. They have no HTTP surface.
 
 | Class | Keyed by | Holds | Expected size |
 | --- | --- | --- | --- |
-| `PrincipalDO` | principal id | Settings, event feed, notifications, idempotency keys, webhook subscriptions, per-user Drive state (recent, starred, shared-with-me index) | Small (MBs) |
-| `MailboxDO` | mailbox id | Messages (metadata and text), threads, labels, filters, drafts, FTS index, outbox | ≈5 KB per message, about 2M messages before limits |
+| `PrincipalDO` | principal id | Identity-adjacent per-principal state only: settings, event feed and notifications, webhook subscriptions, agent hard-cap counters ([ADR-0013](adr/0013-per-principal-state.md)) | Small (MBs) |
+| `MailboxDO` | mailbox id | Messages (metadata and text), threads, labels, filters, drafts, FTS index, outbox, auto-collected contacts | ≈5–20 KB per message including FTS, so roughly 500k–2M messages before the 10 GB limit. A size guard applies, and S04.T01 measures the real figure ([R-18](risks.md)). |
 | `DriveSpaceDO` | space id (My Drive or a shared drive) | Item tree, versions, permissions, trash, FTS index, change feed | ≈1–2 KB per item |
 | `DocumentDO` | item id of a native doc, sheet or deck | CRDT update log, snapshots, comments, suggestions, version index, presence | Typically under 50 MB |
 | `MeetingDO` | meeting id | Roster, lobby, chat, track registry, recording and transcript state | Small and short-lived |
+| `BlobIndexDO` | hash-prefix shard (256 shards) | Map from SHA-256 to storage key, reference counts per owning object, the time each count reached zero, legal-hold pins | Bounded by blob count, spread across shards |
+| `BackupRunDO` | backup run id | The run's progress: export jobs queued, done and failed, segment manifests, and the final run manifest | Small, kept for the retention window |
 
 - **Workflows**: `BackupRun`, `RestoreDrill`, `RestoreObject`, `ExportArchive`, `ImportMailbox`,
   `ImportDrive`, `RetentionSweep`, `DiscoverySearch`.
-- **Queues**: `mail-inbound`, `mail-outbound`, `outbox`, `webhooks`, `index`, `jobs`. Each has a
-  `-dlq`.
+- **Queues**: `mail-inbound`, `mail-outbound`, `outbox`, `webhooks`, `index`, `backup`, `jobs`.
+  Each has a `-dlq`.
 - **Optional satellites** (separate Workers or Containers, still on the same origin through a
   service binding): a document converter or a meeting recorder, added only if the spikes in
   S08, S09, S10 and S11 show isolates cannot do the job within Worker limits.
@@ -163,10 +166,13 @@ Org roles are `owner`, `admin`, `auditor` (audit, eDiscovery, read-only) and `me
 Delegation (a human granting an agent access to their mailbox or a folder) is a normal grant on
 the resource. It never shares credentials.
 
-**Audit.** Every mutating operation and every privileged read (admin, eDiscovery, delegation use)
-emits an audit event `{ actor, actorKind, onBehalfOf, client, op, target, result, ip, ts }`. Events
-go through a queue to R2 as hash-chained, gzip NDJSON segments partitioned by day, in a bucket
-with a retention lock. A rolling 90-day index sits in D1 for the admin UI.
+**Audit.** Every mutating operation and every privileged read (admin, eDiscovery, use of
+delegated access) emits an audit event `{ actor, actorKind, onBehalfOf, client, op, target, result, ip, ts }`.
+Events go through a queue to R2 as hash-chained, gzip NDJSON segments partitioned by day, in a
+locked bucket that is also copied to the disaster-recovery account. D1 keeps a bounded recent index
+for the admin UI, sized and rolled over in S01.T08. **Ordinary reads are not audit events.** Read
+calls by agents are metered per agent and operation in Analytics Engine, so a sponsor can see what an
+agent looked at without growing the audit log by millions of rows a day.
 
 ## 6. Data placement
 
@@ -174,21 +180,37 @@ with a retention lock. A rolling 90-day index sits in D1 for the admin UI.
 | --- | --- | --- |
 | Org settings, domains, principals, addresses and aliases, group membership, passkeys, sessions, API keys, OAuth clients, agent policies, object registry | D1 `directory` | Global (small: about 50 MB for 10k principals) |
 | Mail metadata, threads, labels, filters, FTS | `MailboxDO` | Per mailbox |
-| Raw MIME (`.eml`) and attachments | R2 `blobs` (content-addressed `sha256/<hash>`) | Global, immutable |
+| Raw MIME (`.eml`) and attachments | R2 `blobs` (opaque keys, deduplicated by SHA-256 through `BlobIndexDO`) | Global, immutable |
 | Drive tree, ACLs, versions, FTS | `DriveSpaceDO` | Per space |
 | File content and versions | R2 `blobs` | Global, immutable, deduplicated |
 | Native doc, sheet and deck content | `DocumentDO` (update log and latest snapshot), R2 (version snapshots) | Per document |
 | Meeting state | `MeetingDO` | Per meeting |
 | Recordings and transcripts | R2 `blobs`, filed into the host's Drive as items | |
-| Event feeds, notifications, user settings | `PrincipalDO` | Per principal |
+| Event feeds, notifications, user settings, webhook subscriptions, agent counters | `PrincipalDO` | Per principal |
+| Per-user Drive state (starred, recent, shared-with-me index) | The user's My Drive `DriveSpaceDO` (`user_state` tables) | Per principal |
+| Blob reference index | `BlobIndexDO` | 256 shards by hash prefix |
 | Audit log | R2 `audit` (locked), with a D1 recent index | Daily segments |
 | Backups | R2 `backups` (bucket lock), optionally a second account or jurisdiction | Per run |
 | Long-term archive and exports | R2 `archive` (Infrequent Access class) | Per export |
 | Metrics | Analytics Engine | |
 
-**Content addressing.** Blobs are stored under the SHA-256 of their bytes and are never mutated.
-References are counted in the owning objects. A mark-and-sweep GC with a grace period, which
-honours backup retention and legal hold, deletes unreferenced blobs ([S03.T08](stages/S03-platform-services.md)).
+**Blob storage and deduplication** ([ADR-0007](adr/0007-backup-and-archive.md), S03.T01, S03.T11, S03.T12):
+
+- **Storage keys.** Blobs are immutable and stored under **opaque keys** (`b/<ulid>`), because the
+  SHA-256 of a multipart upload is known only at the end. R2's Workers binding has no server-side
+  copy, so the bytes can't be moved to a hash-named key afterwards.
+- **Deduplication.** The hash is computed while streaming (parts must arrive in order) and
+  recorded in `BlobIndexDO`. If the hash already exists when an upload completes, the new copy is
+  deleted and the existing key is reused.
+- **Reference counts.** Owning objects never count references themselves. They send
+  `ref(+1/−1, owner, hash)` effects through their outbox to the hash's `BlobIndexDO` shard. Each
+  effect carries an idempotency id, so redelivery is safe.
+- **GC** walks the index shards, never the owning objects. A blob is deleted only when:
+  - its reference count has been zero for longer than the longest backup retention plus a grace
+    period (default: one year, because monthly full backups are kept for a year)
+  - and it is not pinned by a legal hold.
+
+  Every deletion is logged ([S03.T08](stages/S03-platform-services.md)).
 
 **Data residency.** Durable Object namespaces and R2 buckets can be created in a jurisdiction
 (for example `eu`). The deployment config exposes this choice once, at provisioning time.
@@ -208,8 +230,11 @@ honours backup retention and legal hold, deletes unreferenced blobs ([S03.T08](s
   and delivered by an alarm with retries), idempotency-key storage, object-registry self-registration,
   and the backup contract (`exportSnapshot`, `exportChanges(sinceSeq)`, `importSnapshot`).
 - **Idempotency.** Every mutating operation accepts an idempotency key (the `Idempotency-Key`
-  header, or `idempotency_key` in MCP). Queue consumers are idempotent by message key, because
-  queue delivery is at least once.
+  header, or `idempotency_key` in MCP). The middleware only parses the key and passes it in the
+  request context. The **object that owns the mutation** stores the key together with the result,
+  in the same transaction as the change ([ADR-0013](adr/0013-per-principal-state.md)). That makes
+  retries exactly-once without a second hop to another object. Queue consumers are idempotent by
+  message key, because queue delivery is at least once.
 - **Events.** Domain events (`mail.message.received`, `drive.item.shared`,
   `doc.comment.mentioned`, `meet.recording.ready`) are defined in contracts. They are delivered to
   `PrincipalDO` feeds (for the UI badge and live updates, MCP `events_poll` and `events_wait`) and to
@@ -286,8 +311,8 @@ sequenceDiagram
   `sheet`, `slides`) has a companion `DocumentDO` keyed by the item id.
 - **Permissions** are stored on items and inherited down the tree. Grantees can be a principal, a
   group, the whole org (`org`) or a link (`anyone-with-link`, which an admin can disable). The space
-  object is authoritative. A share writes an outbox entry that updates the grantee's
-  `PrincipalDO` "shared with me" index and sends a notification.
+  object is authoritative. A share writes an outbox entry that updates the shared-with-me
+  index in the grantee's My Drive space and sends a notification.
 - **Opening native documents.** The client asks the space object to open an item. The space object checks
   the ACL and issues a short-lived signed **document ticket** `{itemId, principalId, role, exp}`.
   `DocumentDO` accepts WebSocket connections only with a valid ticket. When access is revoked, the space
@@ -371,6 +396,9 @@ go through queues in batches, not synchronous loops.
 - 64 MiB uncompressed Worker bundle size, which matters for editor models and a WASM formula engine on the server
 - Email Service limits (5 MiB per message, 50 recipients, a daily quota that grows with reputation)
 - Realtime SFU participant limits
+- Email Routing catch-all works only on apex domains. Subdomain mail domains need one rule per
+  address, capped at 200 per domain, and a zone allows 30 mail domains. Staging therefore uses
+  its own apex zone ([R-20](risks.md)).
 - The Rate Limiting binding is per location and eventually consistent. Hard caps, such as an agent's
   daily send quota, are therefore counted in `PrincipalDO`, not in the Rate Limiting binding.
 
@@ -383,10 +411,20 @@ later stage plugs its stores into it. The user-facing archive and retention feat
 | --- | --- | --- | --- |
 | T0: platform durability | Hardware loss | R2 and Durable Object durability, which are replicated by Cloudflare | — |
 | T1: point-in-time | Bad deploys, bugs | D1 Time Travel. Durable Object SQLite PITR (`getBookmarkForTime` / `onNextSessionRestoreBookmark`). | 30 days |
-| T2: logical backups | Logical corruption, deletion, account compromise | Nightly `BackupRun` workflow: an incremental (`changes` since the last seq) or weekly full export of every registered object and of D1, as versioned NDJSON. D1 is dumped with batched `SELECT`s, because the export API blocks the database and cannot export virtual tables. Every file has a manifest and a checksum, is optionally encrypted, and is written to the `backups` bucket under a retention lock. Blobs that a backup references are protected from GC. | Configurable, 35 days locked by default, plus monthly fulls kept for a year |
-| T3: disaster recovery copy | Loss of the account or region, or a compromised admin | Replication of `backups` and `blobs` to a locked bucket in a **separate Cloudflare account**. The primary writes to it with an object-scoped token that cannot change the lock **[S03.T08 verifies]**. Anyone with bucket access can remove an R2 bucket lock, so a separate account is the only real isolation. | Same as T2 |
+| T2: logical backups | Logical corruption, deletion, account compromise | Nightly `BackupRun`. Each night it exports objects marked **dirty** since their last backup (incremental exports of `changes` since the last seq), plus a staggered seventh of all objects as full exports, so every object gets a full export weekly. Export jobs are fanned out through the `backup` queue, one job per object, and tracked by a `BackupRunDO`, so no single Workflow instance hits the 25k-step limit. The design target is 1M registered objects in under 6 hours. D1 is dumped with paged `SELECT`s, because the export API blocks the database and cannot export virtual tables. The D1 Time Travel bookmark at the start of the dump is recorded, so that a fully consistent D1 restore is possible within 30 days. Every file has a manifest and a checksum, is optionally encrypted, and is written to the `backups` bucket under a retention lock. | Configurable, 35 days locked by default, plus monthly fulls kept for a year |
+| T3: disaster recovery copy | Loss of the account or region, or a compromised admin | Replication of **all four durable buckets** (`blobs`, `backups`, `audit`, `archive`) to locked buckets in a **separate Cloudflare account**. The primary writes to it with an object-scoped token that cannot change the lock **[S03.T08 verifies]**. Anyone with bucket access can remove an R2 bucket lock, so a separate account is the only real isolation. | Same as T2 |
 | T4: archive and retention | Compliance, departures, legal | Retention policies, legal holds, eDiscovery, org archive exports (S12) | Policy-defined |
 | T5: user exports | Data portability | Takeout-style export: mbox and EML, original files plus Office and PDF conversions, Markdown and CSV, recordings, JSON metadata | On demand |
+
+**Coverage of every store** ([ADR-0007](adr/0007-backup-and-archive.md#store-coverage)):
+
+- Durable Objects, D1 and the four R2 buckets are covered by the tiers above.
+- KV holds only rebuildable caches. Durable state is not allowed in KV unless it is dumped by the
+  backup run (decided for OAuth grants in S01.T01).
+- Queues hold only in-flight work, which can be replayed from its source.
+- Analytics Engine and Workers Logs are ephemeral by design: metrics, not records.
+- Secrets live in the deployment's secret store, and their recovery is part of the
+  disaster-recovery runbook.
 
 A weekly `RestoreDrill` workflow restores a random sample of objects into scratch objects and
 verifies checksums and invariants. A failed drill alerts the admins. A full disaster-recovery
@@ -408,24 +446,36 @@ Built in S02, and every product stage adds its tools.
   1. **Agent API keys** as static bearer tokens. This works with every client that supports custom headers.
   2. **`client_credentials`** tokens for OAuth clients bound to an agent. The MCP extension is still a
      draft and `workers-oauth-provider` does not implement this grant, so Soldock adds it (S02.T04).
+  3. **"Connect as my agent"** for clients that support only authorization code + PKCE (claude.ai
+     and Claude Desktop connectors, many hosted agents). On the consent screen, a sponsor
+     authorizes the client **as one of their agents**. The token is
+     `{ subject: agent, actor: client, authorized_by: sponsor }`, its scopes are capped by the agent's
+     policy, and the grant is audited (S02.T12).
 
-  **Delegated human access** uses authorization code + PKCE.
+  **Delegated human access** uses the same authorization code + PKCE flow, but the sponsor chooses
+  "as myself", so the token subject is the human.
 - **Tools** are generated from the operation registry: `mail_search`, `mail_get_thread`,
   `mail_send`, `drive_list`, `drive_upload`, `docs_read`, `docs_edit`, `sheets_read_range`,
   `sheets_write_range`, `slides_create_from_outline`, `meet_create`, `meet_get_transcript`,
   `events_wait`, and so on. Tools are filtered by the caller's scopes and agent policy, and can be
-  narrowed further with `?toolsets=mail,drive`. Annotations map from the operation annotations.
-  Results carry `structuredContent` and a readable text rendering.
+  narrowed further with `?toolsets=mail,drive`. With no `toolsets` parameter, the default set is
+  the product toolsets the caller can use. Admin and account-management tools (`admin_*`, key
+  management) appear only with an explicit `?toolsets=admin`, so agents don't receive about 120
+  tools by default. Annotations map from the operation annotations. Results carry
+  `structuredContent` and a readable text rendering.
 - **Resources** expose items, messages, attachments and transcripts by URI
   (`soldock://drive/items/{id}` and similar). Large binaries are returned as resource links or signed
   `/dl/` URLs.
 - **Agent ergonomics:** agent-friendly formats (Markdown, A1 ranges, outlines), cursor
-  pagination, `dry_run` on bulk and destructive operations, idempotency keys, long-poll
-  `events_wait` with a filter so an agent can wait for mail, and asynchronous jobs with a `jobs_get` tool.
+  pagination, `dry_run` on bulk and destructive operations, idempotency keys, and asynchronous
+  jobs with a `jobs_get` tool. There is also a long-poll `events_wait` with a filter, so an agent can
+  wait for mail. It defaults to 25 s and allows at most 55 s, to stay inside common MCP client tool
+  timeouts. Agents loop on its cursor.
 - **Agent safety:** external content is wrapped in an `untrusted` envelope with its provenance.
   Outbound actions are bounded by agent policy (rate limits, recipient allowlists, sponsor
   approval queues). A sponsor or admin kill switch suspends an agent and revokes its tokens at once.
-  Every call is audited with the actor kind.
+  Every mutation and privileged read is audited with the actor kind. Ordinary reads are metered per
+  agent ([§5](#5-identity-and-access)).
 
 ## 12. Security model
 
@@ -500,10 +550,12 @@ soldock/
 ├── tools/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
 │   ├── licenses/               # dependency license policy check
-│   └── cli/                    # `soldock` operator CLI: provision, backup, restore, import
+│   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T09)
+│   └── load/                   # load and soak scenarios run on Cloudflare (S13)
+├── fixtures/                   # MIME / DOCX / XLSX / PPTX corpora with license notes
 ├── e2e/                        # Playwright end-to-end tests
 ├── docs/                       # user, admin, self-hosting, agent and security docs
-├── plan/                       # this plan: vision, architecture, process, ADRs, stages, status
+├── plan/                       # this plan: vision, architecture, process, ADRs, stages, spikes, status
 └── .claude/                    # skills and reviewer agents that implement the process
 ```
 
@@ -523,12 +575,23 @@ soldock/
 - **Local:** `pnpm dev` runs the Vite dev server with the Cloudflare Vite plugin. The Worker, its
   Durable Objects, D1, R2, KV and Queues all run locally in workerd/Miniflare. A local inbound-mail
   simulator posts `.eml` fixtures to the `email()` handler.
-- **Staging:** `dock-staging.<domain>` with its own resources and a staging mail subdomain. Deployed on every
-  merge to `main`.
-- **Production:** deployed from release tags (S14). Before Soldock reaches production, the plan's
-  stage gates control readiness.
+- **Staging:** `dock-staging.<domain>` with its own resources. Its mail domain is a **dedicated
+  apex zone** (for example `soldock-staging.dev`), so catch-all routing works and load tests can
+  create thousands of addresses. Deployed on every merge to `main`.
+- **Production-lite (from M2, S05.T22):** the real `dock.jaredwray.com` deployment, with
+  production resources, backups and the DR copy.
+  - Soldock sends as `@jaredwray.com` through Email Service. SPF covers both senders, and DKIM uses
+    separate selectors.
+  - MX stays at Google, and Google forwards a copy of all inbound mail to an **ingest alias
+    domain**, which Soldock maps onto the `@jaredwray.com` mailboxes. The alias domain is either a
+    subdomain such as `in.jaredwray.com`, which needs per-address rules (fine for a small
+    organization), or a separate apex zone.
+  - This gives real daily-driver use on real addresses months before the MX switch.
+- **Production:** from v1.0 (S14) onward, it is deployed from release tags with manual approval.
+  The MX cutover happens in S14.T07.
 - **Provisioning:** `soldock provision` creates the D1 database, R2 buckets (with lifecycle rules and bucket
   locks), KV namespaces, queues and their DLQs, Email Routing rules and the DNS records for the mail domains.
   It is idempotent and prints the `wrangler.jsonc` bindings. A "Deploy to Cloudflare" button arrives in S14.
 - **Configuration** comes from three places: `wrangler.jsonc` vars (hostnames, mail domains, jurisdiction), secrets
-  (keys) and D1 `settings` (runtime-adjustable policies, edited in the admin console).
+  (keys) and D1 `settings` (runtime-adjustable policies and feature flags, edited through
+  `admin.settings.*` in the admin console, S01.T15).

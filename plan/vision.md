@@ -50,6 +50,26 @@ MCP endpoint, the same way a person works through the web UI.
 - Multi-tenant SaaS hosting. One deployment serves one organization, which may own several
   mail domains ([ADR-0008](adr/0008-single-organization-deployments.md)).
 - End-to-end encrypted mail (S/MIME, PGP).
+- A desktop sync client for Drive. Files are reached through the web app, the API and MCP.
+- Localization. v1 ships in English, with user-facing strings kept in message catalogues so they
+  can be translated later.
+- Web Push notifications. In-app, email and agent event-feed notifications cover v1.
+
+## Contingency: outbound mail
+
+Outbound internet mail can only go through Cloudflare Email Service. Workers cannot open
+outbound port 25, and R1 forbids an external relay. The service is in beta and positioned for
+transactional mail ([R-01](risks.md)). **S00.T13 settles viability before any Mail work.** If the
+answer is negative or unresolved, R1 and "build Gmail" collide, and only the maintainer can choose.
+The options, recorded in an ADR before the S04 kickoff:
+
+1. **Proceed within limits.** Use Email Service at the volumes Cloudflare confirms, with the
+   mitigations in R-01, and request quota increases.
+2. **Internal-first mail.** Full internal mail and receiving from the internet, with outbound
+   internet mail limited to notification-class traffic until Cloudflare supports more.
+3. **A pluggable outbound adapter.** Keep Email Service as the default and allow an optional,
+   operator-configured SMTP relay. That is an explicit, documented exception to R1 for self-hosters
+   who need it.
 
 ## Principles
 
@@ -58,7 +78,7 @@ ADR.
 
 - **P1. Cloudflare-only runtime.** Production depends only on Cloudflare services: Workers,
   Durable Objects, D1, R2, KV, Queues, Workflows, Email Routing and Email Service, Realtime, Workers
-  AI, Vectorize, Browser Rendering, Images, Containers, Secrets Store, Analytics Engine, Access and
+  AI, Vectorize, Browser Run, Images, Containers, Secrets Store, Analytics Engine, Access and
   Turnstile. Development tools such as GitHub and npm are allowed. Outbound calls to
   third-party APIs happen only when a user explicitly asks for them (for example, importing from
   Google).
@@ -86,8 +106,9 @@ ADR.
 
 ## Success criteria for v1.0
 
-1. `dock.jaredwray.com` is the daily driver for the Wray organization. Mail on `@jaredwray.com`
-   has moved from Google Workspace, and the history has been imported.
+1. `dock.jaredwray.com` is the daily driver for the Wray organization. It runs as production-lite
+   from M2 (S05.T22). By v1.0, mail on `@jaredwray.com` has moved from Google Workspace, with its
+   history imported.
 2. An AI agent with its own `@jaredwray.com` address receives mail, files documents in its Drive,
    edits a shared Sheet while a human watches live, and joins a meeting to produce notes, all
    through MCP and all under its own identity and audit trail.

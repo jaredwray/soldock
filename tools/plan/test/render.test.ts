@@ -19,6 +19,7 @@ describe("renderStatus", () => {
 		expect(output).toMatch(/## In progress\n\n- \[S00\.T02\]/);
 		expect(output).toMatch(/## Ready to start\n\n- \[S00\.T03\]/);
 		expect(output).toMatch(/## Blocked\n\n_None._/);
+		expect(output).toMatch(/## Gates due\n\n_None._/);
 	});
 
 	it("draws the stage dependency graph", () => {

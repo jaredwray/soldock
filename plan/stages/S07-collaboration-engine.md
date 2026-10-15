@@ -2,7 +2,7 @@
 id: S07
 title: Collaboration engine
 status: planned
-depends: [S06]
+depends: [S01]
 ---
 
 # S07 · Collaboration engine
@@ -32,6 +32,11 @@ The shared real-time engine behind Docs, Sheets and Slides:
 - **WebSocket hibernation:** `serializeAttachment` holds at most 16 KiB, messages can be up to
   32 MiB, and one object can hold thousands of sockets. Awareness state must be rebuilt after hibernation.
 - **Memory:** 128 MB per isolate, shared with other objects ([R-04](../risks.md)).
+- **Row size:** Durable Object SQLite rows and values are capped at 2 MB, so snapshots and large
+  updates are chunked across rows.
+- **Stage dependencies** are minimal (S01). The Drive pieces (S06.T02 and S06.T04) and the
+  platform pieces (S03.T05 and S03.T12) are task-level dependencies, so the Docs chain doesn't wait
+  for Mail or the Drive UI.
 
 ## Tasks
 
@@ -52,11 +57,12 @@ compaction. Evaluate `y-partyserver` against a thin custom provider.
 - status: todo
 - kind: feature
 - size: M
-- depends: S07.T01
+- depends: S07.T01, S03.T05, S03.T12
 
 - **Sync:** y-protocols sync and awareness over hibernatable WebSockets.
 - **Persistence:** every update is written to SQLite before it is acknowledged.
-- **Compaction:** updates are compacted into a snapshot on thresholds, and checkpoints are written to R2.
+- **Compaction:** updates are compacted into a snapshot on thresholds. Snapshots over 2 MB are
+  chunked across rows, and checkpoints are written to R2.
 - **Load:** cold start from the snapshot plus the tail of updates.
 - **Backup:** backup tables and a round-trip test.
 
@@ -98,7 +104,7 @@ compaction. Evaluate `y-partyserver` against a thin custom provider.
 - status: todo
 - kind: feature
 - size: M
-- depends: S07.T02
+- depends: S07.T02, S03.T10
 
 - **Threads:** comment threads anchored with CRDT relative positions. Threads can be resolved and reopened, and support reactions.
 - **Mentions:** `@` mentions notify through in-app and email.
@@ -125,7 +131,7 @@ compaction. Evaluate `y-partyserver` against a thin custom provider.
 - status: todo
 - kind: feature
 - size: M
-- depends: S07.T02
+- depends: S07.T02, S02.T02
 
 - **Headless editing:** a headless Y.Doc inside `DocumentDO`. Operations apply edits as
   transactions whose origin is the acting principal, so presence shows "Ada is editing".

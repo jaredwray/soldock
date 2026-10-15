@@ -81,6 +81,32 @@ The GitHub Actions `verify` job runs lint, typecheck, tests, plan check and the 
 - [x] CI runs on pull requests and on pushes to `main`.
 - [x] The license checker parses SPDX `OR`/`AND` expressions, supports explicit exceptions, and has unit tests.
 
+### S00.T13 · Spike: is Email Service viable for mailbox traffic?
+- status: todo
+- kind: spike
+- size: S
+
+Outbound mail is the plan's single point of failure ([R-01](../risks.md)). Workers cannot open
+outbound port 25, and R1 rules out an external relay, so **if Email Service can't carry
+person-to-person mailbox traffic, Mail as specified is not buildable on Cloudflare alone.** Answer
+this before any Mail work starts:
+
+- **Sending tests:**
+  - Onboard a throwaway apex domain to Email Service.
+  - Send structured messages and raw MIME. Check that custom `Message-ID`, `In-Reply-To`,
+    `References` and `X-` headers are preserved, and that the result threads correctly in Gmail and Outlook.
+  - Consume the lifecycle-event queue.
+  - Record the documented and observed limits (size, recipients, daily quota, rate).
+- **Acceptable use:** ask Cloudflare in writing whether person-to-person mailbox traffic (humans
+  and agents sending as themselves) is acceptable use, and at what volume.
+- **Findings:** record them in `plan/spikes/S00.T13-email-service.md`.
+
+**Acceptance**
+- [ ] The findings note is committed with the test evidence and Cloudflare's written answer (or the open request, with a date).
+- [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
+  [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
+  the S04 kickoff gate**.
+
 ### S00.T04 · `apps/dock` Worker skeleton
 - status: todo
 - kind: feature
@@ -104,7 +130,22 @@ Create `apps/dock`:
 **Acceptance**
 - [ ] `GET /api/v1/system/ping` returns `{ ok: true }` with an `x-request-id` header, tested in workerd.
 - [ ] Unknown `/api/*` paths return a problem+json 404, and SPA routes fall back to `index.html` (tested).
-- [ ] CI fails on a stale `worker-configuration.d.ts` and on a bundle over budget.
+- [ ] CI fails on a stale `worker-configuration.d.ts`, on a bundle over budget, and on a Worker
+  startup time over budget. Large server-side bundles hit the startup CPU limit long before 64 MiB.
+
+### S00.T14 · Coverage reporting and thresholds
+- status: todo
+- kind: chore
+- size: S
+- depends: S00.T04
+
+Add `@vitest/coverage-v8` to every Vitest project, with a per-project threshold of 90% lines for
+`apps/dock`, `packages/*` and `tools/*`. Add it to `pnpm verify` and CI, and upload the report as a
+CI artifact. Until this task lands, the coverage clause in the Definition of Done is reported, not enforced.
+
+**Acceptance**
+- [ ] Dropping coverage below the threshold in a fixture project fails `pnpm verify` (tested once, then reverted).
+- [ ] CI shows coverage per project.
 
 ### S00.T05 · `apps/web` SPA skeleton and `packages/ui` seed
 - status: todo
@@ -199,11 +240,15 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - depends: S00.T05
 
 - **Environments:** `wrangler.jsonc` defines `staging` and `production`.
-- **Provisioning:** `tools/cli` adds a `soldock provision --env <env>` command. It is idempotent and
+- **Provisioning:** create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
+  `soldock provision --env <env>` command. It is idempotent and
   creates D1, R2 buckets (`blobs`, `backups`, `archive`, `audit`), KV, queues and their DLQs. It
   prints the bindings, using wrangler's automatic provisioning where possible and the Cloudflare
   API otherwise.
 - **Deploy:** a GitHub Actions workflow deploys `main` to staging (`dock-staging.<domain>`).
+- **Staging mail domain:** a dedicated **apex** zone (for example `soldock-staging.dev`). Email
+  Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
+  rules ([R-20](../risks.md)).
 - **Docs:** `docs/self-hosting.md` (first draft) lists the account prerequisites (the Workers Paid
   plan and a zone on Cloudflare) and the secrets.
 
@@ -274,6 +319,8 @@ uploaded on failure.
 - `pnpm dev` runs the SPA and the Worker on one local origin. `pnpm verify` and `pnpm e2e` are green in CI.
 - Staging serves the SPA plus `system.ping` and `system.version` (through the registry) at its own host.
 - `SoldockObject` with migrations, changes, outbox and idempotency is tested in workerd.
+- The viability of Email Service for mailbox traffic is answered (S00.T13). Any contingency the
+  maintainer chose is recorded in an ADR.
 
 **Exit demo**
 
@@ -286,4 +333,6 @@ uploaded on failure.
 ## Gate log
 
 - 2026-10-15 · kickoff · plan bootstrap. S00.T01–T03 were delivered with the plan itself. Fable
-  reviewed the plan (see [plan/README.md](../README.md#review-history)).
+  (`plan-reviewer`) reviewed the whole plan, the implementation system and the repo structure over
+  several rounds until it reported no blocking findings. See
+  [plan/README.md › Review history](../README.md#review-history) and [jaredwray/soldock#1](https://github.com/jaredwray/soldock/pull/1).

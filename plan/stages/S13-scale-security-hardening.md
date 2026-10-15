@@ -2,7 +2,7 @@
 id: S13
 title: Scale, security and hardening
 status: planned
-depends: [S12]
+depends: [S05, S06]
 ---
 
 # S13 · Scale, security and hardening
@@ -31,27 +31,41 @@ structured reviews. Know what it costs to run.
 - Hardening is continuous. Every stage's Definition of Done includes security, a11y and
   observability. This stage is the integrated, adversarial pass.
 - Load generation runs on Cloudflare too: Workers and Durable Objects as virtual users, plus
-  Browser Run for UI flows.
+  Browser Run for UI flows. Browser Run bills per concurrent browser, so keep UI-flow concurrency small.
+- **Stage dependencies** are minimal (S05 and S06, the daily-driver products). Mail and Drive load
+  testing starts at M2 instead of after Meet. Tasks that need the full surface depend on the
+  later stages directly.
 
 ## Tasks
 
-### S13.T01 · Load and soak test suite
+### S13.T01 · Load harness, plus Mail, Drive and MCP scenarios
 - status: todo
 - kind: test
 - size: M
 
-`tools/load` holds scenario scripts, executed on Cloudflare (Workers and Durable Objects as virtual users):
+`tools/load` runs scenario scripts on Cloudflare, with Workers and Durable Objects as virtual users:
 
 - 5,000 principals, 1,000 of them concurrently active
 - mail bursts at 50 messages per second
-- 1,000 open documents, plus one document with 50 editors
-- 20 meetings
+- Drive uploads and searches
 - 500 agents making 100 MCP calls per second
 
-A 24 h soak runs on staging.
+Staging uses its apex mail zone, so thousands of addresses route through catch-all.
 
 **Acceptance**
 - [ ] A load report is committed, with p50 and p95 per operation. SLO breaches become tasks with owners.
+
+### S13.T09 · Collaboration and Meet load, and the 24 h soak
+- status: todo
+- kind: test
+- size: M
+- depends: S13.T01, S08, S09, S10, S11
+
+Add collaboration scenarios (1,000 open documents, plus one document with 50 editors) and Meet
+scenarios (20 meetings). Then run a 24 h soak of the full mix on staging.
+
+**Acceptance**
+- [ ] The report is extended and the soak is clean, or regressions are filed as tasks.
 
 ### S13.T02 · Performance budgets in CI
 - status: todo
@@ -70,6 +84,7 @@ memory high-water marks. Regressions fail CI.
 - status: todo
 - kind: test
 - size: M
+- depends: S11, S12
 
 Run a structured review against OWASP ASVS L2. It covers:
 
@@ -94,6 +109,7 @@ Run the `/security-review` skill over the codebase, and fix the findings.
 - status: todo
 - kind: test
 - size: M
+- depends: S05.T15, S08.T05, S11.T09
 
 Build a scenario suite:
 
@@ -113,6 +129,7 @@ approvals, caps and kill switch contain each scenario.
 - status: todo
 - kind: test
 - size: S
+- depends: S08, S09, S10, S11, S12.T05
 
 Automated axe checks across every route, plus a manual screen-reader pass (NVDA/VoiceOver) through
 the core flows of every product. Check keyboard-only operation and reduced-motion support.
@@ -136,7 +153,7 @@ mail and their event feeds. Tail and Logpush exports are documented.
 - status: todo
 - kind: docs
 - size: S
-- depends: S13.T01
+- depends: S13.T01, S13.T09
 
 `docs/operations/costs.md` gives the monthly cost per 1,000 users by product (Workers, Durable
 Objects, D1, R2, Queues, Workflows, Email Service, Realtime, Workers AI, Browser Run, Images),
@@ -144,6 +161,18 @@ derived from load-test metrics and current pricing. It identifies the cost drive
 
 **Acceptance**
 - [ ] The model is reproducible from a script over the metrics, and was reviewed at the exit gate.
+
+### S13.T10 · Installable PWA
+- status: todo
+- kind: feature
+- size: S
+
+A web app manifest, icons, a service worker with an offline shell and asset caching (never
+caching API responses that contain user data), an install prompt, and an update flow. This
+delivers the "installable as a PWA" promise in [vision.md](../vision.md#scope).
+
+**Acceptance**
+- [ ] Lighthouse reports the app as installable. Offline, the app shows its shell plus cached editor documents. A new deploy prompts a reload (tested).
 
 ### S13.T08 · Chaos and failure testing
 - status: todo

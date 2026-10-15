@@ -24,9 +24,13 @@ R2 stores objects of up to 5 TiB with no egress fees.
   - `DocumentDO` per native document
   - `MeetingDO` per meeting
 
-  Each object is authoritative for its own data and ACLs.
-- **R2 `blobs`** holds every large or immutable payload, content-addressed by SHA-256. Objects store
-  references, not bytes. Other buckets: `backups` (locked), `archive` (Infrequent Access) and `audit` (locked).
+  Each object is authoritative for its own data and ACLs. Per-user state lives in the domain
+  that owns it ([ADR-0013](0013-per-principal-state.md)).
+- **Shared infrastructure objects**, sharded so none is a hot spot:
+  - `BlobIndexDO`: 256 shards by hash prefix, mapping blob hashes to storage keys and reference counts
+  - `BackupRunDO`: one per backup run
+- **R2 `blobs`** holds every large or immutable payload under opaque keys, deduplicated by SHA-256
+  through `BlobIndexDO`. Objects store references, not bytes. Other buckets: `backups` (locked), `archive` (Infrequent Access) and `audit` (locked).
 - **Cross-object effects** (sharing fan-out, mail delivery to many mailboxes, notifications) use
   a **transactional outbox** inside the source object, delivered at least once by alarm or queue to
   idempotent handlers. No distributed transactions.

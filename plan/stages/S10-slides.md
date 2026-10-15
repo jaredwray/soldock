@@ -2,7 +2,7 @@
 id: S10
 title: Slides
 status: planned
-depends: [S07]
+depends: [S01]
 ---
 
 # S10 · Slides
@@ -31,7 +31,12 @@ slide thumbnails as images.
 - **Model:** deck → slides (array) → elements (maps with type, transform, style, and rich text
   through the S08 schema).
 - **Text boxes** reuse the Docs editor stack. That is why this stage has a task-level dependency on S08.T02.
-- **Thumbnails** are rendered with Browser Run and cached in R2. They are also returned to agents as image content.
+- **Thumbnails:** the UI's thumbnails (slide sorter and filmstrip) are rendered in the browser
+  from the same renderer as the editor. Browser Run renders images only for agents
+  (`slides.render_thumbnail`) and for PDF and PNG export, cached in R2 by content hash. This keeps
+  Browser Run's per-concurrent-browser billing off the editing path ([R-19](../risks.md)).
+- **Stage dependencies** are minimal (S01). The model ADR (S10.T01) can start as soon as the stage
+  is active. Editor work depends on the S07 and S08 tasks it uses.
 
 ## Tasks
 
@@ -40,7 +45,7 @@ slide thumbnails as images.
 - kind: spike
 - size: S
 
-ADR-0017 covers:
+An ADR (next free number) titled **"Slides model and rendering"** covers:
 
 - the element model and coordinate system (EMU-compatible, for PPTX)
 - masters, layouts and themes
@@ -49,7 +54,7 @@ ADR-0017 covers:
 - presence for slides
 
 **Acceptance**
-- [ ] ADR-0017 is accepted, and the S10 tasks are updated.
+- [ ] The "Slides model and rendering" ADR is accepted, and the S10 tasks are updated.
 
 ### S10.T02 · `slides-model`
 - status: todo
@@ -70,7 +75,7 @@ ADR-0017 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S10.T02, S08.T02
+- depends: S10.T02, S08.T02, S07.T09
 
 - **Manipulation:** select, multi-select, move, resize, rotate, snapping guides, align and distribute, group and ungroup, z-order.
 - **Content:** insert shapes, images and tables, and edit text boxes in place with the Docs editor.
@@ -95,7 +100,7 @@ ADR-0017 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S10.T03
+- depends: S10.T03, S07.T02
 
 Full-screen presenting, a presenter view (notes, next slide, timer), and keyboard and clicker
 control. **Audience follow** broadcasts the presenter's position through `DocumentDO`, which Meet
@@ -121,7 +126,7 @@ uses in S11.
 - status: todo
 - kind: feature
 - size: M
-- depends: S10.T02, S07.T07
+- depends: S10.T02, S07.T07, S02.T10
 
 Operations:
 
@@ -140,7 +145,7 @@ Operations:
 - status: todo
 - kind: feature
 - size: S
-- depends: S10.T04, S10.T05
+- depends: S10.T04, S10.T05, S06.T09, S07.T05, S07.T06
 
 Integrate with Drive (new, share, versions), add comments on elements, and index slide text for Drive search.
 

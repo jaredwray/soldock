@@ -36,28 +36,66 @@ Build the shared machinery every product needs before any product data exists:
 - **D1 dumps** use paged `SELECT`s. The export API blocks the database and skips virtual tables.
 - **Durable Object SQLite** supports FTS5, and PITR uses bookmarks over a 30-day window.
 - **Workflows:** up to 25k steps per instance, step results ≤ 1 MiB, 100 creations per second per
-  workflow. A backup run must batch objects per step.
+  workflow. Backup runs therefore fan out one queue job per object, tracked by `BackupRunDO`, and
+  never loop over objects inside one instance ([ADR-0007](../adr/0007-backup-and-archive.md)).
+- **Blobs:** stored under opaque keys and deduplicated through `BlobIndexDO`. A multipart upload's
+  hash is known only at completion, and the R2 binding cannot copy objects server-side.
 
 ## Tasks
 
-### S03.T01 · Blob store
+### S03.T01 · Blob store core
 - status: todo
 - kind: feature
 - size: M
 
-`platform/blobs`:
+`platform/blobs` ([architecture §6](../architecture.md#6-data-placement)):
 
-- **Addressing:** content-addressed keys (`sha256/<hash>`), with hashing while streaming.
-- **Upload:** single-shot uploads up to the zone body limit, and resumable chunked sessions
-  (`/blob/uploads`) that use R2 multipart (create, part, complete, abort).
+- **Storage:** immutable objects under opaque keys (`b/<ulid>`).
+- **Upload:** single-shot uploads up to the zone body limit (100 MB on Free and Pro), with SHA-256
+  computed while streaming.
 - **Download:** streaming downloads with `Range`.
 - **Signed URLs:** expiring `/dl/:token` URLs (HMAC, bound to principal and blob, with optional one-time use).
 - **Safety:** content-type sniffing guard, size limits, and `serveUserContent` for responses.
-- **Reference counting:** an API used by owning objects.
+- **Registration:** completed blobs are registered with the blob index (S03.T12).
 
 **Acceptance**
-- [ ] A 1 GiB chunked upload and a resumed upload after a simulated drop both produce the correct hash (tested with a smaller size in CI, and a full size on staging).
+- [ ] A streamed upload stores the bytes and reports the correct SHA-256 (tested).
 - [ ] Range requests return correct bytes and headers. An expired or tampered `/dl/` token is rejected (tested).
+
+### S03.T12 · `BlobIndexDO`: deduplication and reference counts
+- status: todo
+- kind: feature
+- size: M
+
+- **Sharding:** 256 shards by hash prefix.
+- **Index:** maps a hash to its storage key and size, keeps reference counts per owning object, and
+  records when each count reaches zero.
+- **Dedup at completion:** if the hash already exists, the new copy is deleted and the existing key returned.
+- **References:** `ref` and `unref` effects arrive through the outbox and are idempotent by effect id.
+- **Legal-hold pins:** a hook for S12.T04.
+- **Backup:** backup tables.
+
+**Acceptance**
+- [ ] Concurrent uploads of identical bytes end with one stored object and both owners referencing it (tested).
+- [ ] Redelivered `ref` and `unref` effects never double-count (property test). The backup round trip passes.
+
+### S03.T11 · Resumable multipart upload sessions
+- status: todo
+- kind: feature
+- size: M
+- depends: S03.T01, S03.T12
+
+- **Sessions:** `/blob/uploads` create, part, complete and abort, on R2 multipart.
+- **Parts:** at least 5 MiB (except the last) and under the zone body limit. They are uploaded **in
+  order**, so the hash can be computed incrementally. The hash state is persisted per session, so
+  uploads resume after a drop.
+- **Completion:** registers the blob with the index, including deduplication.
+- **Cleanup:** abandoned sessions are aborted (R2's 7-day default, plus our own sweep).
+
+**Acceptance**
+- [ ] A 1 GiB chunked upload and a resumed upload after a simulated drop both produce the correct
+  hash (tested with a smaller size in CI, and a full size on staging).
+- [ ] A part sent out of order is rejected with a clear error, and the session stays resumable (tested).
 
 ### S03.T02 · Quotas and usage accounting
 - status: todo
@@ -112,34 +150,55 @@ markers.
 - **Manifest:** schema version, seq range, row counts, SHA-256 per segment, blob references.
 - **Encryption:** optional AES-256-GCM envelope encryption.
 - **Specification:** the format is documented in `docs/operations/backup-format.md`.
+- **Dirty tracking:** the first change after a backup sets `dirty` and sends one outbox effect to
+  the current run's dirty set.
+- **Compaction:** the `changes` table is compacted below the lowest seq that the backup cursor and every indexer have passed.
 
 **Acceptance**
 - [ ] Round trip (seed, export, wipe, import, deep-equal) for `TestObject` and `PrincipalDO`.
 - [ ] Incremental export plus replay equals a full export (property test).
 - [ ] An object with an older schema can import a backup and migrate it forward (tested).
 
-### S03.T06 · `BackupRun` workflow and D1 dump
+### S03.T06 · Per-object export jobs and `BackupRunDO`
 - status: todo
 - kind: feature
 - size: M
 - depends: S03.T05, S03.T03
 
-- **Scope of a run:** the nightly workflow (cron) enumerates the registry in batches and exports
-  each object. It is incremental since the last cursor, with a full export weekly. It also dumps D1
-  with paged `SELECT`s.
-- **Output:** files land in `backups/<run>/`, with a run manifest and a summary.
+- **Jobs:** a `backup` queue and its consumer. Each job exports one object (incremental or full),
+  writes segments and the manifest to `backups/<run>/<type>/<id>/`, and reports the result to the
+  run's `BackupRunDO`.
+- **Run state:** `BackupRunDO` tracks the jobs queued, done and failed, retries failures, and writes
+  the run manifest when everything is settled.
+
+**Acceptance**
+- [ ] Redelivered or duplicated export jobs produce exactly one consistent set of segments per object (tested).
+- [ ] The run manifest lists every object with its checksums, and failed jobs are retried and then surfaced (tested).
+
+### S03.T13 · `BackupRun` orchestrator, D1 dump and scale benchmark
+- status: todo
+- kind: feature
+- size: M
+- depends: S03.T06
+
+- **Nightly workflow (cron):** pages through the dirty set, plus a staggered seventh of the
+  registry for weekly fulls, and enqueues export jobs in batches. Each step stays well under the
+  Workflow step and result limits.
+- **D1:** dumped with paged `SELECT`s, with the Time Travel bookmark recorded at the start.
 - **Locking:** the bucket-lock configuration (retention) is applied by `soldock provision`.
 - **Visibility:** an admin backup status page, and `admin.backups.list`.
 
 **Acceptance**
-- [ ] A run over 1,000 synthetic objects completes and resumes correctly after an injected failure in the middle of the run (tested on staging).
+- [ ] A run over 1,000 synthetic objects completes, and resumes correctly after an injected failure in the middle of the run (staging).
+- [ ] **Scale benchmark:** a synthetic registry of 1M objects (10% dirty) finishes inside the 6 h
+  SLO, extrapolated from a measured run of at least 50k objects. The numbers are recorded in `plan/spikes/`.
 - [ ] Locked backup objects can't be deleted before retention ends (verified on staging).
 
 ### S03.T07 · Restore framework and restore drills
 - status: todo
 - kind: feature
 - size: M
-- depends: S03.T06
+- depends: S03.T13
 
 - **Restore modes:** restore an object from a logical backup, in place or into a new id. Restore D1
   tables. PITR wrappers cover Durable Object bookmarks and D1 Time Travel.
@@ -155,12 +214,14 @@ markers.
 - status: todo
 - kind: feature
 - size: M
-- depends: S03.T01, S03.T06
+- depends: S03.T12, S03.T13
 
-- **GC:** mark-and-sweep with a grace period (default 7 days). It never deletes blobs referenced by
-  retained backups or legal holds. It logs and reports what it deletes.
-- **DR copy:** R2 event notifications trigger a queue that copies new blobs and backup objects to a
-  bucket in a **separate Cloudflare account** using an object-scoped token.
+- **GC:** walks the `BlobIndexDO` shards, never the owning objects. It deletes a blob only when its
+  reference count has been zero for longer than the longest backup retention plus a grace period
+  (default one year), and no legal hold pins it. It logs and reports every deletion.
+- **DR copy:** R2 event notifications trigger a queue that copies **all four durable buckets**
+  (`blobs`, `backups`, `audit`, `archive`) to locked buckets in a **separate Cloudflare account**,
+  using an object-scoped token.
 - **Verification:** confirm and document that the token cannot remove that bucket's lock
   ([R-10](../risks.md)). Add an alert when a lock configuration changes.
 

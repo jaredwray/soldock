@@ -2,7 +2,7 @@
 id: S06
 title: Drive — files, folders, sharing
 status: planned
-depends: [S02, S03]
+depends: [S01]
 ---
 
 # S06 · Drive — files, folders, sharing
@@ -33,8 +33,11 @@ through UI, REST and MCP, and is backed up.
 ## Design notes
 
 - [Architecture §8.2](../architecture.md#82-drive-s06), [ADR-0004](../adr/0004-data-partitioning.md).
-- **Space objects are authoritative** for ACLs. "Shared with me" is a denormalized index in
-  `PrincipalDO`, kept current through the outbox, including renames and moves.
+- **Space objects are authoritative** for ACLs. Per-user Drive state (starred, recent, and the
+  shared-with-me index) lives in each user's **My Drive** space ([ADR-0013](../adr/0013-per-principal-state.md)).
+  The outbox keeps it current, including renames and moves.
+- **Stage dependencies** are minimal (S01). Platform pieces (blobs, the blob index, backups, MCP,
+  notifications) are task-level dependencies, so Drive can run in parallel with Mail.
 - **Previews of active content** follow the same-origin rules in [ADR-0002](../adr/0002-cloudflare-only-single-origin.md).
 
 ## Tasks
@@ -44,7 +47,7 @@ through UI, REST and MCP, and is backed up.
 - kind: spike
 - size: S
 
-ADR-0015 covers:
+An ADR (next free number) titled **"Drive data model"** covers:
 
 - spaces (My Drive per principal, shared drives per group)
 - the item schema
@@ -56,17 +59,18 @@ ADR-0015 covers:
 - limits (items per folder, depth)
 
 **Acceptance**
-- [ ] ADR-0015 is accepted. Permission evaluation is specified with a test table, which S06.T04 implements.
+- [ ] The "Drive data model" ADR is accepted. Permission evaluation is specified with a test table, which S06.T04 implements.
 
 ### S06.T02 · `DriveSpaceDO` core
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T01
+- depends: S06.T01, S03.T05
 
 - **Items:** folder, file, doc, sheet, slides and shortcut, with parents, names, MIME type, size, blob reference and timestamps.
 - **History:** versions, and trash with a 30-day automatic purge (an alarm).
-- **Per-user state:** stars and "last viewed" are kept in `PrincipalDO`.
+- **Per-user state (My Drive spaces):** `user_state` tables for stars, recent items and the
+  shared-with-me index, referencing `(spaceId, itemId)`.
 - **Plumbing:** the changes feed and backup tables.
 
 **Acceptance**
@@ -78,11 +82,11 @@ ADR-0015 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T02
+- depends: S06.T02, S03.T02, S03.T11
 
 - **Operations:** `drive.upload` (small and inline), `drive.create_upload_session` (resumable
   chunks), `drive.complete_upload`, folder upload (a manifest of paths) and `drive.download`.
-- **Behavior:** overwriting creates a version, quota is enforced, and blob reference counts are updated.
+- **Behavior:** overwriting creates a version, quota is enforced, and blob references are registered through the outbox.
 
 **Acceptance**
 - [ ] An interrupted upload resumes. A version is created on overwrite, and older versions download intact (tested).
@@ -91,20 +95,31 @@ ADR-0015 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T02
+- depends: S06.T02, S03.T10
 
 - **Roles:** owner, editor, commenter and viewer.
-- **Grantees:** a principal, a group, the org, or `anyone-with-link` (an admin can disable it per org).
+- **Grantees:** a principal, a group, the org, or `anyone-with-link` (an admin can disable it through `admin.settings`).
 - **Behavior:**
   - permissions are inherited and can be overridden on a folder or item
-  - ownership can be transferred
-  - users can request access
-  - shares send notifications through in-app and email
-- **Shared with me:** fan-out to grantees' `PrincipalDO` indexes through the outbox.
+  - shares send notifications in-app, and by email once S05.T19 exists
+- **Shared with me:** fan-out through the outbox to the grantees' My Drive `user_state` indexes.
 
 **Acceptance**
-- [ ] The permission evaluation table from ADR-0015 passes in full, including groups and inheritance.
+- [ ] The permission evaluation table from the "Drive data model" ADR passes in full, including groups and inheritance.
 - [ ] Revoking access is effective on the next request, and fan-out converges (tested).
+
+### S06.T13 · Ownership transfer and access requests
+- status: todo
+- kind: feature
+- size: S
+- depends: S06.T04
+
+- **Ownership transfer:** within a space, and across spaces through copy plus delete, preserving versions.
+- **Access requests:** a "request access" flow that notifies the owners, with approve and deny operations.
+
+**Acceptance**
+- [ ] Transferring ownership moves the quota charge and keeps every grant. An access request
+  approved by the owner grants exactly the requested role (tested).
 
 ### S06.T05 · Shared drives
 - status: todo
@@ -139,7 +154,7 @@ ADR-0015 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T03
+- depends: S06.T03, S03.T01
 
 - **Images:** thumbnails and previews through the Images binding.
 - **Documents and media:** PDFs through pdf.js on the client, text and code highlighting,
@@ -154,7 +169,7 @@ ADR-0015 covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T03, S06.T04, S06.T06
+- depends: S06.T03, S06.T04, S06.T06, S02.T02, S02.T10
 
 Operations:
 
@@ -190,7 +205,7 @@ and the authorization matrix.
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T09
+- depends: S06.T09, S06.T13
 
 - **Share dialog:** a people and group picker (agents are labelled), roles, link settings and access requests.
 - **Details panel:** versions and activity.
@@ -216,12 +231,12 @@ and the authorization matrix.
 - status: todo
 - kind: feature
 - size: S
-- depends: S06.T08, S05.T04
+- depends: S06.T08, S05.T21
 
 - **Attachments:** save mail attachments to Drive, and attach files from Drive.
-- **Large files:** an attachment that would push a message over Email Service's 5 MiB limit
-  automatically becomes a Drive link, shared with the recipients according to policy
-  ([R-01](../risks.md)).
+- **Large files:** the S05.T21 signed-link fallback is upgraded. An attachment that would push a
+  message over Email Service's 5 MiB limit is saved to the sender's Drive and becomes a Drive link,
+  shared with the recipients according to policy ([R-01](../risks.md)).
 
 **Acceptance**
 - [ ] Sending a 20 MiB file to an external recipient delivers a message containing a working,

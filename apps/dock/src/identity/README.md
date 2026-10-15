@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
-| **Owns** | D1 `directory` tables; `PrincipalDO` (settings, event feed, notifications, idempotency, webhooks, shared-with-me index); R2 `audit`. |
+| **Owns** | D1 `directory` tables; `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only, per [ADR-0013](../../../../plan/adr/0013-per-principal-state.md)); R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Built in** | S01, S02 (T03, T04, T06, T07, T09) |
 | **Operations** | `directory.*`, `admin.*`, `account.*`, `events.*`, `notifications.*`, `webhooks.*` |

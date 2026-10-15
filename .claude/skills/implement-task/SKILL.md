@@ -12,9 +12,10 @@ skip the plan updates: they are how the next session knows what happened.
 
 - If the user named a task id, use it. Otherwise run `pnpm plan next`:
   - If anything is **in progress**, continue it, unless the user asked for something else.
-  - Otherwise take the first ready task in the lowest-numbered **active** stage.
-  - If no stage is active, the next stage needs its kickoff gate. Run the
-    [`stage-gate`](../stage-gate/SKILL.md) skill with `kickoff` first, and tell the user.
+  - If it lists **gates due**, run the [`stage-gate`](../stage-gate/SKILL.md) skill for them
+    first (exit before kickoff), and tell the user.
+  - Otherwise take the first ready task. `next` lists only tasks from active stages, in plan order.
+- Never flip a stage to `active` yourself to unblock a task. That is what the kickoff gate is for.
 - Check open PRs for the task id so you don't duplicate work in flight.
 
 ## 2. Understand
@@ -61,7 +62,8 @@ skip the plan updates: they are how the next session knows what happened.
 
 ## 7. Record
 
-- Tick the acceptance boxes, and set `- status: done`.
+- Tick the acceptance boxes, and set `- status: done`. A box that turned out not to apply is
+  ticked with `— N/A: <reason>` appended. `plan check` rejects done tasks with unticked boxes.
 - Run `pnpm plan status --write`, then `pnpm plan check`.
 - Update module READMEs, `plan/architecture.md` (if the design changed), the ADRs (accepted,
   new, or superseded), `plan/risks.md` (if a risk moved), and the user, admin and agent docs.

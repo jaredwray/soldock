@@ -58,6 +58,9 @@ Settle [ADR-0012](../adr/0012-auth-architecture.md):
 
 **Acceptance**
 - [ ] ADR-0012 is set to `accepted` with the evidence (a small prototype branch, linked).
+- [ ] The ADR names where OAuth grants and tokens live. If that is KV, the ADR also specifies how
+  the backup run dumps them. No durable state may sit in an unbacked store
+  ([ADR-0007 store coverage](../adr/0007-backup-and-archive.md#store-coverage)).
 - [ ] Downstream tasks (S01.T04, S01.T07, S02.T03, S02.T04) are updated with the decisions.
 
 ### S01.T02 · Directory schema and repositories
@@ -175,6 +178,10 @@ completes.
 
 - **API:** `audit.record()`, which records actor, actor kind, on-behalf-of, client, operation,
   target, result, IP and timestamp.
+- **Scope:** every mutation and every privileged read (admin actions, eDiscovery, use of
+  delegated access). Ordinary reads are **not** audit events. Agent read calls are metered per
+  agent and operation in Analytics Engine instead
+  ([architecture §5](../architecture.md#5-identity-and-access)).
 - **Pipeline:** events go to a queue, then to R2 `audit/` as daily, hash-chained, gzip NDJSON
   segments. A 90-day index lives in D1 for queries.
 - **Decision:** evaluate Basin Pipelines (Iceberg plus SQL) as the sink and record the choice in an ADR.
@@ -183,6 +190,9 @@ completes.
 - [ ] Every mutating operation registered so far emits an audit event. A contract test enforces this for future operations.
 - [ ] Tampering with a segment breaks hash-chain verification (tested).
 - [ ] An admin can query recent events by actor, target and operation.
+- [ ] The D1 recent index is sized in the ADR (rows per day × retention against the 10 GB limit,
+  at the [§9](../architecture.md#9-scale-model) targets), and rows past retention roll over
+  automatically (tested with a fake clock).
 
 ### S01.T09 · Directory and admin operations
 - status: todo
@@ -204,20 +214,62 @@ Contracts and handlers:
 - [ ] Every operation has REST tests for human, agent and admin principals, covering allow and deny.
 - [ ] Groups support nesting with cycle prevention. Effective membership is computed and cached (tested).
 
-### S01.T10 · Admin console and account settings UI
+### S01.T10 · Admin console: people, agents, groups and domains
 - status: todo
 - kind: feature
 - size: M
 - depends: S01.T09, S01.T04
 
-- **Admin pages:** people, agents (including the policy editor and key management), groups,
-  domains and the audit viewer.
-- **Account settings:** profile, passkeys, sessions and personal tokens.
-- **Agents in the UI:** they show the agent badge and their sponsor everywhere.
+Admin pages for people, agents (including the policy editor and key management), groups and
+domains. Agents show the agent badge and their sponsor everywhere.
 
 **Acceptance**
-- [ ] E2E: an admin creates a human (invite link) and an agent (API key shown once), suspends the agent, and sees the audit trail.
+- [ ] E2E: an admin creates a human (invite link) and an agent (API key shown once), edits the agent's policy, and suspends the agent.
 - [ ] Every page passes axe and is keyboard-operable.
+
+### S01.T16 · Audit viewer UI
+- status: todo
+- kind: feature
+- size: S
+- depends: S01.T08, S01.T10
+
+An admin page for querying audit events (filters by actor, actor kind, target, operation and
+time), with hash-chain verification status per segment, plus a per-agent activity view for
+sponsors, built from the audit index and the read metering.
+
+**Acceptance**
+- [ ] E2E: the actions from S01.T10's e2e appear in the viewer. A sponsor sees their agent's activity, including read counts.
+
+### S01.T17 · Account settings UI
+- status: todo
+- kind: feature
+- size: S
+- depends: S01.T04, S01.T09
+
+Account settings pages: profile, passkeys, sessions and devices, personal access tokens, and connected apps (filled in by S02.T03).
+
+**Acceptance**
+- [ ] E2E: add a second passkey, revoke another session, create and revoke a personal access token. Axe-clean.
+
+### S01.T15 · Org settings and feature flags
+- status: todo
+- kind: feature
+- size: S
+- depends: S01.T09
+
+`admin.settings.get` and `admin.settings.update` (typed, Zod-validated settings in D1, with a cache and
+audited changes), plus a settings page in the admin console. Later stages register their own settings here:
+
+- personal access tokens allowed (S01.T07)
+- DCR enabled (S02.T03)
+- quota defaults (S03.T02)
+- link sharing allowed (S06.T04)
+- guests allowed (S11.T05)
+- feature flags ([ADR-0003](../adr/0003-modular-monolith.md))
+
+**Acceptance**
+- [ ] Settings are typed per key, and an unknown or invalid value is rejected (tested).
+- [ ] Changes take effect across isolates within the cache TTL and are audited (tested).
 
 ### S01.T11 · Rate limiting and bot protection
 - status: todo

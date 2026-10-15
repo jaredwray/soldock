@@ -5,7 +5,7 @@
 | | |
 | --- | --- |
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups/shared mailboxes, delegation, agent outbound policy enforcement. |
-| **Owns** | `MailboxDO` (messages, threads, labels, filters, drafts, FTS, outbox); raw MIME + attachments in R2 `blobs`. |
+| **Owns** | `MailboxDO` (messages, threads, labels, filters, drafts, FTS, outbox, auto-collected contacts, pending agent-send approvals); raw MIME + attachments in R2 `blobs`. |
 | **Depends on** | `platform`, `identity`; `drive` (attachments ↔ Drive, S06.T12). |
 | **Built in** | S04, S05 |
 | **Operations** | `mail.*`, `contacts.*` |

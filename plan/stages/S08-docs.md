@@ -2,7 +2,7 @@
 id: S08
 title: Docs
 status: planned
-depends: [S07]
+depends: [S01]
 ---
 
 # S08 · Docs
@@ -35,6 +35,8 @@ operations. They can be required to edit in suggestion mode, and humans watch th
   suggestions on S07.
 - **Conversion code** is shared by the SPA and the Worker through `packages/docs-model`.
 - **Fidelity risk:** [R-06](../risks.md).
+- **Stage dependencies** are minimal (S01). S08.T01 (the pure model package) can start as soon as
+  the stage is active. Editor work depends on the S07 tasks it actually uses.
 
 ## Tasks
 
@@ -57,7 +59,7 @@ operations. They can be required to edit in suggestion mode, and humans watch th
 - status: todo
 - kind: feature
 - size: M
-- depends: S08.T01
+- depends: S08.T01, S07.T09, S07.T04
 
 - **Editing:** the TipTap editor bound to the S07 client library, with a toolbar, slash commands,
   Markdown input rules and keyboard shortcuts.
@@ -71,7 +73,7 @@ operations. They can be required to edit in suggestion mode, and humans watch th
 - status: todo
 - kind: feature
 - size: M
-- depends: S08.T02
+- depends: S08.T02, S06.T03
 
 - **Tables:** insert, delete, merge and resize.
 - **Images:** upload, paste and drag, stored in the blob store and linked to the item.
@@ -81,28 +83,38 @@ operations. They can be required to edit in suggestion mode, and humans watch th
 - [ ] A pasted image is uploaded once, deduplicated and counted against the quota (tested).
   Chips render only what the viewer can access.
 
-### S08.T04 · Import and export: DOCX, HTML, PDF, Markdown and text
+### S08.T04 · DOCX import and export
 - status: todo
 - kind: feature
 - size: M
 - depends: S08.T01
 
-- **DOCX:** import with a permissive library (candidate: `mammoth`, BSD-2) mapped to the schema,
-  and export with a permissive library (candidate: `docx`, MIT).
-- **Other formats:** HTML import and export (sanitized), and PDF export through Browser Run with
-  print CSS.
-- **Integration:** Drive's "open with Docs" and "download as".
+- **Import:** with a permissive library (candidate: `mammoth`, BSD-2), mapped to the schema.
+- **Export:** with a permissive library (candidate: `docx`, MIT).
+- **Shared code:** both run in `packages/docs-model`, so the SPA and the Worker use the same converters.
 
 **Acceptance**
 - [ ] For the corpus in `fixtures/docs/`, structural assertions pass on import (headings, lists,
   tables and images preserved), and exports open without errors in a validator.
+
+### S08.T10 · HTML and PDF export, and Drive "open with" and "download as"
+- status: todo
+- kind: feature
+- size: M
+- depends: S08.T04, S06.T08
+
+- **Formats:** HTML import and export (sanitized), and PDF export through Browser Run with print CSS.
+- **Drive integration:** "open with Docs" for DOCX, HTML and Markdown files, and "download as" DOCX, PDF, Markdown, HTML or text.
+
+**Acceptance**
 - [ ] A PDF export of a 50-page document finishes under 30 s (staging).
+- [ ] Opening a DOCX from Drive creates a native doc that keeps the original as an earlier version (tested).
 
 ### S08.T05 · Agent operations for Docs
 - status: todo
 - kind: feature
 - size: M
-- depends: S08.T01, S07.T07
+- depends: S08.T01, S07.T07, S02.T10
 
 Operations:
 
@@ -124,7 +136,7 @@ setting can force edits into suggestion mode.
 - status: todo
 - kind: feature
 - size: M
-- depends: S08.T02
+- depends: S08.T02, S07.T05
 
 Suggestions for insertions, deletions and formatting are stored as marks or attributes with an
 author. Suggestions can be accepted or rejected one at a time or all at once. Comments link to
@@ -151,7 +163,7 @@ otherwise as accepted text, with that limitation documented.
 - status: todo
 - kind: feature
 - size: S
-- depends: S08.T03, S08.T06
+- depends: S08.T03, S08.T06, S06.T09, S07.T06
 
 - **Drive:** "New doc" in Drive, plus title rename, star, move and share from inside the editor.
 - **Panels:** a comments sidebar, a version history panel and a suggestions review panel.

@@ -1,5 +1,5 @@
 import { isSettled, type Plan, type Stage, type Task } from "./model.ts";
-import { readyTasks, tasksWithStatus } from "./schedule.ts";
+import { readyTasks, stagesAwaitingExit, stagesAwaitingKickoff, tasksWithStatus } from "./schedule.ts";
 
 function progress(stage: Stage): { settled: number; total: number } {
 	const live = stage.tasks.filter((t) => t.status !== "dropped");
@@ -50,6 +50,19 @@ export function renderStatus(plan: Plan): string {
 			`| ${stageLink(stage)} | ${stage.title} | ${stage.status} | \`${bar(settled, total)}\` ${settled}/${total} | ${stage.depends.join(", ") || "—"} |`,
 		);
 	}
+
+	const gates = [
+		...stagesAwaitingExit(plan).map(
+			(s) => `- ${stageLink(s)} · ${s.title}: every task is settled; run the **exit gate**`,
+		),
+		...stagesAwaitingKickoff(plan).map(
+			(s) => `- ${stageLink(s)} · ${s.title}: dependencies done; run the **kickoff gate**`,
+		),
+	];
+	out.push("");
+	out.push("## Gates due");
+	out.push("");
+	out.push(gates.length > 0 ? gates.join("\n") : "_None._");
 
 	const sections: Array<[string, Task[]]> = [
 		["In progress", tasksWithStatus(plan, "in-progress")],

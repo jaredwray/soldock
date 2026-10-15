@@ -1,21 +1,25 @@
-import { isSettled, type Plan, type Task } from "./model.ts";
-import { effectiveDependencies, expandDependency } from "./validate.ts";
+import { openDependencies } from "./graph.ts";
+import { isSettled, type Plan, type Stage, type Task } from "./model.ts";
 
-export function openDependencies(plan: Plan, task: Task): Task[] {
-	const open: Task[] = [];
-	for (const dep of effectiveDependencies(plan, task)) {
-		for (const t of expandDependency(plan, dep)) {
-			if (t.id !== task.id && !isSettled(t.status)) open.push(t);
-		}
-	}
-	return open;
+/** `todo` tasks in **active** stages whose dependencies are all satisfied, in plan order. */
+export function readyTasks(plan: Plan): Task[] {
+	return plan.stages
+		.filter((stage) => stage.status === "active")
+		.flatMap((stage) => stage.tasks.filter((t) => t.status === "todo" && openDependencies(plan, t).length === 0));
 }
 
-/** Tasks that are `todo` and whose dependencies are all done or dropped, in plan order. */
-export function readyTasks(plan: Plan): Task[] {
-	return plan.stages.flatMap((stage) =>
-		stage.tasks.filter((t) => t.status === "todo" && openDependencies(plan, t).length === 0),
+/** Planned stages whose dependency stages are all done: each needs its kickoff gate before work starts. */
+export function stagesAwaitingKickoff(plan: Plan): Stage[] {
+	return plan.stages.filter(
+		(stage) =>
+			stage.status === "planned" &&
+			stage.depends.every((dep) => plan.stages.find((s) => s.id === dep)?.status === "done"),
 	);
+}
+
+/** Active stages whose tasks are all settled: each needs its exit gate. */
+export function stagesAwaitingExit(plan: Plan): Stage[] {
+	return plan.stages.filter((stage) => stage.status === "active" && stage.tasks.every((t) => isSettled(t.status)));
 }
 
 export function tasksWithStatus(plan: Plan, status: Task["status"]): Task[] {

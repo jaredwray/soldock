@@ -32,14 +32,21 @@
      the provider's token endpoint. Its access tokens use the same format and validation path.
 3. **Delegated access for MCP clients:** `workers-oauth-provider` handles authorization code + PKCE,
    CIMD and DCR, with Soldock's consent screen. The token `props` carry `{ subject, actor, scopes }`.
-4. **One validation path.** Every bearer credential (API key, OAuth access token, client-credentials
+4. **"Connect as my agent."** Many clients support only authorization code + PKCE, including
+   claude.ai and Claude Desktop connectors. The consent screen lets the signed-in human choose
+   **"as myself"** (subject = human) or **"as one of my agents"** (subject = agent,
+   `authorized_by` = sponsor). The second option is offered only to an agent's sponsor or an admin.
+   Its scopes are capped by the agent's policy, and it is audited and revocable from the agent's
+   page. This lets an agent be its own identity in clients that cannot hold secrets or set headers.
+5. **One validation path.** Every bearer credential (API key, OAuth access token, client-credentials
    token) resolves to the same `AuthContext` in middleware, and the audience is checked against the
    resource (`/mcp` or `/api`).
 
 ## What the spike must establish
 
 - Whether the provider's KV storage, which is eventually consistent, meets our revocation target,
-  or whether grants should move to D1 or a Durable Object.
+  or whether grants should move to D1 or a Durable Object. Durable state may not stay in KV
+  unless the backup run dumps it ([ADR-0007 store coverage](0007-backup-and-archive.md#store-coverage)).
 - Whether `client_credentials` can be added cleanly next to the provider (shared token format and
   validation), or whether we should own the whole authorization server.
 - Whether `@simplewebauthn/server` runs in workerd.

@@ -12,8 +12,9 @@ depends: [S04]
 Humans and agents compose, reply to and forward mail to anyone. Mail is delivered with full
 DKIM, SPF and DMARC alignment, and bounces and suppressions are handled. Agent outbound mail is
 bounded by policy, with sponsor approval. Filters, vacation responders, forwarding, groups, shared
-mailboxes and delegation work. At the end of this stage the Wray organization can dogfood mail on
-the staging domain.
+mailboxes and delegation work. At the end of this stage Soldock runs as **production-lite** on
+`dock.jaredwray.com`. The Wray organization uses it daily with real addresses while MX still
+points to Google.
 
 ## Scope
 
@@ -59,12 +60,21 @@ On staging:
 - Consume lifecycle events from the queue.
 - Measure the quota and rate behavior.
 
-**Contact Cloudflare** to confirm acceptable use for person-to-person mailbox traffic, and record
-the answer. Write ADR-0014.
+The viability question and the acceptable-use conversation with Cloudflare were settled in
+S00.T13. This spike covers the integration details:
+
+- the binding API shape
+- `References` handling: replies with more than 100 `References` entries are not accepted, so
+  composition must truncate to the most recent entries and keep the root
+- messages sent through `send_email` show as "dropped" in the Email Routing summary, which must be
+  documented so operators aren't alarmed
+- how quotas and rates behave under burst
+
+Write an ADR (next free number) titled **"Outbound mail through Email Service"**.
 
 **Acceptance**
-- [ ] ADR-0014 is accepted, recording header fidelity, limits and the acceptable-use answer. R-01 is updated.
-- [ ] If the service is unsuitable, the plan is escalated to the maintainer before S05.T04 starts.
+- [ ] The "Outbound mail through Email Service" ADR is accepted, recording header fidelity,
+  limits and quirks. R-01 is updated.
 
 ### S05.T02 · MIME composition library
 - status: todo
@@ -116,29 +126,58 @@ RFC 5322 and MIME composition:
    batches of 50 or fewer with the same `Message-ID`.
 6. Delivery status is updated per recipient, and the Sent label is applied.
 
-Until S06.T12 lands, oversized messages are rejected with an actionable error.
+Messages over the size limit become links (S05.T21) until S06.T12 upgrades them to Drive links.
 
 **Acceptance**
 - [ ] Messages sent to external accounts (Gmail and Outlook seed accounts) thread correctly in replies and pass DKIM, SPF and DMARC (staging).
 - [ ] Undo-send cancels before enqueue. Scheduled send fires within a minute of its scheduled time (tested).
 - [ ] An internal message never calls Email Service (tested with the binding mocked).
 
-### S05.T05 · Agent outbound policy and sponsor approvals
+### S05.T05 · Agent outbound policy enforcement
 - status: todo
 - kind: feature
 - size: M
 - depends: S05.T04, S02.T09
 
-- **Policy enforcement:** `internal-only` (the default for new agents), `allowlist` (domains and
-  addresses) or `any`. Rate and daily caps are enforced through `PrincipalDO` counters.
-- **Approvals:** policies can require approval for external recipients. Approval-required sends
-  enter an approval queue. The sponsor approves or rejects in the UI, through MCP or by mail reply,
-  and the agent receives an event either way.
+- **Modes:** `internal-only` (the default for new agents), `allowlist` (domains and addresses) or
+  `any`, enforced before a message enters the outbox. Rate and daily caps are enforced through
+  `PrincipalDO` counters.
+- **Approval rules:** a policy can mark sends as needing approval. Those sends are parked with
+  `approval_required`, for S05.T15 to handle.
 - **Disclosure:** an optional agent-disclosure footer, plus the `X-Soldock-Agent` header.
 
 **Acceptance**
 - [ ] Every policy mode is covered for allow, deny and approval-required, through REST and MCP (authorization matrix).
-- [ ] An agent cannot approve its own sends or edit its policy (tested).
+- [ ] An agent cannot edit its policy or caps through any path (tested).
+
+### S05.T15 · Sponsor approval queue
+- status: todo
+- kind: feature
+- size: M
+- depends: S05.T05
+
+- **Storage:** parked sends live in the agent's `MailboxDO`
+  ([ADR-0013](../adr/0013-per-principal-state.md)).
+- **Operations:** `mail.approvals.list`, which fans out across the sponsor's agents, plus
+  `mail.approvals.approve` and `mail.approvals.reject` (with an optional edit or comment).
+- **Sponsor UI:** a queue in the sponsor's UI, with a notification for each new request. The agent
+  receives an event either way.
+
+**Acceptance**
+- [ ] A sponsor approves in the UI and through MCP. The message is sent exactly once, even if both happen (tested).
+- [ ] An agent cannot approve its own sends, and only the sponsor or an admin can approve (authorization matrix).
+
+### S05.T16 · Approve by mail reply
+- status: todo
+- kind: feature
+- size: S
+- depends: S05.T15, S05.T19
+
+The approval notification email carries a signed, single-use reply token. A reply of
+"approve" or "reject", from the sponsor's own address with DMARC passing, resolves the request.
+
+**Acceptance**
+- [ ] A forged or replayed reply, or a reply from another address, is rejected and audited (tested).
 
 ### S05.T06 · Bounces, complaints and suppression
 - status: todo
@@ -187,20 +226,42 @@ Gmail-style filters:
 **Acceptance**
 - [ ] The loop-prevention suite passes (auto-submitted headers, self-forwarding, ping-pong between two responders).
 
-### S05.T09 · Groups, shared mailboxes, delegation and send-as
+### S05.T09 · Distribution groups and send-as
 - status: todo
 - kind: feature
 - size: M
 - depends: S05.T04
 
-- **Group modes:** distribution (fan out to members) or a collaborative inbox (a shared
-  `MailboxDO`, with members' access by role).
-- **Delegation:** a mailbox owner grants a principal read, organize or send-on-behalf access.
+- **Distribution groups:** fan out to members through the queue, with membership policy (who may post).
 - **Send-as:** send as an alias or a group address, with verification.
 
 **Acceptance**
-- [ ] A human delegates their mailbox to agent Ada with read and organize access. Ada can label and archive but not send (tested).
 - [ ] Group fan-out to 500 members completes through the queue within the SLO (staging benchmark).
+- [ ] Sending as an unverified alias, or as a group the sender may not post to, is rejected (tested).
+
+### S05.T17 · Collaborative inboxes (shared mailboxes)
+- status: todo
+- kind: feature
+- size: M
+- depends: S05.T09
+
+A group can deliver to a shared `MailboxDO` instead of fanning out. Members get access by role:
+read, organize, reply as the group. The view shows who handled a thread.
+
+**Acceptance**
+- [ ] Two members working the same shared thread see each other's label and archive changes live. Roles are enforced (authorization matrix).
+
+### S05.T18 · Mailbox delegation
+- status: todo
+- kind: feature
+- size: S
+- depends: S05.T04
+
+A mailbox owner grants a principal read, organize or send-on-behalf access (`mail.delegation.*`).
+Delegated actions are audited with `onBehalfOf`.
+
+**Acceptance**
+- [ ] A human delegates their mailbox to agent Ada with read and organize access. Ada can label and archive but not send (tested).
 
 ### S05.T10 · Composer UI
 - status: todo
@@ -226,7 +287,7 @@ A TipTap-based composer with:
 - status: todo
 - kind: feature
 - size: M
-- depends: S05.T07, S05.T08, S05.T09
+- depends: S05.T07, S05.T08, S05.T09, S05.T17, S05.T18
 
 - **Settings pages:** signatures, filters (with a test-against-mailbox preview), vacation
   responder, forwarding, delegation and send-as.
@@ -254,7 +315,7 @@ A TipTap-based composer with:
 - size: S
 - depends: S05.T04
 
-- **Auto-collection:** "Other contacts" are collected from sent mail into `PrincipalDO`.
+- **Auto-collection:** "Other contacts" are collected from sent mail into the sender's `MailboxDO` ([ADR-0013](../adr/0013-per-principal-state.md)).
 - **Operation:** `contacts.suggest`, ranking directory entries above collected contacts.
 - **Not in scope:** a full Contacts app (see the backlog).
 
@@ -267,18 +328,84 @@ A TipTap-based composer with:
 - size: S
 - depends: S05.T04, S05.T10, S05.T12
 
-Move the maintainer's secondary or test mail to the staging mail domain for two weeks. Record
-issues as tasks and fix the blocking ones.
+Use the staging apex mail domain as a second daily mailbox for two weeks. Record issues as tasks
+and fix the blocking ones before production-lite.
 
 **Acceptance**
 - [ ] A dogfood report is committed under `plan/spikes/`, with resulting tasks filed.
+
+### S05.T19 · Platform notification mail
+- status: todo
+- kind: feature
+- size: M
+- depends: S05.T04, S03.T10
+
+The platform's own sender is a `system` principal (for example `no-reply@<domain>`). It provides:
+
+- templated, localizable-ready transactional mail: invites, share notifications, mentions,
+  approval requests, digests, alerts, recovery
+- per-recipient rate limits
+- notification preferences, with one-click unsubscribe for digests (RFC 8058)
+- delivery through the S05.T04 pipeline
+
+This task implements the email hooks left by S01.T14 and S03.T10. Later stages use it too:
+S06.T04, S07.T05 and S13.T06.
+
+**Acceptance**
+- [ ] An invite, a share notification and a digest are delivered with List-Unsubscribe headers where required, and preferences are honoured (tested).
+
+### S05.T20 · Email Service onboarding in `admin.domains`
+- status: todo
+- kind: feature
+- size: S
+- depends: S05.T01, S04.T02
+
+Extend `admin.domains.*` and the console so admins can:
+
+- onboard a domain for sending through the Email Service API
+- show the DKIM, SPF and DMARC records and their verification status
+- keep the binding's allowed senders in sync
+
+**Acceptance**
+- [ ] Onboarding a new domain through the console shows each record's status until it verifies (tested with a mocked API, and once on staging).
+
+### S05.T21 · Large attachments as signed links (before Drive)
+- status: todo
+- kind: feature
+- size: S
+- depends: S05.T04, S03.T01
+
+When an external message would exceed Email Service's 5 MiB limit, oversized attachments are
+replaced by expiring, per-recipient `/dl/` links with a clear note in the message. S06.T12
+upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-01](../risks.md)).
+
+**Acceptance**
+- [ ] Sending a 20 MiB attachment to an external recipient delivers a message whose link downloads the file until it expires (staging).
+
+### S05.T22 · Production-lite deployment
+- status: todo
+- kind: ops
+- size: M
+- depends: S05.T14, S05.T20, S05.T21
+
+Provision the production environment at `dock.jaredwray.com`, with production resources, nightly
+backups and the DR copy ([architecture §16](../architecture.md#16-environments-deployment-and-configuration)):
+
+- **Sending:** as `@jaredwray.com` through Email Service. SPF covers both senders, and DKIM uses separate selectors.
+- **Receiving:** MX stays at Google, which forwards copies to an ingest alias domain mapped onto the `@jaredwray.com` mailboxes.
+- **Users:** the maintainer and the first agents use it daily.
+
+**Acceptance**
+- [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail. Forwarded inbound mail lands in the right mailboxes.
+- [ ] Production backups and drills run nightly, and a rollback to Google-only is documented.
 
 ## Exit criteria
 
 - Humans and agents send and receive external mail with correct threading and authentication alignment.
 - Agent policy is enforced, with sponsor approvals. Bounces surface.
 - Filters, vacation responder, forwarding, groups, shared mailboxes and delegation work, all through UI, REST and MCP.
-- Dogfooding is complete, with no open blocking issues.
+- Dogfooding is complete, with no open blocking issues. **Production-lite runs on
+  `dock.jaredwray.com` with real addresses (M2).**
 
 **Exit demo**
 

@@ -41,7 +41,10 @@ operation (`docs.edit`, `sheets.write_range`, …).
 ## Consequences
 
 - Operation names are stable public API. Renaming one requires a deprecation path.
-- Contract tests are generated per operation (REST + MCP × principal kinds).
+- Contract tests are generated per operation (REST + MCP × principal kinds). To make that
+  possible, every implementation registers a **fixture builder** alongside its handler. The builder
+  seeds the owner, the resource and the grantees a call needs. CI fails when an operation has no
+  fixture builder (S02.T10).
 - MCP tool descriptions double as documentation, so they must be written for agents: precise, with
   examples and limits.
 - Bulk and real-time-only interactions need careful design to stay within this model.

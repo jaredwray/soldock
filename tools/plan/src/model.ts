@@ -30,6 +30,8 @@ export interface Stage {
 	depends: string[];
 	file: string;
 	tasks: Task[];
+	/** Lines of the `## Gate log` section, e.g. "- 2026-10-15 · kickoff · …". */
+	gateLog: string[];
 }
 
 export interface Plan {

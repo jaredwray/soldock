@@ -43,6 +43,10 @@ Set up tooling.
 ## Exit criteria
 
 Everything deploys.
+
+## Gate log
+
+- 2026-10-15 · kickoff · plan-reviewer (Fable): no blocking findings
 `;
 
 export const STAGE_B = `---

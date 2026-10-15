@@ -166,6 +166,16 @@ export function parseStage(file: string, source: string): ParseResult {
 		tasks.push(task);
 	}
 
+	const gateLog: string[] = [];
+	const gateStart = lines.findIndex((line) => /^##\s+Gate log\s*$/.test(line));
+	if (gateStart !== -1) {
+		for (let i = gateStart + 1; i < lines.length; i++) {
+			const line = lines[i] ?? "";
+			if (/^#{1,2}\s/.test(line)) break;
+			if (line.startsWith("- ")) gateLog.push(line);
+		}
+	}
+
 	const stage: Stage = {
 		id,
 		title,
@@ -173,6 +183,7 @@ export function parseStage(file: string, source: string): ParseResult {
 		depends: parseList(front.get("depends") ?? ""),
 		file,
 		tasks,
+		gateLog,
 	};
 	return { stage, problems };
 }

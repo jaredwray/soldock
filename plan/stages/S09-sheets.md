@@ -2,7 +2,7 @@
 id: S09
 title: Sheets
 status: planned
-depends: [S07]
+depends: [S01]
 ---
 
 # S09 · Sheets
@@ -38,6 +38,8 @@ computed results even when no human has the sheet open.
 - **The formula engine must be permissively licensed.** HyperFormula is excluded (GPL). IronCalc
   (MIT/Apache, WASM) is the leading candidate ([R-05](../risks.md)).
 - **Server-side calculation** runs in `DocumentDO` within its memory and CPU budget.
+- **Stage dependencies** are minimal (S01). The long-lead engine spike (S09.T01) can start as soon
+  as the stage is active ([R-05](../risks.md)). Later tasks depend on the S07 tasks they use.
 
 ## Tasks
 
@@ -55,10 +57,10 @@ Evaluate:
 - **Workbook CRDT layout:** benchmark it at 100k and 1M cells.
 
 Define the v1 supported-function list (the top ~300 Excel functions by usage) and the fidelity
-targets. Write ADR-0016.
+targets. Write an ADR (next free number) titled **"Spreadsheet engine and data model"**.
 
 **Acceptance**
-- [ ] ADR-0016 is accepted, with benchmarks, the function list and the size limits. S09 tasks are updated.
+- [ ] The "Spreadsheet engine and data model" ADR is accepted, with benchmarks, the function list and the size limits. S09 tasks are updated.
 
 ### S09.T02 · `sheets-model`: workbook CRDT and addressing
 - status: todo
@@ -79,7 +81,7 @@ targets. Write ADR-0016.
 - status: todo
 - kind: feature
 - size: M
-- depends: S09.T02
+- depends: S09.T02, S07.T07
 
 - **Recalculation:** a dependency graph with incremental recalculation. Cached values are stored
   in the document, and volatile functions are handled.
@@ -91,40 +93,71 @@ targets. Write ADR-0016.
 - [ ] Client and server produce identical values across the conformance suite.
 - [ ] An agent writing a formula through MCP to a closed sheet reads back its computed value (tested).
 
-### S09.T04 · Grid UI core
+### S09.T04 · Grid rendering and navigation
 - status: todo
 - kind: feature
 - size: M
-- depends: S09.T02
+- depends: S09.T02, S07.T09
 
-- **Grid:** a canvas-virtualized grid.
-- **Editing:** selection (ranges, multi-range), an in-cell editor and a formula bar with
-  autocomplete, a fill handle, and copy and paste (TSV and HTML to and from Excel or Google Sheets).
-- **History:** undo and redo per user.
-- **Navigation:** sheet tabs and keyboard navigation.
-- **Collaboration:** presence (selections of humans and agents).
+- **Rendering:** a canvas-virtualized grid, with headers and gridlines.
+- **Selection and navigation:** ranges and multi-range selection, keyboard navigation and sheet tabs.
+- **Collaboration:** presence, showing the selections of humans and agents.
 
 **Acceptance**
-- [ ] E2E: paste a 1,000×20 range from a TSV fixture, edit formulas, undo and redo, with two users concurrently.
+- [ ] E2E: navigate a 100k-cell sheet by keyboard and mouse. A second user's selection is visible live.
 
-### S09.T05 · Formatting, structure, sort and filter
+### S09.T11 · Cell editing, formula bar and undo
+- status: todo
+- kind: feature
+- size: M
+- depends: S09.T04, S09.T03
+
+An in-cell editor, a formula bar with function autocomplete and argument hints, a fill handle
+(series and formulas), and undo and redo per user (Yjs UndoManager).
+
+**Acceptance**
+- [ ] E2E: two users edit formulas concurrently, the fill handle extends a formula series, and each user's undo affects only their own edits.
+
+### S09.T12 · Clipboard interoperability
+- status: todo
+- kind: feature
+- size: S
+- depends: S09.T04
+
+Copy and paste of TSV and HTML to and from Excel and Google Sheets: values, formulas (re-based),
+and basic formats.
+
+**Acceptance**
+- [ ] E2E: pasting a 1,000×20 range from TSV and HTML fixtures gives identical cell values, with formulas re-based correctly.
+
+### S09.T05 · Cell formatting
 - status: todo
 - kind: feature
 - size: M
 - depends: S09.T04
 
-Number, date and currency formats, text styles, borders, fills, alignment, wrapping, merges,
-frozen rows and columns, resizing, hiding, sort ranges, filter views, data validation (lists) and
+Number, date and currency formats, text styles, borders, fills, alignment, wrapping and merges.
+
+**Acceptance**
+- [ ] Formats survive an XLSX round trip for the corpus (with S09.T07).
+
+### S09.T13 · Structure, sort, filter and validation
+- status: todo
+- kind: feature
+- size: M
+- depends: S09.T04
+
+Frozen rows and columns, resizing, hiding, sort ranges, filter views, data validation (lists) and
 basic conditional formatting.
 
 **Acceptance**
-- [ ] Formats survive an XLSX round trip for the corpus (with S09.T07). Sort is stable and formula-safe (tested).
+- [ ] Sort is stable and formula-safe, and filter views are per user and don't change other users' view (tested).
 
 ### S09.T06 · Agent operations for Sheets
 - status: todo
 - kind: feature
 - size: M
-- depends: S09.T03
+- depends: S09.T03, S02.T10
 
 Operations:
 
@@ -177,7 +210,7 @@ images or live chips, and exported to XLSX where supported.
 - status: todo
 - kind: test
 - size: S
-- depends: S09.T03, S09.T04
+- depends: S09.T03, S09.T04, S09.T11
 
 Targets: scrolling at 60 fps across 100k cells, a cold open of a 100k-cell sheet in under 2 s, and
 server recalculation within the object's budget. Clear limit errors appear above the supported
@@ -190,7 +223,7 @@ size.
 - status: todo
 - kind: feature
 - size: S
-- depends: S09.T05, S06.T06
+- depends: S09.T05, S06.T06, S06.T09, S07.T05
 
 Integrate with Drive (new, share, versions, comments on cells). Extract text from cells for Drive search.
 

@@ -5,9 +5,14 @@ description: Run a Soldock stage gate — "kickoff" (planned → active) or "exi
 
 # Stage gate
 
-Arguments: `<kickoff|exit> <stage id>`, for example `kickoff S04`. If no stage is given, use the
-lowest-numbered stage that is `planned` and has its dependency stages done (kickoff), or that is
-`active` with every task settled (exit).
+Arguments: `<kickoff|exit> <stage id>`, for example `kickoff S04`. If no stage is given, run
+`pnpm plan next`. Its "Gates due" section lists the stages that need a kickoff (`planned`, with
+every dependency stage `done`) or an exit (`active`, with every task settled).
+
+Gate-log lines must use this exact format, which `pnpm plan check` enforces:
+
+- `- YYYY-MM-DD · kickoff · <reviewer>: <outcome> · <PR link>`
+- `- YYYY-MM-DD · exit · <reviewer>: <outcome> · <PR link>`
 
 ## Kickoff (planned → active)
 
@@ -34,6 +39,8 @@ lowest-numbered stage that is `planned` and has its dependency stages done (kick
    - Set `status: active` in the frontmatter.
    - Append to `## Gate log`: `- YYYY-MM-DD · kickoff · plan-reviewer (Fable): N findings, all
      addressed or declined with reasons · <PR link>`.
+   - Check for decisions the stage depends on that earlier stages left open. For example, S04's
+     kickoff requires the S00.T13 Email Service answer, or the contingency ADR.
    - Run `pnpm plan status --write`, then open a PR titled `plan(Sxx): kickoff`.
 
 ## Exit (active → done)
@@ -52,6 +59,7 @@ lowest-numbered stage that is `planned` and has its dependency stages done (kick
    criteria and the Definition of Done. Fix the blocking findings, through tasks if they are large,
    and repeat until it reports none.
 5. **Close.**
-   - Set `status: done`, and append the gate-log line.
+   - Set `status: done`, and append the `exit` gate-log line. Dependent stages unlock only now:
+     `pnpm plan next` treats a stage dependency as satisfied only once the stage is `done`.
    - Update `plan/risks.md` (close, retire or add risks) and `plan/architecture.md` if reality diverged.
    - Run `pnpm plan status --write`, then open a PR titled `plan(Sxx): exit`.

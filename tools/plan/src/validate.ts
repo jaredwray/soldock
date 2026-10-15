@@ -1,22 +1,9 @@
-import { isSettled, type Plan, type Problem, STAGE_ID, type Task } from "./model.ts";
+import { effectiveDependencies, expandDependency, openDependencies } from "./graph.ts";
+import { isSettled, type Plan, type Problem, TASK_ID, type Task } from "./model.ts";
 
-/** Resolves a dependency id to the set of task ids it stands for. */
-export function expandDependency(plan: Plan, dep: string): Task[] {
-	if (STAGE_ID.test(dep)) {
-		return plan.stages.find((s) => s.id === dep)?.tasks ?? [];
-	}
-	for (const stage of plan.stages) {
-		const task = stage.tasks.find((t) => t.id === dep);
-		if (task) return [task];
-	}
-	return [];
-}
-
-/** A task's own dependencies plus the dependencies of the stage it lives in. */
-export function effectiveDependencies(plan: Plan, task: Task): string[] {
-	const stage = plan.stages.find((s) => s.id === task.stageId);
-	return [...new Set([...(stage?.depends ?? []), ...task.depends])];
-}
+const KICKOFF_LINE = /^- \d{4}-\d{2}-\d{2} · kickoff · /;
+const EXIT_LINE = /^- \d{4}-\d{2}-\d{2} · exit · /;
+const MOVED_TO = /moved to (S\d{2}\.T\d{2})/;
 
 export function validatePlan(plan: Plan): Problem[] {
 	const problems: Problem[] = [];
@@ -50,16 +37,39 @@ export function validatePlan(plan: Plan): Problem[] {
 				problems.push({ file: stage.file, message: `stage ${stage.id} depends on unknown stage ${dep}` });
 			if (dep === stage.id) problems.push({ file: stage.file, message: `stage ${stage.id} depends on itself` });
 		}
+
+		// Stage lifecycle: planned → (kickoff gate) → active → (exit gate) → done.
 		const started = stage.tasks.some((t) => t.status !== "todo" && t.status !== "dropped");
 		const settled = stage.tasks.every((t) => isSettled(t.status));
 		if (stage.status === "planned" && started) {
 			problems.push({
 				file: stage.file,
-				message: `stage ${stage.id} is "planned" but has started tasks; mark it "active" (after its kickoff gate)`,
+				message: `stage ${stage.id} is "planned" but has started tasks; run its kickoff gate first`,
 			});
 		}
 		if (stage.status === "done" && !settled) {
 			problems.push({ file: stage.file, message: `stage ${stage.id} is "done" but has unsettled tasks` });
+		}
+		if (stage.status !== "planned") {
+			const unfinished = stage.depends.filter((dep) => plan.stages.find((s) => s.id === dep)?.status !== "done");
+			if (unfinished.length > 0) {
+				problems.push({
+					file: stage.file,
+					message: `stage ${stage.id} is "${stage.status}" but its dependency stage(s) ${unfinished.join(", ")} are not done`,
+				});
+			}
+			if (!stage.gateLog.some((line) => KICKOFF_LINE.test(line))) {
+				problems.push({
+					file: stage.file,
+					message: `stage ${stage.id} is "${stage.status}" but its Gate log has no "- YYYY-MM-DD · kickoff · …" line`,
+				});
+			}
+		}
+		if (stage.status === "done" && !stage.gateLog.some((line) => EXIT_LINE.test(line))) {
+			problems.push({
+				file: stage.file,
+				message: `stage ${stage.id} is "done" but its Gate log has no "- YYYY-MM-DD · exit · …" line`,
+			});
 		}
 
 		for (const task of stage.tasks) {
@@ -69,6 +79,13 @@ export function validatePlan(plan: Plan): Problem[] {
 				if (expandDependency(plan, dep).length === 0 && !stageIds.has(dep)) {
 					problems.push({ ...where, message: `${task.id} depends on unknown id ${dep}` });
 				}
+				const target = TASK_ID.test(dep) ? taskIndex.get(dep) : undefined;
+				if (target?.status === "dropped" && task.status !== "dropped") {
+					problems.push({
+						...where,
+						message: `${task.id} depends on dropped task ${dep}; point it at the replacement or remove the dependency`,
+					});
+				}
 			}
 			if (task.status === "dropped" && !task.reason) {
 				problems.push({ ...where, message: `${task.id} is dropped and needs a "reason:" line` });
@@ -76,18 +93,25 @@ export function validatePlan(plan: Plan): Problem[] {
 			if (task.status === "blocked" && !task.reason) {
 				problems.push({ ...where, message: `${task.id} is blocked and needs a "reason:" line` });
 			}
-			if (task.status === "in-progress" && task.size === "L") {
+			const moved = task.reason ? MOVED_TO.exec(task.reason)?.[1] : undefined;
+			if (moved && !taskIndex.has(moved)) {
+				problems.push({ ...where, message: `${task.id} says it moved to ${moved}, which does not exist` });
+			}
+			if ((task.status === "in-progress" || task.status === "done") && task.size === "L") {
 				problems.push({ ...where, message: `${task.id} is size L; split it into S/M tasks before starting it` });
 			}
+			if (task.status === "done" && /^\s*- \[ \]/m.test(task.body)) {
+				problems.push({
+					...where,
+					message: `${task.id} is done but has unticked acceptance boxes; tick them (append "— N/A: <reason>" if one does not apply)`,
+				});
+			}
 			if (task.status === "done" || task.status === "in-progress") {
-				for (const dep of effectiveDependencies(plan, task)) {
-					const open = expandDependency(plan, dep).filter((t) => t.id !== task.id && !isSettled(t.status));
-					if (open.length > 0) {
-						problems.push({
-							...where,
-							message: `${task.id} is ${task.status} but dependency ${dep} is not settled (${open.map((t) => t.id).join(", ")})`,
-						});
-					}
+				for (const open of openDependencies(plan, task)) {
+					problems.push({
+						...where,
+						message: `${task.id} is ${task.status} but dependency ${open.id} is not settled (${open.status})`,
+					});
 				}
 			}
 		}

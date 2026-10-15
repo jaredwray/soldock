@@ -2,7 +2,7 @@
 id: S04
 title: Mail I — receive, store, read, search
 status: planned
-depends: [S02, S03]
+depends: [S01]
 ---
 
 # S04 · Mail I — receive, store, read, search
@@ -32,10 +32,16 @@ covered by backups from day one.
 
 ## Design notes
 
+- **Gate:** this stage's kickoff requires a positive (or contingency-resolved) answer from
+  S00.T13 on whether Email Service can carry mailbox traffic.
+- **Stage dependencies** are minimal (S01). The platform pieces each task needs (blobs, jobs,
+  backups, MCP, events) are task-level dependencies, so Mail can run in parallel with S02 and S03.
+
 - [Architecture §8.1](../architecture.md#81-mail-s04s05).
-- **Email Routing:** inbound messages can be up to 25 MiB. The `email()` handler receives `from`,
-  `to`, `headers`, a `raw` stream and `rawSize`, and can call `setReject`. A catch-all rule to a
-  Worker works on apex domains, but in wrangler config subdomains need per-address rules.
+- **Email Routing:** inbound messages can be up to 25 MiB, enforced before the Worker runs. The
+  `email()` handler receives `from`, `to`, `headers`, a `raw` stream and `rawSize`, and can call
+  `setReject`. **Catch-all works only on apex domains.** Subdomains need one rule per address, up
+  to 200 rules per domain, and a zone allows 30 mail domains ([R-20](../risks.md)).
 - **Reference implementation:** study `cloudflare/agentic-inbox` (check its license before reusing any code).
 - **Untrusted content:** message bodies from senders outside the organization are untrusted
   content ([S02.T09](S02-agent-api-surface.md)).
@@ -46,6 +52,7 @@ covered by backups from day one.
 - status: todo
 - kind: spike
 - size: S
+- depends: S00.T13
 
 Validate on staging:
 
@@ -63,10 +70,17 @@ Assemble a MIME corpus covering:
 - 20 MiB attachments
 - DSNs
 
-Write ADR-0013 for the mailbox schema and threading algorithm.
+Write an ADR (next free number) titled **"Mailbox storage and threading"** that covers the
+mailbox schema and the threading algorithm.
+
+Also measure the **bytes per message**, including the FTS index, over the corpus and a synthetic
+100k-message mailbox. Then set a mailbox-size guard with a clear `quota_exceeded` error below the
+10 GB object limit. Decide whether date-based mailbox sharding must move from the backlog into S12
+for large Gmail imports ([R-18](../risks.md)).
 
 **Acceptance**
-- [ ] ADR-0013 is accepted, and the corpus is committed under `fixtures/mail/` with its licenses.
+- [ ] The "Mailbox storage and threading" ADR is accepted, and the corpus is committed under `fixtures/mail/` with its licenses.
+- [ ] Bytes per message and the size guard are recorded in the ADR. The sharding decision is recorded and R-18 updated.
 - [ ] S04 tasks are updated with what the spike found.
 
 ### S04.T02 · Mail domains and address routing
@@ -79,16 +93,20 @@ Write ADR-0013 for the mailbox schema and threading algorithm.
 - **Address resolution:** primary addresses, aliases, groups (expanded to member mailboxes),
   plus-addressing and the catch-all policy, served from D1 through a read-through cache.
 - **Mailboxes:** created lazily for each principal.
+- **Non-apex mail domains:** Email Routing rules are managed through the API (create, update and
+  delete a per-address rule as addresses change). The 200-rule cap returns `quota_exceeded` with
+  guidance, and `admin.domains` reports the 30-domains-per-zone limit.
 
 **Acceptance**
 - [ ] Resolution is case-insensitive, handles `user+tag@`, and rejects unknown recipients. Groups expand with cycle safety (tested).
 - [ ] Cache invalidation on address changes reaches every isolate within 60 s (tested by asserting the TTL).
+- [ ] On a subdomain mail domain, creating an address creates its routing rule, and the 201st address is refused clearly (tested with a mocked API).
 
 ### S04.T03 · Inbound pipeline
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T01, S04.T02
+- depends: S04.T01, S04.T02, S04.T04, S03.T01, S03.T03, S03.T12
 
 - **`email()` handler:** resolves the recipient (`setReject` for unknown recipients), enforces
   size and policy, streams `raw` to R2, and enqueues `mail-inbound`.
@@ -98,16 +116,17 @@ Write ADR-0013 for the mailbox schema and threading algorithm.
 
 **Acceptance**
 - [ ] Every corpus message is delivered exactly once, even when queue messages are redelivered (tested).
-- [ ] Unknown recipients are rejected during the SMTP session (staging), and oversize mail is rejected with a 5xx.
+- [ ] Unknown recipients are rejected during the SMTP session (staging). A message over the
+  org's configured size limit (below Email Routing's 25 MiB) is rejected with `setReject` (tested).
 
 ### S04.T04 · `MailboxDO` core
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T01
+- depends: S04.T01, S03.T05
 
-- **Schema (per ADR-0013):** messages, threads, labels, message labels, attachment references and
-  changes.
+- **Schema (per the "Mailbox storage and threading" ADR):** messages, threads, labels, message
+  labels, attachment references and changes, with the mailbox-size guard.
 - **Threading:** `References` and `In-Reply-To`, with a subject fallback.
 - **Labels:** system labels and user labels, with per-label counts (total and unread).
 - **Backup:** `backupTables` and the round-trip test.
@@ -137,7 +156,7 @@ Write ADR-0013 for the mailbox schema and threading algorithm.
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T04
+- depends: S04.T04, S02.T09
 
 - **Sanitizer:** an HTML allowlist that runs in Workers.
 - **Rendering contract:** sanitized HTML is rendered in a sandboxed iframe (no `allow-scripts`, no
@@ -168,7 +187,7 @@ Write ADR-0013 for the mailbox schema and threading algorithm.
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T04, S04.T05, S04.T06
+- depends: S04.T04, S04.T05, S04.T06, S02.T02, S02.T10
 
 Operations:
 
@@ -192,7 +211,7 @@ authorization-matrix entries.
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T08
+- depends: S04.T08, S02.T06
 
 - **Layout:** a Gmail-like layout with a label sidebar and counts.
 - **Thread list:** virtualized, with selection, bulk actions and pagination.
@@ -205,7 +224,7 @@ authorization-matrix entries.
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T09
+- depends: S04.T09, S03.T01
 
 - **Thread view:** conversation layout with sanitized iframe rendering and quoted-text folding.
 - **Attachments:** a list with previews (images and PDF) and downloads through `/dl/`.
@@ -230,7 +249,7 @@ authorization-matrix entries.
 - status: todo
 - kind: feature
 - size: S
-- depends: S04.T08
+- depends: S04.T08, S02.T06, S02.T07
 
 - **Events:** `mail.message.received`, written to the feed and delivered to webhooks.
 - **Filtering:** `events_wait` accepts a mail-search filter (for example
@@ -257,11 +276,11 @@ authorization-matrix entries.
 - status: todo
 - kind: test
 - size: S
-- depends: S04.T04
+- depends: S04.T04, S03.T07, S03.T13
 
 - **Backups and drills:** mailboxes are included in `BackupRun` and `RestoreDrill`.
 - **Export:** an mbox and EML exporter function (reused by S12 Takeout).
-- **Blob references:** references from messages and attachments are counted for GC.
+- **Blob references:** references from messages and attachments are registered with `BlobIndexDO` through the outbox.
 
 **Acceptance**
 - [ ] Drill on staging: a mailbox restored from backup produces an identical mbox export.

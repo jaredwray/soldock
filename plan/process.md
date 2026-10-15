@@ -37,9 +37,16 @@ depends: [S01, S02, S03]
 ---
 ```
 
-Stage `depends` lists hard prerequisites: **no task in the stage is ready until every task in
-those stages is settled** (done or dropped). Keep stage dependencies minimal and put finer-grained
-dependencies on individual tasks.
+Stage `depends` lists hard prerequisites: **no task in the stage is ready until each of those
+stages is `done`, meaning it passed its exit gate.** A task-level dependency on a stage id means
+the same thing. A dependency on a task is satisfied when that task is done or dropped. Keep stage
+dependencies minimal, usually just S01, and put finer-grained needs on individual tasks.
+
+Each stage file ends with a `## Gate log`. `pnpm plan check` requires:
+
+- an **`active`** stage to have a line `- YYYY-MM-DD · kickoff · <reviewer and outcome> · <PR link>`
+- a **`done`** stage to have a line `- YYYY-MM-DD · exit · …`
+- its dependency stages to be `done` before it becomes `active`
 
 Tasks are level-3 headings with a metadata list immediately underneath:
 
@@ -65,17 +72,24 @@ Rules:
 - A task of size `L` cannot be started. Split it first (`pnpm plan check` enforces this).
 - A task cannot be `in-progress` or `done` while any of its dependencies is unsettled. This is
   enforced too.
-- Tick acceptance boxes as you satisfy them. A `done` task has every box ticked, or an explanation
-  of the box it does not.
+- A task may not depend on a **dropped** task. Point it at the replacement. A `reason: moved to
+  Sxx.Tyy` must name a task that exists.
+- Tick acceptance boxes as you satisfy them. A `done` task may not have an unticked box. If a box
+  turned out not to apply, tick it and append `— N/A: <reason>`.
+- Never pre-assign ADR numbers in task text. Refer to the ADR a task will write **by its title**,
+  and give it the next free number when you write it.
 
 ## 3. The task loop
 
 Every unit of work follows this loop. The [`implement-task`](../.claude/skills/implement-task/SKILL.md)
 skill walks an agent through it.
 
-1. **Pick.** Run `pnpm plan next`. Finish `in-progress` tasks first. Otherwise take the first
-   ready task in the lowest-numbered **active** stage. Ready tasks in other stages can be picked
-   when the active stage has none ready, or when the user asks for one.
+1. **Pick.** Run `pnpm plan next`. Finish `in-progress` tasks first. If it lists **gates due**,
+   run them before starting new work in those stages: an exit gate for a stage whose tasks are all
+   settled, or a kickoff gate for a stage whose dependencies are done. Otherwise take the first
+   ready task in the lowest-numbered active stage. Ready tasks in **other active** stages can be
+   picked when that stage has none ready, or when the user asks for one. `next` only ever lists
+   tasks from active stages.
 2. **Understand.** Run `pnpm plan show <id>`. Read the stage's goal and design notes, the ADRs it
    links, the architecture sections it touches, and the READMEs of the modules involved. If the
    task is not [ready](#definition-of-ready), fix the task first: split it, clarify it, or add a
@@ -111,7 +125,7 @@ Each stage has two gates. Record the outcome of each in the stage file's `## Gat
    backup coverage, MCP tools, e2e tests), and make every acceptance criterion testable.
 3. Have the **`plan-reviewer`** agent (Fable) review the stage. Address every finding or record
    why not. Repeat until the reviewer has no blocking findings.
-4. Set `status: active` and add a gate-log line.
+4. Set `status: active` and add the kickoff line to the gate log (the format is in [§2](#2-stage-files-and-task-format)).
 
 **Exit gate** (the stage moves from `active` to `done`). Run `stage-gate` with `exit`.
 
@@ -126,7 +140,7 @@ Each stage has two gates. Record the outcome of each in the stage file's `## Gat
    - **docs**: updated
 4. Have the **`impl-reviewer`** agent (Fable) review the stage as a whole, from the diff since the
    kickoff gate, against the exit criteria. Fix what it finds blocking.
-5. Set `status: done`, add a gate-log line, and update `risks.md`.
+5. Set `status: done`, add the exit line to the gate log, and update `risks.md`.
 
 ## 5. Definition of Ready
 
@@ -146,7 +160,7 @@ The PR template repeats this list. Items that don't apply are marked N/A with a 
   - Unit tests for logic.
   - Workerd integration tests (`@cloudflare/vitest-pool-workers`) for Durable Objects, routes, queues and workflows.
   - E2E (Playwright) tests for user-visible flows.
-  - Coverage of changed modules stays at or above the threshold (90% lines).
+  - Coverage of changed modules stays at or above the threshold (90% lines, enforced from S00.T14 on).
 - [ ] **Parity.** New capabilities are operations in `packages/contracts`, exposed through REST and MCP and tested through both adapters.
   The UI calls the same operation.
 - [ ] **Authorization.** Scopes are declared and resource checks are enforced. Tests cover allow and deny for a human, an agent and a delegated token.

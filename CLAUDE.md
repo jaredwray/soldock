@@ -56,7 +56,9 @@ pnpm plan status --write
 | `packages/{docs,sheets,slides}-model/` | Isomorphic document models and converters |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
 | `tools/plan/`, `tools/licenses/` | Plan CLI and license policy check |
-| `plan/` | Vision, architecture, process, ADRs, stages, status, risks |
+| `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
+| `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
+| `plan/` | Vision, architecture, process, ADRs, stages, spike findings, status, risks |
 | `docs/` | User, admin, self-hosting, agent and security docs |
 
 Many of these directories are created by the S00 tasks. Check `pnpm plan` for what exists yet.

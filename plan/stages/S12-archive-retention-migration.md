@@ -46,13 +46,29 @@ Also make Soldock a credible replacement by importing from Google Workspace and 
 
 ## Tasks
 
+### S12.T11 · Streaming archive packager
+- status: todo
+- kind: feature
+- size: M
+- depends: S03.T11
+
+A streaming zip64 writer for large exports:
+
+- **Output:** it writes into R2 multipart uploads, with parts of at least 5 MiB.
+- **Resumability:** it resumes across Workflow steps by persisting its state (offsets and the
+  central-directory entries so far).
+- **Integrity:** it verifies CRC32 per entry.
+
+**Acceptance**
+- [ ] A 50 GB synthetic export completes on staging across many workflow steps and opens with standard unzip tools. An injected failure resumes without corruption.
+
 ### S12.T01 · User export (Takeout)
 - status: todo
 - kind: feature
 - size: M
-- depends: S08, S09, S10, S11
+- depends: S12.T11, S08, S09, S10, S11
 
-The `ExportArchive` workflow builds a per-user zip with:
+The `ExportArchive` workflow uses the S12.T11 packager to build a per-user zip with:
 
 - mail as mbox and EML
 - Drive originals
@@ -65,7 +81,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 
 **Acceptance**
 - [ ] An export of a seeded user contains every item, and its manifest checksums verify (tested).
-- [ ] A 50 GB export completes on staging by resuming across workflow steps.
+- [ ] Each product's exporter is covered by a unit test (mail, Drive originals, Docs, Sheets, Slides, Meet).
 
 ### S12.T02 · Org export and scheduled cold archive
 - status: todo
@@ -84,6 +100,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - status: todo
 - kind: feature
 - size: M
+- depends: S03.T08
 
 - **Rules:** set per org, group, mail label or Drive location: keep for N, delete after N, or keep forever.
 - **Enforcement:** the `RetentionSweep` workflow runs with `dry_run` reports first.
@@ -96,7 +113,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - status: todo
 - kind: feature
 - size: M
-- depends: S12.T03
+- depends: S12.T03, S03.T12
 
 - **Holds:** a hold on a principal or a query prevents purge and GC.
 - **eDiscovery:** the `auditor` role can search across mailboxes and drives (the
@@ -111,6 +128,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - status: todo
 - kind: feature
 - size: M
+- depends: S03.T07
 
 - **Admin console:** restore a deleted user, restore a mailbox or drive to a point in time
   (choosing between logical backup and PITR automatically), and restore a single message or file
@@ -135,6 +153,19 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 **Acceptance**
 - [ ] Importing a seeded Gmail test account reproduces label and thread structure. Re-running the import is idempotent (staging).
 
+### S12.T12 · Google OAuth app setup for imports
+- status: todo
+- kind: docs
+- size: S
+- depends: S12.T06
+
+A guide and admin settings for creating the deployment's own Google OAuth client (scopes,
+verification caveats, test users). It covers the IMAP fallback using XOAUTH2 through Workers TCP
+sockets for accounts where the API isn't available.
+
+**Acceptance**
+- [ ] An agent session follows the guide on a clean Google project and completes a test import.
+
 ### S12.T07 · Import Google Drive
 - status: todo
 - kind: feature
@@ -152,6 +183,7 @@ principals that map to ours. Progress and conflicts are reported.
 - status: todo
 - kind: ops
 - size: M
+- depends: S03.T08, S03.T13
 
 `soldock dr rebuild --from <backup-account>` provisions a fresh account, restores D1, rehydrates
 every registered object from the latest full backup plus incrementals, and re-points the blobs.
