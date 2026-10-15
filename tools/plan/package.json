@@ -1,0 +1,8 @@
+{
+	"name": "@soldock/tool-plan",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Reads plan/stages/*.md, validates the task graph, reports what is ready next and renders plan/STATUS.md.",
+	"type": "module",
+	"license": "MIT"
+}

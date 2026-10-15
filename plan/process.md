@@ -1,0 +1,228 @@
+# How we build Soldock
+
+This is the implementation system for the repository. Humans and AI agents follow the same
+process. It works at three levels:
+
+```text
+Plan (vision, architecture, ADRs)
+ └─ Stage (Sxx): a shippable increment with a kickoff gate and an exit gate
+     └─ Task (Sxx.Tyy): one pull request's worth of work with acceptance criteria
+```
+
+## 1. Sources of truth
+
+| Artifact | Purpose | Who edits it |
+| --- | --- | --- |
+| [`vision.md`](vision.md) | Requirements, scope, non-goals, principles | Maintainer only, by PR |
+| [`architecture.md`](architecture.md) | The current target design | Any task that changes the design, in the same PR |
+| [`adr/`](adr/) | Architecture Decision Records: why things are the way they are | Spikes and design-changing tasks |
+| [`stages/Sxx-*.md`](stages/) | Each stage's goal, design notes, **tasks with status**, exit criteria and gate log | Every task PR (to update its status) |
+| [`STATUS.md`](STATUS.md) | Generated dashboard: progress, what is in flight, what is ready | Only by `pnpm plan status --write` |
+| [`risks.md`](risks.md) | Risk register with owners, triggers and mitigations | Gates and spikes |
+| `apps/dock/src/<domain>/README.md`, `packages/*/README.md` | Each module's contract: what it owns, its dependencies, data, backup coverage, operations | The task that changes the module |
+
+The stage files are the **single source of truth for task status**. STATUS.md is derived from
+them, and CI fails if it is stale or if the task graph is invalid (`pnpm plan check`).
+
+## 2. Stage files and task format
+
+Each stage file starts with frontmatter:
+
+```yaml
+---
+id: S04
+title: Mail I — receive, store, read, search
+status: planned        # planned → active (after its kickoff gate) → done (after its exit gate)
+depends: [S01, S02, S03]
+---
+```
+
+Stage `depends` lists hard prerequisites: **no task in the stage is ready until every task in
+those stages is settled** (done or dropped). Keep stage dependencies minimal and put finer-grained
+dependencies on individual tasks.
+
+Tasks are level-3 headings with a metadata list immediately underneath:
+
+```markdown
+### S04.T03 · Inbound pipeline: email() → R2 → queue → MailboxDO
+- status: todo           # todo | in-progress | blocked | done | dropped
+- kind: feature          # spike | feature | chore | docs | test | ops
+- size: M                # S (≤ ½ day) | M (≤ 2 days) | L (must be split before starting)
+- depends: S04.T02, S03.T03
+- reason: …              # required when status is blocked or dropped
+
+What to build and why, with design notes.
+
+**Acceptance**
+- [ ] Observable, testable outcomes.
+```
+
+Rules:
+
+- IDs are permanent. **Never renumber or reuse an ID.** New tasks take the next free number in
+  their stage, whatever their position in the file. A task can move to another stage only by being
+  dropped (`reason: moved to S07.T12`) and recreated there.
+- A task of size `L` cannot be started. Split it first (`pnpm plan check` enforces this).
+- A task cannot be `in-progress` or `done` while any of its dependencies is unsettled. This is
+  enforced too.
+- Tick acceptance boxes as you satisfy them. A `done` task has every box ticked, or an explanation
+  of the box it does not.
+
+## 3. The task loop
+
+Every unit of work follows this loop. The [`implement-task`](../.claude/skills/implement-task/SKILL.md)
+skill walks an agent through it.
+
+1. **Pick.** Run `pnpm plan next`. Finish `in-progress` tasks first. Otherwise take the first
+   ready task in the lowest-numbered **active** stage. Ready tasks in other stages can be picked
+   when the active stage has none ready, or when the user asks for one.
+2. **Understand.** Run `pnpm plan show <id>`. Read the stage's goal and design notes, the ADRs it
+   links, the architecture sections it touches, and the READMEs of the modules involved. If the
+   task is not [ready](#definition-of-ready), fix the task first: split it, clarify it, or add a
+   spike.
+3. **Claim.** Create a branch `<stage>-<task>-<slug>` (for example `s04-t03-inbound-pipeline`),
+   or use the branch you were assigned. Set the task's `status: in-progress`, regenerate STATUS.md,
+   and open the PR early if others are working in parallel.
+4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
+   the task. File follow-ups as new tasks; don't widen the PR.
+5. **Verify.** Run `pnpm verify` (lint, typecheck, tests, plan check, license check). It must be
+   green. For UI work, run the app and check the change in a browser (see the
+   [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
+6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
+   [Definition of Done](#definition-of-done). For `M` tasks, and for anything touching auth,
+   backups or data models, ask the `impl-reviewer` agent for a review and address what it finds.
+7. **Record.** Tick the acceptance boxes, set `status: done`, and run `pnpm plan status --write`.
+   Update module READMEs and `architecture.md`, and write or update an ADR if a decision was made.
+8. **Ship.** Commit with a conventional message that includes the task id (for example
+   `feat(mail): inbound pipeline [S04.T03]`). Push, then open a PR using the template. One task per
+   PR. Tightly coupled `S` tasks may share a PR if every id appears in the title. The maintainer
+   merges; agents never merge their own PRs.
+
+## 4. Stage gates
+
+Each stage has two gates. Record the outcome of each in the stage file's `## Gate log` section.
+
+**Kickoff gate** (the stage moves from `planned` to `active`). Run the
+[`stage-gate`](../.claude/skills/stage-gate/SKILL.md) skill with `kickoff`.
+
+1. Re-read the stage spec against the current codebase, ADRs and risks. Things learned in earlier
+   stages usually change the plan.
+2. Refine the tasks: split anything `L`, fix dependencies, add missing work (migrations, docs,
+   backup coverage, MCP tools, e2e tests), and make every acceptance criterion testable.
+3. Have the **`plan-reviewer`** agent (Fable) review the stage. Address every finding or record
+   why not. Repeat until the reviewer has no blocking findings.
+4. Set `status: active` and add a gate-log line.
+
+**Exit gate** (the stage moves from `active` to `done`). Run `stage-gate` with `exit`.
+
+1. Every task is `done` or `dropped`, with reasons.
+2. Run the stage's **exit demo** (scripted in the stage file) against local and staging. Record
+   evidence: test names, e2e runs, screenshots.
+3. Run the cross-cutting audits:
+   - **parity**: every new operation is reachable through REST, MCP and the UI
+   - **authorization matrix**: every operation × role × principal kind
+   - **backup coverage**: the restore drill includes the stage's new object types and data
+   - **threat model**: updated for the new surface
+   - **docs**: updated
+4. Have the **`impl-reviewer`** agent (Fable) review the stage as a whole, from the diff since the
+   kickoff gate, against the exit criteria. Fix what it finds blocking.
+5. Set `status: done`, add a gate-log line, and update `risks.md`.
+
+## 5. Definition of Ready
+
+A task is ready when:
+
+- its goal and acceptance criteria are clear, observable and testable
+- every dependency is settled (`pnpm plan next` lists it)
+- open design questions are answered, by an ADR or a completed spike
+- it is size `S` or `M`
+
+## 6. Definition of Done
+
+The PR template repeats this list. Items that don't apply are marked N/A with a reason.
+
+- [ ] **Acceptance.** Every acceptance box for the task is ticked.
+- [ ] **Tests.**
+  - Unit tests for logic.
+  - Workerd integration tests (`@cloudflare/vitest-pool-workers`) for Durable Objects, routes, queues and workflows.
+  - E2E (Playwright) tests for user-visible flows.
+  - Coverage of changed modules stays at or above the threshold (90% lines).
+- [ ] **Parity.** New capabilities are operations in `packages/contracts`, exposed through REST and MCP and tested through both adapters.
+  The UI calls the same operation.
+- [ ] **Authorization.** Scopes are declared and resource checks are enforced. Tests cover allow and deny for a human, an agent and a delegated token.
+- [ ] **Audit and events.** Mutations emit audit events, and domain events are registered in contracts.
+- [ ] **Recoverability.** New persistent state implements the backup contract with a round-trip test (export → wipe → import → equal).
+  Blob references are counted. Data appears in user exports, or a follow-up task exists in S12.
+- [ ] **Idempotency.** Mutations accept idempotency keys, and queue and workflow steps are idempotent.
+- [ ] **Agent safety.** Content from outside the organization is marked untrusted. Destructive and bulk operations support `dry_run`.
+- [ ] **Observability.** New operations and jobs emit structured logs and metrics.
+- [ ] **Security.** Input is validated at the boundary with Zod. The threat model is updated for any new surface.
+- [ ] **UI quality.** Keyboard accessible, axe-clean, responsive, with loading, empty and error states.
+- [ ] **Docs.** Module READMEs and `architecture.md` are updated. An ADR is added for any decision. User, admin or agent docs are updated if behavior is visible.
+- [ ] **Plan.** Task status and STATUS.md are updated. `pnpm verify` is green.
+
+## 7. Spikes
+
+A spike (`kind: spike`) answers a question before the plan commits to an approach. It is
+time-boxed (size S or M). It must deliver:
+
+- an ADR (accepted or rejected options, the evidence, and the consequences) or a findings note in
+  `plan/spikes/`
+- throwaway code only in the PR description or a `spikes/` branch, never merged into `apps/` or
+  `packages/` unless it meets the Definition of Done
+- **updated tasks**: the spike edits the downstream tasks it affects (scope, sizes, new tasks) in
+  the same PR
+
+## 8. Testing strategy
+
+| Layer | Tool | Where |
+| --- | --- | --- |
+| Pure logic (parsers, converters, query languages, address math) | Vitest (node) | `packages/*/test`, `apps/dock/src/**/lib/*.test.ts` |
+| Durable Objects, routes, queues, workflows, email handler | Vitest + `@cloudflare/vitest-pool-workers` (real workerd with D1, R2, KV and Durable Objects) | `apps/dock/test/` |
+| Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
+| Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
+| Backup round-trip | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
+| End-to-end | Playwright against `pnpm dev` (local) and staging | `e2e/` |
+| Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
+| Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |
+
+## 9. Changing the plan
+
+The plan is expected to change. Change it deliberately:
+
+- **Add, split or drop tasks** in the PR that discovers the need. Use new IDs. Drop with a
+  `reason:`.
+- **Change the design**: write an ADR (or supersede one) and update `architecture.md` in the same PR.
+- **Change scope or principles**: only the maintainer can, by editing `vision.md`.
+- **Resequence stages**: edit stage `depends` and explain why in the PR. `pnpm plan check` must
+  still pass (no cycles).
+
+## 10. Parallel work
+
+Several agents can work at once:
+
+- Pick tasks that do not depend on each other. Use separate branches or worktrees.
+- Claim a task by opening a draft PR that sets it to `in-progress`, and check open PRs before
+  picking. Merge conflicts in STATUS.md are resolved by regenerating it.
+- Schema migrations are a serialization point. Only one in-flight PR at a time may add a migration
+  to a given store.
+
+## 11. Roles
+
+| Role | Who | Responsibility |
+| --- | --- | --- |
+| Maintainer | Jared Wray | Owns the vision, merges PRs, gives final approval at gates |
+| Implementer | A human or a Claude session | Runs the task loop |
+| `plan-reviewer` | Fable subagent ([`.claude/agents/plan-reviewer.md`](../.claude/agents/plan-reviewer.md)) | Adversarial review of plans, stages, ADRs and spikes |
+| `impl-reviewer` | Fable subagent ([`.claude/agents/impl-reviewer.md`](../.claude/agents/impl-reviewer.md)) | Adversarial review of implementation diffs and stage exits against the spec and the Definition of Done |
+
+## 12. Commands
+
+```sh
+pnpm plan              # stage summary
+pnpm plan next         # what to work on now
+pnpm plan show S04.T03 # one task, plus the state of its dependencies
+pnpm plan check        # validate the graph and STATUS.md freshness (runs in CI)
+pnpm plan status --write
+pnpm verify            # lint, typecheck, test, plan check, license check (runs in CI)
+```
