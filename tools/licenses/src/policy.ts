@@ -27,7 +27,7 @@ export interface Violation {
  * Parentheses are treated as grouping for the common `(A OR B)` form.
  */
 export function isAllowedExpression(expression: string, allowed: ReadonlySet<string>): boolean {
-	const normalized = expression.trim().replace(/^\((.*)\)$/s, "$1");
+	const normalized = unwrapEnclosingParens(expression.trim());
 	if (normalized.length === 0) {
 		return false;
 	}
@@ -46,6 +46,26 @@ export function isAllowedExpression(expression: string, allowed: ReadonlySet<str
 			?.replace(/\+$/, "")
 			.trim() ?? "";
 	return allowed.has(id);
+}
+
+/** Removes parentheses only when the first `(` matches the final `)`, e.g. "(A OR B)" but not "(A) AND (B)". */
+function unwrapEnclosingParens(expression: string): string {
+	let current = expression;
+	while (current.startsWith("(") && current.endsWith(")")) {
+		let depth = 0;
+		let enclosing = true;
+		for (let i = 0; i < current.length; i++) {
+			if (current[i] === "(") depth++;
+			if (current[i] === ")") depth--;
+			if (depth === 0 && i < current.length - 1) {
+				enclosing = false;
+				break;
+			}
+		}
+		if (!enclosing) break;
+		current = current.slice(1, -1).trim();
+	}
+	return current;
 }
 
 function splitTopLevel(expression: string, operator: "AND" | "OR"): string[] {

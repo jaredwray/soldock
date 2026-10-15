@@ -38,6 +38,10 @@ audited, and an admin can manage people, agents, groups and domains from the con
 - D1 read replication is still beta ([R-11](../risks.md)). The auth path must perform without
   replicas: cache session lookups for a short time, and revoke by purging the cache plus the 60 s ceiling.
 - Agents must never be able to change their own policy or sponsor. Test this explicitly.
+- **Parity bootstrap:** S01's operations ship with REST tests. MCP tools are generated from the
+  registry, so S02.T02 exposes these operations retroactively, and S02.T10 adds their REST + MCP
+  contract and authorization-matrix tests. S02's exit gate checks this
+  ([process §6](../process.md#6-definition-of-done)).
 
 ## Tasks
 

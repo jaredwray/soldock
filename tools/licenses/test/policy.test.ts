@@ -21,6 +21,12 @@ describe("isAllowedExpression", () => {
 		expect(isAllowedExpression("(MIT AND ISC) OR AGPL-3.0", allowed)).toBe(true);
 	});
 
+	it("does not strip parentheses that only wrap the first and last operands", () => {
+		expect(isAllowedExpression("(MIT OR GPL-3.0-only) AND (GPL-2.0-only OR GPL-3.0-only)", allowed)).toBe(false);
+		expect(isAllowedExpression("(MIT OR GPL-3.0-only) AND (ISC OR GPL-3.0-only)", allowed)).toBe(true);
+		expect(isAllowedExpression("((MIT))", allowed)).toBe(true);
+	});
+
 	it("ignores WITH exceptions and + suffixes", () => {
 		expect(isAllowedExpression("Apache-2.0 WITH LLVM-exception", allowed)).toBe(true);
 		expect(isAllowedExpression("MIT+", allowed)).toBe(true);

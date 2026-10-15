@@ -143,7 +143,7 @@ markers.
 - status: todo
 - kind: feature
 - size: M
-- depends: S03.T04, S02.T06
+- depends: S03.T04
 
 - **Contract implementation:** `exportSnapshot`, `exportChanges(sinceSeq)` and `importSnapshot` in
   `SoldockObject`, driven by `backupTables`. Output is streamed NDJSON in ≤ 1 MiB segments.
@@ -155,7 +155,7 @@ markers.
 - **Compaction:** the `changes` table is compacted below the lowest seq that the backup cursor and every indexer have passed.
 
 **Acceptance**
-- [ ] Round trip (seed, export, wipe, import, deep-equal) for `TestObject` and `PrincipalDO`.
+- [ ] Round trip (seed, export, wipe, import, deep-equal) for `TestObject`. Each later object type adds its own round-trip test in its own task.
 - [ ] Incremental export plus replay equals a full export (property test).
 - [ ] An object with an older schema can import a backup and migrate it forward (tested).
 

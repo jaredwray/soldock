@@ -70,6 +70,11 @@ describe("validatePlan", () => {
 		);
 	});
 
+	it("rejects a task that depends on its own stage", () => {
+		const own = STAGE_A.replace("- depends: S00.T01\n\n### S00.T03", "- depends: S00\n\n### S00.T03");
+		expect(messages([own, STAGE_B]).some((m) => m.includes("depends on its own stage S00"))).toBe(true);
+	});
+
 	it("requires reasons for dropped and blocked tasks", () => {
 		const noReason = STAGE_B.replace("- reason: superseded by S01.T01\n", "");
 		expect(messages([STAGE_A, noReason]).some((m) => m.includes("dropped and needs"))).toBe(true);

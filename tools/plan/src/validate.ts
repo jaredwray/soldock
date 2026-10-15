@@ -76,6 +76,12 @@ export function validatePlan(plan: Plan): Problem[] {
 			const where = { file: task.file, line: task.line };
 			for (const dep of task.depends) {
 				if (dep === task.id) problems.push({ ...where, message: `${task.id} depends on itself` });
+				if (dep === task.stageId) {
+					problems.push({
+						...where,
+						message: `${task.id} depends on its own stage ${dep}, which can never be satisfied`,
+					});
+				}
 				if (expandDependency(plan, dep).length === 0 && !stageIds.has(dep)) {
 					problems.push({ ...where, message: `${task.id} depends on unknown id ${dep}` });
 				}

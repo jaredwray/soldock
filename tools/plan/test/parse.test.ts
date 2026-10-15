@@ -55,6 +55,15 @@ status: started
 		expect(messages.some((m) => m.includes("malformed task heading"))).toBe(true);
 	});
 
+	it("rejects unknown and duplicate metadata keys", () => {
+		const typo = STAGE_A.replace("- depends: S00.T02, S00.T03", "- depend: S00.T02, S00.T03");
+		expect(parseStage("a.md", typo).problems.map((p) => p.message)).toContain(
+			'S00.T04: unknown metadata key "depend" (expected status, kind, size, depends, reason)',
+		);
+		const dup = STAGE_A.replace("- kind: ops\n", "- kind: ops\n- kind: chore\n");
+		expect(parseStage("a.md", dup).problems.map((p) => p.message)).toContain('S00.T04: duplicate metadata key "kind"');
+	});
+
 	it("rejects tasks filed under the wrong stage", () => {
 		const source = STAGE_A.replace("### S00.T04", "### S09.T04");
 		const messages = parseStage("a.md", source).problems.map((p) => p.message);

@@ -168,6 +168,7 @@ my agents"** to the agent's sponsor or to an admin.
 - status: todo
 - kind: feature
 - size: M
+- depends: S03.T05
 
 - **`PrincipalDO`:** a `SoldockObject` per principal. It holds user settings, an event feed
   (append-only, with cursors and retention), notification state, webhook subscriptions and agent
@@ -181,7 +182,7 @@ my agents"** to the agent's sponsor or to an admin.
 **Acceptance**
 - [ ] `events_wait` returns within 1 s of a matching event, and times out cleanly without one (tested).
 - [ ] The feed survives hibernation and eviction without losing events, and cursors are stable (tested).
-- [ ] `PrincipalDO` declares `backupTables` (the round-trip test arrives with S03.T05).
+- [ ] `PrincipalDO` declares `backupTables`, and its backup round-trip test passes (export, wipe, import, deep-equal).
 
 ### S02.T07 · Webhooks
 - status: todo
@@ -258,6 +259,7 @@ token), pagination iterators, a webhook signature verifier and examples. It is p
 **Acceptance**
 - [ ] Adding an operation without matrix entries, or without a fixture builder, fails CI.
 - [ ] Parity failures (an operation reachable through REST but not MCP, or the reverse) fail CI.
+  This covers every operation registered in S00 and S01 as well (the parity bootstrap).
 
 ### S02.T11 · Docs for connecting agents
 - status: todo

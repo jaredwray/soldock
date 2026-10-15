@@ -17,6 +17,7 @@ import {
 const TASK_HEADING = /^###\s+(S\d{2}\.T\d{2})\s*[·:—–-]\s*(.+?)\s*$/;
 const LOOKS_LIKE_TASK_HEADING = /^###\s+S\d/;
 const META_LINE = /^-\s+([a-z-]+):\s*(.*?)\s*$/;
+const META_KEYS = new Set(["status", "kind", "size", "depends", "reason"]);
 
 export interface ParseResult {
 	stage?: Stage;
@@ -108,6 +109,15 @@ export function parseStage(file: string, source: string): ParseResult {
 			if (line.trim() === "" && meta.size === 0) continue;
 			const match = META_LINE.exec(line);
 			if (!match?.[1]) break;
+			if (!META_KEYS.has(match[1])) {
+				problems.push({
+					file,
+					line: j + 1,
+					message: `${taskId}: unknown metadata key "${match[1]}" (expected ${[...META_KEYS].join(", ")})`,
+				});
+			} else if (meta.has(match[1])) {
+				problems.push({ file, line: j + 1, message: `${taskId}: duplicate metadata key "${match[1]}"` });
+			}
 			meta.set(match[1], match[2] ?? "");
 		}
 

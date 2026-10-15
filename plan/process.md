@@ -163,6 +163,10 @@ The PR template repeats this list. Items that don't apply are marked N/A with a 
   - Coverage of changed modules stays at or above the threshold (90% lines, enforced from S00.T14 on).
 - [ ] **Parity.** New capabilities are operations in `packages/contracts`, exposed through REST and MCP and tested through both adapters.
   The UI calls the same operation.
+  - *Bootstrap exception (S00–S01 only):* the MCP adapter (S02.T02) and the contract harness
+    (S02.T10) don't exist yet. Operations defined in these stages satisfy parity by being
+    registered in contracts with REST tests. MCP exposure is generated, so S02.T02 exposes them
+    retroactively, and S02.T10 tests every registered operation. S02's exit gate verifies this.
 - [ ] **Authorization.** Scopes are declared and resource checks are enforced. Tests cover allow and deny for a human, an agent and a delegated token.
 - [ ] **Audit and events.** Mutations emit audit events, and domain events are registered in contracts.
 - [ ] **Recoverability.** New persistent state implements the backup contract with a round-trip test (export → wipe → import → equal).
