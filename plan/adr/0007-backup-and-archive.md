@@ -102,7 +102,7 @@ Mechanics:
 
 ## Consequences
 
-- S12 builds the framework after the main products work, then covers every existing store at once (S12.T19).
+- S12 builds the framework after the main products work, then covers every existing store at once (S12.T19–T20).
   Until then, production depends on Cloudflare durability and native PITR ([R-21](../risks.md)).
 - Backup cost grows with change volume (dirty objects) plus a seventh of all objects each night. S13 measures it.
 - The blob index is a shared service. With 256 shards and outbox batching, it scales with the

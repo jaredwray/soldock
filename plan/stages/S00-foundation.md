@@ -172,6 +172,10 @@ contributors, and the required checks taken from the workflows. An agent prepare
 command and the list of required checks, then sets the task to `blocked` with
 `reason: waiting for an admin to run lockdown-repo.sh` until the maintainer confirms.
 
+While this task is `blocked`, S01 can take a **partial kickoff** (`partial: re-refine after S00`,
+[process §4](../process.md#4-stage-gates)), so product work doesn't sit idle waiting for the
+lockdown.
+
 **Acceptance**
 - [ ] `lockdown-repo.sh <owner/repo> --check` is clean, and `DEFENSE_IN_DEPTH.md` §7 is checked.
 

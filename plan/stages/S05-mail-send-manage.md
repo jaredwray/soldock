@@ -392,7 +392,7 @@ upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-
 
 ### S05.T24 · Native point-in-time restore hook and runbook
 - status: todo
-- kind: ops
+- kind: feature
 - size: S
 - depends: S00.T08, S01.T05
 
@@ -402,7 +402,8 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
 - **Restore operation:** an admin-only `admin.objects.restore_to_time` operation on
   `SoldockObject`. It calls `ctx.storage.getBookmarkForTime(ts)`, then
   `onNextSessionRestoreBookmark(bookmark)`, then `ctx.abort()`, and records the bookmark it
-  replaced so the restore can be undone. Durable Object PITR is reachable only from code inside
+  replaced so the restore can be undone. With `dry_run`, it returns the bookmark that would be
+  restored without applying it. Durable Object PITR is reachable only from code inside
   the object; there is no dashboard, wrangler or REST path.
 - **Runbook:** `docs/operations/pitr.md` covers that operation for each object class,
   `wrangler d1 time-travel restore` for the directory, and how blob GC's 45-day grace (S03.T08)
@@ -411,6 +412,7 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
 **Acceptance**
 - [ ] On staging, a destructive change to a test mailbox and to the D1 directory is undone by following the runbook.
 - [ ] Only org owners and admins can call the operation, and every call is audited (authorization matrix).
+- [ ] `dry_run` reports the target bookmark and changes nothing (tested).
 
 ### S05.T25 · Production deploy pipeline and rollback
 - status: todo

@@ -98,7 +98,7 @@ Run a structured review against OWASP ASVS L2. It covers:
 - secrets handling
 - dependency audit
 - CSP
-- backup encryption and key separation
+- backup encryption and key separation, if S12 has landed (otherwise it is reviewed at S12's exit gate)
 
 Run the `/security-review` skill over the codebase, and fix the findings.
 
