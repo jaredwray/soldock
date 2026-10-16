@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`; `drive` (attachments ↔ Drive, S06.T12). |
 | **Built in** | S04, S05 |
 | **Operations** | `mail.*`, `contacts.*` |
-| **Backup coverage** | `MailboxDO` round trip; mbox/EML export (S04.T14). |
+| **Data inventory** | `MailboxDO` tables (messages, threads, labels, filters, drafts, FTS, outbox, contacts, approvals); raw MIME and attachments in R2 `blobs`. Backups: S12; mbox/EML in Takeout (S12.T01). |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

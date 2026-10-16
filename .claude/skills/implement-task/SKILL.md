@@ -45,7 +45,8 @@ skip the plan updates: they are how the next session knows what happened.
 - Follow the [golden rules](../../../CLAUDE.md#golden-rules), and specifically:
   - **New capability:** add an operation to `packages/contracts`. Implement it, and test it
     through REST and MCP for a human, an agent and a delegated token.
-  - **New persistent state:** declare `backupTables`, write a round-trip test, and count blob references.
+  - **New persistent state:** list it in the module README's data inventory and count blob
+    references. Don't build backup code before S12.
   - **Mutations:** idempotency keys, audit events, and domain events registered in contracts.
   - **External content:** the untrusted envelope.
 - Stay inside the task. Record discovered work as **new tasks** in the right stage (next free ID,

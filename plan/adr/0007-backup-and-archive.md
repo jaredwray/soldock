@@ -1,8 +1,14 @@
-# ADR-0007: Layered backup, archive and recovery, built in from the first data store
+# ADR-0007: Layered backup, archive and recovery, built once the main products work
 
-- **Status:** accepted
-- **Date:** 2026-10-15
-- **Decided in:** plan bootstrap (requirement R7)
+- **Status:** accepted, implementation deferred to S12
+- **Date:** 2026-10-15 (deferral recorded 2026-10-16)
+- **Decided in:** plan bootstrap (requirement R7). The maintainer chose to defer backups until the main code works.
+
+> **Deferral.** At the maintainer's direction, none of this is built before S12. The core
+> products come first ("grow in layers"). Until then, production relies on T0 (platform
+> durability) and T1 (native 30-day PITR, run by hand from a runbook). This ADR stays the target
+> design. Modules keep a data inventory, and the outbox, the `changes` log and immutable blobs make
+> it cheap to add later ([R-21](../risks.md)).
 
 ## Context
 
@@ -50,7 +56,7 @@ Mechanics:
   4. finishes when the `BackupRunDO` reports completion
 
   This keeps every Workflow instance far below its 25k-step limit. The design target is
-  **1M registered objects in a run under 6 hours**, verified by a benchmark in S03.T13.
+  **1M registered objects in a run under 6 hours**, verified by a benchmark in S12.T15.
 - **What each export job writes:** NDJSON segments plus a manifest (schema version, seq range, row
   counts, SHA-256 checksums, referenced blob hashes) under `backups/<run>/<type>/<id>/`.
 - **D1** is dumped with paged `SELECT`s, which is not a point-in-time snapshot. The run records the
@@ -94,7 +100,8 @@ Mechanics:
 
 ## Consequences
 
-- S03 builds the framework before any product data exists. Each product stage then extends coverage.
+- S12 builds the framework after the main products work, then covers every existing store at once (S12.T19).
+  Until then, production depends on Cloudflare durability and native PITR ([R-21](../risks.md)).
 - Backup cost grows with change volume (dirty objects) plus a seventh of all objects each night. S13 measures it.
 - The blob index is a shared service. With 256 shards and outbox batching, it scales with the
   number of blobs, but deletion is slow on purpose: storage for deleted data lingers for up to a year.

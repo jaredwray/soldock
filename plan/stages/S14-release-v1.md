@@ -1,16 +1,17 @@
 ---
 id: S14
-title: v1.0 release and production cutover
+title: v1.0 release
 status: planned
 depends: [S12, S13]
 ---
 
-# S14 · v1.0 release and production cutover
+# S14 · v1.0 release
 
 ## Goal
 
-Ship Soldock v1.0 as a self-hostable open-source release, and move the Wray organization's
-production workspace (`dock.jaredwray.com`, `@jaredwray.com`) off Google Workspace.
+Ship Soldock v1.0 as a self-hostable open-source release. The Wray organization's production
+workspace has run on `dock.jaredwray.com`, with its MX on Cloudflare, since M2 (S05.T22). This stage
+upgrades it to the v1.0 release through the normal upgrade path.
 
 ## Scope
 
@@ -21,7 +22,6 @@ production workspace (`dock.jaredwray.com`, `@jaredwray.com`) off Google Workspa
   - release automation
   - community files
   - a third-party pentest
-  - the production cutover
 - **Out:** the post-v1 [backlog](../backlog.md).
 
 ## Tasks
@@ -104,8 +104,9 @@ An interactive CLI that:
 - kind: docs
 - size: S
 
-`CODE_OF_CONDUCT.md`, `SECURITY.md` (disclosure process), issue and PR templates, `GOVERNANCE.md`,
-and a public roadmap linked to the plan.
+`CODE_OF_CONDUCT.md`, issue templates, `GOVERNANCE.md`, and a public roadmap linked to the plan.
+Use the agentic [`project-templates`](https://github.com/jaredwray/agentic/blob/main/skills/project-setup/project-templates/SKILL.md)
+skill for the governance files. `SECURITY.md` already exists, from S00.T15.
 
 **Acceptance**
 - [ ] Files merged. GitHub private vulnerability reporting is enabled.
@@ -122,22 +123,10 @@ same-origin surfaces. Fix the findings.
 - [ ] Report received. Critical and high findings are fixed and regression-tested before tagging v1.0.
 
 ### S14.T07 · Production cutover for jaredwray.com
-- status: todo
+- status: dropped
 - kind: ops
 - size: M
-- depends: S14.T03
-
-Production-lite has been running since M2 (S05.T22). Follow `docs/operations/cutover.md`:
-
-1. Import Gmail and Drive history (S12.T06 and S12.T07) for all users.
-2. Confirm the parallel run (Google forwarding into Soldock) has been clean for at least two weeks.
-3. Switch the `jaredwray.com` MX to Email Routing in a low-traffic window. It is an apex zone, so catch-all works.
-4. Run a final delta import.
-5. Monitor for 30 days, with a rollback plan (restore MX to Google).
-
-**Acceptance**
-- [ ] All users and agents are on Soldock. MX is switched. No mail is lost (verified by
-  comparing message counts). The rollback plan was rehearsed on staging.
+- reason: superseded by S05.T22: production runs on dock.jaredwray.com with the MX on Cloudflare from M2, so there is no later cutover
 
 ## Exit criteria
 

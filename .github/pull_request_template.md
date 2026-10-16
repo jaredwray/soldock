@@ -19,7 +19,7 @@
 - [ ] Parity: operation in contracts, REST + MCP tested, UI uses it
 - [ ] Authorization: human, agent, delegated allow/deny tests
 - [ ] Audit + domain events
-- [ ] Recoverability: backup round-trip, blob refs, export coverage
+- [ ] Data inventory: new stores listed in the module README, blob refs counted (backups come in S12)
 - [ ] Idempotency
 - [ ] Agent safety: untrusted content marked, `dry_run` where destructive/bulk
 - [ ] Observability: logs + metrics

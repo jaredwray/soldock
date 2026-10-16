@@ -12,9 +12,9 @@ depends: [S04]
 Humans and agents compose, reply to and forward mail to anyone. Mail is delivered with full
 DKIM, SPF and DMARC alignment, and bounces and suppressions are handled. Agent outbound mail is
 bounded by policy, with sponsor approval. Filters, vacation responders, forwarding, groups, shared
-mailboxes and delegation work. At the end of this stage Soldock runs as **production-lite** on
-`dock.jaredwray.com`. The Wray organization uses it daily with real addresses while MX still
-points to Google.
+mailboxes and delegation work. At the end of this stage Soldock is **in production** on
+`dock.jaredwray.com`. The `jaredwray.com` MX points to Cloudflare Email Routing, outbound mail goes
+through Cloudflare Email Service, and Google is not involved.
 
 ## Scope
 
@@ -331,7 +331,7 @@ A TipTap-based composer with:
 - depends: S05.T04, S05.T10, S05.T12
 
 Use the staging apex mail domain as a second daily mailbox for two weeks. Record issues as tasks
-and fix the blocking ones before production-lite.
+and fix the blocking ones before the production deployment.
 
 **Acceptance**
 - [ ] A dogfood report is committed under `plan/spikes/`, with resulting tasks filed.
@@ -385,55 +385,50 @@ upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-
 - [ ] Sending a 20 MiB attachment to an external recipient delivers a message whose link downloads the file until it expires (staging).
 
 ### S05.T23 · Ingest alias domain and trusted forwarders
-- status: todo
+- status: dropped
 - kind: feature
 - size: M
-- depends: S04.T02, S04.T07
+- reason: superseded by S05.T22: production uses Cloudflare MX directly, with no Google forwarding or alias ingest domain
 
-Production-lite receives copies of `@jaredwray.com` mail that Google forwards to an ingest
-domain, before the MX switch.
-
-- **Alias domains:** in `addresses`, an alias domain resolves `user@<alias>` to `user@<canonical>`.
-  It is **receive-only** (nobody can send as it), it is shown in `admin.domains`, and it uses
-  S04.T02's per-address rule management when it is a subdomain.
-- **Trusted forwarders:** a per-domain setting names a forwarder (for example Google Workspace for
-  the org). For mail arriving on that domain, the SPF and DMARC verdicts come from the
-  forwarder's **ARC chain** when that chain validates, rather than from the broken direct SPF. The
-  original authentication results are still shown.
-
-**Acceptance**
-- [ ] Mail forwarded through Google from a sender without DKIM lands in the Inbox, not Spam,
-  and shows the ARC-derived verdict (tested with ARC fixtures and once on staging).
-- [ ] Sending as an alias-domain address is rejected (tested).
-
-### S05.T22 · Production-lite deployment
+### S05.T22 · Production deployment on dock.jaredwray.com
 - status: todo
 - kind: ops
 - size: M
-- depends: S05.T05, S05.T14, S05.T15, S05.T20, S05.T21, S05.T23, S03.T08
+- depends: S05.T05, S05.T14, S05.T15, S05.T20, S05.T21
 
-Provision the production environment at `dock.jaredwray.com`, with production resources, nightly
-backups and the DR copy ([architecture §16](../architecture.md#16-environments-deployment-and-configuration)):
+Provision the production environment ([architecture §16](../architecture.md#16-environments-deployment-and-configuration))
+and move `jaredwray.com` mail onto Cloudflare:
 
-- **Sending:** as `@jaredwray.com` through Email Service. SPF covers both senders, and DKIM uses separate selectors.
-- **Receiving:** MX stays at Google, which forwards copies to an ingest alias domain (S05.T23)
-  mapped onto the `@jaredwray.com` mailboxes. Google's ARC chain is trusted for that domain.
+- **App:** `dock.jaredwray.com` is served by the production `dock` Worker.
+- **Receiving:** the `jaredwray.com` MX records point to **Cloudflare Email Routing**, with a
+  catch-all rule to the `dock` Worker. It's an apex zone, so catch-all works.
+- **Sending:** as `@jaredwray.com` through **Cloudflare Email Service**, with SPF, DKIM and DMARC
+  published for it alone.
 - **Agents:** they send only under outbound policy (S05.T05) and sponsor approvals (S05.T15).
+- **Cutover runbook:** `docs/operations/cutover.md` covers:
+  - lowering TTLs ahead of the switch
+  - the DNS changes
+  - checks that mail arrives from Gmail, Outlook and other external senders
+  - where to get the previous provider's mail if history matters (an mbox or Takeout export, to
+    import later with S12.T10 or S12.T06)
 - **Users:** the maintainer and the first agents use it daily.
 
+Production runs before the backup stage (S12) exists. [R-21](../risks.md) records that risk and
+the interim measures.
+
 **Acceptance**
-- [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail. Forwarded
-  inbound mail lands in the right mailboxes, and mail from senders without DKIM lands in the Inbox, not Spam.
-- [ ] The DR copy to the second account is live for production (S03.T08).
-- [ ] Production backups and drills run nightly, and a rollback to Google-only is documented.
+- [ ] External mail to `@jaredwray.com` addresses (human and agent) arrives through Cloudflare
+  Email Routing. No MX record points anywhere else.
+- [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail and Outlook.
+- [ ] The cutover runbook is committed and was rehearsed first on the staging apex zone.
 
 ## Exit criteria
 
 - Humans and agents send and receive external mail with correct threading and authentication alignment.
 - Agent policy is enforced, with sponsor approvals. Bounces surface.
 - Filters, vacation responder, forwarding, groups, shared mailboxes and delegation work, all through UI, REST and MCP.
-- Dogfooding is complete, with no open blocking issues. **Production-lite runs on
-  `dock.jaredwray.com` with real addresses (M2).**
+- Dogfooding is complete, with no open blocking issues. **Production runs on `dock.jaredwray.com`,
+  with the `jaredwray.com` MX on Cloudflare Email Routing (M2).**
 
 **Exit demo**
 

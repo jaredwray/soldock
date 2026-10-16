@@ -11,8 +11,7 @@ depends: [S01]
 
 Mail sent from the internet to any human or agent address at our domains arrives within seconds.
 It is threaded, labelled, searchable with Gmail-style operators, rendered safely in a Gmail-like UI,
-and readable by agents through MCP, with external content marked untrusted. Mailboxes are
-covered by backups from day one.
+and readable by agents through MCP, with external content marked untrusted.
 
 ## Scope
 
@@ -27,7 +26,6 @@ covered by backups from day one.
   - the Mail UI for reading
   - agent mail events
   - a local mail simulator and corpus
-  - backup coverage
 - **Out:** sending, drafts, filters, vacation responder, groups and delegation (S05).
 
 ## Design notes
@@ -35,7 +33,7 @@ covered by backups from day one.
 - **Gate:** this stage's kickoff requires a positive (or contingency-resolved) answer from
   S00.T13 on whether Email Service can carry mailbox traffic.
 - **Stage dependencies** are minimal (S01). The platform pieces each task needs (blobs, jobs,
-  backups, MCP, events) are task-level dependencies, so Mail can run in parallel with S02 and S03.
+  MCP, events) are task-level dependencies, so Mail can run in parallel with S02 and S03.
 
 - [Architecture §8.1](../architecture.md#81-mail-s04s05).
 - **Email Routing:** inbound messages can be up to 25 MiB, enforced before the Worker runs. The
@@ -123,18 +121,16 @@ for large Gmail imports ([R-18](../risks.md)).
 - status: todo
 - kind: feature
 - size: M
-- depends: S04.T01, S03.T05
+- depends: S04.T01
 
 - **Schema (per the "Mailbox storage and threading" ADR):** messages, threads, labels, message
   labels, attachment references and changes, with the mailbox-size guard.
 - **Threading:** `References` and `In-Reply-To`, with a subject fallback.
 - **Labels:** system labels and user labels, with per-label counts (total and unread).
-- **Backup:** `backupTables` and the round-trip test.
 
 **Acceptance**
 - [ ] The threading test suite passes over the corpus plus synthetic edge cases (out-of-order arrival, missing references, subject collisions).
 - [ ] Label counts stay correct under concurrent modifications (property test).
-- [ ] The backup round-trip test passes.
 
 ### S04.T05 · Mail search
 - status: todo
@@ -179,9 +175,6 @@ for large Gmail imports ([R-18](../risks.md)).
   are quarantined to Spam.
 - **Spam scoring:** rule-based, with an optional Workers AI classifier behind a setting.
 - **Feedback:** "report spam" and "not spam" train the per-org allow and block lists.
-- **Forward-compatibility:** keep the authentication-verdict step pluggable. S05.T23 adds
-  trusted forwarders, whose validated ARC chain overrides the SPF and DMARC verdicts on ingest
-  alias domains.
 
 **Acceptance**
 - [ ] Corpus messages with failing authentication land in Spam, and the explanation is shown in the UI and API (tested).
@@ -276,24 +269,16 @@ authorization-matrix entries.
 - [ ] The simulator is documented in `docs/development.md`, and the corpus regression runs in CI.
 
 ### S04.T14 · Mailbox backup and export coverage
-- status: todo
+- status: dropped
 - kind: test
 - size: S
-- depends: S04.T04, S03.T07, S03.T13
-
-- **Backups and drills:** mailboxes are included in `BackupRun` and `RestoreDrill`.
-- **Export:** an mbox and EML exporter function (reused by S12 Takeout).
-- **Blob references:** references from messages and attachments are registered with `BlobIndexDO` through the outbox.
-
-**Acceptance**
-- [ ] Drill on staging: a mailbox restored from backup produces an identical mbox export.
+- reason: moved to S12.T01 (backups are deferred until the main products work; the mbox/EML exporter is built with Takeout)
 
 ## Exit criteria
 
 - External mail reaches human and agent addresses on the staging mail domain, and the UI shows it live.
 - Search operators work. Rendering is safe. Spam and authentication handling is visible.
 - An agent searches and reads mail through MCP, with untrusted envelopes.
-- Mailboxes are in nightly backups and drills.
 
 **Exit demo**
 
@@ -301,7 +286,6 @@ authorization-matrix entries.
 2. Both inboxes update live.
 3. Search `from:gmail.com has:attachment`.
 4. Through MCP, Ada runs `mail_search` and then `mail_get_thread`. The output shows the untrusted envelope.
-5. Restore Ada's mailbox from last night's backup into a scratch id. The exports match.
 
 ## Gate log
 

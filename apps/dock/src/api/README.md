@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity` (auth middleware). Domain implementations are injected by the composition root (`src/index.ts`); this adapter never imports product domains. |
 | **Built in** | S00.T10, S02.T05 |
 | **Operations** | Serves every operation under `/api/v1`. |
-| **Backup coverage** | N/A (stateless). |
+| **Data inventory** | None (stateless). |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

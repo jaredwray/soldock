@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/sheets-model`. |
 | **Built in** | S09 |
 | **Operations** | `sheets.*` |
-| **Backup coverage** | Covered by `DocumentDO`; XLSX/CSV in Takeout. |
+| **Data inventory** | None of its own (content in `DocumentDO`). XLSX/CSV in Takeout. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

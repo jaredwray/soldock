@@ -23,7 +23,7 @@ boundaries, CI and the plan tooling.
   - operation registry v0 (REST only; MCP comes in S02)
   - the `SoldockObject` base class
   - environments and provisioning, the e2e harness, contributor docs
-- **Out:** authentication (S01), MCP (S02), blobs, jobs and backups (S03), product features.
+- **Out:** authentication (S01), MCP (S02), blobs and jobs (S03), product features, backups (S12).
 
 ## Design notes
 
@@ -112,6 +112,37 @@ throwaway Worker on a scratch branch is fine for the queue consumer
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
+
+### S00.T15 · Run the agentic `defense-in-depth-nodejs` hardening
+- status: todo
+- kind: ops
+- size: M
+- depends: S00.T03
+
+Run [`defense-in-depth-nodejs`](https://github.com/jaredwray/agentic/blob/main/skills/security/defense-in-depth-nodejs/SKILL.md)
+from `jaredwray/agentic` on this repo. That skill is a manual, resumable loop that opens **one
+hardening item per PR**. This task tracks the loop until it completes, and is the one task allowed
+to span several PRs. Each PR follows the skill's branch naming (`chore/defense-…`) and PR
+conventions, and mentions `[S00.T15]`.
+
+- **Profile:** website/app, public repo. When S14.T04 starts publishing `@soldock/sdk` and
+  `@soldock/cli` to npm, re-run the skill for its npm-publishing section.
+- **What it covers:**
+  - `SECURITY.md` and `DEFENSE_IN_DEPTH.md`
+  - `CODEOWNERS`, with the owners named by the maintainer
+  - Aikido Safe Chain for cloud agents, merged with the existing SessionStart hook
+  - pnpm settings: a 7-day cooldown, `trustPolicy`, blocked lifecycle scripts, a frozen lockfile
+  - least-privilege Actions permissions, SHA-pinned actions, Socket Firewall in CI, zizmor
+    workflow linting, kebab-case workflow and job names
+  - Aikido and Socket tooling
+  - last, the repo lockdown script, which an admin runs
+- **Labels:** create the `security` label recorded in `AGENTS.md` › Agentic conventions.
+
+**Acceptance**
+- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable item done, or deferred with a reason.
+  `SECURITY.md` lists only measures that are actually in place.
+- [ ] The `security` label exists on the repository.
+- [ ] `pnpm verify` and CI stay green after every hardening PR, and the CI job names remain valid required checks.
 
 ### S00.T04 · `apps/dock` Worker skeleton
 - status: todo
@@ -208,7 +239,7 @@ Enforce [architecture §15 module rules](../architecture.md#15-repository-layout
   - `platform/` imports a domain
   - a package imports from `apps/`
 - **Templates:** `docs/templates/` holds the module README template (owns, depends on, data stores,
-  backup coverage, operations, events) and a package template.
+  operations, events) and a package template.
 
 **Acceptance**
 - [ ] A fixture with a forbidden import fails the check, and the real tree passes (tested).
@@ -228,8 +259,8 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - **Outbox:** `enqueue(effect)` inside the same storage transaction. An alarm-driven dispatcher
   delivers with exponential backoff and dead-letters after N attempts.
 - **Idempotency:** an `idempotency` table with a TTL sweep.
-- **Backup contract (interfaces only):** subclasses declare `backupTables`. `exportSnapshot`,
-  `exportChanges` and `importSnapshot` are implemented in S03.T05.
+- **Backup contract:** not built now. S12 adds it once the main products work. The `changes`
+  table and the registry hook are what it will build on.
 - **Registry:** a self-registration hook, a no-op until S03.T04.
 - **Tests:** a test-only `TestObject` subclass exercises everything above.
 
@@ -248,7 +279,7 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - **Environments:** `wrangler.jsonc` defines `staging` and `production`.
 - **Provisioning:** create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
   `soldock provision --env <env>` command. It is idempotent and
-  creates D1, R2 buckets (`blobs`, `backups`, `archive`, `audit`), KV, queues and their DLQs. It
+  creates D1, R2 buckets (`blobs`, `audit`), KV, queues and their DLQs. It
   prints the bindings, using wrangler's automatic provisioning where possible and the Cloudflare
   API otherwise.
 - **Deploy:** a GitHub Actions workflow deploys `main` to staging (`dock-staging.<domain>`).
@@ -257,8 +288,6 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
   rules ([R-20](../risks.md)).
 - **Docs:** `docs/self-hosting.md` (first draft) lists the account prerequisites and the secrets:
   - the Workers Paid plan and a zone on Cloudflare
-  - a **second Cloudflare account** for disaster-recovery copies ([ADR-0007](../adr/0007-backup-and-archive.md)).
-    `provision` documents it and checks for it but does not create it. S03.T08 and S14.T08 wire it up.
 
 Needs the maintainer to supply `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as repository
 secrets. Set the task to `blocked` with a reason if they are missing.

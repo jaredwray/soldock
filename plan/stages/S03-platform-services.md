@@ -1,11 +1,11 @@
 ---
 id: S03
-title: Platform services (blobs, jobs, backup and restore framework, search)
+title: Platform services (blobs, jobs, search, notifications)
 status: planned
 depends: [S01]
 ---
 
-# S03 · Platform services (blobs, jobs, backup and restore framework, search)
+# S03 · Platform services (blobs, jobs, search, notifications)
 
 ## Goal
 
@@ -15,29 +15,27 @@ Build the shared machinery every product needs before any product data exists:
 - quotas
 - jobs, queues and workflows
 - the object registry
-- **the full backup, restore and drill framework**, proven on a synthetic object type
-- blob GC with a disaster-recovery copy
+- blob deduplication and GC
 - the shared search framework
 - in-app notifications
+
+**Backups are deferred.** The backup, restore and disaster-recovery framework is built in S12,
+after the main products work ([ADR-0007](../adr/0007-backup-and-archive.md)).
 
 ## Scope
 
 - **In:** everything listed in the goal.
-- **Out:** product-specific stores. Each product stage adds its object types to backup coverage.
+- **Out:** product-specific stores, and the backup, restore and DR framework (S12.T13–T19).
 
 ## Design notes
 
-- [ADR-0004](../adr/0004-data-partitioning.md), [ADR-0007](../adr/0007-backup-and-archive.md),
-  [architecture §6](../architecture.md#6-data-placement) and [§10](../architecture.md#10-backup-archive-and-recovery).
+- [ADR-0004](../adr/0004-data-partitioning.md) and [architecture §6](../architecture.md#6-data-placement).
 - **R2 limits and access:**
   - multipart parts are 5 MiB–5 GiB, with up to 10,000 parts
   - incomplete uploads are aborted after 7 days
   - presigned URLs don't work on custom domains, so all transfer goes through the Worker
-- **D1 dumps** use paged `SELECT`s. The export API blocks the database and skips virtual tables.
-- **Durable Object SQLite** supports FTS5, and PITR uses bookmarks over a 30-day window.
-- **Workflows:** up to 25k steps per instance, step results ≤ 1 MiB, 100 creations per second per
-  workflow. Backup runs therefore fan out one queue job per object, tracked by `BackupRunDO`, and
-  never loop over objects inside one instance ([ADR-0007](../adr/0007-backup-and-archive.md)).
+- **Durable Object SQLite** supports FTS5.
+- **Workflows:** up to 25k steps per instance, step results ≤ 1 MiB, 100 creations per second per workflow.
 - **Blobs:** stored under opaque keys and deduplicated through `BlobIndexDO`. A multipart upload's
   hash is known only at completion, and the R2 binding cannot copy objects server-side.
 
@@ -73,11 +71,10 @@ Build the shared machinery every product needs before any product data exists:
 - **Dedup at completion:** if the hash already exists, the new copy is deleted and the existing key returned.
 - **References:** `ref` and `unref` effects arrive through the outbox and are idempotent by effect id.
 - **Legal-hold pins:** a hook for S12.T04.
-- **Backup:** backup tables.
 
 **Acceptance**
 - [ ] Concurrent uploads of identical bytes end with one stored object and both owners referencing it (tested).
-- [ ] Redelivered `ref` and `unref` effects never double-count (property test). The backup round trip passes.
+- [ ] Redelivered `ref` and `unref` effects never double-count (property test).
 
 ### S03.T11 · Resumable multipart upload sessions
 - status: todo
@@ -133,112 +130,50 @@ Build the shared machinery every product needs before any product data exists:
 - size: S
 
 `SoldockObject` registers itself in the D1 `objects` table when it is first created (type, id,
-owner, created). The table also holds:
-
-- `full_shard` (0–6): which night of the week gets the object's full export
-- `dirty_since`: set through the outbox on the first change after a backup ([ADR-0007](../adr/0007-backup-and-archive.md))
-- the backup cursor
-
-Includes listing and paging APIs for admin tools and backups, indexed on `dirty_since` and
-`full_shard`, and soft-delete markers.
+owner, created). Includes listing and paging APIs for admin tools and migrations, and soft-delete
+markers. The backup stage adds dirty tracking to this table later (S12.T13).
 
 **Acceptance**
 - [ ] Creating 10k test objects registers each exactly once, even when first requests are concurrent (tested at smaller scale).
 
 ### S03.T05 · Backup format and object export and import
-- status: todo
+- status: dropped
 - kind: feature
 - size: M
-- depends: S03.T04
-
-- **Contract implementation:** `exportSnapshot`, `exportChanges(sinceSeq)` and `importSnapshot` in
-  `SoldockObject`, driven by `backupTables`. Output is streamed NDJSON in ≤ 1 MiB segments.
-- **Manifest:** schema version, seq range, row counts, SHA-256 per segment, blob references.
-- **Encryption:** optional AES-256-GCM envelope encryption.
-- **Specification:** the format is documented in `docs/operations/backup-format.md`.
-- **Dirty tracking:** the first change after a backup sets a local `dirty` flag and sends one
-  outbox effect that sets `objects.dirty_since` (S03.T04).
-- **Compaction:** the `changes` table is compacted below the lowest seq that the backup cursor and every indexer have passed.
-
-**Acceptance**
-- [ ] Round trip (seed, export, wipe, import, deep-equal) for `TestObject`. Each later object type adds its own round-trip test in its own task.
-- [ ] Incremental export plus replay equals a full export (property test).
-- [ ] An object with an older schema can import a backup and migrate it forward (tested).
+- reason: moved to S12.T13 (backups are deferred until the main products work)
 
 ### S03.T06 · Per-object export jobs and `BackupRunDO`
-- status: todo
+- status: dropped
 - kind: feature
 - size: M
-- depends: S03.T05, S03.T03
-
-- **Jobs:** a `backup` queue and its consumer. Each job exports one object (incremental or full),
-  writes segments and the manifest to `backups/<run>/<type>/<id>/`, and reports the result to the
-  run's `BackupRunDO`.
-- **Run state:** `BackupRunDO` tracks the jobs queued, done and failed, retries failures, and writes
-  the run manifest when everything is settled.
-
-**Acceptance**
-- [ ] Redelivered or duplicated export jobs produce exactly one consistent set of segments per object (tested).
-- [ ] The run manifest lists every object with its checksums, and failed jobs are retried and then surfaced (tested).
+- reason: moved to S12.T14 (backups are deferred until the main products work)
 
 ### S03.T13 · `BackupRun` orchestrator, D1 dump and scale benchmark
-- status: todo
+- status: dropped
 - kind: feature
 - size: M
-- depends: S03.T06
-
-- **Nightly workflow (cron):** pages through the registry
-  (`WHERE dirty_since IS NOT NULL OR full_shard = <today>`) and enqueues export jobs in batches. Each step stays well under the
-  Workflow step and result limits.
-- **D1:** dumped with paged `SELECT`s, with the Time Travel bookmark recorded at the start.
-- **Locking:** the bucket-lock configuration (retention) is applied by `soldock provision`.
-- **Visibility:** an admin backup status page, and `admin.backups.list`.
-
-**Acceptance**
-- [ ] A run over 1,000 synthetic objects completes, and resumes correctly after an injected failure in the middle of the run (staging).
-- [ ] A change that lands while its object is being exported keeps `dirty_since` set, and the next run exports it (tested).
-- [ ] **Scale benchmark:** a synthetic registry of 1M objects (10% dirty) finishes inside the 6 h
-  SLO, extrapolated from a measured run of at least 50k objects. The numbers are recorded in `plan/spikes/`.
-- [ ] Locked backup objects can't be deleted before retention ends (verified on staging).
+- reason: moved to S12.T15 (backups are deferred until the main products work)
 
 ### S03.T07 · Restore framework and restore drills
-- status: todo
+- status: dropped
 - kind: feature
 - size: M
-- depends: S03.T13
+- reason: moved to S12.T16 (backups are deferred until the main products work)
 
-- **Restore modes:** restore an object from a logical backup, in place or into a new id. Restore D1
-  tables. PITR wrappers cover Durable Object bookmarks and D1 Time Travel.
-- **Operations:** `admin.restore.*` operations and `soldock restore` CLI commands.
-- **Drills:** the weekly `RestoreDrill` workflow samples objects, restores them into scratch ids,
-  verifies checksums and invariants, records the results, and alerts on failure.
-
-**Acceptance**
-- [ ] Drill on staging: restoring a sampled object yields byte-identical exports.
-- [ ] A PITR restore of an object to a timestamp before a destructive change recovers the data (tested on staging).
-
-### S03.T08 · Blob GC and a disaster-recovery copy in a separate account
+### S03.T08 · Blob GC
 - status: todo
 - kind: feature
-- size: M
-- depends: S03.T12, S03.T13
+- size: S
+- depends: S03.T12
 
-- **GC:** walks the `BlobIndexDO` shards, never the owning objects. It deletes a blob only when its
-  reference count has been zero for longer than the longest backup retention plus a grace period
-  (default one year), and no legal hold pins it. It logs and reports every deletion.
-- **DR copy:** R2 event notifications trigger a queue that copies **all four durable buckets**
-  (`blobs`, `backups`, `audit`, `archive`) to locked buckets in a **separate Cloudflare account**,
-  using an object-scoped token.
-- **Verification:** confirm and document that the token cannot remove that bucket's lock
-  ([R-10](../risks.md)). Add an alert when a lock configuration changes.
-- **Cross-account writes:** bindings only reach the same account, so the copy uses R2's
-  S3-compatible API with SigV4 signing (candidate: `aws4fetch`, MIT).
-- **DR growth:** primary GC deletions don't propagate, so the DR account only grows until S03.T14
-  adds DR-side GC. Document the expected growth and cost.
+GC walks the `BlobIndexDO` shards, never the owning objects. It deletes a blob only when its
+reference count has been zero for longer than a grace period (default 7 days) and no legal hold
+pins it (the hook is used by S12.T04). It logs and reports every deletion. When backups arrive,
+S12.T17 extends the grace period to cover backup retention.
 
 **Acceptance**
 - [ ] A GC dry run over seeded references deletes only unreferenced, out-of-grace blobs (tested).
-- [ ] On staging, a new blob appears in the DR bucket within 5 minutes, and a delete issued with the primary's token fails there.
+- [ ] Every deletion is logged with its hash, size and the time its reference count reached zero (tested).
 
 ### S03.T09 · Search framework
 - status: todo
@@ -270,34 +205,24 @@ Includes listing and paging APIs for admin tools and backups, indexed on `dirty_
 - [ ] A notification appears live in the SPA, and in `events_poll` for an agent (tested).
 
 ### S03.T14 · DR-side retention and GC
-- status: todo
+- status: dropped
 - kind: ops
 - size: S
-- depends: S03.T08
-
-A small janitor Worker runs **in the DR account**, with that account's own credentials, so the
-primary never gains delete rights there. It deletes DR blobs and backup sets only when both hold:
-the lock retention has passed, and the replicated backup manifests (as held in the DR account) no
-longer reference them under the retention policy.
-
-**Acceptance**
-- [ ] On staging, DR storage stops growing monotonically under a synthetic churn workload. The
-  janitor never deletes anything referenced by a retained manifest (tested).
+- reason: moved to S12.T18 (backups are deferred until the main products work)
 
 ## Exit criteria
 
-- Large uploads and downloads stream through the dock origin, with quotas enforced.
-- Nightly backups, restores and the weekly drill work end to end on staging for `TestObject`,
-  `PrincipalDO` and D1. The disaster-recovery copy lands in the second account.
+- Large uploads and downloads stream through the dock origin, deduplicated, with quotas enforced.
+- Unreferenced blobs are collected after the grace period.
 - The search framework and notifications are ready for products.
 
 **Exit demo**
 
-1. Upload a 1 GiB file through chunked upload.
-2. Trigger `BackupRun`.
-3. Delete a test object.
-4. Restore it from the backup and diff the exports (identical).
-5. Run `RestoreDrill`, and show its green report on the admin backup page.
+1. Upload a 1 GiB file through chunked upload, then upload it again. It is stored once.
+2. Download a byte range through a signed `/dl/` URL.
+3. Delete the owning test object, and show GC collecting the blob after a shortened grace period.
+4. Run a search query with operators against a seeded test object.
+5. Raise a notification and see it arrive live in the SPA and through `events_poll`.
 
 ## Gate log
 

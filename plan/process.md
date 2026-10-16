@@ -19,7 +19,7 @@ Plan (vision, architecture, ADRs)
 | [`stages/Sxx-*.md`](stages/) | Each stage's goal, design notes, **tasks with status**, exit criteria and gate log | Every task PR (to update its status) |
 | [`STATUS.md`](STATUS.md) | Generated dashboard: progress, what is in flight, what is ready | Only by `pnpm plan status --write` |
 | [`risks.md`](risks.md) | Risk register with owners, triggers and mitigations | Gates and spikes |
-| `apps/dock/src/<domain>/README.md`, `packages/*/README.md` | Each module's contract: what it owns, its dependencies, data, backup coverage, operations | The task that changes the module |
+| `apps/dock/src/<domain>/README.md`, `packages/*/README.md` | Each module's contract: what it owns, its dependencies, its data inventory, operations | The task that changes the module |
 
 The stage files are the **single source of truth for task status**. STATUS.md is derived from
 them, and CI fails if it is stale or if the task graph is invalid (`pnpm plan check`).
@@ -134,7 +134,7 @@ for the stages it lists.
 1. Re-read the stage spec against the current codebase, ADRs and risks. Things learned in earlier
    stages usually change the plan.
 2. Refine the tasks: split anything `L`, fix dependencies, add missing work (migrations, docs,
-   backup coverage, MCP tools, e2e tests), and make every acceptance criterion testable.
+   MCP tools, e2e tests), and make every acceptance criterion testable.
 3. Have the **`plan-reviewer`** agent (Fable) review the stage. Address every finding or record
    why not. Repeat until the reviewer has no blocking findings.
 4. Set `status: active` and add the kickoff line to the gate log (the format is in [§2](#2-stage-files-and-task-format)).
@@ -149,7 +149,8 @@ for the stages it lists.
 4. Run the cross-cutting audits:
    - **parity**: every new operation is reachable through REST, MCP and the UI
    - **authorization matrix**: every operation × role × principal kind
-   - **backup coverage**: the restore drill includes the stage's new object types and data
+   - **data inventory**: new persistent stores are listed in their module README (from S12 on,
+     the restore drill also covers them)
    - **threat model**: updated for the new surface
    - **docs**: updated
 5. Have the **`impl-reviewer`** agent (Fable) review the stage as a whole, from the diff since the
@@ -183,8 +184,10 @@ The PR template repeats this list. Items that don't apply are marked N/A with a 
     retroactively, and S02.T10 tests every registered operation. S02's exit gate verifies this.
 - [ ] **Authorization.** Scopes are declared and resource checks are enforced. Tests cover allow and deny for a human, an agent and a delegated token.
 - [ ] **Audit and events.** Mutations emit audit events, and domain events are registered in contracts.
-- [ ] **Recoverability.** New persistent state implements the backup contract with a round-trip test (export → wipe → import → equal).
-  Blob references are counted. Data appears in user exports, or a follow-up task exists in S12.
+- [ ] **Data inventory.** New persistent state (Durable Object tables, D1 tables, R2 prefixes, KV
+  keys) is listed in the module README's data inventory, and blob references are counted. Backups
+  are deferred to S12, which covers everything in these inventories. From S12 on, new state also
+  needs a backup round-trip test.
 - [ ] **Idempotency.** Mutations accept idempotency keys, and queue and workflow steps are idempotent.
 - [ ] **Agent safety.** Content from outside the organization is marked untrusted. Destructive and bulk operations support `dry_run`.
 - [ ] **Observability.** New operations and jobs emit structured logs and metrics.
@@ -213,7 +216,7 @@ time-boxed (size S or M). It must deliver:
 | Durable Objects, routes, queues, workflows, email handler | Vitest + `@cloudflare/vitest-pool-workers` (real workerd with D1, R2, KV and Durable Objects) | `apps/dock/test/` |
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
-| Backup round-trip | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
+| Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
 | End-to-end | Playwright against `pnpm dev` (local) and staging | `e2e/` |
 | Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
 | Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |

@@ -170,7 +170,6 @@ my agents"** to the agent's sponsor or to an admin.
 - status: todo
 - kind: feature
 - size: M
-- depends: S03.T05
 
 - **`PrincipalDO`:** a `SoldockObject` per principal. It holds user settings, an event feed
   (append-only, with cursors and retention), notification state, webhook subscriptions and agent
@@ -184,7 +183,7 @@ my agents"** to the agent's sponsor or to an admin.
 **Acceptance**
 - [ ] `events_wait` returns within 1 s of a matching event, and times out cleanly without one (tested).
 - [ ] The feed survives hibernation and eviction without losing events, and cursors are stable (tested).
-- [ ] `PrincipalDO` declares `backupTables`, and its backup round-trip test passes (export, wipe, import, deep-equal).
+- [ ] `PrincipalDO`'s tables are listed in the identity README's data inventory (backups come in S12).
 
 ### S02.T07 · Webhooks
 - status: todo

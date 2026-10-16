@@ -100,7 +100,7 @@ number) titled **"Meeting recording"**.
 - status: todo
 - kind: feature
 - size: M
-- depends: S11.T01, S03.T05
+- depends: S11.T01
 
 - **Meetings:** codes (`abc-defg-hij`), instant and scheduled meetings, and roles (host,
   co-host, participant, guest, agent).
@@ -108,11 +108,9 @@ number) titled **"Meeting recording"**.
 - **Room state:** the roster, the track registry, chat (persisted to a transcript), hand raise,
   reactions, and host controls (mute, stop video, remove, lock, end for all).
 - **Transport:** hibernatable WebSockets (`/ws/meet/:id`).
-- **Backup:** backup tables for chat and transcripts.
 
 **Acceptance**
 - [ ] Host-control permissions are enforced server-side (authorization matrix). Roster state survives hibernation (tested).
-- [ ] The backup round-trip test passes for `MeetingDO`.
 
 ### S11.T03 · Media plane
 - status: todo

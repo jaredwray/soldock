@@ -9,21 +9,21 @@ Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for h
 
 | Stage | Title | Status | Progress | Depends on |
 | --- | --- | --- | --- | --- |
-| [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 3/14 | — |
+| [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 3/15 | — |
 | [S01](stages/S01-identity-access.md) | Identity, access and directory | planned | `░░░░░░░░░░` 0/17 | S00 |
 | [S02](stages/S02-agent-api-surface.md) | Agent and API surface (MCP, OAuth, events) | planned | `░░░░░░░░░░` 0/12 | S01 |
-| [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, backup and restore framework, search) | planned | `░░░░░░░░░░` 0/14 | S01 |
-| [S04](stages/S04-mail-receive.md) | Mail I — receive, store, read, search | planned | `░░░░░░░░░░` 0/14 | S01 |
-| [S05](stages/S05-mail-send-manage.md) | Mail II — compose, send, manage | planned | `░░░░░░░░░░` 0/23 | S04 |
+| [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, search, notifications) | planned | `░░░░░░░░░░` 0/9 | S01 |
+| [S04](stages/S04-mail-receive.md) | Mail I — receive, store, read, search | planned | `░░░░░░░░░░` 0/13 | S01 |
+| [S05](stages/S05-mail-send-manage.md) | Mail II — compose, send, manage | planned | `░░░░░░░░░░` 0/22 | S04 |
 | [S06](stages/S06-drive.md) | Drive — files, folders, sharing | planned | `░░░░░░░░░░` 0/13 | S01 |
 | [S07](stages/S07-collaboration-engine.md) | Collaboration engine | planned | `░░░░░░░░░░` 0/10 | S01 |
 | [S08](stages/S08-docs.md) | Docs | planned | `░░░░░░░░░░` 0/10 | S01 |
 | [S09](stages/S09-sheets.md) | Sheets | planned | `░░░░░░░░░░` 0/13 | S01 |
 | [S10](stages/S10-slides.md) | Slides | planned | `░░░░░░░░░░` 0/8 | S01 |
 | [S11](stages/S11-meet.md) | Meet | planned | `░░░░░░░░░░` 0/15 | S01 |
-| [S12](stages/S12-archive-retention-migration.md) | Archive, retention, restore UX and migration | planned | `░░░░░░░░░░` 0/12 | S05, S06 |
+| [S12](stages/S12-backup-archive-migration.md) | Backup, archive, retention and migration | planned | `░░░░░░░░░░` 0/19 | S05, S06 |
 | [S13](stages/S13-scale-security-hardening.md) | Scale, security and hardening | planned | `░░░░░░░░░░` 0/10 | S05, S06 |
-| [S14](stages/S14-release-v1.md) | v1.0 release and production cutover | planned | `░░░░░░░░░░` 0/8 | S12, S13 |
+| [S14](stages/S14-release-v1.md) | v1.0 release | planned | `░░░░░░░░░░` 0/7 | S12, S13 |
 
 ## Exit gates due
 
@@ -44,27 +44,28 @@ _None._
 ## Ready to start
 
 - [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_
+- [S00.T15](stages/S00-foundation.md) · Run the agentic `defense-in-depth-nodejs` hardening _(ops, M)_
 - [S00.T04](stages/S00-foundation.md) · `apps/dock` Worker skeleton _(feature, M)_
 
 ## Stage map
 
 ```mermaid
 graph LR
-  S00["S00 Foundation<br/>3/14"]:::active
+  S00["S00 Foundation<br/>3/15"]:::active
   S01["S01 Identity, access and directory<br/>0/17"]:::planned
   S02["S02 Agent and API surface (MCP, OAuth, events)<br/>0/12"]:::planned
-  S03["S03 Platform services (blobs, jobs, backup and restore framework, search)<br/>0/14"]:::planned
-  S04["S04 Mail I — receive, store, read, search<br/>0/14"]:::planned
-  S05["S05 Mail II — compose, send, manage<br/>0/23"]:::planned
+  S03["S03 Platform services (blobs, jobs, search, notifications)<br/>0/9"]:::planned
+  S04["S04 Mail I — receive, store, read, search<br/>0/13"]:::planned
+  S05["S05 Mail II — compose, send, manage<br/>0/22"]:::planned
   S06["S06 Drive — files, folders, sharing<br/>0/13"]:::planned
   S07["S07 Collaboration engine<br/>0/10"]:::planned
   S08["S08 Docs<br/>0/10"]:::planned
   S09["S09 Sheets<br/>0/13"]:::planned
   S10["S10 Slides<br/>0/8"]:::planned
   S11["S11 Meet<br/>0/15"]:::planned
-  S12["S12 Archive, retention, restore UX and migration<br/>0/12"]:::planned
+  S12["S12 Backup, archive, retention and migration<br/>0/19"]:::planned
   S13["S13 Scale, security and hardening<br/>0/10"]:::planned
-  S14["S14 v1.0 release and production cutover<br/>0/8"]:::planned
+  S14["S14 v1.0 release<br/>0/7"]:::planned
   S00 --> S01
   S01 --> S02
   S01 --> S03

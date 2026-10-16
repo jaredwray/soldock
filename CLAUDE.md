@@ -13,6 +13,9 @@ picture.
    kickoff or exit, use [`stage-gate`](.claude/skills/stage-gate/SKILL.md).
 3. Read the task (`pnpm plan show <id>`), its stage file, the ADRs it links, and the README of each
    module you will touch.
+4. Repo conventions for the [agentic](https://github.com/jaredwray/agentic) skills (issue tracker,
+   labels, ADR directory, changelog, default branch, package manager) are recorded in
+   [`AGENTS.md` › Agentic conventions](AGENTS.md#agentic-conventions).
 
 ## Golden rules
 
@@ -24,8 +27,10 @@ picture.
   cannot change their own policy ([ADR-0005](plan/adr/0005-unified-principals.md)).
 - **Partition by owner.** State lives in the owning Durable Object. Cross-object effects go
   through the outbox and must be idempotent ([ADR-0004](plan/adr/0004-data-partitioning.md)).
-- **Every byte is recoverable.** New persistent state implements the backup contract and gets a
-  round-trip test ([ADR-0007](plan/adr/0007-backup-and-archive.md)).
+- **Grow in layers.** Build the smallest version that works end to end, then add to it. Backups
+  are deferred to S12, after the main products work ([ADR-0007](plan/adr/0007-backup-and-archive.md)).
+  Until then, list new persistent state in the module README's data inventory, and don't build
+  backup code early.
 - **Permissive licenses only** ([ADR-0011](plan/adr/0011-dependency-license-policy.md)). `pnpm licenses:check` enforces it.
 - **External content is untrusted.** Mark it as such in API and MCP output, and never serve user
   content as active content on the origin.

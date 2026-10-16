@@ -10,7 +10,7 @@ endpoint, the same way people work through the web app.
 - **Cloudflare only.** Workers, Durable Objects, D1, R2, Queues, Workflows, Email Routing and Email Service, Realtime, Workers AI.
 - **One origin.** The UI, API, MCP, OAuth, WebSockets and file transfer all live on one subdomain.
 - **Humans and agents are peers.** Every capability is defined once and exposed through the UI, REST and MCP.
-- **Every byte is recoverable.** Point-in-time recovery, nightly logical backups, disaster-recovery copies, retention, legal hold and exports.
+- **Archive and backup.** Nightly logical backups, disaster-recovery copies, retention, legal hold and exports, built once the core products work.
 - **Built to scale.** State is partitioned per mailbox, drive space, document and meeting, for thousands of users.
 - **MIT licensed**, with permissively licensed dependencies only.
 

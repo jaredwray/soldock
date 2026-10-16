@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`. |
 | **Built in** | S06, S07.T03, S07.T08 |
 | **Operations** | `drive.*` |
-| **Backup coverage** | `DriveSpaceDO` round trip; originals in Takeout. |
+| **Data inventory** | `DriveSpaceDO` tables (items, versions, permissions, trash, FTS, `user_state`); file bytes in R2 `blobs`. Backups: S12; originals also in Takeout. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

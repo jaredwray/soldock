@@ -62,9 +62,8 @@ Settle [ADR-0012](../adr/0012-auth-architecture.md):
 
 **Acceptance**
 - [ ] ADR-0012 is set to `accepted` with the evidence (a small prototype branch, linked).
-- [ ] The ADR names where OAuth grants and tokens live. If that is KV, the ADR also specifies how
-  the backup run dumps them. No durable state may sit in an unbacked store
-  ([ADR-0007 store coverage](../adr/0007-backup-and-archive.md#store-coverage)).
+- [ ] The ADR names where OAuth grants and tokens live, and records it in the identity README's
+  data inventory, so the backup stage (S12) can cover it.
 - [ ] Downstream tasks (S01.T04, S01.T07, S02.T03, S02.T04) are updated with the decisions.
 
 ### S01.T02 · Directory schema and repositories
@@ -83,7 +82,7 @@ D1 migrations and a typed repository layer for:
 - `credentials` (passkeys)
 - `sessions`
 - `api_keys`
-- `objects` (registry: type, id, owner, created, backup cursor)
+- `objects` (registry: type, id, owner, created)
 - `settings`
 
 **Acceptance**

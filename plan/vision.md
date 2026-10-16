@@ -19,7 +19,7 @@ MCP endpoint, the same way a person works through the web UI.
 | R4 | Works for humans and for agents | [Principle P3](#principles), parity rule in the [Definition of Done](process.md#definition-of-done) |
 | R5 | Fully open source | MIT license, [ADR-0011](adr/0011-dependency-license-policy.md), S14 |
 | R6 | One subdomain for the whole UX | [ADR-0002](adr/0002-cloudflare-only-single-origin.md), [architecture §3](architecture.md#3-one-origin-request-routing) |
-| R7 | Complete archive and backup system | [ADR-0007](adr/0007-backup-and-archive.md), S03 (framework), S12 (archive and retention) |
+| R7 | Complete archive and backup system | [ADR-0007](adr/0007-backup-and-archive.md), S12 (built after the main products work) |
 | R8 | Scale to thousands of users | [ADR-0004](adr/0004-data-partitioning.md), [architecture §9](architecture.md#9-scale-model), S13 |
 
 ## Scope
@@ -38,7 +38,8 @@ MCP endpoint, the same way a person works through the web UI.
   captions and transcripts, ICS invites, and agents taking part in meetings.
 - **Platform**: directory (people, agents, groups, domains), passkey sign-in, optional SSO through
   Cloudflare Access, OAuth 2.1 and MCP, REST and OpenAPI, event feeds and webhooks, admin console,
-  audit log, backup, restore, export, retention, legal hold, and import from Google Workspace.
+  audit log, and (after the core products work) backup, restore, export, retention, legal hold and
+  optional one-time history imports.
 
 **Explicit non-goals for v1.0** (some are on the [post-v1 backlog](backlog.md))
 
@@ -91,9 +92,11 @@ ADR.
 - **P4. Partition by owner.** State lives in one Durable Object per mailbox, drive space,
   document or meeting. Nothing global sits on a hot path except the small D1 directory. Cross-object
   effects go through a transactional outbox and are idempotent.
-- **P5. Every byte is recoverable.** Each store implements the backup contract from the day it
-  is created. Restores are tested automatically. Deleting data is a policy decision, never an
-  accident.
+- **P5. Grow in layers; recoverable by design.** Build the smallest version that works end to end
+  first, then add capabilities on a product that already works. Backups are one of those layers.
+  They are built in S12, after the main products work. Until then, every module keeps a data
+  inventory and uses append-only change logs and immutable blobs, so adding backups later doesn't
+  mean redesigning anything. Deleting data is a policy decision, never an accident.
 - **P6. Open and self-hostable.** The code is MIT licensed and dependencies are permissively
   licensed ([ADR-0011](adr/0011-dependency-license-policy.md)). Deploying is one command or one
   button, and the docs let someone else run it.
@@ -106,9 +109,9 @@ ADR.
 
 ## Success criteria for v1.0
 
-1. `dock.jaredwray.com` is the daily driver for the Wray organization. It runs as production-lite
-   from M2 (S05.T22). By v1.0, mail on `@jaredwray.com` has moved from Google Workspace, with its
-   history imported.
+1. `dock.jaredwray.com` is the daily driver for the Wray organization, in production from M2
+   (S05.T22). The `jaredwray.com` MX points to Cloudflare Email Routing, outbound mail goes through
+   Cloudflare Email Service, and nothing depends on Google.
 2. An AI agent with its own `@jaredwray.com` address receives mail, files documents in its Drive,
    edits a shared Sheet while a human watches live, and joins a meeting to produce notes, all
    through MCP and all under its own identity and audit trail.

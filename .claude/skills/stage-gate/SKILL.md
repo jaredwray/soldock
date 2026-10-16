@@ -33,7 +33,7 @@ Gate-log lines must use this exact format, which `pnpm plan check` enforces:
    append `partial: re-refine after <stage>` to the gate-log line.
    - Split every `L` task.
    - Fix dependencies.
-   - Add missing work: migrations, backup coverage, operations and MCP tools, authorization-matrix
+   - Add missing work: migrations, data inventory, operations and MCP tools, authorization-matrix
      entries, e2e tests, docs, admin UI.
    - Make every acceptance criterion observable and testable.
    - New tasks take the next free IDs. Never renumber.
@@ -59,7 +59,8 @@ Gate-log lines must use this exact format, which `pnpm plan check` enforces:
 3. **Cross-cutting audits.** Write the results into the PR description.
    - **Parity:** list the operations added in this stage, and show each one's REST route, MCP tool and UI usage.
    - **Authorization matrix:** coverage report for the new operations.
-   - **Backup:** the restore drill includes every new object type, and the round-trip tests are green.
+   - **Data inventory:** every new store is listed in its module README. From S12 on, the restore
+     drill includes every new object type and the round-trip tests are green.
    - **Threat model:** `docs/security/threat-model.md` is updated for the new surface.
    - **Docs:** user, admin and agent docs exist for the new features.
 4. **Re-refine partial kickoffs.** For every stage whose kickoff line says

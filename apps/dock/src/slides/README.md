@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/slides-model`. |
 | **Built in** | S10 |
 | **Operations** | `slides.*` |
-| **Backup coverage** | Covered by `DocumentDO`; PPTX/PDF in Takeout. |
+| **Data inventory** | None of its own (content in `DocumentDO`); thumbnails cached in R2. PPTX/PDF in Takeout. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

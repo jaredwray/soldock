@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`. Domain implementations are injected by the composition root (`src/index.ts`); this adapter never imports product domains. |
 | **Built in** | S02 (T01, T02, T09, T10) |
 | **Operations** | Exposes every operation as `<domain>_<verb>` tools. |
-| **Backup coverage** | N/A (stateless). |
+| **Data inventory** | None (stateless). |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

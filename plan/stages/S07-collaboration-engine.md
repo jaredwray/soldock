@@ -35,7 +35,7 @@ The shared real-time engine behind Docs, Sheets and Slides:
 - **Row size:** Durable Object SQLite rows and values are capped at 2 MB, so snapshots and large
   updates are chunked across rows.
 - **Stage dependencies** are minimal (S01). The Drive pieces (S06.T02 and S06.T04) and the
-  platform pieces (S03.T05 and S03.T12) are task-level dependencies, so the Docs chain doesn't wait
+  platform piece (S03.T12) are task-level dependencies, so the Docs chain doesn't wait
   for Mail or the Drive UI.
 
 ## Tasks
@@ -57,14 +57,13 @@ compaction. Evaluate `y-partyserver` against a thin custom provider.
 - status: todo
 - kind: feature
 - size: M
-- depends: S07.T01, S03.T05, S03.T12
+- depends: S07.T01, S03.T12
 
 - **Sync:** y-protocols sync and awareness over hibernatable WebSockets.
 - **Persistence:** every update is written to SQLite before it is acknowledged.
 - **Compaction:** updates are compacted into a snapshot on thresholds. Snapshots over 2 MB are
   chunked across rows, and checkpoints are written to R2.
 - **Load:** cold start from the snapshot plus the tail of updates.
-- **Backup:** backup tables and a round-trip test.
 
 **Acceptance**
 - [ ] Killing the object mid-session loses no acknowledged update (tested).
@@ -148,8 +147,8 @@ compaction. Evaluate `y-partyserver` against a thin custom provider.
 - depends: S07.T02, S06.T02
 
 Create, copy and create-from-template for native items. On trash, restore and purge the matching
-`DocumentDO` is put to sleep, restored or deleted, in step with Drive. The registry and backups
-include document objects.
+`DocumentDO` is put to sleep, restored or deleted, in step with Drive. The object registry
+includes document objects.
 
 **Acceptance**
 - [ ] Purging an item deletes its `DocumentDO` data after retention, and a restore before the purge brings it back (tested).
@@ -186,7 +185,7 @@ latency, CPU and memory per object, and compaction cost.
 
 - Two humans and an agent co-edit a test document type in real time, with presence, comments,
   assignment to the agent, versions and restore.
-- Revoking access disconnects a user live. Backups and drills cover documents.
+- Revoking access disconnects a user live.
 
 **Exit demo**
 

@@ -141,6 +141,7 @@ the core flows of every product. Check keyboard-only operation and reduced-motio
 - status: todo
 - kind: feature
 - size: M
+- depends: S12.T16
 
 The admin health page draws on Analytics Engine queries: SLOs, error rates, queue and DLQ depth,
 backup and drill status, deliverability, and Realtime quality. Alert rules notify admins through

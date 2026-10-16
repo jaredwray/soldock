@@ -4,11 +4,11 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Cross-cutting runtime services every domain uses: HTTP plumbing, errors, IDs, config, logging, metrics, blob store, jobs/queues/workflows, outbox, events, the `SoldockObject` base class, backup/restore framework, search framework. |
-| **Owns** | Blob store (opaque keys in R2 `blobs`) and `BlobIndexDO` (dedup + refcounts, 256 shards); the backup format, `BackupRun`/`RestoreDrill` workflows and `BackupRunDO`; `SoldockObject` (migrations, `changes`, outbox, idempotency). |
+| **Purpose** | Cross-cutting runtime services every domain uses: HTTP plumbing, errors, IDs, config, logging, metrics, blob store and blob index, jobs/queues/workflows, outbox, events, the `SoldockObject` base class, search framework. |
+| **Owns** | Blob store (opaque keys in R2 `blobs`) and `BlobIndexDO` (dedup + refcounts, 256 shards) with blob GC; `SoldockObject` (migrations, `changes`, outbox, idempotency); the object registry. |
 | **Depends on** | Nothing in `apps/dock/src` (imports no domain). May import `packages/contracts`. |
 | **Built in** | S00 (T04, T06, T08), S03 |
 | **Operations** | — |
-| **Backup coverage** | Provides the backup contract itself; round-trip tests for `TestObject`. |
+| **Data inventory** | `BlobIndexDO` shards; R2 `blobs`; D1 `objects` registry; `TestObject` (tests only). Backups: S12 (the backup framework itself lives in `archive`). |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

@@ -23,18 +23,18 @@ built by.
 | [S00](stages/S00-foundation.md) Foundation | Monorepo, CI, plan tool, Worker + SPA skeleton, operation registry, Durable Object base class, staging | |
 | [S01](stages/S01-identity-access.md) Identity, access and directory | Principals (humans and agents), passkeys, API keys, authorization, audit, admin console | |
 | [S02](stages/S02-agent-api-surface.md) Agent and API surface | MCP endpoint, OAuth 2.1, `client_credentials`, events and webhooks, SDK, contract and authorization harness | **M1: agents can connect as themselves** |
-| [S03](stages/S03-platform-services.md) Platform services | Blobs, quotas, jobs, object registry, **backup, restore and drill framework**, disaster-recovery copy, search, notifications | |
+| [S03](stages/S03-platform-services.md) Platform services | Blobs (deduplicated), quotas, jobs, object registry, blob GC, search, notifications | |
 | [S04](stages/S04-mail-receive.md) Mail I | Receive, store, thread, search, safe rendering, Mail UI, agent mail tools | |
-| [S05](stages/S05-mail-send-manage.md) Mail II | Compose, send, agent outbound policy and approvals, bounces, filters, groups, delegation, platform mail, production-lite | **M2: mail daily driver on dock.jaredwray.com (production-lite)** |
+| [S05](stages/S05-mail-send-manage.md) Mail II | Compose, send, agent outbound policy and approvals, bounces, filters, groups, delegation, platform mail, production deployment | **M2: production on dock.jaredwray.com, with the jaredwray.com MX on Cloudflare** |
 | [S06](stages/S06-drive.md) Drive | Files, folders, sharing, shared drives, search, previews, Mail ↔ Drive | |
 | [S07](stages/S07-collaboration-engine.md) Collaboration engine | `DocumentDO`, CRDT sync, presence, comments, versions, server-side agent edits | |
 | [S08](stages/S08-docs.md) Docs | Editor, suggestions, DOCX/PDF/Markdown, agent Markdown editing | **M3: mail + drive + docs** |
 | [S09](stages/S09-sheets.md) Sheets | Grid, formulas computed on client and server, XLSX, charts, agent range operations | |
 | [S10](stages/S10-slides.md) Slides | Editor, themes, present mode, PPTX/PDF, agent outline-to-deck | |
 | [S11](stages/S11-meet.md) Meet | SFU calls, lobby and guests, ICS invites, captions and transcripts, recording, agents in meetings | **M4: full suite** |
-| [S12](stages/S12-archive-retention-migration.md) Archive and migration | Takeout, retention, legal hold and eDiscovery, restore UX, disaster-recovery rebuild, Google import | |
+| [S12](stages/S12-backup-archive-migration.md) Backup, archive and migration | **Backup, restore and DR framework (deferred until the products work)**, Takeout, retention, legal hold and eDiscovery, restore UX, DR rebuild, optional history imports | |
 | [S13](stages/S13-scale-security-hardening.md) Scale and hardening | 5k-user load tests, ASVS L2 review, agent red-team, a11y, cost model | |
-| [S14](stages/S14-release-v1.md) v1.0 release | Docs site, one-click deploy, upgrades, pentest, production cutover | **M5: v1.0, jaredwray.com in production** |
+| [S14](stages/S14-release-v1.md) v1.0 release | Docs site, one-click deploy, upgrades, pentest, release automation | **M5: v1.0** |
 
 Stage dependencies are kept minimal. A stage depends only on the stages whose *whole* output it
 builds on, usually S01 (identity), and finer-grained needs are task-level dependencies. Once S01

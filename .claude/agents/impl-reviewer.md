@@ -29,7 +29,8 @@ diff range. Find real defects and gaps between what was promised and what was bu
      - secrets out of logs
      - untrusted-content marking
    - **Parity:** the capability exists as an operation, is reachable through REST and MCP, and the UI uses the operation.
-   - **Recoverability:** new state has `backupTables`, a round-trip test and blob reference counting.
+   - **Data inventory:** new state is listed in the module README and blob references are counted.
+     Backups are deferred to S12, so flag premature backup code. From S12 on, require `backupTables` and a round-trip test.
    - **Architecture:** module boundaries, outbox for cross-object effects, no global hot spots,
      and consistency with the ADRs. A design change without an ADR is a finding.
    - **Plan hygiene:** task status, STATUS.md regenerated, follow-up work filed as tasks, docs and READMEs updated.

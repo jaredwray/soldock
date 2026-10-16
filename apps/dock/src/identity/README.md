@@ -9,6 +9,6 @@
 | **Depends on** | `platform`. |
 | **Built in** | S01 (incl. T15 org settings, T16 audit viewer, T17 account settings), S02 (T03, T04, T06, T07, T09, T12 "connect as my agent") |
 | **Operations** | `directory.*`, `admin.*`, `account.*`, `events.*`, `notifications.*`, `webhooks.*` |
-| **Backup coverage** | `PrincipalDO` round trip; D1 directory logical dump. |
+| **Data inventory** | D1 `directory` tables; `PrincipalDO` tables; OAuth grant storage (location per ADR-0012); R2 `audit` segments. Backups: S12. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

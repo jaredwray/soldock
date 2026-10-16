@@ -118,7 +118,7 @@ points to Email Routing. They have no HTTP surface.
 | `DocumentDO` | item id of a native doc, sheet or deck | CRDT update log, snapshots, comments, suggestions, version index, presence | Typically under 50 MB |
 | `MeetingDO` | meeting id | Roster, lobby, chat, track registry, recording and transcript state | Small and short-lived |
 | `BlobIndexDO` | hash-prefix shard (256 shards) | Map from SHA-256 to storage key, reference counts per owning object, the time each count reached zero, legal-hold pins | Bounded by blob count, spread across shards |
-| `BackupRunDO` | backup run id | The run's progress: export jobs queued, done and failed, segment manifests, and the final run manifest | Small, kept for the retention window |
+| `BackupRunDO` (S12) | backup run id | The run's progress: export jobs queued, done and failed, segment manifests, and the final run manifest | Small, kept for the retention window |
 
 - **Workflows**: `BackupRun`, `RestoreDrill`, `RestoreObject`, `ExportArchive`, `ImportMailbox`,
   `ImportDrive`, `RetentionSweep`, `DiscoverySearch`.
@@ -206,11 +206,12 @@ agent looked at without growing the audit log by millions of rows a day.
   `ref(+1/−1, owner, hash)` effects through their outbox to the hash's `BlobIndexDO` shard. Each
   effect carries an idempotency id, so redelivery is safe.
 - **GC** walks the index shards, never the owning objects. A blob is deleted only when:
-  - its reference count has been zero for longer than the longest backup retention plus a grace
-    period (default: one year, because monthly full backups are kept for a year)
+  - its reference count has been zero for longer than a grace period (7 days)
   - and it is not pinned by a legal hold.
 
-  Every deletion is logged ([S03.T08](stages/S03-platform-services.md)).
+  Every deletion is logged ([S03.T08](stages/S03-platform-services.md)). Once backups exist (S12),
+  the grace period grows to cover the longest backup retention (one year by default), so a
+  retained backup never points at a deleted blob (S12.T17).
 
 **Data residency.** Durable Object namespaces and R2 buckets can be created in a jurisdiction
 (for example `eu`). The deployment config exposes this choice once, at provisioning time.
@@ -225,10 +226,11 @@ agent looked at without growing the audit log by millions of rows a day.
   only in the UI.**
 - **`SoldockObject` base class** (S00.T08). It is the common base for all Durable Objects and
   provides versioned SQLite migrations that run in `blockConcurrencyWhile` on first access, a
-  `changes` table (a monotonic `seq` per object, used by backups, indexing and sync), a
-  **transactional outbox** (side effects are written in the same transaction as the state change
-  and delivered by an alarm with retries), idempotency-key storage, object-registry self-registration,
-  and the backup contract (`exportSnapshot`, `exportChanges(sinceSeq)`, `importSnapshot`).
+  `changes` table (a monotonic `seq` per object, used by indexing and sync now, and by backups
+  later), a **transactional outbox** (side effects are written in the same transaction as the
+  state change and delivered by an alarm with retries), idempotency-key storage and
+  object-registry self-registration. The backup contract (`exportSnapshot`,
+  `exportChanges(sinceSeq)`, `importSnapshot`) is added in S12, after the products work.
 - **Idempotency.** Every mutating operation accepts an idempotency key (the `Idempotency-Key`
   header, or `idempotency_key` in MCP). The middleware only parses the key and passes it in the
   request context. The **object that owns the mutation** stores the key together with the result,
@@ -380,8 +382,8 @@ the Worker share one implementation.
 | Agents | 500 active agents, 100 MCP calls per second in aggregate |
 
 **SLOs** (p95, client on the same continent): REST and MCP reads under 300 ms and writes under
-500 ms. Inbound mail visible in the UI within 10 s. Document sync fan-out under 250 ms. Backup
-completion under 6 h every night. Restore of a single mailbox or drive under 1 h.
+500 ms. Inbound mail visible in the UI within 10 s. Document sync fan-out under 250 ms. Once S12
+lands: backup completion under 6 h every night, and restore of a single mailbox or drive under 1 h.
 
 **Why it scales.** Load is partitioned by owner, so adding users adds objects, not load on
 shared ones. The only shared stores are D1 (small, read-mostly, replicated, cached) and Queues
@@ -404,15 +406,17 @@ go through queues in batches, not synchronous loops.
 
 ## 10. Backup, archive and recovery
 
-Defined in [ADR-0007](adr/0007-backup-and-archive.md). The framework is built in S03, and every
-later stage plugs its stores into it. The user-facing archive and retention features come in S12.
+Defined in [ADR-0007](adr/0007-backup-and-archive.md). **Deferred.** The backup system is built in
+S12, after the main products work, so the core code comes first. Until then, production relies on
+T0 (Cloudflare durability) and T1 (native 30-day point-in-time recovery, used by hand from a
+runbook). This section is the target design that S12 implements ([R-21](risks.md)).
 
 | Tier | Protects against | Mechanism | Window |
 | --- | --- | --- | --- |
 | T0: platform durability | Hardware loss | R2 and Durable Object durability, which are replicated by Cloudflare | — |
 | T1: point-in-time | Bad deploys, bugs | D1 Time Travel. Durable Object SQLite PITR (`getBookmarkForTime` / `onNextSessionRestoreBookmark`). | 30 days |
 | T2: logical backups | Logical corruption, deletion, account compromise | Nightly `BackupRun`. Each night it exports objects marked **dirty** since their last backup (`objects.dirty_since` in the D1 registry, set once per object by an outbox effect), as incremental exports of `changes` since the last seq, plus a staggered seventh of all objects as full exports, so every object gets a full export weekly. Export jobs are fanned out through the `backup` queue, one job per object, and tracked by a `BackupRunDO`, so no single Workflow instance hits the 25k-step limit. The design target is 1M registered objects in under 6 hours. D1 is dumped with paged `SELECT`s, because the export API blocks the database and cannot export virtual tables. The D1 Time Travel bookmark at the start of the dump is recorded, so that a fully consistent D1 restore is possible within 30 days. Every file has a manifest and a checksum, is optionally encrypted, and is written to the `backups` bucket under a retention lock. | Configurable, 35 days locked by default, plus monthly fulls kept for a year |
-| T3: disaster recovery copy | Loss of the account or region, or a compromised admin | Replication of **all four durable buckets** (`blobs`, `backups`, `audit`, `archive`) to locked buckets in a **separate Cloudflare account**. The primary writes to it with an object-scoped token that cannot change the lock **[S03.T08 verifies]**. Anyone with bucket access can remove an R2 bucket lock, so a separate account is the only real isolation. | Same as T2 |
+| T3: disaster recovery copy | Loss of the account or region, or a compromised admin | Replication of **all four durable buckets** (`blobs`, `backups`, `audit`, `archive`) to locked buckets in a **separate Cloudflare account**. The primary writes to it with an object-scoped token that cannot change the lock **[S12.T17 verifies]**. Anyone with bucket access can remove an R2 bucket lock, so a separate account is the only real isolation. | Same as T2 |
 | T4: archive and retention | Compliance, departures, legal | Retention policies, legal holds, eDiscovery, org archive exports (S12) | Policy-defined |
 | T5: user exports | Data portability | Takeout-style export: mbox and EML, original files plus Office and PDF conversions, Markdown and CSV, recordings, JSON metadata | On demand |
 
@@ -420,7 +424,7 @@ later stage plugs its stores into it. The user-facing archive and retention feat
 
 - Durable Objects, D1 and the four R2 buckets are covered by the tiers above.
 - KV holds only rebuildable caches. Durable state is not allowed in KV unless it is dumped by the
-  backup run (decided for OAuth grants in S01.T01).
+  backup run. S01.T01 records where OAuth grants live, and S12 covers them.
 - Queues hold only in-flight work, which can be replayed from its source.
 - Analytics Engine and Workers Logs are ephemeral by design: metrics, not records.
 - Secrets live in the deployment's secret store, and their recovery is part of the
@@ -526,7 +530,7 @@ soldock/
 │   │   ├── migrations/         # D1 (directory) migrations
 │   │   ├── src/
 │   │   │   ├── index.ts        # fetch / email / queue / scheduled; re-exports DO + Workflow classes
-│   │   │   ├── platform/       # http, errors, ids, config, logging, metrics, blobs, jobs, outbox, events, backup, search
+│   │   │   ├── platform/       # http, errors, ids, config, logging, metrics, blobs, jobs, outbox, events, search (+ backup from S12)
 │   │   │   ├── identity/       # principals, directory, passkeys, sessions, API keys, OAuth AS, authz, audit
 │   │   │   ├── api/            # REST adapter + OpenAPI generation over the operation registry
 │   │   │   ├── mcp/            # MCP adapter over the operation registry
@@ -537,7 +541,7 @@ soldock/
 │   │   │   ├── sheets/         # server-side Sheets operations and recalculation
 │   │   │   ├── slides/         # server-side Slides operations and rendering
 │   │   │   ├── meet/           # MeetingDO, Realtime SFU/TURN client, recording, transcripts
-│   │   │   └── archive/        # exports, retention, legal hold, eDiscovery, imports, restore operations
+│   │   │   └── archive/        # backup/restore/DR, exports, retention, legal hold, eDiscovery, imports (S12)
 │   │   └── test/               # workerd integration tests (vitest-pool-workers)
 │   └── web/                    # the SPA (React + Vite), built into dock's static assets
 ├── packages/
@@ -562,7 +566,7 @@ soldock/
 **Module rules.**
 
 1. Each `apps/dock/src/<domain>/` has an `index.ts` that is its only public surface, and a
-   `README.md` stating what it owns, what it depends on, its data stores, its backup coverage and its operations.
+   `README.md` stating what it owns, what it depends on, its data inventory (every persistent store, which S12's backups will cover) and its operations.
 2. A domain imports another domain only through that domain's `index.ts`. `platform/` imports no
    domain. The `api/` and `mcp/` adapters import only `platform/` and `identity/`. The composition
    root (`src/index.ts`) wires each domain's operation implementations into the registry the
@@ -578,22 +582,18 @@ soldock/
 - **Staging:** `dock-staging.<domain>` with its own resources. Its mail domain is a **dedicated
   apex zone** (for example `soldock-staging.dev`), so catch-all routing works and load tests can
   create thousands of addresses. Deployed on every merge to `main`.
-- **Production-lite (from M2, S05.T22):** the real `dock.jaredwray.com` deployment, with
-  production resources, backups and the DR copy.
-  - Soldock sends as `@jaredwray.com` through Email Service. SPF covers both senders, and DKIM uses
-    separate selectors.
-  - MX stays at Google, and Google forwards a copy of all inbound mail to an **ingest alias
-    domain**, which Soldock maps onto the `@jaredwray.com` mailboxes. The alias domain is either a
-    subdomain such as `in.jaredwray.com`, which needs per-address rules (fine for a small
-    organization), or a separate apex zone. The ingest domain is receive-only.
-  - Google is a **trusted forwarder** for that domain. Its ARC chain supplies the SPF and DMARC
-    verdicts, so forwarded mail isn't sent to Spam (S05.T23).
-  - Gmail history imports (S12.T06) deduplicate by `Message-ID` against mail that already arrived by forwarding.
-  - This gives real daily-driver use on real addresses months before the MX switch.
-- **Production:** from v1.0 (S14) onward, it is deployed from release tags with manual approval.
-  The MX cutover happens in S14.T07.
-- **Provisioning:** `soldock provision` creates the D1 database, R2 buckets (with lifecycle rules and bucket
-  locks), KV namespaces, queues and their DLQs, Email Routing rules and the DNS records for the mail domains.
+- **Production (from M2, S05.T22):** the real `dock.jaredwray.com` deployment, with production
+  resources. **Google is not involved.**
+  - The `jaredwray.com` MX records point to **Cloudflare Email Routing**, whose catch-all rule
+    hands every message to the `dock` Worker's `email()` handler. `jaredwray.com` is an apex zone,
+    so catch-all works.
+  - Outbound mail goes through **Cloudflare Email Service** as `@jaredwray.com`. SPF, DKIM and
+    DMARC are published for it.
+  - The web app, API and MCP endpoint are served at `https://dock.jaredwray.com`.
+  - Mail history from a previous provider is an optional one-time import (S12.T06 and S12.T10).
+  - Releases from v1.0 on (S14) are deployed from tags with manual approval.
+- **Provisioning:** `soldock provision` creates the D1 database, R2 buckets (with lifecycle rules; the
+  locked `backups` and `archive` buckets are added in S12), KV namespaces, queues and their DLQs, Email Routing rules and the DNS records for the mail domains.
   It is idempotent and prints the `wrangler.jsonc` bindings. A "Deploy to Cloudflare" button arrives in S14.
 - **Configuration** comes from three places: `wrangler.jsonc` vars (hostnames, mail domains, jurisdiction), secrets
   (keys) and D1 `settings` (runtime-adjustable policies and feature flags, edited through

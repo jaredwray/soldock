@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`, `drive` (tickets, ACL). |
 | **Built in** | S07 |
 | **Operations** | `comments.*`, `versions.*` |
-| **Backup coverage** | `DocumentDO` round trip. |
+| **Data inventory** | `DocumentDO` tables (update log, snapshots, comments, versions); R2 version checkpoints. Backups: S12. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

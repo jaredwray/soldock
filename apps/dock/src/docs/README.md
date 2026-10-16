@@ -9,6 +9,6 @@
 | **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/docs-model`. |
 | **Built in** | S08 |
 | **Operations** | `docs.*` |
-| **Backup coverage** | Covered by `DocumentDO`; DOCX/Markdown in Takeout. |
+| **Data inventory** | None of its own (content in `DocumentDO`). DOCX/Markdown in Takeout. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.

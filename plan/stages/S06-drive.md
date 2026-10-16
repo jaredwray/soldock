@@ -36,7 +36,7 @@ through UI, REST and MCP, and is backed up.
 - **Space objects are authoritative** for ACLs. Per-user Drive state (starred, recent, and the
   shared-with-me index) lives in each user's **My Drive** space ([ADR-0013](../adr/0013-per-principal-state.md)).
   The outbox keeps it current, including renames and moves.
-- **Stage dependencies** are minimal (S01). Platform pieces (blobs, the blob index, backups, MCP,
+- **Stage dependencies** are minimal (S01). Platform pieces (blobs, the blob index, MCP,
   notifications) are task-level dependencies, so Drive can run in parallel with Mail.
 - **Previews of active content** follow the same-origin rules in [ADR-0002](../adr/0002-cloudflare-only-single-origin.md).
 
@@ -65,18 +65,18 @@ An ADR (next free number) titled **"Drive data model"** covers:
 - status: todo
 - kind: feature
 - size: M
-- depends: S06.T01, S03.T05
+- depends: S06.T01
 
 - **Items:** folder, file, doc, sheet, slides and shortcut, with parents, names, MIME type, size, blob reference and timestamps.
 - **History:** versions, and trash with a 30-day automatic purge (an alarm).
 - **Per-user state (My Drive spaces):** `user_state` tables for stars, recent items and the
   shared-with-me index, referencing `(spaceId, itemId)`.
-- **Plumbing:** the changes feed and backup tables.
+- **Plumbing:** the changes feed.
 
 **Acceptance**
 - [ ] Tree invariants hold under random operation sequences: no cycles, unique names per folder,
   correct counts (property tests).
-- [ ] The backup round-trip test passes, and purge respects retention and legal-hold hooks.
+- [ ] Purge goes through a hook that the retention and legal-hold work (S12) can veto (tested with a stub).
 
 ### S06.T03 · Upload and download operations
 - status: todo
@@ -246,7 +246,7 @@ and the authorization matrix.
 
 - Files and folders can be managed end to end, shared at every grantee level, and searched under
   correct ACLs, through UI, REST and MCP.
-- Large attachments work through Drive links, and drive spaces are covered by backups and drills.
+- Large attachments work through Drive links.
 
 **Exit demo**
 
@@ -254,7 +254,6 @@ and the authorization matrix.
 2. The owner previews it and moves it into a shared drive.
 3. An admin disables link sharing, and an existing link stops working.
 4. The owner deletes a folder, then restores it from the trash.
-5. An admin restores the space from backup into a scratch id and diffs it.
 
 ## Gate log
 
