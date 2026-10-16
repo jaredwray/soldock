@@ -82,7 +82,8 @@ The GitHub Actions `verify` job runs lint, typecheck, tests, plan check and the 
 - [x] The license checker parses SPDX `OR`/`AND` expressions, supports explicit exceptions, and has unit tests.
 
 ### S00.T13 · Spike: is Email Service viable for mailbox traffic?
-- status: todo
+- status: blocked
+- reason: needs maintainer resources: a valid CLOUDFLARE_API_TOKEN (the one in the cloud environment is rejected with code 9109), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 - kind: spike
 - size: S
 

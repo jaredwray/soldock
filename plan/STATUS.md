@@ -39,11 +39,10 @@ _None._
 
 ## Blocked
 
-_None._
+- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: a valid CLOUDFLARE_API_TOKEN (the one in the cloud environment is rejected with code 9109), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 
 ## Ready to start
 
-- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_
 - [S00.T15](stages/S00-foundation.md) · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings _(ops, M)_
 - [S00.T04](stages/S00-foundation.md) · `apps/dock` Worker skeleton _(feature, M)_
 
