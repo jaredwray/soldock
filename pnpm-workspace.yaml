@@ -19,3 +19,4 @@ minimumReleaseAgeStrict: true # fail instead of falling back to a too-new versio
 minimumReleaseAgeIgnoreMissingTime: false # missing publish-time metadata fails closed
 
 trustPolicy: no-downgrade # fail if a later version has weaker trust evidence than an earlier one
+blockExoticSubdeps: true # transitive dependencies must come from the registry, not git URLs or tarballs
