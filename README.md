@@ -34,7 +34,7 @@ pnpm verify      # lint, typecheck, tests, plan integrity, license policy
 pnpm plan next   # what to build next
 ```
 
-Requires Node ≥ 22.18 and pnpm 10.
+Requires Node ≥ 22.18 and pnpm 11 (pinned in `package.json`; an older pnpm switches to it automatically).
 
 ## License
 

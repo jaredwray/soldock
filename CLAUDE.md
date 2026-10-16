@@ -47,7 +47,7 @@ picture.
 ## Commands
 
 ```sh
-pnpm install            # Node >= 22.18 (CI uses 24), pnpm 10
+pnpm install            # Node >= 22.18 (CI uses 24), pnpm 11 (pinned in package.json)
 pnpm verify             # lint + types + typecheck + test + budgets + plan check + license check (what CI runs)
 pnpm lint:fix           # Biome format + lint fixes
 pnpm test               # Vitest (all projects)

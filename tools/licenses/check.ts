@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { findViolations, flattenPnpmLicenses, type LicensePolicy } from "./src/policy.ts";
 
 const policy = JSON.parse(readFileSync(new URL("./policy.json", import.meta.url), "utf8")) as LicensePolicy;
-const raw = execFileSync("pnpm", ["licenses", "list", "--json"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+// `-r` covers every workspace package. From pnpm 11, a plain `licenses list` reads only the root package.
+const raw = execFileSync("pnpm", ["-r", "licenses", "list", "--json"], {
+	encoding: "utf8",
+	maxBuffer: 64 * 1024 * 1024,
+});
 const packages = flattenPnpmLicenses(raw.trim().length > 0 ? JSON.parse(raw) : {});
 const violations = findViolations(packages, policy);
 

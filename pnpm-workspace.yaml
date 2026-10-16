@@ -3,8 +3,9 @@ packages:
   - "packages/*"
   - "tools/*"
 
-# Packages allowed to run install scripts (pnpm blocks all others). Both fetch or validate
-# platform-specific binaries needed by wrangler and the workerd test pool.
-onlyBuiltDependencies:
-  - esbuild
-  - workerd
+# Packages allowed to run install scripts. pnpm 11 blocks all others and fails the install on an
+# unapproved one (strictDepBuilds). Each entry is a reviewed exception: both fetch or validate the
+# platform-specific binaries that wrangler and the workerd test runner need.
+allowBuilds:
+  esbuild: true
+  workerd: true
