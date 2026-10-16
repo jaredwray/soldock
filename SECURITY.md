@@ -23,4 +23,6 @@ We will acknowledge receipt on the issue and by email, fix it in public, and cre
 This repository follows the [defense-in-depth](https://github.com/jaredwray/agentic/blob/main/skills/security/defense-in-depth-nodejs/SKILL.md)
 hardening checklist; progress is tracked in [DEFENSE_IN_DEPTH.md](./DEFENSE_IN_DEPTH.md). Measures currently in place:
 
+- Codespaces, Cursor Cloud Agents and Claude Code on the web install through Aikido Safe Chain; package-manager shims must not be bypassed.
+- The Codespaces Dev Container image is pinned by digest (`name:<tag>@sha256:<digest>`), not a floating tag.
 - Socket reviews every pull request that changes dependencies, and Aikido scans every pull request.
