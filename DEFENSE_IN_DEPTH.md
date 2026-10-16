@@ -17,9 +17,9 @@ Profile: website/app · public
 
 ## 3. Dependencies (pnpm)
 - [x] `packageManager: pnpm@11.3+` pinned in `package.json` — PR #7
-- [ ] 7-day cooldown: `minimumReleaseAge: 10080`, `minimumReleaseAgeStrict: true`, `minimumReleaseAgeIgnoreMissingTime: false`; no first-party `minimumReleaseAgeExclude` (PR #8 pending)
-- [ ] `trustPolicy: no-downgrade`; no first-party `trustPolicyExclude`
-- [ ] Lifecycle scripts blocked: `strictDepBuilds: true`, `dangerouslyAllowAllBuilds: false`, `allowBuilds: {}` baseline
+- [x] 7-day cooldown: `minimumReleaseAge: 10080`, `minimumReleaseAgeStrict: true`, `minimumReleaseAgeIgnoreMissingTime: false`; no first-party `minimumReleaseAgeExclude` — PR #8
+- [ ] `trustPolicy: no-downgrade`; no first-party `trustPolicyExclude` (PR #9 pending)
+- [ ] Lifecycle scripts blocked: `strictDepBuilds: true`, `dangerouslyAllowAllBuilds: false`, `allowBuilds: {}` baseline (PR #10 pending)
 - [ ] `blockExoticSubdeps: true`
 - [x] Lockfile committed; CI installs with `pnpm install --frozen-lockfile` — verified 2026-10-16
 - [x] No `.github/dependabot.yml`; other dependency-update tools (if any) open PRs only — never auto-merge — verified 2026-10-16
