@@ -3,9 +3,13 @@ packages:
   - "packages/*"
   - "tools/*"
 
-# Packages allowed to run install scripts. pnpm 11 blocks all others and fails the install on an
-# unapproved one (strictDepBuilds). Each entry is a reviewed exception: both fetch or validate the
-# platform-specific binaries that wrangler and the workerd test runner need.
+# Lifecycle scripts are blocked: pnpm fails the install when a package that is not in allowBuilds
+# has a build script. Each allowBuilds entry is a reviewed exception. Approve new entries only in
+# a dependency review (pnpm approve-builds), never in CI.
+strictDepBuilds: true
+dangerouslyAllowAllBuilds: false
+# esbuild and workerd fetch or validate the platform binaries that wrangler and the workerd test
+# runner need.
 allowBuilds:
   esbuild: true
   workerd: true
@@ -13,3 +17,6 @@ allowBuilds:
 minimumReleaseAge: 10080 # 7 days, in minutes
 minimumReleaseAgeStrict: true # fail instead of falling back to a too-new version
 minimumReleaseAgeIgnoreMissingTime: false # missing publish-time metadata fails closed
+
+trustPolicy: no-downgrade # fail if a later version has weaker trust evidence than an earlier one
+blockExoticSubdeps: true # transitive dependencies must come from the registry, not git URLs or tarballs
