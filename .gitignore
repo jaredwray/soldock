@@ -147,3 +147,13 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Cloudflare / build output
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+dist/
+.vite/
+playwright-report/
+test-results/
