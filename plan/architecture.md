@@ -563,10 +563,12 @@ soldock/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
 │   ├── licenses/               # dependency license policy check (ADR-0011, exceptions in ADR-0014)
 │   ├── budgets/                # Worker bundle-size and startup-time budgets
-│   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T09)
+│   ├── workflows/              # workflow trigger guard for credentialed workflows (S00.T19, ADR-0015)
+│   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T20)
 │   └── load/                   # load and soak scenarios run on Cloudflare (S13)
 ├── fixtures/                   # MIME / DOCX / XLSX / PPTX corpora with license notes
 ├── e2e/                        # Playwright end-to-end tests
+├── spikes/                     # credentialed spike harnesses, removed by each spike's findings PR (process §7)
 ├── docs/                       # user, admin, self-hosting, agent and security docs
 ├── plan/                       # this plan: vision, architecture, process, ADRs, stages, spikes, status
 └── .claude/                    # skills and reviewer agents that implement the process
@@ -590,7 +592,16 @@ soldock/
   simulator posts `.eml` fixtures to the `email()` handler.
 - **Staging:** `dock-staging.<domain>` with its own resources. Its mail domain is a **dedicated
   apex zone** (for example `soldock-staging.dev`), so catch-all routing works and load tests can
-  create thousands of addresses. Deployed on every merge to `main`.
+  create thousands of addresses. Deployed on every merge to `main`, after which the end-to-end
+  suite runs against it.
+- **Credentials and live tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)):
+  - Cloudflare tokens live only in the `staging` and `production` GitHub Actions environments,
+    which accept deployments from a protected `main` only. Agent sessions never hold them.
+  - Staging and production are separate Cloudflare accounts, because Workers, D1, R2, KV and
+    Queues permissions are account-scoped.
+  - Pull requests test locally: workerd tests, plus e2e against the built Worker.
+  - Provisioning, deploys, live end-to-end runs, spikes against real services and load tests run as
+    workflows on `main`, triggered by a push, a manual dispatch or a schedule.
 - **Production (from M2, S05.T22):** the real `dock.jaredwray.com` deployment, with production
   resources. **Google is not involved.**
   - The `jaredwray.com` MX records point to **Cloudflare Email Routing**, whose catch-all rule

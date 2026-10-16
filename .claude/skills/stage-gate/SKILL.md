@@ -54,8 +54,10 @@ Gate-log lines must use this exact format, which `pnpm plan check` enforces:
 ## Exit (active → done)
 
 1. **Confirm settlement.** Every task is `done` or `dropped`, and every dropped task has a reason (`pnpm plan check`).
-2. **Exit demo.** Run the stage's demo script on local and staging. Capture the evidence: test
-   names, e2e run links, screenshots and command transcripts.
+2. **Exit demo.** Run the stage's demo script locally. For staging, use the post-merge deploy run
+   and any dispatched runs. You hold no Cloudflare credentials (ADR-0015). If your GitHub access
+   can't dispatch a workflow, ask the maintainer to. Capture the evidence: test names, e2e and
+   workflow run links, screenshots and command transcripts.
 3. **Cross-cutting audits.** Write the results into the PR description.
    - **Parity:** list the operations added in this stage, and show each one's REST route, MCP tool and UI usage.
    - **Authorization matrix:** coverage report for the new operations.

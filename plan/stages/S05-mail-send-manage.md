@@ -309,7 +309,7 @@ A TipTap-based composer with:
 - **Runbook:** `docs/operations/deliverability.md` (warming, quotas, blocklist response).
 
 **Acceptance**
-- [ ] The suite runs weekly on staging and reports into the admin health page.
+- [ ] The suite runs weekly on staging, as a `schedule` workflow in the `staging` environment ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)), and reports into the admin health page.
 
 ### S05.T13 · Auto-collected contacts and recipient autocomplete
 - status: todo
@@ -420,9 +420,15 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
 - size: S
 - depends: S00.T09
 
-- **Deploy:** a `production` GitHub environment with a required reviewer. Deploys are a manual
-  dispatch from `main` until S14.T04 switches to tag deploys. The workflow follows the S00.T16
-  conventions.
+- **Deploy:** a `production` GitHub environment set up as follows
+  ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)):
+  - a required reviewer, with self-review prevented and no administrator bypass
+  - deployment branches limited to `main`; S14.T04 adds release tags
+  - its own Cloudflare token, in a separate production account. If the maintainer instead runs
+    staging and production in one account, they record that here and in R-22.
+
+  Deploys are a manual dispatch from `main` until S14.T04 switches to tag deploys. The workflow
+  follows the S00.T16 conventions and S00.T19's guard, and runs the e2e smoke suite after deploying.
 - **Rollback:** documented and scripted with `wrangler rollback` and versions.
 - **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
   roll back the MX within its TTL.

@@ -2,14 +2,14 @@
 
 # Build status
 
-**4 / 198 tasks done (2%)** · active stage(s): S00
+**4 / 201 tasks done (2%)** · active stage(s): S00
 
 The stage files in [`stages/`](stages/) are the source of truth; this page is regenerated from them.
 Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for how.
 
 | Stage | Title | Status | Progress | Depends on |
 | --- | --- | --- | --- | --- |
-| [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 4/17 | — |
+| [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 4/20 | — |
 | [S01](stages/S01-identity-access.md) | Identity, access and directory | planned | `░░░░░░░░░░` 0/17 | S00 |
 | [S02](stages/S02-agent-api-surface.md) | Agent and API surface (MCP, OAuth, events) | planned | `░░░░░░░░░░` 0/12 | S01 |
 | [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, search, notifications) | planned | `░░░░░░░░░░` 0/9 | S01 |
@@ -39,10 +39,13 @@ _None._
 
 ## Blocked
 
-- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare secrets in GitHub Actions, since the spike's sending tests run as a workflow (agent sessions never hold Cloudflare credentials), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
+- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare credentials in the `staging` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
+- [S00.T09](stages/S00-foundation.md) · Environments and staging deploy _(ops, M)_ — needs the maintainer setup below (protected `main`, a separate staging Cloudflare account, the `staging` environment and its secrets), plus S00.T19 and S00.T20
 
 ## Ready to start
 
+- [S00.T19](stages/S00-foundation.md) · Workflow trigger guard _(test, S)_
+- [S00.T20](stages/S00-foundation.md) · `soldock provision` _(feature, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_
@@ -52,7 +55,7 @@ _None._
 
 ```mermaid
 graph LR
-  S00["S00 Foundation<br/>4/17"]:::active
+  S00["S00 Foundation<br/>4/20"]:::active
   S01["S01 Identity, access and directory<br/>0/17"]:::planned
   S02["S02 Agent and API surface (MCP, OAuth, events)<br/>0/12"]:::planned
   S03["S03 Platform services (blobs, jobs, search, notifications)<br/>0/9"]:::planned

@@ -14,7 +14,7 @@
 
 <!-- From plan/process.md §6. Tick or mark N/A with a reason. -->
 
-- [ ] Acceptance criteria all ticked in the stage file
+- [ ] Acceptance criteria all ticked in the stage file (boxes observable only after merge: listed under "How it was verified", per process §3 step 7)
 - [ ] Tests: unit / workerd integration / e2e as applicable; coverage holds
 - [ ] Parity: operation in contracts, REST + MCP tested, UI uses it
 - [ ] Authorization: human, agent, delegated allow/deny tests

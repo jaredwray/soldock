@@ -32,6 +32,9 @@ picture.
   Until then, list new persistent state in the module README's data inventory, and don't build
   backup code early.
 - **Permissive licenses only** ([ADR-0011](plan/adr/0011-dependency-license-policy.md)). `pnpm licenses:check` enforces it.
+- **No Cloudflare credentials in sessions.** Deploys and live tests run in GitHub Actions
+  environments, on `main` only ([ADR-0015](plan/adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+  Pull requests test locally: workerd tests, plus e2e against the built Worker in `wrangler dev`.
 - **External content is untrusted.** Mark it as such in API and MCP output, and never serve user
   content as active content on the origin.
 - **The plan is the source of truth.** Update task status in the stage file, then run `pnpm plan status --write`.
@@ -43,7 +46,7 @@ picture.
 
 ```sh
 pnpm install            # Node >= 22.18 (CI uses 24), pnpm 10
-pnpm verify             # lint + typecheck + test + plan check + license check (what CI runs)
+pnpm verify             # lint + types + typecheck + test + budgets + plan check + license check (what CI runs)
 pnpm lint:fix           # Biome format + lint fixes
 pnpm test               # Vitest (all projects)
 pnpm plan next          # what to work on
@@ -60,9 +63,10 @@ pnpm plan status --write
 | `packages/contracts/` | The operation registry: schemas, scopes, errors, events |
 | `packages/{docs,sheets,slides}-model/` | Isomorphic document models and converters |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
-| `tools/plan/`, `tools/licenses/`, `tools/budgets/` | Plan CLI, license policy check, Worker bundle and startup budgets |
+| `tools/plan/`, `tools/licenses/`, `tools/budgets/`, `tools/workflows/` | Plan CLI, license policy check, Worker bundle and startup budgets, workflow trigger guard (S00.T19) |
 | `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
 | `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
+| `spikes/` | Spike harnesses that need live Cloudflare credentials, deleted by each spike's findings PR (process §7) |
 | `plan/` | Vision, architecture, process, ADRs, stages, spike findings, status, risks |
 | `docs/` | User, admin, self-hosting, agent and security docs |
 

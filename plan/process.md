@@ -110,7 +110,7 @@ skill walks an agent through it.
    and open the PR early if others are working in parallel.
 4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
    the task. File follow-ups as new tasks; don't widen the PR.
-5. **Verify.** Run `pnpm verify` (lint, typecheck, tests, plan check, license check). It must be
+5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, plan check, license check). It must be
    green. For UI work, run the app and check the change in a browser (see the
    [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
 6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
@@ -118,6 +118,11 @@ skill walks an agent through it.
    backups or data models, ask the `impl-reviewer` agent for a review and address what it finds.
 7. **Record.** Tick the acceptance boxes, set `status: done`, and run `pnpm plan status --write`.
    Update module READMEs and `architecture.md`, and write or update an ADR if a decision was made.
+   Some boxes can only be observed after merge, such as a deploy or a dispatched run
+   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). For those:
+   1. Leave the task `in-progress` and merge.
+   2. Read the run, or ask for it.
+   3. Tick the box with the run link in a small `plan: Sxx.Tyy done` PR.
 8. **Ship.** Commit with a conventional message that includes the task id (for example
    `feat(mail): inbound pipeline [S04.T03]`). Push, then open a PR using the template. One task per
    PR. Tightly coupled `S` tasks may share a PR if every id appears in the title. The maintainer
@@ -147,8 +152,10 @@ for the stages it lists.
 **Exit gate** (the stage moves from `active` to `done`). Run `stage-gate` with `exit`.
 
 1. Every task is `done` or `dropped`, with reasons.
-2. Run the stage's **exit demo** (scripted in the stage file) against local and staging. Record
-   evidence: test names, e2e runs, screenshots.
+2. Run the stage's **exit demo** (scripted in the stage file) locally. Record evidence: test
+   names, e2e runs, screenshots. The staging evidence is the post-merge deploy run plus any
+   dispatched runs, because agent sessions hold no Cloudflare credentials
+   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Link those runs.
 3. List the partial kickoffs that named this stage (`partial: re-refine after Sxx`) and re-run
    their kickoff review before closing this gate.
 4. Run the cross-cutting audits:
@@ -175,7 +182,8 @@ A task is ready when:
 
 The PR template repeats this list. Items that don't apply are marked N/A with a reason.
 
-- [ ] **Acceptance.** Every acceptance box for the task is ticked.
+- [ ] **Acceptance.** Every acceptance box for the task is ticked, except boxes that can only be
+  observed after merge ([§3 step 7](#3-the-task-loop)). The PR names those under "How it was verified".
 - [ ] **Tests.**
   - Unit tests for logic.
   - Workerd integration tests (`@cloudflare/vitest-plugin`) for Durable Objects, routes, queues and workflows.
@@ -208,8 +216,12 @@ time-boxed (size S or M). It must deliver:
 
 - an ADR (accepted or rejected options, the evidence, and the consequences) or a findings note in
   `plan/spikes/`
-- throwaway code only in the PR description or a `spikes/` branch, never merged into `apps/` or
-  `packages/` unless it meets the Definition of Done
+- throwaway code only in the PR description or a `spike/<task-id>` branch, never merged into `apps/` or
+  `packages/` unless it meets the Definition of Done. One exception: a spike that needs live
+  Cloudflare credentials can't run from a branch
+  ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Its harness (a
+  `workflow_dispatch` workflow plus the throwaway code under `spikes/<name>/`) lands on `main` as
+  its own reviewed task first, and the spike's findings PR deletes it.
 - **updated tasks**: the spike edits the downstream tasks it affects (scope, sizes, new tasks) in
   the same PR
 
@@ -222,9 +234,25 @@ time-boxed (size S or M). It must deliver:
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
 | Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
-| End-to-end | Playwright against `pnpm dev` (local) and staging | `e2e/` |
+| End-to-end | Playwright against the built Worker in local workerd (`wrangler dev`) on every PR, and against staging after every deploy of `main` | `e2e/` |
 | Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
 | Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |
+
+**Live Cloudflare tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+Agent sessions have no Cloudflare credentials, by design. Anything that needs a real account runs
+as a GitHub Actions workflow on `main`:
+
+- **`staging` environment:** provisioning, staging deploys, the staging e2e run, spikes, load
+  tests, and weekly suites (`schedule` workflows).
+- **`production` environment:** production deploys only (S05.T25), with its own token and a
+  required reviewer.
+
+To check live behaviour, read the post-merge run. To run a workflow, dispatch it on `main` if your
+GitHub access allows, or ask the maintainer to. Then read its job summary, logs and artifacts, and
+link the runs as evidence. Never ask for a token in a session.
+
+A workflow that uses an environment may trigger only on `push` to `main`, `workflow_dispatch` or
+`schedule`, directly or through a workflow that calls it. S00.T19's guard enforces this.
 
 ## 9. Changing the plan
 

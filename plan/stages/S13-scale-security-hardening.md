@@ -50,7 +50,10 @@ structured reviews. Know what it costs to run.
 - Drive uploads and searches
 - 500 agents making 100 MCP calls per second
 
-Staging uses its apex mail zone, so thousands of addresses route through catch-all.
+Staging uses its apex mail zone, so thousands of addresses route through catch-all. Runs are
+manually dispatched GitHub Actions workflows in the `staging` environment, because agent sessions
+hold no Cloudflare credentials ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+The report is built from the run's artifacts.
 
 **Acceptance**
 - [ ] A load report is committed, with p50 and p95 per operation. SLO breaches become tasks with owners.
@@ -123,7 +126,7 @@ Run it against real agents connected through MCP. Verify that the untrusted enve
 approvals, caps and kill switch contain each scenario.
 
 **Acceptance**
-- [ ] Every scenario is contained. A regression suite runs weekly on staging. R-08 is updated.
+- [ ] Every scenario is contained. A regression suite runs weekly on staging, as a `schedule` workflow in the `staging` environment. R-08 is updated.
 
 ### S13.T05 · Accessibility audit (WCAG 2.2 AA)
 - status: todo
