@@ -35,7 +35,7 @@ _None._
 
 ## In progress
 
-_None._
+- [S00.T15](stages/S00-foundation.md) · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings _(ops, M)_
 
 ## Blocked
 
@@ -44,7 +44,6 @@ _None._
 ## Ready to start
 
 - [S00.T18](stages/S00-foundation.md) · Email Service spike harness _(chore, S)_
-- [S00.T15](stages/S00-foundation.md) · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings _(ops, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_

@@ -143,7 +143,7 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 - [ ] Dispatched on `main` without the `staging` secrets, the workflow fails fast and names what is missing.
 
 ### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
-- status: todo
+- status: in-progress
 - kind: ops
 - size: M
 - depends: S00.T03
