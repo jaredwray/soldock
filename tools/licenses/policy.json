@@ -15,5 +15,11 @@
 		"Python-2.0",
 		"MPL-2.0"
 	],
-	"exceptions": []
+	"exceptions": [
+		{
+			"name": "@img/sharp-libvips-*",
+			"license": "LGPL-3.0-or-later",
+			"reason": "Dev-only (ADR-0011): prebuilt libvips binaries that miniflare (via wrangler and @cloudflare/vitest-plugin) loads dynamically for local image emulation. Never bundled into the Worker or the SPA, never distributed."
+		}
+	]
 }

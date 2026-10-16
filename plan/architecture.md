@@ -550,7 +550,7 @@ soldock/
 │   │   │   ├── slides/         # server-side Slides operations and rendering
 │   │   │   ├── meet/           # MeetingDO, Realtime SFU/TURN client, recording, transcripts
 │   │   │   └── archive/        # BackupRunDO, backup workflows, restores, DR, exports, retention, legal hold, eDiscovery, imports (S12)
-│   │   └── test/               # workerd integration tests (vitest-pool-workers)
+│   │   └── test/               # workerd integration tests (@cloudflare/vitest-plugin)
 │   └── web/                    # the SPA (React + Vite), built into dock's static assets
 ├── packages/
 │   ├── contracts/              # operation registry: schemas, scopes, errors, events (shared by dock, web, sdk)
@@ -562,6 +562,7 @@ soldock/
 ├── tools/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
 │   ├── licenses/               # dependency license policy check
+│   ├── budgets/                # Worker bundle-size and startup-time budgets
 │   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T09)
 │   └── load/                   # load and soak scenarios run on Cloudflare (S13)
 ├── fixtures/                   # MIME / DOCX / XLSX / PPTX corpora with license notes

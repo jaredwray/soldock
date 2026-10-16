@@ -1,0 +1,32 @@
+// The dock Worker: the whole backend, served from one origin (ADR-0002, ADR-0003).
+// After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "soldock-dock",
+	"main": "src/index.ts",
+	// Pinned. Bump deliberately, in its own PR, after reading the compatibility-flag changelog.
+	"compatibility_date": "2026-10-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"assets": {
+		// Placeholder page until S00.T05 points this at the apps/web build.
+		"directory": "./public",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		// Browser navigations go straight to assets, so every Worker-owned prefix must be listed here
+		// (architecture §3). Keep in sync with WORKER_PREFIXES in src/routes.ts; a test enforces it.
+		"run_worker_first": [
+			"/api/*",
+			"/mcp*",
+			"/oauth/*",
+			"/.well-known/*",
+			"/auth/*",
+			"/ws/*",
+			"/blob/*",
+			"/dl/*",
+			"/hooks/*"
+		]
+	}
+}

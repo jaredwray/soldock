@@ -1,0 +1,8 @@
+{
+	"name": "@soldock/tool-budgets",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Worker bundle-size and startup-time budget checks (S00.T04; extended by S13.T02).",
+	"type": "module",
+	"license": "MIT"
+}

@@ -35,7 +35,7 @@ _None._
 
 ## In progress
 
-_None._
+- [S00.T04](stages/S00-foundation.md) · `apps/dock` Worker skeleton _(feature, M)_
 
 ## Blocked
 
@@ -44,7 +44,6 @@ _None._
 ## Ready to start
 
 - [S00.T15](stages/S00-foundation.md) · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings _(ops, M)_
-- [S00.T04](stages/S00-foundation.md) · `apps/dock` Worker skeleton _(feature, M)_
 
 ## Stage map
 

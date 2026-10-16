@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		// Bundled by wrangler (esbuild) and Vite, so bundler resolution; runtime types come from
+		// worker-configuration.d.ts (`wrangler types`), not @types/node or the DOM lib.
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2024"],
+		"types": ["@cloudflare/vitest-plugin/types"]
+	},
+	"include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts", "vitest.config.ts"]
+}
