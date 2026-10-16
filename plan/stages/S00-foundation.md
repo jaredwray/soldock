@@ -84,7 +84,7 @@ The GitHub Actions `verify` job runs lint, typecheck, tests, plan check and the 
 
 ### S00.T13 · Spike: is Email Service viable for mailbox traffic?
 - status: blocked
-- reason: needs maintainer resources: Cloudflare secrets in GitHub Actions, since the spike's sending tests run as a workflow (agent sessions never hold Cloudflare credentials), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
+- reason: needs maintainer resources: Cloudflare credentials in the `staging` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 - kind: spike
 - size: S
 

@@ -39,7 +39,7 @@ _None._
 
 ## Blocked
 
-- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare secrets in GitHub Actions, since the spike's sending tests run as a workflow (agent sessions never hold Cloudflare credentials), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
+- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare credentials in the `staging` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 
 ## Ready to start
 
@@ -48,6 +48,7 @@ _None._
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_
 - [S00.T07](stages/S00-foundation.md) · Module boundaries and conventions _(chore, S)_
+- [S00.T09](stages/S00-foundation.md) · Environments, provisioning and staging deploy _(ops, M)_
 
 ## Stage map
 
