@@ -37,9 +37,9 @@ Profile: website/app · public
 - [ ] No npm tokens (or other registry credentials) in Actions secrets
 
 ## 6. Security tooling
-- [x] Aikido runs on every build — verified 2026-10-16 (`Aikido Security: check code` runs on PRs)
+- [x] Aikido runs on every build — verified 2026-10-16 on pull requests (`Aikido Security: check code`). Direct pushes to `main` aren't covered until § 7 requires pull requests
 - [ ] Aikido release gate: the release workflow's stage-publish job `needs:` a passing `scan-release` — not applicable: website/app profile, nothing is staged to npm
-- [x] Socket reviews every PR that changes dependencies — verified 2026-10-16 (`Socket Security: Pull Request Alerts` runs on PRs)
+- [x] Socket reviews every PR that changes dependencies — verified 2026-10-16 (`Socket Security: Pull Request Alerts`). Direct pushes to `main` aren't covered until § 7 requires pull requests
 
 ## 7. Repository lockdown
 - [ ] Phishing-resistant 2FA (passkeys / hardware keys) on the GitHub and npm accounts (manual)
