@@ -118,6 +118,11 @@ skill walks an agent through it.
    backups or data models, ask the `impl-reviewer` agent for a review and address what it finds.
 7. **Record.** Tick the acceptance boxes, set `status: done`, and run `pnpm plan status --write`.
    Update module READMEs and `architecture.md`, and write or update an ADR if a decision was made.
+   Some boxes can only be observed after merge, such as a deploy or a dispatched run
+   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). For those:
+   1. Leave the task `in-progress` and merge.
+   2. Read the run, or ask for it.
+   3. Tick the box with the run link in a small `plan: Sxx.Tyy done` PR.
 8. **Ship.** Commit with a conventional message that includes the task id (for example
    `feat(mail): inbound pipeline [S04.T03]`). Push, then open a PR using the template. One task per
    PR. Tightly coupled `S` tasks may share a PR if every id appears in the title. The maintainer
@@ -147,8 +152,10 @@ for the stages it lists.
 **Exit gate** (the stage moves from `active` to `done`). Run `stage-gate` with `exit`.
 
 1. Every task is `done` or `dropped`, with reasons.
-2. Run the stage's **exit demo** (scripted in the stage file) against local and staging. Record
-   evidence: test names, e2e runs, screenshots.
+2. Run the stage's **exit demo** (scripted in the stage file) locally. Record evidence: test
+   names, e2e runs, screenshots. The staging evidence is the post-merge deploy run plus any
+   dispatched runs, because agent sessions hold no Cloudflare credentials
+   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Link those runs.
 3. List the partial kickoffs that named this stage (`partial: re-refine after Sxx`) and re-run
    their kickoff review before closing this gate.
 4. Run the cross-cutting audits:
@@ -226,7 +233,7 @@ time-boxed (size S or M). It must deliver:
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
 | Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
-| End-to-end | Playwright against `pnpm dev` on every PR, and against staging after every deploy of `main` | `e2e/` |
+| End-to-end | Playwright against the built Worker in local workerd (`wrangler dev`) on every PR, and against staging after every deploy of `main` | `e2e/` |
 | Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
 | Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |
 
@@ -234,14 +241,17 @@ time-boxed (size S or M). It must deliver:
 Agent sessions have no Cloudflare credentials, by design. Anything that needs a real account runs
 as a GitHub Actions workflow on `main`:
 
-- **`staging` environment:** staging deploys, the staging e2e run, spikes and load tests.
+- **`staging` environment:** provisioning, staging deploys, the staging e2e run, spikes, load
+  tests, and weekly suites (`schedule` workflows).
 - **`production` environment:** production deploys only (S05.T25), with its own token and a
   required reviewer.
 
-To check live behaviour, merge and read the post-deploy run, or dispatch the workflow on `main`,
-then read its job summary, logs and artifacts. Never ask for a token in a session. Never let a
-workflow that uses an environment run on `pull_request`, `pull_request_target` or `workflow_run`,
-and never let such a workflow be called from one that does.
+To check live behaviour, read the post-merge run. To run a workflow, dispatch it on `main` if your
+GitHub access allows, or ask the maintainer to. Then read its job summary, logs and artifacts, and
+link the runs as evidence. Never ask for a token in a session.
+
+A workflow that uses an environment may trigger only on `push` to `main`, `workflow_dispatch` or
+`schedule`, directly or through a workflow that calls it. S00.T19's guard enforces this.
 
 ## 9. Changing the plan
 

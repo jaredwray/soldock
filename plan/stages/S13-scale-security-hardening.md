@@ -126,7 +126,7 @@ Run it against real agents connected through MCP. Verify that the untrusted enve
 approvals, caps and kill switch contain each scenario.
 
 **Acceptance**
-- [ ] Every scenario is contained. A regression suite runs weekly on staging. R-08 is updated.
+- [ ] Every scenario is contained. A regression suite runs weekly on staging, as a `schedule` workflow in the `staging` environment. R-08 is updated.
 
 ### S13.T05 · Accessibility audit (WCAG 2.2 AA)
 - status: todo

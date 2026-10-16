@@ -114,7 +114,8 @@ apex domain on the Cloudflare account (with Email Service enabled), seed Gmail a
 and a Cloudflare contact for the acceptable-use question. If any of these is missing, set the task to `blocked` with a `reason:` naming it.
 
 **Acceptance**
-- [ ] The findings note is committed with the test evidence and Cloudflare's written answer (or the open request, with a date).
+- [ ] The findings note is committed with the test evidence (links to the dispatched runs) and Cloudflare's written answer (or the open request, with a date).
+- [ ] The findings PR removes S00.T18's harness Worker and workflow.
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
@@ -129,7 +130,8 @@ S00.T13 needs live credentials, which reach only workflows that run `main`, and 
 lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md),
 [process §7](../process.md#7-spikes)):
 
-- **`spikes/email-service/`:** a throwaway Worker with its own name, never the `dock` Worker. It sends
+- **`spikes/email-service/`:** a throwaway Worker named `soldock-spike-email`, never the `dock`
+  Worker. `spikes/` is excluded from coverage and budgets. It sends
   structured messages and raw MIME with custom `Message-ID`, `In-Reply-To`, `References` and `X-`
   headers to recipients given as inputs. It consumes the lifecycle-event queue and records what it
   observes.
@@ -141,6 +143,53 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 **Acceptance**
 - [ ] PR CI builds the harness with `wrangler deploy --dry-run` and lints the workflow, with no credentials.
 - [ ] Dispatched on `main` without the `staging` secrets, the workflow fails fast and names what is missing.
+
+### S00.T19 · Workflow trigger guard
+- status: todo
+- kind: test
+- size: S
+- depends: S00.T03
+
+`tools/workflows/check.ts` enforces [ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)'s
+trigger allowlist over `.github/workflows/`, and runs in `pnpm verify`. It has the same shape as
+`tools/licenses` and `tools/budgets`: pure rules with unit tests and fixtures.
+
+A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` must meet three rules:
+
+- **Triggers:** it triggers only on `push` with `branches: [main]` and no `tags` (S14.T04 adds
+  release tags), `workflow_dispatch` or `schedule`. Every other trigger fails.
+- **Reusable workflows:** a callee's `environment:` is checked against its caller's triggers, so
+  the guard follows local calls (`uses: ./.github/workflows/…`).
+- **Checkouts:** every `actions/checkout` sets `persist-credentials: false`, with no `ref:` other
+  than `${{ github.sha }}`.
+
+**Acceptance**
+- [ ] The guard fails on each fixture below and passes on the real workflows:
+  - an environment job with a `pull_request` trigger
+  - a `pull_request_target` workflow that calls a local reusable workflow whose job uses `environment: staging`
+  - a `workflow_run`-triggered workflow that reads a `CLOUDFLARE_*` secret
+  - a `push` trigger without `branches: [main]`
+  - a dispatch workflow that checks out `ref: ${{ inputs.ref }}`
+- [ ] It runs in `pnpm verify` and CI.
+
+### S00.T20 · `soldock provision`
+- status: todo
+- kind: feature
+- size: M
+- depends: S00.T04
+
+Create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
+`soldock provision --env <env>` command:
+
+- It is idempotent, and creates D1, R2 buckets (`blobs`, `audit`), KV, queues and their DLQs.
+- It prints the bindings, using wrangler's automatic provisioning where possible and the
+  Cloudflare API otherwise.
+- It reads credentials only from the environment, because it runs only in GitHub Actions
+  ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)). S00.T09 wires it into a dispatched job.
+
+**Acceptance**
+- [ ] Running `soldock provision` twice is a no-op the second time (tested against a mocked API).
+- [ ] Missing credentials fail fast with a message that names them and points to `docs/self-hosting.md`.
 
 ### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
 - status: in-progress
@@ -197,7 +246,9 @@ These conventions apply to every workflow added later, including S00.T09's deplo
 The skill's **§7**, which comes last after every earlier item, including the manual ones. A repo
 **admin** runs the skill's `lockdown-repo.sh`, which is never copied into this repository. It
 sets: PRs required on `main`, admin-only tags, approval for workflow runs from outside
-contributors, and the required checks taken from the workflows. An agent prepares the exact
+contributors, and the required checks taken from the workflows. S00.T09 already needs `main`
+protected before any environment secret exists ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+The lockdown completes and verifies that protection. An agent prepares the exact
 command and the list of required checks, then sets the task to `blocked` with
 `reason: waiting for an admin to run lockdown-repo.sh` until the maintainer confirms.
 
@@ -231,8 +282,8 @@ Create `apps/dock`:
 **Acceptance**
 - [x] `GET /api/v1/system/ping` returns `{ ok: true }` with an `x-request-id` header, tested in workerd.
 - [x] Unknown `/api/*` paths return a problem+json 404, and SPA routes fall back to `index.html` (tested).
-  The workerd tests call the Worker without the assets router, so S00.T11's smoke test covers browser
-  navigations through it.
+  The workerd tests call the Worker without the assets router, so S00.T09's post-deploy smoke check
+  and S00.T11's suite cover browser navigations through it.
 - [x] CI fails on a stale `worker-configuration.d.ts`, on a bundle over budget, and on a Worker
   startup time over budget. Large server-side bundles hit the startup CPU limit long before 64 MiB.
 
@@ -263,11 +314,14 @@ CI artifact. Until this task lands, the coverage clause in the Definition of Don
   with `@cloudflare/vite-plugin` (pointing at `apps/dock/wrangler.jsonc`).
 - **UI package:** `packages/ui` exports design tokens and the first components (Button, Input,
   Dialog, Menu, Toast) built on Radix primitives.
+- **Staging:** the S00.T09 deploy workflow runs `pnpm build` for `apps/web` before `wrangler deploy`,
+  and its smoke check expects the shell at `/mail`.
 
 **Acceptance**
 - [ ] `pnpm dev` serves the SPA and `/api/v1/system/ping` on one local origin, with hot reload.
 - [ ] `pnpm build` produces assets that `wrangler dev` serves with SPA fallback.
 - [ ] A component test (Vitest + Testing Library) and an axe check run in CI.
+- [ ] After merge, the staging deploy run serves the shell at `/mail` (run link recorded).
 
 ### S00.T06 · Platform primitives
 - status: todo
@@ -340,52 +394,60 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - [ ] Re-sending a request with the same idempotency key returns the original result (tested).
 - [ ] `changes` compaction never drops a row above the lowest registered cursor, and the table stays bounded under steady churn (tested).
 
-### S00.T09 · Environments, provisioning and staging deploy
+### S00.T09 · Environments and staging deploy
 - status: todo
 - kind: ops
 - size: M
-- depends: S00.T04
+- depends: S00.T04, S00.T19, S00.T20
+
+Everything here runs in GitHub Actions, in the `staging` environment, the only place the
+Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
 
 - **Environments:** `wrangler.jsonc` defines `staging` and `production`.
-- **Provisioning:** create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
-  `soldock provision --env <env>` command. It is idempotent and
-  creates D1, R2 buckets (`blobs`, `audit`), KV, queues and their DLQs. It
-  prints the bindings, using wrangler's automatic provisioning where possible and the Cloudflare
-  API otherwise.
-- **Deploy:** a GitHub Actions workflow deploys `main` to staging (`dock-staging.<domain>`) on every
-  push to `main` and on manual dispatch. It runs in the `staging` environment, the only place the
-  Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
-  It deploys whatever assets exist (the placeholder page until S00.T05, then the SPA build).
-  It follows the S00.T16 workflow conventions: SHA-pinned actions, least-privilege `permissions`, and
-  kebab-case workflow and job names.
+- **Provision:** a `workflow_dispatch` job runs `soldock provision --env staging` (S00.T20) and
+  writes the resulting bindings to the job summary. Wrangler can't write auto-provisioned IDs back
+  from CI, so an agent commits the bindings to `wrangler.jsonc` in a PR.
+- **Deploy:** a workflow deploys `main` to staging (`dock-staging.<domain>`) on every push to `main`
+  and on manual dispatch.
+  - It deploys whatever assets exist: the placeholder page until S00.T05, then the SPA build.
+  - It uses `concurrency: { group: deploy-staging, cancel-in-progress: false }`, so two merges
+    never interleave.
+  - It installs with `sfw pnpm install --frozen-lockfile` and restores no caches.
+  - It follows the S00.T16 workflow conventions: SHA-pinned actions, least-privilege `permissions`,
+    and kebab-case workflow and job names.
+  - S00.T19's guard checks it.
 - **Post-deploy smoke:** after deploying, the same workflow runs an HTTP smoke check against the
-  staging host. Ping returns `{ ok: true }`. Browser navigations (`Sec-Fetch-Mode: navigate`) to
-  `/api/v1/nope` and `/mcp` return `application/problem+json` 404s. A navigation to `/mail` returns
-  the shell. These run through the real assets router, which the workerd tests can't reach.
-  S00.T11 replaces this check with the Playwright suite.
-- **Guard:** a test fails CI when a workflow that names a GitHub environment or a `CLOUDFLARE_*`
-  secret can be triggered by anything other than `push` (to `main`, or a release tag from S14.T04)
-  or `workflow_dispatch`. It follows local reusable-workflow calls (`uses: ./.github/workflows/…`),
-  because a called workflow inherits its caller's event. `pull_request`, `pull_request_target` and
-  `workflow_run` all fail it.
+  staging host. These requests go through the real assets router, which the workerd tests can't
+  reach. S00.T11 replaces this check with the Playwright suite. The check:
+  - Ping returns `{ ok: true }`.
+  - Browser navigations (`Sec-Fetch-Mode: navigate`) to `/api/v1/nope` and `/mcp` return
+    `application/problem+json` 404s.
+  - A navigation to `/mail` returns `index.html` (the placeholder until S00.T05).
 - **Staging mail domain:** a dedicated **apex** zone (for example `soldock-staging.dev`). Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
   rules ([R-20](../risks.md)).
-- **Docs:** `docs/self-hosting.md` (first draft) lists the account prerequisites and the secrets:
-  - the Workers Paid plan and a zone on Cloudflare
+- **Docs:** `docs/self-hosting.md` (first draft) lists:
+  - the account prerequisites: the Workers Paid plan and a zone on Cloudflare
+  - the token permissions: Workers Scripts, D1, KV, R2 and Queues edit on the staging account;
+    DNS and Email Routing rules edit on the staging zone
+  - the GitHub setup below
 
-Needs the maintainer to create the `staging` GitHub environment (deployment branches: `main` only)
-with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as environment secrets, not repository
-secrets. `docs/self-hosting.md` lists the token's permissions. Set the task to `blocked` with a
-reason if they are missing. Agents never receive the token: they read the workflow's runs.
+Needs the maintainer to set up, in this order:
+
+1. Protect `main`: pull requests required, force-push and deletion blocked, and `verify` required.
+   This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
+   unprotected branch.
+2. Create a **separate** Cloudflare account for staging.
+3. Create the `staging` GitHub environment, with deployment branches set to `main` only.
+4. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to that environment as environment secrets, not repository secrets.
+
+Set the task to `blocked` with a reason while any of these is missing. Agents never receive the
+token: they read the workflow's runs.
 
 **Acceptance**
-- [ ] Running `soldock provision` twice is a no-op the second time (tested against a mocked API).
-- [ ] A merge to `main` deploys staging, and the post-deploy smoke check passes against the staging host.
-- [ ] The guard test fails on three fixtures and passes on the real workflows. The fixtures:
-  - an environment job with a `pull_request` trigger
-  - a `pull_request_target` workflow that calls a local reusable workflow whose job uses `environment: staging`
-  - a `workflow_run`-triggered workflow that reads a `CLOUDFLARE_*` secret
+- [ ] The workflows pass S00.T19's guard and zizmor in PR CI.
+- [ ] After merge, the dispatched `provision` run on `main` prints the staging bindings (run link recorded).
+- [ ] After merge, the first deploy of `main` passes its post-deploy smoke check against the staging host (run link recorded).
 
 ### S00.T10 · Operation registry v0 and REST adapter
 - status: todo
@@ -423,13 +485,17 @@ uploaded on failure. The smoke test also covers the one-origin routing that the 
 reach, because they call the Worker without the assets router (S00.T04): browser navigations to
 `/api/v1/nope` and `/mcp` return `application/problem+json`, and a navigation to `/mail` returns the shell.
 
-Both runs happen in GitHub Actions ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
-Every PR runs the suite against `pnpm dev`, with no credentials. After each deploy of `main`,
-S00.T09's workflow runs the same suite against staging with `E2E_BASE_URL`, replacing its HTTP smoke check.
+Both runs happen in GitHub Actions ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)):
+
+- **Every PR:** runs `pnpm build`, then the suite against the built Worker and assets in local
+  workerd (`wrangler dev`), with no credentials. That exercises the same assets router and
+  `run_worker_first` routing that staging uses. `pnpm dev` stays the developer loop.
+- **After each deploy of `main`:** S00.T09's workflow runs the same suite against staging with
+  `E2E_BASE_URL`, replacing its HTTP smoke check.
 
 **Acceptance**
-- [ ] `pnpm e2e` passes locally and in the PR CI job.
-- [ ] The staging deploy workflow runs the same suite against the staging host after every deploy of `main`, and a failure turns the run red.
+- [ ] `pnpm e2e` passes locally and in the PR CI job, against the built Worker.
+- [ ] After merge, the staging deploy run executes the same suite against the staging host, and a failing test turns the run red (run link recorded).
 
 ### S00.T12 · Contributor and agent developer experience
 - status: todo
