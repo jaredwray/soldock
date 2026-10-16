@@ -30,11 +30,23 @@ required reviewers. Its secrets then reach only jobs that run reviewed, merged c
    They are never stored in agent sessions or their cloud-environment settings, in repository-level
    secrets or variables, or in committed files. Each environment has its own token, scoped to its
    own account resources and zones, with the least privilege its workflows need.
-2. **Who can use them.** Each environment allows deployments from `main` only. Workflows that
-   reference an environment or a `CLOUDFLARE_*` secret trigger only on `push` to `main` and on
-   `workflow_dispatch`. Because of the branch rule, a dispatch can reach the secrets only when it
-   runs `main`. They never trigger on `pull_request` or `pull_request_target`, so code that hasn't
-   merged, including agent-written PR code and fork PRs, never runs with a token.
+2. **Who can use them.** Each environment allows deployments from `main` only. When S14.T04 moves
+   releases to tags, it adds a release-tag pattern (`v*`) to the environments that tags deploy to.
+   Tag creation is admin-only by then (the S00.T17 tag ruleset), so a tag is as reviewed as `main`.
+
+   A workflow that references an environment or a `CLOUDFLARE_*` secret may trigger only on:
+   - `push` to `main`
+   - `push` of a release tag, from S14.T04
+   - `workflow_dispatch`, which reaches the secrets only when it runs `main` because of the branch rule
+
+   It never triggers on `pull_request`, `pull_request_target` or `workflow_run`. The last two run
+   in the default branch's context, so the branch rule alone would not stop PR-controlled input
+   from reaching the secrets. The same rule covers reusable workflows: a workflow called with
+   `workflow_call` inherits its caller's event and ref, so a reusable workflow that uses an
+   environment may be called only from workflows that meet the rule.
+
+   As a result, code that hasn't merged, including agent-written PR code and fork PRs, never runs
+   with a token.
 3. **Pull requests test locally.** Every PR runs the full suite in CI with no credentials:
    workerd tests (`@cloudflare/vitest-plugin`) and the end-to-end suite against `pnpm dev` (Miniflare).
 4. **Live tests run after merge.** The staging deploy workflow deploys `main` and then runs the same
@@ -53,9 +65,14 @@ required reviewers. Its secrets then reach only jobs that run reviewed, merged c
 - A staging regression found after merge is fixed forward or reverted, like any red `main`.
 - Workflows with secrets are high-value targets. They follow the S00.T16 hardening: SHA-pinned
   actions, Socket Firewall, zizmor, least-privilege `permissions` and `persist-credentials: false`.
-  The S00.T17 lockdown restricts Actions to an allowlist. A test fails CI if a workflow that uses an
-  environment or a `CLOUDFLARE_*` secret gains a `pull_request` or `pull_request_target` trigger
-  (S00.T09).
+  The S00.T17 lockdown restricts Actions to an allowlist. A guard test (S00.T09) fails CI if a
+  workflow that uses an environment or a `CLOUDFLARE_*` secret can be triggered by anything the
+  rule above forbids. It checks the workflow directly, and through any local reusable workflow it
+  calls.
+- A spike that needs live credentials lands its harness on `main` first, as its own task, under
+  `spikes/<name>/`. A `workflow_dispatch` workflow must exist on the default branch before it can
+  run, and only runs of `main` reach the secrets. The spike's findings PR then deletes the harness
+  ([process §7](../process.md#7-spikes)).
 - The maintainer creates the environments and their secrets. `docs/self-hosting.md` (S00.T09) lists
   the token permissions, and these tasks stay `blocked` until they exist: S00.T09, S00.T13 and S05.T25.
 - New risk [R-22](../risks.md): CI is now the only place a token exists, so a compromised action

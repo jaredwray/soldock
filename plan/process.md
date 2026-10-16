@@ -209,7 +209,11 @@ time-boxed (size S or M). It must deliver:
 - an ADR (accepted or rejected options, the evidence, and the consequences) or a findings note in
   `plan/spikes/`
 - throwaway code only in the PR description or a `spikes/` branch, never merged into `apps/` or
-  `packages/` unless it meets the Definition of Done
+  `packages/` unless it meets the Definition of Done. One exception: a spike that needs live
+  Cloudflare credentials can't run from a branch
+  ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Its harness (a
+  `workflow_dispatch` workflow plus the throwaway code under `spikes/<name>/`) lands on `main` as
+  its own reviewed task first, and the spike's findings PR deletes it.
 - **updated tasks**: the spike edits the downstream tasks it affects (scope, sizes, new tasks) in
   the same PR
 
@@ -228,10 +232,16 @@ time-boxed (size S or M). It must deliver:
 
 **Live Cloudflare tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)).
 Agent sessions have no Cloudflare credentials, by design. Anything that needs a real account runs
-as a GitHub Actions workflow on `main`, in the `staging` environment: deploys, the staging e2e run,
-spikes and load tests. To check live behaviour, merge and read the post-deploy run, or dispatch
-the workflow on `main`, then read its job summary, logs and artifacts. Never ask for a token in a
-session, and never add a `pull_request` trigger to a workflow that uses an environment.
+as a GitHub Actions workflow on `main`:
+
+- **`staging` environment:** staging deploys, the staging e2e run, spikes and load tests.
+- **`production` environment:** production deploys only (S05.T25), with its own token and a
+  required reviewer.
+
+To check live behaviour, merge and read the post-deploy run, or dispatch the workflow on `main`,
+then read its job summary, logs and artifacts. Never ask for a token in a session. Never let a
+workflow that uses an environment run on `pull_request`, `pull_request_target` or `workflow_run`,
+and never let such a workflow be called from one that does.
 
 ## 9. Changing the plan
 

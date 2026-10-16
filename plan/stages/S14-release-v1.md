@@ -97,6 +97,10 @@ An interactive CLI that:
   CHANGELOG file, per `AGENTS.md` › Agentic conventions).
 - **Packages:** publish `@soldock/sdk` and `@soldock/cli` to npm with provenance.
 - **Production:** deploy production from tags with a manual approval, replacing S05.T25's manual dispatch.
+- **Environments:** add the release-tag pattern (`v*`) to the deployment rules of the `production`
+  and `staging` GitHub environments ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+  Tags deploy only because the S00.T17 tag ruleset makes tag creation admin-only. Extend the
+  S00.T09 guard test to allow tag pushes.
 - **Supply chain:** re-run `defense-in-depth-nodejs` §5 (npm publishing) now that packages publish.
 
 **Acceptance**

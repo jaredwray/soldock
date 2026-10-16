@@ -87,6 +87,7 @@ The GitHub Actions `verify` job runs lint, typecheck, tests, plan check and the 
 - reason: needs maintainer resources: Cloudflare credentials in the `staging` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 - kind: spike
 - size: S
+- depends: S00.T18
 
 Outbound mail is the plan's single point of failure ([R-01](../risks.md)). Workers cannot open
 outbound port 25, and R1 rules out an external relay, so **if Email Service can't carry
@@ -103,22 +104,43 @@ this before any Mail work starts:
   and agents sending as themselves) is acceptable use, and at what volume.
 - **Findings:** record them in `plan/spikes/S00.T13-email-service.md`.
 
-The sending tests and the queue consumer run as a manually dispatched GitHub Actions workflow in
-the `staging` environment, never from an agent session
+The sending tests and the queue consumer run from S00.T18's harness, a manually dispatched GitHub
+Actions workflow in the `staging` environment, never from an agent session
 ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)). The run's job summary
-and artifacts are the test evidence.
+and artifacts are the test evidence. The findings PR deletes the harness and its workflow.
 
 Needs the maintainer to supply: Cloudflare credentials in the `staging` GitHub environment, a throwaway
 apex domain on the Cloudflare account (with Email Service enabled), seed Gmail and Outlook accounts,
-and a Cloudflare contact for the acceptable-use question. If any of these is missing, set the task to `blocked` with a `reason:` naming it. A
-throwaway Worker on a scratch branch is fine for the queue consumer
-([process §7](../process.md#7-spikes)).
+and a Cloudflare contact for the acceptable-use question. If any of these is missing, set the task to `blocked` with a `reason:` naming it.
 
 **Acceptance**
 - [ ] The findings note is committed with the test evidence and Cloudflare's written answer (or the open request, with a date).
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
+
+### S00.T18 · Email Service spike harness
+- status: todo
+- kind: chore
+- size: S
+
+S00.T13 needs live credentials, which reach only workflows that run `main`, and a
+`workflow_dispatch` workflow must exist on the default branch before it can be run. So the harness
+lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md),
+[process §7](../process.md#7-spikes)):
+
+- **`spikes/email-service/`:** a throwaway Worker with its own name, never the `dock` Worker. It sends
+  structured messages and raw MIME with custom `Message-ID`, `In-Reply-To`, `References` and `X-`
+  headers to recipients given as inputs. It consumes the lifecycle-event queue and records what it
+  observes.
+- **`.github/workflows/spike-email-service.yaml`:** a `workflow_dispatch` workflow only, in the
+  `staging` environment. It deploys the throwaway Worker, runs the sends and collects the queue
+  events. It uploads them as an artifact, writes the job summary, and then deletes the Worker. It
+  follows the S00.T16 conventions.
+
+**Acceptance**
+- [ ] PR CI builds the harness with `wrangler deploy --dry-run` and lints the workflow, with no credentials.
+- [ ] Dispatched on `main` without the `staging` secrets, the workflow fails fast and names what is missing.
 
 ### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
 - status: todo
@@ -342,7 +364,10 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
   the shell. These run through the real assets router, which the workerd tests can't reach.
   S00.T11 replaces this check with the Playwright suite.
 - **Guard:** a test fails CI when a workflow that names a GitHub environment or a `CLOUDFLARE_*`
-  secret has a `pull_request` or `pull_request_target` trigger.
+  secret can be triggered by anything other than `push` (to `main`, or a release tag from S14.T04)
+  or `workflow_dispatch`. It follows local reusable-workflow calls (`uses: ./.github/workflows/…`),
+  because a called workflow inherits its caller's event. `pull_request`, `pull_request_target` and
+  `workflow_run` all fail it.
 - **Staging mail domain:** a dedicated **apex** zone (for example `soldock-staging.dev`). Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
   rules ([R-20](../risks.md)).
@@ -357,7 +382,10 @@ reason if they are missing. Agents never receive the token: they read the workfl
 **Acceptance**
 - [ ] Running `soldock provision` twice is a no-op the second time (tested against a mocked API).
 - [ ] A merge to `main` deploys staging, and the post-deploy smoke check passes against the staging host.
-- [ ] The guard test fails on a fixture workflow that combines `environment: staging` with a `pull_request` trigger, and passes on the real workflows.
+- [ ] The guard test fails on three fixtures and passes on the real workflows. The fixtures:
+  - an environment job with a `pull_request` trigger
+  - a `pull_request_target` workflow that calls a local reusable workflow whose job uses `environment: staging`
+  - a `workflow_run`-triggered workflow that reads a `CLOUDFLARE_*` secret
 
 ### S00.T10 · Operation registry v0 and REST adapter
 - status: todo
