@@ -20,7 +20,7 @@ Profile: website/app · public
 - [x] 7-day cooldown: `minimumReleaseAge: 10080`, `minimumReleaseAgeStrict: true`, `minimumReleaseAgeIgnoreMissingTime: false`; no first-party `minimumReleaseAgeExclude` — PR #8
 - [x] `trustPolicy: no-downgrade`; no first-party `trustPolicyExclude` — PR #9
 - [ ] Lifecycle scripts blocked: `strictDepBuilds: true`, `dangerouslyAllowAllBuilds: false`, `allowBuilds: {}` baseline (PR #10 pending)
-- [ ] `blockExoticSubdeps: true` (PR pending)
+- [ ] `blockExoticSubdeps: true` (PR #11 pending)
 - [x] Lockfile committed; CI installs with `pnpm install --frozen-lockfile` — verified 2026-10-16
 - [x] No `.github/dependabot.yml`; other dependency-update tools (if any) open PRs only — never auto-merge — verified 2026-10-16
 
