@@ -13,10 +13,10 @@
 		"typecheck": "tsc -p tsconfig.json"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-plugin": "1.4.3",
+		"@cloudflare/vitest-plugin": "1.4.0",
 		"typescript": "7.0.2",
-		"vitest": "4.1.12",
-		"wrangler": "4.151.0"
+		"vitest": "4.1.11",
+		"wrangler": "4.149.0"
 	},
 	"dependencies": {
 		"hono": "4.13.13"
