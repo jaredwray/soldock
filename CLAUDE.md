@@ -60,7 +60,7 @@ pnpm plan status --write
 | `packages/contracts/` | The operation registry: schemas, scopes, errors, events |
 | `packages/{docs,sheets,slides}-model/` | Isomorphic document models and converters |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
-| `tools/plan/`, `tools/licenses/` | Plan CLI and license policy check |
+| `tools/plan/`, `tools/licenses/`, `tools/budgets/` | Plan CLI, license policy check, Worker bundle and startup budgets |
 | `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
 | `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
 | `plan/` | Vision, architecture, process, ADRs, stages, spike findings, status, risks |
@@ -72,7 +72,7 @@ Many of these directories are created by the S00 tasks. Check `pnpm plan` for wh
 
 - **TypeScript:** strict, with `erasableSyntaxOnly`. No enums and no namespaces. Use `.ts` import
   extensions in `tools/`. Biome formats with tabs, double quotes and a 120-column width.
-- **Tests:** Vitest. Use `@cloudflare/vitest-pool-workers` for anything touching bindings or
+- **Tests:** Vitest. Use `@cloudflare/vitest-plugin` for anything touching bindings or
   Durable Objects. Write the acceptance criteria as tests first.
 - **Commits:** conventional commits with the task id, for example `feat(mail): inbound pipeline [S04.T03]`.
   One task per PR, using the PR template.

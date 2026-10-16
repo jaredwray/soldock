@@ -1,7 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Root test runner. Packages and apps add their own Vitest projects as they
-// are created (S00.T04 adds the workerd-backed project for apps/dock).
+// Root test runner. Packages and apps add their own Vitest projects as they are created.
 export default defineConfig({
 	test: {
 		projects: [
@@ -12,6 +11,8 @@ export default defineConfig({
 					environment: "node",
 				},
 			},
+			// Runs inside workerd (apps/dock/vitest.config.ts).
+			"apps/dock",
 		],
 	},
 });

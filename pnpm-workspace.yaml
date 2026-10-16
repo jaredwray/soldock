@@ -2,3 +2,9 @@ packages:
   - "apps/*"
   - "packages/*"
   - "tools/*"
+
+# Packages allowed to run install scripts (pnpm blocks all others). Both fetch or validate
+# platform-specific binaries needed by wrangler and the workerd test pool.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
