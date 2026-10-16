@@ -110,12 +110,12 @@ Actions workflow in the `staging` environment, never from an agent session
 and artifacts are the test evidence. The findings PR deletes the harness and its workflow.
 
 Needs the maintainer to supply: Cloudflare credentials in the `staging` GitHub environment, a throwaway
-apex domain on the Cloudflare account (with Email Service enabled), seed Gmail and Outlook accounts,
+apex domain on the staging Cloudflare account (with Email Service enabled), seed Gmail and Outlook accounts,
 and a Cloudflare contact for the acceptable-use question. If any of these is missing, set the task to `blocked` with a `reason:` naming it.
 
 **Acceptance**
 - [ ] The findings note is committed with the test evidence (links to the dispatched runs) and Cloudflare's written answer (or the open request, with a date).
-- [ ] The findings PR removes S00.T18's harness Worker and workflow.
+- [ ] The findings PR removes S00.T18's harness: its Worker, workflow, queue and event subscription.
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
@@ -124,6 +124,7 @@ and a Cloudflare contact for the acceptable-use question. If any of these is mis
 - status: todo
 - kind: chore
 - size: S
+- depends: S00.T19
 
 S00.T13 needs live credentials, which reach only workflows that run `main`, and a
 `workflow_dispatch` workflow must exist on the default branch before it can be run. So the harness
@@ -136,13 +137,19 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
   headers to recipients given as inputs. It consumes the lifecycle-event queue and records what it
   observes.
 - **`.github/workflows/spike-email-service.yaml`:** a `workflow_dispatch` workflow only, in the
-  `staging` environment. It deploys the throwaway Worker, runs the sends and collects the queue
-  events. It uploads them as an artifact, writes the job summary, and then deletes the Worker. It
+  `staging` environment. It has two modes, chosen by a typed input:
+  - `send` deploys the throwaway Worker and runs the sends.
+  - `collect` drains the lifecycle-event queue, uploads the events as an artifact and writes the
+    job summary.
+
+  Bounces and deferrals arrive after the sends, so the queue and the event subscription outlive
+  each run. S00.T13's findings PR deletes the Worker, the queue and the subscription. The workflow
   follows the S00.T16 conventions.
 
 **Acceptance**
-- [ ] PR CI builds the harness with `wrangler deploy --dry-run` and lints the workflow, with no credentials.
-- [ ] Dispatched on `main` without the `staging` secrets, the workflow fails fast and names what is missing.
+- [ ] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
+  workflow passes S00.T19's guard, plus zizmor once S00.T16 has landed.
+- [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).
 
 ### S00.T19 · Workflow trigger guard
 - status: todo
@@ -159,7 +166,9 @@ A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` mus
 - **Triggers:** it triggers only on `push` with `branches: [main]` and no `tags` (S14.T04 adds
   release tags), `workflow_dispatch` or `schedule`. Every other trigger fails.
 - **Reusable workflows:** a callee's `environment:` is checked against its caller's triggers, so
-  the guard follows local calls (`uses: ./.github/workflows/…`).
+  the guard follows local calls (`uses: ./.github/workflows/…`). A callee may use `workflow_call`
+  only when every local caller passes the trigger and checkout rules. A callee with no local
+  caller fails.
 - **Checkouts:** every `actions/checkout` sets `persist-credentials: false`, with no `ref:` other
   than `${{ github.sha }}`.
 
@@ -170,6 +179,9 @@ A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` mus
   - a `workflow_run`-triggered workflow that reads a `CLOUDFLARE_*` secret
   - a `push` trigger without `branches: [main]`
   - a dispatch workflow that checks out `ref: ${{ inputs.ref }}`
+- [ ] The guard passes on two fixtures:
+  - a `push: main` and `workflow_dispatch` deploy with `environment: staging` and pinned checkouts
+  - a `push: main` caller whose local reusable callee names the environment
 - [ ] It runs in `pnpm verify` and CI.
 
 ### S00.T20 · `soldock provision`
@@ -321,7 +333,6 @@ CI artifact. Until this task lands, the coverage clause in the Definition of Don
 - [ ] `pnpm dev` serves the SPA and `/api/v1/system/ping` on one local origin, with hot reload.
 - [ ] `pnpm build` produces assets that `wrangler dev` serves with SPA fallback.
 - [ ] A component test (Vitest + Testing Library) and an axe check run in CI.
-- [ ] After merge, the staging deploy run serves the shell at `/mail` (run link recorded).
 
 ### S00.T06 · Platform primitives
 - status: todo
@@ -395,7 +406,8 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - [ ] `changes` compaction never drops a row above the lowest registered cursor, and the table stays bounded under steady churn (tested).
 
 ### S00.T09 · Environments and staging deploy
-- status: todo
+- status: blocked
+- reason: needs the maintainer setup below (protected `main`, a separate staging Cloudflare account, the `staging` environment and its secrets), plus S00.T19 and S00.T20
 - kind: ops
 - size: M
 - depends: S00.T04, S00.T19, S00.T20
@@ -409,7 +421,8 @@ Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only
   from CI, so an agent commits the bindings to `wrangler.jsonc` in a PR.
 - **Deploy:** a workflow deploys `main` to staging (`dock-staging.<domain>`) on every push to `main`
   and on manual dispatch.
-  - It deploys whatever assets exist: the placeholder page until S00.T05, then the SPA build.
+  - It deploys whatever assets exist: the placeholder page until S00.T05, then the SPA build. It
+    runs `pnpm build` first once `apps/web` exists.
   - It uses `concurrency: { group: deploy-staging, cancel-in-progress: false }`, so two merges
     never interleave.
   - It installs with `sfw pnpm install --frozen-lockfile` and restores no caches.
@@ -438,7 +451,8 @@ Needs the maintainer to set up, in this order:
    This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
    unprotected branch.
 2. Create a **separate** Cloudflare account for staging.
-3. Create the `staging` GitHub environment, with deployment branches set to `main` only.
+3. Create the `staging` GitHub environment, with deployment branches set to `main` only. A dispatch
+   that names a missing environment creates it with no rules, so if one already exists, configure it.
 4. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to that environment as environment secrets, not repository secrets.
 
 Set the task to `blocked` with a reason while any of these is missing. Agents never receive the
@@ -479,7 +493,8 @@ token: they read the workflow's runs.
 - size: S
 - depends: S00.T05, S00.T09
 
-Playwright in `e2e/` runs against `pnpm dev` (local) or `E2E_BASE_URL` (staging). It includes a
+Playwright in `e2e/` runs in three modes: against `pnpm dev` (the developer loop), against the
+built Worker in `wrangler dev` (PR CI), or against `E2E_BASE_URL` (staging). It includes a
 smoke test (the shell loads, the ping operation succeeds) and a CI job using Chromium, with traces
 uploaded on failure. The smoke test also covers the one-origin routing that the workerd tests can't
 reach, because they call the Worker without the assets router (S00.T04): browser navigations to

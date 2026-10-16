@@ -563,10 +563,12 @@ soldock/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
 │   ├── licenses/               # dependency license policy check (ADR-0011, exceptions in ADR-0014)
 │   ├── budgets/                # Worker bundle-size and startup-time budgets
-│   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T09)
+│   ├── workflows/              # workflow trigger guard for credentialed workflows (S00.T19, ADR-0015)
+│   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T20)
 │   └── load/                   # load and soak scenarios run on Cloudflare (S13)
 ├── fixtures/                   # MIME / DOCX / XLSX / PPTX corpora with license notes
 ├── e2e/                        # Playwright end-to-end tests
+├── spikes/                     # credentialed spike harnesses, removed by each spike's findings PR (process §7)
 ├── docs/                       # user, admin, self-hosting, agent and security docs
 ├── plan/                       # this plan: vision, architecture, process, ADRs, stages, spikes, status
 └── .claude/                    # skills and reviewer agents that implement the process

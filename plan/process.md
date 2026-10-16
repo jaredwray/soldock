@@ -110,7 +110,7 @@ skill walks an agent through it.
    and open the PR early if others are working in parallel.
 4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
    the task. File follow-ups as new tasks; don't widen the PR.
-5. **Verify.** Run `pnpm verify` (lint, typecheck, tests, plan check, license check). It must be
+5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, plan check, license check). It must be
    green. For UI work, run the app and check the change in a browser (see the
    [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
 6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
@@ -182,7 +182,8 @@ A task is ready when:
 
 The PR template repeats this list. Items that don't apply are marked N/A with a reason.
 
-- [ ] **Acceptance.** Every acceptance box for the task is ticked.
+- [ ] **Acceptance.** Every acceptance box for the task is ticked, except boxes that can only be
+  observed after merge ([§3 step 7](#3-the-task-loop)). The PR names those under "How it was verified".
 - [ ] **Tests.**
   - Unit tests for logic.
   - Workerd integration tests (`@cloudflare/vitest-plugin`) for Durable Objects, routes, queues and workflows.
@@ -215,7 +216,7 @@ time-boxed (size S or M). It must deliver:
 
 - an ADR (accepted or rejected options, the evidence, and the consequences) or a findings note in
   `plan/spikes/`
-- throwaway code only in the PR description or a `spikes/` branch, never merged into `apps/` or
+- throwaway code only in the PR description or a `spike/<task-id>` branch, never merged into `apps/` or
   `packages/` unless it meets the Definition of Done. One exception: a spike that needs live
   Cloudflare credentials can't run from a branch
   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Its harness (a
