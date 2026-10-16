@@ -114,7 +114,7 @@ throwaway Worker on a scratch branch is fine for the queue consumer
   the S04 kickoff gate**.
 
 ### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
-- status: todo
+- status: in-progress
 - kind: ops
 - size: M
 - depends: S00.T03
