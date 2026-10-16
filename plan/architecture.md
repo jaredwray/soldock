@@ -561,7 +561,7 @@ soldock/
 │   └── sdk/                    # public TypeScript client
 ├── tools/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
-│   ├── licenses/               # dependency license policy check
+│   ├── licenses/               # dependency license policy check (ADR-0011, exceptions in ADR-0014)
 │   ├── budgets/                # Worker bundle-size and startup-time budgets
 │   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T09)
 │   └── load/                   # load and soak scenarios run on Cloudflare (S13)

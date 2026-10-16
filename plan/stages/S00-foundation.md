@@ -32,7 +32,8 @@ boundaries, CI and the plan tooling.
   [§15 repository layout](../architecture.md#15-repository-layout),
   [§16 environments](../architecture.md#16-environments-deployment-and-configuration).
 - ADRs: [0003](../adr/0003-modular-monolith.md), [0006](../adr/0006-operation-registry.md),
-  [0009](../adr/0009-toolchain.md), [0011](../adr/0011-dependency-license-policy.md).
+  [0009](../adr/0009-toolchain.md), [0011](../adr/0011-dependency-license-policy.md),
+  [0014](../adr/0014-allow-lgpl-libvips-in-local-toolchain.md).
 - `@cloudflare/vitest-plugin` (formerly `@cloudflare/vitest-pool-workers`) requires Vitest 4.1.x.
   Keep Vitest pinned to 4.1 until the plugin supports newer versions.
 - Static Assets: compatibility dates from 2025-04-01 send browser navigations straight to assets.

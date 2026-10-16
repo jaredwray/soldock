@@ -100,17 +100,12 @@ export function flattenPnpmLicenses(
 	return packages;
 }
 
-/** An exception name matches exactly, or as a prefix when it ends with `*` (e.g. `@img/sharp-libvips-*`). */
-function exceptionMatches(exception: LicenseException, pkg: LicensedPackage): boolean {
-	if (exception.license !== pkg.license) return false;
-	return exception.name.endsWith("*") ? pkg.name.startsWith(exception.name.slice(0, -1)) : exception.name === pkg.name;
-}
-
 export function findViolations(packages: LicensedPackage[], policy: LicensePolicy): Violation[] {
 	const allowed = new Set(policy.allowed);
+	const excepted = new Map(policy.exceptions.map((e) => [e.name, e.license]));
 	return packages
 		.filter((pkg) => {
-			if (policy.exceptions.some((e) => exceptionMatches(e, pkg))) {
+			if (excepted.get(pkg.name) === pkg.license) {
 				return false;
 			}
 			return !isAllowedExpression(pkg.license, allowed);

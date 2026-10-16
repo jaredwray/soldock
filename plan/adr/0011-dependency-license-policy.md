@@ -22,6 +22,9 @@ leading JavaScript formula engine is GPL or commercial.
 - GPL, LGPL, AGPL, SSPL, BUSL, Elastic, Commons Clause, non-commercial and unknown licenses are rejected.
 - `pnpm licenses:check` runs in CI. An exception needs an entry in `policy.json` (package,
   exact license, reason) and an ADR or a reference to one.
+
+> Exceptions granted so far: [ADR-0014](0014-allow-lgpl-libvips-in-local-toolchain.md) (LGPL libvips
+> binaries installed by Cloudflare's local toolchain, dev-only).
 - A runtime dependency whose source is not available (compiled-only SDKs) needs an ADR even if
   its license is permissive, because it undermines self-hostability and auditability.
 

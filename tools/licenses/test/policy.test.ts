@@ -55,19 +55,4 @@ describe("findViolations", () => {
 		});
 		expect(violations.map((v) => v.name)).toEqual(["c"]);
 	});
-
-	it("supports prefix exceptions ending in * for platform-specific package families", () => {
-		const family = {
-			"LGPL-3.0-or-later": [
-				{ name: "@img/sharp-libvips-linux-x64", versions: ["1.0.0"], license: "LGPL-3.0-or-later" },
-				{ name: "@img/sharp-libvips-darwin-arm64", versions: ["1.0.0"], license: "LGPL-3.0-or-later" },
-				{ name: "@img/other", versions: ["1.0.0"], license: "LGPL-3.0-or-later" },
-			],
-		};
-		const violations = findViolations(flattenPnpmLicenses(family), {
-			allowed: ["MIT"],
-			exceptions: [{ name: "@img/sharp-libvips-*", license: "LGPL-3.0-or-later", reason: "dev-only" }],
-		});
-		expect(violations.map((v) => v.name)).toEqual(["@img/other"]);
-	});
 });
