@@ -84,7 +84,7 @@ The GitHub Actions `verify` job runs lint, typecheck, tests, plan check and the 
 
 ### S00.T13 · Spike: is Email Service viable for mailbox traffic?
 - status: blocked
-- reason: needs maintainer resources: a valid CLOUDFLARE_API_TOKEN (the one in the cloud environment is rejected with code 9109), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
+- reason: needs maintainer resources: Cloudflare secrets in GitHub Actions, since the spike's sending tests run as a workflow (agent sessions never hold Cloudflare credentials), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 - kind: spike
 - size: S
 
@@ -182,7 +182,7 @@ lockdown.
 - [ ] `lockdown-repo.sh <owner/repo> --check` is clean, and `DEFENSE_IN_DEPTH.md` §7 is checked.
 
 ### S00.T04 · `apps/dock` Worker skeleton
-- status: in-progress
+- status: done
 - kind: feature
 - size: M
 - depends: S00.T01
@@ -202,9 +202,11 @@ Create `apps/dock`:
   budget recorded in `apps/dock/budgets.json`, starting at 5 MiB. The same file holds the startup budget.
 
 **Acceptance**
-- [ ] `GET /api/v1/system/ping` returns `{ ok: true }` with an `x-request-id` header, tested in workerd.
-- [ ] Unknown `/api/*` paths return a problem+json 404, and SPA routes fall back to `index.html` (tested).
-- [ ] CI fails on a stale `worker-configuration.d.ts`, on a bundle over budget, and on a Worker
+- [x] `GET /api/v1/system/ping` returns `{ ok: true }` with an `x-request-id` header, tested in workerd.
+- [x] Unknown `/api/*` paths return a problem+json 404, and SPA routes fall back to `index.html` (tested).
+  The workerd tests call the Worker without the assets router, so S00.T11's smoke test covers browser
+  navigations through it.
+- [x] CI fails on a stale `worker-configuration.d.ts`, on a bundle over budget, and on a Worker
   startup time over budget. Large server-side bundles hit the startup CPU limit long before 64 MiB.
 
 ### S00.T14 · Coverage reporting and thresholds
@@ -371,7 +373,9 @@ secrets. Set the task to `blocked` with a reason if they are missing.
 
 Playwright in `e2e/` runs against `pnpm dev` (local) or `E2E_BASE_URL` (staging). It includes a
 smoke test (the shell loads, the ping operation succeeds) and a CI job using Chromium, with traces
-uploaded on failure.
+uploaded on failure. The smoke test also covers the one-origin routing that the workerd tests can't
+reach, because they call the Worker without the assets router (S00.T04): browser navigations to
+`/api/v1/nope` and `/mcp` return `application/problem+json`, and a navigation to `/mail` returns the shell.
 
 **Acceptance**
 - [ ] `pnpm e2e` passes locally and in CI.

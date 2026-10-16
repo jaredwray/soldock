@@ -29,7 +29,12 @@ export function createApp(): Hono<AppEnv> {
 
 	app.onError((err, c) => {
 		console.error(
-			JSON.stringify({ level: "error", msg: "unhandled error", requestId: c.var.requestId, err: String(err) }),
+			JSON.stringify({
+				level: "error",
+				msg: "unhandled error",
+				requestId: c.var.requestId,
+				err: err.stack ?? String(err),
+			}),
 		);
 		return problemResponse({
 			type: "about:blank",

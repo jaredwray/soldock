@@ -20,3 +20,6 @@ Raising one is a reviewed change: say why in the PR.
 The startup profile is measured locally on the CI runner, not on Cloudflare, so treat it as a
 tripwire for regressions rather than a prediction. The 200 ms budget leaves wide headroom under
 Cloudflare's startup limit. S13.T02 adds more budget classes (SPA bundles, Web Vitals, operation latency).
+
+The check runs on Linux and macOS. On Windows, `execFileSync("pnpm")` can't start `pnpm.cmd` without a
+shell, so use WSL.

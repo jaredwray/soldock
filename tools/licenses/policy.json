@@ -65,6 +65,26 @@
 			"name": "@img/sharp-libvips-linuxmusl-x64",
 			"license": "LGPL-3.0-or-later",
 			"reason": "ADR-0014: libvips prebuilt binary, a dev-only transitive dependency of wrangler and @cloudflare/vitest-plugin (via miniflare and sharp). Never bundled into the Worker or the SPA, and never distributed."
+		},
+		{
+			"name": "@img/sharp-win32-arm64",
+			"license": "Apache-2.0 AND LGPL-3.0-or-later",
+			"reason": "ADR-0014: sharp build with libvips linked in, a dev-only transitive dependency of wrangler and @cloudflare/vitest-plugin (via miniflare). Never bundled into the Worker or the SPA, and never distributed."
+		},
+		{
+			"name": "@img/sharp-win32-ia32",
+			"license": "Apache-2.0 AND LGPL-3.0-or-later",
+			"reason": "ADR-0014: sharp build with libvips linked in, a dev-only transitive dependency of wrangler and @cloudflare/vitest-plugin (via miniflare). Never bundled into the Worker or the SPA, and never distributed."
+		},
+		{
+			"name": "@img/sharp-win32-x64",
+			"license": "Apache-2.0 AND LGPL-3.0-or-later",
+			"reason": "ADR-0014: sharp build with libvips linked in, a dev-only transitive dependency of wrangler and @cloudflare/vitest-plugin (via miniflare). Never bundled into the Worker or the SPA, and never distributed."
+		},
+		{
+			"name": "@img/sharp-wasm32",
+			"license": "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+			"reason": "ADR-0014: sharp build with libvips linked in, a dev-only transitive dependency of wrangler and @cloudflare/vitest-plugin (via miniflare). Never bundled into the Worker or the SPA, and never distributed."
 		}
 	]
 }

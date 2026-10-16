@@ -12,9 +12,15 @@ well as production ones, rejects LGPL, and requires an ADR for every exception.
 S00.T04 adds `wrangler` and `@cloudflare/vitest-plugin`, which [ADR-0002](0002-cloudflare-only-single-origin.md)
 and [ADR-0009](0009-toolchain.md) make unavoidable: they are the only supported way to build, run and
 test a Worker locally. Both depend on `miniflare`, which depends on `sharp` to emulate the Images
-binding. `sharp` installs a prebuilt libvips binary for the host platform as an optional dependency
-(`@img/sharp-libvips-<platform>`), licensed LGPL-3.0-or-later. Every other `@img/*` package in the
-tree is MIT or Apache-2.0.
+binding. `sharp` 0.35 installs a prebuilt build of libvips for the host platform as an optional
+dependency, licensed LGPL-3.0-or-later. Where it lives depends on the platform:
+
+- Linux, macOS and Alpine: in a separate `@img/sharp-libvips-<platform>` package (`LGPL-3.0-or-later`).
+- Windows: linked into `@img/sharp-win32-<arch>` itself (`Apache-2.0 AND LGPL-3.0-or-later`).
+- WebAssembly targets (FreeBSD, WebContainers): in `@img/sharp-wasm32`
+  (`Apache-2.0 AND LGPL-3.0-or-later AND MIT`).
+
+Every other `@img/*` package in the tree is MIT or Apache-2.0.
 
 These binaries:
 
@@ -28,10 +34,13 @@ here, so ADR-0011's concern (copyleft terms imposed on every deployment) does no
 
 ## Decision
 
-- Allow `LGPL-3.0-or-later` for exactly these packages, listed one by one in
-  [`tools/licenses/policy.json`](../../tools/licenses/policy.json): `@img/sharp-libvips-{darwin-arm64,
-  darwin-x64, linux-arm, linux-arm64, linux-ppc64, linux-riscv64, linux-s390x, linux-x64,
-  linuxmusl-arm64, linuxmusl-x64}`, the platforms `sharp` 0.35 publishes.
+- Allow exactly these packages, each with its exact license string, listed one by one in
+  [`tools/licenses/policy.json`](../../tools/licenses/policy.json). Together they cover every platform
+  `sharp` 0.35 publishes:
+  - `LGPL-3.0-or-later`: `@img/sharp-libvips-{darwin-arm64, darwin-x64, linux-arm, linux-arm64,
+    linux-ppc64, linux-riscv64, linux-s390x, linux-x64, linuxmusl-arm64, linuxmusl-x64}`
+  - `Apache-2.0 AND LGPL-3.0-or-later`: `@img/sharp-win32-{arm64, ia32, x64}`
+  - `Apache-2.0 AND LGPL-3.0-or-later AND MIT`: `@img/sharp-wasm32`
 - The exception is per package name, with no wildcard. A new platform package, or a license change
   on a listed one, fails `pnpm licenses:check` until this ADR and the policy are updated in a reviewed PR.
 - The exception never covers a production dependency. If `sharp` or libvips is ever needed at
@@ -39,10 +48,10 @@ here, so ADR-0011's concern (copyleft terms imposed on every deployment) does no
 
 ## Consequences
 
-- `pnpm licenses:check` passes on Linux, macOS and Alpine CI images without weakening the general
-  allowlist.
-- A developer on a platform outside the list (for example FreeBSD or WebContainers, where `sharp`
-  installs a different package) gets a license failure. Adding that platform means amending this ADR.
+- `pnpm licenses:check` passes on every platform `sharp` 0.35 supports, without weakening the
+  general allowlist.
+- When a `sharp` upgrade adds a platform package or changes a license string, `pnpm licenses:check`
+  fails on that platform until this ADR and the policy are amended.
 - If Cloudflare removes `sharp` from `miniflare`, these entries become unused and should be deleted.
 
 ## Alternatives considered

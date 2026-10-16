@@ -1,5 +1,6 @@
 // The dock Worker: the whole backend, served from one origin (ADR-0002, ADR-0003).
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
+// Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "soldock-dock",

@@ -1,5 +1,7 @@
-import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { createExecutionContext } from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import { describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/app.ts";
 
 const ORIGIN = "https://dock.test";
 
@@ -41,6 +43,8 @@ describe("unknown Worker paths", () => {
 		const res = await get(path, { "sec-fetch-mode": "navigate", accept: "text/html" });
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).toBe("application/problem+json");
+		expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(res.headers.get("cache-control")).toBe("no-store");
 		const requestId = res.headers.get("x-request-id");
 		expect(requestId).toBeTruthy();
 		expect(await res.json()).toEqual({
@@ -58,6 +62,38 @@ describe("unknown Worker paths", () => {
 		const res = await exports.default.fetch(new Request(`${ORIGIN}/api/v1/system/ping`, { method: "POST" }));
 		expect(res.status).toBe(404);
 		expect(res.headers.get("content-type")).toBe("application/problem+json");
+	});
+});
+
+describe("unhandled errors", () => {
+	it("return a problem+json 500 that carries the request id and hides the error", async () => {
+		const app = createApp();
+		app.get("/api/v1/test/boom", () => {
+			throw new Error("secret detail");
+		});
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const res = await app.fetch(new Request(`${ORIGIN}/api/v1/test/boom`), env, createExecutionContext());
+			expect(res.status).toBe(500);
+			expect(res.headers.get("content-type")).toBe("application/problem+json");
+			const requestId = res.headers.get("x-request-id");
+			expect(requestId).toBeTruthy();
+			const text = await res.text();
+			expect(text).not.toContain("secret detail");
+			expect(JSON.parse(text)).toEqual({
+				type: "about:blank",
+				title: "Internal Server Error",
+				status: 500,
+				code: "internal",
+				requestId,
+			});
+			// The detail goes to the log instead, as structured JSON with the same request id.
+			const line = JSON.parse(String(logged.mock.calls[0]?.[0]));
+			expect(line).toMatchObject({ level: "error", requestId });
+			expect(line.err).toContain("secret detail");
+		} finally {
+			logged.mockRestore();
+		}
 	});
 });
 

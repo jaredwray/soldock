@@ -18,6 +18,11 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
 export function problemResponse(problem: ProblemDetails): Response {
 	return new Response(JSON.stringify(problem), {
 		status: problem.status,
-		headers: { "content-type": PROBLEM_CONTENT_TYPE },
+		headers: {
+			"content-type": PROBLEM_CONTENT_TYPE,
+			// The body can echo the request path, so never let a browser sniff it or a cache keep it.
+			"x-content-type-options": "nosniff",
+			"cache-control": "no-store",
+		},
 	});
 }
