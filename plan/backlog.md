@@ -14,6 +14,9 @@ if it changes scope ([vision.md](vision.md) non-goals).
   Workers AI, opt-in.
 - **An optional separate user-content domain**, as security hardening (ADR-0002 alternative).
 - **E2E encrypted mail** (S/MIME or PGP).
+- **Trusted forwarders / ARC override.** Honor validated ARC chains from configured forwarders and
+  mailing lists, whose rewriting otherwise breaks SPF and DMARC verdicts. (The Google-forwarding
+  design that needed this was dropped. Production uses Cloudflare MX directly.)
 - **Mailbox sharding by date** for multi-million-message shared mailboxes (ADR-0004).
 - **Native mobile apps.**
 - **Forms, Sites, Keep.**

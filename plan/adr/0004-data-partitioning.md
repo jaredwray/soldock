@@ -16,7 +16,7 @@ R2 stores objects of up to 5 TiB with no egress fees.
 
 - **D1 `directory`** holds only small, global, read-heavy data: org settings, domains, principals,
   addresses, group membership, credentials and sessions, OAuth clients, agent policies, and the
-  **object registry** (every Durable Object instance with its type, owner and backup cursor).
+  **object registry** (every Durable Object instance with its type and owner; S12 adds a backup cursor).
 - **A Durable Object per owner or collaboration unit**:
   - `PrincipalDO` per principal
   - `MailboxDO` per mailbox
@@ -30,7 +30,7 @@ R2 stores objects of up to 5 TiB with no egress fees.
   - `BlobIndexDO`: 256 shards by hash prefix, mapping blob hashes to storage keys and reference counts
   - `BackupRunDO`: one per backup run (S12)
 - **R2 `blobs`** holds every large or immutable payload under opaque keys, deduplicated by SHA-256
-  through `BlobIndexDO`. Objects store references, not bytes. Other buckets: `backups` (locked), `archive` (Infrequent Access) and `audit` (locked).
+  through `BlobIndexDO`. Objects store references, not bytes. Other buckets: `audit` (hash-chained, and locked from S12), plus `backups` (locked) and `archive` (Infrequent Access), which are both added in S12.
 - **Cross-object effects** (sharing fan-out, mail delivery to many mailboxes, notifications) use
   a **transactional outbox** inside the source object, delivered at least once by alarm or queue to
   idempotent handlers. No distributed transactions.

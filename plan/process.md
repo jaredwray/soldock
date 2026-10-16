@@ -76,6 +76,11 @@ Rules:
   Sxx.Tyy` must name a task that exists.
 - Tick acceptance boxes as you satisfy them. A `done` task may not have an unticked box. If a box
   turned out not to apply, tick it and append `— N/A: <reason>`.
+- **Loop tasks.** A task that runs an external one-item-per-PR skill (the `defense-in-depth-nodejs`
+  tasks, S00.T15–T17) may span several PRs. Each of those PRs uses the skill's own branch naming
+  and mentions the task id. The task stays `in-progress` until the skill's tracker (for example
+  `DEFENSE_IN_DEPTH.md`) shows its sections complete. While it waits on merges, other ready tasks
+  can proceed.
 - Never pre-assign ADR numbers in task text. Refer to the ADR a task will write **by its title**,
   and give it the next free number when you write it.
 

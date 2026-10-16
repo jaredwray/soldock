@@ -15,7 +15,7 @@ could be built first. This stage delivers:
 
 - the backup framework: export format, per-object export jobs, a nightly orchestrator, restore and
   drills, and the disaster-recovery copy in a separate account (S12.T13–T18)
-- backup coverage for every product store (S12.T19)
+- backup coverage for every product store (S12.T19–T20)
 - Takeout-style exports and an org archive
 - retention policies, legal hold and eDiscovery
 - restore UX for admins and users
@@ -40,6 +40,8 @@ data that lived elsewhere before Soldock.
 
 ## Design notes
 
+- **Where the code lives:** the backup contract and format go in `platform/backup`, on
+  `SoldockObject`. `BackupRunDO`, the workflows, `admin.backups.*` and the restore operations go in `archive/`.
 - **Shared machinery:** the registry, jobs and `/dl/` from S03, the backup framework built here
   (S12.T13–T18), and the per-product converters (DOCX, XLSX and PPTX from S08–S10).
 - **Interim protection:** until this stage lands, production relies on Cloudflare's durability
@@ -70,6 +72,8 @@ A streaming zip64 writer for large exports:
 - **Resumability:** it resumes across Workflow steps by persisting its state (offsets and the
   central-directory entries so far).
 - **Integrity:** it verifies CRC32 per entry.
+
+- **Provisioning:** `soldock provision` adds the `archive` bucket (Infrequent Access lifecycle).
 
 **Acceptance**
 - [ ] A 50 GB synthetic export completes on staging across many workflow steps and opens with standard unzip tools. An injected failure resumes without corruption.
@@ -273,6 +277,8 @@ Re-enabling a user within retention is possible.
 - **Run state:** `BackupRunDO` tracks the jobs queued, done and failed, retries failures, and writes
   the run manifest when everything is settled.
 
+- **Provisioning:** `soldock provision` adds the `backups` bucket with its lock rules, and the lock on the existing `audit` bucket.
+
 **Acceptance**
 - [ ] Redelivered or duplicated export jobs produce exactly one consistent set of segments per object (tested).
 - [ ] The run manifest lists every object with its checksums, and failed jobs are retried and then surfaced (tested).
@@ -350,24 +356,37 @@ longer reference them under the retention policy.
 - [ ] On staging, DR storage stops growing monotonically under a synthetic churn workload. The
   janitor never deletes anything referenced by a retained manifest (tested).
 
-### S12.T19 · Backup coverage for every product store
+### S12.T19 · Backup coverage: mail, drive and principals
 - status: todo
 - kind: test
 - size: M
-- depends: S12.T16, S07.T02, S11.T02
+- depends: S12.T16, S02.T06
 
-Every Durable Object class (`PrincipalDO`, `MailboxDO`, `DriveSpaceDO`, `DocumentDO`,
-`MeetingDO`, `BlobIndexDO`) declares `backupTables`, using the data inventory each module README
-has kept since S00. Each class gets:
+`PrincipalDO`, `MailboxDO` and `DriveSpaceDO` declare `backupTables`, using the data inventory
+in their module READMEs. Each class gets a round-trip test (seed, export, wipe, import,
+deep-equal), and `BackupRun` and `RestoreDrill` cover it.
 
-- a round-trip test: seed, export, wipe, import, deep-equal
-- coverage in `BackupRun` and `RestoreDrill`
-
-D1, KV and Queues are handled as in [ADR-0007 store coverage](../adr/0007-backup-and-archive.md#store-coverage).
+Durable KV state named in a data inventory is dumped by the run as well, for example OAuth grants
+if S01.T01 kept them in KV.
 
 **Acceptance**
-- [ ] A round-trip test exists and passes for every object class registered in the codebase. CI fails when a new class lacks one.
-- [ ] Drill on staging: a mailbox, a drive space and a document restored from backup produce identical exports (the mailbox compared as mbox).
+- [ ] Round-trip tests pass for the three classes, and the run dumps any durable KV state listed in a data inventory (tested).
+- [ ] Drill on staging: a mailbox and a drive space restored from backup produce identical exports (the mailbox compared as mbox).
+
+### S12.T20 · Backup coverage: documents, meetings and the blob index, plus a CI guard
+- status: todo
+- kind: test
+- size: M
+- depends: S12.T19, S07.T02, S11.T02, S03.T12
+
+`DocumentDO`, `MeetingDO` and `BlobIndexDO` declare `backupTables`, each with a round-trip test
+and drill coverage. A CI guard then fails when a registered object class has no round-trip test.
+Two classes are exempt, each with a recorded reason: `BackupRunDO` (ephemeral run state) and
+`TestObject` (tests only).
+
+**Acceptance**
+- [ ] Round-trip tests pass for the three classes, and a document restored from backup matches its live export (staging drill).
+- [ ] Adding an object class without a round-trip test fails CI, unless it is on the exempt list with a reason (tested).
 
 ## Exit criteria
 

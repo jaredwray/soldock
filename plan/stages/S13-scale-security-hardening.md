@@ -141,14 +141,14 @@ the core flows of every product. Check keyboard-only operation and reduced-motio
 - status: todo
 - kind: feature
 - size: M
-- depends: S12.T16
 
 The admin health page draws on Analytics Engine queries: SLOs, error rates, queue and DLQ depth,
-backup and drill status, deliverability, and Realtime quality. Alert rules notify admins through
+deliverability, and Realtime quality, plus backup and drill status once S12.T16 exists. Alert rules notify admins through
 mail and their event feeds. Tail and Logpush exports are documented.
 
 **Acceptance**
-- [ ] Injected failures (a DLQ spike, a failed drill, an SLO breach) raise alerts within 5 minutes (staging).
+- [ ] Injected failures (a DLQ spike, an SLO breach) raise alerts within 5 minutes (staging). Drill
+  failures arrive through the same alert rules once S12.T16 lands.
 
 ### S13.T07 · Cost model
 - status: todo

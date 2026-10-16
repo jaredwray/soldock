@@ -390,11 +390,49 @@ upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-
 - size: M
 - reason: superseded by S05.T22: production uses Cloudflare MX directly, with no Google forwarding or alias ingest domain
 
+### S05.T24 · Native point-in-time restore hook and runbook
+- status: todo
+- kind: ops
+- size: S
+- depends: S00.T08, S01.T05
+
+This is the interim safety net before production runs without backups ([R-21](../risks.md)). It
+is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
+
+- **Restore operation:** an admin-only `admin.objects.restore_to_time` operation on
+  `SoldockObject`. It calls `ctx.storage.getBookmarkForTime(ts)`, then
+  `onNextSessionRestoreBookmark(bookmark)`, then `ctx.abort()`, and records the bookmark it
+  replaced so the restore can be undone. Durable Object PITR is reachable only from code inside
+  the object; there is no dashboard, wrangler or REST path.
+- **Runbook:** `docs/operations/pitr.md` covers that operation for each object class,
+  `wrangler d1 time-travel restore` for the directory, and how blob GC's 45-day grace (S03.T08)
+  keeps the referenced bytes available.
+
+**Acceptance**
+- [ ] On staging, a destructive change to a test mailbox and to the D1 directory is undone by following the runbook.
+- [ ] Only org owners and admins can call the operation, and every call is audited (authorization matrix).
+
+### S05.T25 · Production deploy pipeline and rollback
+- status: todo
+- kind: ops
+- size: S
+- depends: S00.T09
+
+- **Deploy:** a `production` GitHub environment with a required reviewer. Deploys are a manual
+  dispatch from `main` until S14.T04 switches to tag deploys. The workflow follows the S00.T16
+  conventions.
+- **Rollback:** documented and scripted with `wrangler rollback` and versions.
+- **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
+  roll back the MX within its TTL.
+
+**Acceptance**
+- [ ] One production deploy and one rollback have been exercised (first against staging, using the same workflow).
+
 ### S05.T22 · Production deployment on dock.jaredwray.com
 - status: todo
 - kind: ops
 - size: M
-- depends: S05.T05, S05.T14, S05.T15, S05.T20, S05.T21
+- depends: S05.T05, S05.T14, S05.T15, S05.T20, S05.T21, S05.T24, S05.T25
 
 Provision the production environment ([architecture §16](../architecture.md#16-environments-deployment-and-configuration))
 and move `jaredwray.com` mail onto Cloudflare:
@@ -413,8 +451,8 @@ and move `jaredwray.com` mail onto Cloudflare:
     import later with S12.T10 or S12.T06)
 - **Users:** the maintainer and the first agents use it daily.
 
-Production runs before the backup stage (S12) exists. [R-21](../risks.md) records that risk and
-the interim measures.
+Production runs before the backup stage (S12) exists. [R-21](../risks.md) records that risk. The
+interim measures are native point-in-time restore (S05.T24) and blob GC's 45-day grace (S03.T08).
 
 **Acceptance**
 - [ ] External mail to `@jaredwray.com` addresses (human and agent) arrives through Cloudflare

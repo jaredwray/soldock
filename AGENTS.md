@@ -18,6 +18,6 @@ another tool) should read both before making changes, then run `pnpm plan next`.
   skill from [`jaredwray/agentic`](https://github.com/jaredwray/agentic). Re-run it to change a value.
 - The `security` label is recorded but doesn't exist on GitHub yet. It gets created when the
   [`defense-in-depth-nodejs`](https://github.com/jaredwray/agentic/blob/main/skills/security/defense-in-depth-nodejs/SKILL.md)
-  hardening runs. **That skill still needs to run on this repo** ([S00.T15](plan/stages/S00-foundation.md)).
+  hardening runs. **That skill still needs to run on this repo** ([S00.T15–T17](plan/stages/S00-foundation.md)).
 - ADRs follow this repo's template ([`plan/adr/0000-template.md`](plan/adr/0000-template.md)) and the `new-adr` skill.
 - Planned work goes through the plan (`pnpm plan next`). GitHub Issues that turn into planned work get a plan task that links back to the issue.

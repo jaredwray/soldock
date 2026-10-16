@@ -113,36 +113,67 @@ throwaway Worker on a scratch branch is fine for the queue consumer
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
 
-### S00.T15 · Run the agentic `defense-in-depth-nodejs` hardening
+### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
 - status: todo
 - kind: ops
 - size: M
 - depends: S00.T03
 
 Run [`defense-in-depth-nodejs`](https://github.com/jaredwray/agentic/blob/main/skills/security/defense-in-depth-nodejs/SKILL.md)
-from `jaredwray/agentic` on this repo. That skill is a manual, resumable loop that opens **one
-hardening item per PR**. This task tracks the loop until it completes, and is the one task allowed
-to span several PRs. Each PR follows the skill's branch naming (`chore/defense-…`) and PR
-conventions, and mentions `[S00.T15]`.
+from `jaredwray/agentic`, sections **§1–§3**. This is a **loop task**: the skill opens one hardening
+item per PR ([process §2](../process.md#2-stage-files-and-task-format)).
 
-- **Profile:** website/app, public repo. When S14.T04 starts publishing `@soldock/sdk` and
-  `@soldock/cli` to npm, re-run the skill for its npm-publishing section.
-- **What it covers:**
-  - `SECURITY.md` and `DEFENSE_IN_DEPTH.md`
-  - `CODEOWNERS`, with the owners named by the maintainer
-  - Aikido Safe Chain for cloud agents, merged with the existing SessionStart hook
-  - pnpm settings: a 7-day cooldown, `trustPolicy`, blocked lifecycle scripts, a frozen lockfile
-  - least-privilege Actions permissions, SHA-pinned actions, Socket Firewall in CI, zizmor
-    workflow linting, kebab-case workflow and job names
-  - Aikido and Socket tooling
-  - last, the repo lockdown script, which an admin runs
+- **Profile:** website/app, public repository. S14.T04 re-runs the skill's npm-publishing section
+  once packages publish.
+- **§1:** `SECURITY.md` and `DEFENSE_IN_DEPTH.md`.
+- **§2:** `CODEOWNERS`, with owners named by the maintainer. If they haven't named any, set the
+  task to `blocked` with a `reason:`. Also Aikido Safe Chain for cloud agents, merged into the
+  existing SessionStart hook.
+- **§3:** pnpm's 7-day cooldown, `trustPolicy: no-downgrade`, blocked lifecycle scripts and a frozen lockfile.
 - **Labels:** create the `security` label recorded in `AGENTS.md` › Agentic conventions.
 
 **Acceptance**
-- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable item done, or deferred with a reason.
-  `SECURITY.md` lists only measures that are actually in place.
-- [ ] The `security` label exists on the repository.
-- [ ] `pnpm verify` and CI stay green after every hardening PR, and the CI job names remain valid required checks.
+- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable §1–§3 item done, or deferred with a reason.
+  `SECURITY.md` lists only measures actually in place.
+- [ ] The `security` label exists.
+- [ ] `pnpm verify` and CI stay green after every hardening PR.
+
+### S00.T16 · Defense in depth II: GitHub Actions hardening and security tooling
+- status: todo
+- kind: ops
+- size: M
+- depends: S00.T15
+
+The same skill, sections **§4 and §6** (a loop task):
+
+- least-privilege `permissions` and no commits pushed back by CI
+- SHA-pinned actions (actions-up)
+- Socket Firewall on every job, with `sfw`-prefixed installs
+- `check-workflows.yaml` zizmor linting
+- kebab-case workflow and job names, so they can be required checks
+- Aikido on every build and Socket on every dependency change
+
+These conventions apply to every workflow added later, including S00.T09's deploy workflow and S05.T25's production deploy.
+
+**Acceptance**
+- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable §4 and §6 item done, or deferred with a reason.
+- [ ] zizmor passes on every workflow in CI, and every action is pinned to a SHA.
+
+### S00.T17 · Defense in depth III: repository lockdown (maintainer)
+- status: todo
+- kind: ops
+- size: S
+- depends: S00.T16, S00.T09
+
+The skill's **§7**, which comes last after every earlier item, including the manual ones. A repo
+**admin** runs the skill's `lockdown-repo.sh`, which is never copied into this repository. It
+sets: PRs required on `main`, admin-only tags, approval for workflow runs from outside
+contributors, and the required checks taken from the workflows. An agent prepares the exact
+command and the list of required checks, then sets the task to `blocked` with
+`reason: waiting for an admin to run lockdown-repo.sh` until the maintainer confirms.
+
+**Acceptance**
+- [ ] `lockdown-repo.sh <owner/repo> --check` is clean, and `DEFENSE_IN_DEPTH.md` §7 is checked.
 
 ### S00.T04 · `apps/dock` Worker skeleton
 - status: todo
@@ -238,8 +269,8 @@ Enforce [architecture §15 module rules](../architecture.md#15-repository-layout
   - a domain is deep-imported from another domain
   - `platform/` imports a domain
   - a package imports from `apps/`
-- **Templates:** `docs/templates/` holds the module README template (owns, depends on, data stores,
-  operations, events) and a package template.
+- **Templates:** `docs/templates/` holds the module README template (owns, depends on, data
+  inventory, operations, events) and a package template.
 
 **Acceptance**
 - [ ] A fixture with a forbidden import fails the check, and the real tree passes (tested).
@@ -255,12 +286,15 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 
 - **Migrations:** an ordered, versioned SQLite migration list, applied in `blockConcurrencyWhile` on
   first access, with the schema version recorded.
-- **Changes:** a `changes` table with a monotonic `seq`. Subclasses record changes through `recordChange()`.
+- **Changes:** a `changes` table with a monotonic `seq`. Subclasses record changes through
+  `recordChange()`. Consumers (indexers now, backups from S12) register cursors. The table is
+  compacted below the lowest registered cursor, so it never grows without bound.
 - **Outbox:** `enqueue(effect)` inside the same storage transaction. An alarm-driven dispatcher
   delivers with exponential backoff and dead-letters after N attempts.
 - **Idempotency:** an `idempotency` table with a TTL sweep.
 - **Backup contract:** not built now. S12 adds it once the main products work. The `changes`
-  table and the registry hook are what it will build on.
+  table and the registry hook are what it will build on. Point-in-time restore is the exception,
+  because it is native and needs code inside the object: see S05.T24.
 - **Registry:** a self-registration hook, a no-op until S03.T04.
 - **Tests:** a test-only `TestObject` subclass exercises everything above.
 
@@ -269,6 +303,7 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - [ ] An outbox effect written in a transaction that rolls back is never delivered. Committed
   effects are delivered at least once, even across a simulated eviction (tested).
 - [ ] Re-sending a request with the same idempotency key returns the original result (tested).
+- [ ] `changes` compaction never drops a row above the lowest registered cursor, and the table stays bounded under steady churn (tested).
 
 ### S00.T09 · Environments, provisioning and staging deploy
 - status: todo
@@ -282,7 +317,9 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
   creates D1, R2 buckets (`blobs`, `audit`), KV, queues and their DLQs. It
   prints the bindings, using wrangler's automatic provisioning where possible and the Cloudflare
   API otherwise.
-- **Deploy:** a GitHub Actions workflow deploys `main` to staging (`dock-staging.<domain>`).
+- **Deploy:** a GitHub Actions workflow deploys `main` to staging (`dock-staging.<domain>`). It
+  follows the S00.T16 workflow conventions: SHA-pinned actions, least-privilege `permissions`, and
+  kebab-case workflow and job names.
 - **Staging mail domain:** a dedicated **apex** zone (for example `soldock-staging.dev`). Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
   rules ([R-20](../risks.md)).

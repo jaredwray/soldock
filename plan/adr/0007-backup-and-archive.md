@@ -8,7 +8,9 @@
 > products come first ("grow in layers"). Until then, production relies on T0 (platform
 > durability) and T1 (native 30-day PITR, run by hand from a runbook). This ADR stays the target
 > design. Modules keep a data inventory, and the outbox, the `changes` log and immutable blobs make
-> it cheap to add later ([R-21](../risks.md)).
+> it cheap to add later. Two small interim safety nets are built before production: an admin
+> operation for native point-in-time restore plus its runbook (S05.T24), and blob GC with a 45-day
+> grace period (S03.T08), so a PITR restore can always re-attach its bytes ([R-21](../risks.md)).
 
 ## Context
 
@@ -41,8 +43,8 @@ Mechanics:
 
 - **The backup contract is part of the base class.** Every `SoldockObject` implements
   `exportSnapshot()`, `exportChanges(sinceSeq)` and `importSnapshot()`, and keeps a `changes` table
-  with a monotonic `seq`. A new object type cannot be merged without a round-trip test. That is in
-  the [Definition of Done](../process.md#definition-of-done).
+  with a monotonic `seq`. From S12 on, a new object type cannot be merged without a round-trip test
+  (the S12.T20 CI guard). The contract and the format live in `platform/backup`.
 - **Dirty tracking.** The first change after an object's last backup sets a local `dirty` flag and
   sends one outbox effect. The effect sets `objects.dirty_since` on the object's row in the D1
   registry. That is at most one D1 write per object per backup period, well within D1's write budget.

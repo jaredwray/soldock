@@ -80,8 +80,9 @@ An interactive CLI that:
 
 - **Versioning:** semver releases, and a deploy-time check that D1 migrations are applied.
   Durable Object migrations run lazily, with an optional proactive warm-up workflow.
-- **Compatibility:** backup-format compatibility guarantees, upgrade notes in the changelog, and a
-  documented rollback using Workers gradual deployments and version rollback.
+- **Compatibility:** backup-format compatibility guarantees, upgrade notes in
+  `docs/operations/upgrades.md` and in each GitHub Release, and a documented rollback using Workers
+  gradual deployments and version rollback.
 
 **Acceptance**
 - [ ] An upgrade from the previous release candidate to v1.0 on staging, with production-like
@@ -92,9 +93,11 @@ An interactive CLI that:
 - kind: chore
 - size: S
 
-- **Releases:** tag-driven releases with generated changelogs.
+- **Releases:** tag-driven releases, with release notes generated into the GitHub Release (no
+  CHANGELOG file, per `AGENTS.md` › Agentic conventions).
 - **Packages:** publish `@soldock/sdk` and `@soldock/cli` to npm with provenance.
-- **Production:** deploy production from tags with a manual approval.
+- **Production:** deploy production from tags with a manual approval, replacing S05.T25's manual dispatch.
+- **Supply chain:** re-run `defense-in-depth-nodejs` §5 (npm publishing) now that packages publish.
 
 **Acceptance**
 - [ ] A release-candidate tag produces the GitHub release, the npm packages (with the `next` tag) and a staging deploy.

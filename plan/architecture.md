@@ -168,8 +168,9 @@ the resource. It never shares credentials.
 
 **Audit.** Every mutating operation and every privileged read (admin, eDiscovery, use of
 delegated access) emits an audit event `{ actor, actorKind, onBehalfOf, client, op, target, result, ip, ts }`.
-Events go through a queue to R2 as hash-chained, gzip NDJSON segments partitioned by day, in a
-locked bucket that is also copied to the disaster-recovery account. D1 keeps a bounded recent index
+Events go through a queue to R2 as hash-chained, gzip NDJSON segments partitioned by day. The hash
+chain detects tampering from day one. S12 adds a bucket lock and the copy to the disaster-recovery
+account. D1 keeps a bounded recent index
 for the admin UI, sized and rolled over in S01.T08. **Ordinary reads are not audit events.** Read
 calls by agents are metered per agent and operation in Analytics Engine, so a sponsor can see what an
 agent looked at without growing the audit log by millions of rows a day.
@@ -189,7 +190,7 @@ agent looked at without growing the audit log by millions of rows a day.
 | Event feeds, notifications, user settings, webhook subscriptions, agent counters | `PrincipalDO` | Per principal |
 | Per-user Drive state (starred, recent, shared-with-me index) | The user's My Drive `DriveSpaceDO` (`user_state` tables) | Per principal |
 | Blob reference index | `BlobIndexDO` | 256 shards by hash prefix |
-| Audit log | R2 `audit` (locked), with a D1 recent index | Daily segments |
+| Audit log | R2 `audit` (hash-chained; locked from S12), with a D1 recent index | Daily segments |
 | Backups | R2 `backups` (bucket lock), optionally a second account or jurisdiction | Per run |
 | Long-term archive and exports | R2 `archive` (Infrequent Access class) | Per export |
 | Metrics | Analytics Engine | |
@@ -206,7 +207,8 @@ agent looked at without growing the audit log by millions of rows a day.
   `ref(+1/−1, owner, hash)` effects through their outbox to the hash's `BlobIndexDO` shard. Each
   effect carries an idempotency id, so redelivery is safe.
 - **GC** walks the index shards, never the owning objects. A blob is deleted only when:
-  - its reference count has been zero for longer than a grace period (7 days)
+  - its reference count has been zero for longer than a grace period (45 days by default: longer
+    than the 30-day PITR window, so a point-in-time restore can re-attach the bytes)
   - and it is not pinned by a legal hold.
 
   Every deletion is logged ([S03.T08](stages/S03-platform-services.md)). Once backups exist (S12),
@@ -407,9 +409,15 @@ go through queues in batches, not synchronous loops.
 ## 10. Backup, archive and recovery
 
 Defined in [ADR-0007](adr/0007-backup-and-archive.md). **Deferred.** The backup system is built in
-S12, after the main products work, so the core code comes first. Until then, production relies on
-T0 (Cloudflare durability) and T1 (native 30-day point-in-time recovery, used by hand from a
-runbook). This section is the target design that S12 implements ([R-21](risks.md)).
+S12, after the main products work, so the core code comes first. Until then, production relies on:
+
+- **T0:** Cloudflare's durability.
+- **T1:** native 30-day point-in-time recovery. For Durable Objects it can only be called from
+  inside the object, so S05.T24 adds an admin `restore_to_time` operation and the
+  `docs/operations/pitr.md` runbook before production.
+- **Blob retention:** blob GC's 45-day grace (S03.T08) keeps the bytes a restore needs.
+
+This section is the target design that S12 implements ([R-21](risks.md)).
 
 | Tier | Protects against | Mechanism | Window |
 | --- | --- | --- | --- |
@@ -530,7 +538,7 @@ soldock/
 │   │   ├── migrations/         # D1 (directory) migrations
 │   │   ├── src/
 │   │   │   ├── index.ts        # fetch / email / queue / scheduled; re-exports DO + Workflow classes
-│   │   │   ├── platform/       # http, errors, ids, config, logging, metrics, blobs, jobs, outbox, events, search (+ backup from S12)
+│   │   │   ├── platform/       # http, errors, ids, config, logging, metrics, blobs, jobs, outbox, events, search (+ backup contract/format from S12)
 │   │   │   ├── identity/       # principals, directory, passkeys, sessions, API keys, OAuth AS, authz, audit
 │   │   │   ├── api/            # REST adapter + OpenAPI generation over the operation registry
 │   │   │   ├── mcp/            # MCP adapter over the operation registry
@@ -541,7 +549,7 @@ soldock/
 │   │   │   ├── sheets/         # server-side Sheets operations and recalculation
 │   │   │   ├── slides/         # server-side Slides operations and rendering
 │   │   │   ├── meet/           # MeetingDO, Realtime SFU/TURN client, recording, transcripts
-│   │   │   └── archive/        # backup/restore/DR, exports, retention, legal hold, eDiscovery, imports (S12)
+│   │   │   └── archive/        # BackupRunDO, backup workflows, restores, DR, exports, retention, legal hold, eDiscovery, imports (S12)
 │   │   └── test/               # workerd integration tests (vitest-pool-workers)
 │   └── web/                    # the SPA (React + Vite), built into dock's static assets
 ├── packages/

@@ -167,13 +167,18 @@ markers. The backup stage adds dirty tracking to this table later (S12.T13).
 - depends: S03.T12
 
 GC walks the `BlobIndexDO` shards, never the owning objects. It deletes a blob only when its
-reference count has been zero for longer than a grace period (default 7 days) and no legal hold
-pins it (the hook is used by S12.T04). It logs and reports every deletion. When backups arrive,
-S12.T17 extends the grace period to cover backup retention.
+reference count has been zero for longer than a grace period, and no legal hold pins it (the hook
+is used by S12.T04). It logs and reports every deletion.
+
+The grace period is an org setting. It defaults to **45 days**: longer than the 30-day
+point-in-time restore window plus a margin, so a PITR restore of an object (S05.T24) can always
+re-attach the blobs it references. R2 has no undelete, so this window is the only recovery path for
+bytes until backups exist. When they do, S12.T17 raises it to cover backup retention.
 
 **Acceptance**
 - [ ] A GC dry run over seeded references deletes only unreferenced, out-of-grace blobs (tested).
 - [ ] Every deletion is logged with its hash, size and the time its reference count reached zero (tested).
+- [ ] Setting the grace period below the PITR window plus 10 days is rejected (tested).
 
 ### S03.T09 · Search framework
 - status: todo

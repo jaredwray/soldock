@@ -21,6 +21,10 @@ skip the plan updates: they are how the next session knows what happened.
     `plan/risks.md`, tell the user and propose a partial kickoff for it, even when other tasks are ready.
   - If `next` reports a **re-refinement overdue**, run `stage-gate kickoff` for that stage before anything else in it.
 - Never flip a stage to `active` yourself to unblock a task. That is what the kickoff gate is for.
+- **Loop tasks** (process §2), such as S00.T15–T17, which run `defense-in-depth-nodejs`: follow
+  that skill's own loop (one item per PR, its branch names). Keep the task `in-progress` until the
+  skill's tracker shows its sections complete, and only then mark it `done`. While a loop PR waits
+  for merge, you may pick other ready tasks.
 - Check open PRs for the task id so you don't duplicate work in flight.
 
 ## 2. Understand

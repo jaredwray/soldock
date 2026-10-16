@@ -9,6 +9,6 @@
 | **Depends on** | Nothing in `apps/dock/src` (imports no domain). May import `packages/contracts`. |
 | **Built in** | S00 (T04, T06, T08), S03 |
 | **Operations** | — |
-| **Data inventory** | `BlobIndexDO` shards; R2 `blobs`; D1 `objects` registry; `TestObject` (tests only). Backups: S12 (the backup framework itself lives in `archive`). |
+| **Data inventory** | `BlobIndexDO` shards; R2 `blobs`; D1 `objects` registry; `TestObject` (tests only). Backups: S12. The backup contract and format arrive here as `platform/backup` in S12, and orchestration lives in `archive`. Interim: `admin.objects.restore_to_time` (native PITR, S05.T24). |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
