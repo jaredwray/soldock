@@ -50,7 +50,10 @@ structured reviews. Know what it costs to run.
 - Drive uploads and searches
 - 500 agents making 100 MCP calls per second
 
-Staging uses its apex mail zone, so thousands of addresses route through catch-all.
+Staging uses its apex mail zone, so thousands of addresses route through catch-all. Runs are
+manually dispatched GitHub Actions workflows in the `staging` environment, because agent sessions
+hold no Cloudflare credentials ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+The report is built from the run's artifacts.
 
 **Acceptance**
 - [ ] A load report is committed, with p50 and p95 per operation. SLO breaches become tasks with owners.

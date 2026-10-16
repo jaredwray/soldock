@@ -420,9 +420,11 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
 - size: S
 - depends: S00.T09
 
-- **Deploy:** a `production` GitHub environment with a required reviewer. Deploys are a manual
+- **Deploy:** a `production` GitHub environment with a required reviewer, deployment branches
+  limited to `main`, and its own Cloudflare token as environment secrets
+  ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)). Deploys are a manual
   dispatch from `main` until S14.T04 switches to tag deploys. The workflow follows the S00.T16
-  conventions.
+  conventions and runs the e2e smoke suite after deploying.
 - **Rollback:** documented and scripted with `wrangler rollback` and versions.
 - **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
   roll back the MX within its TTL.

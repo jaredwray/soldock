@@ -589,7 +589,13 @@ soldock/
   simulator posts `.eml` fixtures to the `email()` handler.
 - **Staging:** `dock-staging.<domain>` with its own resources. Its mail domain is a **dedicated
   apex zone** (for example `soldock-staging.dev`), so catch-all routing works and load tests can
-  create thousands of addresses. Deployed on every merge to `main`.
+  create thousands of addresses. Deployed on every merge to `main`, after which the end-to-end
+  suite runs against it.
+- **Credentials and live tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)):
+  Cloudflare tokens live only in the `staging` and `production` GitHub Actions environments, which
+  accept deployments from `main` only. Agent sessions never hold them. Pull requests test locally
+  with Miniflare. Deploys, live end-to-end runs, spikes against real services and load tests run as
+  workflows on `main`, triggered by a push or a manual dispatch.
 - **Production (from M2, S05.T22):** the real `dock.jaredwray.com` deployment, with production
   resources. **Google is not involved.**
   - The `jaredwray.com` MX records point to **Cloudflare Email Routing**, whose catch-all rule

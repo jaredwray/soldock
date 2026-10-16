@@ -222,9 +222,16 @@ time-boxed (size S or M). It must deliver:
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
 | Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
-| End-to-end | Playwright against `pnpm dev` (local) and staging | `e2e/` |
+| End-to-end | Playwright against `pnpm dev` on every PR, and against staging after every deploy of `main` | `e2e/` |
 | Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
 | Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |
+
+**Live Cloudflare tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+Agent sessions have no Cloudflare credentials, by design. Anything that needs a real account runs
+as a GitHub Actions workflow on `main`, in the `staging` environment: deploys, the staging e2e run,
+spikes and load tests. To check live behaviour, merge and read the post-deploy run, or dispatch
+the workflow on `main`, then read its job summary, logs and artifacts. Never ask for a token in a
+session, and never add a `pull_request` trigger to a workflow that uses an environment.
 
 ## 9. Changing the plan
 

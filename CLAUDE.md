@@ -32,6 +32,9 @@ picture.
   Until then, list new persistent state in the module README's data inventory, and don't build
   backup code early.
 - **Permissive licenses only** ([ADR-0011](plan/adr/0011-dependency-license-policy.md)). `pnpm licenses:check` enforces it.
+- **No Cloudflare credentials in sessions.** Deploys and live tests run in GitHub Actions
+  environments, on `main` only ([ADR-0015](plan/adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+  Pull requests test locally with Miniflare.
 - **External content is untrusted.** Mark it as such in API and MCP output, and never serve user
   content as active content on the origin.
 - **The plan is the source of truth.** Update task status in the stage file, then run `pnpm plan status --write`.
