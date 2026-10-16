@@ -7,7 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**", "!**/STATUS.md"]
+		"includes": ["**", "!**/STATUS.md", "!**/worker-configuration.d.ts"]
 	},
 	"formatter": {
 		"enabled": true,

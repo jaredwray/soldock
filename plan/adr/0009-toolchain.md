@@ -17,7 +17,7 @@ Workers runtime, and conventions that agents can follow mechanically.
 | Runtime for tools | Node ≥ 22.18 with native type stripping (no build step for `tools/`) |
 | Packages | pnpm workspaces (`apps/*`, `packages/*`, `tools/*`) |
 | Lint and format | Biome (tabs, double quotes, 120 columns) |
-| Tests | Vitest 4, plus `@cloudflare/vitest-pool-workers` for workerd integration tests; Playwright for e2e |
+| Tests | Vitest 4, plus `@cloudflare/vitest-plugin` for workerd integration tests; Playwright for e2e |
 | HTTP routing in the Worker | Hono |
 | Validation and schemas | Zod (contracts → JSON Schema for MCP and OpenAPI) |
 | Worker tooling | Wrangler, with `@cloudflare/vite-plugin` for local dev of the SPA + Worker |
@@ -28,6 +28,10 @@ Workers runtime, and conventions that agents can follow mechanically.
 | CI | GitHub Actions running `pnpm verify` |
 
 Versions are pinned exactly in `package.json` and upgraded deliberately in their own PRs.
+
+> **Amended 2026-10-16 (S00.T04):** Cloudflare renamed `@cloudflare/vitest-pool-workers` to
+> `@cloudflare/vitest-plugin` and deprecated the old name. Same integration, same decision; only the
+> package name changed.
 
 ## Consequences
 

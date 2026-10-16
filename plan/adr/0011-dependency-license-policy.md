@@ -25,6 +25,9 @@ leading JavaScript formula engine is GPL or commercial.
 - A runtime dependency whose source is not available (compiled-only SDKs) needs an ADR even if
   its license is permissive, because it undermines self-hostability and auditability.
 
+Exceptions granted so far: [ADR-0014](0014-allow-lgpl-libvips-in-local-toolchain.md) (the LGPL
+libvips builds that Cloudflare's local toolchain installs, dev-only).
+
 ## Consequences
 
 - Some best-in-class libraries are off the table, notably HyperFormula. The S09 spike accounts
