@@ -178,7 +178,7 @@ The PR template repeats this list. Items that don't apply are marked N/A with a 
 - [ ] **Acceptance.** Every acceptance box for the task is ticked.
 - [ ] **Tests.**
   - Unit tests for logic.
-  - Workerd integration tests (`@cloudflare/vitest-pool-workers`) for Durable Objects, routes, queues and workflows.
+  - Workerd integration tests (`@cloudflare/vitest-plugin`) for Durable Objects, routes, queues and workflows.
   - E2E (Playwright) tests for user-visible flows.
   - Coverage of changed modules stays at or above the threshold (90% lines, enforced from S00.T14 on).
 - [ ] **Parity.** New capabilities are operations in `packages/contracts`, exposed through REST and MCP and tested through both adapters.
@@ -218,7 +218,7 @@ time-boxed (size S or M). It must deliver:
 | Layer | Tool | Where |
 | --- | --- | --- |
 | Pure logic (parsers, converters, query languages, address math) | Vitest (node) | `packages/*/test`, `apps/dock/src/**/lib/*.test.ts` |
-| Durable Objects, routes, queues, workflows, email handler | Vitest + `@cloudflare/vitest-pool-workers` (real workerd with D1, R2, KV and Durable Objects) | `apps/dock/test/` |
+| Durable Objects, routes, queues, workflows, email handler | Vitest + `@cloudflare/vitest-plugin` (real workerd with D1, R2, KV and Durable Objects) | `apps/dock/test/` |
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
 | Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |

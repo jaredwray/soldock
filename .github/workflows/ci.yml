@@ -16,6 +16,8 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -26,10 +28,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Lint and format
         run: pnpm lint
+      - name: Worker types are current (wrangler types --check)
+        run: pnpm types:check
       - name: Typecheck
         run: pnpm typecheck
       - name: Test
         run: pnpm test
+      - name: Worker bundle and startup budgets
+        run: pnpm budgets:check
       - name: Plan integrity (task graph + STATUS.md freshness)
         run: pnpm plan check
       - name: Dependency license policy

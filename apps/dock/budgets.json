@@ -1,0 +1,4 @@
+{
+	"bundle": { "maxBytes": 5242880 },
+	"startup": { "maxActiveMs": 200 }
+}

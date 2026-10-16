@@ -45,7 +45,7 @@ skip the plan updates: they are how the next session knows what happened.
 
 - Turn each acceptance box into one or more tests before you write the implementation.
 - Put tests where [process §8](../../../plan/process.md#8-testing-strategy) says. Use workerd
-  (`@cloudflare/vitest-pool-workers`) for anything that touches bindings.
+  (`@cloudflare/vitest-plugin`) for anything that touches bindings.
 - Follow the [golden rules](../../../CLAUDE.md#golden-rules), and specifically:
   - **New capability:** add an operation to `packages/contracts`. Implement it, and test it
     through REST and MCP for a human, an agent and a delegated token.
