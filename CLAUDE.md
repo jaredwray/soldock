@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # Soldock: guide for agents (and humans)
 
 Soldock is an open-source Google Workspace replacement (Mail, Meet, Drive, Docs, Sheets, Slides)
