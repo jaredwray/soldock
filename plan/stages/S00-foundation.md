@@ -204,7 +204,7 @@ Create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
 - [ ] Missing credentials fail fast with a message that names them and points to `docs/self-hosting.md`.
 
 ### S00.T15 · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings
-- status: in-progress
+- status: done
 - kind: ops
 - size: M
 - depends: S00.T03
@@ -223,10 +223,11 @@ item per PR ([process §2](../process.md#2-stage-files-and-task-format)).
 - **Labels:** create the `security` label recorded in `AGENTS.md` › Agentic conventions.
 
 **Acceptance**
-- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable §1–§3 item done, or deferred with a reason.
-  `SECURITY.md` lists only measures actually in place.
-- [ ] The `security` label exists.
-- [ ] `pnpm verify` and CI stay green after every hardening PR.
+- [x] `DEFENSE_IN_DEPTH.md` shows every applicable §1–§3 item done, or deferred with a reason.
+  `SECURITY.md` lists only measures actually in place. PRs #3 and #5–#11 did the automated items.
+  S00.T17 takes the two §2 `(manual)` items, because the skill makes them maintainer work before the lockdown.
+- [x] The `security` label exists.
+- [x] `pnpm verify` and CI stay green after every hardening PR.
 
 ### S00.T16 · Defense in depth II: GitHub Actions hardening and security tooling
 - status: todo
@@ -255,8 +256,15 @@ These conventions apply to every workflow added later, including S00.T09's deplo
 - size: S
 - depends: S00.T16, S00.T09
 
-The skill's **§7**, which comes last after every earlier item, including the manual ones. A repo
-**admin** runs the skill's `lockdown-repo.sh`, which is never copied into this repository. It
+The skill's **§7**, which comes last after every earlier item, including the manual ones. First, the
+maintainer does the two §2 `(manual)` items that S00.T15 deferred:
+
+- In the Codex cloud environment, use Manual setup with `bash ./scripts/setup-cloud-environment.sh`
+  as the setup and maintenance script.
+- In the Claude Code on the web environment, allow `malware-list.aikido.dev` (Custom network access
+  plus the default package-manager list).
+
+Then a repo **admin** runs the skill's `lockdown-repo.sh`, which is never copied into this repository. It
 sets: PRs required on `main`, admin-only tags, approval for workflow runs from outside
 contributors, and the required checks taken from the workflows. S00.T09 already needs `main`
 protected before any environment secret exists ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
@@ -269,6 +277,7 @@ While this task is `blocked`, S01 can take a **partial kickoff** (`partial: re-r
 lockdown.
 
 **Acceptance**
+- [ ] The maintainer confirms the two §2 `(manual)` items, and `DEFENSE_IN_DEPTH.md` §2 shows them checked.
 - [ ] `lockdown-repo.sh <owner/repo> --check` is clean, and `DEFENSE_IN_DEPTH.md` §7 is checked.
 
 ### S00.T04 · `apps/dock` Worker skeleton

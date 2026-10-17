@@ -2,14 +2,14 @@
 
 # Build status
 
-**4 / 201 tasks done (2%)** · active stage(s): S00
+**5 / 201 tasks done (2%)** · active stage(s): S00
 
 The stage files in [`stages/`](stages/) are the source of truth; this page is regenerated from them.
 Run `pnpm plan next` to see what to work on and [`process.md`](process.md) for how.
 
 | Stage | Title | Status | Progress | Depends on |
 | --- | --- | --- | --- | --- |
-| [S00](stages/S00-foundation.md) | Foundation | active | `██░░░░░░░░` 4/20 | — |
+| [S00](stages/S00-foundation.md) | Foundation | active | `███░░░░░░░` 5/20 | — |
 | [S01](stages/S01-identity-access.md) | Identity, access and directory | planned | `░░░░░░░░░░` 0/17 | S00 |
 | [S02](stages/S02-agent-api-surface.md) | Agent and API surface (MCP, OAuth, events) | planned | `░░░░░░░░░░` 0/12 | S01 |
 | [S03](stages/S03-platform-services.md) | Platform services (blobs, jobs, search, notifications) | planned | `░░░░░░░░░░` 0/9 | S01 |
@@ -35,7 +35,7 @@ _None._
 
 ## In progress
 
-- [S00.T15](stages/S00-foundation.md) · Defense in depth I: security docs, CODEOWNERS, cloud bootstrap, pnpm settings _(ops, M)_
+_None._
 
 ## Blocked
 
@@ -46,6 +46,7 @@ _None._
 
 - [S00.T19](stages/S00-foundation.md) · Workflow trigger guard _(test, S)_
 - [S00.T20](stages/S00-foundation.md) · `soldock provision` _(feature, M)_
+- [S00.T16](stages/S00-foundation.md) · Defense in depth II: GitHub Actions hardening and security tooling _(ops, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_
@@ -55,7 +56,7 @@ _None._
 
 ```mermaid
 graph LR
-  S00["S00 Foundation<br/>4/20"]:::active
+  S00["S00 Foundation<br/>5/20"]:::active
   S01["S01 Identity, access and directory<br/>0/17"]:::planned
   S02["S02 Agent and API surface (MCP, OAuth, events)<br/>0/12"]:::planned
   S03["S03 Platform services (blobs, jobs, search, notifications)<br/>0/9"]:::planned
