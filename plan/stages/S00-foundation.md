@@ -230,7 +230,7 @@ item per PR ([process §2](../process.md#2-stage-files-and-task-format)).
 - [x] `pnpm verify` and CI stay green after every hardening PR.
 
 ### S00.T16 · Defense in depth II: GitHub Actions hardening and security tooling
-- status: todo
+- status: in-progress
 - kind: ops
 - size: M
 - depends: S00.T15
