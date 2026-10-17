@@ -35,7 +35,7 @@ _None._
 
 ## In progress
 
-_None._
+- [S00.T16](stages/S00-foundation.md) · Defense in depth II: GitHub Actions hardening and security tooling _(ops, M)_
 
 ## Blocked
 
@@ -46,7 +46,6 @@ _None._
 
 - [S00.T19](stages/S00-foundation.md) · Workflow trigger guard _(test, S)_
 - [S00.T20](stages/S00-foundation.md) · `soldock provision` _(feature, M)_
-- [S00.T16](stages/S00-foundation.md) · Defense in depth II: GitHub Actions hardening and security tooling _(ops, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_
