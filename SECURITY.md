@@ -26,4 +26,5 @@ hardening checklist; progress is tracked in [DEFENSE_IN_DEPTH.md](./DEFENSE_IN_D
 - Codespaces, Cursor Cloud Agents and Claude Code on the web install through Aikido Safe Chain; package-manager shims must not be bypassed.
 - The Codespaces Dev Container image is pinned by digest (`name:<tag>@sha256:<digest>`), not a floating tag.
 - Dependencies install through pnpm 11 with a 7-day cooldown on new versions, blocked lifecycle scripts except reviewed packages, `trustPolicy: no-downgrade`, and registry-only transitive dependencies. CI installs from the committed lockfile with `--frozen-lockfile`.
+- CI runs with read-only permissions, and no workflow commits back to the repository. Each action is pinned to a full commit SHA. Socket Firewall (`sfw`) wraps `pnpm install`, with no dependency cache. Checkouts do not keep the token. zizmor examines the workflows on every pull request.
 - Socket reviews every pull request that changes dependencies, and Aikido scans every pull request.
