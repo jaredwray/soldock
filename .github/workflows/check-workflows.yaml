@@ -27,9 +27,16 @@ jobs:
         with:
           mode: firewall-free
           firewall-version: "1.15.4"
+      # SARIF mode always exits 0, so this step only sends the results to code scanning.
+      # Fork PRs skip it (read-only token).
+      - name: Upload zizmor results to code scanning
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: true
+      # Annotation mode fails on a finding, so this step is the gate for the required check.
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
         with:
-          # Fork PRs cannot upload SARIF (read-only token). Lint with annotations instead.
-          advanced-security: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          annotations: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          advanced-security: false
+          annotations: true

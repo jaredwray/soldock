@@ -251,7 +251,8 @@ These conventions apply to every workflow added later, including S00.T09's deplo
   PRs #13–#16 did the file items. The Aikido release gate does not apply, because nothing is staged to npm.
   S00.T17 takes the npm-token check, because only the maintainer can read the Actions secrets list.
 - [x] zizmor passes on every workflow in CI, and every action is pinned to a SHA. The `check-workflows`
-  run on `main` after PR #16 (run 39077498277) reports no results.
+  run on `main` after PR #16 (run 39077498277) reports no results. The `zizmor` job fails on a finding,
+  so the required check in S00.T17 blocks a workflow with a finding.
 
 ### S00.T17 · Defense in depth III: repository lockdown (maintainer)
 - status: todo
