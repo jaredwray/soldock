@@ -49,15 +49,18 @@ that can deploy staging can therefore also change any other Worker or database i
    - code-owner review required, with the repository owner as a bypass actor for pull requests
      only, so direct pushes stay blocked
 
+   The bypass covers every rule of the ruleset, `verify` included. The maintainer merges only on a
+   green `verify`.
+
    The code-owner rule binds other contributors. Agent PRs use the maintainer's account, and GitHub
    does not count the approval of a PR author. So the maintainer reads each workflow change against
    item 3 before the merge ([process §3](../process.md#3-the-task-loop)). This review is a merge
    discipline, not a GitHub gate. Before the first secret exists, the maintainer also reads each
    workflow that is already on `main` against item 3.
 
-   This is a slice of the S00.T17 lockdown, pulled forward as a precondition of S00.T09. The environment
-   branch rule means nothing on an unprotected branch, because anyone with write access could push
-   code straight to `main`.
+   This ruleset is a slice of the S00.T17 lockdown, pulled forward as a precondition of S00.T09.
+   The environment branch rule means nothing on an unprotected branch, because anyone with write
+   access could push code straight to `main`.
 3. **Which runs can use them (an allowlist).** Each environment accepts deployments from `main`
    only. When S14.T04 moves releases to tags, it adds a release-tag pattern (`v*`) to the
    environments that tags deploy to. Tag creation is admin-only by then (the S00.T17 tag ruleset).

@@ -150,8 +150,8 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 - [ ] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
   workflow passes zizmor.
 - [ ] The workflow meets ADR-0015 item 3: `workflow_dispatch` only, `environment: staging`, each
-  checkout uses `ref: ${{ github.sha }}` or no `ref:` and `persist-credentials: false`, and inputs
-  reach steps only through `env:`. The PR lists these checks under "How it was verified".
+  checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`, and
+  inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
 - [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).
 
 ### S00.T19 · Workflow trigger guard
@@ -467,10 +467,15 @@ Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only
 
 Needs the maintainer to set up, in this order:
 
-1. Protect `main` with the branch ruleset that `lockdown-repo.sh` writes. Run it now with
-   `--required-checks verify`, and again at S00.T17. Or create the same ruleset by hand: pull
-   requests required, `verify` required, code-owner review required with the owner as a bypass
-   actor for pull requests only, and force-push and deletion blocked. Do not add a classic
+1. Protect `main` with a branch ruleset named `Pull requests required`. Use the shape that
+   `lockdown-repo.sh` writes at S00.T17:
+   - pull requests required, with force-push and deletion blocked
+   - the `verify` check required
+   - code-owner review required, with the repository owner as a bypass actor for pull requests only
+
+   Create it by hand now. S00.T17 replaces it with the same configuration. Do not run the full
+   script now, because it also sets the Actions allowlist, and that allowlist blocks
+   `pnpm/action-setup` until S00.T17 adds `--allowed-actions`. Do not add a classic
    branch-protection rule, because S00.T17 cannot replace it.
    This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
    unprotected branch.
@@ -486,8 +491,8 @@ token: they read the workflow's runs.
 
 **Acceptance**
 - [ ] The workflows pass zizmor in PR CI, and they meet ADR-0015 item 3: allowed triggers only,
-  each checkout with `ref: ${{ github.sha }}` or no `ref:` and `persist-credentials: false`, and
-  inputs only through `env:`. The PR lists these checks under "How it was verified".
+  each checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`,
+  and inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
 - [ ] After merge, the dispatched `provision` run on `main` prints the staging bindings (run link recorded).
 - [ ] After merge, the first deploy of `main` passes its post-deploy smoke check against the staging host (run link recorded).
 
