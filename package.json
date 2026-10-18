@@ -25,7 +25,8 @@
 		"test:watch": "vitest",
 		"budgets:check": "node tools/budgets/check.ts apps/dock",
 		"licenses:check": "node tools/licenses/check.ts",
-		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm plan check && pnpm licenses:check"
+		"workflows:check": "node tools/workflows/check.ts",
+		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm plan check && pnpm licenses:check && pnpm workflows:check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",

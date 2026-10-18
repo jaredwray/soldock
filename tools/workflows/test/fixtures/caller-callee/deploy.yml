@@ -1,0 +1,10 @@
+# Passes: a push to main calls a local reusable workflow that names the environment.
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  staging:
+    uses: ./.github/workflows/deploy-staging.yml

@@ -1,0 +1,9 @@
+# Fails: the guard cannot read the environment of a reusable workflow in another repository.
+name: ci
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    uses: example/workflows/.github/workflows/deploy.yml@0123456789abcdef0123456789abcdef01234567

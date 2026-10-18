@@ -30,7 +30,7 @@ endpoint, the same way people work through the web app.
 
 ```sh
 pnpm install
-pnpm verify      # lint, typecheck, tests, plan integrity, license policy
+pnpm verify      # lint, typecheck, tests, plan integrity, license policy, workflow guard
 pnpm plan next   # what to build next
 ```
 

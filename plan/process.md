@@ -110,8 +110,8 @@ skill walks an agent through it.
    and open the PR early if others are working in parallel.
 4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
    the task. File follow-ups as new tasks; don't widen the PR.
-5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, plan check, license check). It must be
-   green. For UI work, run the app and check the change in a browser (see the
+5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, plan check, license
+   check, workflow guard). It must be green. For UI work, run the app and check the change in a browser (see the
    [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
 6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
    [Definition of Done](#definition-of-done). For `M` tasks, and for anything touching auth,
@@ -292,5 +292,5 @@ pnpm plan next         # what to work on now
 pnpm plan show S04.T03 # one task, plus the state of its dependencies
 pnpm plan check        # validate the graph and STATUS.md freshness (runs in CI)
 pnpm plan status --write
-pnpm verify            # lint, typecheck, test, plan check, license check (runs in CI)
+pnpm verify            # lint, typecheck, test, plan check, license check, workflow guard (runs in CI)
 ```

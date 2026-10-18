@@ -1,0 +1,11 @@
+{
+	"name": "@soldock/tool-workflows",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Workflow trigger guard for Cloudflare credentials (see plan/adr/0015-cloudflare-credentials-only-in-github-actions.md).",
+	"type": "module",
+	"license": "MIT",
+	"dependencies": {
+		"yaml": "2.9.1"
+	}
+}

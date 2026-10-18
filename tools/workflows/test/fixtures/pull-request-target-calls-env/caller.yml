@@ -1,0 +1,9 @@
+# Fails: pull_request_target calls a local reusable workflow whose job uses the staging environment.
+name: preview
+on:
+  pull_request_target:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    uses: ./.github/workflows/callee.yml

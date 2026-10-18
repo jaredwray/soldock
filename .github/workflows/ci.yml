@@ -48,3 +48,5 @@ jobs:
         run: pnpm plan check
       - name: Dependency license policy
         run: pnpm licenses:check
+      - name: Workflow trigger guard (ADR-0015)
+        run: pnpm workflows:check

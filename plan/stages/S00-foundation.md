@@ -152,7 +152,7 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 - [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).
 
 ### S00.T19 · Workflow trigger guard
-- status: todo
+- status: done
 - kind: test
 - size: S
 - depends: S00.T03
@@ -173,16 +173,16 @@ A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` mus
   than `${{ github.sha }}`.
 
 **Acceptance**
-- [ ] The guard fails on each fixture below and passes on the real workflows:
+- [x] The guard fails on each fixture below and passes on the real workflows:
   - an environment job with a `pull_request` trigger
   - a `pull_request_target` workflow that calls a local reusable workflow whose job uses `environment: staging`
   - a `workflow_run`-triggered workflow that reads a `CLOUDFLARE_*` secret
   - a `push` trigger without `branches: [main]`
   - a dispatch workflow that checks out `ref: ${{ inputs.ref }}`
-- [ ] The guard passes on two fixtures:
+- [x] The guard passes on two fixtures:
   - a `push: main` and `workflow_dispatch` deploy with `environment: staging` and pinned checkouts
   - a `push: main` caller whose local reusable callee names the environment
-- [ ] It runs in `pnpm verify` and CI.
+- [x] It runs in `pnpm verify` and CI.
 
 ### S00.T20 · `soldock provision`
 - status: todo
