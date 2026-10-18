@@ -149,11 +149,14 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 **Acceptance**
 - [ ] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
   workflow passes zizmor.
+- [ ] The workflow meets ADR-0015 item 3: `workflow_dispatch` only, `environment: staging`, each
+  checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`, and
+  inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
 - [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).
 
 ### S00.T19 · Workflow trigger guard
 - status: dropped
-- reason: the maintainer decided that no code check is necessary for the ADR-0015 trigger allowlist. Code review enforces it: CODEOWNERS on `/.github/`, the protected `main`, the environment branch rule and zizmor (PR #18 closed)
+- reason: maintainer decision (PR #18 closed without merge): no code check for the ADR-0015 trigger allowlist. The maintainer reads each workflow change against ADR-0015 item 3 before the merge
 - kind: test
 - size: S
 - depends: S00.T03
@@ -464,21 +467,32 @@ Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only
 
 Needs the maintainer to set up, in this order:
 
-1. Protect `main`: pull requests required, force-push and deletion blocked, `verify` required, and
-   code-owner review required. Code review is the only check of the ADR-0015 trigger allowlist, so
-   CODEOWNERS must require the maintainer's approval of each change to `/.github/`.
+1. Protect `main` with a branch ruleset named `Pull requests required`. Use the shape that
+   `lockdown-repo.sh` writes at S00.T17:
+   - pull requests required, with force-push and deletion blocked
+   - the `verify` check required
+   - code-owner review required, with the repository owner as a bypass actor for pull requests only
+
+   Create it by hand now. S00.T17 replaces it with the same configuration. Do not run the full
+   script now, because it also sets the Actions allowlist, and that allowlist blocks
+   `pnpm/action-setup` until S00.T17 adds `--allowed-actions`. Do not add a classic
+   branch-protection rule, because S00.T17 cannot replace it.
    This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
    unprotected branch.
 2. Create a **separate** Cloudflare account for staging.
 3. Create the `staging` GitHub environment, with deployment branches set to `main` only. A dispatch
    that names a missing environment creates it with no rules, so if one already exists, configure it.
-4. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to that environment as environment secrets, not repository secrets.
+4. Read each workflow that is already on `main` against ADR-0015 item 3, and record the reviewed
+   commit SHA in the S00.T09 PR.
+5. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to that environment as environment secrets, not repository secrets.
 
 Set the task to `blocked` with a reason while any of these is missing. Agents never receive the
 token: they read the workflow's runs.
 
 **Acceptance**
-- [ ] The workflows pass zizmor in PR CI, and their triggers obey the ADR-0015 allowlist.
+- [ ] The workflows pass zizmor in PR CI, and they meet ADR-0015 item 3: allowed triggers only,
+  each checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`,
+  and inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
 - [ ] After merge, the dispatched `provision` run on `main` prints the staging bindings (run link recorded).
 - [ ] After merge, the first deploy of `main` passes its post-deploy smoke check against the staging host (run link recorded).
 
