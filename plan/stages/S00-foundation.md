@@ -116,12 +116,13 @@ and a Cloudflare contact for the acceptable-use question. If any of these is mis
 **Acceptance**
 - [ ] The findings note is committed with the test evidence (links to the dispatched runs) and Cloudflare's written answer (or the open request, with a date).
 - [ ] The findings PR removes S00.T18's harness: its Worker, workflow, queue and event subscription.
+  A `cleanup` run of the harness deletes the Cloudflare resources before the merge (run link recorded).
 - [ ] R-01 is updated. If the answer is negative or unknown, the maintainer has chosen a path from
   [vision.md › Contingency](../vision.md#contingency-outbound-mail), recorded in an ADR, **before
   the S04 kickoff gate**.
 
 ### S00.T18 · Email Service spike harness
-- status: todo
+- status: in-progress
 - kind: chore
 - size: S
 - depends: S00.T16
@@ -137,19 +138,21 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
   headers to recipients given as inputs. It consumes the lifecycle-event queue and records what it
   observes.
 - **`.github/workflows/spike-email-service.yaml`:** a `workflow_dispatch` workflow only, in the
-  `staging` environment. It has two modes, chosen by a typed input:
+  `staging` environment. It has three modes, chosen by a typed input:
   - `send` deploys the throwaway Worker and runs the sends.
   - `collect` drains the lifecycle-event queue, uploads the events as an artifact and writes the
     job summary.
+  - `cleanup` deletes the Worker, the queue and the subscription.
 
   Bounces and deferrals arrive after the sends, so the queue and the event subscription outlive
-  each run. S00.T13's findings PR deletes the Worker, the queue and the subscription. The workflow
-  follows the S00.T16 conventions.
+  each run. Only a workflow run has the credentials to delete them. So S00.T13 runs `cleanup`
+  before its findings PR merges, and the findings PR then deletes the workflow and
+  `spikes/email-service/`. The workflow follows the S00.T16 conventions.
 
 **Acceptance**
-- [ ] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
+- [x] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
   workflow passes zizmor.
-- [ ] The workflow meets ADR-0015 item 3: `workflow_dispatch` only, `environment: staging`, each
+- [x] The workflow meets ADR-0015 item 3: `workflow_dispatch` only, `environment: staging`, each
   checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`, and
   inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
 - [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).

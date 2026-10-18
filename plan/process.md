@@ -110,9 +110,9 @@ skill walks an agent through it.
    and open the PR early if others are working in parallel.
 4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
    the task. File follow-ups as new tasks; don't widen the PR.
-5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, plan check, license check). It must be
-   green. For UI work, run the app and check the change in a browser (see the
-   [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
+5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, spike builds, plan
+   check, license check). It must be green. For UI work, run the app and check the change in a
+   browser (see the [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
 6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
    [Definition of Done](#definition-of-done). For `M` tasks, and for anything touching auth,
    backups or data models, ask the `impl-reviewer` agent for a review and address what it finds.

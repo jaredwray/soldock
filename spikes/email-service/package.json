@@ -1,0 +1,21 @@
+{
+	"name": "@soldock/spike-email-service",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Throwaway harness for the S00.T13 Email Service spike. S00.T13's findings PR deletes it.",
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"build": "wrangler deploy --dry-run --outdir dist",
+		"test": "vitest run",
+		"types": "wrangler types",
+		"types:check": "wrangler types --check",
+		"typecheck": "tsc -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-plugin": "1.4.0",
+		"typescript": "7.0.2",
+		"vitest": "4.1.11",
+		"wrangler": "4.149.0"
+	}
+}

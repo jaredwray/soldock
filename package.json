@@ -20,12 +20,13 @@
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc -p tsconfig.json && pnpm --recursive --if-present typecheck",
-		"types:check": "pnpm --filter @soldock/dock types:check",
+		"types:check": "pnpm --recursive --if-present types:check",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"budgets:check": "node tools/budgets/check.ts apps/dock",
 		"licenses:check": "node tools/licenses/check.ts",
-		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm plan check && pnpm licenses:check"
+		"spikes:build": "pnpm --filter \"./spikes/**\" --if-present build",
+		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm spikes:build && pnpm plan check && pnpm licenses:check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",

@@ -1,0 +1,298 @@
+name: spike-email-service
+
+# The harness for the S00.T13 Email Service spike (S00.T18). See spikes/email-service/README.md.
+# Before S00.T13's findings PR merges, a cleanup run deletes the Worker, the queue and the event
+# subscription. Then the findings PR deletes this workflow and spikes/email-service/.
+#
+# This workflow uses the staging Cloudflare token, so it follows ADR-0015 item 3:
+# - workflow_dispatch is the only trigger.
+# - The job uses the staging environment, which accepts runs of main only.
+# - The checkout keeps no credentials and checks out only github.sha.
+# - Inputs reach the steps only through env:.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "send: deploy the Worker and send the test messages. collect: read the lifecycle events. cleanup: delete the Worker, the queue and the subscription."
+        type: choice
+        options: [collect, send, cleanup]
+        default: collect
+        required: true
+      sender:
+        description: "send mode: the local part of the sender address. The domain is vars.SPIKE_EMAIL_DOMAIN."
+        type: string
+        default: spike
+      recipients:
+        description: "send mode: 1 to 10 recipient addresses, separated by commas. Use seed accounts only."
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: spike-email-service
+  cancel-in-progress: false
+
+jobs:
+  spike:
+    name: spike
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      QUEUE: soldock-spike-email-events
+    steps:
+      # This step runs first and gets no secret values, only whether each secret is set.
+      - name: Check the run and the staging configuration
+        env:
+          HAS_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          DOMAIN: ${{ vars.SPIKE_EMAIL_DOMAIN }}
+          ZONE_ID: ${{ vars.SPIKE_EMAIL_ZONE_ID }}
+          MODE: ${{ inputs.mode }}
+          SENDER: ${{ inputs.sender }}
+          RECIPIENTS: ${{ inputs.recipients }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Dispatch this workflow on main only (ADR-0015)."
+            exit 1
+          fi
+          missing=()
+          [[ "$HAS_API_TOKEN" == "true" ]] || missing+=("secret CLOUDFLARE_API_TOKEN")
+          [[ "$HAS_ACCOUNT_ID" == "true" ]] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
+          [[ -n "$DOMAIN" ]] || missing+=("variable SPIKE_EMAIL_DOMAIN")
+          [[ -n "$ZONE_ID" ]] || missing+=("variable SPIKE_EMAIL_ZONE_ID")
+          if (( ${#missing[@]} > 0 )); then
+            printf -v list '%s, ' "${missing[@]}"
+            echo "::error::The staging environment does not have: ${list%, }. See spikes/email-service/README.md."
+            exit 1
+          fi
+          domain_re='^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+          zone_re='^[0-9a-f]{32}$'
+          sender_re='^[A-Za-z0-9._+-]{1,64}$'
+          recipients_re='^[A-Za-z0-9._%+@, -]+$'
+          if [[ ! "$DOMAIN" =~ $domain_re ]]; then
+            echo "::error::The variable SPIKE_EMAIL_DOMAIN is not a domain name."
+            exit 1
+          fi
+          if [[ ! "$ZONE_ID" =~ $zone_re ]]; then
+            echo "::error::The variable SPIKE_EMAIL_ZONE_ID is not a zone ID (32 hex characters)."
+            exit 1
+          fi
+          if [[ "$MODE" == "send" ]]; then
+            if [[ ! "$SENDER" =~ $sender_re ]]; then
+              echo "::error::The sender input must be 1 to 64 of A-Z, a-z, 0-9, '.', '_', '+' or '-'."
+              exit 1
+            fi
+            if [[ ! "$RECIPIENTS" =~ $recipients_re ]]; then
+              echo "::error::The recipients input must be email addresses, separated by commas."
+              exit 1
+            fi
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
+          package-manager-cache: false
+      # Only the spike's dependencies, and no secrets in this step.
+      - run: sfw pnpm install --frozen-lockfile --filter @soldock/spike-email-service
+
+      # The queue and the event subscription outlive each run, because bounces and deferrals
+      # arrive later. The cleanup mode deletes them.
+      - name: Make sure that the queue and the event subscription exist
+        if: ${{ inputs.mode != 'cleanup' }}
+        working-directory: spikes/email-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOMAIN: ${{ vars.SPIKE_EMAIL_DOMAIN }}
+          ZONE_ID: ${{ vars.SPIKE_EMAIL_ZONE_ID }}
+        run: |
+          if pnpm exec wrangler queues info "$QUEUE" > /dev/null 2>&1; then
+            echo "The queue $QUEUE exists."
+          else
+            pnpm exec wrangler queues create "$QUEUE"
+          fi
+          subscriptions=$(pnpm exec wrangler queues subscription list "$QUEUE" --json)
+          if jq -e --arg domain "$DOMAIN" \
+            'any(.[]?; .source.type == "email.sending" and .source.domain == $domain)' \
+            <<< "$subscriptions" > /dev/null; then
+            echo "The email.sending subscription for $DOMAIN exists."
+          else
+            pnpm exec wrangler queues subscription create "$QUEUE" \
+              --name soldock-spike-email \
+              --source email.sending \
+              --events message.delivered,message.deferred,message.bounced,message.failed,message.rejected,message.complained \
+              --zone-id "$ZONE_ID" \
+              --domain "$DOMAIN"
+          fi
+
+      # Both modes deploy main, so that the step gets the workers.dev URL. Deploy is idempotent.
+      - name: Deploy the spike Worker
+        id: deploy
+        if: ${{ inputs.mode != 'cleanup' }}
+        working-directory: spikes/email-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: |
+          pnpm exec wrangler deploy
+          url=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]? | select(test("^https://[^/]+\\.workers\\.dev$"))]
+            | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          if [[ -z "$url" ]]; then
+            echo "::error::The deploy output has no workers.dev URL. Make sure that the account has a workers.dev subdomain."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # The Worker refuses every request until it has SPIKE_TOKEN. The token is new for each run,
+      # is masked, and the last step deletes it.
+      - name: Call the spike Worker
+        id: call
+        if: ${{ inputs.mode != 'cleanup' }}
+        working-directory: spikes/email-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_URL: ${{ steps.deploy.outputs.url }}
+          DOMAIN: ${{ vars.SPIKE_EMAIL_DOMAIN }}
+          MODE: ${{ inputs.mode }}
+          SENDER: ${{ inputs.sender }}
+          RECIPIENTS: ${{ inputs.recipients }}
+        run: |
+          token=$(openssl rand -hex 32)
+          echo "::add-mask::$token"
+          printf '%s' "$token" | pnpm exec wrangler secret put SPIKE_TOKEN
+          umask 077
+          auth="$RUNNER_TEMP/spike-auth"
+          printf 'Authorization: Bearer %s\n' "$token" > "$auth"
+          out="$RUNNER_TEMP/spike-out"
+          mkdir -p "$out"
+          # The new version with the token takes some seconds to reach the edge. Until then, /ready gets 503.
+          curl --silent --show-error --fail --max-time 10 --retry 24 --retry-delay 5 --retry-all-errors \
+            -H @"$auth" "$WORKER_URL/ready" > /dev/null
+          if [[ "$MODE" == "send" ]]; then
+            jq -n --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --arg from "$SENDER@$DOMAIN" --arg to "$RECIPIENTS" \
+              '{runId: $runId, from: $from, to: ($to | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}' \
+              > "$RUNNER_TEMP/send-request.json"
+            # No retry: a second POST sends the messages again.
+            curl --silent --show-error --fail-with-body --max-time 120 -H @"$auth" \
+              -H "content-type: application/json" --data-binary @"$RUNNER_TEMP/send-request.json" \
+              -o "$out/send.json" "$WORKER_URL/send"
+          else
+            curl --silent --show-error --fail-with-body --max-time 60 -H @"$auth" \
+              -o "$out/events.json" "$WORKER_URL/events"
+          fi
+          rm -f "$auth"
+
+      - name: Write the job summary
+        if: ${{ always() && steps.call.outcome != 'skipped' }}
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          # Event fields come from Cloudflare and from recipient mail servers. They are untrusted
+          # text. So each cell loses its line breaks, gets 200 characters at most, and escapes
+          # pipes and angle brackets. The table shows 200 rows at most.
+          out="$RUNNER_TEMP/spike-out"
+          cell='def cell: tostring | gsub("[\r\n]+"; " ") | .[0:200] | gsub("\\|"; "\\|") | gsub("<"; "&lt;") | gsub(">"; "&gt;");'
+          {
+            echo "## Email Service spike: $MODE (run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT)"
+            echo
+            if [[ "$MODE" == "send" && -f "$out/send.json" ]]; then
+              echo "| Kind | To | Requested Message-ID | Returned ID | Error |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r "$cell"' .results[] | [.kind, .to, .requestedMessageId, (.returnedMessageId // "-"), (.error // "-")]
+                | map(cell) | "| " + join(" | ") + " |"' "$out/send.json"
+              echo
+              echo "Check the threads in each seed mailbox, then run the workflow in collect mode."
+            elif [[ "$MODE" == "collect" && -f "$out/events.json" ]]; then
+              echo "$(jq '.count' "$out/events.json") events. The artifact has the full event bodies (untrusted content)."
+              echo
+              echo "| Queued at | Type | Message ID | Recipient | Terminal |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r "$cell"' .events[:200][] | (.body.payload // .body) as $p
+                | [.queuedAt, (.body.type // "-"), ($p.messageId // "-"), ($p.recipient // "-"), ($p.terminal | if . == null then "-" else . end)]
+                | map(cell) | "| " + join(" | ") + " |"' "$out/events.json"
+            else
+              echo "The Worker call failed before it returned a result. See the log of the step that calls the Worker."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the evidence
+        if: ${{ always() && steps.call.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spike-email-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/spike-out/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Delete the run token from the Worker
+        if: ${{ always() && steps.call.outcome != 'skipped' }}
+        working-directory: spikes/email-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          secrets=$(pnpm exec wrangler secret list --format json)
+          if jq -e 'any(.[]; .name == "SPIKE_TOKEN")' <<< "$secrets" > /dev/null; then
+            pnpm exec wrangler secret delete SPIKE_TOKEN
+          else
+            echo "The Worker has no SPIKE_TOKEN."
+          fi
+
+      # Run collect first: the Durable Object with the recorded events goes with the Worker.
+      # A resource that does not exist is skipped, so a second cleanup run passes. Any other
+      # error stops the step, so that a token problem does not look like "nothing to delete".
+      - name: Delete the Worker, the event subscriptions and the queue
+        if: ${{ inputs.mode == 'cleanup' }}
+        working-directory: spikes/email-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          deleted=()
+          # The Worker consumes the queue, so it goes first. Error 10007: the Worker does not exist.
+          if out=$(pnpm exec wrangler deployments list 2>&1); then
+            pnpm exec wrangler delete
+            deleted+=("the Worker soldock-spike-email")
+          elif [[ "$out" != *"[code: 10007]"* ]]; then
+            echo "$out"
+            exit 1
+          fi
+          if out=$(pnpm exec wrangler queues info "$QUEUE" 2>&1); then
+            subscriptions=$(pnpm exec wrangler queues subscription list "$QUEUE" --json)
+            ids=$(jq -r '.[]?.id' <<< "$subscriptions")
+            for id in $ids; do
+              pnpm exec wrangler queues subscription delete "$QUEUE" --id "$id" --force
+              deleted+=("the event subscription $id")
+            done
+            pnpm exec wrangler queues delete "$QUEUE"
+            deleted+=("the queue $QUEUE")
+          elif [[ "$out" != *"Queue \"$QUEUE\" does not exist"* ]]; then
+            echo "$out"
+            exit 1
+          fi
+          {
+            echo "## Email Service spike: cleanup (run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT)"
+            echo
+            if (( ${#deleted[@]} > 0 )); then
+              printf -- '- Deleted %s.\n' "${deleted[@]}"
+            else
+              echo "Nothing to delete. The Worker and the queue do not exist."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

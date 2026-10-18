@@ -1,0 +1,24 @@
+// Throwaway Worker for the S00.T13 Email Service spike (S00.T18). Never the dock Worker.
+// S00.T13's findings PR deletes this Worker, its queue and its event subscription.
+// After editing bindings, run `pnpm --filter @soldock/spike-email-service types` and commit worker-configuration.d.ts.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "soldock-spike-email",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	"workers_dev": true,
+	"observability": {
+		"enabled": true
+	},
+	// Email Service sending. The spike checks which headers survive, so the binding has no address limits.
+	"send_email": [{ "name": "EMAIL" }],
+	// The `email.sending` event subscription publishes lifecycle events to this queue.
+	"queues": {
+		"consumers": [{ "queue": "soldock-spike-email-events", "max_batch_size": 100, "max_batch_timeout": 5 }]
+	},
+	// Stores the events that the consumer receives, until a `collect` run drains them.
+	"durable_objects": {
+		"bindings": [{ "name": "EVENTS", "class_name": "EventLog" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventLog"] }]
+}
