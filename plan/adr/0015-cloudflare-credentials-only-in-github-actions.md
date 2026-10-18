@@ -39,7 +39,9 @@ that can deploy staging can therefore also change any other Worker or database i
    instead runs both in one account, they record that choice in S05.T25, and R-22's impact for a
    staging leak becomes a production incident.
 2. **Protected `main` first.** No environment holds a secret until `main` is protected: pull
-   requests required, force-push and deletion blocked, and the `verify` check required. This is a
+   requests required, force-push and deletion blocked, the `verify` check required, and code-owner
+   review required. Code review is the only check of the item 3 allowlist on a workflow change, so
+   the code-owner approval for `/.github/` must apply before the first secret exists. This is a
    slice of the S00.T17 lockdown, pulled forward as a precondition of S00.T09. The environment
    branch rule means nothing on an unprotected branch, because anyone with write access could push
    code straight to `main`.
@@ -96,7 +98,9 @@ that can deploy staging can therefore also change any other Worker or database i
     `sfw pnpm install --frozen-lockfile`, zizmor and least-privilege `permissions`.
   - Deploy jobs use a `concurrency` group and restore no caches.
   - The S00.T17 lockdown restricts Actions to an allowlist.
-  - The S00.T19 guard enforces the allowlist in item 3 in `pnpm verify`.
+  - Code review enforces the allowlist in item 3. CODEOWNERS requires the maintainer's review of
+    each change to `/.github/`, and the S00.T17 lockdown requires that review on `main`. No code
+    check enforces it: the maintainer dropped S00.T19.
 - A spike that needs live credentials lands its harness on `main` first, as its own task, under
   `spikes/<name>/`. A `workflow_dispatch` workflow must exist on the default branch before it can
   run, and only runs of `main` reach the secrets. The spike's findings PR then deletes the harness
