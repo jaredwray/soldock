@@ -64,8 +64,11 @@ jobs:
           missing=()
           [[ "$HAS_API_TOKEN" == "true" ]] || missing+=("secret CLOUDFLARE_API_TOKEN")
           [[ "$HAS_ACCOUNT_ID" == "true" ]] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
-          [[ -n "$DOMAIN" ]] || missing+=("variable SPIKE_EMAIL_DOMAIN")
-          [[ -n "$ZONE_ID" ]] || missing+=("variable SPIKE_EMAIL_ZONE_ID")
+          # The cleanup mode does not use the domain or the zone.
+          if [[ "$MODE" != "cleanup" ]]; then
+            [[ -n "$DOMAIN" ]] || missing+=("variable SPIKE_EMAIL_DOMAIN")
+            [[ -n "$ZONE_ID" ]] || missing+=("variable SPIKE_EMAIL_ZONE_ID")
+          fi
           if (( ${#missing[@]} > 0 )); then
             printf -v list '%s, ' "${missing[@]}"
             echo "::error::The staging environment does not have: ${list%, }. See spikes/email-service/README.md."
@@ -75,11 +78,11 @@ jobs:
           zone_re='^[0-9a-f]{32}$'
           sender_re='^[A-Za-z0-9._+-]{1,64}$'
           recipients_re='^[A-Za-z0-9._%+@, -]+$'
-          if [[ ! "$DOMAIN" =~ $domain_re ]]; then
+          if [[ "$MODE" != "cleanup" && ! "$DOMAIN" =~ $domain_re ]]; then
             echo "::error::The variable SPIKE_EMAIL_DOMAIN is not a domain name."
             exit 1
           fi
-          if [[ ! "$ZONE_ID" =~ $zone_re ]]; then
+          if [[ "$MODE" != "cleanup" && ! "$ZONE_ID" =~ $zone_re ]]; then
             echo "::error::The variable SPIKE_EMAIL_ZONE_ID is not a zone ID (32 hex characters)."
             exit 1
           fi
@@ -127,20 +130,28 @@ jobs:
             pnpm exec wrangler queues create "$QUEUE"
           fi
           subscriptions=$(pnpm exec wrangler queues subscription list "$QUEUE" --json)
-          if jq -e --arg domain "$DOMAIN" \
-            'any(.[]?; .source.type == "email.sending" and .source.domain == $domain)' \
-            <<< "$subscriptions" > /dev/null; then
-            echo "The email.sending subscription for $DOMAIN exists."
-          else
-            pnpm exec wrangler queues subscription create "$QUEUE" \
-              --name soldock-spike-email \
-              --source email.sending \
-              --events message.delivered,message.deferred,message.bounced,message.failed,message.rejected,message.complained \
-              --zone-id "$ZONE_ID" \
-              --domain "$DOMAIN"
-          fi
+          # jq -e exits 1 for false. Any other code means unreadable output, so the step fails.
+          rc=0
+          jq -e --arg domain "$DOMAIN" \
+            '(. // []) | any(.[]; .source.type == "email.sending" and .source.domain == $domain)' \
+            <<< "$subscriptions" > /dev/null || rc=$?
+          case "$rc" in
+            0) echo "The email.sending subscription for $DOMAIN exists." ;;
+            1)
+              pnpm exec wrangler queues subscription create "$QUEUE" \
+                --name soldock-spike-email \
+                --source email.sending \
+                --events message.delivered,message.deferred,message.bounced,message.failed,message.rejected,message.complained \
+                --zone-id "$ZONE_ID" \
+                --domain "$DOMAIN"
+              ;;
+            *)
+              echo "::error::The subscription list is not a JSON array."
+              exit 1
+              ;;
+          esac
 
-      # Both modes deploy main, so that the step gets the workers.dev URL. Deploy is idempotent.
+      # The send and collect modes deploy main, so that the step gets the workers.dev URL. Deploy is idempotent.
       - name: Deploy the spike Worker
         id: deploy
         if: ${{ inputs.mode != 'cleanup' }}
@@ -160,7 +171,7 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       # The Worker refuses every request until it has SPIKE_TOKEN. The token is new for each run,
-      # is masked, and the last step deletes it.
+      # is masked, and a later step deletes it.
       - name: Call the spike Worker
         id: call
         if: ${{ inputs.mode != 'cleanup' }}
@@ -189,8 +200,9 @@ jobs:
             jq -n --arg runId "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --arg from "$SENDER@$DOMAIN" --arg to "$RECIPIENTS" \
               '{runId: $runId, from: $from, to: ($to | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)))}' \
               > "$RUNNER_TEMP/send-request.json"
-            # No retry: a second POST sends the messages again.
-            curl --silent --show-error --fail-with-body --max-time 120 -H @"$auth" \
+            # No retry: a second POST sends the messages again. The Worker also stores the results,
+            # so a collect run gets them if this call times out.
+            curl --silent --show-error --fail-with-body --max-time 300 -H @"$auth" \
               -H "content-type: application/json" --data-binary @"$RUNNER_TEMP/send-request.json" \
               -o "$out/send.json" "$WORKER_URL/send"
           else
@@ -209,26 +221,33 @@ jobs:
           # pipes and angle brackets. The table shows 200 rows at most.
           out="$RUNNER_TEMP/spike-out"
           cell='def cell: tostring | gsub("[\r\n]+"; " ") | .[0:200] | gsub("\\|"; "\\|") | gsub("<"; "&lt;") | gsub(">"; "&gt;");'
+          file="$out/events.json"
+          [[ "$MODE" == "send" ]] && file="$out/send.json"
           {
             echo "## Email Service spike: $MODE (run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT)"
             echo
-            if [[ "$MODE" == "send" && -f "$out/send.json" ]]; then
+            if [[ ! -f "$file" ]]; then
+              echo "The Worker call failed before it returned a result. See the log of the step that calls the Worker."
+            elif ! jq -e 'type == "object"' "$file" > /dev/null 2>&1; then
+              echo "The Worker response is not a JSON object. The artifact has the response."
+            elif jq -e 'has("error")' "$file" > /dev/null; then
+              echo "The Worker returned an error: $(jq -r "$cell"' .error | cell' "$file")"
+            elif [[ "$MODE" == "send" ]]; then
               echo "| Kind | To | Requested Message-ID | Returned ID | Error |"
               echo "| --- | --- | --- | --- | --- |"
-              jq -r "$cell"' .results[] | [.kind, .to, .requestedMessageId, (.returnedMessageId // "-"), (.error // "-")]
-                | map(cell) | "| " + join(" | ") + " |"' "$out/send.json"
+              jq -r "$cell"' (.results // [])[] | [.kind, .to, .requestedMessageId, (.returnedMessageId // "-"), (.error // "-")]
+                | map(cell) | "| " + join(" | ") + " |"' "$file"
               echo
               echo "Check the threads in each seed mailbox, then run the workflow in collect mode."
-            elif [[ "$MODE" == "collect" && -f "$out/events.json" ]]; then
-              echo "$(jq '.count' "$out/events.json") events. The artifact has the full event bodies (untrusted content)."
+            else
+              echo "Recorded events: $(jq '.count // 0' "$file"). Stored send results: $(jq '.sends // [] | length' "$file")."
+              echo "The artifact has the full event bodies (untrusted content) and the send results."
               echo
               echo "| Queued at | Type | Message ID | Recipient | Terminal |"
               echo "| --- | --- | --- | --- | --- |"
-              jq -r "$cell"' .events[:200][] | (.body.payload // .body) as $p
+              jq -r "$cell"' (.events // [])[:200][] | (.body.payload // .body) as $p
                 | [.queuedAt, (.body.type // "-"), ($p.messageId // "-"), ($p.recipient // "-"), ($p.terminal | if . == null then "-" else . end)]
-                | map(cell) | "| " + join(" | ") + " |"' "$out/events.json"
-            else
-              echo "The Worker call failed before it returned a result. See the log of the step that calls the Worker."
+                | map(cell) | "| " + join(" | ") + " |"' "$file"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -249,11 +268,17 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           secrets=$(pnpm exec wrangler secret list --format json)
-          if jq -e 'any(.[]; .name == "SPIKE_TOKEN")' <<< "$secrets" > /dev/null; then
-            pnpm exec wrangler secret delete SPIKE_TOKEN
-          else
-            echo "The Worker has no SPIKE_TOKEN."
-          fi
+          # jq -e exits 1 for false. Any other code means unreadable output, so the step fails.
+          rc=0
+          jq -e '(. // []) | any(.[]; .name == "SPIKE_TOKEN")' <<< "$secrets" > /dev/null || rc=$?
+          case "$rc" in
+            0) pnpm exec wrangler secret delete SPIKE_TOKEN ;;
+            1) echo "The Worker has no SPIKE_TOKEN." ;;
+            *)
+              echo "::error::The secret list is not a JSON array. Make sure that SPIKE_TOKEN is deleted."
+              exit 1
+              ;;
+          esac
 
       # Run collect first: the Durable Object with the recorded events goes with the Worker.
       # A resource that does not exist is skipped, so a second cleanup run passes. Any other
@@ -268,7 +293,8 @@ jobs:
           deleted=()
           # The Worker consumes the queue, so it goes first. Error 10007: the Worker does not exist.
           if out=$(pnpm exec wrangler deployments list 2>&1); then
-            pnpm exec wrangler delete
+            # --force: the API can refuse to delete a queue consumer without it. No other Worker uses this one.
+            pnpm exec wrangler delete --force
             deleted+=("the Worker soldock-spike-email")
           elif [[ "$out" != *"[code: 10007]"* ]]; then
             echo "$out"

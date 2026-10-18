@@ -4,8 +4,8 @@
 //
 // Routes (each needs `Authorization: Bearer <SPIKE_TOKEN>`):
 // - GET /ready: 200 when the token is live. The workflow polls it after `wrangler secret put`.
-// - POST /send: {runId, from, to[]}. Sends four messages to each recipient and returns the results.
-// - GET /events: every lifecycle event that the queue consumer recorded.
+// - POST /send: {runId, from, to[]}. Sends four messages to each recipient. Stores and returns the results.
+// - GET /events: every lifecycle event that the queue consumer recorded, and every stored send result.
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
 import { buildRawMime, messageId, parseSendRequest, type SendRequest } from "./mime.ts";
@@ -23,6 +23,12 @@ interface SendResult {
 	requestedMessageId: string;
 	returnedMessageId?: string;
 	error?: string;
+}
+
+/** A send result as the Durable Object stores it, with the run that made it. */
+interface StoredSend extends SendResult {
+	runId: string;
+	sentAt: string;
 }
 
 /** A lifecycle event as the queue delivered it. `body` is the event JSON, kept as text across RPC. */
@@ -48,12 +54,15 @@ export default {
 			} catch (error) {
 				return json({ error: (error as Error).message }, 400);
 			}
-			return json({ runId: send.runId, results: await runSends(env, send) });
+			const results = await runSends(env, send);
+			// If the workflow's call times out, a collect run still gets the results.
+			await env.EVENTS.getByName("log").recordSends(send.runId, results);
+			return json({ runId: send.runId, results });
 		}
 		if (request.method === "GET" && url.pathname === "/events") {
-			const recorded = await env.EVENTS.getByName("log").list();
-			const events = recorded.map((event) => ({ ...event, body: JSON.parse(event.body) as unknown }));
-			return json({ count: events.length, events });
+			const log = env.EVENTS.getByName("log");
+			const events = (await log.list()).map((event) => ({ ...event, body: JSON.parse(event.body) as unknown }));
+			return json({ count: events.length, events, sends: await log.listSends() });
 		}
 		return json({ error: "not found" }, 404);
 	},
@@ -72,75 +81,87 @@ export default {
 	},
 } satisfies ExportedHandler<SpikeEnv>;
 
-/** For each recipient: a structured message and a reply to it, then a raw MIME message and a reply to it. */
+/**
+ * For each recipient: a structured message and a reply to it, then a raw MIME message and a reply to
+ * it. The recipients run in parallel. The four sends to one recipient run in series, so that each
+ * reply follows its original.
+ */
 async function runSends(env: SpikeEnv, { runId, from, to }: SendRequest): Promise<SendResult[]> {
-	const results: SendResult[] = [];
-	const tag = { "X-Soldock-Spike": runId };
-	for (const [index, recipient] of to.entries()) {
-		const structuredId = messageId(runId, "structured", index, from);
-		const structuredReplyId = messageId(runId, "structured-reply", index, from);
-		const rawId = messageId(runId, "raw", index, from);
-		const rawReplyId = messageId(runId, "raw-reply", index, from);
-		const subject = `Soldock spike ${runId}`;
+	const perRecipient = await Promise.all(to.map((recipient, index) => sendToOne(env, runId, from, recipient, index)));
+	return perRecipient.flat();
+}
 
-		results.push(
-			await attempt("structured", recipient, structuredId, () =>
-				env.EMAIL.send({
+async function sendToOne(
+	env: SpikeEnv,
+	runId: string,
+	from: string,
+	recipient: string,
+	index: number,
+): Promise<SendResult[]> {
+	const tag = { "X-Soldock-Spike": runId };
+	const structuredId = messageId(runId, "structured", index, from);
+	const structuredReplyId = messageId(runId, "structured-reply", index, from);
+	const rawId = messageId(runId, "raw", index, from);
+	const rawReplyId = messageId(runId, "raw-reply", index, from);
+	const subject = `Soldock spike ${runId}`;
+
+	// The elements of an array literal are evaluated in order, so each send waits for the one before.
+	return [
+		await attempt("structured", recipient, structuredId, () =>
+			env.EMAIL.send({
+				from,
+				to: recipient,
+				subject: `${subject} (structured)`,
+				text: `Structured message for run ${runId}.`,
+				headers: { ...tag, "Message-ID": structuredId },
+			}),
+		),
+		await attempt("structured-reply", recipient, structuredReplyId, () =>
+			env.EMAIL.send({
+				from,
+				to: recipient,
+				subject: `Re: ${subject} (structured)`,
+				text: `Structured reply for run ${runId}. It should thread under the structured message.`,
+				headers: { ...tag, "Message-ID": structuredReplyId, "In-Reply-To": structuredId, References: structuredId },
+			}),
+		),
+		await attempt("raw", recipient, rawId, () =>
+			env.EMAIL.send(
+				new EmailMessage(
 					from,
-					to: recipient,
-					subject: `${subject} (structured)`,
-					text: `Structured message for run ${runId}.`,
-					headers: { ...tag, "Message-ID": structuredId },
-				}),
-			),
-			await attempt("structured-reply", recipient, structuredReplyId, () =>
-				env.EMAIL.send({
-					from,
-					to: recipient,
-					subject: `Re: ${subject} (structured)`,
-					text: `Structured reply for run ${runId}. It should thread under the structured message.`,
-					headers: { ...tag, "Message-ID": structuredReplyId, "In-Reply-To": structuredId, References: structuredId },
-				}),
-			),
-			await attempt("raw", recipient, rawId, () =>
-				env.EMAIL.send(
-					new EmailMessage(
+					recipient,
+					buildRawMime({
 						from,
-						recipient,
-						buildRawMime({
-							from,
-							to: recipient,
-							subject: `${subject} (raw MIME)`,
-							messageId: rawId,
-							headers: tag,
-							text: `Raw MIME message for run ${runId}.`,
-							date: new Date(),
-						}),
-					),
+						to: recipient,
+						subject: `${subject} (raw MIME)`,
+						messageId: rawId,
+						headers: tag,
+						text: `Raw MIME message for run ${runId}.`,
+						date: new Date(),
+					}),
 				),
 			),
-			await attempt("raw-reply", recipient, rawReplyId, () =>
-				env.EMAIL.send(
-					new EmailMessage(
+		),
+		await attempt("raw-reply", recipient, rawReplyId, () =>
+			env.EMAIL.send(
+				new EmailMessage(
+					from,
+					recipient,
+					buildRawMime({
 						from,
-						recipient,
-						buildRawMime({
-							from,
-							to: recipient,
-							subject: `Re: ${subject} (raw MIME)`,
-							messageId: rawReplyId,
-							inReplyTo: rawId,
-							references: [rawId],
-							headers: tag,
-							text: `Raw MIME reply for run ${runId}. It should thread under the raw MIME message.`,
-							date: new Date(),
-						}),
-					),
+						to: recipient,
+						subject: `Re: ${subject} (raw MIME)`,
+						messageId: rawReplyId,
+						inReplyTo: rawId,
+						references: [rawId],
+						headers: tag,
+						text: `Raw MIME reply for run ${runId}. It should thread under the raw MIME message.`,
+						date: new Date(),
+					}),
 				),
 			),
-		);
-	}
-	return results;
+		),
+	];
 }
 
 /** Runs one send and records its outcome. A refused send is a spike result, not a Worker error. */
@@ -159,8 +180,9 @@ async function attempt(
 }
 
 /**
- * Keeps each lifecycle event that the queue consumer receives. A `collect` run reads them all and
- * deletes none, so a failed artifact upload loses no evidence. S00.T13 deletes the Worker and its data.
+ * Keeps each lifecycle event that the queue consumer receives, and the results of each send. A
+ * `collect` run reads them all and deletes none, so a failed artifact upload loses no evidence. The
+ * `cleanup` run deletes the Worker and its data.
  */
 export class EventLog extends DurableObject<SpikeEnv> {
 	constructor(ctx: DurableObjectState, env: SpikeEnv) {
@@ -168,6 +190,35 @@ export class EventLog extends DurableObject<SpikeEnv> {
 		ctx.storage.sql.exec(
 			"CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, queued_at TEXT NOT NULL, received_at TEXT NOT NULL, body TEXT NOT NULL)",
 		);
+		ctx.storage.sql.exec(
+			"CREATE TABLE IF NOT EXISTS sends (run_id TEXT NOT NULL, seq INTEGER NOT NULL, sent_at TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY (run_id, seq))",
+		);
+	}
+
+	/** Keeps the results of one `POST /send`. A second call with the same run id replaces them. */
+	recordSends(runId: string, results: SendResult[]): void {
+		const sentAt = new Date().toISOString();
+		this.ctx.storage.transactionSync(() => {
+			this.ctx.storage.sql.exec("DELETE FROM sends WHERE run_id = ?", runId);
+			for (const [seq, result] of results.entries()) {
+				this.ctx.storage.sql.exec(
+					"INSERT INTO sends (run_id, seq, sent_at, result) VALUES (?, ?, ?, ?)",
+					runId,
+					seq,
+					sentAt,
+					JSON.stringify(result),
+				);
+			}
+		});
+	}
+
+	listSends(): StoredSend[] {
+		return this.ctx.storage.sql
+			.exec<{ run_id: string; sent_at: string; result: string }>(
+				"SELECT run_id, sent_at, result FROM sends ORDER BY sent_at, run_id, seq",
+			)
+			.toArray()
+			.map((row) => ({ runId: row.run_id, sentAt: row.sent_at, ...(JSON.parse(row.result) as SendResult) }));
 	}
 
 	record(events: RecordedEvent[]): void {

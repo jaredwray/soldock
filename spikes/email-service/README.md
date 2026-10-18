@@ -18,14 +18,15 @@ The Worker `soldock-spike-email` is never the `dock` Worker. It has these parts:
 
 | Part | What |
 | --- | --- |
-| `POST /send` | For each recipient, it sends four messages: a structured message, a structured reply, a raw MIME message and a raw MIME reply. Each message has a custom `Message-ID` and an `X-Soldock-Spike` header. Each reply has `In-Reply-To` and `References`. The response gives the requested and the returned message IDs, or the error |
+| `POST /send` | For each recipient, it sends four messages: a structured message, a structured reply, a raw MIME message and a raw MIME reply. Each message has a custom `Message-ID` and an `X-Soldock-Spike` header. Each reply has `In-Reply-To` and `References`. The recipients run in parallel. The response gives the requested and the returned message IDs, or the error. The Worker also stores these results |
 | Queue consumer | It consumes `soldock-spike-email-events`, which gets the Email Service lifecycle events (`message.delivered`, `deferred`, `bounced`, `failed`, `rejected`, `complained`). It records each event once |
-| `GET /events` | It returns every recorded event. It deletes none, so a failed artifact upload loses no evidence |
+| `GET /events` | It returns every recorded event and every stored send result. It deletes none, so a failed artifact upload loses no evidence |
 | `GET /ready` | It tells the workflow that the run token is live |
 
 Each route needs `Authorization: Bearer <SPIKE_TOKEN>`. The workflow makes a new random token for
-each run, masks it, and deletes it from the Worker at the end of the run. Without the token, the
-Worker refuses each request with `503`. The `send_email` binding has no address limits, so this
+each run, masks it, and deletes it from the Worker at the end of the run. While the Worker has no
+`SPIKE_TOKEN` secret, it refuses each request with `503`. A request without the correct token gets
+`401`. The `send_email` binding has no address limits, so this
 token is the only control on the public `workers.dev` URL.
 
 ## Maintainer setup
@@ -57,7 +58,8 @@ Open **Actions › spike-email-service › Run workflow**, select `main`, and se
    separated by commas). The run deploys the Worker, and makes sure that the queue and the event
    subscription exist. Then it sends the messages. Check the threads in each seed mailbox.
 2. `collect`: run it some minutes after a `send`, and again later for deferrals and bounces. It
-   reads every recorded event.
+   reads every recorded event and every stored send result. If the `send` call timed out, use
+   `collect` to get the send results. Do not run `send` again, because it sends the messages again.
 3. `cleanup`: run it after the last `collect`. It deletes the Worker (with its recorded events),
    the event subscription and the queue. A second `cleanup` run passes and deletes nothing.
 
@@ -82,7 +84,8 @@ pnpm --filter @soldock/spike-email-service types        # regenerate worker-conf
 
 | State | Where | Lifetime |
 | --- | --- | --- |
-| Lifecycle events (one row for each queue message ID) | `EventLog` Durable Object (SQLite) | Until the `cleanup` run deletes the Worker |
+| Lifecycle events (one row for each queue message ID) | `EventLog` Durable Object (SQLite), table `events` | Until the `cleanup` run deletes the Worker |
+| Send results (one row for each message of a run) | `EventLog` Durable Object (SQLite), table `sends` | Until the `cleanup` run deletes the Worker |
 | The queue `soldock-spike-email-events` and its `email.sending` subscription | The staging Cloudflare account | Until the `cleanup` run |
 
 This state is throwaway test evidence. It has no backup. The artifacts of the runs keep the evidence.

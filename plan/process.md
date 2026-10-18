@@ -221,7 +221,9 @@ time-boxed (size S or M). It must deliver:
   Cloudflare credentials can't run from a branch
   ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Its harness (a
   `workflow_dispatch` workflow plus the throwaway code under `spikes/<name>/`) lands on `main` as
-  its own reviewed task first, and the spike's findings PR deletes it.
+  its own reviewed task first, and the spike's findings PR deletes it. If the harness creates cloud
+  resources, it also has a credentialed cleanup run, and that run deletes them before the findings
+  PR merges.
 - **updated tasks**: the spike edits the downstream tasks it affects (scope, sizes, new tasks) in
   the same PR
 

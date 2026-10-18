@@ -42,7 +42,7 @@ describe("the run token gate", () => {
 });
 
 describe("POST /send", () => {
-	it("refuses a bad request body with 400 and sends nothing", async () => {
+	it("refuses a bad request body with 400", async () => {
 		const res = await call("/send", {
 			method: "POST",
 			headers: AUTH,
@@ -52,7 +52,7 @@ describe("POST /send", () => {
 		expect(await res.json()).toEqual({ error: expect.stringMatching(/to must list/) });
 	});
 
-	it("sends a structured message, a raw MIME message and a reply to each, for each recipient", async () => {
+	it("sends a structured message, a raw MIME message and a reply to each, for each recipient, and stores the results", async () => {
 		const res = await call("/send", {
 			method: "POST",
 			headers: AUTH,
@@ -71,6 +71,13 @@ describe("POST /send", () => {
 			"raw-reply b@example.org",
 		]);
 		expect(results.filter((r) => r.error)).toEqual([]);
+
+		// A collect run gets the same results, also when the workflow's call to /send timed out.
+		const stored = await call("/events", { headers: AUTH });
+		const { sends } = (await stored.json()) as { sends: { runId: string; kind: string; to: string }[] };
+		expect(sends.filter((r) => r.runId === "7-1").map((r) => `${r.kind} ${r.to}`)).toEqual(
+			results.map((r) => `${r.kind} ${r.to}`),
+		);
 	});
 });
 
