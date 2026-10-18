@@ -252,8 +252,8 @@ GitHub access allows, or ask the maintainer to. Then read its job summary, logs 
 link the runs as evidence. Never ask for a token in a session.
 
 A workflow that uses an environment may trigger only on `push` to `main`, `workflow_dispatch` or
-`schedule`, directly or through a workflow that calls it. Code review enforces this: CODEOWNERS
-requires the maintainer's review of each change to `/.github/`.
+`schedule`, directly or through a workflow that calls it. The maintainer reads each workflow
+change against ADR-0015 item 3 before the merge. The CODEOWNERS rule binds other contributors.
 
 ## 9. Changing the plan
 
