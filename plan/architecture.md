@@ -563,7 +563,6 @@ soldock/
 │   ├── plan/                   # `pnpm plan`: next / show / check / status
 │   ├── licenses/               # dependency license policy check (ADR-0011, exceptions in ADR-0014)
 │   ├── budgets/                # Worker bundle-size and startup-time budgets
-│   ├── workflows/              # workflow trigger guard for credentialed workflows (S00.T19, ADR-0015)
 │   ├── cli/                    # `soldock` operator CLI: provision, init, backup, restore, import (S00.T20)
 │   └── load/                   # load and soak scenarios run on Cloudflare (S13)
 ├── fixtures/                   # MIME / DOCX / XLSX / PPTX corpora with license notes

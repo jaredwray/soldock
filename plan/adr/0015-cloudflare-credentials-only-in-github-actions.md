@@ -96,7 +96,9 @@ that can deploy staging can therefore also change any other Worker or database i
     `sfw pnpm install --frozen-lockfile`, zizmor and least-privilege `permissions`.
   - Deploy jobs use a `concurrency` group and restore no caches.
   - The S00.T17 lockdown restricts Actions to an allowlist.
-  - The S00.T19 guard enforces the allowlist in item 3 in `pnpm verify`.
+  - Code review enforces the allowlist in item 3. CODEOWNERS requires the maintainer's review of
+    each change to `/.github/`, and the S00.T17 lockdown requires that review on `main`. No code
+    check enforces it: the maintainer dropped S00.T19.
 - A spike that needs live credentials lands its harness on `main` first, as its own task, under
   `spikes/<name>/`. A `workflow_dispatch` workflow must exist on the default branch before it can
   run, and only runs of `main` reach the secrets. The spike's findings PR then deletes the harness

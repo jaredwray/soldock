@@ -124,7 +124,7 @@ and a Cloudflare contact for the acceptable-use question. If any of these is mis
 - status: todo
 - kind: chore
 - size: S
-- depends: S00.T19
+- depends: S00.T16
 
 S00.T13 needs live credentials, which reach only workflows that run `main`, and a
 `workflow_dispatch` workflow must exist on the default branch before it can be run. So the harness
@@ -148,11 +148,12 @@ lands first, as reviewed code ([ADR-0015](../adr/0015-cloudflare-credentials-onl
 
 **Acceptance**
 - [ ] PR CI builds the harness with `wrangler deploy --dry-run`, with no credentials, and the
-  workflow passes S00.T19's guard, plus zizmor once S00.T16 has landed.
+  workflow passes zizmor.
 - [ ] After merge, a dispatch on `main` without the `staging` secrets fails fast and names what is missing (run link recorded).
 
 ### S00.T19 · Workflow trigger guard
-- status: todo
+- status: dropped
+- reason: the maintainer decided that no code check is necessary for the ADR-0015 trigger allowlist. Code review enforces it: CODEOWNERS on `/.github/`, the protected `main`, the environment branch rule and zizmor (PR #18 closed)
 - kind: test
 - size: S
 - depends: S00.T03
@@ -423,10 +424,10 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 
 ### S00.T09 · Environments and staging deploy
 - status: blocked
-- reason: needs the maintainer setup below (protected `main`, a separate staging Cloudflare account, the `staging` environment and its secrets), plus S00.T19 and S00.T20
+- reason: needs the maintainer setup below (protected `main`, a separate staging Cloudflare account, the `staging` environment and its secrets), plus S00.T20
 - kind: ops
 - size: M
-- depends: S00.T04, S00.T19, S00.T20
+- depends: S00.T04, S00.T20
 
 Everything here runs in GitHub Actions, in the `staging` environment, the only place the
 Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
@@ -444,7 +445,7 @@ Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only
   - It installs with `sfw pnpm install --frozen-lockfile` and restores no caches.
   - It follows the S00.T16 workflow conventions: SHA-pinned actions, least-privilege `permissions`,
     and kebab-case workflow and job names.
-  - S00.T19's guard checks it.
+  - Its triggers obey the ADR-0015 allowlist: `push` to `main` and `workflow_dispatch` only.
 - **Post-deploy smoke:** after deploying, the same workflow runs an HTTP smoke check against the
   staging host. These requests go through the real assets router, which the workerd tests can't
   reach. S00.T11 replaces this check with the Playwright suite. The check:
@@ -475,7 +476,7 @@ Set the task to `blocked` with a reason while any of these is missing. Agents ne
 token: they read the workflow's runs.
 
 **Acceptance**
-- [ ] The workflows pass S00.T19's guard and zizmor in PR CI.
+- [ ] The workflows pass zizmor in PR CI, and their triggers obey the ADR-0015 allowlist.
 - [ ] After merge, the dispatched `provision` run on `main` prints the staging bindings (run link recorded).
 - [ ] After merge, the first deploy of `main` passes its post-deploy smoke check against the staging host (run link recorded).
 

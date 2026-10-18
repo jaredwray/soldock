@@ -428,7 +428,8 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
     staging and production in one account, they record that here and in R-22.
 
   Deploys are a manual dispatch from `main` until S14.T04 switches to tag deploys. The workflow
-  follows the S00.T16 conventions and S00.T19's guard, and runs the e2e smoke suite after deploying.
+  follows the S00.T16 conventions and the ADR-0015 trigger allowlist, and runs the e2e smoke suite
+  after deploying.
 - **Rollback:** documented and scripted with `wrangler rollback` and versions.
 - **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
   roll back the MX within its TTL.

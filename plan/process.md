@@ -252,7 +252,8 @@ GitHub access allows, or ask the maintainer to. Then read its job summary, logs 
 link the runs as evidence. Never ask for a token in a session.
 
 A workflow that uses an environment may trigger only on `push` to `main`, `workflow_dispatch` or
-`schedule`, directly or through a workflow that calls it. S00.T19's guard enforces this.
+`schedule`, directly or through a workflow that calls it. Code review enforces this: CODEOWNERS
+requires the maintainer's review of each change to `/.github/`.
 
 ## 9. Changing the plan
 
