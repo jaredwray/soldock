@@ -2,7 +2,8 @@ name: deploy-development
 
 # Continuous deployment (S00.T09): each push to main deploys the dock Worker to the development
 # environment (`soldock-dock-dev`, wrangler `--env development`), then runs the smoke check against
-# its workers.dev host. Production deploys come with S05.T25. There are no other environments.
+# its workers.dev host. Production deploys come with S05.T25. The dock Worker has no other
+# deployment environment.
 #
 # This workflow uses the development Cloudflare token, so it follows ADR-0015 item 3:
 # - push to main and workflow_dispatch are the only triggers.

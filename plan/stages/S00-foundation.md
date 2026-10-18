@@ -111,7 +111,8 @@ and artifacts are the test evidence. The findings PR deletes the harness and its
 
 Needs the maintainer to supply: Cloudflare credentials in the `development` GitHub environment, the
 `soldock.org` apex zone on the development Cloudflare account (with Email Service enabled), seed Gmail and Outlook accounts,
-and a Cloudflare contact for the acceptable-use question. If any of these is missing, set the task to `blocked` with a `reason:` naming it.
+and a Cloudflare contact for the acceptable-use question. Before the first `send` run, the maintainer
+publishes DMARC `p=quarantine` or stricter for `soldock.org` ([R-23](../risks.md)). If any of these is missing, set the task to `blocked` with a `reason:` naming it.
 
 **Acceptance**
 - [ ] The findings note is committed with the test evidence (links to the dispatched runs) and Cloudflare's written answer (or the open request, with a date).
@@ -210,6 +211,9 @@ Create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
   summary. Wrangler can't write auto-provisioned IDs back from CI, so an agent commits the bindings
   to `wrangler.jsonc` in a PR. The workflow follows the same conventions as S00.T09's deploy, and
   it needs the `development` environment that S00.T09 sets up. The CLI does not.
+- The PR adds each binding to `env.development` with the provisioned IDs, and to the top level with
+  the same names and placeholder IDs (for example `TODO-S05.T25`). The config test needs both. The
+  dry run, `wrangler dev` and the Vitest plugin do not check IDs. S05.T25 replaces the placeholders.
 
 **Acceptance**
 - [ ] Running `soldock provision` twice is a no-op the second time (tested against a mocked API).
@@ -475,7 +479,8 @@ the development Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-
 - **Development mail domain:** `soldock.org`, an **apex** zone in the development account. Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
   rules ([R-20](../risks.md)). The S00.T13 spike also sends from it. It is also the public domain of
-  the project, so the development token can change the DNS of the project ([R-23](../risks.md)).
+  the project, so the development account controls the DNS of the project. From S04.T02, the
+  development token can edit it ([R-23](../risks.md)).
 - **Docs:** `docs/self-hosting.md` (first draft) lists:
   - the account prerequisites: the Workers Paid plan and a zone on Cloudflare
   - the token permissions for each workflow
@@ -496,6 +501,8 @@ Needs the maintainer to set up, in this order:
    This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
    unprotected branch.
 2. Create a **separate** Cloudflare account for development, with the `soldock.org` zone in it.
+   Turn on DNSSEC for the zone, and the notifications for DNS and Worker route changes in the
+   account ([R-23](../risks.md)).
 3. Create the `development` GitHub environment, with deployment branches set to `main` only. Do
    this before this task's PR merges. The merge pushes to `main`, which runs the deploy, and a run
    that names a missing environment creates it with no rules. If a `staging` environment exists

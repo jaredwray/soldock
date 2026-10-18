@@ -40,7 +40,7 @@
 		// does not inherit bindings or vars: when production gets a binding, add the development one here.
 		"development": {
 			"name": "soldock-dock-dev",
-			// The development host is the workers.dev URL until a task gives it a custom domain.
+			// The development host is the workers.dev URL. No custom domain is planned (architecture §16).
 			"workers_dev": true
 		}
 	}

@@ -87,9 +87,10 @@ An interactive CLI that:
   gradual deployments and version rollback.
 
 **Acceptance**
-- [ ] A dispatched rehearsal in the `development` environment deploys the previous release-candidate
-  tag, adds production-like data, and then deploys v1.0. It needs no manual step, and it sets the
-  deploy freeze while it runs ([R-24](../risks.md)). The same run rehearses a rollback.
+- [ ] A dispatched rehearsal in the `development` environment deploys the Worker version of the
+  previous release candidate again (`wrangler versions deploy`, with no checkout of the tag), adds
+  production-like data, and then deploys the v1.0 version the same way. It needs no manual step,
+  and it sets the deploy freeze while it runs ([R-24](../risks.md)). The same run rehearses a rollback.
 
 ### S14.T04 · Release automation
 - status: todo

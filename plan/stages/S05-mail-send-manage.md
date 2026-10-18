@@ -433,10 +433,12 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
 - **Rollback:** documented and scripted with `wrangler rollback` and versions.
 - **Production config:** the top level of `apps/dock/wrangler.jsonc` keeps `workers_dev: false` and
   sets `preview_urls: false`. Its only route is `dock.jaredwray.com`, and `env.development` overrides
-  `routes` (the config test enforces it).
+  `routes` (the config test enforces it). Replace the placeholder IDs at the top level (S00.T20)
+  with the IDs of the production resources.
 - **Deploy freeze:** `deploy-development.yaml` deploys nothing while the `development` environment
   variable `DEPLOY_FREEZE` is set, and writes a notice to the job summary. Long runs on development
-  set it ([R-24](../risks.md)).
+  set it ([R-24](../risks.md)). A deploy that the freeze skips does not run again. After the freeze
+  ends, dispatch `deploy-development` on `main`.
 - **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
   roll back the MX within its TTL.
 

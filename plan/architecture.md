@@ -622,7 +622,8 @@ soldock/
   It is idempotent and prints the `wrangler.jsonc` bindings. A "Deploy to Cloudflare" button arrives in S14.
 - **Both environments, one config:** every binding and var is declared twice in
   `apps/dock/wrangler.jsonc`, at the top level (production) and in `env.development`, because a
-  named env does not inherit them. `apps/dock/test/config.test.ts` enforces it.
+  named env does not inherit them. `apps/dock/test/config.test.ts` enforces it. Until S05.T25,
+  the top level has the same binding names with placeholder IDs.
 - **Configuration** comes from three places: `wrangler.jsonc` vars (hostnames, mail domains, jurisdiction), secrets
   (keys) and D1 `settings` (runtime-adjustable policies and feature flags, edited through
   `admin.settings.*` in the admin console, S01.T15).

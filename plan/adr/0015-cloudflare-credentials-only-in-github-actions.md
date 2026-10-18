@@ -141,8 +141,8 @@ that can deploy development can therefore also change any other Worker or databa
   `docs/self-hosting.md` (S00.T09) lists the token permissions. S00.T13 and S05.T25 stay
   `blocked` until these exist. Until then, each S00.T09 deploy run fails at its first step and
   names what is missing.
-- The development account holds `soldock.org`, the public domain of the project. A leaked
-  development token can change its DNS, its mail and the docs site ([R-23](../risks.md)). Each merge
+- The development account holds `soldock.org`, the public domain of the project, with its DNS, its
+  mail and the docs site. From S04.T02, a leaked development token can edit that DNS ([R-23](../risks.md)). Each merge
   redeploys development, so a long run on it needs a deploy freeze ([R-24](../risks.md)).
 - New risk [R-22](../risks.md): CI is now the only place a token exists, so a compromised action, a
   malicious dependency in a deploy job, or a workflow change is the main exfiltration path.

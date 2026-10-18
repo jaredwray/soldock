@@ -23,7 +23,8 @@ domains.
 - The Workers Paid plan on each account.
 - The mail domain of each environment as an apex zone in that account:
   - development: `soldock.org`. It is also the public domain of the project, so the development
-    token can change its DNS ([R-23](../plan/risks.md)).
+    account controls its DNS. From S04.T02, the development token can edit it
+    ([R-23](../plan/risks.md)).
   - production: `jaredwray.com` (S05.T22)
 - A `workers.dev` subdomain on the development account. Set it on the **Workers & Pages** page of
   the dashboard.
@@ -56,7 +57,8 @@ administrator bypass.
 ## Token permissions
 
 Make one API token for each environment (**My Profile › API Tokens › Create Token**). Limit it to
-the account and the zone of that environment.
+the account and the zone of that environment. The `development` token has the permissions of each
+row whose workflow exists on `main`.
 
 | Workflow | Permissions |
 | --- | --- |
