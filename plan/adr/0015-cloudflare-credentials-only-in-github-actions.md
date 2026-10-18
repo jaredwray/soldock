@@ -39,7 +39,9 @@ that can deploy staging can therefore also change any other Worker or database i
    instead runs both in one account, they record that choice in S05.T25, and R-22's impact for a
    staging leak becomes a production incident.
 2. **Protected `main` first.** No environment holds a secret until `main` is protected: pull
-   requests required, force-push and deletion blocked, and the `verify` check required. This is a
+   requests required, force-push and deletion blocked, the `verify` check required, and code-owner
+   review required. Code review is the only check of the item 3 allowlist on a workflow change, so
+   the code-owner approval for `/.github/` must apply before the first secret exists. This is a
    slice of the S00.T17 lockdown, pulled forward as a precondition of S00.T09. The environment
    branch rule means nothing on an unprotected branch, because anyone with write access could push
    code straight to `main`.

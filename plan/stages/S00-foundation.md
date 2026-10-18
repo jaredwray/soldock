@@ -464,7 +464,9 @@ Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only
 
 Needs the maintainer to set up, in this order:
 
-1. Protect `main`: pull requests required, force-push and deletion blocked, and `verify` required.
+1. Protect `main`: pull requests required, force-push and deletion blocked, `verify` required, and
+   code-owner review required. Code review is the only check of the ADR-0015 trigger allowlist, so
+   CODEOWNERS must require the maintainer's approval of each change to `/.github/`.
    This is a slice of S00.T17 pulled forward: an environment branch rule means nothing on an
    unprotected branch.
 2. Create a **separate** Cloudflare account for staging.
