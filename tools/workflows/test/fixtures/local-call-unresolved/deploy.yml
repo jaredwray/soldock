@@ -1,0 +1,10 @@
+# Fails: a local call names a file that is not in .github/workflows/.
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  staging:
+    uses: ./.github/workflows/deploy-stagng.yml

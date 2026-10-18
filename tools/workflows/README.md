@@ -1,9 +1,10 @@
 # `tools/workflows`
 
-Enforces the trigger allowlist of [ADR-0015](../../plan/adr/0015-cloudflare-credentials-only-in-github-actions.md)
-over `.github/workflows/` ([S00.T19](../../plan/stages/S00-foundation.md)). Cloudflare credentials
-live only in GitHub Actions environments. This guard makes sure that only reviewed, merged code on
-`main` can reach them.
+This tool enforces the trigger allowlist of
+[ADR-0015](../../plan/adr/0015-cloudflare-credentials-only-in-github-actions.md) over
+`.github/workflows/` ([S00.T19](../../plan/stages/S00-foundation.md)). Cloudflare credentials live
+only in GitHub Actions environments. This guard makes sure that only reviewed, merged code on `main`
+can reach them.
 
 ```sh
 pnpm workflows:check    # node tools/workflows/check.ts [dir], default .github/workflows
@@ -21,13 +22,26 @@ A workflow is **privileged** when a job names an `environment:` or the file read
 
    Every other trigger fails, for example `pull_request`, `pull_request_target` and `workflow_run`.
 2. **Reusable workflows.** A privileged workflow can trigger on `workflow_call`. Then each local
-   caller (`uses: ./.github/workflows/…`) must also obey rules 1 to 3. A callee with no local caller
+   caller (`uses: ./.github/workflows/…`) must also obey rules 1 and 3. A callee with no local caller
    fails.
 3. **Checkouts.** Each `actions/checkout` step sets `persist-credentials: false`. Its `ref:` is
-   absent or `${{ github.sha }}`.
+   absent or `${{ github.sha }}`. This rule also applies to each local workflow that a privileged
+   workflow calls, because a callee runs in the run of its caller.
 
-One more rule applies to all workflows. A job that calls a reusable workflow from another repository
-fails, because the guard cannot read the `environment:` of that workflow.
+Two more rules apply to all workflows:
+
+- A job that calls a reusable workflow outside `./.github/workflows/`, for example in another
+  repository, fails. The guard cannot read the `environment:` of that workflow.
+- A local call to a file that is not in `.github/workflows/` fails.
+
+The guard reads YAML anchors, aliases and `<<:` merge keys, so a merged `environment:` cannot hide.
+
+## Limits
+
+The secret check reads the file text for `secrets.CLOUDFLARE_` and `secrets['CLOUDFLARE_`. It does
+not find a dynamic form such as `toJSON(secrets)`. That is acceptable, because the `CLOUDFLARE_*`
+secrets exist only as environment secrets (ADR-0015, item 1). A job can read them only when it names
+an `environment:`, and the guard always sees that.
 
 ## Layout
 

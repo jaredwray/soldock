@@ -1,0 +1,10 @@
+# Passes on its own; preview.yml makes this fixture fail.
+name: deploy
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  staging:
+    uses: ./.github/workflows/deploy-staging.yml

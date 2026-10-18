@@ -19,7 +19,12 @@ describe("checkWorkflows refuses", () => {
 		["push-with-tags", ".github/workflows/deploy.yml", /push must have branches: \[main\] and no tags/],
 		["checkout-keeps-credentials", ".github/workflows/deploy.yml", /must set persist-credentials: false/],
 		["callee-without-caller", ".github/workflows/deploy-staging.yml", /no local workflow calls it/],
-		["remote-reusable-call", ".github/workflows/ci.yml", /another repository/],
+		["remote-reusable-call", ".github/workflows/ci.yml", /not a local \.\/\.github\/workflows\/ file/],
+		["dispatch-callee-checkout-input-ref", ".github/workflows/build.yml", /checkout ref must be/],
+		["local-call-unresolved", ".github/workflows/deploy.yml", /not a workflow in \.github\/workflows/],
+		["local-call-dot-segment", ".github/workflows/preview.yml", /trigger "pull_request_target" is not allowed/],
+		["merge-key-hides-environment", ".github/workflows/deploy.yaml", /trigger "pull_request" is not allowed/],
+		["push-list-form", ".github/workflows/deploy.yml", /push must have branches: \[main\]/],
 	])("%s", (fixture, path, message) => {
 		const { violations } = run(fixture);
 		expect(violations).toContainEqual({ path, message: expect.stringMatching(message) });

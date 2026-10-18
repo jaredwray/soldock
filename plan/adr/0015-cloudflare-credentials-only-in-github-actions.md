@@ -58,10 +58,12 @@ that can deploy staging can therefore also change any other Worker or database i
 
    The rule also covers reusable workflows. A workflow called with `workflow_call` inherits its
    caller's event and ref, so the callee's `environment:` is checked against the caller's triggers.
+   A call to a reusable workflow outside this repository's `.github/workflows/` is refused, because
+   its `environment:` cannot be checked.
 
-   In these workflows, every `actions/checkout` uses no `ref:` other than `${{ github.sha }}`, and
-   sets `persist-credentials: false`. A dispatch can't check out unreviewed code and run it with
-   the token.
+   In these workflows, and in each local workflow that they call, every `actions/checkout` uses no
+   `ref:` other than `${{ github.sha }}`, and sets `persist-credentials: false`. A dispatch can't
+   check out unreviewed code and run it with the token.
 
    Dispatch inputs are typed (`choice`, or validated), and are passed to steps through `env:`,
    never interpolated into `run:`.

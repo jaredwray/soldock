@@ -170,7 +170,10 @@ A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` mus
   only when every local caller passes the trigger and checkout rules. A callee with no local
   caller fails.
 - **Checkouts:** every `actions/checkout` sets `persist-credentials: false`, with no `ref:` other
-  than `${{ github.sha }}`.
+  than `${{ github.sha }}`. This also applies to each local workflow that such a workflow calls.
+
+The guard also refuses a call to a reusable workflow outside `./.github/workflows/`, and a local call
+to a file that does not exist, because it cannot check them.
 
 **Acceptance**
 - [x] The guard fails on each fixture below and passes on the real workflows:

@@ -12,5 +12,5 @@ if (violations.length > 0) {
 	process.exit(1);
 }
 console.log(
-	`workflows: ${files.length} workflows checked, ${privileged.length} use an environment or a CLOUDFLARE_* secret, no problems.`,
+	`workflows: ${files.length} workflows checked, ${privileged.length} under the ADR-0015 rules, no problems.`,
 );
