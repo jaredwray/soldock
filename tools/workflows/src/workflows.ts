@@ -74,7 +74,10 @@ export function checkWorkflows(files: WorkflowFile[]): CheckResult {
 					message: `job "${id}" calls ${uses}, which is not a local ./.github/workflows/ file; the guard cannot check its environment`,
 				});
 			} else if (!byPath.has(callee)) {
-				violations.push({ path: workflow.path, message: `job "${id}" calls ${uses}, which is not a workflow in ${WORKFLOWS_DIR}` });
+				violations.push({
+					path: workflow.path,
+					message: `job "${id}" calls ${uses}, which is not a workflow in ${WORKFLOWS_DIR}`,
+				});
 			} else {
 				callers.set(callee, [...(callers.get(callee) ?? []), workflow.path]);
 				callees.set(workflow.path, [...(callees.get(workflow.path) ?? []), callee]);
