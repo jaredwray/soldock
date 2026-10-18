@@ -230,7 +230,7 @@ item per PR ([process §2](../process.md#2-stage-files-and-task-format)).
 - [x] `pnpm verify` and CI stay green after every hardening PR.
 
 ### S00.T16 · Defense in depth II: GitHub Actions hardening and security tooling
-- status: in-progress
+- status: done
 - kind: ops
 - size: M
 - depends: S00.T15
@@ -247,8 +247,12 @@ The same skill, sections **§4 and §6** (a loop task):
 These conventions apply to every workflow added later, including S00.T09's deploy workflow and S05.T25's production deploy.
 
 **Acceptance**
-- [ ] `DEFENSE_IN_DEPTH.md` shows every applicable §4 and §6 item done, or deferred with a reason.
-- [ ] zizmor passes on every workflow in CI, and every action is pinned to a SHA.
+- [x] `DEFENSE_IN_DEPTH.md` shows every applicable §4 and §6 item done, or deferred with a reason.
+  PRs #13–#16 did the file items. The Aikido release gate does not apply, because nothing is staged to npm.
+  S00.T17 takes the npm-token check, because only the maintainer can read the Actions secrets list.
+- [x] zizmor passes on every workflow in CI, and every action is pinned to a SHA. The `check-workflows`
+  run on `main` after PR #16 (run 39077498277) reports no results. The `zizmor` job fails on a finding,
+  so the required check in S00.T17 blocks a workflow with a finding.
 
 ### S00.T17 · Defense in depth III: repository lockdown (maintainer)
 - status: todo
@@ -257,12 +261,14 @@ These conventions apply to every workflow added later, including S00.T09's deplo
 - depends: S00.T16, S00.T09
 
 The skill's **§7**, which comes last after every earlier item, including the manual ones. First, the
-maintainer does the two §2 `(manual)` items that S00.T15 deferred:
+maintainer does the items that S00.T15 and S00.T16 deferred:
 
 - In the Codex cloud environment, use Manual setup with `bash ./scripts/setup-cloud-environment.sh`
   as the setup and maintenance script.
 - In the Claude Code on the web environment, allow `malware-list.aikido.dev` (Custom network access
   plus the default package-manager list).
+- In the repository settings, confirm that the Actions secrets list has no npm token or other
+  registry credential (§4).
 
 Then a repo **admin** runs the skill's `lockdown-repo.sh`, which is never copied into this repository. It
 sets: PRs required on `main`, admin-only tags, approval for workflow runs from outside
@@ -278,6 +284,7 @@ lockdown.
 
 **Acceptance**
 - [ ] The maintainer confirms the two §2 `(manual)` items, and `DEFENSE_IN_DEPTH.md` §2 shows them checked.
+- [ ] The maintainer confirms that the Actions secrets list has no registry credential, and `DEFENSE_IN_DEPTH.md` §4 shows it checked.
 - [ ] `lockdown-repo.sh <owner/repo> --check` is clean, and `DEFENSE_IN_DEPTH.md` §7 is checked.
 
 ### S00.T04 · `apps/dock` Worker skeleton

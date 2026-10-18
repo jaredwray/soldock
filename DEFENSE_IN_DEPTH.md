@@ -31,10 +31,10 @@ Profile: website/app · public
 - [x] Every job installs Socket Firewall (`SocketDev/action` SHA-pinned, `firewall-version` pinned); `pnpm install` / `npm install` run as `sfw pnpm install` / `sfw npm install` — PR #14
 - [x] `.github/workflows/check-workflows.yaml` lints workflows with zizmor on every PR — PR #15
 - [x] Workflow `name:` and job `name:` contain no spaces (kebab-case) so they can be set as required status checks — verified 2026-10-16
-- [ ] `persist-credentials: false` on checkouts that don't push (PR #16 pending)
+- [x] `persist-credentials: false` on checkouts that don't push — PR #16
 - [x] No `pull_request_target` on workflows that run untrusted PR code — verified 2026-10-16
 - [x] Artifact-publishing workflows disable `actions/setup-node` default caching (`package-manager-cache: false`) to prevent cache poisoning — verified 2026-10-16 (no artifact-publishing workflows yet)
-- [ ] No npm tokens (or other registry credentials) in Actions secrets
+- [ ] No npm tokens (or other registry credentials) in Actions secrets — repository side verified 2026-10-17: no workflow reads a secret or sets registry auth, and no `.npmrc` is tracked. Deferred to S00.T17: the maintainer confirms the Actions secrets list, which an agent session cannot read
 
 ## 6. Security tooling
 - [x] Aikido runs on every build — verified 2026-10-16 on pull requests (`Aikido Security: check code`). Direct pushes to `main` aren't covered until § 7 requires pull requests
