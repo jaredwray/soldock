@@ -11,8 +11,9 @@ export default defineConfig({
 					environment: "node",
 				},
 			},
-			// Runs inside workerd (apps/dock/vitest.config.ts).
+			// Run inside workerd (apps/dock/vitest.config.ts, spikes/email-service/vitest.config.ts).
 			"apps/dock",
+			"spikes/email-service",
 		],
 	},
 });

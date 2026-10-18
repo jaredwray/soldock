@@ -44,6 +44,8 @@ jobs:
         run: pnpm test
       - name: Worker bundle and startup budgets
         run: pnpm budgets:check
+      - name: Spike harnesses build (wrangler deploy --dry-run, no credentials)
+        run: pnpm spikes:build
       - name: Plan integrity (task graph + STATUS.md freshness)
         run: pnpm plan check
       - name: Dependency license policy
