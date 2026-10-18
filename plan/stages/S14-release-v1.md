@@ -31,7 +31,9 @@ upgrades it to the v1.0 release through the normal upgrade path.
 - kind: docs
 - size: M
 
-The docs site is served on Cloudflare, from Workers Static Assets on `soldock.org`. It covers:
+The docs site is served on Cloudflare, from Workers Static Assets on `soldock.org`. That zone is in
+the development account ([R-23](../risks.md)). The kickoff decides if the site stays there and
+deploys from the `development` environment, or moves to a zone outside that account. It covers:
 
 - user guides for each product
 - the admin guide
@@ -85,8 +87,9 @@ An interactive CLI that:
   gradual deployments and version rollback.
 
 **Acceptance**
-- [ ] An upgrade from the previous release candidate to v1.0 on development, with production-like
-  data, needs no manual steps. A rollback is rehearsed.
+- [ ] A dispatched rehearsal in the `development` environment deploys the previous release-candidate
+  tag, adds production-like data, and then deploys v1.0. It needs no manual step, and it sets the
+  deploy freeze while it runs ([R-24](../risks.md)). The same run rehearses a rollback.
 
 ### S14.T04 · Release automation
 - status: todo
@@ -98,13 +101,14 @@ An interactive CLI that:
 - **Packages:** publish `@soldock/sdk` and `@soldock/cli` to npm with provenance.
 - **Production:** deploy production from tags with a manual approval, replacing S05.T25's manual dispatch.
 - **Environments:** add the release-tag pattern (`v*`) to the deployment rules of the `production`
-  and `development` GitHub environments ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+  GitHub environment. Development stays on each push to `main`, so a tag never deploys an older
+  commit over it ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
   Tags deploy only because the S00.T17 tag ruleset makes tag creation admin-only. Amend
   ADR-0015 item 3 to allow release-tag pushes.
 - **Supply chain:** re-run `defense-in-depth-nodejs` §5 (npm publishing) now that packages publish.
 
 **Acceptance**
-- [ ] A release-candidate tag produces the GitHub release, the npm packages (with the `next` tag) and a development deploy.
+- [ ] A release-candidate tag produces the GitHub release and the npm packages (with the `next` tag).
 
 ### S14.T05 · Community and governance files
 - status: todo

@@ -45,7 +45,8 @@ and the error names each missing item.
      the S00.T13 findings.
    - `CLOUDFLARE_ACCOUNT_ID`
 4. Onboard `soldock.org` to Email Service. The workflow sends from this domain, the development
-   mail domain (S00.T09). The zone must be in the development account.
+   mail domain (S00.T09). The zone must be in the development account. To run the spike on a
+   different domain, change `DOMAIN` in the workflow.
 5. Add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of `soldock.org`. Find it on the
    zone's **Overview** page in the Cloudflare dashboard, in the **API** section. It is 32 hex
    characters, and it is not a secret.

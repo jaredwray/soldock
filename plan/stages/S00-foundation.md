@@ -195,7 +195,7 @@ A workflow that names an `environment:` or references `secrets.CLOUDFLARE_*` mus
 - status: todo
 - kind: feature
 - size: M
-- depends: S00.T04, S00.T09
+- depends: S00.T04
 
 Create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
 `soldock provision --env <env>` command:
@@ -208,7 +208,8 @@ Create the `tools/cli` package (`@soldock/cli`, binary `soldock`) with a
 - `.github/workflows/provision-development.yaml` runs `soldock provision --env development` as a
   `workflow_dispatch` job in the `development` environment, and writes the bindings to the job
   summary. Wrangler can't write auto-provisioned IDs back from CI, so an agent commits the bindings
-  to `wrangler.jsonc` in a PR. The workflow follows the same conventions as S00.T09's deploy.
+  to `wrangler.jsonc` in a PR. The workflow follows the same conventions as S00.T09's deploy, and
+  it needs the `development` environment that S00.T09 sets up. The CLI does not.
 
 **Acceptance**
 - [ ] Running `soldock provision` twice is a no-op the second time (tested against a mocked API).
@@ -440,16 +441,18 @@ This is the base for every Durable Object ([architecture §7](../architecture.md
 - size: M
 - depends: S00.T04
 
-Soldock has two environments, `development` and `production`, and no others (maintainer direction,
-2026-10-18). Everything here runs in GitHub Actions, in the `development` environment, the only place
+The dock Worker has two deployment environments, `development` and `production`, and no others
+(maintainer direction, 2026-10-18). Everything here runs in GitHub Actions, in the `development` environment, the only place
 the development Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
 
 - **Environments:** in `apps/dock/wrangler.jsonc`, the top level is production (S05.T25), and
   `env.development` is the `soldock-dock-dev` Worker. A named env does not inherit bindings or vars,
-  so each later binding goes in both.
+  so each later binding goes in both, and `test/config.test.ts` fails when they differ. The top
+  level sets `workers_dev: false`, so production serves only its custom domain (ADR-0002).
 - **Deploy:** `.github/workflows/deploy-development.yaml` deploys `main` to development on every push
-  to `main` and on manual dispatch. The development host is the Worker's `workers.dev` URL until a
-  task gives it a custom domain.
+  to `main` and on manual dispatch. The development host is the Worker's `workers.dev` URL. No custom
+  domain is planned, so passkeys (S01) and OAuth clients (S02) registered on it stay valid, and the
+  app stays off the public `soldock.org` zone ([R-23](../risks.md)).
   - It deploys whatever assets exist: the placeholder page until S00.T05, then the SPA build. It
     runs `pnpm build` first once `apps/web` exists.
   - It uses `concurrency: { group: deploy-development, cancel-in-progress: false }`, so two merges
@@ -458,8 +461,9 @@ the development Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-
   - It follows the S00.T16 workflow conventions: SHA-pinned actions, least-privilege `permissions`,
     and kebab-case workflow and job names.
   - Its triggers obey the ADR-0015 allowlist: `push` to `main` and `workflow_dispatch` only.
-  - `pnpm verify` runs the same deploy with `--dry-run`, so a bad `env.development` fails in the PR.
-- **Post-deploy smoke:** after deploying, the same workflow runs `scripts/smoke-check.sh` against the
+  - `pnpm verify` runs the same deploy with `--dry-run`, and a config test checks that
+    `env.development` declares every top-level binding and var.
+- **Post-deploy smoke:** after the deploy, the same workflow runs `scripts/smoke-check.sh` against the
   development host. These requests go through the real assets router, which the workerd tests can't
   reach. S00.T11 replaces this check with the Playwright suite. The check:
   - Ping returns `{ ok: true }`.
@@ -470,7 +474,8 @@ the development Cloudflare credentials exist ([ADR-0015](../adr/0015-cloudflare-
   or queue binding until then.
 - **Development mail domain:** `soldock.org`, an **apex** zone in the development account. Email
   Routing catch-all works only on apex domains, and subdomains are limited to 200 per-address
-  rules ([R-20](../risks.md)). The S00.T13 spike also sends from it.
+  rules ([R-20](../risks.md)). The S00.T13 spike also sends from it. It is also the public domain of
+  the project, so the development token can change the DNS of the project ([R-23](../risks.md)).
 - **Docs:** `docs/self-hosting.md` (first draft) lists:
   - the account prerequisites: the Workers Paid plan and a zone on Cloudflare
   - the token permissions for each workflow
@@ -493,7 +498,9 @@ Needs the maintainer to set up, in this order:
 2. Create a **separate** Cloudflare account for development, with the `soldock.org` zone in it.
 3. Create the `development` GitHub environment, with deployment branches set to `main` only. Do
    this before this task's PR merges. The merge pushes to `main`, which runs the deploy, and a run
-   that names a missing environment creates it with no rules.
+   that names a missing environment creates it with no rules. If a `staging` environment exists
+   from S00.T18, move its secrets and variables to `development`, then delete `staging`. No
+   environment may hold a token that no workflow uses.
 4. Read each workflow that is already on `main` against ADR-0015 item 3, and record the reviewed
    commit SHA in the S00.T09 PR.
 5. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to that environment as environment secrets, not repository secrets.
@@ -502,9 +509,12 @@ Until these exist, each deploy run fails at its first step and names what is mis
 receive the token: they read the workflow's runs.
 
 **Acceptance**
-- [ ] The workflows pass zizmor in PR CI, and they meet ADR-0015 item 3: allowed triggers only,
+- [x] The workflows pass zizmor in PR CI, and they meet ADR-0015 item 3: allowed triggers only,
   each checkout sets `persist-credentials: false` and uses no `ref:` other than `${{ github.sha }}`,
   and inputs reach steps only through `env:`. The PR lists these checks under "How it was verified".
+- [x] `apps/dock/test/config.test.ts` fails when the top level and `env.development` declare
+  different binding names or var keys, when development could take production's routes, and when
+  the config names an account.
 - [ ] After merge, the first deploy of `main` passes its post-deploy smoke check against the development host (run link recorded).
 
 ### S00.T10 · Operation registry v0 and REST adapter
@@ -550,7 +560,8 @@ Both runs happen in GitHub Actions ([ADR-0015](../adr/0015-cloudflare-credential
   workerd (`wrangler dev`), with no credentials. That exercises the same assets router and
   `run_worker_first` routing that the development host uses. `pnpm dev` stays the developer loop.
 - **After each deploy of `main`:** S00.T09's workflow runs the same suite against the development host with
-  `E2E_BASE_URL`, replacing its HTTP smoke check.
+  `E2E_BASE_URL`, replacing its HTTP smoke check. First, the run checks that `system.version`
+  returns the deployed version, because the old version can answer the first requests.
 
 **Acceptance**
 - [ ] `pnpm e2e` passes locally and in the PR CI job, against the built Worker.

@@ -9,6 +9,8 @@ set -euo pipefail
 base="${1:?usage: scripts/smoke-check.sh <base-url>}"
 base="${base%/}"
 failures=0
+page=$(mktemp)
+trap 'rm -f "$page"' EXIT
 
 pass() { echo "ok: $1"; }
 fail() {
@@ -16,8 +18,9 @@ fail() {
 	failures=$((failures + 1))
 }
 
-# A new version can take some seconds to reach each edge location, so this first request retries.
-if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 12 --retry-delay 5 --retry-all-errors \
+# A first deploy to a new workers.dev host can take a minute or more to answer, so this first request
+# retries for up to two minutes.
+if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 24 --retry-delay 5 --retry-all-errors \
 	"$base/api/v1/system/ping"); then
 	fail "GET /api/v1/system/ping did not return a 2xx response"
 	exit 1
@@ -28,10 +31,17 @@ else
 	fail "GET /api/v1/system/ping returned: ${ping:0:200}"
 fi
 
+# These requests retry only a transient error (no --fail), so a wrong status is reported at once. A
+# curl error is reported as a failed check, not as an exit of the script.
+navigate() {
+	curl --silent --show-error --max-time 10 --retry 3 --retry-delay 2 --retry-connrefused \
+		-o "$page" -w '%{http_code} %{content_type}' -H "Sec-Fetch-Mode: navigate" -H "Accept: text/html" "$base$1" ||
+		echo "curl exit $?"
+}
+
 # A browser navigation to a Worker-owned path must get the Worker's problem+json 404, not the SPA.
 for path in /api/v1/nope /mcp; do
-	result=$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code} %{content_type}' \
-		-H "Sec-Fetch-Mode: navigate" -H "Accept: text/html" "$base$path")
+	result=$(navigate "$path")
 	if [[ "$result" == "404 application/problem+json"* ]]; then
 		pass "navigation to $path returns a problem+json 404"
 	else
@@ -40,15 +50,12 @@ for path in /api/v1/nope /mcp; do
 done
 
 # A navigation to an app route must get the shell (index.html) from the assets router.
-page=$(mktemp)
-result=$(curl --silent --show-error --max-time 10 -o "$page" -w '%{http_code} %{content_type}' \
-	-H "Sec-Fetch-Mode: navigate" -H "Accept: text/html" "$base/mail")
+result=$(navigate /mail)
 if [[ "$result" == "200 text/html"* ]] && grep -q "data-soldock-shell" "$page"; then
 	pass "navigation to /mail returns the shell"
 else
 	fail "navigation to /mail returned \"$result\" without the shell (data-soldock-shell)"
 fi
-rm -f "$page"
 
 if ((failures > 0)); then
 	echo "Smoke check failed: $failures check(s)."

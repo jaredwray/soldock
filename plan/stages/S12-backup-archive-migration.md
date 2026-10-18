@@ -334,6 +334,9 @@ Re-enabling a user within retention is possible.
   S3-compatible API with SigV4 signing (candidate: `aws4fetch`, MIT).
 - **GC and retention:** extend the S03.T08 blob GC so a blob is deleted only once its reference
   count has been zero for longer than the longest backup retention plus the grace period.
+- **Token:** the DR account is not a deployment environment of the dock Worker. Decide where its
+  token lives (a named secret in `production`, or an environment that deploys nothing), and amend
+  ADR-0015.
 - **DR growth:** primary GC deletions don't propagate, so the DR account only grows until S12.T18
   adds DR-side GC. Document the expected growth and cost.
 
@@ -353,7 +356,7 @@ the lock retention has passed, and the replicated backup manifests (as held in t
 longer reference them under the retention policy.
 
 **Acceptance**
-- [ ] On development, DR storage stops growing monotonically under a synthetic churn workload. The
+- [ ] On development, DR storage does not grow without limit under a synthetic churn workload. The
   janitor never deletes anything referenced by a retained manifest (tested).
 
 ### S12.T19 · Backup coverage: mail, drive and principals

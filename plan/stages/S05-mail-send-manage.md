@@ -431,11 +431,17 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
   follows the S00.T16 conventions and the ADR-0015 trigger allowlist, and runs the e2e smoke suite
   after deploying.
 - **Rollback:** documented and scripted with `wrangler rollback` and versions.
+- **Production config:** the top level of `apps/dock/wrangler.jsonc` keeps `workers_dev: false` and
+  sets `preview_urls: false`. Its only route is `dock.jaredwray.com`, and `env.development` overrides
+  `routes` (the config test enforces it).
+- **Deploy freeze:** `deploy-development.yaml` deploys nothing while the `development` environment
+  variable `DEPLOY_FREEZE` is set, and writes a notice to the job summary. Long runs on development
+  set it ([R-24](../risks.md)).
 - **DNS:** `docs/operations/cutover.md` records the previous MX, SPF and DKIM records, and how to
   roll back the MX within its TTL.
 
 **Acceptance**
-- [ ] One production deploy and one rollback have been exercised (first against development, using the same workflow).
+- [ ] The rollback steps ran first against development, then against production. One production deploy and one rollback ran with this task's workflow.
 
 ### S05.T22 · Production deployment on dock.jaredwray.com
 - status: todo

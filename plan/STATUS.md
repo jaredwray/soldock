@@ -44,6 +44,7 @@ _None._
 
 ## Ready to start
 
+- [S00.T20](stages/S00-foundation.md) · `soldock provision` _(feature, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_

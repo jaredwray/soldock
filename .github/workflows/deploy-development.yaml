@@ -67,8 +67,8 @@ jobs:
           node-version-file: .node-version
           # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
           package-manager-cache: false
-      # Only the dock Worker's dependencies, and no secrets in this step.
-      - run: sfw pnpm install --frozen-lockfile --filter @soldock/dock
+      # Only the dock Worker and the workspace packages that it uses, and no secrets in this step.
+      - run: sfw pnpm install --frozen-lockfile --filter "@soldock/dock..."
 
       # Deploys the placeholder page until S00.T05. Then this job runs `pnpm build` first.
       - name: Deploy the dock Worker to development

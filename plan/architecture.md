@@ -402,7 +402,7 @@ go through queues in batches, not synchronous loops.
 - Realtime SFU participant limits
 - Email Routing catch-all works only on apex domains. Subdomain mail domains need one rule per
   address, capped at 200 per domain, and a zone allows 30 mail domains. Development therefore uses
-  its own apex zone, `soldock.org` ([R-20](risks.md)).
+  its own apex zone, `soldock.org` ([R-20](risks.md), [R-23](risks.md)).
 - The Rate Limiting binding is per location and eventually consistent. Hard caps, such as an agent's
   daily send quota, are therefore counted in `PrincipalDO`, not in the Rate Limiting binding.
 
@@ -592,11 +592,16 @@ soldock/
 - **Development:** the `soldock-dock-dev` Worker (`env.development` in `wrangler.jsonc`) on its
   `workers.dev` host, with its own resources in its own account. Its mail domain is the **apex
   zone** `soldock.org`, so catch-all routing works and load tests can create thousands of
-  addresses. Deployed on every merge to `main`, after which the smoke check (later the end-to-end
-  suite) runs against it. There are two environments only: development and production.
+  addresses. `soldock.org` is also the public domain of the project ([R-23](risks.md)). Each merge
+  to `main` deploys development. Then the smoke check (later, the end-to-end suite) runs against it.
+  - The dock Worker has two deployment environments only: development and production.
+  - The development host stays on `workers.dev`. No custom domain is planned, so passkeys and OAuth
+    clients registered on it stay valid, and the app stays off the `soldock.org` zone.
+  - Each merge redeploys development, so a long run on it sets a deploy freeze ([R-24](risks.md)).
 - **Credentials and live tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)):
   - Cloudflare tokens live only in the `development` and `production` GitHub Actions environments,
-    which accept deployments from a protected `main` only. Agent sessions never hold them.
+    which accept deployments from a protected `main` only. Agent sessions never hold them. S12.T17
+    decides where the tokens of the backup and disaster-recovery accounts live.
   - Development and production are separate Cloudflare accounts, because Workers, D1, R2, KV and
     Queues permissions are account-scoped.
   - Pull requests test locally: workerd tests, plus e2e against the built Worker.
@@ -615,6 +620,9 @@ soldock/
 - **Provisioning:** `soldock provision` creates the D1 database, R2 buckets (with lifecycle rules; the
   locked `backups` and `archive` buckets are added in S12), KV namespaces, queues and their DLQs, Email Routing rules and the DNS records for the mail domains.
   It is idempotent and prints the `wrangler.jsonc` bindings. A "Deploy to Cloudflare" button arrives in S14.
+- **Both environments, one config:** every binding and var is declared twice in
+  `apps/dock/wrangler.jsonc`, at the top level (production) and in `env.development`, because a
+  named env does not inherit them. `apps/dock/test/config.test.ts` enforces it.
 - **Configuration** comes from three places: `wrangler.jsonc` vars (hostnames, mail domains, jurisdiction), secrets
   (keys) and D1 `settings` (runtime-adjustable policies and feature flags, edited through
   `admin.settings.*` in the admin console, S01.T15).

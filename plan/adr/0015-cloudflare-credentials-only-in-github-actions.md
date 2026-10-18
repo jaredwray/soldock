@@ -1,6 +1,6 @@
 # ADR-0015: Keep Cloudflare credentials in GitHub Actions and run live tests there
 
-- **Status:** accepted
+- **Status:** accepted (amended 2026-10-18)
 - **Date:** 2026-10-16
 - **Decided in:** maintainer direction, during S00.T04 (the S00.T13 spike was blocked on a token)
 
@@ -31,9 +31,12 @@ that can deploy development can therefore also change any other Worker or databa
 > maintainer's review of workflow changes. The Consequences bullet on enforcement replaces the
 > S00.T19 code check, which the maintainer dropped.
 >
-> **Amended 2026-10-18 (S00.T09, maintainer direction):** there are two environments only,
-> `development` and `production`. `development` replaces the `staging` environment in every item.
-> The rules for it did not change.
+> **Amended 2026-10-18 (S00.T09, maintainer direction):** the dock Worker has two deployment
+> environments only, `development` and `production`. `development` replaces the `staging`
+> environment in every item, and the rules for it did not change. The development mail domain is
+> `soldock.org`, the public domain of the project. [R-23](../risks.md) records what that exposes.
+> The backup and disaster-recovery accounts of S12.T17 and S12.T08 are not deployment
+> environments. S12.T17 decides where their tokens live, and amends this ADR.
 
 1. **Where credentials live.** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exist only as
    secrets of GitHub Actions environments:
@@ -42,11 +45,11 @@ that can deploy development can therefore also change any other Worker or databa
 
    They are never stored in agent sessions or their cloud-environment settings, in repository-level
    secrets or variables, or in committed files. Each environment has its own least-privilege token.
-   There are no other environments. Development and production use **separate Cloudflare
-   accounts**, because the permissions above are account-scoped: a leaked development token must
-   not be able to reach production. If the maintainer instead runs both in one account, they
-   record that choice in S05.T25, and R-22's impact for a development leak becomes a production
-   incident.
+   The dock Worker has no other deployment environment. Development and production use
+   **separate Cloudflare accounts**, because the permissions above are account-scoped: a leaked
+   development token must not be able to reach production. If the maintainer instead runs both in
+   one account, they record that choice in S05.T25, and R-22's impact for a development leak
+   becomes a production incident.
 2. **Protected `main` first.** No environment holds a secret until `main` has the branch ruleset
    that `lockdown-repo.sh` writes (S00.T17):
    - pull requests required, with force-push and deletion blocked
@@ -138,6 +141,9 @@ that can deploy development can therefore also change any other Worker or databa
   `docs/self-hosting.md` (S00.T09) lists the token permissions. S00.T13 and S05.T25 stay
   `blocked` until these exist. Until then, each S00.T09 deploy run fails at its first step and
   names what is missing.
+- The development account holds `soldock.org`, the public domain of the project. A leaked
+  development token can change its DNS, its mail and the docs site ([R-23](../risks.md)). Each merge
+  redeploys development, so a long run on it needs a deploy freeze ([R-24](../risks.md)).
 - New risk [R-22](../risks.md): CI is now the only place a token exists, so a compromised action, a
   malicious dependency in a deploy job, or a workflow change is the main exfiltration path.
 
