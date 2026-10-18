@@ -85,7 +85,7 @@ An interactive CLI that:
   gradual deployments and version rollback.
 
 **Acceptance**
-- [ ] An upgrade from the previous release candidate to v1.0 on staging, with production-like
+- [ ] An upgrade from the previous release candidate to v1.0 on development, with production-like
   data, needs no manual steps. A rollback is rehearsed.
 
 ### S14.T04 · Release automation
@@ -98,13 +98,13 @@ An interactive CLI that:
 - **Packages:** publish `@soldock/sdk` and `@soldock/cli` to npm with provenance.
 - **Production:** deploy production from tags with a manual approval, replacing S05.T25's manual dispatch.
 - **Environments:** add the release-tag pattern (`v*`) to the deployment rules of the `production`
-  and `staging` GitHub environments ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
+  and `development` GitHub environments ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
   Tags deploy only because the S00.T17 tag ruleset makes tag creation admin-only. Amend
   ADR-0015 item 3 to allow release-tag pushes.
 - **Supply chain:** re-run `defense-in-depth-nodejs` §5 (npm publishing) now that packages publish.
 
 **Acceptance**
-- [ ] A release-candidate tag produces the GitHub release, the npm packages (with the `next` tag) and a staging deploy.
+- [ ] A release-candidate tag produces the GitHub release, the npm packages (with the `next` tag) and a development deploy.
 
 ### S14.T05 · Community and governance files
 - status: todo

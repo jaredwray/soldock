@@ -1,4 +1,6 @@
 // The dock Worker: the whole backend, served from one origin (ADR-0002, ADR-0003).
+// The top level is production (S05.T25). `env.development` is the development Worker, which
+// deploy-development.yaml deploys on each push to main (S00.T09). There are no other environments.
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
 // Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
 {
@@ -29,5 +31,14 @@
 			"/dl/*",
 			"/hooks/*"
 		]
+	},
+	"env": {
+		// A named env inherits `main`, the compatibility settings, observability and `assets`. It does not
+		// inherit bindings or vars: when production gets a binding, add the development one here too.
+		"development": {
+			"name": "soldock-dock-dev",
+			// The development host is the workers.dev URL until a task gives it a custom domain.
+			"workers_dev": true
+		}
 	}
 }

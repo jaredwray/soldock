@@ -110,9 +110,9 @@ skill walks an agent through it.
    and open the PR early if others are working in parallel.
 4. **Build test-first.** Write the acceptance criteria as tests, then implement. Keep the diff to
    the task. File follow-ups as new tasks; don't widen the PR.
-5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, spike builds, plan
-   check, license check). It must be green. For UI work, run the app and check the change in a
-   browser (see the [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
+5. **Verify.** Run `pnpm verify` (lint, types check, typecheck, tests, budgets, deploy dry run, spike
+   builds, plan check, license check). It must be green. For UI work, run the app and check the
+   change in a browser (see the [run skill](../.claude/skills/implement-task/SKILL.md#running-the-app)).
 6. **Self-review.** Re-read the diff against the task's acceptance criteria and the
    [Definition of Done](#definition-of-done). For `M` tasks, and for anything touching auth,
    backups or data models, ask the `impl-reviewer` agent for a review and address what it finds.
@@ -153,7 +153,7 @@ for the stages it lists.
 
 1. Every task is `done` or `dropped`, with reasons.
 2. Run the stage's **exit demo** (scripted in the stage file) locally. Record evidence: test
-   names, e2e runs, screenshots. The staging evidence is the post-merge deploy run plus any
+   names, e2e runs, screenshots. The development evidence is the post-merge deploy run plus any
    dispatched runs, because agent sessions hold no Cloudflare credentials
    ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)). Link those runs.
 3. List the partial kickoffs that named this stage (`partial: re-refine after Sxx`) and re-run
@@ -236,7 +236,7 @@ time-boxed (size S or M). It must deliver:
 | Operation contracts | Generated tests: each operation is called through REST and MCP with human, agent and delegated tokens | `apps/dock/test/contracts/` |
 | Authorization matrix | Table-driven: operation × role × principal kind × resource relationship | `apps/dock/test/authz/` |
 | Backup round-trip (from S12) | For each object type: seed → export → wipe → import → deep-equal, plus migrations over old backups | `apps/dock/test/backup/` |
-| End-to-end | Playwright against the built Worker in local workerd (`wrangler dev`) on every PR, and against staging after every deploy of `main` | `e2e/` |
+| End-to-end | Playwright against the built Worker in local workerd (`wrangler dev`) on every PR, and against the development host after every deploy of `main` | `e2e/` |
 | Corpora | Real-world MIME messages, DOCX, XLSX and PPTX files, collected under fixtures with their licenses noted | `fixtures/` |
 | Load and soak | Worker-based load generator plus scripted scenarios (S13) | `tools/load/` |
 
@@ -244,7 +244,7 @@ time-boxed (size S or M). It must deliver:
 Agent sessions have no Cloudflare credentials, by design. Anything that needs a real account runs
 as a GitHub Actions workflow on `main`:
 
-- **`staging` environment:** provisioning, staging deploys, the staging e2e run, spikes, load
+- **`development` environment:** provisioning, development deploys, the development e2e run, spikes, load
   tests, and weekly suites (`schedule` workflows).
 - **`production` environment:** production deploys only (S05.T25), with its own token and a
   required reviewer.

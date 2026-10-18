@@ -401,8 +401,8 @@ go through queues in batches, not synchronous loops.
 - Email Service limits (5 MiB per message, 50 recipients, a daily quota that grows with reputation)
 - Realtime SFU participant limits
 - Email Routing catch-all works only on apex domains. Subdomain mail domains need one rule per
-  address, capped at 200 per domain, and a zone allows 30 mail domains. Staging therefore uses
-  its own apex zone ([R-20](risks.md)).
+  address, capped at 200 per domain, and a zone allows 30 mail domains. Development therefore uses
+  its own apex zone, `soldock.org` ([R-20](risks.md)).
 - The Rate Limiting binding is per location and eventually consistent. Hard caps, such as an agent's
   daily send quota, are therefore counted in `PrincipalDO`, not in the Rate Limiting binding.
 
@@ -589,14 +589,15 @@ soldock/
 - **Local:** `pnpm dev` runs the Vite dev server with the Cloudflare Vite plugin. The Worker, its
   Durable Objects, D1, R2, KV and Queues all run locally in workerd/Miniflare. A local inbound-mail
   simulator posts `.eml` fixtures to the `email()` handler.
-- **Staging:** `dock-staging.<domain>` with its own resources. Its mail domain is a **dedicated
-  apex zone** (for example `soldock-staging.dev`), so catch-all routing works and load tests can
-  create thousands of addresses. Deployed on every merge to `main`, after which the end-to-end
-  suite runs against it.
+- **Development:** the `soldock-dock-dev` Worker (`env.development` in `wrangler.jsonc`) on its
+  `workers.dev` host, with its own resources in its own account. Its mail domain is the **apex
+  zone** `soldock.org`, so catch-all routing works and load tests can create thousands of
+  addresses. Deployed on every merge to `main`, after which the smoke check (later the end-to-end
+  suite) runs against it. There are two environments only: development and production.
 - **Credentials and live tests** ([ADR-0015](adr/0015-cloudflare-credentials-only-in-github-actions.md)):
-  - Cloudflare tokens live only in the `staging` and `production` GitHub Actions environments,
+  - Cloudflare tokens live only in the `development` and `production` GitHub Actions environments,
     which accept deployments from a protected `main` only. Agent sessions never hold them.
-  - Staging and production are separate Cloudflare accounts, because Workers, D1, R2, KV and
+  - Development and production are separate Cloudflare accounts, because Workers, D1, R2, KV and
     Queues permissions are account-scoped.
   - Pull requests test locally: workerd tests, plus e2e against the built Worker.
   - Provisioning, deploys, live end-to-end runs, spikes against real services and load tests run as

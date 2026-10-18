@@ -52,7 +52,7 @@ through Cloudflare Email Service, and Google is not involved.
 - kind: spike
 - size: S
 
-On staging:
+On development:
 
 - Onboard the sending domain (check the DKIM, SPF and DMARC records it creates).
 - Send structured messages and raw MIME through the binding. Check which headers are preserved
@@ -129,7 +129,7 @@ RFC 5322 and MIME composition:
 Messages over the size limit become links (S05.T21) until S06.T12 upgrades them to Drive links.
 
 **Acceptance**
-- [ ] Messages sent to external accounts (Gmail and Outlook seed accounts) thread correctly in replies and pass DKIM, SPF and DMARC (staging).
+- [ ] Messages sent to external accounts (Gmail and Outlook seed accounts) thread correctly in replies and pass DKIM, SPF and DMARC (development).
 - [ ] Undo-send cancels before enqueue. Scheduled send fires within a minute of its scheduled time (tested).
 - [ ] An internal message never calls Email Service (tested with the binding mocked).
 
@@ -238,7 +238,7 @@ Gmail-style filters:
 - **Send-as:** send as an alias or a group address, with verification.
 
 **Acceptance**
-- [ ] Group fan-out to 500 members completes through the queue within the SLO (staging benchmark).
+- [ ] Group fan-out to 500 members completes through the queue within the SLO (development benchmark).
 - [ ] Sending as an unverified alias, or as a group the sender may not post to, is rejected (tested).
 
 ### S05.T17 · Collaborative inboxes (shared mailboxes)
@@ -304,12 +304,12 @@ A TipTap-based composer with:
 - size: S
 - depends: S05.T04
 
-- **Automated checks:** send from staging to seed accounts at major providers. Verify headers,
+- **Automated checks:** send from development to seed accounts at major providers. Verify headers,
   alignment, spam-folder placement (where observable) and List-Unsubscribe handling for groups.
 - **Runbook:** `docs/operations/deliverability.md` (warming, quotas, blocklist response).
 
 **Acceptance**
-- [ ] The suite runs weekly on staging, as a `schedule` workflow in the `staging` environment ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)), and reports into the admin health page.
+- [ ] The suite runs weekly on development, as a `schedule` workflow in the `development` environment ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)), and reports into the admin health page.
 
 ### S05.T13 · Auto-collected contacts and recipient autocomplete
 - status: todo
@@ -324,13 +324,13 @@ A TipTap-based composer with:
 **Acceptance**
 - [ ] Suggestions rank frequent and recent recipients first and never leak other users' contacts (tested).
 
-### S05.T14 · Dogfood on the staging mail domain
+### S05.T14 · Dogfood on the development mail domain
 - status: todo
 - kind: ops
 - size: S
 - depends: S05.T04, S05.T10, S05.T12
 
-Use the staging apex mail domain as a second daily mailbox for two weeks. Record issues as tasks
+Use the development apex mail domain as a second daily mailbox for two weeks. Record issues as tasks
 and fix the blocking ones before the production deployment.
 
 **Acceptance**
@@ -369,7 +369,7 @@ Extend `admin.domains.*` and the console so admins can:
 - keep the binding's allowed senders in sync
 
 **Acceptance**
-- [ ] Onboarding a new domain through the console shows each record's status until it verifies (tested with a mocked API, and once on staging).
+- [ ] Onboarding a new domain through the console shows each record's status until it verifies (tested with a mocked API, and once on development).
 
 ### S05.T21 · Large attachments as signed links (before Drive)
 - status: todo
@@ -382,7 +382,7 @@ replaced by expiring, per-recipient `/dl/` links with a clear note in the messag
 upgrades this to Drive links. This keeps ordinary attachments working at M2 ([R-01](../risks.md)).
 
 **Acceptance**
-- [ ] Sending a 20 MiB attachment to an external recipient delivers a message whose link downloads the file until it expires (staging).
+- [ ] Sending a 20 MiB attachment to an external recipient delivers a message whose link downloads the file until it expires (development).
 
 ### S05.T23 · Ingest alias domain and trusted forwarders
 - status: dropped
@@ -410,7 +410,7 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
   keeps the referenced bytes available.
 
 **Acceptance**
-- [ ] On staging, a destructive change to a test mailbox and to the D1 directory is undone by following the runbook.
+- [ ] On development, a destructive change to a test mailbox and to the D1 directory is undone by following the runbook.
 - [ ] Only org owners and admins can call the operation, and every call is audited (authorization matrix).
 - [ ] `dry_run` reports the target bookmark and changes nothing (tested).
 
@@ -425,7 +425,7 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
   - a required reviewer, with self-review prevented and no administrator bypass
   - deployment branches limited to `main`; S14.T04 adds release tags
   - its own Cloudflare token, in a separate production account. If the maintainer instead runs
-    staging and production in one account, they record that here and in R-22.
+    development and production in one account, they record that here and in R-22.
 
   Deploys are a manual dispatch from `main` until S14.T04 switches to tag deploys. The workflow
   follows the S00.T16 conventions and the ADR-0015 trigger allowlist, and runs the e2e smoke suite
@@ -435,7 +435,7 @@ is Cloudflare's **native** 30-day recovery (T1), not the deferred backup system.
   roll back the MX within its TTL.
 
 **Acceptance**
-- [ ] One production deploy and one rollback have been exercised (first against staging, using the same workflow).
+- [ ] One production deploy and one rollback have been exercised (first against development, using the same workflow).
 
 ### S05.T22 · Production deployment on dock.jaredwray.com
 - status: todo
@@ -467,7 +467,7 @@ interim measures are native point-in-time restore (S05.T24) and blob GC's 45-day
 - [ ] External mail to `@jaredwray.com` addresses (human and agent) arrives through Cloudflare
   Email Routing. No MX record points anywhere else.
 - [ ] Mail sent from Soldock as `@jaredwray.com` passes DKIM, SPF and DMARC at Gmail and Outlook.
-- [ ] The cutover runbook is committed and was rehearsed first on the staging apex zone.
+- [ ] The cutover runbook is committed and was rehearsed first on the development apex zone.
 
 ## Exit criteria
 

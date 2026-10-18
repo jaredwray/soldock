@@ -339,7 +339,7 @@ session. Admins can require SSO for humans.
 
 **Exit demo**
 
-1. Run setup on staging and sign in with a passkey.
+1. Run setup on development and sign in with a passkey.
 2. Invite a second human, who registers.
 3. Create agent "Ada" with sponsor = owner, and issue a key.
 4. `curl -H "Authorization: Bearer <key>" /api/v1/directory/whoami` returns Ada with `kind: agent`.

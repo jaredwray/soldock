@@ -20,7 +20,7 @@ built by.
 
 | Stage | What ships | Milestone |
 | --- | --- | --- |
-| [S00](stages/S00-foundation.md) Foundation | Monorepo, CI, plan tool, Worker + SPA skeleton, operation registry, Durable Object base class, staging | |
+| [S00](stages/S00-foundation.md) Foundation | Monorepo, CI, plan tool, Worker + SPA skeleton, operation registry, Durable Object base class, development deploy | |
 | [S01](stages/S01-identity-access.md) Identity, access and directory | Principals (humans and agents), passkeys, API keys, authorization, audit, admin console | |
 | [S02](stages/S02-agent-api-surface.md) Agent and API surface | MCP endpoint, OAuth 2.1, `client_credentials`, events and webhooks, SDK, contract and authorization harness | **M1: agents can connect as themselves** |
 | [S03](stages/S03-platform-services.md) Platform services | Blobs (deduplicated), quotas, jobs, object registry, blob GC, search, notifications | |

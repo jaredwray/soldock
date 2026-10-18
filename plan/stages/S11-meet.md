@@ -200,7 +200,7 @@ share. Participants follow the presenter's slide, and the presenter view stays l
 - **Upcoming meetings:** a list in Meet. This is not a calendar.
 
 **Acceptance**
-- [ ] Invites render correctly in Gmail and Outlook, and RSVPs round-trip (staging).
+- [ ] Invites render correctly in Gmail and Outlook, and RSVPs round-trip (development).
 - [ ] The ICS output validates against RFC 5545 tests.
 
 ### S11.T07 · Captions and transcription
@@ -216,7 +216,7 @@ share. Participants follow the presenter's slide, and the presenter view stays l
 - **Opt-in:** transcription is opt-in per meeting, and participants see an indicator.
 
 **Acceptance**
-- [ ] Caption latency is under 2 s at p95 (staging measurement). The transcript is filed to Drive, and its permissions match the invite list.
+- [ ] Caption latency is under 2 s at p95 (development measurement). The transcript is filed to Drive, and its permissions match the invite list.
 
 ### S11.T08 · Recording
 - status: todo
@@ -231,7 +231,7 @@ Implement the recording approach chosen in the "Meeting recording" ADR:
 - **Retention:** retention-policy hooks.
 
 **Acceptance**
-- [ ] A 30-minute, 4-person recording is filed to Drive and plays back with audio and video in sync (staging).
+- [ ] A 30-minute, 4-person recording is filed to Drive and plays back with audio and video in sync (development).
 
 ### S11.T09 · Agents in meetings
 - status: todo
@@ -246,7 +246,7 @@ Implement the recording approach chosen in the "Meeting recording" ADR:
 - **Host control:** the host can remove the agent.
 
 **Acceptance**
-- [ ] An agent attends a meeting, posts a summary to chat at the end, and files notes to Drive (tested on staging).
+- [ ] An agent attends a meeting, posts a summary to chat at the end, and files notes to Drive (tested on development).
 - [ ] If the host disallows agents, the join fails with `policy_denied` (tested).
 
 ### S11.T10 · Meet operations and MCP tools

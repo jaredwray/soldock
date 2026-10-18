@@ -76,7 +76,7 @@ A streaming zip64 writer for large exports:
 - **Provisioning:** `soldock provision` adds the `archive` bucket (Infrequent Access lifecycle).
 
 **Acceptance**
-- [ ] A 50 GB synthetic export completes on staging across many workflow steps and opens with standard unzip tools. An injected failure resumes without corruption.
+- [ ] A 50 GB synthetic export completes on development across many workflow steps and opens with standard unzip tools. An injected failure resumes without corruption.
 
 ### S12.T01 · User export (Takeout)
 - status: todo
@@ -111,7 +111,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
   with a lifecycle-based expiry.
 
 **Acceptance**
-- [ ] A scheduled org archive runs on staging and is listed in the admin console with its size and checksums.
+- [ ] A scheduled org archive runs on development and is listed in the admin console with its size and checksums.
 
 ### S12.T03 · Retention policies
 - status: todo
@@ -157,7 +157,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 - **Self-service:** trash and version restore.
 
 **Acceptance**
-- [ ] E2E for each admin restore path on staging, with before and after verification.
+- [ ] E2E for each admin restore path on development, with before and after verification.
 
 ### S12.T06 · Import Gmail
 - status: todo
@@ -175,7 +175,7 @@ link, and exports expire after N days. Operations: `account.export`, plus `admin
 
 **Acceptance**
 - [ ] Importing a seeded Gmail test account reproduces label and thread structure. Re-running the
-  import is idempotent, and messages already in the mailbox are not duplicated (staging).
+  import is idempotent, and messages already in the mailbox are not duplicated (development).
 
 ### S12.T12 · Google OAuth app setup for imports
 - status: todo
@@ -201,7 +201,7 @@ OOXML, then imported as native documents. Folder structure and sharing are prese
 principals that map to ours. Progress and conflicts are reported.
 
 **Acceptance**
-- [ ] A seeded Drive imports with its folder structure and conversions. Shares map to existing principals (staging).
+- [ ] A seeded Drive imports with its folder structure and conversions. Shares map to existing principals (development).
 
 ### S12.T08 · Disaster-recovery runbook and scripted drill
 - status: todo
@@ -214,7 +214,7 @@ every registered object from the latest full backup plus incrementals, and re-po
 The runbook is `docs/operations/disaster-recovery.md`. The drill runs quarterly.
 
 **Acceptance**
-- [ ] A rebuild of staging into an empty account passes the smoke and e2e suites. RTO and RPO are measured and recorded.
+- [ ] A rebuild of development into an empty account passes the smoke and e2e suites. RTO and RPO are measured and recorded.
 
 ### S12.T09 · Account lifecycle
 - status: todo
@@ -297,11 +297,11 @@ Re-enabling a user within retention is possible.
 - **Visibility:** an admin backup status page, and `admin.backups.list`.
 
 **Acceptance**
-- [ ] A run over 1,000 synthetic objects completes, and resumes correctly after an injected failure in the middle of the run (staging).
+- [ ] A run over 1,000 synthetic objects completes, and resumes correctly after an injected failure in the middle of the run (development).
 - [ ] A change that lands while its object is being exported keeps `dirty_since` set, and the next run exports it (tested).
 - [ ] **Scale benchmark:** a synthetic registry of 1M objects (10% dirty) finishes inside the 6 h
   SLO, extrapolated from a measured run of at least 50k objects. The numbers are recorded in `plan/spikes/`.
-- [ ] Locked backup objects can't be deleted before retention ends (verified on staging).
+- [ ] Locked backup objects can't be deleted before retention ends (verified on development).
 
 ### S12.T16 · Restore framework and restore drills
 - status: todo
@@ -316,8 +316,8 @@ Re-enabling a user within retention is possible.
   verifies checksums and invariants, records the results, and alerts on failure.
 
 **Acceptance**
-- [ ] Drill on staging: restoring a sampled object yields byte-identical exports.
-- [ ] A PITR restore of an object to a timestamp before a destructive change recovers the data (tested on staging).
+- [ ] Drill on development: restoring a sampled object yields byte-identical exports.
+- [ ] A PITR restore of an object to a timestamp before a destructive change recovers the data (tested on development).
 
 ### S12.T17 · Disaster-recovery copy in a separate account
 - status: todo
@@ -338,7 +338,7 @@ Re-enabling a user within retention is possible.
   adds DR-side GC. Document the expected growth and cost.
 
 **Acceptance**
-- [ ] On staging, a new blob appears in the DR bucket within 5 minutes, and a delete issued with the primary's token fails there.
+- [ ] On development, a new blob appears in the DR bucket within 5 minutes, and a delete issued with the primary's token fails there.
 - [ ] GC never deletes a blob that a retained backup references (tested).
 
 ### S12.T18 · DR-side retention and GC
@@ -353,7 +353,7 @@ the lock retention has passed, and the replicated backup manifests (as held in t
 longer reference them under the retention policy.
 
 **Acceptance**
-- [ ] On staging, DR storage stops growing monotonically under a synthetic churn workload. The
+- [ ] On development, DR storage stops growing monotonically under a synthetic churn workload. The
   janitor never deletes anything referenced by a retained manifest (tested).
 
 ### S12.T19 · Backup coverage: mail, drive and principals
@@ -371,7 +371,7 @@ if S01.T01 kept them in KV.
 
 **Acceptance**
 - [ ] Round-trip tests pass for the three classes, and the run dumps any durable KV state listed in a data inventory (tested).
-- [ ] Drill on staging: a mailbox and a drive space restored from backup produce identical exports (the mailbox compared as mbox).
+- [ ] Drill on development: a mailbox and a drive space restored from backup produce identical exports (the mailbox compared as mbox).
 
 ### S12.T20 · Backup coverage: documents, meetings and the blob index, plus a CI guard
 - status: todo
@@ -385,12 +385,12 @@ Two classes are exempt, each with a recorded reason: `BackupRunDO` (ephemeral ru
 `TestObject` (tests only).
 
 **Acceptance**
-- [ ] Round-trip tests pass for the three classes, and a document restored from backup matches its live export (staging drill).
+- [ ] Round-trip tests pass for the three classes, and a document restored from backup matches its live export (development drill).
 - [ ] Adding an object class without a round-trip test fails CI, unless it is on the exempt list with a reason (tested).
 
 ## Exit criteria
 
-- Nightly backups, restores and the weekly drill cover every store, on staging and in production.
+- Nightly backups, restores and the weekly drill cover every store, on development and in production.
   The disaster-recovery copy lands in the second account.
 - Users and admins can export everything. Retention and holds are enforced. Restores are
   self-service where appropriate.

@@ -148,7 +148,7 @@ An ADR (next free number) titled **"Drive data model"** covers:
 
 **Acceptance**
 - [ ] Search never returns items the caller can't access (authorization-matrix test, with seeded spaces).
-- [ ] p95 under 300 ms for a 100k-item space plus 50 shared drives (staging benchmark).
+- [ ] p95 under 300 ms for a 100k-item space plus 50 shared drives (development benchmark).
 
 ### S06.T07 · Previews and thumbnails
 - status: todo
@@ -240,7 +240,7 @@ and the authorization matrix.
 
 **Acceptance**
 - [ ] Sending a 20 MiB file to an external recipient delivers a message containing a working,
-  permission-scoped link (staging).
+  permission-scoped link (development).
 
 ## Exit criteria
 

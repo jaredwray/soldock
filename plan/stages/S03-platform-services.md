@@ -91,7 +91,7 @@ after the main products work ([ADR-0007](../adr/0007-backup-and-archive.md)).
 
 **Acceptance**
 - [ ] A 1 GiB chunked upload and a resumed upload after a simulated drop both produce the correct
-  hash (tested with a smaller size in CI, and a full size on staging).
+  hash (tested with a smaller size in CI, and a full size on development).
 - [ ] A part sent out of order is rejected with a clear error, and the session stays resumable (tested).
 
 ### S03.T02 · Quotas and usage accounting

@@ -36,15 +36,14 @@ _None._
 ## In progress
 
 - [S00.T18](stages/S00-foundation.md) · Email Service spike harness _(chore, S)_
+- [S00.T09](stages/S00-foundation.md) · Environments and development deploy _(ops, M)_
 
 ## Blocked
 
-- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare credentials in the `staging` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), a throwaway apex domain with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
-- [S00.T09](stages/S00-foundation.md) · Environments and staging deploy _(ops, M)_ — needs the maintainer setup below (protected `main`, a separate staging Cloudflare account, the `staging` environment and its secrets), plus S00.T20
+- [S00.T13](stages/S00-foundation.md) · Spike: is Email Service viable for mailbox traffic? _(spike, S)_ — needs maintainer resources: Cloudflare credentials in the `development` GitHub environment (ADR-0015; the spike runs as a dispatched workflow), the `soldock.org` zone in the development account with Email Service enabled, seed Gmail/Outlook accounts, and a Cloudflare contact
 
 ## Ready to start
 
-- [S00.T20](stages/S00-foundation.md) · `soldock provision` _(feature, M)_
 - [S00.T14](stages/S00-foundation.md) · Coverage reporting and thresholds _(chore, S)_
 - [S00.T05](stages/S00-foundation.md) · `apps/web` SPA skeleton and `packages/ui` seed _(feature, M)_
 - [S00.T06](stages/S00-foundation.md) · Platform primitives _(feature, M)_
