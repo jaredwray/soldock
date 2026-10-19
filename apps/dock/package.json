@@ -7,6 +7,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "wrangler dev",
+		"deploy:development": "wrangler deploy --env development",
+		"deploy:check": "wrangler deploy --dry-run --env development --outdir dist/development",
 		"test": "vitest run",
 		"types": "wrangler types",
 		"types:check": "wrangler types --check",

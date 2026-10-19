@@ -8,7 +8,7 @@
 
 ## How it was verified
 
-<!-- Tests added, `pnpm verify` result, e2e / staging evidence, screenshots for UI. -->
+<!-- Tests added, `pnpm verify` result, e2e / development evidence, screenshots for UI. -->
 
 ## Definition of Done
 

@@ -289,7 +289,7 @@ token), pagination iterators, a webhook signature verifier and examples. It is p
 
 **Exit demo**
 
-1. Run `claude mcp add soldock --transport http https://dock-staging…/mcp --header "Authorization: Bearer sdk_…"`.
+1. Run `claude mcp add soldock --transport http https://soldock-dock-dev…/mcp --header "Authorization: Bearer sdk_…"`.
 2. Ask Claude for `directory_whoami`, then call `events_wait`.
 3. An admin posts a test event, and the wait returns.
 4. Repeat through OAuth as the owner. `whoami` shows the human, with the client as actor.

@@ -107,7 +107,7 @@ operations. They can be required to edit in suggestion mode, and humans watch th
 - **Drive integration:** "open with Docs" for DOCX, HTML and Markdown files, and "download as" DOCX, PDF, Markdown, HTML or text.
 
 **Acceptance**
-- [ ] A PDF export of a 50-page document finishes under 30 s (staging).
+- [ ] A PDF export of a 50-page document finishes under 30 s (development).
 - [ ] Opening a DOCX from Drive creates a native doc that keeps the original as an earlier version (tested).
 
 ### S08.T05 · Agent operations for Docs

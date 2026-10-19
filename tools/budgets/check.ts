@@ -28,7 +28,8 @@ function wrangler(...args: string[]): void {
 
 try {
 	const outdir = join(work, "bundle");
-	wrangler("deploy", "--dry-run", "--outdir", outdir);
+	// `--env ""` builds the top level (production) and stops the warning about the development env.
+	wrangler("deploy", "--dry-run", "--env", "", "--outdir", outdir);
 	const files = readdirSync(outdir, { recursive: true, encoding: "utf8" }).flatMap((path) => {
 		const stat = statSync(join(outdir, path));
 		return stat.isFile() ? [{ path, bytes: stat.size }] : [];

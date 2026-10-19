@@ -25,8 +25,9 @@
 		"test:watch": "vitest",
 		"budgets:check": "node tools/budgets/check.ts apps/dock",
 		"licenses:check": "node tools/licenses/check.ts",
+		"deploy:check": "pnpm --filter @soldock/dock run deploy:check",
 		"spikes:build": "pnpm --filter \"./spikes/**\" --if-present build",
-		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm spikes:build && pnpm plan check && pnpm licenses:check"
+		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm run deploy:check && pnpm spikes:build && pnpm plan check && pnpm licenses:check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",

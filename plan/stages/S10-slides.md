@@ -139,7 +139,7 @@ Operations:
 - `slides.render_thumbnail`, which returns an image so the agent can check its own layout
 
 **Acceptance**
-- [ ] An agent builds a 10-slide deck from an outline, renders the thumbnails, fixes an overflow it detects, and a human watches live (tested end to end on staging).
+- [ ] An agent builds a 10-slide deck from an outline, renders the thumbnails, fixes an overflow it detects, and a human watches live (tested end to end on development).
 
 ### S10.T08 · Slides UI integration
 - status: todo

@@ -116,6 +116,6 @@ ADR.
    edits a shared Sheet while a human watches live, and joins a meeting to produce notes, all
    through MCP and all under its own identity and audit trail.
 3. Load tests sustain 5,000 simulated users within the SLOs in [architecture §9](architecture.md#9-scale-model).
-4. A full disaster-recovery drill rebuilds a staging deployment from backups into an empty
+4. A full disaster-recovery drill rebuilds a development deployment from backups into an empty
    Cloudflare account.
 5. A third party deploys their own instance from the docs in under an hour.

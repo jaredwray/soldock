@@ -52,7 +52,7 @@ and readable by agents through MCP, with external content marked untrusted.
 - size: S
 - depends: S00.T13
 
-Validate on staging:
+Validate on development:
 
 - Email Routing catch-all to the Worker
 - the headers available, including Authentication-Results
@@ -114,7 +114,7 @@ for large Gmail imports ([R-18](../risks.md)).
 
 **Acceptance**
 - [ ] Every corpus message is delivered exactly once, even when queue messages are redelivered (tested).
-- [ ] Unknown recipients are rejected during the SMTP session (staging). A message over the
+- [ ] Unknown recipients are rejected during the SMTP session (development). A message over the
   org's configured size limit (below Email Routing's 25 MiB) is rejected with `setReject` (tested).
 
 ### S04.T04 · `MailboxDO` core
@@ -146,7 +146,7 @@ for large Gmail imports ([R-18](../risks.md)).
 
 **Acceptance**
 - [ ] A golden test suite of queries runs over a seeded mailbox, comparing against expected result sets.
-- [ ] p95 search time is under 200 ms on a 100k-message mailbox (benchmark on staging).
+- [ ] p95 search time is under 200 ms on a 100k-message mailbox (benchmark on development).
 
 ### S04.T06 · Rendering safety
 - status: todo
@@ -276,13 +276,13 @@ authorization-matrix entries.
 
 ## Exit criteria
 
-- External mail reaches human and agent addresses on the staging mail domain, and the UI shows it live.
+- External mail reaches human and agent addresses on the development mail domain, and the UI shows it live.
 - Search operators work. Rendering is safe. Spam and authentication handling is visible.
 - An agent searches and reads mail through MCP, with untrusted envelopes.
 
 **Exit demo**
 
-1. From an external Gmail account, send mail with attachments to `owner@` and `ada@` on the staging domain.
+1. From an external Gmail account, send mail with attachments to `owner@` and `ada@` on the development domain.
 2. Both inboxes update live.
 3. Search `from:gmail.com has:attachment`.
 4. Through MCP, Ada runs `mail_search` and then `mail_get_thread`. The output shows the untrusted envelope.

@@ -9,7 +9,7 @@ The entire backend as one deployable Worker (modular monolith, [ADR-0003](../../
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker ([docs/self-hosting.md](../../docs/self-hosting.md)) |
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns ([architecture §3](../../plan/architecture.md#3-one-origin-request-routing)). Must match `run_worker_first`; `test/config.test.ts` enforces it |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, routes |
@@ -41,7 +41,12 @@ pnpm --filter @soldock/dock dev             # wrangler dev
 pnpm --filter @soldock/dock types           # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm types:check                            # fails if worker-configuration.d.ts is stale (CI)
 pnpm budgets:check                          # builds with --dry-run, profiles startup, compares to budgets.json (CI)
+pnpm run deploy:check                       # wrangler deploy --dry-run --env development (CI)
+scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, against wrangler dev
 ```
+
+`deploy-development.yaml` runs `pnpm run deploy:development` in GitHub Actions on each push to
+`main`. Never run it from a developer machine or an agent session (ADR-0015).
 
 ## Data inventory
 

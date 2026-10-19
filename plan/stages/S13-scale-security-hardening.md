@@ -50,8 +50,8 @@ structured reviews. Know what it costs to run.
 - Drive uploads and searches
 - 500 agents making 100 MCP calls per second
 
-Staging uses its apex mail zone, so thousands of addresses route through catch-all. Runs are
-manually dispatched GitHub Actions workflows in the `staging` environment, because agent sessions
+Development uses its apex mail zone, so thousands of addresses route through catch-all. Runs are
+manually dispatched GitHub Actions workflows in the `development` environment, because agent sessions
 hold no Cloudflare credentials ([ADR-0015](../adr/0015-cloudflare-credentials-only-in-github-actions.md)).
 The report is built from the run's artifacts.
 
@@ -65,7 +65,7 @@ The report is built from the run's artifacts.
 - depends: S13.T01, S08, S09, S10, S11
 
 Add collaboration scenarios (1,000 open documents, plus one document with 50 editors) and Meet
-scenarios (20 meetings). Then run a 24 h soak of the full mix on staging.
+scenarios (20 meetings). Then run a 24 h soak of the full mix on development.
 
 **Acceptance**
 - [ ] The report is extended and the soak is clean, or regressions are filed as tasks.
@@ -126,7 +126,7 @@ Run it against real agents connected through MCP. Verify that the untrusted enve
 approvals, caps and kill switch contain each scenario.
 
 **Acceptance**
-- [ ] Every scenario is contained. A regression suite runs weekly on staging, as a `schedule` workflow in the `staging` environment. R-08 is updated.
+- [ ] Every scenario is contained. A regression suite runs weekly on development, as a `schedule` workflow in the `development` environment. R-08 is updated.
 
 ### S13.T05 · Accessibility audit (WCAG 2.2 AA)
 - status: todo
@@ -150,7 +150,7 @@ deliverability, and Realtime quality, plus backup and drill status once S12.T16 
 mail and their event feeds. Tail and Logpush exports are documented.
 
 **Acceptance**
-- [ ] Injected failures (a DLQ spike, an SLO breach) raise alerts within 5 minutes (staging). Drill
+- [ ] Injected failures (a DLQ spike, an SLO breach) raise alerts within 5 minutes (development). Drill
   failures arrive through the same alert rules once S12.T16 lands.
 
 ### S13.T07 · Cost model

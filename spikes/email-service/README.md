@@ -36,19 +36,23 @@ and the error names each missing item.
 
 1. Make sure that `main` has the "Pull requests required" ruleset
    ([ADR-0015](../../plan/adr/0015-cloudflare-credentials-only-in-github-actions.md) item 2).
-2. Create the `staging` environment. Set its deployment branches to `main` only.
-   - A dispatch that references a missing environment makes GitHub create it with no branch rule.
-     If `staging` exists already, set the branch rule before you add a secret.
-3. Add these environment secrets for the staging Cloudflare account:
+2. Create the `development` environment. Set its deployment branches to `main` only.
+   - A run that references a missing environment makes GitHub create it with no branch rule.
+     If `development` exists already, set the branch rule before you add a secret.
+3. Add these environment secrets for the development Cloudflare account:
    - `CLOUDFLARE_API_TOKEN`: it must be able to deploy Workers with Durable Objects, manage
      Queues and event subscriptions, and send email from the zone. Record the exact permissions in
      the S00.T13 findings.
    - `CLOUDFLARE_ACCOUNT_ID`
-4. Add these environment variables:
-   - `SPIKE_EMAIL_DOMAIN`: the throwaway apex domain, onboarded to Email Service.
-   - `SPIKE_EMAIL_ZONE_ID`: the zone ID of that domain.
-5. Make sure that the account has a `workers.dev` subdomain.
-6. Make seed Gmail and Outlook accounts to receive the messages.
+4. Onboard `soldock.org` to Email Service. The workflow sends from this domain, the development
+   mail domain (S00.T09). The zone must be in the development account. Before the first `send`
+   run, publish DMARC `p=quarantine` or stricter for the domain ([R-23](../../plan/risks.md)). To
+   run the spike on a different domain, change `DOMAIN` in the workflow.
+5. Add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of `soldock.org`. Find it on the
+   zone's **Overview** page in the Cloudflare dashboard, in the **API** section. It is 32 hex
+   characters, and it is not a secret.
+6. Make sure that the account has a `workers.dev` subdomain.
+7. Make seed Gmail and Outlook accounts to receive the messages.
 
 ## Run the spike
 
@@ -86,6 +90,6 @@ pnpm --filter @soldock/spike-email-service types        # regenerate worker-conf
 | --- | --- | --- |
 | Lifecycle events (one row for each queue message ID) | `EventLog` Durable Object (SQLite), table `events` | Until the `cleanup` run deletes the Worker |
 | Send results (one row for each message of a run) | `EventLog` Durable Object (SQLite), table `sends` | Until the `cleanup` run deletes the Worker |
-| The queue `soldock-spike-email-events` and its `email.sending` subscription | The staging Cloudflare account | Until the `cleanup` run |
+| The queue `soldock-spike-email-events` and its `email.sending` subscription | The development Cloudflare account | Until the `cleanup` run |
 
 This state is throwaway test evidence. It has no backup. The artifacts of the runs keep the evidence.

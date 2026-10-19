@@ -1,6 +1,6 @@
 # ADR-0015: Keep Cloudflare credentials in GitHub Actions and run live tests there
 
-- **Status:** accepted
+- **Status:** accepted (amended 2026-10-18)
 - **Date:** 2026-10-16
 - **Decided in:** maintainer direction, during S00.T04 (the S00.T13 spike was blocked on a token)
 
@@ -9,10 +9,10 @@
 Most of Soldock is built by agents in cloud sessions (Claude Code on the web). Some work needs a
 real Cloudflare account:
 
-- provisioning and deploying staging (S00.T09) and production (S05.T25)
+- provisioning and deploying development (S00.T09, S00.T20) and production (S05.T25)
 - end-to-end tests against a deployed Worker (S00.T11)
 - the Email Service spike (S00.T13)
-- load tests and weekly suites on staging (S05.T12, S13)
+- load tests and weekly suites on development (S05.T12, S13)
 
 Any secret in an agent session can be reached by every command the agent runs, including commands
 steered by untrusted content such as a malicious issue, document or dependency. The maintainer has
@@ -23,25 +23,33 @@ branches and tags, and can require reviewers. On a **protected** `main` (pull re
 no force-push), its secrets reach only jobs that run reviewed, merged code.
 
 Cloudflare's API permissions for Workers Scripts, D1, R2, KV and Queues are account-scoped. A token
-that can deploy staging can therefore also change any other Worker or database in the same account.
+that can deploy development can therefore also change any other Worker or database in the same account.
 
 ## Decision
 
 > **Amended 2026-10-18 (S00.T19 dropped, PRs #19 and #20):** item 2 names the ruleset and the
 > maintainer's review of workflow changes. The Consequences bullet on enforcement replaces the
 > S00.T19 code check, which the maintainer dropped.
+>
+> **Amended 2026-10-18 (S00.T09, maintainer direction):** the dock Worker has two deployment
+> environments only, `development` and `production`. `development` replaces the `staging`
+> environment in every item, and the rules for it did not change. The development mail domain is
+> `soldock.org`, the public domain of the project. [R-23](../risks.md) records what that exposes.
+> The backup and disaster-recovery accounts of S12.T17 and S12.T08 are not deployment
+> environments. S12.T17 decides where their tokens live, and amends this ADR.
 
 1. **Where credentials live.** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exist only as
    secrets of GitHub Actions environments:
-   - `staging`, from S00.T09
+   - `development`, from S00.T09
    - `production`, from S05.T25. It requires a reviewer, with self-review prevented and no admin bypass.
 
    They are never stored in agent sessions or their cloud-environment settings, in repository-level
    secrets or variables, or in committed files. Each environment has its own least-privilege token.
-   Staging and production use **separate Cloudflare accounts**, because the permissions above are
-   account-scoped: a leaked staging token must not be able to reach production. If the maintainer
-   instead runs both in one account, they record that choice in S05.T25, and R-22's impact for a
-   staging leak becomes a production incident.
+   The dock Worker has no other deployment environment. Development and production use
+   **separate Cloudflare accounts**, because the permissions above are account-scoped: a leaked
+   development token must not be able to reach production. If the maintainer instead runs both in
+   one account, they record that choice in S05.T25, and R-22's impact for a development leak
+   becomes a production incident.
 2. **Protected `main` first.** No environment holds a secret until `main` has the branch ruleset
    that `lockdown-repo.sh` writes (S00.T17):
    - pull requests required, with force-push and deletion blocked
@@ -92,9 +100,9 @@ that can deploy staging can therefore also change any other Worker or database i
      so the assets router and `run_worker_first` are exercised before merge
 
    `pnpm dev` stays the developer loop.
-5. **Live tests run after merge.** The staging deploy workflow deploys `main` and then runs the same
-   end-to-end suite against the staging host. Spikes, provisioning and load tests that need a live
-   account are dispatched workflows in the `staging` environment, and weekly suites are `schedule`
+5. **Live tests run after merge.** The development deploy workflow deploys `main` and then runs the
+   same end-to-end suite against the development host. Spikes, provisioning and load tests that need
+   a live account are dispatched workflows in the `development` environment, and weekly suites are `schedule`
    workflows in it. Their evidence is the run's job summary and artifacts.
 6. **Agents observe; they never hold credentials.** To check live behaviour, an agent reads the
    post-merge run. It dispatches a workflow on `main` itself if its GitHub access allows, or asks the
@@ -105,7 +113,7 @@ that can deploy staging can therefore also change any other Worker or database i
 - No agent session can leak a Cloudflare token, because none holds one.
 - Live feedback is slower. A change is checked against real Cloudflare only after it merges, so the
   local suite (Miniflare, and e2e against the built Worker) has to catch nearly everything first.
-- A staging regression found after merge is fixed forward or reverted, like any red `main`.
+- A development regression found after merge is fixed forward or reverted, like any red `main`.
 - Some acceptance boxes can only be observed after merge: a deploy, a dispatched run.
   [Process §3](../process.md#3-the-task-loop) handles them. The task stays `in-progress` through
   the merge, and a small follow-up PR ticks the box with the run link.
@@ -130,8 +138,12 @@ that can deploy staging can therefore also change any other Worker or database i
 - Wrangler can't write auto-provisioned resource IDs back to the repository from CI. So
   `soldock provision` runs as a dispatched job that prints the bindings, and an agent commits them.
 - The maintainer creates the environments, their secrets and the branch protection.
-  `docs/self-hosting.md` (S00.T09) lists the token permissions. S00.T09, S00.T13 and S05.T25 stay
-  `blocked` until these exist.
+  `docs/self-hosting.md` (S00.T09) lists the token permissions. S00.T13 and S05.T25 stay
+  `blocked` until these exist. Until then, each S00.T09 deploy run fails at its first step and
+  names what is missing.
+- The development account holds `soldock.org`, the public domain of the project, with its DNS, its
+  mail and the docs site. From S04.T02, a leaked development token can edit that DNS ([R-23](../risks.md)). Each merge
+  redeploys development, so a long run on it needs a deploy freeze ([R-24](../risks.md)).
 - New risk [R-22](../risks.md): CI is now the only place a token exists, so a compromised action, a
   malicious dependency in a deploy job, or a workflow change is the main exfiltration path.
 
@@ -146,7 +158,7 @@ that can deploy staging can therefore also change any other Worker or database i
 - *A trigger denylist (refuse only PR events):* misses `workflow_run`, `issue_comment` and reusable
   workflows called from them. An allowlist fails closed.
 - *One Cloudflare account for both environments:* simpler to set up, but every account-scoped
-  staging token is then a production credential with no reviewer in front of it.
+  development token is then a production credential with no reviewer in front of it.
 - *A self-hosted runner holding the token:* moves the secret to a machine the project must secure
   and patch, for no gain over environments.
 - *A code check of the item 3 allowlist in `pnpm verify` (S00.T19):* the maintainer dropped it on
