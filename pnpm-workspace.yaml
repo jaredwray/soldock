@@ -19,5 +19,11 @@ minimumReleaseAge: 10080 # 7 days, in minutes
 minimumReleaseAgeStrict: true # fail instead of falling back to a too-new version
 minimumReleaseAgeIgnoreMissingTime: false # missing publish-time metadata fails closed
 
+# Security pins. miniflare requires undici 7.29.1. @cloudflare/vitest-plugin requires zod 4.6.5.
+# These overrides install the patched releases.
+overrides:
+  undici: "7.30.1"
+  zod: "4.6.7"
+
 trustPolicy: no-downgrade # fail if a later version has weaker trust evidence than an earlier one
 blockExoticSubdeps: true # transitive dependencies must come from the registry, not git URLs or tarballs
