@@ -52,7 +52,6 @@ pnpm test               # Vitest (all projects)
 | `apps/dock/` | The Worker: the whole backend (one deployable). Domain modules live in `src/<domain>/`. |
 | `apps/web/` | The SPA (React + Vite), served by `dock` as static assets |
 | `packages/contracts/` | The operation registry: schemas, scopes, errors, events |
-| `packages/{docs,sheets,slides}-model/` | Isomorphic document models and converters |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
 | `tools/licenses/`, `tools/budgets/` | License policy check, Worker bundle and startup budgets |
 | `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
