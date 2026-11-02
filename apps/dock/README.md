@@ -10,7 +10,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker ([docs/self-hosting.md](../../docs/self-hosting.md)) |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `space.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Joins the operation handlers of each domain, sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers and `MailboxDO` |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, the REST routes and `/mcp` |
@@ -72,7 +72,8 @@ scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, aga
 ```
 
 `deploy-development.yaml` runs `pnpm run deploy:development` and the remote D1 migrations in GitHub
-Actions on each push to `main`. Never run them from a developer machine or an agent session.
+Actions on each push to `main`, then smoke checks `https://space.soldock.org`. Never run them from a
+developer machine or an agent session.
 [`docs/development.md`](../../docs/development.md) shows how to run the whole product locally,
 with injected inbound mail.
 

@@ -18,10 +18,10 @@ fail() {
 	failures=$((failures + 1))
 }
 
-# A first deploy to a new workers.dev host can take a minute or more to answer, so this first request
-# retries for up to two minutes.
-if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 24 --retry-delay 5 --retry-all-errors \
-	"$base/api/v1/system/ping"); then
+# A new host can take some minutes to answer: a new custom domain needs its DNS record and its
+# certificate. So this first request retries for up to five minutes.
+if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 60 --retry-delay 5 --retry-max-time 300 \
+	--retry-all-errors "$base/api/v1/system/ping"); then
 	fail "GET /api/v1/system/ping did not return a 2xx response"
 	exit 1
 fi
