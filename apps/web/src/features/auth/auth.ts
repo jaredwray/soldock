@@ -16,10 +16,19 @@ export async function createSession(apiKey: string): Promise<void> {
 	throw new ApiError(response.status, problem);
 }
 
-/** Clears the session cookie. */
+/**
+ * Ends the session on the server. The cookie is HttpOnly, so only the server can end it: a failed
+ * call throws, and the app stays signed in instead of showing a sign-out that did not happen.
+ */
 export async function endSession(): Promise<void> {
-	await fetch("/auth/sign-out", { method: "POST", credentials: "same-origin" });
+	const response = await fetch("/auth/sign-out", { method: "POST", credentials: "same-origin" });
+	if (!response.ok) {
+		const problem = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+		throw new ApiError(response.status, problem);
+	}
 }
+
+export const SIGN_OUT_FAILED = "Sign-out did not finish, so you are still signed in. Try again.";
 
 export function signInErrorMessage(error: unknown): string {
 	if (error instanceof ApiError) {

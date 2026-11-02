@@ -1,4 +1,4 @@
-import { type Address, EmailAddress, type Message } from "@soldock/contracts";
+import { type Address, EmailAddress, MAIL_LIMITS, type Message } from "@soldock/contracts";
 import { formatAddress, fullDate, sameAddress } from "../../lib/format.ts";
 
 /** The first values of a composer. Address fields are comma-separated text. */
@@ -70,9 +70,10 @@ function uniqueAddresses(addresses: readonly Address[], exclude: readonly string
 	return result;
 }
 
+/** The subject with the prefix, cut to the subject limit of mail.send. */
 function prefixed(prefix: string, subject: string): string {
 	const pattern = new RegExp(`^${prefix}:\\s`, "i");
-	return pattern.test(subject) ? subject : `${prefix}: ${subject}`;
+	return (pattern.test(subject) ? subject : `${prefix}: ${subject}`).slice(0, MAIL_LIMITS.subjectChars);
 }
 
 /** The plain text of a message. For HTML only, it uses an inert document, which runs nothing and loads nothing. */

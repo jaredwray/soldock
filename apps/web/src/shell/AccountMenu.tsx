@@ -1,15 +1,18 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useAdminAccess } from "../features/admin/access.ts";
+import { SIGN_OUT_FAILED } from "../features/auth/auth.ts";
 import { useSession } from "../features/auth/session.tsx";
 import { initials } from "../lib/format.ts";
 import { Icon } from "../lib/icons.tsx";
 import { Link } from "../lib/router.tsx";
+import { useToast } from "../lib/toast.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
 /** The account button and its panel: identity, Settings, Admin (when allowed) and Sign out. */
 export function AccountMenu() {
 	const { whoami, signOut } = useSession();
+	const toast = useToast();
 	const principal = whoami.principal;
 	const showAdmin = useAdminAccess(principal);
 	const [open, setOpen] = useState(false);
@@ -80,7 +83,11 @@ export function AccountMenu() {
 							</li>
 						)}
 						<li>
-							<button type="button" className="account-link" onClick={() => void signOut()}>
+							<button
+								type="button"
+								className="account-link"
+								onClick={() => void signOut().catch(() => toast({ message: SIGN_OUT_FAILED, tone: "error" }))}
+							>
 								<Icon name="signOut" />
 								Sign out
 							</button>

@@ -39,12 +39,10 @@ export function App() {
 		[],
 	);
 
+	// The UI shows signed-out only after the server ended the session. A failure throws to the caller.
 	const signOut = useCallback(async () => {
-		try {
-			await endSession();
-		} finally {
-			setState({ status: "signed-out", expired: false });
-		}
+		await endSession();
+		setState({ status: "signed-out", expired: false });
 	}, []);
 
 	const session = useMemo<Session | null>(
