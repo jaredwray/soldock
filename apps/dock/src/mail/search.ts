@@ -35,33 +35,43 @@ export class QueryError extends Error {}
 
 const SYSTEM_IN = new Set(["inbox", "sent", "starred", "spam", "trash", "important", "unread"]);
 
-/** Splits the text into tokens. A quoted part, with or without an operator before it, is one token. */
-function tokenize(query: string): string[] {
-	const tokens: string[] = [];
-	const pattern = /(-?)([a-z_]+:)?"([^"]*)"?|(\S+)/gi;
-	for (const match of query.matchAll(pattern)) {
-		if (match[4] !== undefined) tokens.push(match[4]);
-		else tokens.push(`${match[1] ?? ""}${match[2] ?? ""}"${match[3] ?? ""}"`);
-	}
-	return tokens;
+interface Token {
+	text: string;
+	/** For a quoted part: its content, with backslash escapes resolved. */
+	quoted: string | null;
 }
 
-function unquote(value: string): string {
-	return value.startsWith('"') && value.endsWith('"') && value.length >= 2 ? value.slice(1, -1) : value;
+/**
+ * Splits the text into tokens. A quoted part, with or without an operator before it, is one token.
+ * Inside quotes, a backslash escapes the next character, so `label:"say \"hi\""` works.
+ */
+function tokenize(query: string): Token[] {
+	const tokens: Token[] = [];
+	const pattern = /(-?)([a-z_]+:)?"((?:[^"\\]|\\.)*)"?|(\S+)/gi;
+	for (const match of query.matchAll(pattern)) {
+		if (match[4] !== undefined) tokens.push({ text: match[4], quoted: null });
+		else {
+			tokens.push({
+				text: `${match[1] ?? ""}${match[2] ?? ""}`,
+				quoted: (match[3] ?? "").replace(/\\(.)/g, "$1"),
+			});
+		}
+	}
+	return tokens;
 }
 
 export function parseQuery(query: string): Clause[] {
 	const clauses: Clause[] = [];
 	let joinNext = false;
 	for (const token of tokenize(query.trim())) {
-		if (token === "OR" || token === "|") {
+		if (token.quoted === null && (token.text === "OR" || token.text === "|")) {
 			if (clauses.length > 0) joinNext = true;
 			continue;
 		}
-		if (token === "AND") continue;
-		let rest = token;
+		if (token.quoted === null && token.text === "AND") continue;
+		let rest = token.text;
 		let negate = false;
-		if (rest.startsWith("-") && rest.length > 1) {
+		if (rest.startsWith("-") && (rest.length > 1 || token.quoted !== null)) {
 			negate = true;
 			rest = rest.slice(1);
 		}
@@ -69,13 +79,13 @@ export function parseQuery(query: string): Clause[] {
 		const colon = rest.indexOf(":");
 		if (colon > 0) {
 			const op = rest.slice(0, colon).toLowerCase();
-			const value = unquote(rest.slice(colon + 1)).trim();
+			const value = (token.quoted ?? rest.slice(colon + 1)).trim();
 			if ((OPERATORS as readonly string[]).includes(op) && value.length > 0) {
 				term = { negate, kind: "op", op: op as Operator, value };
 			}
 		}
 		if (!term) {
-			const value = unquote(rest).trim();
+			const value = (token.quoted === null ? rest : `${rest}${token.quoted}`).trim();
 			if (value.length === 0) continue;
 			term = { negate, kind: "text", value };
 		}

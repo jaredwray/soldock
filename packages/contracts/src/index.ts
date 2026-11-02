@@ -2,6 +2,7 @@
 export { ApiError, type ClientOptions, createClient, type FetchLike } from "./client.ts";
 export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {
+	AllowlistEntry,
 	ApiKey,
 	CreatedApiKey,
 	OutboundPolicy,

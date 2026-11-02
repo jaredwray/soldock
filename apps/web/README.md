@@ -60,7 +60,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | --- | --- |
 | [`index.html`](index.html) | The page shell. Its root element has `data-soldock-shell`, which the dock tests and the smoke check look for |
 | [`public/_headers`](public/_headers) | The security headers. Cloudflare static assets apply them to each response |
-| [`src/main.tsx`](src/main.tsx) | The entry point. It imports `src/lib/zod-jitless.ts` first |
+| [`src/main.tsx`](src/main.tsx) | The entry point |
 | [`src/App.tsx`](src/App.tsx) | Boot and the session state |
 | [`src/routes.ts`](src/routes.ts) | Route parse and path functions |
 | [`src/shell/`](src/shell/) | The signed-in frame: the top bar, the search box and the account menu |
@@ -103,9 +103,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and
   no external font or CDN. `connect-src 'self'` keeps each call on the dock host.
-- **Zod runs without `eval`.** `@soldock/contracts` makes Zod schemas when it loads. Zod then tests
-  `new Function`, and the CSP reports that test. [`src/lib/zod-jitless.ts`](src/lib/zod-jitless.ts)
-  turns off that test. It must load before each module that imports `@soldock/contracts`.
+- **Zod runs without `eval`.** `@soldock/contracts` turns on Zod's `jitless` mode before it makes a
+  schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
+  `new Function`, and the CSP reports no violation.
 - **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The API key
   field is a password field, and the app does not keep the key.
 

@@ -1,4 +1,4 @@
-import type { OutboundPolicy } from "@soldock/contracts";
+import { AllowlistEntry, type OutboundPolicy } from "@soldock/contracts";
 
 export const POLICY_MODES: readonly { mode: OutboundPolicy["mode"]; title: string; hint: string }[] = [
 	{ mode: "internal-only", title: "Internal only", hint: "Only people and agents in this organization." },
@@ -29,10 +29,7 @@ export function parseAllowlist(text: string): string[] {
 	];
 }
 
-const ENTRY =
-	/^(?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-/** The entries that are not a domain or an address. The server checks them again. */
+/** The entries that are not a domain or an address, by the same schema that the server uses. */
 export function invalidAllowlistEntries(entries: readonly string[]): string[] {
-	return entries.filter((entry) => !ENTRY.test(entry));
+	return entries.filter((entry) => !AllowlistEntry.safeParse(entry).success);
 }

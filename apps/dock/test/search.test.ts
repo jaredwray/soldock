@@ -18,6 +18,14 @@ describe("parseQuery", () => {
 		]);
 	});
 
+	// The web app quotes label names this way, and a label name can hold a double quote.
+	it("resolves backslash escapes inside a quoted value", () => {
+		expect(parseQuery(String.raw`label:"say \"hi\"" -"a \\ b"`)).toEqual([
+			[{ negate: false, kind: "op", op: "label", value: 'say "hi"' }],
+			[{ negate: true, kind: "text", value: "a \\ b" }],
+		]);
+	});
+
 	it("treats an unknown operator as text, as Gmail does", () => {
 		expect(parseQuery("foo:bar")).toEqual([[{ negate: false, kind: "text", value: "foo:bar" }]]);
 	});

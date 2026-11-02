@@ -12,9 +12,11 @@ binding.
 pnpm install
 pnpm build                                   # the SPA, into apps/web/dist
 pnpm --filter @soldock/dock migrate:local    # the D1 migrations, into the local database
-echo 'SETUP_TOKEN="local-setup-token"' > apps/dock/.dev.vars
-pnpm --filter @soldock/dock dev              # http://localhost:8787
+pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token   # http://localhost:8787
 ```
+
+Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.dev.vars`, and
+`pnpm types:check` then fails.
 
 Create the owner. The production config uses `MAIL_DOMAINS=jaredwray.com`, so use an address on that
 domain locally:

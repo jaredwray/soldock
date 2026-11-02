@@ -1,5 +1,3 @@
-// This import must stay first: it sets the Zod config before @soldock/contracts loads.
-import "./lib/zod-jitless.ts";
 import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

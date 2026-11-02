@@ -1,6 +1,6 @@
-import { z } from "zod";
 import { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { z } from "./zod.ts";
 
 /** System labels. Every mailbox has them, and nobody can rename or delete them. */
 export const SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"] as const;
@@ -201,7 +201,8 @@ export const listThreads = defineOperation({
 		"has:attachment, filename:, before:YYYY/MM/DD, after:YYYY/MM/DD, older_than:/newer_than: (with d, m or y, for example 7d),",
 		"larger:/smaller: (with K or M, for example 2M), quoted phrases, a leading - to negate a term, and OR between terms.",
 		"Other words search the subject, the people, the body and the attachment names.",
-		"Results exclude spam and trash unless the query names them or uses in:anywhere. Pass next_cursor as cursor to get the next page.",
+		"An empty query lists all mail. Results exclude spam and trash unless the query names them or uses in:anywhere.",
+		"Escape a double quote inside a quoted value with a backslash. Pass next_cursor as cursor to get the next page.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/threads" },
 	scopes: ["mail.read"],

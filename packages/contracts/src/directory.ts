@@ -1,7 +1,7 @@
-import { z } from "zod";
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
+import { z } from "./zod.ts";
 
 const PrincipalId = prefixedId("prn");
 
@@ -18,7 +18,7 @@ const DisplayName = z
 	);
 
 /** A domain (`example.com`) or one address (`ada@example.com`). */
-const AllowlistEntry = z
+export const AllowlistEntry = z
 	.string()
 	.trim()
 	.toLowerCase()

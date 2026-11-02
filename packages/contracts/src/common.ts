@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "./zod.ts";
 
 /**
  * One mailbox address, without a display name. The pattern refuses spaces, line breaks, angle
