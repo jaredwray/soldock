@@ -77,6 +77,14 @@ describe("composeMessage", () => {
 		expect(parsed.to.map((a) => a.address)).toEqual(input.to);
 	});
 
+	it("leaves out an In-Reply-To or a reference too long for one header line", () => {
+		const long = `<${"y".repeat(950)}@a.example>`;
+		const raw = composeMessage(message({ inReplyTo: long, references: ["<ok@a.example>", long] }));
+		for (const line of raw.split("\r\n")) expect(line.length).toBeLessThanOrEqual(998);
+		expect(raw).not.toMatch(/^In-Reply-To:/m);
+		expect(raw).toMatch(/^References: <ok@a\.example>\r$/m);
+	});
+
 	// With a line break, a user-controlled value could start a new header, such as Bcc.
 	it.each([
 		["subject", { subject: "Hi\r\nBcc: victim@example.org" }],
@@ -117,6 +125,17 @@ describe("parseMail", () => {
 			),
 		);
 		expect(real.authentication).toEqual({ spf: "pass", dkim: "fail", dmarc: "fail" });
+	});
+
+	// In a reply, such an ID would need a header line over 998 characters.
+	it("drops a Message-ID longer than 250 characters, in Message-ID, In-Reply-To and References", async () => {
+		const long = `<${"x".repeat(1500)}@sender.example>`;
+		const parsed = await parse(
+			raw(`Message-ID: ${long}\r\nIn-Reply-To: ${long}\r\nReferences: <ok@a.example> ${long}`),
+		);
+		expect(parsed.messageIdHeader).toBeNull();
+		expect(parsed.inReplyTo).toBeNull();
+		expect(parsed.references).toEqual(["<ok@a.example>"]);
 	});
 
 	it("keeps the first and the most recent references of a very long chain", async () => {

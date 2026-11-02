@@ -4,7 +4,7 @@ import { MAIL_LIMITS } from "@soldock/contracts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
-import { compileQuery, parseQuery, QueryError } from "./search.ts";
+import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -23,6 +23,8 @@ export interface DeliverInput {
 export interface SendInput {
 	messageId: string;
 	idempotencyKey: string | null;
+	/** The SHA-256 of the request, so a reused idempotency key with another message is a conflict. */
+	requestHash: string;
 	contentHash: string;
 	rawKey: string;
 	size: number;
@@ -148,10 +150,11 @@ const MIGRATIONS: string[][] = [
 		`CREATE TABLE labels (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
+			name_folded TEXT NOT NULL,
 			type TEXT NOT NULL CHECK (type IN ('system', 'user')),
 			created_at INTEGER NOT NULL
 		)`,
-		"CREATE UNIQUE INDEX labels_name ON labels (lower(name))",
+		"CREATE UNIQUE INDEX labels_name ON labels (name_folded)",
 		`CREATE TABLE message_labels (
 			message_seq INTEGER NOT NULL,
 			label_id TEXT NOT NULL,
@@ -182,11 +185,13 @@ const MIGRATIONS: string[][] = [
 		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
 		`CREATE TABLE idempotency (
 			key TEXT PRIMARY KEY,
+			request_hash TEXT NOT NULL,
 			result TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
 		...SYSTEM_LABEL_ORDER.map(
-			(id) => `INSERT INTO labels (id, name, type, created_at) VALUES ('${id}', '${id}', 'system', 0)`,
+			(id) =>
+				`INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('${id}', '${id}', '${id.toLowerCase()}', 'system', 0)`,
 		),
 	],
 ];
@@ -273,7 +278,13 @@ export class MailboxDO extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
-		ctx.blockConcurrencyWhile(async () => this.migrate());
+		ctx.blockConcurrencyWhile(async () => {
+			this.migrate();
+			// send() sets the alarm after its transaction commits. If the object stopped between the
+			// two, the outbox has rows and no alarm: set one now.
+			const pending = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0;
+			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+		});
 	}
 
 	private migrate(): void {
@@ -335,6 +346,7 @@ export class MailboxDO extends DurableObject<Env> {
 				internalDate: input.internalDate,
 				bcc: [],
 				labels,
+				subjectFallback: !input.spam,
 			});
 			this.bump();
 			return inserted;
@@ -353,9 +365,11 @@ export class MailboxDO extends DurableObject<Env> {
 		internalDate: number;
 		bcc: MailAddress[];
 		labels: string[];
+		/** False for spam: a forged sender must not join a thread by its subject. */
+		subjectFallback: boolean;
 	}): { seq: number; id: string; threadId: string } {
 		const { parsed } = m;
-		const threadId = this.resolveThread(parsed, m.internalDate, m.threadHint);
+		const threadId = this.resolveThread(parsed, m.internalDate, m.threadHint, m.subjectFallback);
 		const text = capUtf8(parsed.text, MAX_TEXT_BYTES);
 		const html = capUtf8(parsed.html, MAX_HTML_BYTES);
 		const plain = parsed.text ?? (parsed.html ? htmlToText(parsed.html) : "");
@@ -427,7 +441,12 @@ export class MailboxDO extends DurableObject<Env> {
 	 * that references it (for mail that arrives out of order). A reply with no known reference joins
 	 * a recent thread with the same subject. When the message links two threads, they merge.
 	 */
-	private resolveThread(parsed: ParsedMail, internalDate: number, hint: string | null): string {
+	private resolveThread(
+		parsed: ParsedMail,
+		internalDate: number,
+		hint: string | null,
+		subjectFallback: boolean,
+	): string {
 		const found = new Set<string>();
 		if (hint && this.one("SELECT 1 AS found FROM threads WHERE id = ?", hint)) found.add(hint);
 		const refs = [...new Set([...(parsed.inReplyTo ? [parsed.inReplyTo] : []), ...parsed.references])].slice(-50);
@@ -449,7 +468,7 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 		const normalized = normalizeSubject(parsed.subject);
 		const sender = parsed.from?.address.toLowerCase();
-		if (found.size === 0 && normalized && sender && hasReplyPrefix(parsed.subject)) {
+		if (subjectFallback && found.size === 0 && normalized && sender && hasReplyPrefix(parsed.subject)) {
 			// Only a participant of the thread can join it by subject: its sender wrote to the thread or
 			// was a recipient of it. A stranger's "Re:" starts a new thread.
 			const row = this.one<{ id: string }>(
@@ -787,12 +806,20 @@ export class MailboxDO extends DurableObject<Env> {
 		if (users >= MAIL_LIMITS.userLabels) {
 			return { error: { code: "invalid", message: `A mailbox can have at most ${MAIL_LIMITS.userLabels} labels.` } };
 		}
-		if (this.one("SELECT 1 AS found FROM labels WHERE lower(name) = lower(?)", name)) {
+		// JavaScript folds the case, because SQLite's lower() folds ASCII only.
+		const folded = foldLabelName(name);
+		if (this.one("SELECT 1 AS found FROM labels WHERE name_folded = ?", folded)) {
 			return { error: { code: "conflict", message: `A label named "${name}" exists.` } };
 		}
 		const id = newId("lbl");
 		this.ctx.storage.transactionSync(() => {
-			this.sql.exec("INSERT INTO labels (id, name, type, created_at) VALUES (?, ?, 'user', ?)", id, name, Date.now());
+			this.sql.exec(
+				"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES (?, ?, ?, 'user', ?)",
+				id,
+				name,
+				folded,
+				Date.now(),
+			);
 			this.bump();
 		});
 		return { id, name, type: "user", threads_total: 0, threads_unread: 0 };
@@ -866,14 +893,21 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// --- Sending --------------------------------------------------------------------------------
 
-	/** The stored result of an earlier send with this idempotency key in the last 24 hours, if any. */
-	idempotentResult(key: string): SendResult | null {
-		const row = this.one<{ result: string }>(
-			"SELECT result FROM idempotency WHERE key = ? AND created_at >= ?",
+	/**
+	 * The stored result of an earlier send with this idempotency key in the last 24 hours, if any. The
+	 * key is bound to its request: the same key with a different message is a conflict.
+	 */
+	idempotentResult(key: string, requestHash: string): SendResult | Refusal | null {
+		const row = this.one<{ result: string; request_hash: string }>(
+			"SELECT result, request_hash FROM idempotency WHERE key = ? AND created_at >= ?",
 			key,
 			Date.now() - IDEMPOTENCY_TTL_MS,
 		);
-		return row ? (JSON.parse(row.result) as SendResult) : null;
+		if (!row) return null;
+		if (row.request_hash !== requestHash) {
+			return { error: { code: "conflict", message: "This idempotency key was used for a different message." } };
+		}
+		return JSON.parse(row.result) as SendResult;
 	}
 
 	/**
@@ -881,12 +915,13 @@ export class MailboxDO extends DurableObject<Env> {
 	 * transaction. With an idempotency key that was used before, it stores nothing and returns the
 	 * first result.
 	 */
-	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult }> {
+	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult } | Refusal> {
 		const now = Date.now();
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
-				const earlier = this.idempotentResult(input.idempotencyKey);
+				const earlier = this.idempotentResult(input.idempotencyKey, input.requestHash);
+				if (earlier && "error" in earlier) return earlier;
 				if (earlier) return { duplicate: true, result: earlier };
 			}
 			const selfDelivery = input.recipients.some((r) => r.self);
@@ -901,6 +936,7 @@ export class MailboxDO extends DurableObject<Env> {
 				internalDate: input.internalDate,
 				bcc: input.bcc,
 				labels: selfDelivery ? ["SENT", "INBOX"] : ["SENT"],
+				subjectFallback: true,
 			});
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
@@ -927,8 +963,9 @@ export class MailboxDO extends DurableObject<Env> {
 			const sendResult: SendResult = { message_id: stored.id, thread_id: stored.threadId, recipients };
 			if (input.idempotencyKey) {
 				this.sql.exec(
-					"INSERT INTO idempotency (key, result, created_at) VALUES (?, ?, ?)",
+					"INSERT INTO idempotency (key, request_hash, result, created_at) VALUES (?, ?, ?, ?)",
 					input.idempotencyKey,
+					input.requestHash,
 					JSON.stringify(sendResult),
 					now,
 				);
@@ -936,7 +973,9 @@ export class MailboxDO extends DurableObject<Env> {
 			this.bump();
 			return { duplicate: false, result: sendResult };
 		});
-		if (!result.duplicate && input.recipients.some((r) => !r.self)) await this.ctx.storage.setAlarm(now);
+		if (!("error" in result) && !result.duplicate && input.recipients.some((r) => !r.self)) {
+			await this.ctx.storage.setAlarm(now);
+		}
 		return result;
 	}
 
@@ -977,16 +1016,21 @@ export class MailboxDO extends DurableObject<Env> {
 			now,
 			OUTBOX_BATCH,
 		);
-		const raws = new Map<string, Uint8Array>();
+		// Only the raw message of the current row stays in memory. Rows of one message are adjacent
+		// (ORDER BY o.id), so each message is read once, and a batch never holds more than one.
+		let currentKey: string | null = null;
+		let currentRaw = new Uint8Array();
 		for (const row of due) {
 			try {
-				let raw = raws.get(row.raw_key);
-				if (!raw) {
+				if (currentKey !== row.raw_key) {
+					currentKey = null;
+					currentRaw = new Uint8Array();
 					const object = await this.env.BLOBS.get(row.raw_key);
 					if (!object) throw new Error("the raw message is missing from R2");
-					raw = new Uint8Array(await object.arrayBuffer());
-					raws.set(row.raw_key, raw);
+					currentRaw = new Uint8Array(await object.arrayBuffer());
+					currentKey = row.raw_key;
 				}
+				const raw = currentRaw;
 				let status: "delivered" | "sent";
 				let providerId: string | null = null;
 				if (row.kind === "deliver") {

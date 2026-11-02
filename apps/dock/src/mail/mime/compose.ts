@@ -172,6 +172,8 @@ function foldTokens(name: string, tokens: string[]): string {
 }
 
 const MAX_LINE = 998;
+/** The longest Message-ID that In-Reply-To or References carries. It fits a line with the field name. */
+const MAX_ID_IN_HEADER = 900;
 
 /**
  * Folds free text (Subject, extra headers) at its spaces. A word too long for one line is sent as
@@ -208,10 +210,13 @@ export function composeMessage(message: OutgoingMessage): string {
 	headers.push(textHeader("Subject", message.subject));
 	add("Date", formatDate(message.date));
 	add("Message-ID", message.messageId);
-	if (message.inReplyTo) add("In-Reply-To", message.inReplyTo);
-	if (message.references?.length) {
-		for (const ref of message.references) assertSafe("References", ref);
-		headers.push(foldTokens("References", message.references));
+	// A Message-ID too long for one header line is left out, so no line can pass 998 characters.
+	const fits = (id: string) => id.length <= MAX_ID_IN_HEADER;
+	if (message.inReplyTo && fits(message.inReplyTo)) add("In-Reply-To", message.inReplyTo);
+	const references = (message.references ?? []).filter(fits);
+	if (references.length > 0) {
+		for (const ref of references) assertSafe("References", ref);
+		headers.push(foldTokens("References", references));
 	}
 	for (const [name, value] of message.headers ?? []) {
 		if (!HEADER_NAME.test(name)) throw new Error(`invalid header name ${name}`);

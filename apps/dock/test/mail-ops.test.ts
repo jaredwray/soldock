@@ -9,15 +9,18 @@ beforeEach(async () => {
 	({ ada, bot } = await seedOrg());
 });
 
-async function receive(
-	input: Partial<Parameters<typeof rawMessage>[0]> & { subject: string },
-	receivedAt: Date | undefined = input.date,
-) {
+type Incoming = Partial<Parameters<typeof rawMessage>[0]> & { subject: string };
+
+async function deliver(input: Incoming, receivedAt: Date | undefined = input.date) {
 	await inject(
 		rawMessage({ from: "bob@sender.example", to: "ada@dock.test", ...input }),
 		"ada@dock.test",
 		receivedAt ? { receivedAt } : {},
 	);
+}
+
+async function receive(input: Incoming, receivedAt: Date | undefined = input.date) {
+	await deliver(input, receivedAt);
 	const { threads } = await ada.call("mail.list_threads", { query: "in:anywhere" });
 	const thread = threads.find((t) => t.subject === input.subject);
 	if (!thread) throw new Error(`thread ${input.subject} not found`);
@@ -62,6 +65,8 @@ describe("mail.list_threads", () => {
 		});
 		await receive({ subject: "Old newsletter", from: "news@list.example", date: old, text: "unsubscribe" });
 		const lunch = await receive({ subject: "Lunch plans", from: "dan@friends.example", text: "Pizza or ramen?" });
+		// Mail to ada+news@ reaches ada@, so to:me finds it too.
+		await receive({ subject: "Tagged copy", to: "ada+news@dock.test" });
 		const label = await ada.call("mail.create_label", { name: "Food & Fun" });
 		await ada.call("mail.modify_threads", {
 			thread_ids: [lunch.id],
@@ -80,14 +85,16 @@ describe("mail.list_threads", () => {
 			["filename:pdf", ["Quarterly report"]],
 			["larger:2K", ["Quarterly report"]],
 			["is:starred", ["Lunch plans"]],
-			["is:unread", ["Invoice 1042", "Old newsletter", "Quarterly report"]],
+			["is:unread", ["Invoice 1042", "Old newsletter", "Quarterly report", "Tagged copy"]],
 			["is:read", ["Lunch plans"]],
 			['label:"food & fun"', ["Lunch plans"]],
 			["label:food-&-fun", ["Lunch plans"]],
 			["older_than:1y", ["Old newsletter"]],
-			["newer_than:30d -from:dan", ["Invoice 1042", "Quarterly report"]],
-			["to:me", ["Invoice 1042", "Lunch plans", "Old newsletter", "Quarterly report"]],
+			["newer_than:30d -from:dan", ["Invoice 1042", "Quarterly report", "Tagged copy"]],
+			["to:me", ["Invoice 1042", "Lunch plans", "Old newsletter", "Quarterly report", "Tagged copy"]],
 			["in:sent", []],
+			// A NUL is not a term: the query is empty, so it lists all mail (it was a 500 before).
+			["\u0000", ["Invoice 1042", "Lunch plans", "Old newsletter", "Quarterly report", "Tagged copy"]],
 		];
 		for (const [query, expected] of table) expect(await subjects(query), query).toEqual(expected);
 	});
@@ -162,12 +169,65 @@ describe("mail.modify_threads", () => {
 	});
 });
 
+describe("hostile and large threads", () => {
+	// One message that the HTML parser refuses must not hide the rest of its thread.
+	it("keeps a thread readable when one message's HTML cannot be sanitized", async () => {
+		await receive({ subject: "Plan", messageId: "<plan-1@sender.example>", text: "First message" });
+		await deliver({
+			subject: "Re: Plan",
+			inReplyTo: "<plan-1@sender.example>",
+			text: "",
+			html: "<select><style>x</style></select><p>Hostile but readable</p>",
+		});
+		const [thread] = (await ada.call("mail.list_threads")).threads;
+		const full = await ada.call("mail.get_thread", { thread_id: thread?.id as string });
+		expect(full.messages).toHaveLength(2);
+		expect(full.messages[0]?.body.text).toContain("First message");
+		expect(full.messages[1]?.body.html).toBeNull();
+		expect(full.messages[1]?.body.text).toContain("Hostile but readable");
+	});
+
+	// A thread result travels over RPC, which allows 32 MiB. The newest bodies come first.
+	it("leaves out the oldest bodies of a very large thread, and mail.get_message returns them", {
+		timeout: 60_000,
+	}, async () => {
+		const big = `<p>${"x".repeat(1_000_000)}</p>`;
+		let previous: string | undefined;
+		for (let i = 0; i < 7; i++) {
+			const id = `<big-${i}@sender.example>`;
+			await deliver({
+				subject: i === 0 ? "Huge" : "Re: Huge",
+				messageId: id,
+				...(previous ? { inReplyTo: previous } : {}),
+				text: "",
+				html: big,
+			});
+			previous = id;
+		}
+		const [thread] = (await ada.call("mail.list_threads")).threads;
+		expect(thread?.message_count).toBe(7);
+		const full = await ada.call("mail.get_thread", { thread_id: thread?.id as string });
+		const omitted = full.messages.filter((m) => m.body.omitted);
+		expect(omitted.length).toBeGreaterThan(0);
+		expect(full.messages.at(-1)?.body.omitted).toBe(false);
+		const one = await ada.call("mail.get_message", { message_id: omitted[0]?.id as string });
+		expect(one.body.omitted).toBe(false);
+		expect(one.body.html?.length).toBeGreaterThan(1_000_000);
+		expect(await code(bot.call("mail.get_message", { message_id: omitted[0]?.id as string }))).toBe("not_found");
+	});
+});
+
 describe("labels", () => {
 	it("creates a label once by name in any case, and deleting it removes it from every message", async () => {
 		const thread = await receive({ subject: "Tagged" });
 		const label = await ada.call("mail.create_label", { name: "Clients/Acme" });
 		expect(await code(ada.call("mail.create_label", { name: "clients/acme" }))).toBe("conflict");
 		expect(await code(ada.call("mail.create_label", { name: "inbox" }))).toBe("conflict");
+		// Case folding is not only for ASCII.
+		const cafe = await ada.call("mail.create_label", { name: "Café" });
+		expect(await code(ada.call("mail.create_label", { name: "CAFÉ" }))).toBe("conflict");
+		await ada.call("mail.modify_threads", { thread_ids: [thread.id], add_label_ids: [cafe.id] });
+		expect(await subjects("label:CAFÉ")).toEqual(["Tagged"]);
 		await ada.call("mail.modify_threads", { thread_ids: [thread.id], add_label_ids: [label.id] });
 		expect(await subjects("label:clients/acme")).toEqual(["Tagged"]);
 		await ada.call("mail.delete_label", { label_id: label.id });

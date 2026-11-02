@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError } from "@soldock/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -169,6 +169,40 @@ describe("mail.send to the internet", () => {
 		expect(pulled).toBeLessThan(40);
 	});
 
+	// The alarm takes 25 outbox rows at a time, and it must set itself again until the outbox is empty.
+	it("delivers more recipients than one alarm batch takes", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(ada.id);
+		const to = Array.from({ length: 30 }, (_, i) => `r${i}@example.org`);
+		const sent = await ada.call("mail.send", { to, text: "To many" });
+		await drainOutbox(ada.id);
+		expect(email.sent).toHaveLength(30);
+		expect((await deliveryOf(ada, sent.thread_id))?.every((d) => d.status === "sent")).toBe(true);
+	});
+
+	// send() sets the alarm after its transaction. An object that stops in between must still deliver.
+	it("sets the alarm again on start when the outbox has rows and no alarm", async () => {
+		const sent = await ada.call("mail.send", { to: ["owner@dock.test"], text: "Lost alarm" });
+		await drainOutbox(ada.id);
+		// The runtime fires the alarm at once, so the test makes the state of a lost alarm itself:
+		// a queued recipient, an outbox row and no alarm.
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		await runInDurableObject(mailbox, async (_instance, state) => {
+			await state.storage.deleteAlarm();
+			state.storage.sql.exec("UPDATE delivery SET status = 'queued'");
+			state.storage.sql.exec(
+				"INSERT INTO outbox (message_seq, kind, target, address, next_attempt_at) SELECT message_seq, 'deliver', ?, address, ? FROM delivery",
+				owner.id,
+				Date.now(),
+			);
+		});
+		await evictDurableObject(mailbox);
+		await drainOutbox(ada.id);
+		expect(await deliveryOf(ada, sent.thread_id)).toEqual([
+			{ address: "owner@dock.test", kind: "local", status: "delivered", error: null },
+		]);
+	});
+
 	// Email Service accepts 5 MiB for each message.
 	it("refuses a message over 5 MiB when a recipient is external, and accepts it for local recipients", async () => {
 		const big = btoa("x".repeat(4 * 1024 * 1024));
@@ -234,6 +268,15 @@ describe("agent outbound policy", () => {
 });
 
 describe("idempotency", () => {
+	// A key names one message. Reusing it for another message is a client bug that must not pass silently.
+	it("refuses the same key with a different message", async () => {
+		await ada.call("mail.send", { to: ["owner@dock.test"], text: "First", idempotency_key: "k-x" });
+		expect(await code(ada.call("mail.send", { to: ["owner@dock.test"], text: "Second", idempotency_key: "k-x" }))).toBe(
+			"conflict",
+		);
+		expect(await sentCount(ada)).toBe(1);
+	});
+
 	// Two attempts compose different bytes, so each stores its own raw object. The loser's must go.
 	it("keeps one message and one raw object when two sends with one key race", async () => {
 		const send = () => ada.call("mail.send", { to: ["owner@dock.test"], text: "Race", idempotency_key: "race" });

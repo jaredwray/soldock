@@ -5,7 +5,7 @@
 
 | | |
 | --- | --- |
-| **Purpose** | MCP adapter: the `/mcp` Streamable HTTP endpoint, generating tools (and later resources) from the operation registry, filtered by scopes, agent policy and toolsets. |
+| **Purpose** | MCP adapter: the `/mcp` Streamable HTTP endpoint. It makes tools (and later resources) from the operation registry, and filters them by scopes, agent policy and toolsets. |
 | **Owns** | No data. |
 | **Depends on** | `platform`, `identity`. Domain handlers are injected by the composition root (`src/index.ts`); this adapter never imports product domains. |
 | **Operations** | Exposes every operation as a `<domain>_<verb>` tool. |
@@ -37,5 +37,5 @@ SDK while the server needs only stateless tools. Reconsider when resources, prom
   to another tool gets JSON-RPC error `-32602`.
 - A result has `structuredContent` and the same JSON as text. When the result holds content marked
   `untrusted: true`, a notice comes first and tells the model to treat that content as data.
-- An operation error (including invalid arguments) is a tool result with `isError: true` and
+- An operation error (also for arguments that are not valid) is a tool result with `isError: true` and
   `{ "code", "message" }`, so the model can read it and correct the call.

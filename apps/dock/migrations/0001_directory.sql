@@ -47,13 +47,17 @@ CREATE TABLE api_keys (
 CREATE INDEX api_keys_principal ON api_keys (principal_id);
 
 -- Browser sessions of humans. Only the SHA-256 of the cookie value is stored. A session keeps the
--- scopes of the API key that created it, so a narrow key cannot become a full session.
+-- scopes of the API key that created it, so a narrow key cannot become a full session, and it ends
+-- when that key is revoked.
 CREATE TABLE sessions (
 	token_hash TEXT PRIMARY KEY,
 	principal_id TEXT NOT NULL REFERENCES principals (id),
+	key_id TEXT NOT NULL REFERENCES api_keys (id),
 	scopes TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	expires_at TEXT NOT NULL
 );
 
 CREATE INDEX sessions_principal ON sessions (principal_id);
+
+CREATE INDEX sessions_key ON sessions (key_id);

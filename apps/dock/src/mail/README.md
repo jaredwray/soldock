@@ -8,7 +8,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups/shared mailboxes, delegation, agent outbound policy enforcement. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, idempotency keys); raw MIME in R2 `blobs`. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
+| **Operations** | `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -50,9 +50,10 @@ A message joins a thread when one of these is true:
 
 - It references (`In-Reply-To`, `References`) a message of the thread.
 - A message of the thread references it. This covers mail that arrives out of order.
-- It has a reply prefix (`Re:`, `AW:`, `Fwd:` and others), no known reference, the same normalized
-  subject as a thread with a message in the last 30 days, and a sender who took part in that
-  thread (as a sender or a recipient). A stranger's `Re:` starts a new thread.
+- It has a reply prefix (`Re:`, `AW:`, `Fwd:` and others) and no known reference. Also, a thread
+  has the same normalized subject and a message in the last 30 days. The sender took part in that
+  thread, as a sender or a recipient. A stranger's `Re:` starts a new thread. Spam never joins a
+  thread by its subject, because a DMARC failure means that the sender can be forged.
 
 When a message links two threads, they merge into the older thread. A sent reply joins the thread
 of the message that it answers.
@@ -61,7 +62,8 @@ of the message that it answers.
 
 - System labels: `INBOX`, `STARRED`, `IMPORTANT`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
 - User labels have `lbl_` ids. Their names are unique without regard to case, so a user label
-  cannot be named `inbox`.
+  cannot be named `inbox`. The comparison uses the NFC form in lowercase, for all scripts:
+  `Café` and `CAFÉ` are the same name. The `label:` operator uses the same comparison.
 - A label change on a thread applies to each message of the thread.
 - Archive removes `INBOX`. Trash adds `TRASH` and keeps the other labels, so a restore (remove
   `TRASH`) brings the thread back to where it was.
@@ -74,13 +76,23 @@ of the message that it answers.
 - Operators: `from:`, `to:`, `cc:`, `bcc:`, `subject:`, `label:`, `in:`, `is:`, `has:attachment`,
   `filename:`, `before:`, `after:`, `older_than:`, `newer_than:`, `larger:`, `smaller:`, `-`, `OR`
   and quoted phrases.
-- `from:me` and `to:me` use the address of the mailbox.
+- `from:me` and `to:me` use the address of the mailbox. They also find the address with a
+  `+tag`.
 - Other words search the FTS5 index: subject, people, body (first 100,000 characters) and
   attachment names.
-- Dates are the time of receipt, as in Gmail.
+- Dates are the time of receipt, as in Gmail. `before:` and `after:` use dates in UTC.
 - Results exclude spam and trash unless the query names them or uses `in:anywhere`.
 - The query text becomes bound values only. FTS words are quoted, so FTS operators in the text
-  have no effect.
+  have no effect. Control characters are removed from the query.
+
+## Read
+
+- `mail.get_thread` returns each message of a thread with its body. One result goes over RPC,
+  and RPC allows 32 MiB. The bodies of a thread share a budget of 6,000,000 characters.
+- The newest bodies get the budget first. A message without its body has `body.omitted: true`.
+  `mail.get_message` returns that message with its body.
+- Each message is sanitized alone. When the sanitizer fails on one message, that message gets
+  `body.html: null` and a text body from its HTML. The other messages of the thread do not change.
 
 ## Outbound
 
@@ -96,6 +108,8 @@ of the message that it answers.
 4. The raw bytes go to R2. `MailboxDO.send()` stores the sent copy with `SENT`, one `delivery`
    row and one `outbox` row for each recipient, and the idempotency key, in one transaction. When
    the mailbox answers that the key was used, the handler deletes the raw object of this attempt.
+   The key keeps a SHA-256 hash of the request. The same key with a different request gets
+   `conflict`.
 5. The outbox alarm delivers:
    - a local recipient: a copy of the raw bytes in R2 for that mailbox, then `MailboxDO.deliver()`.
      Local mail never reaches Email Service.
@@ -104,6 +118,9 @@ of the message that it answers.
 6. A failed delivery is retried with backoff (1 minute, doubled, at most 1 hour), 8 times. Then
    the recipient is `failed`. Delivery is at least once: a crash after a send and before the outbox
    row is deleted sends again.
+7. One alarm takes 25 outbox rows. It sets the next alarm while rows stay. When the object starts
+   with outbox rows and no alarm, it sets an alarm, so a stop between the transaction and the
+   alarm cannot lose mail.
 
 Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, with `SENT` and
 `INBOX`.
@@ -131,7 +148,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
-| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours |
+| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<principal>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
@@ -153,6 +170,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 | Request body on REST and MCP | about 23 MiB | The base64 of 10 MiB plus its text, refused while it streams |
 | Recipients for each message | 50 | Email Service |
 | Stored text body / HTML body | 256 KiB / 1 MiB of UTF-8 | Durable Object row limit (2 MB). Longer bodies are cut and `truncated` is true |
+| Bodies in one `mail.get_thread` result | 6,000,000 characters | RPC result limit (32 MiB). Older bodies are omitted |
+| Subject | 2,000 characters | A longer subject is cut |
+| Message-ID | 250 characters | A longer ID is not kept, so a reply header stays under 998 characters |
 | User labels | 500 | |
 | Bound values in one search | 90 | Durable Object SQLite allows 100 |
 

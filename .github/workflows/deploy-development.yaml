@@ -77,15 +77,19 @@ jobs:
         run: pnpm build
 
       # Migrations only add, so the running Worker keeps working with the new schema. On the first
-      # deploy the database does not exist yet, so this step can fail. The step after the deploy
-      # applies the migrations again, and it must pass.
+      # deploy the database does not exist yet: the deploy creates it, and the step after the deploy
+      # applies the migrations. Any other failure here stops the deploy.
       - name: Apply the D1 migrations before the deploy
-        continue-on-error: true
         working-directory: apps/dock
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm run migrate:development
+        run: |
+          if pnpm exec wrangler d1 info soldock-directory --env development > /dev/null 2>&1; then
+            pnpm run migrate:development
+          else
+            echo "::notice::The D1 database does not exist yet. The deploy creates it, and the next step migrates it."
+          fi
 
       # wrangler provisions the D1 database, the R2 bucket and the queues by name on the first deploy.
       - name: Deploy the dock Worker to development

@@ -242,11 +242,14 @@ export async function getApiKey(db: D1Database, id: string): Promise<ApiKeyRecor
 	return row ? toApiKey(row) : null;
 }
 
+/** Revokes a key and ends the browser sessions that it created, in one transaction. */
 export async function revokeApiKey(db: D1Database, id: string): Promise<void> {
-	await db
-		.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-		.bind(new Date().toISOString(), id)
-		.run();
+	await db.batch([
+		db
+			.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+			.bind(new Date().toISOString(), id),
+		db.prepare("DELETE FROM sessions WHERE key_id = ?").bind(id),
+	]);
 }
 
 /** The live key with this secret, and its principal. */
@@ -273,9 +276,13 @@ export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<vo
 
 /**
  * Creates a session with the scopes of the key that signed in, and deletes the expired sessions of
- * the same principal. Returns the cookie value.
+ * the same principal. The session ends when that key is revoked. Returns the cookie value.
  */
-export async function createSession(db: D1Database, principalId: string, scopes: readonly Scope[]): Promise<string> {
+export async function createSession(
+	db: D1Database,
+	principalId: string,
+	key: Pick<ApiKeyRecord, "id" | "scopes">,
+): Promise<string> {
 	const token = randomToken(32);
 	const now = Date.now();
 	await db.batch([
@@ -283,11 +290,14 @@ export async function createSession(db: D1Database, principalId: string, scopes:
 			.prepare("DELETE FROM sessions WHERE principal_id = ? AND expires_at <= ?")
 			.bind(principalId, new Date(now).toISOString()),
 		db
-			.prepare("INSERT INTO sessions (token_hash, principal_id, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+			.prepare(
+				"INSERT INTO sessions (token_hash, principal_id, key_id, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+			)
 			.bind(
 				await sha256Hex(token),
 				principalId,
-				JSON.stringify(scopes),
+				key.id,
+				JSON.stringify(key.scopes),
 				new Date(now).toISOString(),
 				new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
 			),
@@ -300,7 +310,11 @@ export async function findSession(
 	token: string,
 ): Promise<{ principal: PrincipalRecord; scopes: Scope[] } | null> {
 	const row = await db
-		.prepare("SELECT principal_id, scopes FROM sessions WHERE token_hash = ? AND expires_at > ?")
+		.prepare(
+			`SELECT s.principal_id, s.scopes FROM sessions s
+			JOIN api_keys k ON k.id = s.key_id AND k.revoked_at IS NULL
+			WHERE s.token_hash = ? AND s.expires_at > ?`,
+		)
 		.bind(await sha256Hex(token), new Date().toISOString())
 		.first<{ principal_id: string; scopes: string }>();
 	if (!row) return null;

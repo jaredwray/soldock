@@ -120,6 +120,35 @@ describe("browser sessions", () => {
 		expect(mint.status).toBe(403);
 	});
 
+	// Revocation is the way to lock out a leaked key, so it must also end what the key created.
+	it("ends the sessions of a key when the key is revoked", async () => {
+		const owner = await setupOwner();
+		const { api_key } = await owner.call("account.create_api_key", { label: "laptop", scopes: ["account.read"] });
+		const cookie = cookieOf(await signIn(api_key.secret));
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
+		await owner.call("account.revoke_api_key", { key_id: api_key.id });
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
+	});
+
+	it("refuses a large sign-in body while it streams, before any credential check", async () => {
+		let pulled = 0;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulled++;
+				if (pulled > 40) controller.close();
+				else controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20));
+			},
+		});
+		const res = await request("/auth/session", {
+			method: "POST",
+			headers: { origin: ORIGIN, "content-type": "application/json" },
+			body,
+			duplex: "half",
+		} as RequestInit);
+		expect(res.status).toBe(413);
+		expect(pulled).toBeLessThan(5);
+	});
+
 	it("refuses a sign-in from another origin, with a bad key, or with an agent key", async () => {
 		const { owner, bot } = await seedOrg();
 		expect((await signIn(owner.key, "https://evil.example")).status).toBe(403);

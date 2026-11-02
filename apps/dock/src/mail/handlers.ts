@@ -1,13 +1,22 @@
 import { MAIL_LIMITS, type Message } from "@soldock/contracts";
 import { type CallContext, domainOf, mailDomains, resolveAddress } from "../identity/index.ts";
-import { audit, base64ToBytes, bytesToBase64, type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
+import {
+	audit,
+	base64ToBytes,
+	bytesToBase64,
+	type HandlerMap,
+	log,
+	newId,
+	OperationError,
+	sha256Hex,
+} from "../platform/index.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
 import { sanitizeHtml } from "./sanitize.ts";
 import { compileQuery, parseQuery, QueryError } from "./search.ts";
-import { replySubject } from "./threading.ts";
+import { htmlToText, replySubject } from "./threading.ts";
 
 type MailOperation =
 	| "mail.get_profile"
@@ -90,7 +99,8 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 		untrusted: stored.origin === "external",
 		authentication: stored.origin === "external" ? stored.authentication : null,
 		body: {
-			text: stored.text,
+			// When the HTML cannot be sanitized and the message has no text part, a text form keeps it readable.
+			text: stored.text ?? (html === null && stored.html !== null ? htmlToText(stored.html) : null),
 			html: html?.html ?? null,
 			remote_images_blocked: html?.remoteImagesBlocked ?? 0,
 			truncated: stored.truncated,
@@ -263,9 +273,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.send"(call, input) {
 		const box = mailbox(call);
+		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
+		const { idempotency_key: _key, ...request } = input;
+		const requestHash = await sha256Hex(JSON.stringify(request));
 		if (input.idempotency_key) {
-			const earlier = await box.idempotentResult(input.idempotency_key);
-			if (earlier) return earlier;
+			const earlier = await box.idempotentResult(input.idempotency_key, requestHash);
+			if (earlier) return accept(earlier);
 		}
 		const recipients = await resolveRecipients(call, [...input.to, ...input.cc, ...input.bcc]);
 		checkOutboundPolicy(call, recipients);
@@ -331,6 +344,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		const sendInput: SendInput = {
 			messageId,
 			idempotencyKey: input.idempotency_key ?? null,
+			requestHash,
 			contentHash,
 			rawKey,
 			size: bytes.byteLength,
@@ -344,7 +358,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// When the mailbox answers that the key was used, no message references the object, so delete it.
 		// After an error the mailbox can still have committed, so the object stays: a dangling reference
 		// would lose mail, and an orphan only costs storage until blob GC exists.
-		const sent = await box.send(sendInput);
+		const answer = await box.send(sendInput);
+		if ("error" in answer) {
+			// No message references this attempt's object.
+			await call.env.BLOBS.delete(rawKey);
+			return accept(answer);
+		}
+		const sent = answer;
 		if (sent.duplicate) await call.env.BLOBS.delete(rawKey);
 		else auditOk(call, "mail.send", sent.result.message_id);
 		return sent.result;

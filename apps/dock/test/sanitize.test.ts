@@ -30,6 +30,11 @@ describe("sanitizeHtml", () => {
 			"<style></sty@import x;le><img src=x onerror=alert(1)></style>",
 			/onerror|<img|<\/style><img/i,
 		],
+		["an xmp element", "<xmp><img src=x onerror=alert(1)></xmp>", /onerror|<img/i],
+		["an XMP element in capitals", "<XMP><img src=x onerror=alert(1)></XMP>", /onerror|<img/i],
+		["a noembed element", "<noembed><img src=x onerror=alert(1)></noembed>", /onerror|<img/i],
+		["a noframes element", "<noframes><a href=javascript:alert(1)>x</a></noframes>", /javascript|<a/i],
+		["a plaintext element", "<plaintext><img src=x onerror=alert(1)>", /onerror|<img/i],
 		[
 			"a script that CSS cleaning would expose",
 			"<style>p{} <javascript:/style><script>alert(2)</script></style>",
@@ -85,6 +90,28 @@ describe("sanitizeHtml", () => {
 		expect(result.html).not.toContain("t.example");
 		expect(result.html).toContain("color: red");
 		expect(result.html).toContain("url(data:image/png;base64,iVBORw0KGgo=)");
+	});
+
+	// The parser keeps the content of a raw-text element as text. Unwrapped, that text would be markup.
+	it("never unwraps html, head or body, so their repeated tags cannot pass through", async () => {
+		const html = await clean(`${"<head>".repeat(1000)}<body bgcolor="red"><p>x</p></body>`);
+		expect(html).not.toMatch(/<head|<body|<html/i);
+		expect(html).toContain("<p>x</p>");
+	});
+
+	// External CSS reaches the sanitizer on every read of a thread, so its time must be linear.
+	it.each([
+		["unclosed url( calls", `<style>${"url(".repeat(262_144)}</style>`],
+		["url( calls with one late )", `<style>${"url(".repeat(262_144)})</style>`],
+		["image-set( calls", `<style>${"image-set(".repeat(100_000)}</style>`],
+		["@import rules", `<style>${"@import ".repeat(130_000)}</style>`],
+		["open comments", `<style>${"/*".repeat(500_000)}</style>`],
+		["url( in a style attribute", `<p style="${"url(".repeat(262_144)}">x</p>`],
+	])("cleans 1 MiB of %s in linear time", async (_name, html) => {
+		const started = Date.now();
+		const result = await sanitizeHtml(html);
+		expect(Date.now() - started).toBeLessThan(3000);
+		expect(result.html).not.toMatch(/url\(|image-set\(|@import/i);
 	});
 
 	it("keeps the text of an element that is not on the allowlist", async () => {

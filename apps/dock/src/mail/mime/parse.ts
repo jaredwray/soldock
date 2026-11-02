@@ -40,10 +40,19 @@ export interface ParsedMail {
 /** Threading needs the root and the recent references. Long chains keep the first and the last ones. */
 export const MAX_REFERENCES = 40;
 
-const MESSAGE_ID = /<[^<>\s]+>/g;
+/**
+ * The longest Message-ID that the mailbox keeps. A longer one is dropped: in a reply's In-Reply-To
+ * or References it could not fit a header line of 998 characters.
+ */
+export const MAX_MESSAGE_ID = 250;
+
+/** The longest subject that the mailbox keeps, in characters. */
+export const MAX_SUBJECT = 2000;
+
+const MESSAGE_ID = /<[^<>\s]{1,998}>/g;
 
 function messageIds(value: string | undefined): string[] {
-	return value ? (value.match(MESSAGE_ID) ?? []) : [];
+	return value ? (value.match(MESSAGE_ID) ?? []).filter((id) => id.length <= MAX_MESSAGE_ID) : [];
 }
 
 function firstMessageId(value: string | undefined): string | null {
@@ -52,7 +61,7 @@ function firstMessageId(value: string | undefined): string | null {
 	if (id) return id;
 	// Some senders omit the angle brackets.
 	const bare = value.trim();
-	return /^[^<>\s]+@[^<>\s]+$/.test(bare) ? `<${bare}>` : null;
+	return bare.length <= MAX_MESSAGE_ID - 2 && /^[^<>\s@]+@[^<>\s@]+$/.test(bare) ? `<${bare}>` : null;
 }
 
 function flatten(addresses: PostalAddress[] | PostalAddress | undefined): MailAddress[] {
@@ -105,7 +114,10 @@ export async function parseMail(raw: Uint8Array | ArrayBuffer, options: { authse
 			references.length > MAX_REFERENCES
 				? [references[0] as string, ...references.slice(-(MAX_REFERENCES - 1))]
 				: references,
-		subject: (email.subject ?? "").replace(/[\r\n]+/g, " ").trim(),
+		subject: (email.subject ?? "")
+			.slice(0, MAX_SUBJECT)
+			.replace(/[\r\n]+/g, " ")
+			.trim(),
 		from: flatten(email.from)[0] ?? null,
 		to: flatten(email.to),
 		cc: flatten(email.cc),

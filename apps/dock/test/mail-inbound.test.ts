@@ -163,6 +163,24 @@ describe("threading", () => {
 		expect((await inbox(ada.call)).map((t) => t.message_count)).toEqual([2]);
 	});
 
+	// A DMARC failure means the sender is forged. Such a message must not join a real conversation.
+	it("never joins spam to a thread by subject", async () => {
+		const { ada } = await seedOrg();
+		const to = "ada@dock.test";
+		await inject(rawMessage({ from: "bob@sender.example", to, subject: "Invoice" }), to);
+		await inject(
+			rawMessage({
+				from: "bob@sender.example",
+				to,
+				subject: "Re: Invoice",
+				headers: [["Authentication-Results", "mx.cloudflare.net; spf=fail; dkim=fail; dmarc=fail"]],
+			}),
+			to,
+		);
+		const threads = (await ada.call("mail.list_threads", { query: "in:anywhere" })).threads;
+		expect(threads.map((t) => t.message_count)).toEqual([1, 1]);
+	});
+
 	it("merges two threads when a message references both", async () => {
 		const { ada } = await seedOrg();
 		await inject(

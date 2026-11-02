@@ -8,8 +8,8 @@ through MCP or REST.
 
 ## Create an agent
 
-1. An owner or an admin opens **Admin** in the web app and creates an agent, with a display name,
-   an address on a mail domain and a sponsor. The REST and MCP operation is
+1. An owner or an admin opens **Admin** in the web app and creates an agent. The agent gets a
+   display name, an address on a mail domain and a sponsor. The REST and MCP operation is
    `directory.create_principal`.
 2. The result shows the agent's first API key once. Store it in the agent's secret store.
 3. The sponsor, an owner or an admin can create more keys for the agent, with fewer scopes, and

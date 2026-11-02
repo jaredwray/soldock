@@ -1,7 +1,7 @@
-import { ALL_SCOPES, EmailAddress } from "@soldock/contracts";
+import { ALL_SCOPES, DisplayName, EmailAddress } from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
-import { audit, log, OperationError, type RequestIdVariables, sameSecret } from "../platform/index.ts";
+import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
 import {
@@ -17,7 +17,7 @@ import {
 type AuthApp = Hono<{ Bindings: Env; Variables: RequestIdVariables }>;
 
 const SetupBody = z.strictObject({
-	display_name: z.string().trim().min(1).max(100),
+	display_name: DisplayName,
 	address: EmailAddress,
 });
 
@@ -27,9 +27,13 @@ function sessionCookie(value: string, maxAge: number): string {
 	return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
+/** The bodies of these routes are small. A larger body is refused while it streams. */
+const AUTH_BODY_BYTES = 4096;
+
 async function jsonBody(request: Request): Promise<unknown> {
+	const text = await readBodyText(request, AUTH_BODY_BYTES);
 	try {
-		return await request.json();
+		return JSON.parse(text);
 	} catch {
 		throw new OperationError("invalid", "The body must be JSON.");
 	}
@@ -92,7 +96,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 			throw new OperationError("forbidden", "Agents cannot sign in to the web app. Use the key with the API or MCP.");
 		}
 		// The session gets the scopes of this key and no more, so a narrow key stays narrow.
-		const token = await createSession(c.env.DIRECTORY, found.principal.id, found.key.scopes);
+		const token = await createSession(c.env.DIRECTORY, found.principal.id, found.key);
 		log("info", "session created", { principalId: found.principal.id, requestId: c.var.requestId });
 		return c.body(null, 204, { "set-cookie": sessionCookie(token, SESSION_TTL_SECONDS), "cache-control": "no-store" });
 	});

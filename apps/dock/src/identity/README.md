@@ -37,6 +37,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   guarded insert in one D1 transaction stops two concurrent setups.
 - `POST /auth/session`: a human signs in to the web app with an API key. This is temporary until
   passkeys exist. Agents get `403`. Each sign-in deletes the expired sessions of that human.
+- A session records the key that signed in. When that key is revoked, its sessions end in the
+  same D1 batch, and a session lookup also checks that the key is not revoked.
+- The bodies of `/auth/*` requests can be at most 4 KiB. A larger body gets `413` while it streams.
 - `POST /auth/sign-out`: deletes the session.
 
 ## Authorization

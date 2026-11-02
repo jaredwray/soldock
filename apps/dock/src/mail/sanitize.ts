@@ -4,8 +4,17 @@
  * allow-same-origin, under a CSP that refuses every remote load.
  */
 
-/** Elements that are removed with everything inside them. */
+/**
+ * Elements that are removed with everything inside them. The raw-text elements (`xmp`, `noembed`,
+ * `noframes`, `plaintext`, `listing`) must be here: the parser keeps their content as text, so an
+ * unwrap would turn that text into live markup.
+ */
 const DROP = new Set([
+	"xmp",
+	"noembed",
+	"noframes",
+	"plaintext",
+	"listing",
 	"script",
 	"noscript",
 	"iframe",
@@ -40,9 +49,6 @@ const DROP = new Set([
 
 /** Elements that stay. Any element in neither list is removed, and its content stays. */
 const KEEP = new Set([
-	"html",
-	"head",
-	"body",
 	"style",
 	"a",
 	"abbr",
@@ -185,29 +191,67 @@ function unescapeCss(css: string): string {
 	);
 }
 
-const SAFE_DATA_URL = /^\s*(['"]?)\s*data:image\/(?:png|gif|jpeg|webp);base64,[a-z0-9+/=\s]+\1\s*$/i;
+/** An inline image in `url()`, after trimming. One character class and an anchor: linear time. */
+const SAFE_DATA_URL = /^(['"]?)data:image\/(?:png|gif|jpeg|webp);base64,[a-z0-9+/=\s]*\1$/i;
+
+/** Removes CSS comments in one pass. An open comment runs to the end, as in a browser. */
+function stripComments(css: string): string {
+	let out = "";
+	let i = 0;
+	for (;;) {
+		const start = css.indexOf("/*", i);
+		if (start < 0) return out + css.slice(i);
+		out += css.slice(i, start);
+		const end = css.indexOf("*/", start + 2);
+		if (end < 0) return out;
+		i = end + 2;
+	}
+}
+
+/**
+ * Replaces each call that `pattern` finds (for example `url(`) with `none`, unless `keep` accepts
+ * its arguments. One pass over the text: each search starts after the last call. A call without
+ * `)` runs to the end, as in a browser, so it is replaced to the end.
+ */
+function replaceCalls(css: string, pattern: RegExp, keep: (args: string) => boolean, onBlocked: () => void): string {
+	let out = "";
+	let i = 0;
+	for (;;) {
+		pattern.lastIndex = i;
+		const match = pattern.exec(css);
+		if (!match) return out + css.slice(i);
+		const argsStart = match.index + match[0].length;
+		const close = css.indexOf(")", argsStart);
+		const end = close < 0 ? css.length : close + 1;
+		out += css.slice(i, match.index);
+		if (keep(css.slice(argsStart, close < 0 ? css.length : close).trim())) {
+			out += css.slice(match.index, end);
+		} else {
+			out += "none";
+			onBlocked();
+		}
+		i = end;
+	}
+}
 
 /**
  * Cleans CSS from a style attribute or a style sheet. It removes the CSS that runs code in old
  * engines, imports other sheets, or loads remote content (`url()`, `image-set()`), and counts each
  * remote load that it removes. The client CSP also refuses remote loads: this is the second layer.
+ * Each step is linear in the length of the CSS, because the CSS comes from external senders.
  */
 function cleanCss(css: string): { css: string; blocked: number } {
 	let blocked = 0;
-	const cleaned = unescapeCss(css)
-		.replace(/\/\*[\s\S]*?\*\//g, "")
-		.replace(/@import[^;]*;?/gi, () => {
+	const count = () => {
+		blocked++;
+	};
+	let cleaned = stripComments(unescapeCss(css));
+	cleaned = replaceCalls(cleaned, /url\(/gi, (args) => SAFE_DATA_URL.test(args), count);
+	cleaned = replaceCalls(cleaned, /(?:-webkit-)?image-set\(/gi, () => false, count);
+	cleaned = cleaned
+		.replace(/@import/gi, () => {
 			blocked++;
-			return "";
-		})
-		.replace(/url\(([^)]*)\)/gi, (match, target: string) => {
-			if (SAFE_DATA_URL.test(target)) return match;
-			blocked++;
-			return "none";
-		})
-		.replace(/(?:-webkit-)?image-set\([^)]*\)/gi, () => {
-			blocked++;
-			return "none";
+			return "@x-blocked-import";
 		})
 		.replace(/expression\s*\(/gi, "x-blocked(")
 		.replace(/(?:java|vb)script\s*:/gi, "")

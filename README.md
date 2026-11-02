@@ -14,9 +14,9 @@ endpoint, the same way people work through the web app.
 - **Built to scale.** State is partitioned per mailbox, drive space, document and meeting, for thousands of users.
 - **MIT licensed**, with permissively licensed dependencies only.
 
-> **Status:** early development. Mail has its first end-to-end layer: receive through Email Routing,
-> threads, labels, search, a Gmail-like web app, and sending through Email Service, for people and
-> for agents through MCP.
+> **Status:** early development. Mail has its first end-to-end layer. It receives mail through
+> Email Routing and sends mail through Email Service. It has threads, labels, search and a
+> Gmail-like web app. People use it in the browser, and agents use it through MCP.
 
 ## Start here
 

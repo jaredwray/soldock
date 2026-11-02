@@ -33,6 +33,14 @@ export type Operator = (typeof OPERATORS)[number];
 
 export class QueryError extends Error {}
 
+/**
+ * The form of a label name that uniqueness and `label:` compare: NFC, lowercase by JavaScript.
+ * SQLite's lower() folds ASCII only, so the mailbox stores this form.
+ */
+export function foldLabelName(name: string): string {
+	return name.normalize("NFC").toLowerCase();
+}
+
 const SYSTEM_IN = new Set(["inbox", "sent", "starred", "spam", "trash", "important", "unread"]);
 
 interface Token {
@@ -63,7 +71,8 @@ function tokenize(query: string): Token[] {
 export function parseQuery(query: string): Clause[] {
 	const clauses: Clause[] = [];
 	let joinNext = false;
-	for (const token of tokenize(query.trim())) {
+	// Control characters mean nothing in a query, and a NUL would end an FTS5 string early.
+	for (const token of tokenize(query.replace(/\p{Cc}/gu, " ").trim())) {
 		if (token.quoted === null && (token.text === "OR" || token.text === "|")) {
 			if (clauses.length > 0) joinNext = true;
 			continue;
@@ -110,8 +119,12 @@ export interface CompileOptions {
 	now: number;
 }
 
+function escapeLike(value: string): string {
+	return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 function like(value: string): string {
-	return `%${value.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+	return `%${escapeLike(value.toLowerCase())}%`;
 }
 
 /** An FTS5 query for one word or phrase: a quoted string, so FTS operators in the text have no effect. */
@@ -150,10 +163,18 @@ function parseSize(value: string): number {
 
 function addressCondition(column: string, value: string, options: CompileOptions): { sql: string; params: string[] } {
 	if (value.toLowerCase() === "me") {
-		if (options.self.length === 0) return { sql: "0", params: [] };
+		// Mail to user+tag@domain reaches user@domain, so "me" matches the +tag forms too.
+		const patterns = options.self.flatMap((address) => {
+			const at = address.lastIndexOf("@");
+			return [
+				like(address),
+				`%${escapeLike(address.slice(0, at).toLowerCase())}+%${escapeLike(address.slice(at).toLowerCase())}%`,
+			];
+		});
+		if (patterns.length === 0) return { sql: "0", params: [] };
 		return {
-			sql: `(${options.self.map(() => `lower(coalesce(${column}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`,
-			params: options.self.map(like),
+			sql: `(${patterns.map(() => `lower(coalesce(${column}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`,
+			params: patterns,
 		};
 	}
 	// coalesce: a NULL column would make the condition NULL, and NOT NULL is not true, so a negated
@@ -187,8 +208,8 @@ function compileTerm(term: Term, options: CompileOptions): { sql: string; params
 		case "label":
 			return {
 				sql: `EXISTS (SELECT 1 FROM message_labels ml JOIN labels l ON l.id = ml.label_id
-					WHERE ml.message_seq = m.seq AND (l.id = ? OR replace(lower(l.name), ' ', '-') = replace(?, ' ', '-')))`,
-				params: [value, lower],
+					WHERE ml.message_seq = m.seq AND (l.id = ? OR replace(l.name_folded, ' ', '-') = replace(?, ' ', '-')))`,
+				params: [value, foldLabelName(value)],
 			};
 		case "in":
 			if (lower === "anywhere" || lower === "all") return { sql: "1", params: [] };
