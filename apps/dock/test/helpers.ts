@@ -1,0 +1,257 @@
+import {
+	createExecutionContext,
+	createMessageBatch,
+	getQueueResult,
+	runDurableObjectAlarm,
+	runInDurableObject,
+} from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import { createClient, type FetchLike, type InputOf, type OperationName, type OutputOf } from "@soldock/contracts";
+import { vi } from "vitest";
+import worker from "../src/index.ts";
+
+export const ORIGIN = "https://dock.test";
+export const SETUP_TOKEN = "test-setup-token";
+
+const handlers = worker as Required<Pick<ExportedHandler<Env>, "email" | "queue">>;
+
+/** Sends a request through the real Worker entry point. */
+export function request(path: string, init: RequestInit = {}): Promise<Response> {
+	return exports.default.fetch(new Request(`${ORIGIN}${path}`, init));
+}
+
+const workerFetch: FetchLike = async (url, init) => {
+	const requestInit: RequestInit = { method: init.method, headers: init.headers };
+	if (init.body !== undefined) requestInit.body = init.body;
+	return exports.default.fetch(new Request(url, requestInit));
+};
+
+/** A REST client for one API key, built on the same typed client as the web app. */
+export function api(key: string) {
+	const client = createClient({
+		baseUrl: ORIGIN,
+		fetch: workerFetch,
+		headers: () => ({ authorization: `Bearer ${key}` }),
+	});
+	return client.call as <N extends OperationName>(name: N, input?: InputOf<N>) => Promise<OutputOf<N>>;
+}
+
+export interface Actor {
+	id: string;
+	address: string;
+	key: string;
+	call: ReturnType<typeof api>;
+}
+
+/** Runs first-run setup and returns the owner. */
+export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
+	const res = await request("/auth/setup", {
+		method: "POST",
+		headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json" },
+		body: JSON.stringify({ display_name: "Olive Owner", address }),
+	});
+	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
+	const body = (await res.json()) as { principal: { id: string; address: string }; api_key: { secret: string } };
+	return {
+		id: body.principal.id,
+		address: body.principal.address,
+		key: body.api_key.secret,
+		call: api(body.api_key.secret),
+	};
+}
+
+/** Creates a principal as `admin` and returns it with its first key. */
+export async function createActor(
+	admin: Actor,
+	input: InputOf<"directory.create_principal">,
+): Promise<Actor & { sponsorId: string | null }> {
+	const { principal, api_key } = await admin.call("directory.create_principal", input);
+	return {
+		id: principal.id,
+		address: principal.address,
+		key: api_key.secret,
+		call: api(api_key.secret),
+		sponsorId: principal.sponsor_id,
+	};
+}
+
+/** The owner, a human member and an agent that the member sponsors. */
+export async function seedOrg() {
+	const owner = await setupOwner();
+	const ada = await createActor(owner, { kind: "human", display_name: "Ada Lovelace", address: "ada@dock.test" });
+	const bot = await createActor(owner, {
+		kind: "agent",
+		display_name: "Billing Bot",
+		address: "bot@dock.test",
+		sponsor_id: ada.id,
+	});
+	return { owner, ada, bot };
+}
+
+export interface RawMessageInput {
+	from: string;
+	to: string;
+	subject: string;
+	text?: string;
+	html?: string;
+	messageId?: string;
+	inReplyTo?: string;
+	references?: string[];
+	date?: Date;
+	headers?: [string, string][];
+	attachment?: { filename: string; mimeType: string; content: string };
+}
+
+let counter = 0;
+
+/** A small RFC 5322 message, written by hand so the tests do not depend on the production composer. */
+export function rawMessage(input: RawMessageInput): string {
+	counter++;
+	const lines: string[] = [
+		...(input.headers ?? []).map(([name, value]) => `${name}: ${value}`),
+		`From: ${input.from}`,
+		`To: ${input.to}`,
+		`Subject: ${input.subject}`,
+		`Date: ${(input.date ?? new Date()).toUTCString()}`,
+		`Message-ID: ${input.messageId ?? `<test-${counter}-${Math.random().toString(36).slice(2)}@sender.example>`}`,
+	];
+	if (input.inReplyTo) lines.push(`In-Reply-To: ${input.inReplyTo}`);
+	if (input.references) lines.push(`References: ${input.references.join(" ")}`);
+	lines.push("MIME-Version: 1.0");
+	const text = input.text ?? "Hello.";
+	if (!input.html && !input.attachment) {
+		lines.push("Content-Type: text/plain; charset=utf-8", "", text);
+		return `${lines.join("\r\n")}\r\n`;
+	}
+	const boundary = `b${counter}`;
+	lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`, "");
+	lines.push(`--${boundary}`, "Content-Type: text/plain; charset=utf-8", "", text);
+	if (input.html) lines.push(`--${boundary}`, "Content-Type: text/html; charset=utf-8", "", input.html);
+	if (input.attachment) {
+		lines.push(
+			`--${boundary}`,
+			`Content-Type: ${input.attachment.mimeType}; name="${input.attachment.filename}"`,
+			`Content-Disposition: attachment; filename="${input.attachment.filename}"`,
+			"Content-Transfer-Encoding: base64",
+			"",
+			btoa(input.attachment.content),
+		);
+	}
+	lines.push(`--${boundary}--`, "");
+	return lines.join("\r\n");
+}
+
+/**
+ * Delivers a raw message through the real `email()` handler and the real queue consumer. The queue
+ * producer is the only fake: it keeps the jobs, so the test runs the consumer at once and can
+ * redeliver a job. `receivedAt` sets the time of receipt, which date searches use.
+ */
+export async function inject(raw: string, to: string, options: { from?: string; receivedAt?: Date } = {}) {
+	const from = options.from ?? "sender@sender.example";
+	const jobs: unknown[] = [];
+	const setReject = vi.fn();
+	const bytes = new TextEncoder().encode(raw);
+	const message = {
+		from,
+		to,
+		headers: new Headers(),
+		raw: new Response(bytes).body,
+		rawSize: bytes.byteLength,
+		setReject,
+		forward: vi.fn(),
+		reply: vi.fn(),
+	} as unknown as ForwardableEmailMessage;
+	const testEnv = { ...env, MAIL_INBOUND: { send: async (body: unknown) => void jobs.push(body) } } as unknown as Env;
+	await handlers.email(message, testEnv, createExecutionContext());
+	const rejected = setReject.mock.calls[0]?.[0] as string | undefined;
+	if (options.receivedAt)
+		for (const job of jobs as { receivedAt: number }[]) job.receivedAt = options.receivedAt.getTime();
+	if (jobs.length > 0) await consume(jobs);
+	return { rejected: rejected ?? null, jobs };
+}
+
+/** Runs the inbound queue consumer on the given job bodies. */
+export async function consume(jobs: unknown[]) {
+	const batch = createMessageBatch(
+		"soldock-mail-inbound",
+		jobs.map((body, i) => ({ id: `job-${counter}-${i}`, timestamp: new Date(), attempts: 1, body })),
+	);
+	const ctx = createExecutionContext();
+	await handlers.queue(batch, env, ctx);
+	return getQueueResult(batch, ctx);
+}
+
+export interface FakeEmailService {
+	/** The envelope of each message that the mailbox handed to Email Service. */
+	sent: { from: string; to: string }[];
+	/** When set, each send fails with this error. */
+	fail: Error | null;
+}
+
+/**
+ * Replaces the Email Service binding of one mailbox object with a fake that records each envelope.
+ * Email Service is the boundary: a test sees exactly what the outbox hands to it.
+ */
+export async function fakeEmailService(principalId: string): Promise<FakeEmailService> {
+	const fake: FakeEmailService = { sent: [], fail: null };
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(principalId));
+	await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const email = {
+			async send(message: EmailMessage) {
+				if (fake.fail) throw fake.fail;
+				fake.sent.push({ from: message.from, to: message.to });
+				return { messageId: `<fake-${fake.sent.length}@email.test>` };
+			},
+		} as unknown as SendEmail;
+		target.env = { ...target.env, EMAIL: email };
+	});
+	return fake;
+}
+
+/**
+ * Waits until the outbox of a mailbox has no due delivery. The runtime fires the alarm by itself, so
+ * this runs a pending alarm and then waits for one in flight: a due row stays until its attempt ends.
+ */
+export async function drainOutbox(principalId: string): Promise<void> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(principalId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const due = await runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox WHERE next_attempt_at <= ?", Date.now())
+						.one().n,
+			);
+			if (due > 0) throw new Error(`${due} outbox deliveries are due`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** Sends one JSON-RPC request to /mcp. */
+export async function mcp(key: string | null, method: string, params?: unknown, headers: Record<string, string> = {}) {
+	const res = await request("/mcp", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			accept: "application/json, text/event-stream",
+			...(key ? { authorization: `Bearer ${key}` } : {}),
+			...headers,
+		},
+		body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params === undefined ? {} : { params }) }),
+	});
+	return { status: res.status, body: (await res.json().catch(() => null)) as Record<string, unknown> | null };
+}
+
+/** Calls one MCP tool and returns its result. */
+export async function callTool(key: string, name: string, args: Record<string, unknown> = {}) {
+	const { body } = await mcp(key, "tools/call", { name, arguments: args });
+	return body?.result as {
+		isError?: boolean;
+		content: { type: string; text: string }[];
+		structuredContent?: Record<string, unknown>;
+	};
+}

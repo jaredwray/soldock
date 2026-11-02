@@ -2,6 +2,8 @@ import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.ts";
+import { identityHandlers } from "../src/identity/index.ts";
+import { mailHandlers } from "../src/mail/index.ts";
 
 const ORIGIN = "https://dock.test";
 
@@ -31,7 +33,6 @@ describe("unknown Worker paths", () => {
 	it.each([
 		"/api/v1/nope",
 		"/api/v2/system/ping",
-		"/mcp",
 		"/oauth/authorize",
 		"/.well-known/oauth-authorization-server",
 		"/auth/sign-in",
@@ -67,7 +68,7 @@ describe("unknown Worker paths", () => {
 
 describe("unhandled errors", () => {
 	it("return a problem+json 500 that carries the request id and hides the error", async () => {
-		const app = createApp();
+		const app = createApp({ ...identityHandlers, ...mailHandlers });
 		app.get("/api/v1/test/boom", () => {
 			throw new Error("secret detail");
 		});

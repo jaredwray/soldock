@@ -23,6 +23,7 @@
 	"dependencies": {
 		"@soldock/contracts": "workspace:*",
 		"hono": "4.13.13",
-		"postal-mime": "4.1.4"
+		"postal-mime": "4.1.4",
+		"zod": "4.6.7"
 	}
 }
