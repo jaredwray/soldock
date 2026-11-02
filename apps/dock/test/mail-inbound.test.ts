@@ -146,10 +146,12 @@ describe("threading", () => {
 		await inject(rawMessage({ from: "bob@sender.example", to, subject: "RE: lunch?" }), to);
 		await inject(rawMessage({ from: "carol@sender.example", to, subject: "Re: Lunch?" }), to);
 		await inject(rawMessage({ from: "mallory@evil.example", to, subject: "Re: Lunch?" }), to);
+		// An address that is only a part of a participant's address is not that participant.
+		await inject(rawMessage({ from: "arol@sender.example", to, subject: "Re: Lunch?" }), to);
 		await inject(rawMessage({ from: "dan@sender.example", to, subject: "Lunch?" }), to);
 		await inject(rawMessage({ from: "dan@sender.example", to, subject: "Re: Dinner?" }), to);
 		const counts = (await inbox(ada.call)).map((t) => t.message_count).sort();
-		expect(counts).toEqual([1, 1, 1, 3]);
+		expect(counts).toEqual([1, 1, 1, 1, 3]);
 	});
 
 	it("merges two threads when a message references both", async () => {

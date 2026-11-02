@@ -435,7 +435,11 @@ export class MailboxDO extends DurableObject<Env> {
 				WHERE t.normalized_subject = ? AND t.last_message_at >= ?
 				AND EXISTS (
 					SELECT 1 FROM messages m WHERE m.thread_id = t.id
-					AND (m.from_addr = ? OR instr(m.to_text, ?) > 0 OR instr(m.cc_text, ?) > 0)
+					AND (
+						m.from_addr = ?
+						OR EXISTS (SELECT 1 FROM json_each(m.to_json) r WHERE lower(json_extract(r.value, '$.address')) = ?)
+						OR EXISTS (SELECT 1 FROM json_each(m.cc_json) r WHERE lower(json_extract(r.value, '$.address')) = ?)
+					)
 				)
 				ORDER BY t.last_message_at DESC LIMIT 1`,
 				normalized,
