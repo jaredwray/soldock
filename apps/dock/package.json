@@ -21,6 +21,8 @@
 		"wrangler": "4.149.0"
 	},
 	"dependencies": {
-		"hono": "4.13.13"
+		"@soldock/contracts": "workspace:*",
+		"hono": "4.13.13",
+		"postal-mime": "4.1.4"
 	}
 }

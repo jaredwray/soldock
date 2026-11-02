@@ -27,9 +27,15 @@ importers:
 
   apps/dock:
     dependencies:
+      '@soldock/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       hono:
         specifier: 4.13.13
         version: 4.13.13
+      postal-mime:
+        specifier: 4.1.4
+        version: 4.1.4
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: 1.4.0
@@ -43,6 +49,16 @@ importers:
       wrangler:
         specifier: 4.149.0
         version: 4.149.0(@types/node@24.19.2)
+
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   spikes/email-service:
     devDependencies:
@@ -955,6 +971,10 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  postal-mime@4.1.4:
+    resolution: {integrity: sha512-+6Qsn7Q2TSLMScfN4X2VQIclPRKgDAtKhytQex3fVSV/+HgVaawtsQGzKYDQLQIBR7b4Vfg+88WRGvuF/kwLSw==}
+    engines: {node: '>=20'}
+
   postcss@8.5.29:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
     engines: {node: ^10 || ^12 || >=14}
@@ -1751,6 +1771,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  postal-mime@4.1.4: {}
 
   postcss@8.5.29:
     dependencies:
