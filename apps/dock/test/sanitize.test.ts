@@ -51,6 +51,28 @@ describe("sanitizeHtml", () => {
 			/image-set|tracker/i,
 		],
 		["a style sheet behavior", "<style>p { behavior: url(x.htc) }</style>", /[^-]behavior\s*:/i],
+		// The browser decodes character references in an attribute before it reads the CSS.
+		[
+			"a CSS url( spelled with a character reference in a style attribute",
+			'<p style="background: u&#114;l(https://tracker.example/e.png)">x</p>',
+			/tracker/i,
+		],
+		[
+			"a quote from a character reference that would end the style attribute",
+			'<p style="color:&quot; onmouseover=&quot;alert(1)">x</p>',
+			/onmouseover="/i,
+		],
+		// Cleaning must not delete text: the text around a deletion joins.
+		[
+			"a CSS url( that the removal of javascript: would join",
+			'<p style="background: ujavascript:rl(https://tracker.example/j.png)">x</p>',
+			/url\(/i,
+		],
+		[
+			"a CSS @import that the removal of javascript: would join",
+			'<style>@imjavascript:port "https://tracker.example/i.css";</style>',
+			/@import/i,
+		],
 		["a srcset", '<img srcset="https://tracker.example/a.png 1x">', /srcset|tracker/i],
 		["a template", "<template><script>alert(1)</script></template>", /template|script/i],
 		["a comment with a conditional", "<!--[if IE]><script>alert(1)</script><![endif]-->", /script|\[if/i],
@@ -112,6 +134,15 @@ describe("sanitizeHtml", () => {
 		const result = await sanitizeHtml(html);
 		expect(Date.now() - started).toBeLessThan(3000);
 		expect(result.html).not.toMatch(/url\(|image-set\(|@import/i);
+	});
+
+	// The output style attribute holds no reference for the browser to decode, so it sees the checked CSS.
+	it("keeps quoted fonts in a style attribute, and leaves other references as text", async () => {
+		const html = await clean(
+			'<p style="font-family: &quot;Helvetica Neue&quot;, Arial; background: url&lpar;https://tracker.example/l.png)">x</p>',
+		);
+		expect(html).toContain("font-family: &quot;Helvetica Neue&quot;, Arial");
+		expect(html).toContain("url&amp;lpar;");
 	});
 
 	it("keeps the text of an element that is not on the allowlist", async () => {

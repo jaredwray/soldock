@@ -191,6 +191,43 @@ function unescapeCss(css: string): string {
 	);
 }
 
+/** The named references that mail often uses in attributes. Others stay as text: see `styleAttribute`. */
+const NAMED_REFERENCES = new Map([
+	["amp", "&"],
+	["AMP", "&"],
+	["lt", "<"],
+	["LT", "<"],
+	["gt", ">"],
+	["GT", ">"],
+	["quot", '"'],
+	["QUOT", '"'],
+	["apos", "'"],
+	["nbsp", "\u00a0"],
+]);
+
+function decodeReferences(value: string): string {
+	return value.replace(
+		/&(?:#x([0-9a-f]+)|#([0-9]+)|([a-z]+));?/gi,
+		(match, hex: string | undefined, decimal: string | undefined, name: string | undefined) => {
+			if (name !== undefined) return NAMED_REFERENCES.get(name) ?? match;
+			const code = Number.parseInt(hex ?? decimal ?? "", hex === undefined ? 10 : 16);
+			return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+				? "\uFFFD"
+				: String.fromCodePoint(code);
+		},
+	);
+}
+
+/**
+ * Cleans a style attribute. HTMLRewriter gives the raw value, and the browser decodes character
+ * references in it: `u&#114;l(` is `url(`. So the value is decoded before the checks. Each `&` of the
+ * result is escaped, so the browser decodes nothing more and sees exactly the checked CSS.
+ */
+function styleAttribute(raw: string): { css: string; blocked: number } {
+	const { css, blocked } = cleanCss(decodeReferences(raw));
+	return { css: css.replaceAll("&", "&amp;"), blocked };
+}
+
 /** An inline image in `url()`, after trimming. One character class and an anchor: linear time. */
 const SAFE_DATA_URL = /^(['"]?)data:image\/(?:png|gif|jpeg|webp);base64,[a-z0-9+/=\s]*\1$/i;
 
@@ -239,6 +276,7 @@ function replaceCalls(css: string, pattern: RegExp, keep: (args: string) => bool
  * engines, imports other sheets, or loads remote content (`url()`, `image-set()`), and counts each
  * remote load that it removes. The client CSP also refuses remote loads: this is the second layer.
  * Each step is linear in the length of the CSS, because the CSS comes from external senders.
+ * No step deletes text, because a deletion can join its neighbors into a new call: `ujavascript:rl(`.
  */
 function cleanCss(css: string): { css: string; blocked: number } {
 	let blocked = 0;
@@ -254,7 +292,7 @@ function cleanCss(css: string): { css: string; blocked: number } {
 			return "@x-blocked-import";
 		})
 		.replace(/expression\s*\(/gi, "x-blocked(")
-		.replace(/(?:java|vb)script\s*:/gi, "")
+		.replace(/(?:java|vb)script\s*:/gi, "x-blocked:")
 		.replace(/behavior\s*:/gi, "x-behavior:")
 		.replace(/-moz-binding/gi, "x-moz-binding");
 	return { css: cleaned, blocked };
@@ -298,8 +336,8 @@ export async function sanitizeHtml(html: string): Promise<SanitizedHtml> {
 						continue;
 					}
 					if (attribute === "style") {
-						// setAttribute escapes the value, so cleaned CSS cannot leave the attribute.
-						const { css, blocked } = cleanCss(value);
+						// setAttribute escapes quotes, so cleaned CSS cannot leave the attribute.
+						const { css, blocked } = styleAttribute(value);
 						remoteImagesBlocked += blocked;
 						element.setAttribute(name, css);
 						continue;

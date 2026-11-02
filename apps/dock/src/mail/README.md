@@ -134,6 +134,10 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
   forms, frames, SVG, `javascript:` and `data:` links, and CSS that runs code or imports style
   sheets. Links get `target="_blank"` and `rel="noopener noreferrer nofollow"`.
 - Remote images are removed and counted (`remote_images_blocked`). `cid:` images are removed.
+- CSS `url()` that is not an inline image, `image-set()` and `@import` are removed and counted.
+  The checks see what the browser sees: CSS escapes and comments are resolved first. In a `style`
+  attribute, character references are decoded first, and each `&` of the result is escaped.
+  No cleaning step deletes text, because a deletion can join its neighbors into a new call.
 - The web app renders HTML only in a sandboxed iframe, without `allow-scripts` or
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
