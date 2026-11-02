@@ -76,12 +76,14 @@ function prefixed(prefix: string, subject: string): string {
 	return (pattern.test(subject) ? subject : `${prefix}: ${subject}`).slice(0, MAIL_LIMITS.subjectChars);
 }
 
-// Markers for line breaks in HTML. They are private-use characters, so mail text does not use them.
-const LINE = "\uE000";
-const PARAGRAPH = "\uE001";
-const BREAK = "\uE002";
-// Each match starts at a marker, so the regex never backtracks over a long run of spaces.
-const BREAK_RUN = /[\uE000-\uE002][\s\uE000-\uE002]*/g;
+// Markers for line breaks in HTML. Each starts with U+0000, which the HTML parser never puts in a
+// text node (it drops it or makes it U+FFFD). So no text of the message can look like a marker.
+const LINE = "\u0000l";
+const PARAGRAPH = "\u0000p";
+const BREAK = "\u0000b";
+// Each match starts at a marker. Its two parts start with different characters, so it never backtracks.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: U+0000 is the marker, because parsed text never holds it.
+const BREAK_RUN = /\u0000[lpb](?:\s|\u0000[lpb])*/g;
 
 /**
  * The plain text of a message. For HTML only, it uses an inert document, which runs nothing and loads
