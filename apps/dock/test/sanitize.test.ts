@@ -46,10 +46,13 @@ describe("sanitizeHtml", () => {
 	// Remote images are tracking pixels as often as not, so they are counted and dropped.
 	it("blocks and counts remote images, keeps inline data images, and drops cid: references", async () => {
 		const result = await sanitizeHtml(
-			'<img src="https://tracker.example/p.gif"><img src="//cdn.example/a.png"><table background="http://x.example/bg.png"></table><img src="data:image/png;base64,iVBORw0KGgo="><img src="cid:logo@example">',
+			'<img src="https://tracker.example/p.gif"><img alt="Logo <b>" src="//cdn.example/a.png"><table background="http://x.example/bg.png"></table><img src="data:image/png;base64,iVBORw0KGgo="><img src="cid:logo@example">',
 		);
 		expect(result.remoteImagesBlocked).toBe(3);
 		expect(result.html).not.toMatch(/tracker|cdn\.example|x\.example|cid:/);
+		// A blocked image leaves its alt text, escaped, and no broken image.
+		expect(result.html).toContain("Logo &lt;b&gt;");
+		expect(result.html.match(/<img/g)).toHaveLength(1);
 		expect(result.html).toContain('src="data:image/png;base64,iVBORw0KGgo="');
 	});
 

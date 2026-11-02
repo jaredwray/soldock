@@ -31,8 +31,9 @@ export function snippetOf(text: string, length = 200): string {
 export function htmlToText(html: string): string {
 	return html
 		.replace(/<(style|script|head)[^>]*>[\s\S]*?<\/\1>/gi, " ")
-		.replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n")
-		.replace(/<[^>]+>/g, " ")
+		.replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6]|table|blockquote)>/gi, "\n")
+		.replace(/<\/(td|th)>/gi, " ")
+		.replace(/<[^>]+>/g, "")
 		.replace(/&nbsp;/gi, " ")
 		.replace(/&amp;/gi, "&")
 		.replace(/&lt;/gi, "<")

@@ -86,10 +86,10 @@ row whose workflow exists on `main`.
 
 | Workflow | Permissions |
 | --- | --- |
-| `deploy-development.yaml` | Account › Workers Scripts: Edit, and Account › Account Settings: Read |
-| `spike-email-service.yaml` | Also Queues edit, event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
-| The `provision` workflow (not built yet) | Also D1 edit, Workers KV Storage edit, Workers R2 Storage edit and Queues edit |
-| Inbound mail (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
+| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
+| The `provision` workflow (not built yet) | Also Workers KV Storage edit |
+| Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
 
 Use a custom token, not a template: the templates give more than these permissions. If a run
 shows that wrangler needs one more permission, add it to the token and to this table. When a change
@@ -109,3 +109,56 @@ adds a binding, it adds the permission to this table too.
   pnpm --filter @soldock/dock dev            # wrangler dev, on http://localhost:8787
   scripts/smoke-check.sh http://localhost:8787
   ```
+
+## Mail
+
+The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these
+steps once for each environment, in its Cloudflare account. Do them after the first deploy, because
+Email Routing can route only to a Worker that exists.
+
+1. Set `MAIL_DOMAINS` in `apps/dock/wrangler.jsonc` to the mail domains of the environment
+   (comma-separated). An address on one of these domains is local: mail between local addresses
+   never leaves the deployment.
+2. Receive: in the dashboard, open the mail zone, then **Email › Email Routing**.
+   - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
+     providers.
+   - Under **Routing rules**, set the **Catch-all address** action to **Send to a Worker** and select
+     the dock Worker (`soldock-dock-dev` or `soldock-dock`). Catch-all works only on an apex domain.
+   - The Worker rejects mail for unknown addresses during the SMTP session, so a catch-all does not
+     accept mail for addresses that do not exist.
+3. Send: onboard the mail domain to Email Service (**Email › Email Service**). Publish the DKIM,
+   SPF and DMARC records that it shows, and wait until each one is verified. Publish DMARC
+   `p=quarantine` or stricter before the first send.
+4. Confirm `MAIL_AUTHSERV_ID`: send a message from an external account, and read the topmost
+   `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
+   `mail/raw/<principal>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
+   change the var: the mailbox ignores results from any other server.
+5. First-run setup (once):
+   1. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
+      Secrets**, and add the secret `SETUP_TOKEN` with a long random value.
+   2. Create the owner:
+
+      ```sh
+      curl -X POST "https://<dock-host>/auth/setup" \
+        -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
+        -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
+      ```
+
+      The response holds the owner's first API key (`api_key.secret`). It is shown only once. A
+      second call gets `409`.
+   3. Delete the `SETUP_TOKEN` secret.
+   4. Open `https://<dock-host>/`, and sign in with the key. Create people and agents on the
+      **Admin** page.
+
+Email Service is in beta, and its terms and quotas are for transactional mail. The
+[Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person
+mail. Until it reports, send test mail only to seed accounts.
+
+Messages that the Worker sends with `send_email` show as "dropped" in the Email Routing summary.
+That is expected: they leave through Email Service, not through a routing rule.
+
+### Dead letters
+
+An inbound job that fails 5 times, or that cannot be read, goes to the queue
+`soldock-mail-inbound-dlq`. The raw message stays in R2. Look at the queue in the dashboard
+(**Storage & Databases › Queues**). The Worker logs each dead letter with the principal id.

@@ -220,7 +220,9 @@ export async function sanitizeHtml(html: string): Promise<SanitizedHtml> {
 					if (attribute === "src" && tag === "img") {
 						if (!SAFE_DATA_IMAGE.test(value.trim())) {
 							if (isRemote(value)) remoteImagesBlocked++;
-							element.removeAttribute(name);
+							// An image without a source shows as a broken icon. Its alt text stays, as text.
+							element.replace(element.getAttribute("alt") ?? "", { html: false });
+							return;
 						}
 						continue;
 					}
