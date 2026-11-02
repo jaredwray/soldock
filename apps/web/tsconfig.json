@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		// Vite bundles the app, so use bundler resolution. The app runs in the browser only.
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"jsx": "react-jsx",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"types": ["vite/client"]
+	},
+	"include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
+}
