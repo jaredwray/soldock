@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		// Consumed as TypeScript source by wrangler (esbuild) and Vite, so bundler resolution.
+		// Runtime-agnostic: no Workers, DOM or Node types.
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2024"],
+		"types": []
+	},
+	"include": ["src/**/*.ts", "test/**/*.ts"]
+}

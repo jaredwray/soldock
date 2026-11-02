@@ -17,8 +17,8 @@
 		"enabled": true
 	},
 	"assets": {
-		// Placeholder page until this points at the apps/web build.
-		"directory": "./public",
+		// The apps/web build. Run `pnpm build` at the repository root before dev, tests or deploy.
+		"directory": "../web/dist",
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
 		// Browser navigations go straight to assets, so every Worker-owned prefix must be listed here.
@@ -35,13 +35,77 @@
 			"/hooks/*"
 		]
 	},
+	// Resource IDs are left out on purpose: `wrangler deploy` provisions the D1 database, the R2 bucket and
+	// the queues by name on the first deploy, and finds them by name after that.
+	// The directory: principals, addresses, API keys and sessions. Migrations are in ./migrations.
+	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
+	// Raw MIME of each message (key mail/raw/<principal>/<sha256>).
+	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
+	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
+	"queues": {
+		"producers": [
+			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
+			{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" }
+		],
+		"consumers": [
+			{
+				"queue": "soldock-mail-inbound",
+				"max_batch_size": 10,
+				"max_batch_timeout": 2,
+				"max_retries": 5,
+				"dead_letter_queue": "soldock-mail-inbound-dlq"
+			}
+		]
+	},
+	// Outbound mail to the internet through Cloudflare Email Service. The code sets From to the
+	// sender's own address, so the binding has no address list.
+	"send_email": [{ "name": "EMAIL" }],
+	// One MailboxDO for each principal (messages, threads, labels, search index, outbox).
+	"durable_objects": {
+		"bindings": [{ "name": "MAILBOX", "class_name": "MailboxDO" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] }],
+	"vars": {
+		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
+		"MAIL_DOMAINS": "jaredwray.com",
+		// The receiving server whose Authentication-Results header the mailbox trusts.
+		"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
+	},
 	"env": {
-		// A named env inherits `main`, the compatibility settings, observability, `assets` and routes. It
-		// does not inherit bindings or vars: when production gets a binding, add the development one here.
+		// A named env inherits `main`, the compatibility settings, observability, `assets`, routes and
+		// Durable Object migrations. It does not inherit bindings or vars: when production gets a binding,
+		// add the development one here.
 		"development": {
 			"name": "soldock-dock-dev",
 			// The development host is the workers.dev URL. No custom domain is planned.
-			"workers_dev": true
+			"workers_dev": true,
+			"d1_databases": [
+				{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }
+			],
+			"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
+			"queues": {
+				"producers": [
+					{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
+					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" }
+				],
+				"consumers": [
+					{
+						"queue": "soldock-mail-inbound",
+						"max_batch_size": 10,
+						"max_batch_timeout": 2,
+						"max_retries": 5,
+						"dead_letter_queue": "soldock-mail-inbound-dlq"
+					}
+				]
+			},
+			"send_email": [{ "name": "EMAIL" }],
+			"durable_objects": {
+				"bindings": [{ "name": "MAILBOX", "class_name": "MailboxDO" }]
+			},
+			"vars": {
+				"MAIL_DOMAINS": "soldock.org",
+				"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
+			}
 		}
 	}
 }

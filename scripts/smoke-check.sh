@@ -39,15 +39,26 @@ navigate() {
 		echo "curl exit $?"
 }
 
-# A browser navigation to a Worker-owned path must get the Worker's problem+json 404, not the SPA.
-for path in /api/v1/nope /mcp; do
+# A browser navigation to a Worker-owned path must get the Worker's problem+json, not the SPA.
+# /mcp takes POST only, so a navigation gets 405.
+for check in "/api/v1/nope 404" "/hooks/nope 404" "/mcp 405"; do
+	read -r path status <<< "$check"
 	result=$(navigate "$path")
-	if [[ "$result" == "404 application/problem+json"* ]]; then
-		pass "navigation to $path returns a problem+json 404"
+	if [[ "$result" == "$status application/problem+json"* ]]; then
+		pass "navigation to $path returns a problem+json $status"
 	else
-		fail "navigation to $path returned \"$result\", not a problem+json 404"
+		fail "navigation to $path returned \"$result\", not a problem+json $status"
 	fi
 done
+
+# The API must refuse a request without a credential, with a Bearer challenge.
+result=$(curl --silent --show-error --max-time 10 --retry 3 --retry-delay 2 --retry-connrefused \
+	-o /dev/null -w '%{http_code}' "$base/api/v1/mail/profile" || echo "curl exit $?")
+if [[ "$result" == "401" ]]; then
+	pass "GET /api/v1/mail/profile without a credential returns 401"
+else
+	fail "GET /api/v1/mail/profile without a credential returned \"$result\", not 401"
+fi
 
 # A navigation to an app route must get the shell (index.html) from the assets router.
 result=$(navigate /mail)

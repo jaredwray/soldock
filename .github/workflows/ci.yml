@@ -40,6 +40,9 @@ jobs:
         run: pnpm types:check
       - name: Typecheck
         run: pnpm typecheck
+      # The dock Worker serves apps/web/dist as its assets, so tests and dry runs need the build.
+      - name: Build the SPA (apps/web)
+        run: pnpm build
       - name: Test
         run: pnpm test
       - name: Worker bundle and startup budgets

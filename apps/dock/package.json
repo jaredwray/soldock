@@ -9,6 +9,8 @@
 		"dev": "wrangler dev",
 		"deploy:development": "wrangler deploy --env development",
 		"deploy:check": "wrangler deploy --dry-run --env development --outdir dist/development",
+		"migrate:local": "wrangler d1 migrations apply DIRECTORY --local",
+		"migrate:development": "wrangler d1 migrations apply DIRECTORY --remote --env development",
 		"test": "vitest run",
 		"types": "wrangler types",
 		"types:check": "wrangler types --check",
@@ -21,6 +23,9 @@
 		"wrangler": "4.149.0"
 	},
 	"dependencies": {
-		"hono": "4.13.13"
+		"@soldock/contracts": "workspace:*",
+		"hono": "4.13.13",
+		"postal-mime": "4.1.4",
+		"zod": "4.6.7"
 	}
 }

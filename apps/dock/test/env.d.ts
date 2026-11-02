@@ -3,3 +3,5 @@ declare module "*?raw" {
 	const content: string;
 	export default content;
 }
+
+type D1Migration = import("cloudflare:test").D1Migration;

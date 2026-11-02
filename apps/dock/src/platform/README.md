@@ -1,6 +1,6 @@
 # `platform` module
 
-> Status: **started** (HTTP plumbing). The rest is not built yet. Keep this README current as the module grows; it is the module's contract.
+> Status: **started** (HTTP plumbing, ids, crypto helpers, logs and the operation invoker). The rest is not built yet. Keep this README current as the module grows; it is the module's contract.
 
 | | |
 | --- | --- |
@@ -15,4 +15,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 ## What exists
 
 - `http/request-id.ts`: Hono middleware giving each request a server-generated id (`c.var.requestId`, `x-request-id` header).
-- `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path. A later error catalogue produces them.
+- `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path.
+- `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
+- `crypto/crypto.ts`: SHA-256, random tokens, base64 and a constant-time secret comparison.
+- `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
+- `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
+- `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes.

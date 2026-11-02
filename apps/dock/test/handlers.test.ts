@@ -7,17 +7,17 @@ import entry from "../src/index.ts";
 const worker = entry as Required<Pick<ExportedHandler<Env>, "email" | "queue" | "scheduled">>;
 
 describe("email handler", () => {
-	it("rejects inbound mail until the pipeline exists, so senders get a bounce", async () => {
+	it("rejects mail for an address that no principal has, so the sender gets a bounce", async () => {
 		const setReject = vi.fn();
-		const message = { from: "a@example.com", to: "b@dock.test", setReject } as unknown as ForwardableEmailMessage;
+		const message = { from: "a@example.com", to: "nobody@dock.test", setReject } as unknown as ForwardableEmailMessage;
 		await worker.email(message, env, createExecutionContext());
 		expect(setReject).toHaveBeenCalledOnce();
-		expect(setReject.mock.calls[0]?.[0]).toMatch(/does not accept mail yet/);
+		expect(setReject.mock.calls[0]?.[0]).toMatch(/^5\.1\.1 /);
 	});
 });
 
 describe("queue handler", () => {
-	it("acknowledges every message", async () => {
+	it("acknowledges every message of a queue that has no consumer here", async () => {
 		const batch = createMessageBatch<unknown>("jobs", [
 			{ id: "m1", timestamp: new Date(), attempts: 1, body: { hello: "world" } },
 			{ id: "m2", timestamp: new Date(), attempts: 1, body: 2 },

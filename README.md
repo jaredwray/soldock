@@ -14,7 +14,9 @@ endpoint, the same way people work through the web app.
 - **Built to scale.** State is partitioned per mailbox, drive space, document and meeting, for thousands of users.
 - **MIT licensed**, with permissively licensed dependencies only.
 
-> **Status:** early development. The foundation is in progress.
+> **Status:** early development. Mail has its first end-to-end layer. It receives mail through
+> Email Routing and sends mail through Email Service. It has threads, labels, search and a
+> Gmail-like web app. People use it in the browser, and agents use it through MCP.
 
 ## Start here
 
@@ -22,6 +24,8 @@ endpoint, the same way people work through the web app.
 | --- | --- |
 | Understand the code | [`apps/dock/README.md`](apps/dock/README.md) and the README of each module |
 | Self-host | [`docs/self-hosting.md`](docs/self-hosting.md) |
+| Run it locally | [`docs/development.md`](docs/development.md) |
+| Connect an agent | [`docs/agents.md`](docs/agents.md) |
 | Contribute (human or agent) | [`CLAUDE.md`](CLAUDE.md) |
 
 ## Development

@@ -1,18 +1,31 @@
 import { Hono } from "hono";
-import { problemResponse, type RequestIdVariables, requestId } from "./platform/index.ts";
+import { mountRestApi } from "./api/index.ts";
+import { type CallContext, mountAuthRoutes } from "./identity/index.ts";
+import { mountMcp } from "./mcp/index.ts";
+import {
+	type HandlerMap,
+	log,
+	OperationError,
+	problemResponse,
+	type RequestIdVariables,
+	requestId,
+} from "./platform/index.ts";
 
 export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
- * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`). Routes are hand-written until the
- * operation registry generates them.
+ * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`). The REST routes and the MCP tools
+ * come from the operation registry, with the handlers that the composition root passes in.
  */
-export function createApp(): Hono<AppEnv> {
+export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
 	const app = new Hono<AppEnv>();
 
 	app.use(requestId());
 
 	app.get("/api/v1/system/ping", (c) => c.json({ ok: true }));
+	mountAuthRoutes(app);
+	mountRestApi(app, handlers);
+	mountMcp(app, handlers);
 
 	app.notFound((c) => {
 		const { pathname } = new URL(c.req.url);
@@ -28,14 +41,9 @@ export function createApp(): Hono<AppEnv> {
 	});
 
 	app.onError((err, c) => {
-		console.error(
-			JSON.stringify({
-				level: "error",
-				msg: "unhandled error",
-				requestId: c.var.requestId,
-				err: err.stack ?? String(err),
-			}),
-		);
+		const instance = new URL(c.req.url).pathname;
+		if (err instanceof OperationError) return err.toResponse({ requestId: c.var.requestId, instance });
+		log("error", "unhandled error", { requestId: c.var.requestId, err: err.stack ?? String(err) });
 		return problemResponse({
 			type: "about:blank",
 			title: "Internal Server Error",
