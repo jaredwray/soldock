@@ -154,6 +154,15 @@ describe("threading", () => {
 		expect(counts).toEqual([1, 1, 1, 1, 3]);
 	});
 
+	// SMTPUTF8 addresses can have non-ASCII letters. Case folding must work for them too.
+	it("treats a non-ASCII address in another case as the same participant", async () => {
+		const { ada } = await seedOrg();
+		const to = "ada@dock.test";
+		await inject(rawMessage({ from: "bob@sender.example", to: `${to}, Älice@sender.example`, subject: "Plan" }), to);
+		await inject(rawMessage({ from: "älice@sender.example", to, subject: "Re: Plan" }), to);
+		expect((await inbox(ada.call)).map((t) => t.message_count)).toEqual([2]);
+	});
+
 	it("merges two threads when a message references both", async () => {
 		const { ada } = await seedOrg();
 		await inject(

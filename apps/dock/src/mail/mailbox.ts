@@ -120,6 +120,7 @@ const MIGRATIONS: string[][] = [
 			to_text TEXT NOT NULL,
 			cc_text TEXT NOT NULL,
 			bcc_text TEXT NOT NULL,
+			participants TEXT NOT NULL,
 			sent_date INTEGER NOT NULL,
 			internal_date INTEGER NOT NULL,
 			snippet TEXT NOT NULL,
@@ -205,6 +206,15 @@ function capUtf8(value: string | null, maxBytes: number): { value: string | null
 	const bytes = encoder.encode(value);
 	if (bytes.byteLength <= maxBytes) return { value, truncated: false };
 	return { value: decoder.decode(bytes.subarray(0, maxBytes)).replace(/�+$/, ""), truncated: true };
+}
+
+/**
+ * The lowercase addresses of the sender and the recipients, with JavaScript case folding. SQLite's
+ * lower() folds ASCII only, so the threading check compares these exact values.
+ */
+function participantsOf(parsed: ParsedMail): string[] {
+	const all = [parsed.from, ...parsed.to, ...parsed.cc].filter((a): a is MailAddress => a !== null);
+	return [...new Set(all.map((a) => a.address.toLowerCase()))];
 }
 
 function addressText(addresses: MailAddress[]): string {
@@ -342,9 +352,10 @@ export class MailboxDO extends DurableObject<Env> {
 		const attachments = parsed.attachments.map((attachment, index) => ({ ...attachment, index }));
 		const seq = this.one<{ seq: number }>(
 			`INSERT INTO messages (id, thread_id, content_hash, raw_key, origin, message_id_header, subject, from_name,
-				from_addr, to_json, cc_json, bcc_json, reply_to_json, to_text, cc_text, bcc_text, sent_date, internal_date,
-				snippet, text_body, html_body, body_truncated, size, has_attachments, attachments_json, attachment_names, auth_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+				from_addr, to_json, cc_json, bcc_json, reply_to_json, to_text, cc_text, bcc_text, participants, sent_date,
+				internal_date, snippet, text_body, html_body, body_truncated, size, has_attachments, attachments_json,
+				attachment_names, auth_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 			m.id,
 			threadId,
 			m.contentHash,
@@ -361,6 +372,7 @@ export class MailboxDO extends DurableObject<Env> {
 			addressText(parsed.to),
 			addressText(parsed.cc),
 			addressText(m.bcc),
+			JSON.stringify(participantsOf(parsed)),
 			parsed.date ?? m.internalDate,
 			m.internalDate,
 			snippetOf(plain),
@@ -434,18 +446,12 @@ export class MailboxDO extends DurableObject<Env> {
 				`SELECT t.id FROM threads t
 				WHERE t.normalized_subject = ? AND t.last_message_at >= ?
 				AND EXISTS (
-					SELECT 1 FROM messages m WHERE m.thread_id = t.id
-					AND (
-						m.from_addr = ?
-						OR EXISTS (SELECT 1 FROM json_each(m.to_json) r WHERE lower(json_extract(r.value, '$.address')) = ?)
-						OR EXISTS (SELECT 1 FROM json_each(m.cc_json) r WHERE lower(json_extract(r.value, '$.address')) = ?)
-					)
+					SELECT 1 FROM messages m, json_each(m.participants) p
+					WHERE m.thread_id = t.id AND p.value = ?
 				)
 				ORDER BY t.last_message_at DESC LIMIT 1`,
 				normalized,
 				internalDate - SUBJECT_THREAD_WINDOW_MS,
-				sender,
-				sender,
 				sender,
 			);
 			if (row) found.add(row.id);
