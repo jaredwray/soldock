@@ -4,9 +4,9 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Server-side Slides operations: outline-to-deck, slide/element edits, thumbnails via Browser Run, PPTX/PDF conversion (models in `packages/slides-model`). |
+| **Purpose** | Server-side Slides operations: outline-to-deck, slide/element edits, thumbnails via Browser Run, PPTX/PDF conversion. |
 | **Owns** | No own store (content lives in `DocumentDO`); thumbnails cached in R2. |
-| **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/slides-model`. |
+| **Depends on** | `platform`, `identity`, `collab`, `drive`. |
 | **Operations** | `slides.*` |
 | **Data inventory** | None of its own (content in `DocumentDO`); thumbnails cached in R2. PPTX/PDF in Takeout. |
 
