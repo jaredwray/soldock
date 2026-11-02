@@ -11,8 +11,8 @@ Profile: website/app · public
 ## 2. CODEOWNERS and cloud bootstrap
 - [x] `.github/CODEOWNERS` covers `/.github/`, `/.vscode/`, `/.cursor/`, `/.devcontainer/`, `/.claude/`, `/.codex/`, `/scripts/` with owners the maintainer names — PR #6
 - [x] Codespaces, Cursor Cloud Agents, and Claude Code on the web bootstrap Aikido Safe Chain via scripts/setup-cloud-environment.sh (--ci shims, frozen lockfile); Claude Code runs it from `.claude/hooks/session-start.sh` (web sessions only, install log on stderr, 600s timeout) and `.gitignore` keeps `.claude/settings.json` and `.claude/hooks/` tracked — PR #5
-- [ ] Codex cloud environments use Manual setup with `bash ./scripts/setup-cloud-environment.sh` as the setup and maintenance script (manual) — deferred to S00.T17: maintainer work before the § 7 lockdown
-- [ ] Claude Code on the web environments allow `malware-list.aikido.dev` (Custom network access plus the default package-manager list) (manual) — deferred to S00.T17: maintainer work before the § 7 lockdown
+- [ ] Codex cloud environments use Manual setup with `bash ./scripts/setup-cloud-environment.sh` as the setup and maintenance script (manual) — deferred: maintainer work before the § 7 lockdown
+- [ ] Claude Code on the web environments allow `malware-list.aikido.dev` (Custom network access plus the default package-manager list) (manual) — deferred: maintainer work before the § 7 lockdown
 - [x] Dev Container `image` pinned by digest (`name:<tag>@sha256:<digest>`; not a floating tag) — PR #5
 
 ## 3. Dependencies (pnpm)
@@ -34,7 +34,7 @@ Profile: website/app · public
 - [x] `persist-credentials: false` on checkouts that don't push — PR #16
 - [x] No `pull_request_target` on workflows that run untrusted PR code — verified 2026-10-16
 - [x] Artifact-publishing workflows disable `actions/setup-node` default caching (`package-manager-cache: false`) to prevent cache poisoning — verified 2026-10-16 (no artifact-publishing workflows yet)
-- [ ] No npm tokens (or other registry credentials) in Actions secrets — repository side verified 2026-10-17: no workflow reads a secret or sets registry auth, and no `.npmrc` is tracked. Deferred to S00.T17: the maintainer confirms the Actions secrets list, which an agent session cannot read
+- [ ] No npm tokens (or other registry credentials) in Actions secrets — repository side verified 2026-10-17: no workflow reads a secret or sets registry auth, and no `.npmrc` is tracked. Deferred: the maintainer confirms the Actions secrets list, which an agent session cannot read
 
 ## 6. Security tooling
 - [x] Aikido runs on every build — verified 2026-10-16 on pull requests (`Aikido Security: check code`). Direct pushes to `main` aren't covered until § 7 requires pull requests

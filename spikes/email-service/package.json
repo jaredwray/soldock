@@ -2,7 +2,7 @@
 	"name": "@soldock/spike-email-service",
 	"version": "0.0.0",
 	"private": true,
-	"description": "Throwaway harness for the S00.T13 Email Service spike. S00.T13's findings PR deletes it.",
+	"description": "Throwaway harness for the Email Service spike. The spike's findings PR deletes it.",
 	"license": "MIT",
 	"type": "module",
 	"scripts": {

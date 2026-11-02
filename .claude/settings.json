@@ -15,7 +15,6 @@
 	},
 	"permissions": {
 		"allow": [
-			"Bash(pnpm plan:*)",
 			"Bash(pnpm verify)",
 			"Bash(pnpm lint:*)",
 			"Bash(pnpm typecheck)",

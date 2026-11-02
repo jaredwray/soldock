@@ -1,6 +1,6 @@
 # `tools/budgets`
 
-Fails CI when a Worker grows past its budgets ([S00.T04](../../plan/stages/S00-foundation.md)).
+Fails CI when a Worker grows past its budgets.
 Large server-side bundles hit the startup CPU limit long before the size limit, so both are checked.
 
 ```sh
@@ -19,7 +19,7 @@ Raising one is a reviewed change: say why in the PR.
 
 The startup profile is measured locally on the CI runner, not on Cloudflare, so treat it as a
 tripwire for regressions rather than a prediction. The 200 ms budget leaves wide headroom under
-Cloudflare's startup limit. S13.T02 adds more budget classes (SPA bundles, Web Vitals, operation latency).
+Cloudflare's startup limit. More budget classes (SPA bundles, Web Vitals, operation latency) come later.
 
 The check runs on Linux and macOS. On Windows, `execFileSync("pnpm")` can't start `pnpm.cmd` without a
 shell, so use WSL.

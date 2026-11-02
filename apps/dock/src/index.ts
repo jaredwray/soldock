@@ -1,4 +1,4 @@
-// Composition root of the dock Worker (ADR-0003). Every handler and, later, every Durable Object
+// Composition root of the dock Worker. Every handler and, later, every Durable Object
 // and Workflow class is exported from here.
 import { createApp } from "./app.ts";
 import { isWorkerPath } from "./routes.ts";
@@ -15,7 +15,7 @@ export default {
 		return env.ASSETS.fetch(request);
 	},
 
-	// Inbound mail arrives here from Email Routing. Until the inbound pipeline exists (S04.T03),
+	// Inbound mail arrives here from Email Routing. Until the inbound pipeline exists,
 	// reject at SMTP time so a sender gets a bounce instead of mail vanishing.
 	async email(message) {
 		console.warn(

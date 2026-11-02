@@ -1,4 +1,4 @@
-// Throwaway Worker for the S00.T13 Email Service spike (S00.T18). Never the dock Worker.
+// Throwaway Worker for the Email Service spike. Never the dock Worker.
 // The workflow's cleanup run deletes this Worker, its queue and its event subscription.
 // After you edit a binding, run `pnpm --filter @soldock/spike-email-service types` and commit worker-configuration.d.ts.
 {

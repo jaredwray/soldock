@@ -5,7 +5,7 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`). Routes are hand-written until the
- * operation registry generates them (S00.T10).
+ * operation registry generates them.
  */
 export function createApp(): Hono<AppEnv> {
 	const app = new Hono<AppEnv>();

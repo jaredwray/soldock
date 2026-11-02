@@ -7,7 +7,7 @@
 /.claude/ @jaredwray
 /.codex/ @jaredwray
 /scripts/ @jaredwray
-# Spike harnesses run with the development Cloudflare token (ADR-0015).
+# Spike harnesses run with the development Cloudflare token.
 /spikes/ @jaredwray
 # The deploy workflows run these with the Cloudflare token: the deploy scripts and the wrangler config.
 /apps/dock/package.json @jaredwray

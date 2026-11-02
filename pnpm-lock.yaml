@@ -63,8 +63,6 @@ importers:
 
   tools/licenses: {}
 
-  tools/plan: {}
-
 packages:
 
   '@biomejs/biome@2.5.15':

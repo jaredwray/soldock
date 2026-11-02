@@ -14,24 +14,21 @@ endpoint, the same way people work through the web app.
 - **Built to scale.** State is partitioned per mailbox, drive space, document and meeting, for thousands of users.
 - **MIT licensed**, with permissively licensed dependencies only.
 
-> **Status:** early development. The plan is complete and the foundation stage is in progress.
-> See [`plan/STATUS.md`](plan/STATUS.md).
+> **Status:** early development. The foundation is in progress.
 
 ## Start here
 
 | If you want to… | Read |
 | --- | --- |
-| Understand the project | [`plan/vision.md`](plan/vision.md), then [`plan/architecture.md`](plan/architecture.md) |
-| See progress | [`plan/STATUS.md`](plan/STATUS.md), or run `pnpm plan` |
-| Contribute (human or agent) | [`CLAUDE.md`](CLAUDE.md), [`plan/process.md`](plan/process.md), then `pnpm plan next` |
-| Know why something is the way it is | [`plan/adr/`](plan/adr/) |
+| Understand the code | [`apps/dock/README.md`](apps/dock/README.md) and the README of each module |
+| Self-host | [`docs/self-hosting.md`](docs/self-hosting.md) |
+| Contribute (human or agent) | [`CLAUDE.md`](CLAUDE.md) |
 
 ## Development
 
 ```sh
 pnpm install
-pnpm verify      # lint, typecheck, tests, plan integrity, license policy
-pnpm plan next   # what to build next
+pnpm verify      # lint, typecheck, tests, license policy
 ```
 
 Requires Node ≥ 22.18 and pnpm 11 (pinned in `package.json`; an older pnpm switches to it automatically).

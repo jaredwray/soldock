@@ -1,6 +1,6 @@
 /**
- * RFC 9457 problem details, the error envelope for every Worker-owned path (architecture §7).
- * S00.T06 adds the error catalogue that produces these; until then callers build them directly.
+ * RFC 9457 problem details, the error envelope for every Worker-owned path.
+ * A later error catalogue produces these; until then callers build them directly.
  */
 export interface ProblemDetails {
 	type: string;

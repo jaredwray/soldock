@@ -12,7 +12,7 @@ const packages = flattenPnpmLicenses(raw.trim().length > 0 ? JSON.parse(raw) : {
 const violations = findViolations(packages, policy);
 
 if (violations.length > 0) {
-	console.error("Dependency license policy violations (see plan/adr/0011-dependency-license-policy.md):");
+	console.error("Dependency license policy violations (see tools/licenses/policy.json):");
 	for (const v of violations) {
 		console.error(`  - ${v.name}@${v.versions.join(",")}: ${v.license}`);
 	}
