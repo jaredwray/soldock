@@ -53,6 +53,7 @@ export function MailPane(props: MailPaneProps) {
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
 	const [cursor, setCursor] = useState(0);
 	const [focusToken, setFocusToken] = useState(0);
+	/** The thread id and the unread message ids that the pane marked as read last. */
 	const markedRef = useRef<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const listScrollRef = useRef(0);
@@ -68,7 +69,8 @@ export function MailPane(props: MailPaneProps) {
 		void thread.refresh();
 	});
 
-	// Keep the cursor on the thread that opened, so j and k continue from it.
+	// Keep the cursor on the thread that opened, so j and k continue from it. A thread that opens
+	// again is marked as read again, for example after "Mark as unread".
 	useOnChange(threadId, () => {
 		markedRef.current = null;
 		const index = threads.findIndex((item) => item.id === threadId);
@@ -88,16 +90,19 @@ export function MailPane(props: MailPaneProps) {
 		return () => scroller.removeEventListener("scroll", save);
 	}, [listMode]);
 
-	// When an unread thread opens, the pane marks it as read. mail.get_thread does not do it.
+	// When an unread thread opens, the pane marks it as read. mail.get_thread does not do it. A refresh
+	// can bring a new unread message into the open thread, so the guard keys on the unread message ids:
+	// a new set is marked again, and the same set is not sent twice.
 	const openThread = thread.thread;
 	const patchThread = thread.patch;
 	const patchList = list.patch;
 	useEffect(() => {
-		if (!openThread || markedRef.current === openThread.id) return;
-		const unread =
-			openThread.label_ids.includes("UNREAD") || openThread.messages.some((m) => m.label_ids.includes("UNREAD"));
-		if (!unread) return;
-		markedRef.current = openThread.id;
+		if (!openThread) return;
+		const unreadIds = openThread.messages.filter((m) => m.label_ids.includes("UNREAD")).map((m) => m.id);
+		if (unreadIds.length === 0 && !openThread.label_ids.includes("UNREAD")) return;
+		const key = `${openThread.id} ${unreadIds.sort().join(" ")}`;
+		if (markedRef.current === key) return;
+		markedRef.current = key;
 		const change = actionChange("read");
 		patchThread(change);
 		patchList([openThread.id], change, view);

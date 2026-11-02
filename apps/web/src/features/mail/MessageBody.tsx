@@ -15,19 +15,77 @@ const FRAME_HEAD = [
 	"<style>html{background:#fff;color:#1f1f1f}body{margin:16px;font:14px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{white-space:pre-wrap}</style>",
 ].join("");
 
+/** Elements that start a new line. Each one adds a line to the height estimate. */
+const BLOCK_TAGS: ReadonlySet<string> = new Set([
+	"p",
+	"div",
+	"br",
+	"tr",
+	"li",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+	"blockquote",
+	"pre",
+	"hr",
+]);
+
+/** Elements whose content does not show. */
+const HIDDEN_TAGS: ReadonlySet<string> = new Set(["style", "head"]);
+
+/** The tag name at `start`, the position after `<`. A closing tag gives an empty name. */
+function tagNameAt(html: string, start: number): string {
+	let end = start;
+	while (end < html.length && /[a-z0-9]/.test(html.charAt(end))) end += 1;
+	return html.slice(start, end);
+}
+
 /**
  * A height for the frame, from the HTML source. A frame with an opaque origin cannot be measured.
  * The frame scrolls, so a low estimate hides nothing. The CSS limits the height to 60vh.
+ *
+ * It reads the source in one pass, with no regex that can backtrack. Each search starts where the
+ * last one stopped, so the time is linear in the length, also for hostile HTML.
  */
 export function frameHeight(html: string): number {
-	const text = html
-		.replace(/<(style|head)\b[\s\S]*?<\/\1>/gi, "")
-		.replace(/<[^>]*>/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	const blocks = html.match(/<(?:p|div|br|tr|li|h[1-6]|blockquote|pre|hr)\b/gi)?.length ?? 0;
-	const images = html.match(/<img\b/gi)?.length ?? 0;
-	const lines = Math.ceil(text.length / 90) + blocks + images * 4;
+	const source = html.toLowerCase();
+	let textChars = 0;
+	let blocks = 0;
+	let images = 0;
+	// A tag counts as a space, and a run of spaces counts as one character.
+	let afterSpace = true;
+	const addText = (start: number, end: number) => {
+		for (let index = start; index < end; index += 1) {
+			const space = source.charCodeAt(index) <= 32;
+			if (!space || !afterSpace) textChars += 1;
+			afterSpace = space;
+		}
+	};
+	let position = 0;
+	while (position < source.length) {
+		const open = source.indexOf("<", position);
+		if (open === -1) {
+			addText(position, source.length);
+			break;
+		}
+		addText(position, open);
+		const close = source.indexOf(">", open);
+		if (close === -1) break;
+		afterSpace = true;
+		const name = tagNameAt(source, open + 1);
+		position = close + 1;
+		if (BLOCK_TAGS.has(name)) blocks += 1;
+		else if (name === "img") images += 1;
+		else if (HIDDEN_TAGS.has(name)) {
+			const end = source.indexOf(`</${name}`, position);
+			if (end === -1) break;
+			position = end;
+		}
+	}
+	const lines = Math.ceil(textChars / 90) + blocks + images * 4;
 	return Math.max(140, Math.min(4000, lines * 22 + 48));
 }
 

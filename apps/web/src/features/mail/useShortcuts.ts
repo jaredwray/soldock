@@ -1,13 +1,22 @@
 import { useEffect, useRef } from "react";
 
+/** The properties of an element that `isTypingTarget` reads. Each HTMLElement has them. */
+export interface KeyTarget {
+	readonly tagName: string;
+	readonly isContentEditable: boolean;
+	/** The type of an input element. An input element without a type is a text field. */
+	readonly type?: string;
+}
+
+/** Input types that take no text. A key press on one of them can be a shortcut. */
+const NON_TEXT_INPUTS: readonly string[] = ["checkbox", "radio", "button", "submit", "reset", "file"];
+
 /** True when a key press goes to a text field, so a shortcut must not act on it. */
-export function isTypingTarget(target: EventTarget | null): boolean {
-	if (!(target instanceof HTMLElement)) return false;
+export function isTypingTarget(target: KeyTarget): boolean {
 	if (target.isContentEditable) return true;
-	if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-	if (target instanceof HTMLInputElement) {
-		return !["checkbox", "radio", "button", "submit", "reset", "file"].includes(target.type);
-	}
+	const tag = target.tagName.toUpperCase();
+	if (tag === "TEXTAREA" || tag === "SELECT") return true;
+	if (tag === "INPUT") return !NON_TEXT_INPUTS.includes(target.type ?? "text");
 	return false;
 }
 
@@ -26,7 +35,7 @@ export function useShortcuts(handler: (event: KeyboardEvent) => void): void {
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
-			if (isTypingTarget(event.target)) return;
+			if (event.target instanceof HTMLElement && isTypingTarget(event.target)) return;
 			if (document.querySelector("dialog[open]")) return;
 			handlerRef.current(event);
 		}

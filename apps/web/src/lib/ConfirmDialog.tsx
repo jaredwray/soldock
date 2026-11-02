@@ -37,7 +37,14 @@ export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm
 				</p>
 			)}
 			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose} disabled={busy}>
+				{/* A dangerous action does not get the first focus, so Enter or Space cannot run it by accident. */}
+				<button
+					type="button"
+					className="button"
+					onClick={onClose}
+					disabled={busy}
+					data-autofocus={danger ? true : undefined}
+				>
 					Cancel
 				</button>
 				<button
@@ -45,7 +52,7 @@ export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm
 					className={danger ? "button button-danger" : "button button-primary"}
 					onClick={confirm}
 					disabled={busy}
-					data-autofocus
+					data-autofocus={danger ? undefined : true}
 				>
 					{busy ? "Working…" : confirmLabel}
 				</button>

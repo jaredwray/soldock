@@ -15,6 +15,12 @@ MCP clients. The app has no UI-only path.
 - **Boot.** The app calls `account.whoami`. A 401 shows the sign-in page. Otherwise the app shows.
 - **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
   labels, a thread list and a thread view.
+  - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as
+    "Northwind" under "Clients". When no label has the parent name, the parent shows as a group row
+    that is text, not a link. The link of a nested label has the full path as its accessible name,
+    so a screen reader reads "Clients/Northwind".
+  - Under 768px, the sidebar is a drawer. When the drawer opens, the focus goes to its first item.
+    When it closes, the focus goes back to the menu button.
   - The thread list shows the participants, the subject, the snippet, a short date, a star and a
     checkbox. Unread threads are bold. "Older" loads the next page.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
@@ -22,19 +28,40 @@ MCP clients. The app has no UI-only path.
     spam" and "Restore". An action that moves threads shows a toast with "Undo".
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
-    "External sender" notice with the SPF, DKIM and DMARC results.
-  - When an unread thread opens, the app removes UNREAD with `mail.modify_threads`.
+    "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
+    gets a "This message is in Spam" notice, because it can be in a thread with other messages.
+  - In a very large thread, `mail.get_thread` leaves out the bodies of older messages
+    (`body.omitted`). When such a message is expanded, the app gets its body with
+    `mail.get_message`. The message shows a loading state, or an error with "Try again". A
+    collapsed message causes no call. Reply, Reply all and Forward wait for the body.
+  - When an unread thread opens, the app removes UNREAD with `mail.modify_threads`. When a refresh
+    brings a new unread message into the open thread, the app removes UNREAD again. The app keeps
+    the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
     attachments. One idempotency key for each composed message makes a retry safe.
+  - The composer refuses a file before it reads the file, when the file makes the message larger
+    than `MAIL_LIMITS.messageBytes`. Send shows the same error.
+  - A recipient is external when its domain is not in `mail_domains` from `mail.get_profile`. When
+    a recipient is external, the composer shows the 5 MB limit of Cloudflare Email Service. Send
+    stops a message that is larger than `MAIL_LIMITS.externalMessageBytes` and has an external
+    recipient.
+  - A forward cannot attach the files of the original message. The forwarded header names them in
+    the line `Attachments (not included): …`. Inline images are not in this line.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list. Shortcuts do not work while the focus is in a text field.
 - **Admin** (`/admin`). Owners and admins see the directory, and create people and agents. The
-  first API key of a new principal shows once, with a copy button. For each agent, the page sets
+  first API key of a new principal shows once, with a copy button. A credential cannot grant a scope
+  that it does not hold. Thus the form offers only the scopes of the session (for an agent, also
+  only `AGENT_SCOPES`). For a person, the app sends these scopes as `key_scopes`, so an admin who
+  signed in with a narrower key can still create a person. For each agent, the page sets
   the outbound mail policy and manages the API keys. A member who sponsors an agent sees the page
   with only those agents.
-- **Settings** (`/settings`). Your account, your API keys (list, create, revoke) and sign out.
+- **Settings** (`/settings`). Your account, your API keys (list, create, revoke) and sign out. A new
+  key can hold only the scopes of the session.
+- **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
+  focus on Cancel.
 
 ## Routes
 
@@ -70,6 +97,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/settings/`](src/features/settings/) | Settings, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, actions and shortcuts |
 
 ## Commands
 
@@ -78,9 +106,15 @@ Run these from the repository root.
 ```sh
 pnpm --filter @soldock/web dev          # Vite dev server. It sends /api, /auth and /mcp to wrangler dev on port 8787
 pnpm --filter @soldock/web build        # writes apps/web/dist
-pnpm --filter @soldock/web typecheck
+pnpm --filter @soldock/web typecheck    # also checks test/
 pnpm build                              # the same build as above
+npx vitest run --project web            # the tests in test/
 ```
+
+The `web` Vitest project runs in Node, with no DOM. Thus the tests cover only modules that do not
+need the DOM. The label query test uses the real search parser of dock
+([`apps/dock/src/mail/search.ts`](../dock/src/mail/search.ts)), so a quoted label name must parse
+back to the same name.
 
 Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 
@@ -95,7 +129,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`
   and `<base target="_blank">`. The frame loads nothing from the network, and links open in a new tab.
 - **The frame has a fixed height.** The app cannot measure a frame with an opaque origin. It sets a
-  height from an estimate of the HTML source, at most 60vh, and the frame scrolls.
+  height from an estimate of the HTML source, at most 60vh, and the frame scrolls. The estimate
+  reads the source in one pass with no backtracking regex, so hostile HTML cannot freeze the tab.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.

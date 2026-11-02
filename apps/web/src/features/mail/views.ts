@@ -78,3 +78,68 @@ export function labelChipName(id: string, labelsById: ReadonlyMap<string, Label>
 export function isUserLabelId(id: string): boolean {
 	return id.startsWith("lbl_");
 }
+
+/** One row of the label tree in the sidebar. */
+export interface LabelRow {
+	/** The label id, or `group:` and the path for a group row. */
+	key: string;
+	/** The last part of the path, for example `Northwind` for `Clients/Northwind`. */
+	name: string;
+	/** The path before the name, for example `Clients/`. It is empty at the top level. */
+	parent: string;
+	depth: number;
+	/** The label of the row. It is null for a group row: a parent path that is not a label. */
+	label: Label | null;
+}
+
+interface LabelNode {
+	key: string;
+	name: string;
+	path: string[];
+	label: Label | null;
+	children: LabelNode[];
+}
+
+/**
+ * The user labels as a tree, in display order. A slash in a name makes a nested label. A parent
+ * path that is not a label gets a group row, so `Clients/Northwind` always shows under `Clients`.
+ */
+export function labelRows(labels: readonly Label[]): LabelRow[] {
+	const roots: LabelNode[] = [];
+	const nodes = new Map<string, LabelNode>();
+	for (const label of labels) {
+		if (label.type !== "user") continue;
+		const parts = label.name
+			.split("/")
+			.map((part) => part.trim())
+			.filter(Boolean);
+		const path = parts.length > 0 ? parts : [label.name];
+		let siblings = roots;
+		for (let depth = 0; depth < path.length; depth += 1) {
+			const key = path.slice(0, depth + 1).join("/");
+			let node = nodes.get(key);
+			if (!node) {
+				node = { key, name: path[depth] ?? "", path: path.slice(0, depth), label: null, children: [] };
+				nodes.set(key, node);
+				siblings.push(node);
+			}
+			if (depth === path.length - 1) {
+				// Two names can give the same path, for example `A/B` and `A//B`. Each label keeps its own row.
+				if (node.label) siblings.push({ ...node, label, children: [] });
+				else node.label = label;
+			}
+			siblings = node.children;
+		}
+	}
+	const rows: LabelRow[] = [];
+	const visit = (level: readonly LabelNode[], depth: number) => {
+		for (const node of [...level].sort((a, b) => a.name.localeCompare(b.name))) {
+			const parent = node.path.length > 0 ? `${node.path.join("/")}/` : "";
+			const key = node.label ? node.label.id : `group:${node.key}`;
+			rows.push({ key, name: node.name, parent, depth, label: node.label });
+			visit(node.children, depth + 1);
+		}
+	};
+	visit(roots, 0);
+	return rows;
+}

@@ -8,6 +8,9 @@ import { AccountMenu } from "./AccountMenu.tsx";
 /** The element id of the search box. The `/` shortcut moves the focus to it. */
 export const SEARCH_INPUT_ID = "mail-search";
 
+/** The element id of the menu button. The focus goes back to it when the mail drawer closes. */
+export const MENU_BUTTON_ID = "mail-menu-button";
+
 interface TopBarProps {
 	route: Route;
 	navOpen: boolean;
@@ -20,6 +23,7 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 		<header className="topbar">
 			{isMail && (
 				<button
+					id={MENU_BUTTON_ID}
 					type="button"
 					className="icon-button menu-button"
 					aria-label="Main menu"

@@ -95,6 +95,8 @@ const LIST_LOADING: ListState = { status: "loading", threads: [], nextCursor: nu
 export function useThreadList(query: string | null) {
 	const [state, setState] = useState<ListState>(LIST_LOADING);
 	const requestRef = useRef(0);
+	/** The request id of the last loadOlder call. Only that call clears `loadingOlder`. */
+	const olderRef = useRef(0);
 	const stateRef = useRef(state);
 	stateRef.current = state;
 
@@ -133,10 +135,16 @@ export function useThreadList(query: string | null) {
 		void load(false);
 	}, [load]);
 
+	/**
+	 * Gets the next page. A refresh that starts later discards the result, because the cursor belongs
+	 * to the old rows. `loadingOlder` still ends with this request, so the "Older" button never stays
+	 * disabled.
+	 */
 	const loadOlder = useCallback(async () => {
 		const cursor = stateRef.current.nextCursor;
 		if (query === null || cursor === null || stateRef.current.loadingOlder) return;
 		const request = ++requestRef.current;
+		olderRef.current = request;
 		setState((current) => ({ ...current, loadingOlder: true }));
 		try {
 			const result = await api.call("mail.list_threads", { query, cursor, limit: PAGE_SIZE });
@@ -144,17 +152,12 @@ export function useThreadList(query: string | null) {
 			setState((current) => {
 				const known = new Set(current.threads.map((thread) => thread.id));
 				const added = result.threads.filter((thread) => !known.has(thread.id));
-				return {
-					...current,
-					threads: [...current.threads, ...added],
-					nextCursor: result.next_cursor,
-					loadingOlder: false,
-				};
+				return { ...current, threads: [...current.threads, ...added], nextCursor: result.next_cursor };
 			});
 		} catch (caught) {
-			if (request !== requestRef.current) return;
-			setState((current) => ({ ...current, loadingOlder: false }));
-			throw caught;
+			if (request === requestRef.current) throw caught;
+		} finally {
+			if (olderRef.current === request) setState((current) => ({ ...current, loadingOlder: false }));
 		}
 	}, [query]);
 

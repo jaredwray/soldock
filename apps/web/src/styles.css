@@ -418,6 +418,11 @@ fieldset {
 	margin-bottom: 4px;
 }
 
+.scope-list .field-hint {
+	grid-column: 1 / -1;
+	margin-bottom: 8px;
+}
+
 .notice {
 	margin: 12px 0;
 	padding: 10px 12px;
@@ -844,6 +849,13 @@ fieldset {
 	flex: 1;
 	min-width: 0;
 	padding-right: 40px;
+}
+
+/* A parent path that is not a label. It is text, not a link. */
+.nav-group,
+.nav-group:hover {
+	background: none;
+	color: var(--text-muted);
 }
 
 .nav-label-delete {
@@ -1294,6 +1306,12 @@ fieldset {
 	margin-top: 1px;
 }
 
+.spam-notice {
+	border-color: var(--danger);
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
 .auth-results {
 	display: flex;
 	flex-wrap: wrap;
@@ -1329,6 +1347,24 @@ fieldset {
 	border-radius: var(--radius);
 	background: #ffffff;
 	color-scheme: light;
+}
+
+/* The body of a message that mail.get_message loads: the loading and error states. */
+.message-body-state {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 12px;
+	align-items: center;
+	min-height: 64px;
+	padding: 12px;
+	border: 1px dashed var(--border);
+	border-radius: var(--radius);
+	color: var(--text-muted);
+	font-size: 14px;
+}
+
+.message-body-state p {
+	margin: 0;
 }
 
 .message-text {
@@ -2161,9 +2197,10 @@ h3.card-title {
 		border-radius: 0;
 	}
 
+	/* A modal dialog has fixed insets, so height: auto fills the screen. fit-content keeps it small. */
 	.dialog-small {
 		width: calc(100vw - 32px);
-		height: auto;
+		height: fit-content;
 		max-height: calc(100dvh - 32px);
 		margin: auto;
 		border-radius: var(--radius-large);

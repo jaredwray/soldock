@@ -76,12 +76,43 @@ function prefixed(prefix: string, subject: string): string {
 	return (pattern.test(subject) ? subject : `${prefix}: ${subject}`).slice(0, MAIL_LIMITS.subjectChars);
 }
 
-/** The plain text of a message. For HTML only, it uses an inert document, which runs nothing and loads nothing. */
+// Markers for line breaks in HTML. They are private-use characters, so mail text does not use them.
+const LINE = "\uE000";
+const PARAGRAPH = "\uE001";
+const BREAK = "\uE002";
+// Each match starts at a marker, so the regex never backtracks over a long run of spaces.
+const BREAK_RUN = /[\uE000-\uE002][\s\uE000-\uE002]*/g;
+
+/**
+ * The plain text of a message. For HTML only, it uses an inert document, which runs nothing and loads
+ * nothing. Each block element starts a new line, and a paragraph or a heading also gets an empty line.
+ */
 export function messageText(message: Message): string {
 	if (message.body.text !== null) return message.body.text;
 	if (message.body.html === null) return "";
-	const document = new DOMParser().parseFromString(message.body.html, "text/html");
-	return (document.body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+	const body = new DOMParser().parseFromString(message.body.html, "text/html").body;
+	for (const element of body.querySelectorAll("style, script, template")) element.remove();
+	for (const element of body.querySelectorAll("br")) element.replaceWith(BREAK);
+	for (const element of body.querySelectorAll("div, li, tr, blockquote, pre")) {
+		element.before(LINE);
+		element.after(LINE);
+	}
+	for (const element of body.querySelectorAll("p, h1, h2, h3, h4, h5, h6")) {
+		element.before(PARAGRAPH);
+		element.after(PARAGRAPH);
+	}
+	// One run of markers is one break. Its number of lines comes from the strongest marker and the <br> count.
+	return (body.textContent ?? "")
+		.replace(BREAK_RUN, (run) => {
+			const breaks = run.split(BREAK).length - 1;
+			const blockLines = run.includes(PARAGRAPH) ? 2 : run.includes(LINE) ? 1 : 0;
+			return "\n".repeat(Math.min(2, blockLines + breaks));
+		})
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 }
 
 function quote(message: Message): string {
@@ -118,8 +149,14 @@ export function replyDraft(message: Message, myAddress: string, all: boolean): D
 	});
 }
 
-/** A forward: Fwd: and the quoted message. It is a new thread, so it has no reply_to_message_id. */
+/**
+ * A forward: Fwd: and the quoted message. It is a new thread, so it has no reply_to_message_id. The
+ * composer cannot attach the files of the original, so the header names them.
+ */
 export function forwardDraft(message: Message): Draft {
+	const files = message.attachments
+		.filter((attachment) => !attachment.inline)
+		.map((attachment) => attachment.filename || "(no name)");
 	const header = [
 		"---------- Forwarded message ----------",
 		`From: ${message.from ? formatAddress(message.from) : "(unknown)"}`,
@@ -127,6 +164,7 @@ export function forwardDraft(message: Message): Draft {
 		`Subject: ${message.subject}`,
 		`To: ${message.to.map(formatAddress).join(", ")}`,
 		...(message.cc.length > 0 ? [`Cc: ${message.cc.map(formatAddress).join(", ")}`] : []),
+		...(files.length > 0 ? [`Attachments (not included): ${files.join(", ")}`] : []),
 	].join("\n");
 	return newDraft({
 		title: "Forward",

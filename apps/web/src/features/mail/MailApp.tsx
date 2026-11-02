@@ -114,7 +114,13 @@ export function MailApp({ route, navOpen, onCloseNav }: MailAppProps) {
 				onShowHelp={() => setDialog({ type: "help" })}
 			/>
 			{draft && (
-				<Composer key={draft.key} draft={draft} myAddress={myAddress} onClose={() => setDraft(null)} onSent={sent} />
+				<Composer
+					key={draft.key}
+					draft={draft}
+					mailDomains={profile?.mail_domains ?? null}
+					onClose={() => setDraft(null)}
+					onSent={sent}
+				/>
 			)}
 			{dialog?.type === "help" && <ShortcutHelp onClose={() => setDialog(null)} />}
 			{dialog?.type === "new-label" && (

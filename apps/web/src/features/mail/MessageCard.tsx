@@ -1,5 +1,5 @@
 import type { Address, Label, Message } from "@soldock/contracts";
-import { useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
 import { addressName, formatBytes, fullDate, sameAddress, shortDate } from "../../lib/format.ts";
@@ -18,9 +18,46 @@ interface MessageCardProps {
 	onReply: (message: Message, mode: ReplyMode) => void;
 }
 
+type FullBody =
+	| { status: "idle" | "loading" }
+	| { status: "ready"; body: Message["body"] }
+	| { status: "error"; error: string };
+
+/**
+ * The body to show. In a very large thread, mail.get_thread leaves out the bodies of older messages
+ * (`body.omitted`). Such a body comes from mail.get_message, but only while `expanded` is true, so a
+ * collapsed message causes no call.
+ */
+function useFullBody(message: Message, expanded: boolean) {
+	const [full, setFull] = useState<FullBody>({ status: "idle" });
+	const omitted = message.body.omitted;
+	const messageId = message.id;
+
+	const load = useCallback(async () => {
+		setFull({ status: "loading" });
+		try {
+			const result = await api.call("mail.get_message", { message_id: messageId });
+			setFull({ status: "ready", body: result.body });
+		} catch (caught) {
+			setFull({ status: "error", error: errorMessage(caught) });
+		}
+	}, [messageId]);
+
+	useEffect(() => {
+		if (expanded && omitted && full.status === "idle") void load();
+	}, [expanded, omitted, full.status, load]);
+
+	const body = !omitted ? message.body : full.status === "ready" ? full.body : null;
+	return { body, full, retry: load };
+}
+
 export function MessageCard({ message, myAddress, labelsById, defaultExpanded, onReply }: MessageCardProps) {
 	const [expanded, setExpanded] = useState(defaultExpanded);
+	const { body, full, retry } = useFullBody(message, expanded);
 	const bodyId = useId();
+	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
+	const withBody = body ? { ...message, body } : null;
+	const spam = message.label_ids.includes("SPAM");
 	const sender = message.from;
 	const senderName = sender
 		? sameAddress(sender.address, myAddress)
@@ -73,22 +110,52 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 								))}
 							</ul>
 						)}
+						{spam && <SpamNotice />}
 						{message.untrusted && <ExternalNotice message={message} />}
-						<MessageBody body={message.body} subject={message.subject} />
+						{body ? (
+							<MessageBody body={body} subject={message.subject} />
+						) : full.status === "error" ? (
+							<div className="message-body-state" role="alert">
+								<p>The message did not load. {full.error}</p>
+								<button type="button" className="button button-small" onClick={() => void retry()}>
+									Try again
+								</button>
+							</div>
+						) : (
+							<div className="message-body-state" aria-live="polite">
+								<span className="spinner spinner-small" aria-hidden="true" />
+								Loading the message…
+							</div>
+						)}
 						{message.attachments.length > 0 && <Attachments message={message} />}
 						{message.origin === "sent" && message.delivery && message.delivery.length > 0 && (
 							<Delivery delivery={message.delivery} />
 						)}
 						<div className="message-actions">
-							<button type="button" className="button button-small" onClick={() => onReply(message, "reply")}>
+							<button
+								type="button"
+								className="button button-small"
+								onClick={() => withBody && onReply(withBody, "reply")}
+								disabled={!withBody}
+							>
 								<Icon name="reply" size={16} />
 								Reply
 							</button>
-							<button type="button" className="button button-small" onClick={() => onReply(message, "replyAll")}>
+							<button
+								type="button"
+								className="button button-small"
+								onClick={() => withBody && onReply(withBody, "replyAll")}
+								disabled={!withBody}
+							>
 								<Icon name="replyAll" size={16} />
 								Reply all
 							</button>
-							<button type="button" className="button button-small" onClick={() => onReply(message, "forward")}>
+							<button
+								type="button"
+								className="button button-small"
+								onClick={() => withBody && onReply(withBody, "forward")}
+								disabled={!withBody}
+							>
 								<Icon name="forward" size={16} />
 								Forward
 							</button>
@@ -124,6 +191,18 @@ function RecipientLine({
 					)
 					.join(", ")}
 			</dd>
+		</div>
+	);
+}
+
+/** A message in Spam can be in a thread with other messages. The notice tells the reader. */
+function SpamNotice() {
+	return (
+		<div className="external-notice spam-notice">
+			<Icon name="spam" size={18} />
+			<p>
+				<strong>This message is in Spam.</strong> Be careful with links, attachments and requests in it.
+			</p>
 		</div>
 	);
 }

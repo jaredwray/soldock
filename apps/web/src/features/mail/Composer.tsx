@@ -26,6 +26,12 @@ function encodedSize(bytes: number): number {
 	return Math.ceil(bytes / 3) * 4;
 }
 
+const TOO_LARGE = `The message is too large. The limit is ${formatBytes(MAIL_LIMITS.messageBytes)}.`;
+
+function domainOf(address: string): string {
+	return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+}
+
 /** The contract refuses control characters, quotes, slashes and backslashes in a file name. */
 function safeFilename(name: string): string {
 	const cleaned = name.replace(/[\p{Cc}"\\/]/gu, "_").trim();
@@ -34,12 +40,16 @@ function safeFilename(name: string): string {
 
 interface ComposerProps {
 	draft: Draft;
-	myAddress: string;
+	/**
+	 * The mail domains of the deployment, from mail.get_profile. A recipient on another domain is
+	 * external. Null while the profile loads.
+	 */
+	mailDomains: readonly string[] | null;
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
 
-export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
+export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps) {
 	const [fields, setFields] = useState({ to: draft.to, cc: draft.cc, bcc: draft.bcc });
 	const [showCopies, setShowCopies] = useState(draft.cc !== "" || draft.bcc !== "");
 	const [subject, setSubject] = useState(draft.subject);
@@ -71,12 +81,23 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 		attachments.length > 0;
 
 	const attachmentBytes = attachments.reduce((sum, file) => sum + file.size, 0);
-	const estimatedBytes = encodedSize(attachmentBytes) + new Blob([text, subject]).size;
+	const textBytes = new Blob([text, subject]).size;
+	const estimatedBytes = encodedSize(attachmentBytes) + textBytes;
 	const tooLarge = estimatedBytes > MAIL_LIMITS.messageBytes;
-	const myDomain = myAddress.split("@")[1]?.toLowerCase() ?? "";
 	const allRecipients = [fields.to, fields.cc, fields.bcc].flatMap((value) => parseAddressList(value).addresses);
-	const hasOtherDomain = allRecipients.some((address) => address.split("@")[1]?.toLowerCase() !== myDomain);
-	const overExternal = hasOtherDomain && estimatedBytes > MAIL_LIMITS.externalMessageBytes;
+	const localDomains = new Set((mailDomains ?? []).map((domain) => domain.toLowerCase()));
+	// Without the profile, the composer cannot tell which recipients are external. The server then decides.
+	const externalRecipients =
+		mailDomains === null ? [] : allRecipients.filter((address) => !localDomains.has(domainOf(address)));
+	const overExternalLimit = estimatedBytes > MAIL_LIMITS.externalMessageBytes;
+	const tooLargeForExternal = externalRecipients.length > 0 && overExternalLimit;
+	const externalLimit = formatBytes(MAIL_LIMITS.externalMessageBytes);
+	const externalNames =
+		externalRecipients.length > 3
+			? `${externalRecipients.slice(0, 3).join(", ")} and ${externalRecipients.length - 3} more`
+			: externalRecipients.join(", ");
+	const externalError = `The message is too large for ${externalNames}. Cloudflare Email Service accepts at most ${externalLimit} for mail to an address outside your organization. Make the message smaller, or remove those recipients.`;
+	const showExternalHint = externalRecipients.length > 0 || (mailDomains === null && overExternalLimit);
 
 	function requestClose() {
 		if (sending) return;
@@ -90,6 +111,15 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 		if (files.length === 0) return;
 		if (attachments.length + files.length > MAIL_LIMITS.attachments) {
 			setError(`A message can have at most ${MAIL_LIMITS.attachments} attachments.`);
+			return;
+		}
+		// Refuse files that make the message too large before the browser reads them into memory.
+		const addedBytes = files.reduce((sum, file) => sum + file.size, 0);
+		if (
+			files.some((file) => file.size > MAIL_LIMITS.messageBytes) ||
+			encodedSize(attachmentBytes + addedBytes) + textBytes > MAIL_LIMITS.messageBytes
+		) {
+			setError(TOO_LARGE);
 			return;
 		}
 		setReading(true);
@@ -142,7 +172,11 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 			return;
 		}
 		if (tooLarge) {
-			setError(`The message is too large. The limit is ${formatBytes(MAIL_LIMITS.messageBytes)}.`);
+			setError(TOO_LARGE);
+			return;
+		}
+		if (tooLargeForExternal) {
+			setError(externalError);
 			return;
 		}
 		setSending(true);
@@ -182,7 +216,11 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 				autoComplete="off"
 				spellCheck={false}
 				value={fields[field]}
-				onChange={(event) => setFields((current) => ({ ...current, [field]: event.target.value }))}
+				onChange={(event) => {
+					setFields((current) => ({ ...current, [field]: event.target.value }));
+					// The error can name a recipient, so it goes when the recipients change.
+					setError(null);
+				}}
 				aria-invalid={fieldErrors[field] ? true : undefined}
 				aria-describedby={fieldErrors[field] ? `${ids[field]}-error` : undefined}
 				disabled={sending}
@@ -253,7 +291,10 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 									className="icon-button icon-button-small"
 									aria-label={`Remove ${file.filename}`}
 									title="Remove"
-									onClick={() => setAttachments((current) => current.filter((item) => item.id !== file.id))}
+									onClick={() => {
+										setAttachments((current) => current.filter((item) => item.id !== file.id));
+										setError(null);
+									}}
 									disabled={sending}
 								>
 									<Icon name="close" size={16} />
@@ -262,12 +303,14 @@ export function Composer({ draft, myAddress, onClose, onSent }: ComposerProps) {
 						))}
 					</ul>
 				)}
-				<p id={ids.size} className={tooLarge ? "compose-size field-error" : "compose-size field-hint"}>
+				<p
+					id={ids.size}
+					className={tooLarge || tooLargeForExternal ? "compose-size field-error" : "compose-size field-hint"}
+				>
 					{attachments.length > 0
 						? `${attachments.length} of ${MAIL_LIMITS.attachments} files, ${formatBytes(attachmentBytes)}. The message is about ${formatBytes(estimatedBytes)} of ${formatBytes(MAIL_LIMITS.messageBytes)}.`
 						: `Up to ${MAIL_LIMITS.attachments} files. A message can be at most ${formatBytes(MAIL_LIMITS.messageBytes)}.`}
-					{overExternal &&
-						` Mail to addresses outside your organization can be at most ${formatBytes(MAIL_LIMITS.externalMessageBytes)}.`}
+					{showExternalHint && ` Mail to addresses outside your organization can be at most ${externalLimit}.`}
 				</p>
 				<div aria-live="assertive">
 					{error && (

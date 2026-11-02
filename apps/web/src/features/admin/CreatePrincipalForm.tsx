@@ -1,5 +1,6 @@
 import {
 	AGENT_SCOPES,
+	ALL_SCOPES,
 	type CreatedApiKey,
 	EmailAddress,
 	type InputOf,
@@ -9,6 +10,7 @@ import {
 } from "@soldock/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
+import { useSession } from "../auth/session.tsx";
 
 interface CreatePrincipalFormProps {
 	me: Principal;
@@ -18,12 +20,16 @@ interface CreatePrincipalFormProps {
 
 /** Creates a person or an agent. The result holds a first API key, which shows once. */
 export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFormProps) {
+	const { whoami } = useSession();
+	// A credential cannot grant a scope that it does not hold. The form offers only the scopes of this session.
+	const humanScopes = ALL_SCOPES.filter((scope) => whoami.scopes.includes(scope));
+	const agentScopes = AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const [kind, setKind] = useState<"human" | "agent">("human");
 	const [name, setName] = useState("");
 	const [address, setAddress] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
 	const [sponsorId, setSponsorId] = useState(me.id);
-	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(AGENT_SCOPES));
+	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(agentScopes));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = { name: useId(), address: useId(), role: useId(), sponsor: useId() };
@@ -37,13 +43,13 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 		setError(null);
 		const input: InputOf<"directory.create_principal"> =
 			kind === "human"
-				? { kind, display_name: name.trim(), address: address.trim(), org_role: role }
+				? { kind, display_name: name.trim(), address: address.trim(), org_role: role, key_scopes: humanScopes }
 				: {
 						kind,
 						display_name: name.trim(),
 						address: address.trim(),
 						sponsor_id: sponsorId,
-						key_scopes: AGENT_SCOPES.filter((scope) => scopes.has(scope)),
+						key_scopes: agentScopes.filter((scope) => scopes.has(scope)),
 					};
 		try {
 			const result = await api.call("directory.create_principal", input);
@@ -115,21 +121,26 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 					/>
 				</div>
 				{kind === "human" ? (
-					<div className="field">
-						<label htmlFor={ids.role} className="field-label">
-							Role
-						</label>
-						<select
-							id={ids.role}
-							className="input"
-							value={role}
-							onChange={(event) => setRole(event.target.value === "admin" ? "admin" : "member")}
-							disabled={busy}
-						>
-							<option value="member">Member</option>
-							<option value="admin">Admin</option>
-						</select>
-					</div>
+					<>
+						<div className="field">
+							<label htmlFor={ids.role} className="field-label">
+								Role
+							</label>
+							<select
+								id={ids.role}
+								className="input"
+								value={role}
+								onChange={(event) => setRole(event.target.value === "admin" ? "admin" : "member")}
+								disabled={busy}
+							>
+								<option value="member">Member</option>
+								<option value="admin">Admin</option>
+							</select>
+						</div>
+						<p className="field-hint form-grid-wide">
+							The first key of the person gets the scopes of this session: {humanScopes.join(", ")}.
+						</p>
+					</>
 				) : (
 					<>
 						<div className="field">
@@ -152,7 +163,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 						</div>
 						<fieldset className="scope-list form-grid-wide">
 							<legend className="field-label">Scopes of the first key</legend>
-							{AGENT_SCOPES.map((scope) => (
+							{agentScopes.map((scope) => (
 								<label key={scope} className="check-row">
 									<input
 										type="checkbox"

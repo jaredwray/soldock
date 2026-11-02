@@ -1,8 +1,10 @@
 import type { Label } from "@soldock/contracts";
+import { useEffect, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, viewPath } from "../../routes.ts";
-import { SYSTEM_NAV } from "./views.ts";
+import { MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { labelRows, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
 	view: MailView;
@@ -27,16 +29,34 @@ export function Sidebar({
 	onClose,
 }: SidebarProps) {
 	const byId = new Map((labels ?? []).map((label) => [label.id, label]));
-	const userLabels = (labels ?? [])
-		.filter((label) => label.type === "user")
-		.sort((a, b) => a.name.localeCompare(b.name));
+	const rows = labelRows(labels ?? []);
+	const navRef = useRef<HTMLElement>(null);
+	const wasOpen = useRef(open);
+
+	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
+	// focus goes back to the menu button, if the focus was in the drawer.
+	useEffect(() => {
+		const nav = navRef.current;
+		if (!nav || open === wasOpen.current) return;
+		wasOpen.current = open;
+		if (open) {
+			nav.querySelector<HTMLElement>("a[href], button")?.focus();
+		} else if (nav.contains(document.activeElement) || document.activeElement === document.body) {
+			document.getElementById(MENU_BUTTON_ID)?.focus();
+		}
+	}, [open]);
 
 	return (
 		<>
 			{open && (
 				<button type="button" className="nav-backdrop" aria-label="Close the menu" tabIndex={-1} onClick={onClose} />
 			)}
-			<nav id="mail-nav" className={open ? "sidebar sidebar-open" : "sidebar"} aria-label="Mail folders and labels">
+			<nav
+				id="mail-nav"
+				ref={navRef}
+				className={open ? "sidebar sidebar-open" : "sidebar"}
+				aria-label="Mail folders and labels"
+			>
 				<button type="button" className="compose-button" onClick={onCompose}>
 					<Icon name="pencil" />
 					Compose
@@ -79,21 +99,43 @@ export function Sidebar({
 				</div>
 				{labelsError && labels === null && <p className="nav-error">Labels are not available.</p>}
 				<ul className="nav-list">
-					{userLabels.map((label) => {
+					{rows.map((row) => {
+						const indent = { paddingInlineStart: `${16 + row.depth * 16}px` };
+						const label = row.label;
+						if (!label) {
+							// A group row: a parent path that is not a label. It is text, not a link.
+							return (
+								<li key={row.key} className="nav-label-row">
+									<span className="nav-item nav-group" style={indent}>
+										<Icon name="folder" />
+										<span className="nav-name">
+											<span aria-hidden="true">{row.name}</span>
+											<span className="visually-hidden">{`${row.parent}${row.name}`}</span>
+										</span>
+									</span>
+								</li>
+							);
+						}
 						const active = view.kind === "label" && view.labelId === label.id;
-						const depth = label.name.split("/").length - 1;
-						const shortName = label.name.split("/").pop() || label.name;
 						return (
-							<li key={label.id} className="nav-label-row">
+							<li key={row.key} className="nav-label-row">
 								<Link
 									to={viewPath({ kind: "label", labelId: label.id })}
 									className={active ? "nav-item nav-item-active" : "nav-item"}
 									aria-current={active ? "page" : undefined}
-									style={{ paddingInlineStart: `${16 + depth * 16}px` }}
+									style={indent}
 									title={label.name}
 								>
 									<Icon name="tag" />
-									<span className="nav-name">{shortName}</span>
+									{row.parent ? (
+										// A screen reader reads the full path, for example Clients/Northwind.
+										<span className="nav-name">
+											<span aria-hidden="true">{row.name}</span>
+											<span className="visually-hidden">{label.name}</span>
+										</span>
+									) : (
+										<span className="nav-name">{row.name}</span>
+									)}
 									{label.threads_unread > 0 && (
 										<span className="nav-count">
 											{label.threads_unread}
@@ -113,7 +155,7 @@ export function Sidebar({
 							</li>
 						);
 					})}
-					{labels !== null && userLabels.length === 0 && <li className="nav-empty">No labels yet.</li>}
+					{labels !== null && rows.length === 0 && <li className="nav-empty">No labels yet.</li>}
 				</ul>
 				<p className="nav-hint">
 					Press <kbd>?</kbd> for keyboard shortcuts.

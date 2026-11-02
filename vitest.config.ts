@@ -18,6 +18,14 @@ export default defineConfig({
 					environment: "node",
 				},
 			},
+			{
+				// The pure modules of the web app. Code that needs the DOM stays out of these tests.
+				test: {
+					name: "web",
+					include: ["apps/web/test/**/*.test.ts"],
+					environment: "node",
+				},
+			},
 			// Run inside workerd (apps/dock/vitest.config.ts, spikes/email-service/vitest.config.ts).
 			"apps/dock",
 			"spikes/email-service",

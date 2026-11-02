@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { useToast } from "../../lib/toast.tsx";
+import { useSession } from "../auth/session.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 
 /** Scopes that a new key does not get unless the person selects them. */
@@ -12,7 +13,10 @@ const PRIVILEGED: readonly Scope[] = ["account.keys", "directory.write"];
 interface ApiKeyManagerProps {
 	/** The key owner. Leave it out for your own keys. */
 	principalId?: string;
-	/** The scopes that a new key can hold, for example AGENT_SCOPES for an agent. */
+	/**
+	 * The scopes that a new key can hold, for example AGENT_SCOPES for an agent. The form offers only
+	 * the ones that this session also holds, because a credential cannot grant a scope that it does not hold.
+	 */
 	allowedScopes: readonly Scope[];
 	heading: string;
 	headingLevel?: 2 | 3;
@@ -21,6 +25,8 @@ interface ApiKeyManagerProps {
 /** Lists, creates and revokes the API keys of one principal. */
 export function ApiKeyManager({ principalId, allowedScopes, heading, headingLevel = 2 }: ApiKeyManagerProps) {
 	const toast = useToast();
+	const { whoami } = useSession();
+	const offeredScopes = allowedScopes.filter((scope) => whoami.scopes.includes(scope));
 	const [keys, setKeys] = useState<ApiKey[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
@@ -105,7 +111,8 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, headingLeve
 			)}
 			<CreateKeyForm
 				principalId={principalId}
-				allowedScopes={allowedScopes}
+				allowedScopes={offeredScopes}
+				narrowed={offeredScopes.length < allowedScopes.length}
 				onCreated={(key) => {
 					setCreated(key);
 					void load();
@@ -136,10 +143,13 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, headingLeve
 function CreateKeyForm({
 	principalId,
 	allowedScopes,
+	narrowed,
 	onCreated,
 }: {
 	principalId: string | undefined;
 	allowedScopes: readonly Scope[];
+	/** True when this session holds fewer scopes than the key owner can have. */
+	narrowed: boolean;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
 	const [label, setLabel] = useState("");
@@ -204,6 +214,11 @@ function CreateKeyForm({
 			</div>
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes</legend>
+				{narrowed && (
+					<p className="field-hint">
+						This session does not hold all scopes. A new key can hold only the scopes that this session holds.
+					</p>
+				)}
 				{allowedScopes.map((scope) => (
 					<label key={scope} className="check-row">
 						<input
