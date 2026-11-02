@@ -30,10 +30,14 @@ function isAdmin(caller: AuthContext): boolean {
 	return caller.principal.org_role === "owner" || caller.principal.org_role === "admin";
 }
 
-/** A human manages their own keys, the keys of the agents that they sponsor and, as an admin, anyone's keys. */
+/**
+ * A human manages their own keys, the keys of the agents that they sponsor and, as an admin, the keys
+ * of others. Only the owner manages the owner's keys, so an admin can never act as the owner.
+ */
 function canManageKeysOf(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human") return false;
 	if (target.id === caller.principal.id) return true;
+	if (target.org_role === "owner") return false;
 	if (target.kind === "agent" && target.sponsor_id === caller.principal.id) return true;
 	return isAdmin(caller);
 }

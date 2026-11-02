@@ -235,6 +235,18 @@ describe("directory authorization", () => {
 		).toBe("forbidden");
 		expect(await denied(other.call("account.list_api_keys", { principal_id: ada.id }))).toBe("forbidden");
 		expect(await denied(other.call("account.revoke_api_key", { key_id: api_key.id }))).toBe("forbidden");
+		// An admin manages other people's keys, but never the owner's: that would let it act as the owner.
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+		});
+		await admin.call("account.list_api_keys", { principal_id: ada.id });
+		expect(await denied(admin.call("account.list_api_keys", { principal_id: owner.id }))).toBe("forbidden");
+		expect(
+			await denied(admin.call("account.create_api_key", { principal_id: owner.id, label: "x", scopes: ["mail.read"] })),
+		).toBe("forbidden");
 		// An agent has no account.keys scope at all, so it cannot mint or revoke keys.
 		expect(await denied(bot.call("account.list_api_keys"))).toBe("forbidden");
 		const tool = await callTool(owner.key, "account_list_api_keys", { principal_id: bot.id });

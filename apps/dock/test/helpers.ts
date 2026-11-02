@@ -170,11 +170,11 @@ export async function inject(raw: string, to: string, options: { from?: string; 
 	return { rejected: rejected ?? null, jobs };
 }
 
-/** Runs the inbound queue consumer on the given job bodies. */
-export async function consume(jobs: unknown[]) {
+/** Runs the inbound queue consumer on the given job bodies, as delivery number `attempts`. */
+export async function consume(jobs: unknown[], attempts = 1) {
 	const batch = createMessageBatch(
 		"soldock-mail-inbound",
-		jobs.map((body, i) => ({ id: `job-${counter}-${i}`, timestamp: new Date(), attempts: 1, body })),
+		jobs.map((body, i) => ({ id: `job-${counter}-${i}`, timestamp: new Date(), attempts, body })),
 	);
 	const ctx = createExecutionContext();
 	await handlers.queue(batch, env, ctx);

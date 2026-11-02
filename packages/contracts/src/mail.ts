@@ -12,16 +12,21 @@ export const MAIL_LIMITS = {
 	subjectChars: 998,
 	bodyChars: 2_000_000,
 	attachments: 20,
-	/** The size of one composed message. Email Routing accepts at most 25 MiB. */
-	messageBytes: 25 * 1024 * 1024,
+	/** An inbound message. Email Routing accepts at most 25 MiB. */
+	inboundMessageBytes: 25 * 1024 * 1024,
+	/**
+	 * A composed message for recipients in this deployment. A send holds several copies of the message
+	 * at once, and a Worker isolate has 128 MB of memory, so this is less than the inbound limit.
+	 */
+	messageBytes: 10 * 1024 * 1024,
 	/** The size of a composed message that has an external recipient. Email Service accepts at most 5 MiB. */
 	externalMessageBytes: 5 * 1024 * 1024,
 	labelNameChars: 225,
 	userLabels: 500,
 	threadsPerModify: 100,
 	pageSize: 100,
-	/** The size of an attachment that `mail.get_attachment` returns. */
-	attachmentDownloadBytes: 25 * 1024 * 1024,
+	/** An attachment that `mail.get_attachment` returns as base64, for the same memory reason. */
+	attachmentDownloadBytes: 10 * 1024 * 1024,
 } as const;
 
 const ThreadId = prefixedId("thr");
@@ -284,7 +289,7 @@ const OutgoingAttachment = z.strictObject({
 	content_base64: z
 		.string()
 		// The base64 of the largest message, so a request cannot make the Worker decode more than that.
-		.max(Math.ceil(MAIL_LIMITS.messageBytes / 3) * 4, "must be at most 25 MiB")
+		.max(Math.ceil(MAIL_LIMITS.messageBytes / 3) * 4, "must be at most 10 MiB")
 		.regex(/^[A-Za-z0-9+/]*={0,2}$/, "must be base64"),
 });
 

@@ -74,11 +74,14 @@ describe("the inbound queue consumer", () => {
 		await seedOrg();
 		const bad = await consume([{ v: 99 }]);
 		expect(bad.explicitAcks).toHaveLength(1);
-		const missing = await consume([
-			{ v: 1, principalId: "prn_x", rawKey: "mail/raw/none", contentHash: "x", receivedAt: Date.now() },
-		]);
+		const job = { v: 1, principalId: "prn_x", rawKey: "mail/raw/none", contentHash: "x", receivedAt: Date.now() };
+		const missing = await consume([job]);
 		expect(missing.retryMessages).toHaveLength(1);
 		expect(missing.explicitAcks).toHaveLength(0);
+		// The fifth failure goes to the dead-letter queue and stops the retries.
+		const last = await consume([job], 5);
+		expect(last.retryMessages).toEqual([]);
+		expect(last.explicitAcks).toHaveLength(1);
 	});
 
 	// A DMARC failure that the receiving server recorded means the From domain did not send the mail.
@@ -135,20 +138,18 @@ describe("threading", () => {
 		expect(threads[0]?.message_count).toBe(3);
 	});
 
-	it("joins a reply without references by subject, but never a new message with the same subject", async () => {
+	// A stranger's "Re:" with the same subject must not land inside someone else's conversation.
+	it("joins a reply without references by subject only for a participant, and never a new message", async () => {
 		const { ada } = await seedOrg();
-		await inject(rawMessage({ from: "bob@sender.example", to: "ada@dock.test", subject: "Lunch?" }), "ada@dock.test");
-		await inject(
-			rawMessage({ from: "bob@sender.example", to: "ada@dock.test", subject: "RE: lunch?" }),
-			"ada@dock.test",
-		);
-		await inject(rawMessage({ from: "dan@sender.example", to: "ada@dock.test", subject: "Lunch?" }), "ada@dock.test");
-		await inject(
-			rawMessage({ from: "dan@sender.example", to: "ada@dock.test", subject: "Re: Dinner?" }),
-			"ada@dock.test",
-		);
+		const to = "ada@dock.test";
+		await inject(rawMessage({ from: "bob@sender.example", to: `${to}, carol@sender.example`, subject: "Lunch?" }), to);
+		await inject(rawMessage({ from: "bob@sender.example", to, subject: "RE: lunch?" }), to);
+		await inject(rawMessage({ from: "carol@sender.example", to, subject: "Re: Lunch?" }), to);
+		await inject(rawMessage({ from: "mallory@evil.example", to, subject: "Re: Lunch?" }), to);
+		await inject(rawMessage({ from: "dan@sender.example", to, subject: "Lunch?" }), to);
+		await inject(rawMessage({ from: "dan@sender.example", to, subject: "Re: Dinner?" }), to);
 		const counts = (await inbox(ada.call)).map((t) => t.message_count).sort();
-		expect(counts).toEqual([1, 1, 2]);
+		expect(counts).toEqual([1, 1, 1, 3]);
 	});
 
 	it("merges two threads when a message references both", async () => {

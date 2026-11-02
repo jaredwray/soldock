@@ -36,7 +36,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `POST /auth/setup`: creates the owner and a first key, once, when the directory is empty. A
   guarded insert in one D1 transaction stops two concurrent setups.
 - `POST /auth/session`: a human signs in to the web app with an API key. This is temporary until
-  passkeys exist. Agents get `403`.
+  passkeys exist. Agents get `403`. Each sign-in deletes the expired sessions of that human.
 - `POST /auth/sign-out`: deletes the session.
 
 ## Authorization
@@ -53,7 +53,8 @@ Each call passes three checks:
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never
      can: it has no `directory.write` scope, and the operation accepts humans only.
    - A human manages their own keys and the keys of the agents that they sponsor. Owners and
-     admins manage anyone's keys.
+     admins manage the keys of others, except the owner's: only the owner manages those, so an
+     admin can never act as the owner.
    - A new key can hold only scopes that the creating credential holds, so a narrow key cannot
      mint a wider one.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with

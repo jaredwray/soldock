@@ -50,8 +50,9 @@ A message joins a thread when one of these is true:
 
 - It references (`In-Reply-To`, `References`) a message of the thread.
 - A message of the thread references it. This covers mail that arrives out of order.
-- It has a reply prefix (`Re:`, `AW:`, `Fwd:` and others), no known reference, and the same
-  normalized subject as a thread with a message in the last 30 days.
+- It has a reply prefix (`Re:`, `AW:`, `Fwd:` and others), no known reference, the same normalized
+  subject as a thread with a message in the last 30 days, and a sender who took part in that
+  thread (as a sender or a recipient). A stranger's `Re:` starts a new thread.
 
 When a message links two threads, they merge into the older thread. A sent reply joins the thread
 of the message that it answers.
@@ -89,10 +90,12 @@ of the message that it answers.
    - `internal-only` (the default): external recipients get `policy_denied`.
    - `allowlist`: only the listed domains and addresses.
    - `any`: no limit.
-3. The handler composes the MIME message once. Bcc is never written. A message with an external
-   recipient can be at most 5 MiB (the Email Service limit). Other messages can be at most 25 MiB.
+3. The handler refuses attachments over the limit before it decodes them. Then it composes the MIME
+   message once. Bcc is never written. A message with an external recipient can be at most 5 MiB
+   (the Email Service limit). Other messages can be at most 10 MiB (the memory of one isolate).
 4. The raw bytes go to R2. `MailboxDO.send()` stores the sent copy with `SENT`, one `delivery`
-   row and one `outbox` row for each recipient, and the idempotency key, in one transaction.
+   row and one `outbox` row for each recipient, and the idempotency key, in one transaction. When
+   the mailbox answers that the key was used, the handler deletes the raw object of this attempt.
 5. The outbox alarm delivers:
    - a local recipient: a copy of the raw bytes in R2 for that mailbox, then `MailboxDO.deliver()`.
      Local mail never reaches Email Service.
@@ -130,7 +133,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
-| Raw MIME of each message | R2 `blobs`, key `mail/raw/<principal>/<sha256>` | One owner for each object: each mailbox has its own copy. The key comes from the content, so a retry writes the same object |
+| Raw MIME of each message | R2 `blobs`, key `mail/raw/<principal>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
 
 Blob reference counts: each raw object has exactly one owner (the mailbox in its key), so no shared
@@ -144,7 +147,10 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 | Limit | Value | Source |
 | --- | --- | --- |
 | Inbound message | 25 MiB | Email Routing |
+| Outbound message to local recipients | 10 MiB | Memory: a send holds several copies, and an isolate has 128 MB |
 | Outbound message with an external recipient | 5 MiB | Email Service |
+| Attachment returned by `mail.get_attachment` | 10 MiB | Memory: the base64 JSON holds more copies. A streamed `/dl/` download comes later |
+| Request body on REST and MCP | about 23 MiB | The base64 of 10 MiB plus its text, refused while it streams |
 | Recipients for each message | 50 | Email Service |
 | Stored text body / HTML body | 256 KiB / 1 MiB of UTF-8 | Durable Object row limit (2 MB). Longer bodies are cut and `truncated` is true |
 | User labels | 500 | |
@@ -162,3 +168,4 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - A remote image proxy, `cid:` image display, and a spam classifier
 - Counters for label counts. They are counted on each call now.
 - `postmaster@` and `abuse@` as reserved addresses
+- Streamed attachment downloads (`/dl/`) for attachments over 10 MiB, and sends over 10 MiB

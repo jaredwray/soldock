@@ -43,13 +43,13 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env): P
 		message.setReject("5.1.1 Recipient address rejected: no such mailbox");
 		return;
 	}
-	if (message.rawSize > MAIL_LIMITS.messageBytes) {
+	if (message.rawSize > MAIL_LIMITS.inboundMessageBytes) {
 		log("info", "inbound mail rejected: too large", { recipientDomain, size: message.rawSize });
 		message.setReject("5.3.4 Message size exceeds the limit of this mailbox");
 		return;
 	}
 	const bytes = new Uint8Array(await new Response(message.raw).arrayBuffer());
-	if (bytes.byteLength > MAIL_LIMITS.messageBytes) {
+	if (bytes.byteLength > MAIL_LIMITS.inboundMessageBytes) {
 		message.setReject("5.3.4 Message size exceeds the limit of this mailbox");
 		return;
 	}

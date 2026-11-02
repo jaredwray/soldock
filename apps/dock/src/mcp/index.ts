@@ -7,9 +7,11 @@ import {
 	type HandlerMap,
 	invokeOperation,
 	log,
+	MAX_REQUEST_BYTES,
 	OperationError,
 	problemResponse,
 	type RequestIdVariables,
+	readBodyText,
 } from "../platform/index.ts";
 
 type McpEnv = { Bindings: Env; Variables: RequestIdVariables };
@@ -152,9 +154,10 @@ export function mountMcp(app: Hono<McpEnv>, handlers: HandlerMap<CallContext>): 
 			return rpcError(null, -32600, `Unsupported MCP-Protocol-Version: ${version}`, 400);
 		}
 
+		const text = await readBodyText(c.req.raw, MAX_REQUEST_BYTES);
 		let message: unknown;
 		try {
-			message = await c.req.json();
+			message = JSON.parse(text);
 		} catch {
 			return rpcError(null, -32700, "Parse error", 400);
 		}

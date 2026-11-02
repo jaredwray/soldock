@@ -150,7 +150,7 @@ export const listApiKeys = defineOperation({
 	name: "account.list_api_keys",
 	summary: "List API keys",
 	description:
-		"Lists the API keys of a principal: yourself by default, or an agent that you sponsor. Owners and admins can list the keys of anyone.",
+		"Lists the API keys of a principal: yourself by default, or an agent that you sponsor. Owners and admins can list the keys of anyone except the owner.",
 	http: { method: "GET", path: "/api/v1/account/api-keys" },
 	scopes: ["account.keys"],
 	callers: ["human"],
@@ -164,7 +164,7 @@ export const createApiKey = defineOperation({
 	name: "account.create_api_key",
 	summary: "Create an API key",
 	description:
-		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone. An agent key can hold only agent scopes. The secret is shown only once.",
+		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner. An agent key can hold only agent scopes. The secret is shown only once.",
 	http: { method: "POST", path: "/api/v1/account/api-keys" },
 	scopes: ["account.keys"],
 	callers: ["human"],

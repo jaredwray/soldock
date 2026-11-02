@@ -310,11 +310,14 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			replyThreadId: reply?.threadId ?? null,
 			recipients,
 		};
-		const { duplicate, result } = await box.send(sendInput);
-		if (!duplicate) {
-			auditOk(call, "mail.send", result.message_id);
-		}
-		return result;
+		// The raw object belongs to this attempt only: its key comes from bytes with a new Message-ID.
+		// When the mailbox answers that the key was used, no message references the object, so delete it.
+		// After an error the mailbox can still have committed, so the object stays: a dangling reference
+		// would lose mail, and an orphan only costs storage until blob GC exists.
+		const sent = await box.send(sendInput);
+		if (sent.duplicate) await call.env.BLOBS.delete(rawKey);
+		else auditOk(call, "mail.send", sent.result.message_id);
+		return sent.result;
 	},
 
 	async "mail.get_attachment"(call, input) {

@@ -131,8 +131,42 @@ describe("mail.send to the internet", () => {
 		expect(await deliveryOf(ada, sent.thread_id)).toEqual([
 			{ address: "bob@example.org", kind: "external", status: "queued", error: null },
 		]);
-		email.fail = null;
 		expect(email.sent).toEqual([]);
+		// The last allowed attempt fails too, so the recipient becomes failed and the outbox row goes.
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		await runInDurableObject(mailbox, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET attempts = 7, next_attempt_at = ?", Date.now());
+		});
+		await drainOutbox(ada.id);
+		expect(await deliveryOf(ada, sent.thread_id)).toEqual([
+			{ address: "bob@example.org", kind: "external", status: "failed", error: "temporary failure" },
+		]);
+		const left = await runInDurableObject(
+			mailbox,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+		);
+		expect(left).toBe(0);
+	});
+
+	// A request that is too large must be refused while it streams, not after it fills memory.
+	it("refuses a request body over the limit before it reads all of it", async () => {
+		let pulled = 0;
+		const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulled++;
+				if (pulled > 40) controller.close();
+				else controller.enqueue(chunk);
+			},
+		});
+		const res = await request("/api/v1/mail/messages", {
+			method: "POST",
+			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+			body,
+			duplex: "half",
+		} as RequestInit);
+		expect(res.status).toBe(413);
+		expect(pulled).toBeLessThan(40);
 	});
 
 	// Email Service accepts 5 MiB for each message.
@@ -200,6 +234,16 @@ describe("agent outbound policy", () => {
 });
 
 describe("idempotency", () => {
+	// Two attempts compose different bytes, so each stores its own raw object. The loser's must go.
+	it("keeps one message and one raw object when two sends with one key race", async () => {
+		const send = () => ada.call("mail.send", { to: ["owner@dock.test"], text: "Race", idempotency_key: "race" });
+		const [a, b] = await Promise.all([send(), send()]);
+		expect(a.message_id).toBe(b.message_id);
+		expect(await sentCount(ada)).toBe(1);
+		const { objects } = await env.BLOBS.list({ prefix: `mail/raw/${ada.id}/` });
+		expect(objects).toHaveLength(1);
+	});
+
 	it("returns the first result for a repeated key, from the body or the Idempotency-Key header", async () => {
 		const first = await ada.call("mail.send", { to: ["owner@dock.test"], text: "Once", idempotency_key: "k-1" });
 		const second = await ada.call("mail.send", { to: ["owner@dock.test"], text: "Once", idempotency_key: "k-1" });

@@ -426,11 +426,23 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 		}
 		const normalized = normalizeSubject(parsed.subject);
-		if (found.size === 0 && normalized && hasReplyPrefix(parsed.subject)) {
+		const sender = parsed.from?.address.toLowerCase();
+		if (found.size === 0 && normalized && sender && hasReplyPrefix(parsed.subject)) {
+			// Only a participant of the thread can join it by subject: its sender wrote to the thread or
+			// was a recipient of it. A stranger's "Re:" starts a new thread.
 			const row = this.one<{ id: string }>(
-				"SELECT id FROM threads WHERE normalized_subject = ? AND last_message_at >= ? ORDER BY last_message_at DESC LIMIT 1",
+				`SELECT t.id FROM threads t
+				WHERE t.normalized_subject = ? AND t.last_message_at >= ?
+				AND EXISTS (
+					SELECT 1 FROM messages m WHERE m.thread_id = t.id
+					AND (m.from_addr = ? OR instr(m.to_text, ?) > 0 OR instr(m.cc_text, ?) > 0)
+				)
+				ORDER BY t.last_message_at DESC LIMIT 1`,
 				normalized,
 				internalDate - SUBJECT_THREAD_WINDOW_MS,
+				sender,
+				sender,
+				sender,
 			);
 			if (row) found.add(row.id);
 		}

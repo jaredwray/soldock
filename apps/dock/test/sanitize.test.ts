@@ -31,6 +31,11 @@ describe("sanitizeHtml", () => {
 			/onerror|<img|<\/style><img/i,
 		],
 		[
+			"a script that CSS cleaning would expose",
+			"<style>p{} <javascript:/style><script>alert(2)</script></style>",
+			/<script|alert/i,
+		],
+		[
 			"a CSS escape that spells url(",
 			'<div style="background: \\75 rl(https://tracker.example/p.gif)">x</div>',
 			/tracker/i,

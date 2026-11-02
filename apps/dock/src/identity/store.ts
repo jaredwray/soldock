@@ -271,20 +271,27 @@ export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<vo
 	await db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now.toISOString(), key.id).run();
 }
 
-/** Creates a session with the scopes of the key that signed in. Returns the cookie value. */
+/**
+ * Creates a session with the scopes of the key that signed in, and deletes the expired sessions of
+ * the same principal. Returns the cookie value.
+ */
 export async function createSession(db: D1Database, principalId: string, scopes: readonly Scope[]): Promise<string> {
 	const token = randomToken(32);
 	const now = Date.now();
-	await db
-		.prepare("INSERT INTO sessions (token_hash, principal_id, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
-		.bind(
-			await sha256Hex(token),
-			principalId,
-			JSON.stringify(scopes),
-			new Date(now).toISOString(),
-			new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
-		)
-		.run();
+	await db.batch([
+		db
+			.prepare("DELETE FROM sessions WHERE principal_id = ? AND expires_at <= ?")
+			.bind(principalId, new Date(now).toISOString()),
+		db
+			.prepare("INSERT INTO sessions (token_hash, principal_id, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
+			.bind(
+				await sha256Hex(token),
+				principalId,
+				JSON.stringify(scopes),
+				new Date(now).toISOString(),
+				new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
+			),
+	]);
 	return token;
 }
 

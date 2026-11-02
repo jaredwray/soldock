@@ -3,7 +3,14 @@ import { type Operation, type OperationName, operationList, pathParams } from "@
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import { authenticate, type CallContext, isSameOrigin } from "../identity/index.ts";
-import { type HandlerMap, invokeOperation, OperationError, type RequestIdVariables } from "../platform/index.ts";
+import {
+	type HandlerMap,
+	invokeOperation,
+	MAX_REQUEST_BYTES,
+	OperationError,
+	type RequestIdVariables,
+	readBodyText,
+} from "../platform/index.ts";
 
 type ApiEnv = { Bindings: Env; Variables: RequestIdVariables };
 
@@ -22,7 +29,7 @@ async function readInput(c: Context<ApiEnv>, operation: Operation): Promise<Reco
 	if (operation.http.method === "GET") {
 		body = c.req.query();
 	} else {
-		const text = await c.req.text();
+		const text = await readBodyText(c.req.raw, MAX_REQUEST_BYTES);
 		if (text.trim().length > 0) {
 			let parsed: unknown;
 			try {
