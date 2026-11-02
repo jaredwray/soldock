@@ -5,6 +5,7 @@ export {
 	AllowlistEntry,
 	ApiKey,
 	CreatedApiKey,
+	DisplayName,
 	OutboundPolicy,
 	Principal,
 } from "./directory.ts";

@@ -63,6 +63,8 @@ export interface StoredMessage {
 	text: string | null;
 	html: string | null;
 	truncated: boolean;
+	/** The body is left out of this thread result. `getMessage` returns it. */
+	omitted: boolean;
 	attachments: (AttachmentMeta & { index: number })[];
 	authentication: AuthenticationResults | null;
 	labels: string[];
@@ -190,6 +192,11 @@ const MIGRATIONS: string[][] = [
 ];
 
 const MAX_TEXT_BYTES = 256 * 1024;
+/**
+ * The body characters of one thread result. An RPC value can be at most 32 MiB, and a character can
+ * take two bytes in it, so this keeps a thread result well below that.
+ */
+export const THREAD_BODY_CHARS = 6_000_000;
 const MAX_HTML_BYTES = 1024 * 1024;
 const MAX_INDEXED_BODY_CHARS = 100_000;
 const SUBJECT_THREAD_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -227,7 +234,10 @@ function backoff(attempts: number): number {
 
 type Row = Record<string, SqlStorageValue>;
 
-interface MessageRow extends Row {
+const MESSAGE_META_COLUMNS = `seq, id, thread_id, origin, message_id_header, subject, from_name, from_addr,
+	to_json, cc_json, bcc_json, reply_to_json, sent_date, internal_date, snippet, body_truncated, attachments_json, auth_json`;
+
+interface MessageMetaRow extends Row {
 	seq: number;
 	id: string;
 	thread_id: string;
@@ -243,11 +253,11 @@ interface MessageRow extends Row {
 	sent_date: number;
 	internal_date: number;
 	snippet: string;
-	text_body: string | null;
-	html_body: string | null;
 	body_truncated: number;
 	attachments_json: string;
 	auth_json: string | null;
+	text_chars?: number | null;
+	html_chars?: number | null;
 }
 
 /**
@@ -620,20 +630,66 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * A thread with its messages, oldest first. The bodies of the newest messages come first, up to
+	 * `THREAD_BODY_CHARS`: an RPC result can be at most 32 MiB, so the bodies of older messages in a
+	 * very large thread are left out (`omitted`), and `getMessage` returns each one.
+	 */
 	getThread(threadId: string): { id: string; subject: string; messages: StoredMessage[] } | null {
 		const thread = this.one<{ id: string; subject: string }>("SELECT id, subject FROM threads WHERE id = ?", threadId);
 		if (!thread) return null;
-		const rows = this.all<MessageRow>(
-			"SELECT * FROM messages WHERE thread_id = ? ORDER BY internal_date, seq",
+		const rows = this.all<MessageMetaRow>(
+			`SELECT ${MESSAGE_META_COLUMNS}, length(text_body) AS text_chars, length(html_body) AS html_chars
+			FROM messages WHERE thread_id = ? ORDER BY internal_date, seq`,
 			threadId,
 		);
+		const withBody = new Set<number>();
+		let budget = THREAD_BODY_CHARS;
+		for (const row of [...rows].reverse()) {
+			const chars = (row.text_chars ?? 0) + (row.html_chars ?? 0);
+			if (chars > budget && withBody.size > 0) break;
+			withBody.add(row.seq);
+			budget -= chars;
+		}
+		const labels = this.labelsOf("m.thread_id = ?", threadId);
+		const delivery = this.deliveryOf("m.thread_id = ?", threadId);
+		return {
+			id: thread.id,
+			subject: thread.subject,
+			messages: rows.map((row) => {
+				const body = withBody.has(row.seq)
+					? this.one<{ text_body: string | null; html_body: string | null }>(
+							"SELECT text_body, html_body FROM messages WHERE seq = ?",
+							row.seq,
+						)
+					: null;
+				return this.toStored(row, body, labels, delivery);
+			}),
+		};
+	}
+
+	/** One message with its full body, or null. */
+	getMessage(messageId: string): StoredMessage | null {
+		const row = this.one<MessageMetaRow & { text_body: string | null; html_body: string | null }>(
+			`SELECT ${MESSAGE_META_COLUMNS}, text_body, html_body FROM messages WHERE id = ?`,
+			messageId,
+		);
+		if (!row) return null;
+		return this.toStored(row, row, this.labelsOf("m.seq = ?", row.seq), this.deliveryOf("m.seq = ?", row.seq));
+	}
+
+	private labelsOf(where: string, value: SqlStorageValue): Map<number, string[]> {
 		const labels = new Map<number, string[]>();
 		for (const row of this.all<{ message_seq: number; label_id: string }>(
-			"SELECT ml.message_seq, ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE m.thread_id = ?",
-			threadId,
+			`SELECT ml.message_seq, ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE ${where}`,
+			value,
 		)) {
 			labels.set(row.message_seq, [...(labels.get(row.message_seq) ?? []), row.label_id]);
 		}
+		return labels;
+	}
+
+	private deliveryOf(where: string, value: SqlStorageValue): Map<number, DeliveryRecord[]> {
 		const delivery = new Map<number, DeliveryRecord[]>();
 		for (const row of this.all<{
 			message_seq: number;
@@ -642,8 +698,8 @@ export class MailboxDO extends DurableObject<Env> {
 			status: string;
 			error: string | null;
 		}>(
-			"SELECT d.message_seq, d.address, d.kind, d.status, d.error FROM delivery d JOIN messages m ON m.seq = d.message_seq WHERE m.thread_id = ? ORDER BY d.address",
-			threadId,
+			`SELECT d.message_seq, d.address, d.kind, d.status, d.error FROM delivery d JOIN messages m ON m.seq = d.message_seq WHERE ${where} ORDER BY d.address`,
+			value,
 		)) {
 			const record = {
 				address: row.address,
@@ -653,31 +709,37 @@ export class MailboxDO extends DurableObject<Env> {
 			};
 			delivery.set(row.message_seq, [...(delivery.get(row.message_seq) ?? []), record]);
 		}
+		return delivery;
+	}
+
+	private toStored(
+		row: MessageMetaRow,
+		body: { text_body: string | null; html_body: string | null } | null,
+		labels: Map<number, string[]>,
+		delivery: Map<number, DeliveryRecord[]>,
+	): StoredMessage {
 		return {
-			id: thread.id,
-			subject: thread.subject,
-			messages: rows.map((row) => ({
-				id: row.id,
-				threadId: row.thread_id,
-				origin: row.origin as StoredMessage["origin"],
-				messageIdHeader: row.message_id_header,
-				subject: row.subject,
-				from: row.from_addr ? { name: row.from_name, address: row.from_addr } : null,
-				to: JSON.parse(row.to_json) as MailAddress[],
-				cc: JSON.parse(row.cc_json) as MailAddress[],
-				bcc: JSON.parse(row.bcc_json) as MailAddress[],
-				replyTo: JSON.parse(row.reply_to_json) as MailAddress[],
-				sentDate: row.sent_date,
-				internalDate: row.internal_date,
-				snippet: row.snippet,
-				text: row.text_body,
-				html: row.html_body,
-				truncated: row.body_truncated === 1,
-				attachments: JSON.parse(row.attachments_json) as StoredMessage["attachments"],
-				authentication: row.auth_json ? (JSON.parse(row.auth_json) as AuthenticationResults) : null,
-				labels: labels.get(row.seq) ?? [],
-				delivery: row.origin === "sent" ? (delivery.get(row.seq) ?? []) : null,
-			})),
+			id: row.id,
+			threadId: row.thread_id,
+			origin: row.origin as StoredMessage["origin"],
+			messageIdHeader: row.message_id_header,
+			subject: row.subject,
+			from: row.from_addr ? { name: row.from_name, address: row.from_addr } : null,
+			to: JSON.parse(row.to_json) as MailAddress[],
+			cc: JSON.parse(row.cc_json) as MailAddress[],
+			bcc: JSON.parse(row.bcc_json) as MailAddress[],
+			replyTo: JSON.parse(row.reply_to_json) as MailAddress[],
+			sentDate: row.sent_date,
+			internalDate: row.internal_date,
+			snippet: row.snippet,
+			text: body?.text_body ?? null,
+			html: body?.html_body ?? null,
+			truncated: row.body_truncated === 1,
+			omitted: body === null,
+			attachments: JSON.parse(row.attachments_json) as StoredMessage["attachments"],
+			authentication: row.auth_json ? (JSON.parse(row.auth_json) as AuthenticationResults) : null,
+			labels: labels.get(row.seq) ?? [],
+			delivery: row.origin === "sent" ? (delivery.get(row.seq) ?? []) : null,
 		};
 	}
 

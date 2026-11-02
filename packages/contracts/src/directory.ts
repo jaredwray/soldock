@@ -7,7 +7,8 @@ const PrincipalId = prefixedId("prn");
 
 const ScopeName = z.enum(ALL_SCOPES as [Scope, ...Scope[]]);
 
-const DisplayName = z
+/** A display name that is safe in a From header and in agent instructions. */
+export const DisplayName = z
 	.string()
 	.trim()
 	.min(1)

@@ -110,6 +110,11 @@ export const Message = z.object({
 		html: z.string().nullable(),
 		remote_images_blocked: z.number().int(),
 		truncated: z.boolean(),
+		/**
+		 * True when `mail.get_thread` left this body out to keep a large thread in one response. The
+		 * newest messages always have their bodies. Get this one with `mail.get_message`.
+		 */
+		omitted: z.boolean(),
 	}),
 	attachments: z.array(AttachmentInfo),
 	/** The status for each recipient, on mail that this mailbox sent. */
@@ -132,7 +137,7 @@ export const getProfile = defineOperation({
 	name: "mail.get_profile",
 	summary: "Get your mailbox address and counts",
 	description:
-		"Returns the address of your mailbox, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed.",
+		"Returns the address of your mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment.",
 	http: { method: "GET", path: "/api/v1/mail/profile" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -141,6 +146,7 @@ export const getProfile = defineOperation({
 	output: z.object({
 		address: z.string(),
 		display_name: z.string(),
+		mail_domains: z.array(z.string()),
 		messages_total: z.number().int(),
 		threads_total: z.number().int(),
 		inbox_unread: z.number().int(),
@@ -202,11 +208,11 @@ export const listThreads = defineOperation({
 	summary: "List or search threads",
 	description: [
 		"Returns threads that match a Gmail-style search query, newest first. The default query is in:inbox.",
-		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|spam|trash|anywhere, is:unread|read|starred|important,",
-		"has:attachment, filename:, before:YYYY/MM/DD, after:YYYY/MM/DD, older_than:/newer_than: (with d, m or y, for example 7d),",
+		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|spam|trash|all|anywhere, is:unread|read|starred|important,",
+		"has:attachment, filename:, before:YYYY/MM/DD, after:YYYY/MM/DD (UTC days), older_than:/newer_than: (with d, m or y, for example 7d),",
 		"larger:/smaller: (with K or M, for example 2M), quoted phrases, a leading - to negate a term, and OR between terms.",
 		"Other words search the subject, the people, the body and the attachment names.",
-		"An empty query lists all mail. Results exclude spam and trash unless the query names them or uses in:anywhere.",
+		"An empty query, or in:all, lists all mail except spam and trash, as the All Mail view does. Results exclude spam and trash unless the query names them or uses in:anywhere.",
 		"Escape a double quote inside a quoted value with a backslash. Pass next_cursor as cursor to get the next page.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/threads" },
@@ -229,13 +235,27 @@ export const getThread = defineOperation({
 	name: "mail.get_thread",
 	summary: "Get a thread and all its messages",
 	description:
-		"Returns each message of a thread with headers, plain text, sanitized HTML, attachment details and, for mail that you sent, the delivery status of each recipient. Reading a thread does not mark it as read: use mail.modify_threads to remove UNREAD.",
+		"Returns each message of a thread with headers, plain text, sanitized HTML, attachment details and, for mail that you sent, the delivery status of each recipient. In a very large thread, the oldest bodies can be left out (body.omitted): get them with mail.get_message. Reading a thread does not mark it as read: use mail.modify_threads to remove UNREAD.",
 	http: { method: "GET", path: "/api/v1/mail/threads/{thread_id}" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
 	annotations: READ,
 	input: z.strictObject({ thread_id: ThreadId }),
 	output: Thread,
+	errors: ["not_found"],
+});
+
+export const getMessage = defineOperation({
+	name: "mail.get_message",
+	summary: "Get one message with its full body",
+	description:
+		"Returns one message with headers, plain text, sanitized HTML and attachment details. Use it for a message whose body mail.get_thread left out (body.omitted). Reading a message does not mark it as read.",
+	http: { method: "GET", path: "/api/v1/mail/messages/{message_id}" },
+	scopes: ["mail.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({ message_id: MessageId }),
+	output: Message,
 	errors: ["not_found"],
 });
 
@@ -361,6 +381,7 @@ export const mailOperations = {
 	"mail.delete_label": deleteLabel,
 	"mail.list_threads": listThreads,
 	"mail.get_thread": getThread,
+	"mail.get_message": getMessage,
 	"mail.modify_threads": modifyThreads,
 	"mail.send": send,
 	"mail.get_attachment": getAttachment,

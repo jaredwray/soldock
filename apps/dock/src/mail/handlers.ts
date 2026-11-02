@@ -1,6 +1,6 @@
 import { MAIL_LIMITS, type Message } from "@soldock/contracts";
 import { type CallContext, domainOf, mailDomains, resolveAddress } from "../identity/index.ts";
-import { audit, base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError } from "../platform/index.ts";
+import { audit, base64ToBytes, bytesToBase64, type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
@@ -16,6 +16,7 @@ type MailOperation =
 	| "mail.delete_label"
 	| "mail.list_threads"
 	| "mail.get_thread"
+	| "mail.get_message"
 	| "mail.modify_threads"
 	| "mail.send"
 	| "mail.get_attachment";
@@ -52,8 +53,25 @@ function auditOk(call: CallContext, op: string, target: string): void {
 	});
 }
 
+/**
+ * Sanitizes the HTML of one message. A message that the sanitizer cannot read loses its HTML (the
+ * plain text stays), so one hostile message can never make its whole thread unreadable.
+ */
+async function safeHtml(stored: StoredMessage): Promise<{ html: string; remoteImagesBlocked: number } | null> {
+	if (stored.html === null) return null;
+	try {
+		return await sanitizeHtml(stored.html);
+	} catch (error) {
+		log("warn", "message HTML could not be sanitized; it is left out", {
+			messageId: stored.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
+}
+
 async function toMessage(stored: StoredMessage): Promise<Message> {
-	const html = stored.html === null ? null : await sanitizeHtml(stored.html);
+	const html = await safeHtml(stored);
 	return {
 		id: stored.id,
 		thread_id: stored.threadId,
@@ -76,6 +94,7 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 			html: html?.html ?? null,
 			remote_images_blocked: html?.remoteImagesBlocked ?? 0,
 			truncated: stored.truncated,
+			omitted: stored.omitted,
 		},
 		attachments: stored.attachments.map((a) => ({
 			index: a.index,
@@ -148,7 +167,12 @@ function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	async "mail.get_profile"(call) {
 		const profile = await mailbox(call).profile();
-		return { address: call.caller.principal.address, display_name: call.caller.principal.display_name, ...profile };
+		return {
+			address: call.caller.principal.address,
+			display_name: call.caller.principal.display_name,
+			mail_domains: [...mailDomains(call.env)],
+			...profile,
+		};
 	},
 
 	async "mail.list_labels"(call) {
@@ -216,6 +240,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			untrusted: messages.some((m) => m.untrusted),
 			messages,
 		};
+	},
+
+	async "mail.get_message"(call, input) {
+		const stored = await mailbox(call).getMessage(input.message_id);
+		if (!stored) throw new OperationError("not_found", "No message has that id.");
+		return toMessage(stored);
 	},
 
 	async "mail.modify_threads"(call, input) {
