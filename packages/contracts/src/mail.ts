@@ -281,7 +281,11 @@ const OutgoingAttachment = z.strictObject({
 		.string()
 		.max(127)
 		.regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i, "must be a MIME type such as application/pdf"),
-	content_base64: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/, "must be base64"),
+	content_base64: z
+		.string()
+		// The base64 of the largest message, so a request cannot make the Worker decode more than that.
+		.max(Math.ceil(MAIL_LIMITS.messageBytes / 3) * 4, "must be at most 25 MiB")
+		.regex(/^[A-Za-z0-9+/]*={0,2}$/, "must be base64"),
 });
 
 export const send = defineOperation({

@@ -37,11 +37,11 @@ function isAscii(value: string): boolean {
 }
 
 /**
- * RFC 2047 encoded words (UTF-8, base64) for a header value with non-ASCII text. Each word is at
- * most 75 characters and never splits a UTF-8 sequence.
+ * RFC 2047 encoded words (UTF-8, base64) for a header value with non-ASCII text, or for any value
+ * with `force`. Each word is at most 75 characters and never splits a UTF-8 sequence.
  */
-export function encodeWords(value: string): string {
-	if (isAscii(value)) return value;
+export function encodeWords(value: string, force = false): string {
+	if (!force && isAscii(value)) return value;
 	const words: string[] = [];
 	let chunk = "";
 	for (const char of value) {
@@ -153,7 +153,10 @@ function attachmentPart(attachment: OutgoingAttachment): string {
 	].join("\r\n");
 }
 
-/** Folds a list of tokens (for example Message-IDs) over lines of 78 characters at most. */
+/**
+ * Folds a list of tokens (Message-IDs, addresses, words) over lines of 78 characters where it can.
+ * RFC 5322 allows 998 characters on a line at most.
+ */
 function foldTokens(name: string, tokens: string[]): string {
 	let line = `${name}:`;
 	const lines: string[] = [];
@@ -168,6 +171,27 @@ function foldTokens(name: string, tokens: string[]): string {
 	return lines.join("\r\n");
 }
 
+const MAX_LINE = 998;
+
+/**
+ * Folds free text (Subject, extra headers) at its spaces. A word too long for one line is sent as
+ * encoded words, which can break anywhere.
+ */
+function textHeader(name: string, value: string): string {
+	assertSafe(name, value);
+	const folded = foldTokens(name, encodeWords(value).split(" "));
+	if (folded.split("\r\n").every((line) => line.length <= MAX_LINE)) return folded;
+	return foldTokens(name, encodeWords(value, true).split(" "));
+}
+
+/** An address list, folded after its commas. */
+function addressHeader(name: string, addresses: string[]): string {
+	return foldTokens(
+		name,
+		addresses.map((address, i) => `${formatAddress(null, address)}${i < addresses.length - 1 ? "," : ""}`),
+	);
+}
+
 /**
  * Builds an RFC 5322 message with MIME parts: text/plain, or multipart/alternative with HTML, in
  * multipart/mixed when it has attachments. Bcc is never written: each recipient gets the same bytes.
@@ -179,10 +203,9 @@ export function composeMessage(message: OutgoingMessage): string {
 		headers.push(`${name}: ${value}`);
 	};
 	add("From", formatAddress(message.from.name, message.from.address));
-	if (message.to.length > 0) add("To", message.to.map((a) => formatAddress(null, a)).join(", "));
-	if (message.cc.length > 0) add("Cc", message.cc.map((a) => formatAddress(null, a)).join(", "));
-	assertSafe("Subject", message.subject);
-	add("Subject", encodeWords(message.subject));
+	if (message.to.length > 0) headers.push(addressHeader("To", message.to));
+	if (message.cc.length > 0) headers.push(addressHeader("Cc", message.cc));
+	headers.push(textHeader("Subject", message.subject));
 	add("Date", formatDate(message.date));
 	add("Message-ID", message.messageId);
 	if (message.inReplyTo) add("In-Reply-To", message.inReplyTo);
@@ -192,8 +215,7 @@ export function composeMessage(message: OutgoingMessage): string {
 	}
 	for (const [name, value] of message.headers ?? []) {
 		if (!HEADER_NAME.test(name)) throw new Error(`invalid header name ${name}`);
-		assertSafe(name, value);
-		add(name, encodeWords(value));
+		headers.push(textHeader(name, value));
 	}
 	add("MIME-Version", "1.0");
 

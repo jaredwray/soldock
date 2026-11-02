@@ -271,14 +271,16 @@ export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<vo
 	await db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now.toISOString(), key.id).run();
 }
 
-export async function createSession(db: D1Database, principalId: string): Promise<string> {
+/** Creates a session with the scopes of the key that signed in. Returns the cookie value. */
+export async function createSession(db: D1Database, principalId: string, scopes: readonly Scope[]): Promise<string> {
 	const token = randomToken(32);
 	const now = Date.now();
 	await db
-		.prepare("INSERT INTO sessions (token_hash, principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+		.prepare("INSERT INTO sessions (token_hash, principal_id, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?)")
 		.bind(
 			await sha256Hex(token),
 			principalId,
+			JSON.stringify(scopes),
 			new Date(now).toISOString(),
 			new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
 		)
@@ -286,12 +288,17 @@ export async function createSession(db: D1Database, principalId: string): Promis
 	return token;
 }
 
-export async function findSession(db: D1Database, token: string): Promise<PrincipalRecord | null> {
+export async function findSession(
+	db: D1Database,
+	token: string,
+): Promise<{ principal: PrincipalRecord; scopes: Scope[] } | null> {
 	const row = await db
-		.prepare("SELECT principal_id FROM sessions WHERE token_hash = ? AND expires_at > ?")
+		.prepare("SELECT principal_id, scopes FROM sessions WHERE token_hash = ? AND expires_at > ?")
 		.bind(await sha256Hex(token), new Date().toISOString())
-		.first<{ principal_id: string }>();
-	return row ? getPrincipal(db, row.principal_id) : null;
+		.first<{ principal_id: string; scopes: string }>();
+	if (!row) return null;
+	const principal = await getPrincipal(db, row.principal_id);
+	return principal ? { principal, scopes: JSON.parse(row.scopes) as Scope[] } : null;
 }
 
 export async function deleteSession(db: D1Database, token: string): Promise<void> {

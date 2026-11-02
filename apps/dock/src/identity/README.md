@@ -28,7 +28,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | Credential | Who | Where |
 | --- | --- | --- |
 | API key `sdk_<43 base64url characters>` | Humans and agents | `Authorization: Bearer` on `/api/v1` and `/mcp`. Only the SHA-256 is stored |
-| Session cookie `__Host-soldock_session` | Humans only | The web app. `Secure`, `HttpOnly`, `SameSite=Lax`, 30 days. Only the SHA-256 is stored |
+| Session cookie `__Host-soldock_session` | Humans only | The web app. `Secure`, `HttpOnly`, `SameSite=Lax`, 30 days. It holds the scopes of the key that signed in. Only the SHA-256 is stored |
 | `SETUP_TOKEN` Worker secret | The operator | `POST /auth/setup` only. Delete it after setup |
 
 `/auth/*` routes (not operations, because they create credentials):
@@ -44,8 +44,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 Each call passes three checks:
 
 1. **Caller kind and scopes** (the shared invoker): the operation lists the principal kinds that
-   can call it and the scopes that the credential must hold. A session holds every scope. A key
-   holds the scopes that it was given, and never more than the ceiling of its principal kind:
+   can call it and the scopes that the credential must hold. A key holds the scopes that it was
+   given. A session holds the scopes of the key that signed in, so a narrow key cannot become a
+   full session. Neither holds more than the ceiling of its principal kind:
    agents can hold only `account.read`, `directory.read`, `mail.read`, `mail.modify` and `mail.send`.
 2. **Role and resource** (the handler):
    - Only owners and admins create principals.

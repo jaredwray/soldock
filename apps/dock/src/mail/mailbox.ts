@@ -782,9 +782,13 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// --- Sending --------------------------------------------------------------------------------
 
-	/** The stored result of an earlier send with this idempotency key, if any. */
+	/** The stored result of an earlier send with this idempotency key in the last 24 hours, if any. */
 	idempotentResult(key: string): SendResult | null {
-		const row = this.one<{ result: string }>("SELECT result FROM idempotency WHERE key = ?", key);
+		const row = this.one<{ result: string }>(
+			"SELECT result FROM idempotency WHERE key = ? AND created_at >= ?",
+			key,
+			Date.now() - IDEMPOTENCY_TTL_MS,
+		);
 		return row ? (JSON.parse(row.result) as SendResult) : null;
 	}
 

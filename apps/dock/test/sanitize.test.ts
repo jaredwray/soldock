@@ -25,6 +25,21 @@ describe("sanitizeHtml", () => {
 		],
 		["a CSS expression", '<div style="width: expression(alert(1))">x</div>', /expression/i],
 		["a CSS import", "<style>@import url(https://evil.example/x.css); p { color: red }</style>", /@import|evil/i],
+		[
+			"a closing tag that CSS cleaning would join",
+			"<style></sty@import x;le><img src=x onerror=alert(1)></style>",
+			/onerror|<img|<\/style><img/i,
+		],
+		[
+			"a CSS escape that spells url(",
+			'<div style="background: \\75 rl(https://tracker.example/p.gif)">x</div>',
+			/tracker/i,
+		],
+		[
+			"a CSS image-set",
+			'<style>p { background: image-set("https://tracker.example/a.png" 1x) }</style>',
+			/image-set|tracker/i,
+		],
 		["a style sheet behavior", "<style>p { behavior: url(x.htc) }</style>", /[^-]behavior\s*:/i],
 		["a srcset", '<img srcset="https://tracker.example/a.png 1x">', /srcset|tracker/i],
 		["a template", "<template><script>alert(1)</script></template>", /template|script/i],
@@ -54,6 +69,17 @@ describe("sanitizeHtml", () => {
 		expect(result.html).toContain("Logo &lt;b&gt;");
 		expect(result.html.match(/<img/g)).toHaveLength(1);
 		expect(result.html).toContain('src="data:image/png;base64,iVBORw0KGgo="');
+	});
+
+	// A url() in CSS loads like an image, so it is a tracking pixel too.
+	it("blocks and counts remote url() in style attributes and style sheets, and keeps data URLs", async () => {
+		const result = await sanitizeHtml(
+			'<style>td { background: url("https://t.example/a.png") }</style><p style="background-image: url(//t.example/b.png); color: red">x</p><p style="background: url(data:image/png;base64,iVBORw0KGgo=)">y</p>',
+		);
+		expect(result.remoteImagesBlocked).toBe(2);
+		expect(result.html).not.toContain("t.example");
+		expect(result.html).toContain("color: red");
+		expect(result.html).toContain("url(data:image/png;base64,iVBORw0KGgo=)");
 	});
 
 	it("keeps the text of an element that is not on the allowlist", async () => {

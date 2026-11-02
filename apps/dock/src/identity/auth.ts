@@ -64,15 +64,16 @@ export async function authenticate(
 	if (!options.allowSession) return null;
 	const token = readCookie(request, SESSION_COOKIE);
 	if (!token) return null;
-	const principal = await findSession(env.DIRECTORY, token);
-	if (principal?.kind !== "human") return null;
+	const session = await findSession(env.DIRECTORY, token);
+	if (session?.principal.kind !== "human") return null;
+	const ceiling = new Set<Scope>(ALL_SCOPES);
 	return {
-		id: principal.id,
-		principal,
+		id: session.principal.id,
+		principal: session.principal,
 		kind: "human",
 		credential: "session",
 		keyId: null,
-		scopes: new Set(ALL_SCOPES),
+		scopes: new Set(session.scopes.filter((scope) => ceiling.has(scope))),
 	};
 }
 

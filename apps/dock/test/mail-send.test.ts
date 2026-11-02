@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError } from "@soldock/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -110,8 +111,9 @@ describe("mail.send to the internet", () => {
 			text: "Attached.",
 		});
 		await drainOutbox(ada.id);
+		// The domain is lowercased. The local part keeps its case, which the receiving server owns.
 		expect(email.sent.sort((a, b) => a.to.localeCompare(b.to))).toEqual([
-			{ from: "ada@dock.test", to: "bob@example.org" },
+			{ from: "ada@dock.test", to: "Bob@example.org" },
 			{ from: "ada@dock.test", to: "secret@example.net" },
 		]);
 		const thread = await ada.call("mail.get_thread", { thread_id: sent.thread_id });
@@ -215,6 +217,13 @@ describe("idempotency", () => {
 			}).then((res) => res.json() as Promise<{ message_id: string }>);
 		expect((await viaHeader()).message_id).toBe((await viaHeader()).message_id);
 		expect(await sentCount(ada)).toBe(2);
+		// After 24 hours a key is free again, and the send goes through.
+		await runInDurableObject(env.MAILBOX.get(env.MAILBOX.idFromName(ada.id)), (_instance, state) => {
+			state.storage.sql.exec("UPDATE idempotency SET created_at = ? WHERE key = 'k-1'", Date.now() - 25 * 3_600_000);
+		});
+		const later = await ada.call("mail.send", { to: ["owner@dock.test"], text: "Once more", idempotency_key: "k-1" });
+		expect(later.message_id).not.toBe(first.message_id);
+		expect(await sentCount(ada)).toBe(3);
 		const other = await createActor(owner, { kind: "human", display_name: "Bob", address: "bob@dock.test" });
 		const keyedByMailbox = await other.call("mail.send", {
 			to: ["ada@dock.test"],

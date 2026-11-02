@@ -171,27 +171,54 @@ function isRemote(url: string): boolean {
 	return value.startsWith("http:") || value.startsWith("https:") || value.startsWith("//");
 }
 
-/** CSS that can run code in old engines or load remote content is removed. */
-function isSafeStyle(value: string): boolean {
-	return !/expression\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding|@import/i.test(compact(value));
+/** Resolves CSS escapes, so the checks see what the browser sees: `\\75 rl(` is `url(`. */
+function unescapeCss(css: string): string {
+	return css.replace(
+		/\\([0-9a-f]{1,6})\s?|\\([^\n])/gi,
+		(_match, hex: string | undefined, char: string | undefined) => {
+			if (hex === undefined) return char ?? "";
+			const code = Number.parseInt(hex, 16);
+			return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+				? "\uFFFD"
+				: String.fromCodePoint(code);
+		},
+	);
+}
+
+const SAFE_DATA_URL = /^\s*(['"]?)\s*data:image\/(?:png|gif|jpeg|webp);base64,[a-z0-9+/=\s]+\1\s*$/i;
+
+/**
+ * Cleans CSS from a style attribute or a style sheet. It removes the CSS that runs code in old
+ * engines, imports other sheets, or loads remote content (`url()`, `image-set()`), and counts each
+ * remote load that it removes. The client CSP also refuses remote loads: this is the second layer.
+ */
+function cleanCss(css: string): { css: string; blocked: number } {
+	let blocked = 0;
+	const cleaned = unescapeCss(css)
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.replace(/@import[^;]*;?/gi, () => {
+			blocked++;
+			return "";
+		})
+		.replace(/url\(([^)]*)\)/gi, (match, target: string) => {
+			if (SAFE_DATA_URL.test(target)) return match;
+			blocked++;
+			return "none";
+		})
+		.replace(/(?:-webkit-)?image-set\([^)]*\)/gi, () => {
+			blocked++;
+			return "none";
+		})
+		.replace(/expression\s*\(/gi, "x-blocked(")
+		.replace(/(?:java|vb)script\s*:/gi, "")
+		.replace(/behavior\s*:/gi, "x-behavior:")
+		.replace(/-moz-binding/gi, "x-moz-binding");
+	return { css: cleaned, blocked };
 }
 
 export interface SanitizedHtml {
 	html: string;
 	remoteImagesBlocked: number;
-}
-
-/**
- * Removes the CSS that can run code in old engines or load other style sheets. The parser already
- * ended the style element at `</style>`, so the text cannot close it.
- */
-function cleanStyleSheet(css: string): string {
-	return css
-		.replace(/@import[^;]*;?/gi, "")
-		.replace(/expression\s*\(/gi, "(")
-		.replace(/(?:java|vb)script\s*:/gi, "")
-		.replace(/behavior\s*:/gi, "x-behavior:")
-		.replace(/-moz-binding/gi, "x-moz-binding");
 }
 
 export async function sanitizeHtml(html: string): Promise<SanitizedHtml> {
@@ -226,8 +253,11 @@ export async function sanitizeHtml(html: string): Promise<SanitizedHtml> {
 						}
 						continue;
 					}
-					if (attribute === "style" && !isSafeStyle(value)) {
-						element.removeAttribute(name);
+					if (attribute === "style") {
+						// setAttribute escapes the value, so cleaned CSS cannot leave the attribute.
+						const { css, blocked } = cleanCss(value);
+						remoteImagesBlocked += blocked;
+						element.setAttribute(name, css);
 						continue;
 					}
 					if (!ATTRIBUTES.has(attribute)) {
@@ -247,7 +277,11 @@ export async function sanitizeHtml(html: string): Promise<SanitizedHtml> {
 				styleText += chunk.text;
 				chunk.remove();
 				if (chunk.lastInTextNode) {
-					chunk.after(cleanStyleSheet(styleText), { html: true });
+					const { css, blocked } = cleanCss(styleText);
+					remoteImagesBlocked += blocked;
+					// The sheet goes back as raw text. A "<" could start a tag (cleaning can join
+					// "</sty" and "le>"), so a sheet with one is dropped. CSS needs no "<".
+					if (!css.includes("<")) chunk.after(css, { html: true });
 					styleText = "";
 				}
 			},

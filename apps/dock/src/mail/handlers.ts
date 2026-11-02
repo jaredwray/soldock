@@ -104,17 +104,20 @@ async function resolveRecipients(call: CallContext, addresses: string[]): Promis
 	const byAddress = new Map<string, Recipient>();
 	const localMailboxes = new Set<string>();
 	for (const raw of addresses) {
-		const address = raw.trim().toLowerCase();
-		if (byAddress.has(address)) continue;
-		if (!domains.has(domainOf(address))) {
-			byAddress.set(address, { address, kind: "external", principalId: null, self: false });
+		// The lowercase form is the key for duplicates and policy. An external envelope keeps the case
+		// of its local part, which RFC 5321 lets the receiving server treat as significant.
+		const key = raw.trim().toLowerCase();
+		if (byAddress.has(key)) continue;
+		if (!domains.has(domainOf(key))) {
+			byAddress.set(key, { address: normalizeCase(raw.trim()), kind: "external", principalId: null, self: false });
 			continue;
 		}
+		const address = key;
 		const principal = await resolveAddress(call.env.DIRECTORY, address);
 		if (!principal) throw new OperationError("not_found", `No mailbox has the address ${address}.`);
 		if (localMailboxes.has(principal.id)) continue;
 		localMailboxes.add(principal.id);
-		byAddress.set(address, {
+		byAddress.set(key, {
 			address,
 			kind: "local",
 			principalId: principal.id,
@@ -128,7 +131,7 @@ async function resolveRecipients(call: CallContext, addresses: string[]): Promis
 function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 	const { principal } = call.caller;
 	if (principal.kind !== "agent") return;
-	const external = recipients.filter((r) => r.kind === "external").map((r) => r.address);
+	const external = recipients.filter((r) => r.kind === "external").map((r) => r.address.toLowerCase());
 	if (external.length === 0) return;
 	const mode = principal.outbound_mode ?? "internal-only";
 	if (mode === "any") return;
@@ -242,6 +245,20 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			reply = await box.getReplyContext(input.reply_to_message_id);
 			if (!reply) throw new OperationError("not_found", "No message has the id in reply_to_message_id.");
 		}
+		const limit = recipients.some((r) => r.kind === "external")
+			? MAIL_LIMITS.externalMessageBytes
+			: MAIL_LIMITS.messageBytes;
+		const tooLarge = (bytes: number) =>
+			new OperationError(
+				"payload_too_large",
+				`The message is ${bytes} bytes. The limit is ${limit} bytes${limit === MAIL_LIMITS.externalMessageBytes ? " when a recipient is outside this deployment (Email Service)" : ""}.`,
+			);
+		// Refuse before anything is decoded, so an oversized request costs no memory.
+		const attachmentBytes = input.attachments.reduce(
+			(sum, a) => sum + Math.floor((a.content_base64.length * 3) / 4),
+			0,
+		);
+		if (attachmentBytes > limit) throw tooLarge(attachmentBytes);
 		const attachments = input.attachments.map((attachment) => {
 			try {
 				return {
@@ -278,15 +295,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			throw new OperationError("invalid", error instanceof Error ? error.message : "The message is not valid.");
 		}
 		const bytes = new TextEncoder().encode(raw);
-		const limit = recipients.some((r) => r.kind === "external")
-			? MAIL_LIMITS.externalMessageBytes
-			: MAIL_LIMITS.messageBytes;
-		if (bytes.byteLength > limit) {
-			throw new OperationError(
-				"payload_too_large",
-				`The message is ${bytes.byteLength} bytes. The limit is ${limit} bytes${limit === MAIL_LIMITS.externalMessageBytes ? " when a recipient is outside this deployment (Email Service)" : ""}.`,
-			);
-		}
+		if (bytes.byteLength > limit) throw tooLarge(bytes.byteLength);
 		const { contentHash, rawKey } = await storeRaw(call.env, call.caller.id, bytes);
 		const parsed = await parseMail(bytes, { authservId: "" });
 		const sendInput: SendInput = {

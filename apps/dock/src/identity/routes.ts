@@ -91,7 +91,8 @@ export function mountAuthRoutes(app: AuthApp): void {
 		if (found.principal.kind !== "human") {
 			throw new OperationError("forbidden", "Agents cannot sign in to the web app. Use the key with the API or MCP.");
 		}
-		const token = await createSession(c.env.DIRECTORY, found.principal.id);
+		// The session gets the scopes of this key and no more, so a narrow key stays narrow.
+		const token = await createSession(c.env.DIRECTORY, found.principal.id, found.key.scopes);
 		log("info", "session created", { principalId: found.principal.id, requestId: c.var.requestId });
 		return c.body(null, 204, { "set-cookie": sessionCookie(token, SESSION_TTL_SECONDS), "cache-control": "no-store" });
 	});

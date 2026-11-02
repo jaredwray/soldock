@@ -102,6 +102,24 @@ describe("browser sessions", () => {
 		expect(await whoami.json()).toMatchObject({ credential: "session", principal: { id: owner.id } });
 	});
 
+	// A narrow key must not become a full session: that would let a read-only key mint a full key.
+	it("gives a session the scopes of the key that signed in, and no more", async () => {
+		const owner = await setupOwner();
+		const { api_key } = await owner.call("account.create_api_key", {
+			label: "reader",
+			scopes: ["account.read", "mail.read"],
+		});
+		const cookie = cookieOf(await signIn(api_key.secret));
+		const whoami = await request("/api/v1/account", { headers: { cookie } });
+		expect(((await whoami.json()) as { scopes: string[] }).scopes.sort()).toEqual(["account.read", "mail.read"]);
+		const mint = await request("/api/v1/account/api-keys", {
+			method: "POST",
+			headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ label: "full", scopes: ["mail.send"] }),
+		});
+		expect(mint.status).toBe(403);
+	});
+
 	it("refuses a sign-in from another origin, with a bad key, or with an agent key", async () => {
 		const { owner, bot } = await seedOrg();
 		expect((await signIn(owner.key, "https://evil.example")).status).toBe(403);

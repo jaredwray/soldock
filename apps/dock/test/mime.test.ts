@@ -60,11 +60,21 @@ describe("composeMessage", () => {
 		expect(raw).toMatch(/^X-Soldock-Agent: true\r$/m);
 	});
 
-	it("writes only CRLF line ends and ASCII, with no line over 998 characters", () => {
-		const raw = composeMessage(message({ subject: "日本語の件名".repeat(10), text: "長い本文".repeat(500) }));
+	// RFC 5322 allows 998 characters on a line. These inputs are all inside the operation's limits.
+	it.each([
+		["a long non-ASCII subject", { subject: "界".repeat(300) }],
+		["one long ASCII word", { subject: "x".repeat(995) }],
+		["50 recipients", { to: Array.from({ length: 50 }, (_, i) => `recipient.number.${i}@example.org`) }],
+		["a long body", { subject: "日本語の件名".repeat(10), text: "長い本文".repeat(500) }],
+	])("writes only CRLF line ends and ASCII, with no line over 998 characters, for %s", async (_name, overrides) => {
+		const input = message(overrides);
+		const raw = composeMessage(input);
 		expect(raw).not.toMatch(/(?<!\r)\n/);
 		expect(raw).toMatch(/^[\t\r\n\x20-\x7e]*$/);
 		for (const line of raw.split("\r\n")) expect(line.length).toBeLessThanOrEqual(998);
+		const parsed = await parse(raw);
+		expect(parsed.subject).toBe(input.subject);
+		expect(parsed.to.map((a) => a.address)).toEqual(input.to);
 	});
 
 	// With a line break, a user-controlled value could start a new header, such as Bcc.
