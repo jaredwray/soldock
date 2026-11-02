@@ -1,5 +1,5 @@
 /**
- * Path prefixes the Worker owns (architecture §3). Every other path belongs to the SPA.
+ * Path prefixes the Worker owns. Every other path belongs to the SPA.
  *
  * `wrangler.jsonc` lists the same prefixes in `assets.run_worker_first`, as `<prefix>*`, because
  * browser navigations otherwise go straight to static assets. ``test/config.test.ts` keeps the two in sync.

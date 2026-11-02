@@ -1,13 +1,12 @@
 # `slides` module
 
-> Status: **planned** — created by the stage(s) below. Keep this README current as the module grows; it is the module's contract ([architecture §15](../../../../plan/architecture.md#15-repository-layout)).
+> Status: **planned** — not created yet. Keep this README current as the module grows; it is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Server-side Slides operations: outline-to-deck, slide/element edits, thumbnails via Browser Run, PPTX/PDF conversion (models in `packages/slides-model`). |
 | **Owns** | No own store (content lives in `DocumentDO`); thumbnails cached in R2. |
 | **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/slides-model`. |
-| **Built in** | S10 |
 | **Operations** | `slides.*` |
 | **Data inventory** | None of its own (content in `DocumentDO`); thumbnails cached in R2. PPTX/PDF in Takeout. |
 

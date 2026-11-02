@@ -16,7 +16,6 @@
 		"node": ">=22.18.0"
 	},
 	"scripts": {
-		"plan": "node tools/plan/src/cli.ts",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"typecheck": "tsc -p tsconfig.json && pnpm --recursive --if-present typecheck",
@@ -27,7 +26,7 @@
 		"licenses:check": "node tools/licenses/check.ts",
 		"deploy:check": "pnpm --filter @soldock/dock run deploy:check",
 		"spikes:build": "pnpm --filter \"./spikes/**\" --if-present build",
-		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm run deploy:check && pnpm spikes:build && pnpm plan check && pnpm licenses:check"
+		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm test && pnpm budgets:check && pnpm run deploy:check && pnpm spikes:build && pnpm licenses:check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",

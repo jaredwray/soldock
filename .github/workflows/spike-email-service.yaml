@@ -1,10 +1,11 @@
 name: spike-email-service
 
-# The harness for the S00.T13 Email Service spike (S00.T18). See spikes/email-service/README.md.
-# Before S00.T13's findings PR merges, a cleanup run deletes the Worker, the queue and the event
+# The harness for the Email Service spike. See spikes/email-service/README.md.
+# Before the spike's findings PR merges, a cleanup run deletes the Worker, the queue and the event
 # subscription. Then the findings PR deletes this workflow and spikes/email-service/.
 #
-# This workflow uses the development Cloudflare token, so it follows ADR-0015 item 3:
+# This workflow uses the development Cloudflare token, so it follows the workflow rules in
+# docs/self-hosting.md:
 # - workflow_dispatch is the only trigger.
 # - The job uses the development environment, which accepts runs of main only.
 # - The checkout keeps no credentials and checks out only github.sha.
@@ -45,7 +46,7 @@ jobs:
     env:
       WRANGLER_SEND_METRICS: "false"
       QUEUE: soldock-spike-email-events
-      # The development mail domain (S00.T09), an apex zone in the development account.
+      # The development mail domain, an apex zone in the development account.
       DOMAIN: soldock.org
     steps:
       # This step runs first and gets no secret values, only whether each secret is set.
@@ -59,7 +60,7 @@ jobs:
           RECIPIENTS: ${{ inputs.recipients }}
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Dispatch this workflow on main only (ADR-0015)."
+            echo "::error::Dispatch this workflow on main only."
             exit 1
           fi
           missing=()

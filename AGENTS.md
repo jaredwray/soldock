@@ -1,13 +1,12 @@
 # AGENTS.md
 
-This repository's agent instructions live in [`CLAUDE.md`](CLAUDE.md), and the implementation
-system they follow is in [`plan/process.md`](plan/process.md). Any coding agent (Claude Code or
-another tool) should read both before making changes, then run `pnpm plan next`.
+This repository's agent instructions live in [`CLAUDE.md`](CLAUDE.md). Any coding agent (Claude
+Code or another tool) should read it before making changes.
 
 ## Agentic conventions
-- Issue tracker: GitHub Issues (bugs, requests, security reports) + local plan files (`plan/stages/*.md`, read by `pnpm plan`) for planned work
+- Issue tracker: GitHub Issues (bugs, requests, security reports, planned work)
 - Labels: bug, enhancement, documentation, security
-- ADR directory: plan/adr/
+- ADR directory: none
 - CHANGELOG: none (release notes in GitHub Releases)
 - Default branch: main
 - Package manager: pnpm
@@ -18,9 +17,7 @@ another tool) should read both before making changes, then run `pnpm plan next`.
   skill from [`jaredwray/agentic`](https://github.com/jaredwray/agentic). Re-run it to change a value.
 - The `security` label exists on GitHub. The
   [`defense-in-depth-nodejs`](https://github.com/jaredwray/agentic/blob/main/skills/security/defense-in-depth-nodejs/SKILL.md)
-  hardening runs as [S00.T15–T17](plan/stages/S00-foundation.md). [`DEFENSE_IN_DEPTH.md`](DEFENSE_IN_DEPTH.md) records its progress.
-- ADRs follow this repo's template ([`plan/adr/0000-template.md`](plan/adr/0000-template.md)) and the `new-adr` skill.
-- Planned work goes through the plan (`pnpm plan next`). GitHub Issues that turn into planned work get a plan task that links back to the issue.
+  hardening is in progress. [`DEFENSE_IN_DEPTH.md`](DEFENSE_IN_DEPTH.md) records its progress.
 
 ## Simplified Technical English
 

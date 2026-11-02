@@ -1,11 +1,12 @@
 name: deploy-development
 
-# Continuous deployment (S00.T09): each push to main deploys the dock Worker to the development
+# Continuous deployment: each push to main deploys the dock Worker to the development
 # environment (`soldock-dock-dev`, wrangler `--env development`), then runs the smoke check against
-# its workers.dev host. Production deploys come with S05.T25. The dock Worker has no other
+# its workers.dev host. Production deploys come later. The dock Worker has no other
 # deployment environment.
 #
-# This workflow uses the development Cloudflare token, so it follows ADR-0015 item 3:
+# This workflow uses the development Cloudflare token, so it follows the workflow rules in
+# docs/self-hosting.md:
 # - push to main and workflow_dispatch are the only triggers.
 # - The job uses the development environment, which accepts runs of main only.
 # - The checkout keeps no credentials and checks out only github.sha.
@@ -43,7 +44,7 @@ jobs:
           HAS_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Deploy main only (ADR-0015)."
+            echo "::error::Deploy main only."
             exit 1
           fi
           missing=()
@@ -71,7 +72,7 @@ jobs:
       # Only the dock Worker and the workspace packages that it uses, and no secrets in this step.
       - run: sfw pnpm install --frozen-lockfile --filter "@soldock/dock..."
 
-      # Deploys the placeholder page until S00.T05. Then this job runs `pnpm build` first.
+      # Deploys the placeholder page until apps/web exists. Then this job runs `pnpm build` first.
       - name: Deploy the dock Worker to development
         id: deploy
         working-directory: apps/dock

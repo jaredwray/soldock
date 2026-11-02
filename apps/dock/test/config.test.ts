@@ -94,7 +94,7 @@ describe("wrangler.jsonc", () => {
 	});
 
 	it("keeps production on one origin, and the development Worker apart from it", () => {
-		// Production serves only its custom domain (ADR-0002). Development uses its workers.dev host.
+		// Production serves only its custom domain. Development uses its workers.dev host.
 		expect(config.workers_dev).toBe(false);
 		expect(config.env.development.workers_dev).toBe(true);
 		expect(config.env.development.name).not.toBe(config.name);
@@ -102,7 +102,7 @@ describe("wrangler.jsonc", () => {
 		for (const key of ["routes", "route"]) {
 			if (key in config) expect(config.env.development, `env.development.${key}`).toHaveProperty(key);
 		}
-		// The account comes from the environment's CLOUDFLARE_ACCOUNT_ID secret (ADR-0015), so a deploy
+		// The account comes from the environment's CLOUDFLARE_ACCOUNT_ID secret, so a deploy
 		// can't reach the other environment's account through the config.
 		expect(wranglerConfig).not.toMatch(/"account_id"/);
 	});

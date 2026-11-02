@@ -1,6 +1,6 @@
-// Throwaway Worker for the S00.T13 Email Service spike (S00.T18). The spike workflow
+// Throwaway Worker for the Email Service spike. The spike workflow
 // (.github/workflows/spike-email-service.yaml) deploys it, calls it with a one-run token, and then
-// deletes the token. S00.T13's findings PR deletes this Worker.
+// deletes the token. The spike's findings PR deletes this Worker.
 //
 // Routes (each needs `Authorization: Bearer <SPIKE_TOKEN>`):
 // - GET /ready: 200 when the token is live. The workflow polls it after `wrangler secret put`.

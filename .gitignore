@@ -162,6 +162,6 @@ test-results/
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
-# This repo also shares its skills and reviewer agents (plan/process.md), so keep those tracked too.
+# This repo also shares its skills and reviewer agents, so keep those tracked too.
 !.claude/skills/
 !.claude/agents/

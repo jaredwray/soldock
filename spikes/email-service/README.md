@@ -1,13 +1,14 @@
 # `spike-email-service`: the Email Service spike harness
 
-> Status: **throwaway** (S00.T18). It exists only for the
-> [S00.T13 spike](../../plan/stages/S00-foundation.md). Before the S00.T13 findings PR merges, a
-> `cleanup` run deletes the Cloudflare resources. Then the findings PR deletes this directory and
-> the workflow ([process §7](../../plan/process.md#7-spikes)).
+> Status: **throwaway**. It exists only for the Email Service spike. Before the spike's findings PR
+> merges, a `cleanup` run deletes the Cloudflare resources. Then the findings PR deletes this
+> directory and the workflow.
 
-S00.T13 finds out if Cloudflare Email Service can carry person-to-person mail ([R-01](../../plan/risks.md)).
+The spike finds out if Cloudflare Email Service can carry person-to-person mail. Email Service is in
+beta, and its terms and quotas are for transactional mail. Soldock has no Cloudflare-only fallback
+for outbound mail.
 The tests need a live Cloudflare account. Only workflows that run `main` get the credentials
-([ADR-0015](../../plan/adr/0015-cloudflare-credentials-only-in-github-actions.md)). So this
+([workflow rules](../../docs/self-hosting.md#workflow-rules)). So this
 harness is a Worker and a manually dispatched workflow,
 [`spike-email-service.yaml`](../../.github/workflows/spike-email-service.yaml). No agent session
 runs it.
@@ -35,18 +36,18 @@ Do these steps before the first run. A missing secret or variable stops the run 
 and the error names each missing item.
 
 1. Make sure that `main` has the "Pull requests required" ruleset
-   ([ADR-0015](../../plan/adr/0015-cloudflare-credentials-only-in-github-actions.md) item 2).
+   ([GitHub setup](../../docs/self-hosting.md#github-setup) step 1).
 2. Create the `development` environment. Set its deployment branches to `main` only.
    - A run that references a missing environment makes GitHub create it with no branch rule.
      If `development` exists already, set the branch rule before you add a secret.
 3. Add these environment secrets for the development Cloudflare account:
    - `CLOUDFLARE_API_TOKEN`: it must be able to deploy Workers with Durable Objects, manage
      Queues and event subscriptions, and send email from the zone. Record the exact permissions in
-     the S00.T13 findings.
+     the spike findings.
    - `CLOUDFLARE_ACCOUNT_ID`
 4. Onboard `soldock.org` to Email Service. The workflow sends from this domain, the development
-   mail domain (S00.T09). The zone must be in the development account. Before the first `send`
-   run, publish DMARC `p=quarantine` or stricter for the domain ([R-23](../../plan/risks.md)). To
+   mail domain. The zone must be in the development account. Before the first `send`
+   run, publish DMARC `p=quarantine` or stricter for the domain ([prerequisites](../../docs/self-hosting.md#prerequisites)). To
    run the spike on a different domain, change `DOMAIN` in the workflow.
 5. Add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of `soldock.org`. Find it on the
    zone's **Overview** page in the Cloudflare dashboard, in the **API** section. It is 32 hex
@@ -68,7 +69,7 @@ Open **Actions › spike-email-service › Run workflow**, select `main`, and se
    the event subscription and the queue. A second `cleanup` run passes and deletes nothing.
 
 The evidence of a run is its job summary and its artifact, `spike-email-<mode>-<run id>-<attempt>`,
-which GitHub keeps for 90 days. Link the runs from the S00.T13 findings note.
+which GitHub keeps for 90 days. Link the runs from the spike findings note.
 
 The run log, the job summary and the artifact are public in a public repository, and they show the
 recipient addresses. Use seed accounts only. Event fields come from Cloudflare and from recipient

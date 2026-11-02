@@ -1,6 +1,6 @@
-// The dock Worker: the whole backend, served from one origin (ADR-0002, ADR-0003).
-// The top level is production (S05.T25). `env.development` is the development Worker, which
-// deploy-development.yaml deploys on each push to main (S00.T09). The dock Worker has no other
+// The dock Worker: the whole backend, served from one origin.
+// The top level is production. `env.development` is the development Worker, which
+// deploy-development.yaml deploys on each push to main. The dock Worker has no other
 // deployment environments. test/config.test.ts checks that both declare the same bindings.
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
 // Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
@@ -11,18 +11,18 @@
 	// Pinned. Bump deliberately, in its own PR, after reading the compatibility-flag changelog.
 	"compatibility_date": "2026-10-01",
 	"compatibility_flags": ["nodejs_compat"],
-	// Production serves only its custom domain (ADR-0002), never a second origin on workers.dev.
+	// Production serves only its custom domain, never a second origin on workers.dev.
 	"workers_dev": false,
 	"observability": {
 		"enabled": true
 	},
 	"assets": {
-		// Placeholder page until S00.T05 points this at the apps/web build.
+		// Placeholder page until this points at the apps/web build.
 		"directory": "./public",
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
-		// Browser navigations go straight to assets, so every Worker-owned prefix must be listed here
-		// (architecture §3). Keep in sync with WORKER_PREFIXES in src/routes.ts; a test enforces it.
+		// Browser navigations go straight to assets, so every Worker-owned prefix must be listed here.
+		// Keep in sync with WORKER_PREFIXES in src/routes.ts; a test enforces it.
 		"run_worker_first": [
 			"/api/*",
 			"/mcp*",
@@ -40,7 +40,7 @@
 		// does not inherit bindings or vars: when production gets a binding, add the development one here.
 		"development": {
 			"name": "soldock-dock-dev",
-			// The development host is the workers.dev URL. No custom domain is planned (architecture §16).
+			// The development host is the workers.dev URL. No custom domain is planned.
 			"workers_dev": true
 		}
 	}

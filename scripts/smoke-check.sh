@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Post-deploy smoke check (S00.T09). The requests go through the real assets router, which the
-# workerd tests can't reach. S00.T11 replaces this check with the Playwright suite.
+# Post-deploy smoke check. The requests go through the real assets router, which the
+# workerd tests can't reach. The Playwright suite will replace this check.
 #
 # Usage: scripts/smoke-check.sh <base-url>
 # Example: scripts/smoke-check.sh http://localhost:8787 (after `pnpm --filter @soldock/dock dev`)
