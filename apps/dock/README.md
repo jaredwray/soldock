@@ -10,7 +10,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker ([docs/self-hosting.md](../../docs/self-hosting.md)) |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Joins the operation handlers of each domain, sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers and `MailboxDO` |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, the REST routes and `/mcp` |
@@ -31,8 +31,8 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).
-- `/auth/setup`, `/auth/session`, `/auth/sign-out`: first-run setup and browser sign-in
-  ([`src/identity/`](src/identity/)).
+- `/auth/setup` (`GET` status, `POST` setup), `/auth/session`, `/auth/sign-out`: first-run setup and
+  browser sign-in ([`src/identity/`](src/identity/)).
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
@@ -50,7 +50,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal |
 | `MAIL_DOMAINS` | Var | The mail domains, comma-separated |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
-| `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup`. Delete it after setup |
+| `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup` while it has at least 32 characters. `GET /auth/setup` reports its state, never its value. Delete it after setup |
 
 `wrangler.jsonc` has no resource ids. `wrangler deploy` provisions the D1 database, the R2 bucket
 and the queues by name on the first deploy, and finds them by name after that.
@@ -72,7 +72,8 @@ scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, aga
 ```
 
 `deploy-development.yaml` runs `pnpm run deploy:development` and the remote D1 migrations in GitHub
-Actions on each push to `main`. Never run them from a developer machine or an agent session.
+Actions on each push to `main`, then smoke checks `https://work.soldock.org`. Never run them from a
+developer machine or an agent session.
 [`docs/development.md`](../../docs/development.md) shows how to run the whole product locally,
 with injected inbound mail.
 

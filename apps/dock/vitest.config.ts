@@ -15,7 +15,8 @@ export default defineProject(async () => ({
 				bindings: {
 					TEST_MIGRATIONS: await readD1Migrations(migrations),
 					MAIL_DOMAINS: "dock.test,second.test",
-					SETUP_TOKEN: "test-setup-token",
+					// At least SETUP_TOKEN_MIN_LENGTH (32) characters, or setup stays off.
+					SETUP_TOKEN: "test-setup-token-0123456789abcdef",
 				},
 			},
 		}),

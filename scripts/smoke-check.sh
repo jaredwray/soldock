@@ -18,10 +18,10 @@ fail() {
 	failures=$((failures + 1))
 }
 
-# A first deploy to a new workers.dev host can take a minute or more to answer, so this first request
-# retries for up to two minutes.
-if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 24 --retry-delay 5 --retry-all-errors \
-	"$base/api/v1/system/ping"); then
+# A new host can take some minutes to answer: a new custom domain needs its DNS record and its
+# certificate. So this first request retries for up to five minutes.
+if ! ping=$(curl --silent --show-error --fail --max-time 10 --retry 60 --retry-delay 5 --retry-max-time 300 \
+	--retry-all-errors "$base/api/v1/system/ping"); then
 	fail "GET /api/v1/system/ping did not return a 2xx response"
 	exit 1
 fi
@@ -58,6 +58,15 @@ if [[ "$result" == "401" ]]; then
 	pass "GET /api/v1/mail/profile without a credential returns 401"
 else
 	fail "GET /api/v1/mail/profile without a credential returned \"$result\", not 401"
+fi
+
+# The first-run setup status comes from the Worker as JSON, before and after setup.
+result=$(curl --silent --show-error --max-time 10 --retry 3 --retry-delay 2 --retry-connrefused \
+	-o "$page" -w '%{http_code} %{content_type}' "$base/auth/setup" || echo "curl exit $?")
+if [[ "$result" == "200 application/json"* ]] && jq -e '.setup_needed | type == "boolean"' "$page" > /dev/null 2>&1; then
+	pass "GET /auth/setup returns the setup status"
+else
+	fail "GET /auth/setup returned \"$result\" without a setup status"
 fi
 
 # A navigation to an app route must get the shell (index.html) from the assets router.

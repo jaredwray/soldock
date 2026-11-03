@@ -11,7 +11,8 @@ import { vi } from "vitest";
 import worker from "../src/index.ts";
 
 export const ORIGIN = "https://dock.test";
-export const SETUP_TOKEN = "test-setup-token";
+/** The SETUP_TOKEN binding of vitest.config.ts. */
+export const SETUP_TOKEN = (env as Env).SETUP_TOKEN as string;
 
 const handlers = worker as Required<Pick<ExportedHandler<Env>, "email" | "queue">>;
 

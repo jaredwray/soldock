@@ -2,7 +2,8 @@ name: deploy-development
 
 # Continuous deployment: each push to main builds the SPA, applies the D1 migrations, deploys the
 # dock Worker to the development environment (`soldock-dock-dev`, wrangler `--env development`),
-# then runs the smoke check against its workers.dev host. Production deploys come later. The dock Worker has no other
+# then runs the smoke check against its host, https://work.soldock.org. The host is the custom domain
+# in apps/dock/wrangler.jsonc. Production deploys come later. The dock Worker has no other
 # deployment environment.
 #
 # This workflow uses the development Cloudflare token, so it follows the workflow rules in
@@ -92,6 +93,7 @@ jobs:
           fi
 
       # wrangler provisions the D1 database, the R2 bucket and the queues by name on the first deploy.
+      # It also attaches the custom domain, and fails if it cannot.
       - name: Deploy the dock Worker to development
         id: deploy
         working-directory: apps/dock
@@ -101,14 +103,15 @@ jobs:
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
         run: |
           pnpm run deploy:development
-          url=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]? | select(test("^https://[^/]+\\.workers\\.dev$"))]
-            | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          # The deploy output shows the custom domain as "work.soldock.org (custom domain)".
+          host=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]?
+            | capture("^(?<host>[a-z0-9.-]+) \\(custom domain\\)$").host] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
           version=$(jq -rn '[inputs | select(.type == "deploy") | .version_id] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
-          if [[ -z "$url" ]]; then
-            echo "::error::The deploy output has no workers.dev URL. Make sure that the account has a workers.dev subdomain."
+          if [[ -z "$host" ]]; then
+            echo "::error::The deploy output has no custom domain. Make sure that env.development in apps/dock/wrangler.jsonc has a route with custom_domain: true."
             exit 1
           fi
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "url=https://$host" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Apply the D1 migrations after the deploy
@@ -131,6 +134,13 @@ jobs:
           VERSION: ${{ steps.deploy.outputs.version }}
           SMOKE: ${{ steps.smoke.outcome }}
         run: |
+          # GET /auth/setup is public. Before setup it returns setup_needed: true.
+          setup=$(curl --silent --max-time 10 "$URL/auth/setup" | jq -r '.setup_needed | tostring' 2> /dev/null || true)
+          case "$setup" in
+            true) setup_line="not done. Open $URL and follow the page (docs/self-hosting.md, First-run setup)." ;;
+            false) setup_line="done" ;;
+            *) setup_line="unknown" ;;
+          esac
           {
             echo "## Development deploy"
             echo
@@ -138,4 +148,5 @@ jobs:
             echo "- Worker version: \`${VERSION:-unknown}\`"
             echo "- Host: $URL"
             echo "- Smoke check: $SMOKE"
+            echo "- First-run setup: $setup_line"
           } >> "$GITHUB_STEP_SUMMARY"

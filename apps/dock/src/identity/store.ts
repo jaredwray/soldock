@@ -69,6 +69,13 @@ export function normalizeAddress(address: string): string {
 	return `${plus > 0 ? local.slice(0, plus) : local}${lower.slice(at)}`;
 }
 
+/** A primary address cannot hold a `+tag`, because mail to `user+tag@` reaches `user@`. */
+export function assertPrimaryAddress(address: string): void {
+	if (address.slice(0, address.lastIndexOf("@")).includes("+")) {
+		throw new OperationError("invalid", "A primary address cannot contain +. Mail to user+tag reaches user.");
+	}
+}
+
 /** The mail domains of the deployment, from the `MAIL_DOMAINS` var (comma-separated). */
 export function mailDomains(env: Pick<Env, "MAIL_DOMAINS">): Set<string> {
 	return new Set(
@@ -85,6 +92,11 @@ export function domainOf(address: string): string {
 /** The scopes that a key for this kind of principal can hold at most. */
 export function scopeCeiling(kind: PrincipalKind): readonly Scope[] {
 	return kind === "agent" ? AGENT_SCOPES : ALL_SCOPES;
+}
+
+/** True while the directory has no principal: first-run setup has not run. */
+export async function directoryIsEmpty(db: D1Database): Promise<boolean> {
+	return (await db.prepare("SELECT 1 FROM principals LIMIT 1").first()) === null;
 }
 
 export async function getPrincipal(db: D1Database, id: string): Promise<PrincipalRecord | null> {

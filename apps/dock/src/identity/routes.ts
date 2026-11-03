@@ -1,13 +1,15 @@
-import { ALL_SCOPES, DisplayName, EmailAddress } from "@soldock/contracts";
+import { ALL_SCOPES, SETUP_TOKEN_MIN_LENGTH, SetupInput, type SetupResult, type SetupStatus } from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
 import {
+	assertPrimaryAddress,
 	createPrincipal,
 	createSession,
 	deleteSession,
+	directoryIsEmpty,
 	domainOf,
 	findApiKey,
 	mailDomains,
@@ -16,10 +18,11 @@ import {
 
 type AuthApp = Hono<{ Bindings: Env; Variables: RequestIdVariables }>;
 
-const SetupBody = z.strictObject({
-	display_name: DisplayName,
-	address: EmailAddress,
-});
+/** Setup is on only while the SETUP_TOKEN secret is set and long enough to resist a guess. */
+function setupTokenState(token: string | undefined): "missing" | "too_short" | "ready" {
+	if (!token) return "missing";
+	return token.length < SETUP_TOKEN_MIN_LENGTH ? "too_short" : "ready";
+}
 
 const SessionBody = z.strictObject({ api_key: z.string().min(1).max(200) });
 
@@ -44,21 +47,45 @@ async function jsonBody(request: Request): Promise<unknown> {
  * the API-key sign-in later.
  */
 export function mountAuthRoutes(app: AuthApp): void {
-	// First-run setup: creates the owner, once, when the directory is empty. The operator calls it
-	// with the SETUP_TOKEN Worker secret. Without that secret, setup is off.
+	// First-run setup status for the web app. Before setup, it tells if the SETUP_TOKEN secret is
+	// ready and which mail domains the owner can use. After setup, it tells nothing more.
+	app.get("/auth/setup", async (c) => {
+		const status: SetupStatus = (await directoryIsEmpty(c.env.DIRECTORY))
+			? { setup_needed: true, setup_token: setupTokenState(c.env.SETUP_TOKEN), mail_domains: [...mailDomains(c.env)] }
+			: { setup_needed: false };
+		return c.json(status, 200, { "cache-control": "no-store" });
+	});
+
+	// First-run setup: creates the owner, once, when the directory is empty. The operator sends the
+	// SETUP_TOKEN Worker secret. Without that secret, or with a short one, setup is off. From the web
+	// app (an Origin header of this origin), setup also signs the owner in. A request from another
+	// origin gets 403. A request without an Origin header (curl) gets no session.
 	app.post("/auth/setup", async (c) => {
 		const token = c.env.SETUP_TOKEN;
-		if (!token)
+		const state = setupTokenState(token);
+		if (state === "missing") {
 			throw new OperationError("unavailable", "Setup is off. Set the SETUP_TOKEN Worker secret to turn it on.");
+		}
+		if (state === "too_short") {
+			throw new OperationError(
+				"unavailable",
+				`Setup is off. The SETUP_TOKEN Worker secret must have at least ${SETUP_TOKEN_MIN_LENGTH} characters.`,
+			);
+		}
+		const fromBrowser = c.req.header("origin") !== undefined;
+		if (fromBrowser && !isSameOrigin(c.req.raw)) {
+			throw new OperationError("forbidden", "Run setup from the Soldock web app.");
+		}
 		if (!sameSecret(c.req.header("authorization") ?? "", `Bearer ${token}`)) {
 			throw new OperationError("unauthenticated", "Send the setup token as a bearer token.");
 		}
-		const parsed = SetupBody.safeParse(await jsonBody(c.req.raw));
+		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
 		const { display_name, address } = parsed.data;
 		if (!mailDomains(c.env).has(domainOf(address))) {
 			throw new OperationError("invalid", `The address must be on a mail domain: ${c.env.MAIL_DOMAINS}.`);
 		}
+		assertPrimaryAddress(address);
 		const created = await createPrincipal(
 			c.env.DIRECTORY,
 			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null },
@@ -75,14 +102,28 @@ export function mountAuthRoutes(app: AuthApp): void {
 			result: "ok",
 			requestId: c.var.requestId,
 		});
-		return c.json(
-			{
-				principal: toPrincipalOutput(created.principal),
-				api_key: { ...created.key, revoked: false, secret: created.secret },
-			},
-			201,
-			{ "cache-control": "no-store" },
-		);
+		const headers: Record<string, string> = { "cache-control": "no-store" };
+		if (fromBrowser) {
+			// The owner and the key exist now, so setup cannot run again. A failed session must not lose
+			// the only key: the response still holds the key, without a session, and the owner signs in
+			// with the key. The session gets the scopes of the first key, like a sign-in with that key.
+			try {
+				const session = await createSession(c.env.DIRECTORY, created.principal.id, created.key);
+				headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
+				log("info", "session created", { principalId: created.principal.id, requestId: c.var.requestId });
+			} catch (error) {
+				log("error", "setup session failed; the key is returned without a session", {
+					principalId: created.principal.id,
+					requestId: c.var.requestId,
+					err: error instanceof Error ? (error.stack ?? error.message) : String(error),
+				});
+			}
+		}
+		const result: SetupResult = {
+			principal: toPrincipalOutput(created.principal),
+			api_key: { ...created.key, revoked: false, secret: created.secret },
+		};
+		return c.json(result, 201, headers);
 	});
 
 	// Sign-in for humans with an API key, until passkeys exist. Agents use their key directly.

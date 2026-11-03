@@ -14,6 +14,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`) |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
+| `src/setup.ts` | The schemas of first-run setup (`/auth/setup`). Setup creates a credential, so it is not an operation |
 | `src/client.ts` | `createClient()`: a typed REST client built from each operation's route. The web app uses it |
 
 ## Rules

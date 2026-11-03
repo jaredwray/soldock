@@ -8,11 +8,16 @@ GitHub Actions deploys both. No developer machine or agent session holds a Cloud
 
 | Environment | Worker | Host | Deployed by |
 | --- | --- | --- | --- |
-| `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `soldock-dock-dev.<subdomain>.workers.dev` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
+| `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
 | `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
 
 The domains in this document are the domains of this instance. On your own instance, use your own
 domains.
+
+The development environment is also the project's own Soldock: the team uses it for its mail on
+`soldock.org`. So its data stays from one deploy to the next. The D1 migrations only add, and a
+deploy never deletes a mailbox. Each Worker serves only its custom domain. `workers.dev` and Preview
+URLs are off, because each one is a second origin with the same data.
 
 ## Prerequisites
 
@@ -30,8 +35,11 @@ domains.
     - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
     - Send test mail only to seed accounts, inside the Email Service quota.
   - production: `jaredwray.com`
-- A `workers.dev` subdomain on the development account. Set it on the **Workers & Pages** page of
-  the dashboard.
+- No DNS record for `work.soldock.org`. The development deploy attaches this custom domain to the
+  Worker and makes its DNS record and certificate. In GitHub Actions, the deploy replaces a DNS record
+  that conflicts. So do not use this name for a different service.
+- A `workers.dev` subdomain on the development account, for the Email Service spike only. Set it on
+  the **Workers & Pages** page of the dashboard. The dock Worker does not use `workers.dev`.
 
 ## GitHub setup
 
@@ -86,7 +94,7 @@ row whose workflow exists on `main`.
 
 | Workflow | Permissions |
 | --- | --- |
-| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). Zone › Workers Routes: Edit on `soldock.org` (the deploy attaches the custom domain `work.soldock.org`). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on `soldock.org` and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
 | `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
 | The `provision` workflow (not built yet) | Also Workers KV Storage edit |
 | Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
@@ -100,9 +108,11 @@ adds a binding, it adds the permission to this table too.
 - Each push to `main` runs `deploy-development.yaml`. To run it again, open **Actions ›
   deploy-development › Run workflow** and select `main`.
 - Until the secrets exist, the run stops at its first step, and the error names each missing secret.
-- After the deploy, the run sends a smoke check to the development host
+- After the deploy, the run sends a smoke check to the development host, `https://work.soldock.org`
   ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and the `development`
-  environment page show the host.
+  environment page show the host. The run reads the host from the custom domain in the deploy output.
+- On the first deploy with the custom domain, the host can take some minutes to answer, because
+  Cloudflare makes its DNS record and its certificate. The smoke check waits up to five minutes.
 - To run the same smoke check against the built Worker on your computer:
 
   ```sh
@@ -115,6 +125,14 @@ adds a binding, it adds the permission to this table too.
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these
 steps once for each environment, in its Cloudflare account. Do them after the first deploy, because
 Email Routing can route only to a Worker that exists.
+
+| Environment | Mail domain | Dock host | Worker |
+| --- | --- | --- | --- |
+| `development` | `soldock.org` | `work.soldock.org` | `soldock-dock-dev` |
+| `production` | `jaredwray.com` | `dock.jaredwray.com` | `soldock-dock` |
+
+The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
+top-level only and applies to each environment. So it cannot hold a rule for one environment.
 
 1. Set `MAIL_DOMAINS` in `apps/dock/wrangler.jsonc` to the mail domains of the environment
    (comma-separated). An address on one of these domains is local: mail between local addresses
@@ -133,22 +151,29 @@ Email Routing can route only to a Worker that exists.
    `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
    `mail/raw/<principal>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
    change the var: the mailbox ignores results from any other server.
-5. First-run setup (once):
-   1. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
-      Secrets**, and add the secret `SETUP_TOKEN` with a long random value.
-   2. Create the owner:
+5. First-run setup (once). Until setup runs, the dock host shows a setup page, and the deploy job
+   summary shows "First-run setup: not done".
+   1. Make a random token with at least 32 characters, for example with `openssl rand -hex 32`. A
+      shorter token keeps setup off.
+   2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
+      Secrets**, and add the secret `SETUP_TOKEN` with that token.
+   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, your
+      name and your address, then select **Create the owner**.
+   4. The page signs you in, and shows the first API key of the owner once. Copy the key. Until
+      passkeys exist, you sign in on a different browser with it.
+   5. Delete the `SETUP_TOKEN` secret.
+   6. Create people and agents on the **Admin** page.
 
-      ```sh
-      curl -X POST "https://<dock-host>/auth/setup" \
-        -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-        -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
-      ```
+   `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
+   and gives no session:
 
-      The response holds the owner's first API key (`api_key.secret`). It is shown only once. A
-      second call gets `409`.
-   3. Delete the `SETUP_TOKEN` secret.
-   4. Open `https://<dock-host>/`, and sign in with the key. Create people and agents on the
-      **Admin** page.
+   ```sh
+   curl -X POST "https://<dock-host>/auth/setup" \
+     -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
+     -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
+   ```
+
+   After setup, the setup page does not show again, and a second setup gets `409`.
 
 Email Service is in beta, and its terms and quotas are for transactional mail. The
 [Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person

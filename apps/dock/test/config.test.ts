@@ -9,7 +9,15 @@ interface WranglerConfig {
 	assets: { binding: string; not_found_handling: string; run_worker_first: string[] };
 	name: string;
 	workers_dev?: boolean;
-	env: { development: Record<string, unknown> & { name: string; workers_dev?: boolean } };
+	preview_urls?: boolean;
+	env: {
+		development: Record<string, unknown> & {
+			name: string;
+			workers_dev?: boolean;
+			preview_urls?: boolean;
+			routes?: Array<{ pattern: string; custom_domain?: boolean }>;
+		};
+	};
 	[key: string]: unknown;
 }
 
@@ -93,10 +101,17 @@ describe("wrangler.jsonc", () => {
 		}
 	});
 
-	it("keeps production on one origin, and the development Worker apart from it", () => {
-		// Production serves only its custom domain. Development uses its workers.dev host.
+	it("keeps each Worker on one origin, and the development Worker apart from production", () => {
+		// Each Worker serves only its custom domain. A workers.dev host or a Preview URL is a second
+		// origin with the same data. A named env inherits preview_urls.
 		expect(config.workers_dev).toBe(false);
-		expect(config.env.development.workers_dev).toBe(true);
+		expect(config.preview_urls).toBe(false);
+		expect(config.env.development.workers_dev).toBe(false);
+		expect(config.env.development.preview_urls ?? config.preview_urls).toBe(false);
+		// deploy-development.yaml smoke checks the one custom domain in the deploy output.
+		const routes = config.env.development.routes ?? [];
+		expect(routes).toHaveLength(1);
+		expect(routes[0]?.custom_domain).toBe(true);
 		expect(config.env.development.name).not.toBe(config.name);
 		// Routes are inherited. Development must never claim production's routes.
 		for (const key of ["routes", "route"]) {

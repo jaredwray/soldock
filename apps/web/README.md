@@ -12,7 +12,17 @@ MCP clients. The app has no UI-only path.
 - **Sign-in.** The person pastes an API key. `POST /auth/session` trades it for an HttpOnly session
   cookie. This sign-in is temporary until passkeys exist. An agent key gets 403, because agents
   cannot sign in to the UI. Each 401 from an operation shows the sign-in page again.
-- **Boot.** The app calls `account.whoami`. A 401 shows the sign-in page. Otherwise the app shows.
+- **Boot.** The app calls `account.whoami`. On a 401, it calls `GET /auth/setup`: while the
+  directory has no owner, the setup page shows. Otherwise, the sign-in page shows.
+- **First-run setup.** The setup page shows until an owner exists.
+  - While the `SETUP_TOKEN` secret is missing or too short, the page shows how to set it, and a
+    "Check again" button.
+  - When the secret is ready, the form takes the setup token, the name and the address. The
+    domain comes from the mail domains of the deployment, so the person types only the part before
+    the @.
+  - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
+    with a copy button and a reminder to delete the `SETUP_TOKEN` secret. Done opens the app.
+  - If a different browser ran setup first (`409`), the page offers the sign-in page.
 - **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
   labels, a thread list and a thread view.
   - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as
