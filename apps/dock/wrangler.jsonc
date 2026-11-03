@@ -1,5 +1,5 @@
 // The dock Worker: the whole backend, served from one origin.
-// The top level is production. `env.development` is the development Worker at space.soldock.org, which
+// The top level is production. `env.development` is the development Worker at work.soldock.org, which
 // deploy-development.yaml deploys on each push to main. The dock Worker has no other
 // deployment environments. test/config.test.ts checks that both declare the same bindings.
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
@@ -79,11 +79,11 @@
 		// add the development one here.
 		"development": {
 			"name": "soldock-dock-dev",
-			// The development host is the custom domain space.soldock.org, in the soldock.org zone of the
+			// The development host is the custom domain work.soldock.org, in the soldock.org zone of the
 			// development account. It is the only origin: workers.dev is off. The deploy attaches the domain
-			// and makes its DNS record. Do not give space.soldock.org another DNS record.
+			// and makes its DNS record. Do not give work.soldock.org another DNS record.
 			"workers_dev": false,
-			"routes": [{ "pattern": "space.soldock.org", "custom_domain": true }],
+			"routes": [{ "pattern": "work.soldock.org", "custom_domain": true }],
 			"d1_databases": [
 				{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }
 			],

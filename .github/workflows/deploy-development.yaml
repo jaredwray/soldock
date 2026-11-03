@@ -2,7 +2,7 @@ name: deploy-development
 
 # Continuous deployment: each push to main builds the SPA, applies the D1 migrations, deploys the
 # dock Worker to the development environment (`soldock-dock-dev`, wrangler `--env development`),
-# then runs the smoke check against its host, https://space.soldock.org. The host is the custom domain
+# then runs the smoke check against its host, https://work.soldock.org. The host is the custom domain
 # in apps/dock/wrangler.jsonc. Production deploys come later. The dock Worker has no other
 # deployment environment.
 #
@@ -103,7 +103,7 @@ jobs:
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
         run: |
           pnpm run deploy:development
-          # The deploy output shows the custom domain as "space.soldock.org (custom domain)".
+          # The deploy output shows the custom domain as "work.soldock.org (custom domain)".
           host=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]?
             | capture("^(?<host>[a-z0-9.-]+) \\(custom domain\\)$").host] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
           version=$(jq -rn '[inputs | select(.type == "deploy") | .version_id] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")

@@ -8,7 +8,7 @@ GitHub Actions deploys both. No developer machine or agent session holds a Cloud
 
 | Environment | Worker | Host | Deployed by |
 | --- | --- | --- | --- |
-| `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `space.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
+| `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
 | `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
 
 The domains in this document are the domains of this instance. On your own instance, use your own
@@ -35,7 +35,7 @@ URLs are off, because each one is a second origin with the same data.
     - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
     - Send test mail only to seed accounts, inside the Email Service quota.
   - production: `jaredwray.com`
-- No DNS record for `space.soldock.org`. The development deploy attaches this custom domain to the
+- No DNS record for `work.soldock.org`. The development deploy attaches this custom domain to the
   Worker and makes its DNS record and certificate. In GitHub Actions, the deploy replaces a DNS record
   that conflicts. So do not use this name for a different service.
 - A `workers.dev` subdomain on the development account, for the Email Service spike only. Set it on
@@ -94,7 +94,7 @@ row whose workflow exists on `main`.
 
 | Workflow | Permissions |
 | --- | --- |
-| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). Zone › Workers Routes: Edit on `soldock.org` (the deploy attaches the custom domain `space.soldock.org`). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on `soldock.org` and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). Zone › Workers Routes: Edit on `soldock.org` (the deploy attaches the custom domain `work.soldock.org`). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on `soldock.org` and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
 | `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
 | The `provision` workflow (not built yet) | Also Workers KV Storage edit |
 | Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
@@ -108,7 +108,7 @@ adds a binding, it adds the permission to this table too.
 - Each push to `main` runs `deploy-development.yaml`. To run it again, open **Actions ›
   deploy-development › Run workflow** and select `main`.
 - Until the secrets exist, the run stops at its first step, and the error names each missing secret.
-- After the deploy, the run sends a smoke check to the development host, `https://space.soldock.org`
+- After the deploy, the run sends a smoke check to the development host, `https://work.soldock.org`
   ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and the `development`
   environment page show the host. The run reads the host from the custom domain in the deploy output.
 - On the first deploy with the custom domain, the host can take some minutes to answer, because
@@ -128,7 +128,7 @@ Email Routing can route only to a Worker that exists.
 
 | Environment | Mail domain | Dock host | Worker |
 | --- | --- | --- | --- |
-| `development` | `soldock.org` | `space.soldock.org` | `soldock-dock-dev` |
+| `development` | `soldock.org` | `work.soldock.org` | `soldock-dock-dev` |
 | `production` | `jaredwray.com` | `dock.jaredwray.com` | `soldock-dock` |
 
 The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
