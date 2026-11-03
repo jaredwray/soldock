@@ -29,12 +29,20 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- | --- |
 | API key `sdk_<43 base64url characters>` | Humans and agents | `Authorization: Bearer` on `/api/v1` and `/mcp`. Only the SHA-256 is stored |
 | Session cookie `__Host-soldock_session` | Humans only | The web app. `Secure`, `HttpOnly`, `SameSite=Lax`, 30 days. It holds the scopes of the key that signed in. Only the SHA-256 is stored |
-| `SETUP_TOKEN` Worker secret | The operator | `POST /auth/setup` only. Delete it after setup |
+| `SETUP_TOKEN` Worker secret | The operator | `POST /auth/setup` only. At least 32 characters (`SETUP_TOKEN_MIN_LENGTH`), or setup stays off. Delete it after setup |
 
 `/auth/*` routes (not operations, because they create credentials):
 
+- `GET /auth/setup`: public. Before setup, it returns `setup_needed: true`, the state of the
+  `SETUP_TOKEN` secret (`missing`, `too_short` or `ready`) and the mail domains. After setup, it
+  returns only `setup_needed: false`. The web app uses it to show the setup page.
 - `POST /auth/setup`: creates the owner and a first key, once, when the directory is empty. A
-  guarded insert in one D1 transaction stops two concurrent setups.
+  guarded insert in one D1 transaction stops two concurrent setups. The owner address cannot
+  contain `+`. When the request has an `Origin` header of this origin (the web app), setup also
+  signs the owner in with a session. A request from a different origin gets `403`. A request
+  without an `Origin` header (`curl`) gets the key and no session.
+- The schemas of both routes are in `@soldock/contracts` (`SetupStatus`, `SetupInput`,
+  `SetupResult`).
 - `POST /auth/session`: a human signs in to the web app with an API key. This is temporary until
   passkeys exist. Agents get `403`. Each sign-in deletes the expired sessions of that human.
 - A session records the key that signed in. When that key is revoked, its sessions end in the

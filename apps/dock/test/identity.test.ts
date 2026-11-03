@@ -14,13 +14,28 @@ async function denied(promise: Promise<unknown>): Promise<string> {
 	return (error as ApiError).code;
 }
 
-function setup(token: string, body: unknown) {
+function setup(token: string, body: unknown, origin?: string) {
 	return request("/auth/setup", {
 		method: "POST",
-		headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+		headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(origin ? { origin } : {}) },
 		body: JSON.stringify(body),
 	});
 }
+
+/** Sends a request to the Worker with this SETUP_TOKEN in place of the one in vitest.config.ts. */
+function withSetupToken(
+	token: string | undefined,
+	path: string,
+	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+) {
+	return (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+		new Request(`${ORIGIN}${path}`, init),
+		{ ...env, SETUP_TOKEN: token } as unknown as Env,
+		createExecutionContext(),
+	);
+}
+
+const OWNER = { display_name: "Olive Owner", address: "owner@dock.test" };
 
 async function signIn(key: string, origin: string | null = ORIGIN) {
 	return request("/auth/session", {
@@ -36,10 +51,15 @@ function cookieOf(res: Response): string {
 
 describe("first-run setup", () => {
 	it("creates the owner once, only with the setup token, and only on a mail domain", async () => {
-		expect((await setup("wrong", { display_name: "X", address: "x@dock.test" })).status).toBe(401);
+		expect((await setup("wrong", OWNER)).status).toBe(401);
 		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x@elsewhere.example" })).status).toBe(400);
-		const owner = await setupOwner();
-		expect(await owner.call("account.whoami")).toMatchObject({
+		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x+tag@dock.test" })).status).toBe(400);
+		const res = await setup(SETUP_TOKEN, OWNER);
+		expect(res.status).toBe(201);
+		// Without an Origin header (curl), setup makes no session.
+		expect(res.headers.get("set-cookie")).toBeNull();
+		const { api_key } = (await res.json()) as { api_key: { secret: string } };
+		expect(await api(api_key.secret)("account.whoami")).toMatchObject({
 			principal: { kind: "human", org_role: "owner", address: "owner@dock.test" },
 			credential: "api_key",
 		});
@@ -47,14 +67,54 @@ describe("first-run setup", () => {
 		expect(again.status).toBe(409);
 	});
 
-	it("is off while the SETUP_TOKEN secret is not set", async () => {
-		const noToken = { ...env, SETUP_TOKEN: undefined } as unknown as Env;
-		const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
-			new Request(`${ORIGIN}/auth/setup`, { method: "POST", headers: { authorization: "Bearer " } }),
-			noToken,
-			createExecutionContext(),
+	it("is off while the SETUP_TOKEN secret is missing or shorter than 32 characters", async () => {
+		for (const [token, state] of [
+			[undefined, "missing"],
+			["a".repeat(31), "too_short"],
+		] as const) {
+			const status = await withSetupToken(token, "/auth/setup");
+			expect(await status.json()).toEqual({
+				setup_needed: true,
+				setup_token: state,
+				mail_domains: ["dock.test", "second.test"],
+			});
+			const res = await withSetupToken(token, "/auth/setup", {
+				method: "POST",
+				headers: { authorization: `Bearer ${token ?? ""}`, "content-type": "application/json" },
+				body: JSON.stringify(OWNER),
+			});
+			expect(res.status).toBe(503);
+		}
+	});
+
+	it("tells the web app that setup is needed, and nothing more after setup", async () => {
+		const before = await request("/auth/setup");
+		expect(before.headers.get("cache-control")).toBe("no-store");
+		expect(await before.json()).toEqual({
+			setup_needed: true,
+			setup_token: "ready",
+			mail_domains: ["dock.test", "second.test"],
+		});
+		await setupOwner();
+		expect(await (await request("/auth/setup")).json()).toEqual({ setup_needed: false });
+	});
+
+	it("signs the owner in when setup runs from the web app, and refuses another origin", async () => {
+		const forged = await setup(SETUP_TOKEN, OWNER, "https://evil.example");
+		expect(forged.status).toBe(403);
+		expect(await (await request("/auth/setup")).json()).toMatchObject({ setup_needed: true });
+
+		const res = await setup(SETUP_TOKEN, OWNER, ORIGIN);
+		expect(res.status).toBe(201);
+		expect(res.headers.get("set-cookie")).toMatch(
+			/^__Host-soldock_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/,
 		);
-		expect(res.status).toBe(503);
+		const { principal } = (await res.json()) as { principal: { id: string } };
+		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(res) } });
+		expect(await whoami.json()).toMatchObject({
+			credential: "session",
+			principal: { id: principal.id, org_role: "owner" },
+		});
 	});
 });
 

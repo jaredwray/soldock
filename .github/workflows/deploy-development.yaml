@@ -134,6 +134,13 @@ jobs:
           VERSION: ${{ steps.deploy.outputs.version }}
           SMOKE: ${{ steps.smoke.outcome }}
         run: |
+          # GET /auth/setup is public. Before setup it returns setup_needed: true.
+          setup=$(curl --silent --max-time 10 "$URL/auth/setup" | jq -r '.setup_needed | tostring' 2> /dev/null || true)
+          case "$setup" in
+            true) setup_line="not done. Open $URL and follow the page (docs/self-hosting.md, First-run setup)." ;;
+            false) setup_line="done" ;;
+            *) setup_line="unknown" ;;
+          esac
           {
             echo "## Development deploy"
             echo
@@ -141,4 +148,5 @@ jobs:
             echo "- Worker version: \`${VERSION:-unknown}\`"
             echo "- Host: $URL"
             echo "- Smoke check: $SMOKE"
+            echo "- First-run setup: $setup_line"
           } >> "$GITHUB_STEP_SUMMARY"

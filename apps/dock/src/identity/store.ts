@@ -87,6 +87,11 @@ export function scopeCeiling(kind: PrincipalKind): readonly Scope[] {
 	return kind === "agent" ? AGENT_SCOPES : ALL_SCOPES;
 }
 
+/** True while the directory has no principal: first-run setup has not run. */
+export async function directoryIsEmpty(db: D1Database): Promise<boolean> {
+	return (await db.prepare("SELECT 1 FROM principals LIMIT 1").first()) === null;
+}
+
 export async function getPrincipal(db: D1Database, id: string): Promise<PrincipalRecord | null> {
 	const row = await db.prepare(`${PRINCIPAL_SELECT} WHERE p.id = ?`).bind(id).first<PrincipalRow>();
 	return row ? toPrincipal(row) : null;

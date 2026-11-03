@@ -151,22 +151,29 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
    `mail/raw/<principal>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
    change the var: the mailbox ignores results from any other server.
-5. First-run setup (once):
-   1. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
-      Secrets**, and add the secret `SETUP_TOKEN` with a long random value.
-   2. Create the owner:
+5. First-run setup (once). Until setup runs, the dock host shows a setup page, and the deploy job
+   summary shows "First-run setup: not done".
+   1. Make a random token with at least 32 characters, for example with `openssl rand -hex 32`. A
+      shorter token keeps setup off.
+   2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
+      Secrets**, and add the secret `SETUP_TOKEN` with that token.
+   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, your
+      name and your address, then select **Create the owner**.
+   4. The page signs you in, and shows the first API key of the owner once. Copy the key. Until
+      passkeys exist, you sign in on a different browser with it.
+   5. Delete the `SETUP_TOKEN` secret.
+   6. Create people and agents on the **Admin** page.
 
-      ```sh
-      curl -X POST "https://<dock-host>/auth/setup" \
-        -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-        -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
-      ```
+   `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
+   and gives no session:
 
-      The response holds the owner's first API key (`api_key.secret`). It is shown only once. A
-      second call gets `409`.
-   3. Delete the `SETUP_TOKEN` secret.
-   4. Open `https://<dock-host>/`, and sign in with the key. Create people and agents on the
-      **Admin** page.
+   ```sh
+   curl -X POST "https://<dock-host>/auth/setup" \
+     -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
+     -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
+   ```
+
+   After setup, the setup page does not show again, and a second setup gets `409`.
 
 Email Service is in beta, and its terms and quotas are for transactional mail. The
 [Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person

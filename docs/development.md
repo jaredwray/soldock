@@ -12,22 +12,25 @@ binding.
 pnpm install
 pnpm build                                   # the SPA, into apps/web/dist
 pnpm --filter @soldock/dock migrate:local    # the D1 migrations, into the local database
-pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token   # http://localhost:8787
+pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
 ```
 
 Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.dev.vars`, and
-`pnpm types:check` then fails.
+`pnpm types:check` then fails. The token must have at least 32 characters, or setup stays off.
 
-Create the owner. The production config uses `MAIL_DOMAINS=jaredwray.com`, so use an address on that
-domain locally:
+Open http://localhost:8787. The setup page shows, because the local directory has no owner. Enter
+the token and create the owner. The production config uses `MAIL_DOMAINS=jaredwray.com`, so the
+owner address is on that domain locally. The page signs you in and shows the first API key once.
+
+To create the owner without a browser:
 
 ```sh
 curl -X POST http://localhost:8787/auth/setup \
-  -H "authorization: Bearer local-setup-token" -H "content-type: application/json" \
+  -H "authorization: Bearer local-setup-token-0123456789abcdef" -H "content-type: application/json" \
   -d '{"display_name":"Local Owner","address":"owner@jaredwray.com"}'
 ```
 
-Open http://localhost:8787 and sign in with `api_key.secret` from the response.
+Then open http://localhost:8787 and sign in with `api_key.secret` from the response.
 
 For the SPA with hot reload, run `pnpm --filter @soldock/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.

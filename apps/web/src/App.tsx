@@ -2,17 +2,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { endSession } from "./features/auth/auth.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext, type Whoami } from "./features/auth/session.tsx";
+import { SetupPage } from "./features/setup/SetupPage.tsx";
+import { getSetupStatus, type SetupNeeded } from "./features/setup/setup.ts";
 import { api, errorMessage, isUnauthenticated, onUnauthenticated } from "./lib/api.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
 
 type SessionState =
 	| { status: "loading" }
+	| { status: "setup"; setup: SetupNeeded }
 	| { status: "signed-out"; expired: boolean }
 	| { status: "error"; message: string }
 	| { status: "signed-in"; whoami: Whoami };
 
-/** Boot: `account.whoami` decides if the app or the sign-in page shows. */
+/**
+ * Boot: `account.whoami` decides if the app shows. Without a session, `GET /auth/setup` decides
+ * between first-run setup (no owner yet) and the sign-in page.
+ */
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 
@@ -21,8 +27,13 @@ export function App() {
 			const whoami = await api.call("account.whoami");
 			setState({ status: "signed-in", whoami });
 		} catch (error) {
-			if (isUnauthenticated(error)) setState({ status: "signed-out", expired: false });
-			else setState({ status: "error", message: errorMessage(error) });
+			if (!isUnauthenticated(error)) return setState({ status: "error", message: errorMessage(error) });
+			try {
+				const setup = await getSetupStatus();
+				setState(setup.setup_needed ? { status: "setup", setup } : { status: "signed-out", expired: false });
+			} catch (setupError) {
+				setState({ status: "error", message: errorMessage(setupError) });
+			}
 		}
 	}, []);
 
@@ -71,6 +82,8 @@ export function App() {
 						</button>
 					</main>
 				);
+			case "setup":
+				return <SetupPage status={state.setup} onRecheck={load} onDone={() => void load()} />;
 			case "signed-out":
 				return <SignInPage expired={state.expired} onSignedIn={() => void load()} />;
 			case "signed-in":

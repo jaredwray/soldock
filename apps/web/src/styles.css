@@ -2230,3 +2230,46 @@ h3.card-title {
 		font-size: 22px;
 	}
 }
+
+/* First-run setup */
+
+.setup-steps {
+	display: grid;
+	gap: 8px;
+	margin: 16px 0 20px;
+	padding-left: 20px;
+}
+
+.setup-form {
+	display: grid;
+	gap: 16px;
+}
+
+.setup-intro {
+	margin: 0;
+}
+
+.setup-form .form-error {
+	margin: 0;
+}
+
+.address-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.address-row .input {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.address-at {
+	color: var(--text-muted);
+}
+
+.address-row .address-domain {
+	flex: 0 1 auto;
+	width: auto;
+	overflow-wrap: anywhere;
+}

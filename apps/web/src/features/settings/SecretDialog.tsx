@@ -1,5 +1,5 @@
 import type { CreatedApiKey } from "@soldock/contracts";
-import { useId, useRef, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 
@@ -8,10 +8,13 @@ export function SecretDialog({
 	apiKey,
 	title,
 	onClose,
+	children,
 }: {
 	apiKey: CreatedApiKey;
 	title?: string;
 	onClose: () => void;
+	/** More text under the key, for example what to do next. */
+	children?: ReactNode;
 }) {
 	const [copied, setCopied] = useState<"no" | "yes" | "failed">("no");
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -61,6 +64,7 @@ export function SecretDialog({
 					{copied === "failed" && "Copy did not work. The key is selected: press Ctrl+C or Cmd+C."}
 				</p>
 				<p className="field-hint">Scopes: {apiKey.scopes.join(", ")}</p>
+				{children}
 			</div>
 			<div className="dialog-actions">
 				<button type="button" className="button" onClick={onClose}>
