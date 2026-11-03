@@ -4,9 +4,9 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Server-side Sheets operations: range read/write, structural edits, server-side recalculation, XLSX/CSV/PDF conversion (models in `packages/sheets-model`). |
+| **Purpose** | Server-side Sheets operations: range read/write, structural edits, server-side recalculation, XLSX/CSV/PDF conversion. |
 | **Owns** | No own store (content lives in `DocumentDO`). |
-| **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/sheets-model`. |
+| **Depends on** | `platform`, `identity`, `collab`, `drive`. |
 | **Operations** | `sheets.*` |
 | **Data inventory** | None of its own (content in `DocumentDO`). XLSX/CSV in Takeout. |
 

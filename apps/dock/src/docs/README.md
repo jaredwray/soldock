@@ -4,9 +4,9 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Server-side Docs operations: read/edit/create via the collab harness, Markdown/DOCX/HTML/PDF conversion (models in `packages/docs-model`), text extraction for search. |
+| **Purpose** | Server-side Docs operations: read/edit/create via the collab harness, Markdown/DOCX/HTML/PDF conversion, text extraction for search. |
 | **Owns** | No own store (content lives in `DocumentDO`). |
-| **Depends on** | `platform`, `identity`, `collab`, `drive`; `packages/docs-model`. |
+| **Depends on** | `platform`, `identity`, `collab`, `drive`. |
 | **Operations** | `docs.*` |
 | **Data inventory** | None of its own (content in `DocumentDO`). DOCX/Markdown in Takeout. |
 
