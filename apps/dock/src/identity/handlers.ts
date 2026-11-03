@@ -3,6 +3,7 @@ import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import {
+	assertPrimaryAddress,
 	createApiKey,
 	createPrincipal,
 	domainOf,
@@ -98,9 +99,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		if (!mailDomains(call.env).has(domainOf(input.address))) {
 			throw new OperationError("invalid", `The address must be on a mail domain: ${call.env.MAIL_DOMAINS}.`);
 		}
-		if (input.address.slice(0, input.address.lastIndexOf("@")).includes("+")) {
-			throw new OperationError("invalid", "A primary address cannot contain +. Mail to user+tag reaches user.");
-		}
+		assertPrimaryAddress(input.address);
 		let sponsorId: string | null = null;
 		if (input.kind === "agent") {
 			if (input.org_role) throw new OperationError("invalid", "An agent has no organization role.");

@@ -69,6 +69,13 @@ export function normalizeAddress(address: string): string {
 	return `${plus > 0 ? local.slice(0, plus) : local}${lower.slice(at)}`;
 }
 
+/** A primary address cannot hold a `+tag`, because mail to `user+tag@` reaches `user@`. */
+export function assertPrimaryAddress(address: string): void {
+	if (address.slice(0, address.lastIndexOf("@")).includes("+")) {
+		throw new OperationError("invalid", "A primary address cannot contain +. Mail to user+tag reaches user.");
+	}
+}
+
 /** The mail domains of the deployment, from the `MAIL_DOMAINS` var (comma-separated). */
 export function mailDomains(env: Pick<Env, "MAIL_DOMAINS">): Set<string> {
 	return new Set(

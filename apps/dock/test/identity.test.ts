@@ -22,15 +22,15 @@ function setup(token: string, body: unknown, origin?: string) {
 	});
 }
 
-/** Sends a request to the Worker with this SETUP_TOKEN in place of the one in vitest.config.ts. */
-function withSetupToken(
-	token: string | undefined,
+/** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
+function withEnv(
+	overrides: { SETUP_TOKEN?: string | undefined; DIRECTORY?: D1Database },
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
 ) {
 	return (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
 		new Request(`${ORIGIN}${path}`, init),
-		{ ...env, SETUP_TOKEN: token } as unknown as Env,
+		{ ...env, ...overrides } as unknown as Env,
 		createExecutionContext(),
 	);
 }
@@ -72,13 +72,13 @@ describe("first-run setup", () => {
 			[undefined, "missing"],
 			["a".repeat(31), "too_short"],
 		] as const) {
-			const status = await withSetupToken(token, "/auth/setup");
+			const status = await withEnv({ SETUP_TOKEN: token }, "/auth/setup");
 			expect(await status.json()).toEqual({
 				setup_needed: true,
 				setup_token: state,
 				mail_domains: ["dock.test", "second.test"],
 			});
-			const res = await withSetupToken(token, "/auth/setup", {
+			const res = await withEnv({ SETUP_TOKEN: token }, "/auth/setup", {
 				method: "POST",
 				headers: { authorization: `Bearer ${token ?? ""}`, "content-type": "application/json" },
 				body: JSON.stringify(OWNER),
@@ -97,6 +97,35 @@ describe("first-run setup", () => {
 		});
 		await setupOwner();
 		expect(await (await request("/auth/setup")).json()).toEqual({ setup_needed: false });
+	});
+
+	// The owner and the key exist after the first D1 batch, so setup cannot run again. If the session
+	// batch then fails, the response must still hold the key, or nobody can sign in.
+	it("returns the key without a session when the session after setup fails", async () => {
+		let batches = 0;
+		const failing = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "batch") {
+					return (statements: D1PreparedStatement[]) => {
+						batches += 1;
+						if (batches === 2) return Promise.reject(new Error("D1_ERROR: storage overloaded"));
+						return target.batch(statements);
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const res = await withEnv({ DIRECTORY: failing }, "/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify(OWNER),
+		});
+		expect(batches).toBe(2);
+		expect(res.status).toBe(201);
+		expect(res.headers.get("set-cookie")).toBeNull();
+		const { api_key } = (await res.json()) as { api_key: { secret: string } };
+		expect(await api(api_key.secret)("account.whoami")).toMatchObject({ principal: { org_role: "owner" } });
 	});
 
 	it("signs the owner in when setup runs from the web app, and refuses another origin", async () => {

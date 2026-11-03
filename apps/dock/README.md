@@ -50,7 +50,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal |
 | `MAIL_DOMAINS` | Var | The mail domains, comma-separated |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
-| `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup`. Delete it after setup |
+| `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup` while it has at least 32 characters. `GET /auth/setup` reports its state, never its value. Delete it after setup |
 
 `wrangler.jsonc` has no resource ids. `wrangler deploy` provisions the D1 database, the R2 bucket
 and the queues by name on the first deploy, and finds them by name after that.

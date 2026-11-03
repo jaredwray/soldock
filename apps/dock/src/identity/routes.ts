@@ -5,6 +5,7 @@ import { audit, log, OperationError, type RequestIdVariables, readBodyText, same
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
 import {
+	assertPrimaryAddress,
 	createPrincipal,
 	createSession,
 	deleteSession,
@@ -84,9 +85,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		if (!mailDomains(c.env).has(domainOf(address))) {
 			throw new OperationError("invalid", `The address must be on a mail domain: ${c.env.MAIL_DOMAINS}.`);
 		}
-		if (address.slice(0, address.lastIndexOf("@")).includes("+")) {
-			throw new OperationError("invalid", "A primary address cannot contain +. Mail to user+tag reaches user.");
-		}
+		assertPrimaryAddress(address);
 		const created = await createPrincipal(
 			c.env.DIRECTORY,
 			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null },
@@ -105,10 +104,20 @@ export function mountAuthRoutes(app: AuthApp): void {
 		});
 		const headers: Record<string, string> = { "cache-control": "no-store" };
 		if (fromBrowser) {
-			// The session gets the scopes of the first key, like a sign-in with that key.
-			const session = await createSession(c.env.DIRECTORY, created.principal.id, created.key);
-			headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
-			log("info", "session created", { principalId: created.principal.id, requestId: c.var.requestId });
+			// The owner and the key exist now, so setup cannot run again. A failed session must not lose
+			// the only key: the response still holds the key, without a session, and the owner signs in
+			// with the key. The session gets the scopes of the first key, like a sign-in with that key.
+			try {
+				const session = await createSession(c.env.DIRECTORY, created.principal.id, created.key);
+				headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
+				log("info", "session created", { principalId: created.principal.id, requestId: c.var.requestId });
+			} catch (error) {
+				log("error", "setup session failed; the key is returned without a session", {
+					principalId: created.principal.id,
+					requestId: c.var.requestId,
+					err: error instanceof Error ? (error.stack ?? error.message) : String(error),
+				});
+			}
 		}
 		const result: SetupResult = {
 			principal: toPrincipalOutput(created.principal),
