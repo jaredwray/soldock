@@ -42,8 +42,8 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 			{created && (
 				<SecretDialog apiKey={created.api_key} title="Copy your API key" onClose={onDone}>
 					<p className="field-hint">
-						You are signed in on this browser. Use this key to sign in on a different browser. You can make more keys in
-						Settings.
+						You are signed in on this browser. Use this key with the API and MCP. To sign in on a different browser,
+						enter your address, and we send a code to your sign-in email. You can make more keys in Settings.
 					</p>
 					<p className="notice">
 						Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. Setup cannot run again, so the
@@ -110,10 +110,19 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 	const [name, setName] = useState("");
 	const [localPart, setLocalPart] = useState("");
 	const [domain, setDomain] = useState(mailDomains[0] ?? "");
+	const [signInEmail, setSignInEmail] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<{ message: string; alreadyRan: boolean } | null>(null);
 	const tokenRef = useRef<HTMLInputElement>(null);
-	const ids = { token: useId(), name: useId(), address: useId(), domain: useId(), hint: useId() };
+	const ids = {
+		token: useId(),
+		name: useId(),
+		address: useId(),
+		domain: useId(),
+		hint: useId(),
+		signInEmail: useId(),
+		signInHint: useId(),
+	};
 
 	useEffect(() => {
 		tokenRef.current?.focus();
@@ -132,10 +141,24 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 		}
 		if (localPart.includes("+")) return invalid("Your address cannot contain +. Mail to user+tag reaches user.");
 		if (!EmailAddress.safeParse(address).success) return invalid("Enter the part of your address before the @.");
+		if (!EmailAddress.safeParse(signInEmail).success) {
+			return invalid("Enter your sign-in email, such as ada@example.com.");
+		}
+		const signInDomain = signInEmail
+			.trim()
+			.slice(signInEmail.trim().lastIndexOf("@") + 1)
+			.toLowerCase();
+		if (mailDomains.includes(signInDomain)) {
+			return invalid("Your sign-in email must be outside Soldock, so that you can read a code before you sign in.");
+		}
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await runSetup(token.trim(), { display_name: name.trim(), address });
+			const result = await runSetup(token.trim(), {
+				display_name: name.trim(),
+				address,
+				sign_in_email: signInEmail.trim(),
+			});
 			setToken("");
 			onCreated(result);
 		} catch (caught) {
@@ -226,6 +249,26 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 				</div>
 				<p id={ids.hint} className="field-hint">
 					Mail to this address arrives in your Soldock inbox.
+				</p>
+			</div>
+			<div className="field">
+				<label htmlFor={ids.signInEmail} className="field-label">
+					Sign-in email
+				</label>
+				<input
+					id={ids.signInEmail}
+					className="input"
+					type="email"
+					autoComplete="email"
+					spellCheck={false}
+					placeholder="ada@example.com"
+					value={signInEmail}
+					onChange={(event) => setSignInEmail(event.target.value)}
+					aria-describedby={ids.signInHint}
+					disabled={busy}
+				/>
+				<p id={ids.signInHint} className="field-hint">
+					An address outside Soldock. When you sign in, we send a one-time code to it.
 				</p>
 			</div>
 			<div aria-live="assertive">

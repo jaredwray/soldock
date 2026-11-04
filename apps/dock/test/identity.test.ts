@@ -1,9 +1,25 @@
 import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ApiError } from "@soldock/contracts";
+import { ALL_SCOPES, ApiError } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
-import { api, callTool, createActor, mcp, ORIGIN, request, SETUP_TOKEN, seedOrg, setupOwner } from "./helpers.ts";
+import {
+	api,
+	callTool,
+	codeIn,
+	cookieOf,
+	createActor,
+	mcp,
+	ORIGIN,
+	OWNER_SIGN_IN_EMAIL,
+	request,
+	requestCode,
+	SETUP_TOKEN,
+	seedOrg,
+	setupOwner,
+	signIn,
+	submitCode,
+} from "./helpers.ts";
 
 async function denied(promise: Promise<unknown>): Promise<string> {
 	const error = await promise.then(
@@ -35,25 +51,33 @@ function withEnv(
 	);
 }
 
-const OWNER = { display_name: "Olive Owner", address: "owner@dock.test" };
+const OWNER = { display_name: "Olive Owner", address: "owner@dock.test", sign_in_email: OWNER_SIGN_IN_EMAIL };
 
-async function signIn(key: string, origin: string | null = ORIGIN) {
-	return request("/auth/session", {
-		method: "POST",
-		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
-		body: JSON.stringify({ api_key: key }),
-	});
+const SESSION_COOKIE =
+	/^__Host-soldock_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/;
+
+/** A different code of the same length. */
+function wrong(code: string): string {
+	return String((Number(code) + 1) % 10 ** code.length).padStart(code.length, "0");
 }
 
-function cookieOf(res: Response): string {
-	return (res.headers.get("set-cookie") ?? "").split(";")[0] as string;
+/** Changes the sign-in email with a session cookie, as the web app does. */
+function setSignInEmailWithCookie(cookie: string, body: Record<string, string>) {
+	return request("/api/v1/account/sign-in-email", {
+		method: "POST",
+		headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
 }
 
 describe("first-run setup", () => {
 	it("creates the owner once, only with the setup token, and only on a mail domain", async () => {
 		expect((await setup("wrong", OWNER)).status).toBe(401);
-		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x@elsewhere.example" })).status).toBe(400);
-		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x+tag@dock.test" })).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x@elsewhere.example" })).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x+tag@dock.test" })).status).toBe(400);
+		// The owner needs a sign-in email, outside the mail domains: a code in a Soldock mailbox cannot be read.
+		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x@dock.test" })).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@second.test" })).status).toBe(400);
 		const res = await setup(SETUP_TOKEN, OWNER);
 		expect(res.status).toBe(201);
 		// Without an Origin header (curl), setup makes no session.
@@ -63,7 +87,7 @@ describe("first-run setup", () => {
 			principal: { kind: "human", org_role: "owner", address: "owner@dock.test" },
 			credential: "api_key",
 		});
-		const again = await setup(SETUP_TOKEN, { display_name: "Mallory", address: "mallory@dock.test" });
+		const again = await setup(SETUP_TOKEN, { ...OWNER, display_name: "Mallory", address: "mallory@dock.test" });
 		expect(again.status).toBe(409);
 	});
 
@@ -135,9 +159,7 @@ describe("first-run setup", () => {
 
 		const res = await setup(SETUP_TOKEN, OWNER, ORIGIN);
 		expect(res.status).toBe(201);
-		expect(res.headers.get("set-cookie")).toMatch(
-			/^__Host-soldock_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/,
-		);
+		expect(res.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
 		const { principal } = (await res.json()) as { principal: { id: string } };
 		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(res) } });
 		expect(await whoami.json()).toMatchObject({
@@ -178,48 +200,98 @@ describe("credentials", () => {
 	});
 });
 
-describe("browser sessions", () => {
-	it("signs a human in with a key, and the cookie is HttpOnly, Secure, SameSite=Lax and host-only", async () => {
-		const owner = await setupOwner();
-		const res = await signIn(owner.key);
-		expect(res.status).toBe(204);
-		const cookie = res.headers.get("set-cookie") ?? "";
-		expect(cookie).toMatch(
-			/^__Host-soldock_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/,
+describe("sign-in with a code", () => {
+	it("sends a code to the sign-in email, and the code signs the person in once, with every human scope", async () => {
+		await setupOwner();
+		const { res, sent } = await requestCode(OWNER_SIGN_IN_EMAIL);
+		expect(res.status).toBe(202);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]).toMatchObject({
+			from: { name: "Soldock", email: "no-reply@dock.test" },
+			to: OWNER_SIGN_IN_EMAIL,
+			subject: "Your Soldock sign-in code",
+		});
+		expect(sent[0]?.text).toContain(`sign in as owner@dock.test at ${ORIGIN}`);
+		const code = codeIn(sent[0]);
+		const signedIn = await submitCode(OWNER_SIGN_IN_EMAIL, code);
+		expect(signedIn.status).toBe(204);
+		expect(signedIn.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
+		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(signedIn) } });
+		const body = (await whoami.json()) as { credential: string; scopes: string[]; sign_in_email: string };
+		expect(body).toMatchObject({ credential: "session", sign_in_email: OWNER_SIGN_IN_EMAIL });
+		expect(body.scopes.sort()).toEqual([...ALL_SCOPES].sort());
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, code)).status).toBe(401);
+	});
+
+	// People type their Soldock address as often as their sign-in email. The code never goes to the mailbox.
+	it("accepts the Soldock address or the sign-in email in any case, and ignores spaces and hyphens in the code", async () => {
+		await setupOwner();
+		const { sent } = await requestCode("Owner@Dock.TEST");
+		expect(sent.map((mail) => mail.to)).toEqual([OWNER_SIGN_IN_EMAIL]);
+		const code = codeIn(sent[0]);
+		expect((await submitCode("OLIVE@home.example", ` ${code.slice(0, 4)}-${code.slice(4)} `)).status).toBe(204);
+	});
+
+	// The answer must not tell an attacker which addresses have an account.
+	it("answers each address the same, and sends nothing for an unknown address, an agent or another origin", async () => {
+		await seedOrg();
+		for (const email of ["nobody@dock.test", "nobody@home.example", "bot@dock.test"]) {
+			const { res, sent } = await requestCode(email);
+			expect(res.status).toBe(202);
+			expect(sent).toEqual([]);
+			expect((await submitCode(email, "12345678")).status).toBe(401);
+		}
+		for (const origin of ["https://evil.example", null]) {
+			const { res, sent } = await requestCode(OWNER_SIGN_IN_EMAIL, origin);
+			expect(res.status).toBe(403);
+			expect(sent).toEqual([]);
+			expect((await submitCode(OWNER_SIGN_IN_EMAIL, "12345678", origin)).status).toBe(403);
+		}
+		expect((await requestCode("not an address")).res.status).toBe(400);
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, "1234")).status).toBe(400);
+	});
+
+	// An 8-digit code is safe only while the number of guesses stays small.
+	it("allows five guesses on one code, after which the correct code also fails", async () => {
+		await setupOwner();
+		const code = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
+		const guesses = await Promise.all(
+			Array.from({ length: 5 }, () => submitCode(OWNER_SIGN_IN_EMAIL, wrong(code)).then((res) => res.status)),
 		);
-		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(res) } });
-		expect(await whoami.json()).toMatchObject({ credential: "session", principal: { id: owner.id } });
+		expect(guesses).toEqual([401, 401, 401, 401, 401]);
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, code)).status).toBe(401);
 	});
 
-	// A narrow key must not become a full session: that would let a read-only key mint a full key.
-	it("gives a session the scopes of the key that signed in, and no more", async () => {
+	it("makes a new code replace the older ones, and refuses an expired code", async () => {
+		await setupOwner();
+		const first = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
+		const second = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, first)).status).toBe(401);
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, second)).status).toBe(204);
+		const third = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
+		await env.DIRECTORY.prepare("UPDATE sign_in_codes SET expires_at = ?")
+			.bind(new Date(Date.now() - 1).toISOString())
+			.run();
+		expect((await submitCode(OWNER_SIGN_IN_EMAIL, third)).status).toBe(401);
+	});
+
+	// Somebody who knows the address must not fill the person's inbox, or get unlimited guesses.
+	it("sends at most five codes an hour to one person, also after a change of the sign-in email", async () => {
 		const owner = await setupOwner();
-		const { api_key } = await owner.call("account.create_api_key", {
-			label: "reader",
-			scopes: ["account.read", "mail.read"],
-		});
-		const cookie = cookieOf(await signIn(api_key.secret));
-		const whoami = await request("/api/v1/account", { headers: { cookie } });
-		expect(((await whoami.json()) as { scopes: string[] }).scopes.sort()).toEqual(["account.read", "mail.read"]);
-		const mint = await request("/api/v1/account/api-keys", {
-			method: "POST",
-			headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
-			body: JSON.stringify({ label: "full", scopes: ["mail.send"] }),
-		});
-		expect(mint.status).toBe(403);
+		const sent = await Promise.all(
+			Array.from({ length: 6 }, () => requestCode(OWNER_SIGN_IN_EMAIL).then((result) => result.sent.length)),
+		);
+		expect(sent.reduce((sum, n) => sum + n, 0)).toBe(5);
+		// The change stops the old codes, but it must not give a new hour of codes to the new inbox.
+		await owner.call("account.set_sign_in_email", { sign_in_email: "olive@new.example" });
+		expect((await requestCode("owner@dock.test")).sent).toEqual([]);
+		await env.DIRECTORY.prepare("UPDATE sign_in_codes SET created_at = ?")
+			.bind(new Date(Date.now() - 61 * 60 * 1000).toISOString())
+			.run();
+		expect((await requestCode("owner@dock.test")).sent.map((mail) => mail.to)).toEqual(["olive@new.example"]);
 	});
 
-	// Revocation is the way to lock out a leaked key, so it must also end what the key created.
-	it("ends the sessions of a key when the key is revoked", async () => {
-		const owner = await setupOwner();
-		const { api_key } = await owner.call("account.create_api_key", { label: "laptop", scopes: ["account.read"] });
-		const cookie = cookieOf(await signIn(api_key.secret));
-		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
-		await owner.call("account.revoke_api_key", { key_id: api_key.id });
-		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
-	});
-
-	it("refuses a large sign-in body while it streams, before any credential check", async () => {
+	it("refuses a large sign-in body while it streams, before any lookup", async () => {
 		let pulled = 0;
 		const body = new ReadableStream<Uint8Array>({
 			pull(controller) {
@@ -228,7 +300,7 @@ describe("browser sessions", () => {
 				else controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20));
 			},
 		});
-		const res = await request("/auth/session", {
+		const res = await request("/auth/code", {
 			method: "POST",
 			headers: { origin: ORIGIN, "content-type": "application/json" },
 			body,
@@ -238,18 +310,10 @@ describe("browser sessions", () => {
 		expect(pulled).toBeLessThan(5);
 	});
 
-	it("refuses a sign-in from another origin, with a bad key, or with an agent key", async () => {
-		const { owner, bot } = await seedOrg();
-		expect((await signIn(owner.key, "https://evil.example")).status).toBe(403);
-		expect((await signIn(owner.key, null)).status).toBe(403);
-		expect((await signIn("sdk_wrong")).status).toBe(401);
-		expect((await signIn(bot.key)).status).toBe(403);
-	});
-
 	// SameSite=Lax still sends the cookie on some cross-site requests, so changes also need the Origin.
 	it("refuses a change made with the cookie unless it comes from this origin", async () => {
-		const owner = await setupOwner();
-		const cookie = cookieOf(await signIn(owner.key));
+		await setupOwner();
+		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
 		const create = (headers: Record<string, string>) =>
 			request("/api/v1/mail/labels", {
 				method: "POST",
@@ -262,8 +326,8 @@ describe("browser sessions", () => {
 	});
 
 	it("ends the session on sign-out", async () => {
-		const owner = await setupOwner();
-		const cookie = cookieOf(await signIn(owner.key));
+		await setupOwner();
+		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
 		const out = await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } });
 		expect(out.status).toBe(204);
 		expect(out.headers.get("set-cookie")).toMatch(/Max-Age=0/);
@@ -271,10 +335,105 @@ describe("browser sessions", () => {
 	});
 });
 
+describe("sign-in email", () => {
+	// A new email is the way to lock out somebody who got into the old one, so it ends the other sessions.
+	it("lets a person change their own sign-in email with a full credential, and ends their other sessions", async () => {
+		const owner = await setupOwner();
+		const here = await signIn(OWNER_SIGN_IN_EMAIL);
+		const elsewhere = await signIn(OWNER_SIGN_IN_EMAIL);
+		const pending = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
+		const res = await setSignInEmailWithCookie(here, { sign_in_email: "Olive@New.example" });
+		expect(await res.json()).toEqual({ principal_id: owner.id, sign_in_email: "olive@new.example" });
+		// A code that went to the old email must not work after the change, with any address.
+		expect((await submitCode("owner@dock.test", pending)).status).toBe(401);
+		expect((await request("/api/v1/account", { headers: { cookie: here } })).status).toBe(200);
+		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
+		expect((await requestCode(OWNER_SIGN_IN_EMAIL)).sent).toEqual([]);
+		expect((await requestCode("owner@dock.test")).sent.map((mail) => mail.to)).toEqual(["olive@new.example"]);
+		expect((await setSignInEmailWithCookie(here, { sign_in_email: "olive@dock.test" })).status).toBe(400);
+	});
+
+	// A sign-in gives every human scope, so a narrow key must not choose where the codes go.
+	it("refuses a credential that does not hold every human scope", async () => {
+		const owner = await setupOwner();
+		const { api_key } = await owner.call("account.create_api_key", {
+			label: "keys only",
+			scopes: ["account.keys", "directory.write"],
+		});
+		const narrow = api(api_key.secret);
+		expect(await denied(narrow("account.set_sign_in_email", { sign_in_email: "mallory@evil.example" }))).toBe(
+			"forbidden",
+		);
+		expect(
+			await denied(
+				narrow("directory.create_principal", {
+					kind: "human",
+					display_name: "Mallory",
+					address: "mallory@dock.test",
+					sign_in_email: "mallory@evil.example",
+				}),
+			),
+		).toBe("forbidden");
+		expect((await requestCode("mallory@evil.example")).sent).toEqual([]);
+	});
+
+	it("lets admins change the sign-in email of others except the owner, and refuses agents", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+			sign_in_email: "ann@home.example",
+		});
+		const adaSession = await signIn("ada@home.example");
+		await admin.call("account.set_sign_in_email", { principal_id: ada.id, sign_in_email: "ada@new.example" });
+		expect((await request("/api/v1/account", { headers: { cookie: adaSession } })).status).toBe(401);
+		expect(
+			await denied(
+				admin.call("account.set_sign_in_email", { principal_id: owner.id, sign_in_email: "x@evil.example" }),
+			),
+		).toBe("forbidden");
+		expect(
+			await denied(ada.call("account.set_sign_in_email", { principal_id: admin.id, sign_in_email: "x@evil.example" })),
+		).toBe("forbidden");
+		expect(
+			await denied(
+				admin.call("account.set_sign_in_email", { principal_id: ada.id, sign_in_email: OWNER_SIGN_IN_EMAIL }),
+			),
+		).toBe("conflict");
+		expect(
+			await denied(ada.call("account.set_sign_in_email", { principal_id: bot.id, sign_in_email: "bot@home.example" })),
+		).toBe("invalid");
+		// MCP gives the same operation, with the same rules.
+		const tool = await callTool(admin.key, "account_set_sign_in_email", {
+			principal_id: ada.id,
+			sign_in_email: "ada@third.example",
+		});
+		expect(tool.structuredContent).toEqual({ principal_id: ada.id, sign_in_email: "ada@third.example" });
+		expect(
+			(
+				await callTool(admin.key, "account_set_sign_in_email", {
+					principal_id: owner.id,
+					sign_in_email: "x@evil.example",
+				})
+			).isError,
+		).toBe(true);
+		expect(await denied(bot.call("account.set_sign_in_email", { sign_in_email: "bot@home.example" }))).toBe(
+			"forbidden",
+		);
+	});
+});
+
 describe("directory authorization", () => {
 	it("lets only owners and admins create principals", async () => {
 		const { owner, ada, bot } = await seedOrg();
-		const input = { kind: "human", display_name: "Eve", address: "eve@dock.test" } as const;
+		const input = {
+			kind: "human",
+			display_name: "Eve",
+			address: "eve@dock.test",
+			sign_in_email: "eve@home.example",
+		} as const;
 		expect(await denied(ada.call("directory.create_principal", input))).toBe("forbidden");
 		expect(await denied(bot.call("directory.create_principal", input))).toBe("forbidden");
 		const admin = await createActor(owner, {
@@ -282,6 +441,7 @@ describe("directory authorization", () => {
 			display_name: "Ann Admin",
 			address: "ann@dock.test",
 			org_role: "admin",
+			sign_in_email: "ann@home.example",
 		});
 		await admin.call("directory.create_principal", input);
 	});
@@ -299,11 +459,32 @@ describe("directory authorization", () => {
 			sponsor_id: owner.id,
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
-		const create = (address: string) =>
-			owner.call("directory.create_principal", { kind: "human", display_name: "X", address });
+		const create = (address: string, signInEmail: string | null = "x@home.example") =>
+			owner.call("directory.create_principal", {
+				kind: "human",
+				display_name: "X",
+				address,
+				...(signInEmail ? { sign_in_email: signInEmail } : {}),
+			});
 		expect(await denied(create("x@not-ours.example"))).toBe("invalid");
 		expect(await denied(create("x+tag@dock.test"))).toBe("invalid");
 		expect(await denied(create("HELPER@dock.test"))).toBe("conflict");
+		// The sender of sign-in codes is reserved, so a reply to a code reaches no mailbox.
+		expect(await denied(create("No-Reply@dock.test"))).toBe("invalid");
+		// A person needs a sign-in email outside the mail domains, and only one person can have it.
+		expect(await denied(create("x@dock.test", null))).toBe("invalid");
+		expect(await denied(create("x@dock.test", "x@second.test"))).toBe("invalid");
+		expect(await denied(create("x@dock.test", "OLIVE@home.example"))).toBe("conflict");
+		expect(
+			await denied(
+				owner.call("directory.create_principal", {
+					kind: "agent",
+					display_name: "Z",
+					address: "z@dock.test",
+					sign_in_email: "z@home.example",
+				}),
+			),
+		).toBe("invalid");
 		expect(
 			await denied(
 				owner.call("directory.create_principal", {
@@ -318,7 +499,12 @@ describe("directory authorization", () => {
 
 	it("lets the sponsor and admins change an agent's policy, and never the agent or another member", async () => {
 		const { owner, ada, bot } = await seedOrg();
-		const other = await createActor(owner, { kind: "human", display_name: "Bob", address: "bob@dock.test" });
+		const other = await createActor(owner, {
+			kind: "human",
+			display_name: "Bob",
+			address: "bob@dock.test",
+			sign_in_email: "bob@home.example",
+		});
 		const change = (mode: "any" | "internal-only") => ({ principal_id: bot.id, mode });
 		await ada.call("directory.update_agent_policy", change("any"));
 		await owner.call("directory.update_agent_policy", change("internal-only"));
@@ -336,7 +522,12 @@ describe("directory authorization", () => {
 
 	it("lets the sponsor manage an agent's keys within agent scopes, and nobody else but admins", async () => {
 		const { ada, bot, owner } = await seedOrg();
-		const other = await createActor(owner, { kind: "human", display_name: "Bob", address: "bob@dock.test" });
+		const other = await createActor(owner, {
+			kind: "human",
+			display_name: "Bob",
+			address: "bob@dock.test",
+			sign_in_email: "bob@home.example",
+		});
 		const { api_key } = await ada.call("account.create_api_key", {
 			principal_id: bot.id,
 			label: "reader",
@@ -359,6 +550,7 @@ describe("directory authorization", () => {
 			display_name: "Ann",
 			address: "ann@dock.test",
 			org_role: "admin",
+			sign_in_email: "ann@home.example",
 		});
 		await admin.call("account.list_api_keys", { principal_id: ada.id });
 		expect(await denied(admin.call("account.list_api_keys", { principal_id: owner.id }))).toBe("forbidden");

@@ -85,6 +85,8 @@ export const whoami = defineOperation({
 		principal: Principal,
 		scopes: z.array(z.string()),
 		credential: z.enum(["session", "api_key"]),
+		/** Where a human gets sign-in codes. Null for an agent, and for a human who has none yet. */
+		sign_in_email: z.string().nullable(),
 	}),
 	errors: [],
 });
@@ -108,6 +110,7 @@ export const createPrincipal = defineOperation({
 	summary: "Create a person or an agent, with a mailbox and a first API key",
 	description: [
 		"Owners and admins only. Creates a human or an agent with an address on one of the mail domains of the deployment.",
+		"A human needs a sign-in email outside those domains: sign-in codes go there. An agent has no sign-in email.",
 		"An agent gets a sponsor (the caller by default) and the internal-only outbound policy.",
 		"The result holds a first API key. Its secret is shown only once.",
 	].join(" "),
@@ -115,14 +118,25 @@ export const createPrincipal = defineOperation({
 	scopes: ["directory.write"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
-	input: z.strictObject({
-		kind: z.enum(["human", "agent"]),
-		display_name: DisplayName,
-		address: EmailAddress,
-		org_role: z.enum(["admin", "member"]).optional(),
-		sponsor_id: PrincipalId.optional(),
-		key_scopes: z.array(ScopeName).min(1).optional(),
-	}),
+	input: z
+		.strictObject({
+			kind: z.enum(["human", "agent"]),
+			display_name: DisplayName,
+			address: EmailAddress,
+			org_role: z.enum(["admin", "member"]).optional(),
+			sponsor_id: PrincipalId.optional(),
+			/** Required for a human. An agent has none. */
+			sign_in_email: EmailAddress.optional(),
+			key_scopes: z.array(ScopeName).min(1).optional(),
+		})
+		.refine((input) => input.kind !== "human" || input.sign_in_email !== undefined, {
+			message: "a human needs a sign-in email",
+			path: ["sign_in_email"],
+		})
+		.refine((input) => input.kind !== "agent" || input.sign_in_email === undefined, {
+			message: "an agent has no sign-in email",
+			path: ["sign_in_email"],
+		}),
 	output: z.object({ principal: Principal, api_key: CreatedApiKey }),
 	errors: ["conflict", "not_found"],
 });
@@ -192,11 +206,30 @@ export const revokeApiKey = defineOperation({
 	errors: ["not_found"],
 });
 
+export const setSignInEmail = defineOperation({
+	name: "account.set_sign_in_email",
+	summary: "Change the sign-in email of a person",
+	description: [
+		"Changes where a human gets sign-in codes: yourself by default.",
+		"Owners and admins can change it for anyone except the owner. The address must be outside the mail domains of the deployment.",
+		"The credential must hold every human scope, because a sign-in gives a session with every human scope.",
+		"The change ends the other browser sessions of that person.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/account/sign-in-email" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId.optional(), sign_in_email: EmailAddress }),
+	output: z.object({ principal_id: z.string(), sign_in_email: z.string() }),
+	errors: ["conflict", "not_found"],
+});
+
 export const directoryOperations = {
 	"account.whoami": whoami,
 	"account.list_api_keys": listApiKeys,
 	"account.create_api_key": createApiKey,
 	"account.revoke_api_key": revokeApiKey,
+	"account.set_sign_in_email": setSignInEmail,
 	"directory.list_principals": listPrincipals,
 	"directory.create_principal": createPrincipal,
 	"directory.update_agent_policy": updateAgentPolicy,

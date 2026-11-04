@@ -20,17 +20,21 @@ Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.
 
 Open http://localhost:8787. The setup page shows, because the local directory has no owner. Enter
 the token and create the owner. The production config uses `MAIL_DOMAINS=jaredwray.com`, so the
-owner address is on that domain locally. The page signs you in and shows the first API key once.
+owner address is on that domain locally. The sign-in email must be on a different domain, for
+example `you@home.example`. The page signs you in and shows the first API key once.
 
 To create the owner without a browser:
 
 ```sh
 curl -X POST http://localhost:8787/auth/setup \
   -H "authorization: Bearer local-setup-token-0123456789abcdef" -H "content-type: application/json" \
-  -d '{"display_name":"Local Owner","address":"owner@jaredwray.com"}'
+  -d '{"display_name":"Local Owner","address":"owner@jaredwray.com","sign_in_email":"you@home.example"}'
 ```
 
-Then open http://localhost:8787 and sign in with `api_key.secret` from the response.
+Then open http://localhost:8787 and sign in. Enter `owner@jaredwray.com` or the sign-in email.
+`wrangler dev` does not send the code: it writes the message to a file and prints
+`send_email binding called with MessageBuilder`, with the path of the text after `Text:`. The code
+is in that file.
 
 For the SPA with hot reload, run `pnpm --filter @soldock/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.

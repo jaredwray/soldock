@@ -4,6 +4,7 @@ import {
 	getQueueResult,
 	runDurableObjectAlarm,
 	runInDurableObject,
+	waitOnExecutionContext,
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { createClient, type FetchLike, type InputOf, type OperationName, type OutputOf } from "@soldock/contracts";
@@ -14,11 +15,72 @@ export const ORIGIN = "https://dock.test";
 /** The SETUP_TOKEN binding of vitest.config.ts. */
 export const SETUP_TOKEN = (env as Env).SETUP_TOKEN as string;
 
-const handlers = worker as Required<Pick<ExportedHandler<Env>, "email" | "queue">>;
+const handlers = worker as Required<Pick<ExportedHandler<Env>, "fetch" | "email" | "queue">>;
 
 /** Sends a request through the real Worker entry point. */
 export function request(path: string, init: RequestInit = {}): Promise<Response> {
 	return exports.default.fetch(new Request(`${ORIGIN}${path}`, init));
+}
+
+/**
+ * Sends a request through the real Worker entry point with a fake Email Service binding, and waits
+ * for the work that runs after the response. Email Service is the boundary: the test sees each
+ * message that the Worker hands to it.
+ */
+export async function requestWithEmail(
+	path: string,
+	init: RequestInit = {},
+): Promise<{ res: Response; sent: EmailMessageBuilder[] }> {
+	const sent: EmailMessageBuilder[] = [];
+	const email = {
+		async send(builder: EmailMessageBuilder) {
+			sent.push(builder);
+			return { messageId: `<fake-${sent.length}@email.test>` };
+		},
+	} as unknown as SendEmail;
+	const ctx = createExecutionContext();
+	const incoming = new Request(`${ORIGIN}${path}`, init) as unknown as Request<unknown, IncomingRequestCfProperties>;
+	const res = await handlers.fetch(incoming, { ...env, EMAIL: email } as Env, ctx);
+	await waitOnExecutionContext(ctx);
+	return { res, sent };
+}
+
+/** Asks for a sign-in code for an address, as the web app does. */
+export function requestCode(email: string, origin: string | null = ORIGIN) {
+	return requestWithEmail("/auth/code", {
+		method: "POST",
+		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
+		body: JSON.stringify({ email }),
+	});
+}
+
+/** The code in a sign-in mail. The mail shows it as two groups of four digits on its own line. */
+export function codeIn(mail: EmailMessageBuilder | undefined): string {
+	const match = /^\s+(\d{4}) (\d{4})$/m.exec(mail?.text ?? "");
+	if (!match) throw new Error(`no sign-in code in the mail: ${mail?.text}`);
+	return `${match[1]}${match[2]}`;
+}
+
+/** Sends a sign-in code, as the web app does. */
+export function submitCode(email: string, code: string, origin: string | null = ORIGIN) {
+	return request("/auth/session", {
+		method: "POST",
+		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
+		body: JSON.stringify({ email, code }),
+	});
+}
+
+/** The `name=value` part of the Set-Cookie header of a response. */
+export function cookieOf(res: Response): string {
+	return (res.headers.get("set-cookie") ?? "").split(";")[0] as string;
+}
+
+/** Signs a human in with a code from their sign-in email, and returns the session cookie. */
+export async function signIn(email: string): Promise<string> {
+	const { sent } = await requestCode(email);
+	const res = await submitCode(email, codeIn(sent[0]));
+	if (res.status !== 204) throw new Error(`sign-in failed: ${res.status} ${await res.text()}`);
+	return cookieOf(res);
 }
 
 const workerFetch: FetchLike = async (url, init) => {
@@ -44,12 +106,15 @@ export interface Actor {
 	call: ReturnType<typeof api>;
 }
 
+/** The sign-in email of the owner that setupOwner creates. */
+export const OWNER_SIGN_IN_EMAIL = "olive@home.example";
+
 /** Runs first-run setup and returns the owner. */
 export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 	const res = await request("/auth/setup", {
 		method: "POST",
 		headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json" },
-		body: JSON.stringify({ display_name: "Olive Owner", address }),
+		body: JSON.stringify({ display_name: "Olive Owner", address, sign_in_email: OWNER_SIGN_IN_EMAIL }),
 	});
 	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as { principal: { id: string; address: string }; api_key: { secret: string } };
@@ -79,7 +144,12 @@ export async function createActor(
 /** The owner, a human member and an agent that the member sponsors. */
 export async function seedOrg() {
 	const owner = await setupOwner();
-	const ada = await createActor(owner, { kind: "human", display_name: "Ada Lovelace", address: "ada@dock.test" });
+	const ada = await createActor(owner, {
+		kind: "human",
+		display_name: "Ada Lovelace",
+		address: "ada@dock.test",
+		sign_in_email: "ada@home.example",
+	});
 	const bot = await createActor(owner, {
 		kind: "agent",
 		display_name: "Billing Bot",

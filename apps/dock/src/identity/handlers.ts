@@ -4,6 +4,7 @@ import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import {
 	assertPrimaryAddress,
+	assertSignInEmail,
 	createApiKey,
 	createPrincipal,
 	domainOf,
@@ -15,6 +16,7 @@ import {
 	type PrincipalRecord,
 	revokeApiKey,
 	scopeCeiling,
+	setSignInEmail,
 	updateOutboundPolicy,
 } from "./store.ts";
 
@@ -23,6 +25,7 @@ type IdentityOperation =
 	| "account.list_api_keys"
 	| "account.create_api_key"
 	| "account.revoke_api_key"
+	| "account.set_sign_in_email"
 	| "directory.list_principals"
 	| "directory.create_principal"
 	| "directory.update_agent_policy";
@@ -32,10 +35,11 @@ function isAdmin(caller: AuthContext): boolean {
 }
 
 /**
- * A human manages their own keys, the keys of the agents that they sponsor and, as an admin, the keys
- * of others. Only the owner manages the owner's keys, so an admin can never act as the owner.
+ * A human manages their own credentials (keys and sign-in email), the keys of the agents that they
+ * sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
+ * credentials, so an admin can never act as the owner.
  */
-function canManageKeysOf(caller: AuthContext, target: PrincipalRecord): boolean {
+function canManageCredentialsOf(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human") return false;
 	if (target.id === caller.principal.id) return true;
 	if (target.org_role === "owner") return false;
@@ -69,6 +73,20 @@ function grantableScopes(caller: AuthContext, target: PrincipalRecord, requested
 	return [...new Set(requested)];
 }
 
+/**
+ * A sign-in email gives a session with every human scope. So only a credential that holds every
+ * human scope can set one, and a narrow key cannot become a full session.
+ */
+function assertCanSetSignInEmail(caller: AuthContext): void {
+	const missing = ALL_SCOPES.filter((scope) => !caller.scopes.has(scope));
+	if (missing.length > 0) {
+		throw new OperationError(
+			"forbidden",
+			`A sign-in email gives every human scope. Your credential does not hold ${missing.join(", ")}.`,
+		);
+	}
+}
+
 function auditOk(call: CallContext, op: string, target: string): void {
 	audit({
 		op,
@@ -87,6 +105,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 			principal: toPrincipalOutput(call.caller.principal),
 			scopes: [...call.caller.scopes],
 			credential: call.caller.credential,
+			sign_in_email: call.caller.principal.sign_in_email,
 		};
 	},
 
@@ -103,12 +122,18 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		let sponsorId: string | null = null;
 		if (input.kind === "agent") {
 			if (input.org_role) throw new OperationError("invalid", "An agent has no organization role.");
+			if (input.sign_in_email) throw new OperationError("invalid", "An agent has no sign-in email.");
 			sponsorId = input.sponsor_id ?? call.caller.principal.id;
 			const sponsor = await getPrincipal(call.env.DIRECTORY, sponsorId);
 			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
 			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
-		} else if (input.sponsor_id) {
-			throw new OperationError("invalid", "Only an agent has a sponsor.");
+		} else {
+			if (input.sponsor_id) throw new OperationError("invalid", "Only an agent has a sponsor.");
+			if (!input.sign_in_email) {
+				throw new OperationError("invalid", "A person needs a sign-in email. Sign-in codes go to it.");
+			}
+			assertSignInEmail(call.env, input.sign_in_email);
+			assertCanSetSignInEmail(call.caller);
 		}
 		const target = { kind: input.kind, sponsor_id: sponsorId } as PrincipalRecord;
 		const scopes = grantableScopes(
@@ -124,6 +149,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 				address: input.address,
 				org_role: input.kind === "human" ? (input.org_role ?? "member") : null,
 				sponsor_id: sponsorId,
+				sign_in_email: input.kind === "human" ? (input.sign_in_email ?? null) : null,
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 		);
@@ -152,12 +178,12 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 	},
 
 	async "account.list_api_keys"(call, input) {
-		const target = await keyOwner(call, input.principal_id);
+		const target = await credentialOwner(call, input.principal_id);
 		return { api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map(toApiKeyOutput) };
 	},
 
 	async "account.create_api_key"(call, input) {
-		const target = await keyOwner(call, input.principal_id);
+		const target = await credentialOwner(call, input.principal_id);
 		const scopes = grantableScopes(call.caller, target, input.scopes);
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
 			label: input.label,
@@ -171,22 +197,41 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 	async "account.revoke_api_key"(call, input) {
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
-		await keyOwner(call, key.principal_id);
+		await credentialOwner(call, key.principal_id);
 		await revokeApiKey(call.env.DIRECTORY, key.id);
 		auditOk(call, "account.revoke_api_key", key.id);
 		return { revoked: true };
 	},
+
+	async "account.set_sign_in_email"(call, input) {
+		const target = await credentialOwner(call, input.principal_id);
+		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a sign-in email.");
+		assertCanSetSignInEmail(call.caller);
+		assertSignInEmail(call.env, input.sign_in_email);
+		// The change ends the other sessions of the person, so a person who lost control of the old
+		// email can lock out each session made with it. The session that makes its own change stays.
+		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;
+		const email = await setSignInEmail(call.env.DIRECTORY, target.id, input.sign_in_email, keep);
+		auditOk(call, "account.set_sign_in_email", target.id);
+		return { principal_id: target.id, sign_in_email: email };
+	},
 };
 
-/** The principal whose keys the call manages: the caller by default. Throws unless the caller may manage them. */
-async function keyOwner(call: CallContext, principalId: string | undefined): Promise<PrincipalRecord> {
+/**
+ * The principal whose credentials the call manages: the caller by default. Throws unless the caller may
+ * manage them.
+ */
+async function credentialOwner(call: CallContext, principalId: string | undefined): Promise<PrincipalRecord> {
 	const target =
 		principalId === undefined || principalId === call.caller.principal.id
 			? call.caller.principal
 			: await getPrincipal(call.env.DIRECTORY, principalId);
 	if (!target) throw new OperationError("not_found", "No principal has that id.");
-	if (!canManageKeysOf(call.caller, target)) {
-		throw new OperationError("forbidden", "You can manage only your own keys and the keys of agents that you sponsor.");
+	if (!canManageCredentialsOf(call.caller, target)) {
+		throw new OperationError(
+			"forbidden",
+			"You can manage only your own credentials and the keys of agents that you sponsor.",
+		);
 	}
 	return target;
 }

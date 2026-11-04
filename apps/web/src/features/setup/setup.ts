@@ -42,7 +42,7 @@ export async function runSetup(token: string, input: SetupInput): Promise<SetupR
 export function setupErrorMessage(error: unknown): string {
 	if (error instanceof ApiError) {
 		if (error.status === 401) return "The setup token is not correct. Examine the SETUP_TOKEN secret, then try again.";
-		if (error.status === 409) return "Setup already ran. Sign in with the API key of the owner.";
+		if (error.status === 409) return "Setup already ran. Sign in with a code to the sign-in email of the owner.";
 		return error.message;
 	}
 	return "Soldock is not available. Examine your connection, then try again.";

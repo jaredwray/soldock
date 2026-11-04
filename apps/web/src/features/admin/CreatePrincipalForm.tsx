@@ -27,23 +27,41 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	const [kind, setKind] = useState<"human" | "agent">("human");
 	const [name, setName] = useState("");
 	const [address, setAddress] = useState("");
+	const [signInEmail, setSignInEmail] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
 	const [sponsorId, setSponsorId] = useState(me.id);
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(agentScopes));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { name: useId(), address: useId(), role: useId(), sponsor: useId() };
+	const ids = {
+		name: useId(),
+		address: useId(),
+		signInEmail: useId(),
+		signInHint: useId(),
+		role: useId(),
+		sponsor: useId(),
+	};
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!name.trim()) return setError("Enter a name.");
 		if (!EmailAddress.safeParse(address).success) return setError("Enter one address, such as ada@example.com.");
+		if (kind === "human" && !EmailAddress.safeParse(signInEmail).success) {
+			return setError("Enter the sign-in email of the person, outside Soldock, such as ada@example.org.");
+		}
 		if (kind === "agent" && scopes.size === 0) return setError("Select at least one scope for the first key.");
 		setBusy(true);
 		setError(null);
 		const input: InputOf<"directory.create_principal"> =
 			kind === "human"
-				? { kind, display_name: name.trim(), address: address.trim(), org_role: role, key_scopes: humanScopes }
+				? {
+						kind,
+						display_name: name.trim(),
+						address: address.trim(),
+						org_role: role,
+						sign_in_email: signInEmail.trim(),
+						key_scopes: humanScopes,
+					}
 				: {
 						kind,
 						display_name: name.trim(),
@@ -55,6 +73,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 			const result = await api.call("directory.create_principal", input);
 			setName("");
 			setAddress("");
+			setSignInEmail("");
 			onCreated(result.principal, result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -122,6 +141,24 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 				</div>
 				{kind === "human" ? (
 					<>
+						<div className="field">
+							<label htmlFor={ids.signInEmail} className="field-label">
+								Sign-in email
+							</label>
+							<input
+								id={ids.signInEmail}
+								className="input"
+								type="email"
+								value={signInEmail}
+								onChange={(event) => setSignInEmail(event.target.value)}
+								aria-describedby={ids.signInHint}
+								disabled={busy}
+								placeholder="ada@example.org"
+							/>
+							<p id={ids.signInHint} className="field-hint">
+								Outside Soldock. The person gets sign-in codes here.
+							</p>
+						</div>
 						<div className="field">
 							<label htmlFor={ids.role} className="field-label">
 								Role

@@ -547,6 +547,20 @@ fieldset {
 	margin-bottom: 16px;
 }
 
+.sign-in-sent {
+	margin: 0 0 16px;
+	overflow-wrap: anywhere;
+}
+
+.sign-in-links {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin-top: 16px;
+	font-size: 14px;
+}
+
 .brand {
 	display: inline-flex;
 	align-items: center;

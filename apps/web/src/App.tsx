@@ -56,9 +56,20 @@ export function App() {
 		setState({ status: "signed-out", expired: false });
 	}, []);
 
+	// After a change to the account, for example the sign-in email, so each page shows the new value. A
+	// late answer applies only to the same person: after a sign-out and a sign-in as somebody else, it is dropped.
+	const refresh = useCallback(async () => {
+		const whoami = await api.call("account.whoami");
+		setState((current) =>
+			current.status === "signed-in" && current.whoami.principal.id === whoami.principal.id
+				? { status: "signed-in", whoami }
+				: current,
+		);
+	}, []);
+
 	const session = useMemo<Session | null>(
-		() => (state.status === "signed-in" ? { whoami: state.whoami, signOut } : null),
-		[state, signOut],
+		() => (state.status === "signed-in" ? { whoami: state.whoami, signOut, refresh } : null),
+		[state, signOut, refresh],
 	);
 
 	return <ToastProvider>{render()}</ToastProvider>;

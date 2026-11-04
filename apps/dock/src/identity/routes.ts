@@ -1,17 +1,27 @@
-import { ALL_SCOPES, SETUP_TOKEN_MIN_LENGTH, SetupInput, type SetupResult, type SetupStatus } from "@soldock/contracts";
+import {
+	ALL_SCOPES,
+	SETUP_TOKEN_MIN_LENGTH,
+	SetupInput,
+	type SetupResult,
+	type SetupStatus,
+	SignInCodeRequest,
+	SignInInput,
+} from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
+import { consumeSignInCode, requestSignInCode } from "./signin.ts";
 import {
 	assertPrimaryAddress,
+	assertSignInEmail,
 	createPrincipal,
 	createSession,
 	deleteSession,
 	directoryIsEmpty,
 	domainOf,
-	findApiKey,
+	findSignInPrincipal,
 	mailDomains,
 	SESSION_TTL_SECONDS,
 } from "./store.ts";
@@ -23,8 +33,6 @@ function setupTokenState(token: string | undefined): "missing" | "too_short" | "
 	if (!token) return "missing";
 	return token.length < SETUP_TOKEN_MIN_LENGTH ? "too_short" : "ready";
 }
-
-const SessionBody = z.strictObject({ api_key: z.string().min(1).max(200) });
 
 function sessionCookie(value: string, maxAge: number): string {
 	return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
@@ -43,8 +51,8 @@ async function jsonBody(request: Request): Promise<unknown> {
 }
 
 /**
- * The `/auth/*` ceremonies. They are not operations: they create credentials. Passkeys replace
- * the API-key sign-in later.
+ * The `/auth/*` ceremonies. They are not operations: they create credentials. A human signs in with a
+ * one-time code that goes to their sign-in email.
  */
 export function mountAuthRoutes(app: AuthApp): void {
 	// First-run setup status for the web app. Before setup, it tells if the SETUP_TOKEN secret is
@@ -81,14 +89,15 @@ export function mountAuthRoutes(app: AuthApp): void {
 		}
 		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const { display_name, address } = parsed.data;
+		const { display_name, address, sign_in_email } = parsed.data;
 		if (!mailDomains(c.env).has(domainOf(address))) {
 			throw new OperationError("invalid", `The address must be on a mail domain: ${c.env.MAIL_DOMAINS}.`);
 		}
 		assertPrimaryAddress(address);
+		assertSignInEmail(c.env, sign_in_email);
 		const created = await createPrincipal(
 			c.env.DIRECTORY,
-			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null },
+			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, sign_in_email },
 			{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
 			{ onlyIfEmpty: true },
 		);
@@ -106,9 +115,9 @@ export function mountAuthRoutes(app: AuthApp): void {
 		if (fromBrowser) {
 			// The owner and the key exist now, so setup cannot run again. A failed session must not lose
 			// the only key: the response still holds the key, without a session, and the owner signs in
-			// with the key. The session gets the scopes of the first key, like a sign-in with that key.
+			// with a code from the sign-in email.
 			try {
-				const session = await createSession(c.env.DIRECTORY, created.principal.id, created.key);
+				const session = await createSession(c.env.DIRECTORY, created.principal.id);
 				headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
 				log("info", "session created", { principalId: created.principal.id, requestId: c.var.requestId });
 			} catch (error) {
@@ -126,19 +135,39 @@ export function mountAuthRoutes(app: AuthApp): void {
 		return c.json(result, 201, headers);
 	});
 
-	// Sign-in for humans with an API key, until passkeys exist. Agents use their key directly.
+	// Step 1 of sign-in: a code goes to the sign-in email of the human who signs in with this address.
+	// The response is 202 for each valid address, and the work runs after the response, so neither the
+	// status nor the time tells if the address has an account. Agents have no sign-in email.
+	app.post("/auth/code", async (c) => {
+		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Soldock web app.");
+		const parsed = SignInCodeRequest.safeParse(await jsonBody(c.req.raw));
+		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
+		const origin = new URL(c.req.url).origin;
+		c.executionCtx.waitUntil(requestSignInCode(c.env, parsed.data.email, origin, c.var.requestId));
+		return c.body(null, 202, { "cache-control": "no-store" });
+	});
+
+	// Step 2 of sign-in: the code from the sign-in email becomes a session. An unknown address and a
+	// wrong, used or expired code get the same 401.
 	app.post("/auth/session", async (c) => {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Soldock web app.");
-		const parsed = SessionBody.safeParse(await jsonBody(c.req.raw));
+		const parsed = SignInInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const found = await findApiKey(c.env.DIRECTORY, parsed.data.api_key);
-		if (!found) throw new OperationError("unauthenticated", "The API key is not valid.");
-		if (found.principal.kind !== "human") {
-			throw new OperationError("forbidden", "Agents cannot sign in to the web app. Use the key with the API or MCP.");
+		const principal = await findSignInPrincipal(c.env.DIRECTORY, parsed.data.email);
+		if (!principal || !(await consumeSignInCode(c.env.DIRECTORY, principal.id, parsed.data.code))) {
+			log("info", "sign-in code refused", { principalId: principal?.id ?? null, requestId: c.var.requestId });
+			throw new OperationError("unauthenticated", "The code is not correct, or it expired. Ask for a new code.");
 		}
-		// The session gets the scopes of this key and no more, so a narrow key stays narrow.
-		const token = await createSession(c.env.DIRECTORY, found.principal.id, found.key);
-		log("info", "session created", { principalId: found.principal.id, requestId: c.var.requestId });
+		const token = await createSession(c.env.DIRECTORY, principal.id);
+		audit({
+			op: "auth.sign_in",
+			actor: principal.id,
+			actorKind: "human",
+			credential: "sign_in_code",
+			target: principal.id,
+			result: "ok",
+			requestId: c.var.requestId,
+		});
 		return c.body(null, 204, { "set-cookie": sessionCookie(token, SESSION_TTL_SECONDS), "cache-control": "no-store" });
 	});
 
