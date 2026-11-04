@@ -71,8 +71,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   statement, so parallel guesses cannot go past 5. A correct code works one time. An unknown
   address and a wrong, used or expired code all get the same `401`. A success writes an
   `auth.sign_in` audit line. Each sign-in deletes the expired sessions of that human.
+  - Known limit: a guess for a known address writes to D1 and an unknown address does not, so the
+    time of the `401` can tell if a sign-in email has an account.
+  - Known limit: codes and attempts are keyed by the person only. Somebody who knows the address
+    can use the 5 guesses of each code and the 5 codes of each hour, so the person cannot sign in
+    until it stops. Existing sessions and API keys still work.
 - A session holds every human scope, because the code proves control of the sign-in email.
-  Revoking an API key does not end a session. To end the sessions of a person, change the
+  When you revoke an API key, the sessions stay. To end the sessions of a person, change the
   sign-in email (`account.set_sign_in_email`).
 - Both sign-in routes need an `Origin` header of this origin, or they get `403`.
 - The bodies of `/auth/*` requests can be at most 4 KiB. A larger body gets `413` while it streams.
@@ -84,9 +89,9 @@ Each call passes three checks:
 
 1. **Caller kind and scopes** (the shared invoker): the operation lists the principal kinds that
    can call it and the scopes that the credential must hold. A key holds the scopes that it was
-   given. A session holds the scopes of the key that signed in, so a narrow key cannot become a
-   full session. Neither holds more than the ceiling of its principal kind:
-   agents can hold only `account.read`, `directory.read`, `mail.read`, `mail.modify` and `mail.send`.
+   given, and never more than the ceiling of its principal kind: agents can hold only
+   `account.read`, `directory.read`, `mail.read`, `mail.modify` and `mail.send`. A session holds
+   every human scope, because only a credential with every human scope can set a sign-in email.
 2. **Role and resource** (the handler):
    - Only owners and admins create principals.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never

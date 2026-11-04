@@ -9,9 +9,11 @@ import { useSession } from "../auth/session.tsx";
  * of the person, and this session stays.
  */
 export function SignInEmailCard() {
-	const { whoami } = useSession();
+	const { whoami, refresh } = useSession();
 	const toast = useToast();
-	const [current, setCurrent] = useState(whoami.sign_in_email);
+	// The new value shows at once. The session context gets it too, so the card shows it after a remount.
+	const [changed, setChanged] = useState<string | null>(null);
+	const current = changed ?? whoami.sign_in_email;
 	const [value, setValue] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -28,9 +30,11 @@ export function SignInEmailCard() {
 		setError(null);
 		try {
 			const result = await api.call("account.set_sign_in_email", { sign_in_email: value.trim() });
-			setCurrent(result.sign_in_email);
+			setChanged(result.sign_in_email);
 			setValue("");
 			toast({ message: "Sign-in email changed. Your sessions on other browsers ended." });
+			// The change is done. If this read fails, the card still shows the new value until it remounts.
+			await refresh().catch(() => undefined);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {

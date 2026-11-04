@@ -350,6 +350,18 @@ describe("sign-in email", () => {
 		expect((await setSignInEmailWithCookie(here, { sign_in_email: "olive@dock.test" })).status).toBe(400);
 	});
 
+	// Migration 0002 leaves each existing person without a sign-in email. docs/self-hosting.md recovers
+	// the owner with the owner's API key. This is that sequence.
+	it("sends no code to a person without a sign-in email, until a full key sets one", async () => {
+		const owner = await setupOwner();
+		await env.DIRECTORY.prepare("UPDATE principals SET sign_in_email = NULL WHERE id = ?").bind(owner.id).run();
+		expect((await requestCode("owner@dock.test")).sent).toEqual([]);
+		expect(await owner.call("account.whoami")).toMatchObject({ sign_in_email: null });
+		await owner.call("account.set_sign_in_email", { sign_in_email: "olive@later.example" });
+		const cookie = await signIn("owner@dock.test");
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
+	});
+
 	// A sign-in gives every human scope, so a narrow key must not choose where the codes go.
 	it("refuses a credential that does not hold every human scope", async () => {
 		const owner = await setupOwner();
@@ -402,6 +414,20 @@ describe("sign-in email", () => {
 		expect(
 			await denied(ada.call("account.set_sign_in_email", { principal_id: bot.id, sign_in_email: "bot@home.example" })),
 		).toBe("invalid");
+		// MCP gives the same operation, with the same rules.
+		const tool = await callTool(admin.key, "account_set_sign_in_email", {
+			principal_id: ada.id,
+			sign_in_email: "ada@third.example",
+		});
+		expect(tool.structuredContent).toEqual({ principal_id: ada.id, sign_in_email: "ada@third.example" });
+		expect(
+			(
+				await callTool(admin.key, "account_set_sign_in_email", {
+					principal_id: owner.id,
+					sign_in_email: "x@evil.example",
+				})
+			).isError,
+		).toBe(true);
 		expect(await denied(bot.call("account.set_sign_in_email", { sign_in_email: "bot@home.example" }))).toBe(
 			"forbidden",
 		);

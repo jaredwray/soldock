@@ -130,9 +130,7 @@ export async function requestSignInCode(env: Env, email: string, origin: string,
 		await sendSignInCode(env, principal, code, origin);
 		log("info", "sign-in code sent", { principalId: principal.id, requestId });
 	} catch (error) {
-		log("error", "sign-in code failed", {
-			requestId,
-			err: error instanceof Error ? (error.stack ?? error.message) : String(error),
-		});
+		// Only the error name: a message from Email Service can hold the sign-in email, a personal address.
+		log("error", "sign-in code failed", { requestId, err: error instanceof Error ? error.name : typeof error });
 	}
 }

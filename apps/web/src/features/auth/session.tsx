@@ -6,6 +6,8 @@ export type Whoami = OutputOf<"account.whoami">;
 export interface Session {
 	whoami: Whoami;
 	signOut: () => Promise<void>;
+	/** Gets `account.whoami` again, after a change to the account. A failure keeps the old value and throws. */
+	refresh: () => Promise<void>;
 }
 
 export const SessionContext = createContext<Session | null>(null);
