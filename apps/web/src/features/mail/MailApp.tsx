@@ -5,7 +5,8 @@ import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { INBOX_PATH, type MailView, viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
-import { Composer, type SendResult } from "./Composer.tsx";
+import type { SendResult } from "./Composer.tsx";
+import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
 import { useLabels, useProfilePoll } from "./data.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
@@ -36,6 +37,7 @@ export function MailApp({ route, navOpen, onCloseNav }: MailAppProps) {
 	const [draft, setDraft] = useState<Draft | null>(null);
 	const [dialog, setDialog] = useState<MailDialog>(null);
 	const closeNavRef = useRef(onCloseNav);
+	usePreloadComposer();
 
 	useEffect(() => {
 		closeNavRef.current = onCloseNav;

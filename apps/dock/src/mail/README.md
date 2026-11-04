@@ -103,8 +103,10 @@ of the message that it answers.
    - `allowlist`: only the listed domains and addresses.
    - `any`: no limit.
 3. The handler refuses attachments over the limit before it decodes them. Then it composes the MIME
-   message once. Bcc is never written. A message with an external recipient can be at most 5 MiB
-   (the Email Service limit). Other messages can be at most 10 MiB (the memory of one isolate).
+   message once. With `html`, the body is `multipart/alternative`: `text` is the plain-text part,
+   and `html` is the HTML part. The web composer always sends both. Bcc is never written. A
+   message with an external recipient can be at most 5 MiB (the Email Service limit). Other
+   messages can be at most 10 MiB (the memory of one isolate).
 4. The raw bytes go to R2. `MailboxDO.send()` stores the sent copy with `SENT`, one `delivery`
    row and one `outbox` row for each recipient, and the idempotency key, in one transaction. When
    the mailbox answers that the key was used, the handler deletes the raw object of this attempt.
