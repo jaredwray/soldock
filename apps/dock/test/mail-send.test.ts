@@ -311,7 +311,12 @@ describe("idempotency", () => {
 		const later = await ada.call("mail.send", { to: ["owner@dock.test"], text: "Once more", idempotency_key: "k-1" });
 		expect(later.message_id).not.toBe(first.message_id);
 		expect(await sentCount(ada)).toBe(3);
-		const other = await createActor(owner, { kind: "human", display_name: "Bob", address: "bob@dock.test" });
+		const other = await createActor(owner, {
+			kind: "human",
+			display_name: "Bob",
+			address: "bob@dock.test",
+			sign_in_email: "bob@home.example",
+		});
 		const keyedByMailbox = await other.call("mail.send", {
 			to: ["ada@dock.test"],
 			text: "Mine",

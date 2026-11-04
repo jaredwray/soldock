@@ -11,6 +11,8 @@ export interface AuthContext extends Caller {
 	kind: PrincipalRecord["kind"];
 	credential: "session" | "api_key";
 	keyId: string | null;
+	/** The SHA-256 of the session cookie, for a session. A change can end the other sessions and keep this one. */
+	sessionHash: string | null;
 	scopes: ReadonlySet<Scope>;
 }
 
@@ -58,6 +60,7 @@ export async function authenticate(
 			kind: found.principal.kind,
 			credential: "api_key",
 			keyId: found.key.id,
+			sessionHash: null,
 			scopes: new Set(found.key.scopes.filter((scope) => ceiling.has(scope))),
 		};
 	}
@@ -66,14 +69,15 @@ export async function authenticate(
 	if (!token) return null;
 	const session = await findSession(env.DIRECTORY, token);
 	if (session?.principal.kind !== "human") return null;
-	const ceiling = new Set<Scope>(ALL_SCOPES);
+	// A human signs in with a code from their sign-in email, so a session holds every human scope.
 	return {
 		id: session.principal.id,
 		principal: session.principal,
 		kind: "human",
 		credential: "session",
 		keyId: null,
-		scopes: new Set(session.scopes.filter((scope) => ceiling.has(scope))),
+		sessionHash: session.tokenHash,
+		scopes: new Set<Scope>(ALL_SCOPES),
 	};
 }
 

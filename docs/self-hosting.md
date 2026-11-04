@@ -158,11 +158,14 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
       Secrets**, and add the secret `SETUP_TOKEN` with that token.
    3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, your
-      name and your address, then select **Create the owner**.
-   4. The page signs you in, and shows the first API key of the owner once. Copy the key. Until
-      passkeys exist, you sign in on a different browser with it.
+      name, your address and your sign-in email, then select **Create the owner**. The sign-in
+      email must be outside the mail domains, for example a personal address. Sign-in codes go
+      there.
+   4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
+      with the API and MCP. To sign in on a different browser, enter your address: Soldock sends
+      a one-time code to your sign-in email.
    5. Delete the `SETUP_TOKEN` secret.
-   6. Create people and agents on the **Admin** page.
+   6. Create people and agents on the **Admin** page. Each person needs a sign-in email.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
    and gives no session:
@@ -170,10 +173,23 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    ```sh
    curl -X POST "https://<dock-host>/auth/setup" \
      -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-     -d '{"display_name":"Your Name","address":"you@<mail-domain>"}'
+     -d '{"display_name":"Your Name","address":"you@<mail-domain>","sign_in_email":"you@personal.example"}'
    ```
 
    After setup, the setup page does not show again, and a second setup gets `409`.
+
+   Sign-in codes leave through Email Service. Do step 3 (send) before you sign in on a different
+   browser.
+
+   A deployment that ran setup before sign-in codes existed has an owner without a sign-in email,
+   and migration `0002` ends each session. Set the sign-in email with the owner's API key, then
+   sign in with a code:
+
+   ```sh
+   curl -X POST "https://<dock-host>/api/v1/account/sign-in-email" \
+     -H "authorization: Bearer <owner API key>" -H "content-type: application/json" \
+     -d '{"sign_in_email":"you@personal.example"}'
+   ```
 
 Email Service is in beta, and its terms and quotas are for transactional mail. The
 [Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person

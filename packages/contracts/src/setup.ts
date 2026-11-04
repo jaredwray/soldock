@@ -24,10 +24,14 @@ export const SetupStatus = z.discriminatedUnion("setup_needed", [
 ]);
 export type SetupStatus = z.infer<typeof SetupStatus>;
 
-/** The body of `POST /auth/setup`. The setup token goes in the `Authorization` header. */
+/**
+ * The body of `POST /auth/setup`. The setup token goes in the `Authorization` header. The sign-in
+ * email is an address outside the mail domains: the owner gets sign-in codes there.
+ */
 export const SetupInput = z.strictObject({
 	display_name: DisplayName,
 	address: EmailAddress,
+	sign_in_email: EmailAddress,
 });
 export type SetupInput = z.infer<typeof SetupInput>;
 

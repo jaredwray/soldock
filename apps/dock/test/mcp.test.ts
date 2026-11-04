@@ -1,20 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { type Actor, callTool, inject, mcp, ORIGIN, rawMessage, request, seedOrg } from "./helpers.ts";
+import {
+	type Actor,
+	callTool,
+	inject,
+	mcp,
+	ORIGIN,
+	OWNER_SIGN_IN_EMAIL,
+	rawMessage,
+	request,
+	seedOrg,
+	signIn,
+} from "./helpers.ts";
 
 const names = (body: Record<string, unknown> | null) =>
 	((body?.result ?? { tools: [] }) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
 
 describe("the MCP endpoint", () => {
 	it("needs an API key, and never accepts the session cookie", async () => {
-		const { owner } = await seedOrg();
+		await seedOrg();
 		const unauthenticated = await mcp(null, "initialize");
 		expect(unauthenticated.status).toBe(401);
-		const signIn = await request("/auth/session", {
-			method: "POST",
-			headers: { origin: ORIGIN, "content-type": "application/json" },
-			body: JSON.stringify({ api_key: owner.key }),
-		});
-		const cookie = (signIn.headers.get("set-cookie") ?? "").split(";")[0] as string;
+		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
 		const withCookie = await request("/mcp", {
 			method: "POST",
 			headers: { cookie, "content-type": "application/json" },
@@ -45,7 +51,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(17);
+		expect(all).toHaveLength(18);
 		expect(names((await mcp(bot.key, "tools/list")).body)).toEqual([
 			"account_whoami",
 			"directory_list_principals",

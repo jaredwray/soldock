@@ -9,17 +9,24 @@ MCP clients. The app has no UI-only path.
 
 ## What exists
 
-- **Sign-in.** The person pastes an API key. `POST /auth/session` trades it for an HttpOnly session
-  cookie. This sign-in is temporary until passkeys exist. An agent key gets 403, because agents
-  cannot sign in to the UI. Each 401 from an operation shows the sign-in page again.
+- **Sign-in.** Two steps on one page.
+  1. The person enters their Soldock address or their sign-in email. `POST /auth/code` sends a
+     one-time code to the sign-in email. The page always says "If this address belongs to an
+     account, we sent a code", because the server does not tell.
+  2. The person enters the 8 digits (`autocomplete="one-time-code"`, numeric keypad). `POST
+     /auth/session` trades the code for an HttpOnly session cookie.
+  - "Send a new code" asks again: only the newest code works. "Use a different address" goes back
+    to step 1.
+  - Agents have no sign-in email, so they cannot sign in to the UI. Each 401 from an operation
+    shows the sign-in page again.
 - **Boot.** The app calls `account.whoami`. On a 401, it calls `GET /auth/setup`: while the
   directory has no owner, the setup page shows. Otherwise, the sign-in page shows.
 - **First-run setup.** The setup page shows until an owner exists.
   - While the `SETUP_TOKEN` secret is missing or too short, the page shows how to set it, and a
     "Check again" button.
-  - When the secret is ready, the form takes the setup token, the name and the address. The
-    domain comes from the mail domains of the deployment, so the person types only the part before
-    the @.
+  - When the secret is ready, the form takes the setup token, the name, the address and the
+    sign-in email. The domain comes from the mail domains of the deployment, so the person types
+    only the part before the @. The form refuses a sign-in email on a mail domain.
   - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
     with a copy button and a reminder to delete the `SETUP_TOKEN` secret. Done opens the app.
   - If a different browser ran setup first (`409`), the page offers the sign-in page.
@@ -86,12 +93,13 @@ MCP clients. The app has no UI-only path.
 - **Admin** (`/admin`). Owners and admins see the directory, and create people and agents. The
   first API key of a new principal shows once, with a copy button. A credential cannot grant a scope
   that it does not hold. Thus the form offers only the scopes of the session (for an agent, also
-  only `AGENT_SCOPES`). For a person, the app sends these scopes as `key_scopes`, so an admin who
-  signed in with a narrower key can still create a person. For each agent, the page sets
+  only `AGENT_SCOPES`). For a person, the app sends these scopes as `key_scopes`. A person also
+  needs a sign-in email outside the mail domains. For each agent, the page sets
   the outbound mail policy and manages the API keys. A member who sponsors an agent sees the page
   with only those agents.
-- **Settings** (`/settings`). Your account, your API keys (list, create, revoke) and sign out. A new
-  key can hold only the scopes of the session.
+- **Settings** (`/settings`). Your account, your sign-in email, your API keys (list, create, revoke)
+  and sign out. A change of the sign-in email (`account.set_sign_in_email`) ends your sessions on
+  other browsers. A new key can hold only the scopes of the session.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.
 
@@ -126,7 +134,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | The directory, the create form and the agent panels |
-| [`src/features/settings/`](src/features/settings/) | Settings, the API key manager and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the sign-in email card, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts |
@@ -184,8 +192,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 - **Zod runs without `eval`.** `@soldock/contracts` turns on Zod's `jitless` mode before it makes a
   schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
   `new Function`, and the CSP reports no violation.
-- **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The API key
-  field is a password field, and the app does not keep the key.
+- **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The app does
+  not keep the sign-in code after the sign-in.
 
 ## Data inventory
 

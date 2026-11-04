@@ -31,8 +31,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).
-- `/auth/setup` (`GET` status, `POST` setup), `/auth/session`, `/auth/sign-out`: first-run setup and
-  browser sign-in ([`src/identity/`](src/identity/)).
+- `/auth/setup` (`GET` status, `POST` setup), `/auth/code`, `/auth/session`, `/auth/sign-out`:
+  first-run setup and browser sign-in with a one-time code to the sign-in email
+  ([`src/identity/`](src/identity/)).
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
@@ -43,10 +44,10 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals, addresses, API keys, sessions |
+| `DIRECTORY` | D1 `soldock-directory` | Principals, addresses, API keys, sessions, sign-in codes |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
-| `EMAIL` | `send_email` | Outbound mail through Email Service |
+| `EMAIL` | `send_email` | Outbound mail and sign-in codes through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal |
 | `MAIL_DOMAINS` | Var | The mail domains, comma-separated |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
@@ -81,7 +82,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals, addresses, API keys, sessions) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<principal>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |

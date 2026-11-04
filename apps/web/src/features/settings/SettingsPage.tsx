@@ -7,6 +7,7 @@ import { INBOX_PATH } from "../../routes.ts";
 import { SIGN_OUT_FAILED } from "../auth/auth.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "./ApiKeys.tsx";
+import { SignInEmailCard } from "./SignInEmail.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -49,6 +50,7 @@ export function SettingsPage() {
 					</div>
 				</dl>
 			</section>
+			<SignInEmailCard />
 			<ApiKeyManager heading="Your API keys" allowedScopes={ALL_SCOPES} />
 			<section className="card">
 				<h2 className="card-title">Sign out</h2>
