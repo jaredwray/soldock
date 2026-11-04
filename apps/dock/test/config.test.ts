@@ -125,6 +125,7 @@ describe("wrangler.jsonc", () => {
 
 describe("isWorkerPath", () => {
 	it("matches the prefixes and nothing else", () => {
+		expect(isWorkerPath("/healthz")).toBe(true);
 		expect(isWorkerPath("/api/v1/system/ping")).toBe(true);
 		expect(isWorkerPath("/mcp")).toBe(true);
 		expect(isWorkerPath("/.well-known/oauth-protected-resource/mcp")).toBe(true);

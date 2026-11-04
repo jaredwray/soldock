@@ -28,6 +28,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   `/blob/`, `/dl/`, `/hooks/`) go to the Hono app. Unknown ones get a `404` with an
   `application/problem+json` body, never the SPA.
 - Every app response carries a server-generated `x-request-id`. A client-supplied one is ignored.
+- `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).
@@ -82,7 +83,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes, reset lock) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<principal>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |

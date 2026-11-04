@@ -10,8 +10,8 @@ import { CreatedApiKey, DisplayName, Principal } from "./directory.ts";
 export const SETUP_TOKEN_MIN_LENGTH = 32;
 
 /**
- * `GET /auth/setup`. Before setup, it tells the web app if the `SETUP_TOKEN` secret is ready and
- * which mail domains the owner address can use. After setup, it tells nothing more.
+ * `GET /auth/setup`. A valid token permits setup or a fresh start without a directory query.
+ * Otherwise, setup is available only when the directory is empty.
  */
 export const SetupStatus = z.discriminatedUnion("setup_needed", [
 	z.object({
@@ -19,6 +19,7 @@ export const SetupStatus = z.discriminatedUnion("setup_needed", [
 		/** `missing`: no `SETUP_TOKEN` secret. `too_short`: shorter than `SETUP_TOKEN_MIN_LENGTH`. */
 		setup_token: z.enum(["missing", "too_short", "ready"]),
 		mail_domains: z.array(z.string()),
+		start_fresh_available: z.boolean().optional(),
 	}),
 	z.object({ setup_needed: z.literal(false) }),
 ]);
@@ -32,6 +33,8 @@ export const SetupInput = z.strictObject({
 	display_name: DisplayName,
 	address: EmailAddress,
 	sign_in_email: EmailAddress,
+	/** Explicit consent to delete the directory before the new owner is created. */
+	start_fresh: z.literal("DELETE DIRECTORY").optional(),
 });
 export type SetupInput = z.infer<typeof SetupInput>;
 

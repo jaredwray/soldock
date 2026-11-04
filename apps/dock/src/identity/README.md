@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. Sends sign-in codes through the `EMAIL` binding (Email Service). |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_sign_in_email`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy` |
-| **Data inventory** | D1 `directory`: `principals` (with `sign_in_email`), `addresses`, `api_keys`, `sessions`, `sign_in_codes` ([`migrations/`](../../migrations/)). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `sign_in_email`), `addresses`, `api_keys`, `sessions`, `sign_in_codes`, `setup_lock` ([`migrations/`](../../migrations/)). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -41,9 +41,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 `/auth/*` routes (not operations, because they create credentials):
 
-- `GET /auth/setup`: public. Before setup, it returns `setup_needed: true`, the state of the
-  `SETUP_TOKEN` secret (`missing`, `too_short` or `ready`) and the mail domains. After setup, it
-  returns only `setup_needed: false`. The web app uses it to show the setup page.
+- `GET /auth/setup`: public. A valid `SETUP_TOKEN` returns `setup_needed: true`,
+  `start_fresh_available: true`, the token state, and the mail domains without a D1 query.
+  Without a valid token, an empty directory gets the token state and mail domains.
+  A directory with accounts gets only `setup_needed: false` in that case.
 - `POST /auth/setup`: creates the owner and a first key, once, when the directory is empty. A
   guarded insert in one D1 transaction stops two concurrent setups. The owner address cannot
   contain `+`. The body also holds the owner's sign-in email, which must be outside the mail
@@ -54,6 +55,17 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   cannot run again. The owner then signs in with a code.
 - The schemas of both routes are in `@soldock/contracts` (`SetupStatus`, `SetupInput`,
   `SetupResult`).
+- `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
+  addresses, keys, sessions, and sign-in codes. It recreates the schema from the bundled migration.
+  The reset and the new owner share one D1 transaction. A failure rolls back both.
+  The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
+  R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
+  The `setup_lock` row blocks new principals during the reset. Each old mailbox persists a pause marker.
+  Setup waits for active deliveries before it replaces the directory, then cancels the remaining old outboxes.
+  A failed directory transaction resumes the old mailboxes and releases the lock.
+  The reset lease expires after ten minutes. A later reset can replace an abandoned lease.
+  The directory transaction checks lease ownership, so an older request cannot replace the newer result.
+  Delete `SETUP_TOKEN` after setup to disable this option.
 - The schemas of both sign-in routes are in `@soldock/contracts` (`SignInCodeRequest`,
   `SignInInput`, `SIGN_IN_CODE_*`).
 - `POST /auth/code` (`{ email }`): step 1 of sign-in. The address is the sign-in email or a Soldock

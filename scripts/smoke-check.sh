@@ -39,6 +39,14 @@ navigate() {
 		echo "curl exit $?"
 }
 
+# The health endpoint must also bypass the SPA for a browser navigation.
+result=$(navigate /healthz)
+if [[ "$result" == "200 application/json"* ]] && jq -e '. == {"ok":true}' "$page" > /dev/null 2>&1; then
+	pass "GET /healthz returns JSON for a browser navigation"
+else
+	fail "GET /healthz returned \"$result\" without a health response"
+fi
+
 # A browser navigation to a Worker-owned path must get the Worker's problem+json, not the SPA.
 # /mcp takes POST only, so a navigation gets 405.
 for check in "/api/v1/nope 404" "/hooks/nope 404" "/mcp 405"; do

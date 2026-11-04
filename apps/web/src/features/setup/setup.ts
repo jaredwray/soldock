@@ -2,7 +2,7 @@ import { ApiError, type SetupInput, type SetupResult, SetupStatus } from "@soldo
 
 // The /auth/setup endpoints are not operations, so they use plain fetch, like features/auth/auth.ts.
 
-/** Setup status while the directory has no owner. */
+/** Setup status for a new directory or an operator with a setup token. */
 export type SetupNeeded = Extract<SetupStatus, { setup_needed: true }>;
 
 async function problemOf(response: Response): Promise<ApiError> {
@@ -10,7 +10,7 @@ async function problemOf(response: Response): Promise<ApiError> {
 	return new ApiError(response.status, problem);
 }
 
-/** Tells if first-run setup is needed, and before setup, if the SETUP_TOKEN secret is ready. */
+/** Reports setup availability and the state of the SETUP_TOKEN secret. */
 export async function getSetupStatus(): Promise<SetupStatus> {
 	const response = await fetch("/auth/setup", {
 		headers: { accept: "application/json, application/problem+json" },

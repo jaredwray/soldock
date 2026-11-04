@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
+import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
 	api,
 	callTool,
@@ -111,16 +112,118 @@ describe("first-run setup", () => {
 		}
 	});
 
-	it("tells the web app that setup is needed, and nothing more after setup", async () => {
+	it("offers a fresh start while the token is set, and hides setup after its removal", async () => {
 		const before = await request("/auth/setup");
 		expect(before.headers.get("cache-control")).toBe("no-store");
 		expect(await before.json()).toEqual({
 			setup_needed: true,
 			setup_token: "ready",
 			mail_domains: ["dock.test", "second.test"],
+			start_fresh_available: true,
 		});
 		await setupOwner();
-		expect(await (await request("/auth/setup")).json()).toEqual({ setup_needed: false });
+		expect(await (await request("/auth/setup")).json()).toMatchObject({
+			setup_needed: true,
+			start_fresh_available: true,
+		});
+		expect(await (await withEnv({ SETUP_TOKEN: undefined }, "/auth/setup")).json()).toEqual({ setup_needed: false });
+	});
+
+	it("offers recovery without a query against the directory", async () => {
+		const unavailable = new Proxy(env.DIRECTORY, {
+			get() {
+				throw new Error("D1 is unavailable");
+			},
+		});
+		const res = await withEnv({ DIRECTORY: unavailable }, "/auth/setup", {
+			headers: { cookie: "__Host-soldock_session=old-session" },
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ setup_needed: true, start_fresh_available: true });
+	});
+
+	it("replaces the directory and invalidates old keys, sessions, and sign-in codes", async () => {
+		const { owner, bot } = await seedOrg();
+		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
+		await requestCode(OWNER_SIGN_IN_EMAIL);
+		const res = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
+		expect(res.status).toBe(201);
+		expect(res.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
+		const result = (await res.json()) as { principal: { id: string }; api_key: { secret: string } };
+		expect(result.principal.id).not.toBe(owner.id);
+		expect(await denied(api(owner.key)("account.whoami"))).toBe("unauthenticated");
+		expect(await denied(api(bot.key)("account.whoami"))).toBe("unauthenticated");
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
+		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(res) } })).status).toBe(200);
+		expect(await api(result.api_key.secret)("account.whoami")).toMatchObject({
+			principal: { id: result.principal.id },
+		});
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM sign_in_codes").first("count")).toBe(0);
+		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
+	});
+
+	it("requires the token, same origin, explicit consent, and valid owner details before a reset", async () => {
+		const owner = await setupOwner();
+		const body = { ...OWNER, start_fresh: "DELETE DIRECTORY" };
+		expect((await setup("wrong", body, ORIGIN)).status).toBe(401);
+		expect((await setup(SETUP_TOKEN, body, "https://evil.example")).status).toBe(403);
+		expect((await setup(SETUP_TOKEN, { ...body, start_fresh: true }, ORIGIN)).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...body, sign_in_email: "owner@dock.test" }, ORIGIN)).status).toBe(400);
+		for (const token of [undefined, "short"]) {
+			const res = await withEnv({ SETUP_TOKEN: token }, "/auth/setup", {
+				method: "POST",
+				headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+				body: JSON.stringify(body),
+			});
+			expect(res.status).toBe(503);
+		}
+		expect(await api(owner.key)("account.whoami")).toMatchObject({ principal: { id: owner.id } });
+	});
+
+	it("rolls back the reset when the transaction fails", async () => {
+		const owner = await setupOwner();
+		const failing = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "batch")
+					return (statements: D1PreparedStatement[]) =>
+						target.batch([...statements, target.prepare("SELECT json('invalid json')")]);
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const res = await withEnv({ DIRECTORY: failing }, "/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({ ...OWNER, start_fresh: "DELETE DIRECTORY" }),
+		});
+		expect(res.status).toBe(500);
+		expect(await api(owner.key)("account.whoami")).toMatchObject({ principal: { id: owner.id } });
+		expect(
+			(await owner.call("mail.send", { to: ["owner@dock.test"], text: "The mailbox resumed" })).recipients,
+		).toMatchObject([{ status: "delivered" }]);
+	});
+
+	it("recreates the old schema that lacks sign_in_email and supports a new session", async () => {
+		await env.DIRECTORY.batch([
+			...["sessions", "sign_in_codes", "api_keys", "addresses", "principals"].map((name) =>
+				env.DIRECTORY.prepare(`DROP TABLE ${name}`),
+			),
+			...legacyDirectory
+				.split(";")
+				.map((sql) => sql.trim())
+				.filter(Boolean)
+				.map((sql) => env.DIRECTORY.prepare(sql)),
+			env.DIRECTORY.prepare(
+				"INSERT INTO principals (id, kind, display_name, org_role, created_at) VALUES ('old', 'human', 'Old owner', 'owner', '2026-01-01')",
+			),
+		]);
+		const res = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
+		expect(res.status).toBe(201);
+		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(res) } })).status).toBe(200);
+		expect(await env.DIRECTORY.prepare("SELECT name FROM d1_migrations").first("name")).toBe("0001_directory.sql");
+		const { sent } = await requestCode(OWNER_SIGN_IN_EMAIL);
+		expect(sent).toHaveLength(1);
 	});
 
 	// The owner and the key exist after the first D1 batch, so setup cannot run again. If the session

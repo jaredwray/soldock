@@ -22,6 +22,7 @@ export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
 
 	app.use(requestId());
 
+	app.get("/healthz", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 	app.get("/api/v1/system/ping", (c) => c.json({ ok: true }));
 	mountAuthRoutes(app);
 	mountRestApi(app, handlers);

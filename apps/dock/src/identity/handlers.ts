@@ -153,7 +153,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 		);
-		if (!created) throw new Error("createPrincipal wrote nothing");
+		if (!created)
+			throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
 		auditOk(call, "directory.create_principal", created.principal.id);
 		return {
 			principal: toPrincipalOutput(created.principal),

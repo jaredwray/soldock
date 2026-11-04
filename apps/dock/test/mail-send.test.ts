@@ -1,7 +1,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError } from "@soldock/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
 	api,
@@ -11,6 +11,7 @@ import {
 	fakeEmailService,
 	ORIGIN,
 	request,
+	SETUP_TOKEN,
 	seedOrg,
 } from "./helpers.ts";
 
@@ -147,6 +148,148 @@ describe("mail.send to the internet", () => {
 		);
 		expect(left).toBe(0);
 	});
+
+	it("cancels pending mail from a deleted account after a fresh reset reuses its address", async () => {
+		const email = await fakeEmailService(ada.id);
+		email.fail = new Error("temporary failure");
+		const sent = await ada.call("mail.send", { to: ["bob@example.org"], text: "Old private mail" });
+		await drainOutbox(ada.id);
+		const reset = await request("/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({
+				display_name: "New owner",
+				address: "ada@dock.test",
+				sign_in_email: "new@home.example",
+				start_fresh: "DELETE DIRECTORY",
+			}),
+		});
+		expect(reset.status).toBe(201);
+		email.fail = null;
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		await runInDurableObject(mailbox, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+		});
+		await drainOutbox(ada.id);
+		expect(email.sent).toEqual([]);
+		const thread = await mailbox.getThread(sent.thread_id);
+		expect(thread).toMatchObject({
+			messages: [{ delivery: [{ status: "failed", error: "The sender account no longer owns this address." }] }],
+		});
+		const left = await runInDurableObject(
+			mailbox,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+		);
+		expect(left).toBe(0);
+	});
+
+	it.each([false, true])(
+		"waits for an active send and blocks new accounts before a reset (lease replaced: %s)",
+		async (replaceLease) => {
+			let releaseSend = () => {};
+			let didStart = false;
+			const delivered: string[] = [];
+			const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+			await runInDurableObject(mailbox, (instance) => {
+				const gate = new Promise<void>((resolve) => {
+					releaseSend = resolve;
+				});
+				const target = instance as unknown as { env: Env };
+				target.env = {
+					...target.env,
+					EMAIL: {
+						send: async (message: EmailMessage) => {
+							didStart = true;
+							await gate;
+							delivered.push(message.to);
+							return { messageId: "<accepted@email.test>" };
+						},
+					} as unknown as SendEmail,
+				};
+			});
+			const sent = await ada.call("mail.send", { to: ["first@example.org", "second@example.org"], text: "In flight" });
+			await vi.waitFor(() => expect(didStart).toBe(true));
+			let response: Response | null = null;
+			const init = {
+				method: "POST",
+				headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+				body: JSON.stringify({
+					display_name: "New owner",
+					address: "ada@dock.test",
+					sign_in_email: "new@home.example",
+					start_fresh: "DELETE DIRECTORY",
+				}),
+			};
+			const reset = request("/auth/setup", init).then((result) => {
+				response = result;
+				return result;
+			});
+			let replacement: Promise<Response> | null = null;
+			try {
+				await vi.waitFor(async () => {
+					if (response) throw new Error("Reset returned before the active send completed");
+					const paused = await runInDurableObject(mailbox, (_instance, state) =>
+						state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'delivery_pause'").toArray(),
+					);
+					expect(paused).toHaveLength(1);
+				});
+				expect(response).toBeNull();
+				expect(
+					await code(
+						owner.call("directory.create_principal", {
+							kind: "human",
+							display_name: "Late account",
+							address: "late@dock.test",
+							sign_in_email: "late@home.example",
+						}),
+					),
+				).toBe("conflict");
+				expect(await env.DIRECTORY.prepare("SELECT id FROM principals WHERE id = ?").bind(ada.id).first("id")).toBe(
+					ada.id,
+				);
+				if (replaceLease) {
+					const previousToken = await env.DIRECTORY.prepare("SELECT token FROM setup_lock").first<string>("token");
+					const previousGeneration = await env.DIRECTORY.prepare("SELECT generation FROM setup_lock").first<number>(
+						"generation",
+					);
+					await env.DIRECTORY.prepare("UPDATE setup_lock SET expires_at = 0").run();
+					replacement = request("/auth/setup", init);
+					await vi.waitFor(async () => {
+						const paused = await runInDurableObject(
+							mailbox,
+							(_instance, state) =>
+								state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'delivery_pause'").one()
+									.value,
+						);
+						expect(paused).not.toBe(previousToken);
+					});
+					await mailbox.pauseDeliveries(previousToken as string, previousGeneration as number);
+					await mailbox.resumeDeliveries(previousToken as string);
+					const currentPause = await runInDurableObject(
+						mailbox,
+						(_instance, state) =>
+							state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'delivery_pause'").one()
+								.value,
+					);
+					expect(currentPause).not.toBe(previousToken);
+				} else {
+					expect((await request("/auth/setup", init)).status).toBe(409);
+				}
+			} finally {
+				await runInDurableObject(mailbox, () => releaseSend());
+				await reset;
+				await replacement;
+			}
+			expect((await reset).status).toBe(replaceLease ? 409 : 201);
+			if (replacement) expect((await replacement).status).toBe(201);
+			expect(delivered).toEqual(["first@example.org"]);
+			const thread = await mailbox.getThread(sent.thread_id);
+			expect(thread?.messages[0]?.delivery?.map((recipient) => recipient.status)).toEqual(["sent", "failed"]);
+			await evictDurableObject(mailbox);
+			await drainOutbox(ada.id);
+			expect(delivered).toEqual(["first@example.org"]);
+		},
+	);
 
 	// A request that is too large must be refused while it streams, not after it fills memory.
 	it("refuses a request body over the limit before it reads all of it", async () => {

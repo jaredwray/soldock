@@ -5,6 +5,7 @@
  * browser navigations otherwise go straight to static assets. ``test/config.test.ts` keeps the two in sync.
  */
 export const WORKER_PREFIXES = [
+	"/healthz",
 	"/api/",
 	"/mcp",
 	"/oauth/",
