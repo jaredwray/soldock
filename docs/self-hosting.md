@@ -203,6 +203,8 @@ The reset deletes all directory accounts, addresses, API keys, sessions, and sig
 It recreates the directory schema and creates the new owner in one D1 transaction.
 If that transaction fails, the old directory stays intact.
 R2 messages, queues, and mailbox Durable Objects stay in place. New accounts cannot access old mail.
+Mailbox alarms cancel pending deliveries from deleted accounts when they next run.
+Mail that Email Service already accepted cannot be recalled.
 
 Select **Use existing accounts** to keep the data and proceed to the app or sign-in.
 Select **Set up without a reset** to create an owner only when the directory is empty.

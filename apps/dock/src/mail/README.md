@@ -113,6 +113,9 @@ of the message that it answers.
    The key keeps a SHA-256 hash of the request. The same key with a different request gets
    `conflict`.
 5. The outbox alarm delivers:
+   - Before each delivery, it checks the original sender ID and address against the current directory.
+     A deleted sender or an address change fails the delivery without a retry.
+     A directory error uses the normal retry path and sends no mail.
    - a local recipient: a copy of the raw bytes in R2 for that mailbox, then `MailboxDO.deliver()`.
      Local mail never reaches Email Service.
    - an external recipient: `EMAIL.send(new EmailMessage(sender, recipient, raw))`, one message

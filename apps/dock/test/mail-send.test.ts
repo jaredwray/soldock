@@ -11,6 +11,7 @@ import {
 	fakeEmailService,
 	ORIGIN,
 	request,
+	SETUP_TOKEN,
 	seedOrg,
 } from "./helpers.ts";
 
@@ -141,6 +142,40 @@ describe("mail.send to the internet", () => {
 		expect(await deliveryOf(ada, sent.thread_id)).toEqual([
 			{ address: "bob@example.org", kind: "external", status: "failed", error: "temporary failure" },
 		]);
+		const left = await runInDurableObject(
+			mailbox,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+		);
+		expect(left).toBe(0);
+	});
+
+	it("cancels pending mail from a deleted account after a fresh reset reuses its address", async () => {
+		const email = await fakeEmailService(ada.id);
+		email.fail = new Error("temporary failure");
+		const sent = await ada.call("mail.send", { to: ["bob@example.org"], text: "Old private mail" });
+		await drainOutbox(ada.id);
+		const reset = await request("/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({
+				display_name: "New owner",
+				address: "ada@dock.test",
+				sign_in_email: "new@home.example",
+				start_fresh: "DELETE DIRECTORY",
+			}),
+		});
+		expect(reset.status).toBe(201);
+		email.fail = null;
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		await runInDurableObject(mailbox, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+		});
+		await drainOutbox(ada.id);
+		expect(email.sent).toEqual([]);
+		const thread = await mailbox.getThread(sent.thread_id);
+		expect(thread).toMatchObject({
+			messages: [{ delivery: [{ status: "failed", error: "The sender account no longer owns this address." }] }],
+		});
 		const left = await runInDurableObject(
 			mailbox,
 			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,

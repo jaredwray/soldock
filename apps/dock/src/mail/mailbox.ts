@@ -1,11 +1,14 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
 import { MAIL_LIMITS } from "@soldock/contracts";
+import { getPrincipal } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
+
+class SenderUnavailable extends Error {}
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = { error: { code: "invalid" | "not_found" | "conflict"; message: string } };
@@ -1033,6 +1036,12 @@ export class MailboxDO extends DurableObject<Env> {
 				const raw = currentRaw;
 				let status: "delivered" | "sent";
 				let providerId: string | null = null;
+				// The raw key keeps the original principal ID, even if a reset reuses the address.
+				const senderId = /^mail\/raw\/([^/]+)\//.exec(row.raw_key)?.[1];
+				const sender = senderId ? await getPrincipal(this.env.DIRECTORY, senderId) : null;
+				if (!sender || sender.address !== row.from_addr) {
+					throw new SenderUnavailable("The sender account no longer owns this address.");
+				}
 				if (row.kind === "deliver") {
 					await deliverInternal(this.env, row.target, raw);
 					status = "delivered";
@@ -1055,7 +1064,7 @@ export class MailboxDO extends DurableObject<Env> {
 					this.bump();
 				});
 			} catch (error) {
-				const attempts = row.attempts + 1;
+				const attempts = error instanceof SenderUnavailable ? OUTBOX_MAX_ATTEMPTS : row.attempts + 1;
 				const message = error instanceof Error ? error.message : String(error);
 				log("warn", "outbox delivery failed", {
 					kind: row.kind,

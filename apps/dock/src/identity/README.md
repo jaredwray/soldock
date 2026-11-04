@@ -60,6 +60,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   The reset and the new owner share one D1 transaction. A failure rolls back both.
   The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
   R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
+  Mailbox alarms fail pending deliveries when the original sender no longer owns the address.
   Delete `SETUP_TOKEN` after setup to disable this option.
 - The schemas of both sign-in routes are in `@soldock/contracts` (`SignInCodeRequest`,
   `SignInInput`, `SIGN_IN_CODE_*`).
