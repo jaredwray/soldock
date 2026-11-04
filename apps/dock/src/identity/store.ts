@@ -282,9 +282,10 @@ export async function updateOutboundPolicy(
 }
 
 /**
- * Sets the sign-in email of a human, deletes the sign-in codes of that human, and ends the sessions of
+ * Sets the sign-in email of a human, stops the sign-in codes of that human, and ends the sessions of
  * that human, except `keepSessionHash`: the session that made the change, when the human changes their
- * own email. A code that went to the old email must not sign in after the change.
+ * own email. A code that went to the old email must not sign in after the change. The codes are marked
+ * used, not deleted, because the hourly limit counts them.
  */
 export async function setSignInEmail(
 	db: D1Database,
@@ -301,7 +302,9 @@ export async function setSignInEmail(
 			db
 				.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ?")
 				.bind(principalId, keepSessionHash),
-			db.prepare("DELETE FROM sign_in_codes WHERE principal_id = ?").bind(principalId),
+			db
+				.prepare("UPDATE sign_in_codes SET used_at = COALESCE(used_at, ?) WHERE principal_id = ?")
+				.bind(new Date().toISOString(), principalId),
 		]);
 	} catch (error) {
 		throw conflictOf(error) ?? error;

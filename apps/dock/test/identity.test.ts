@@ -276,16 +276,19 @@ describe("sign-in with a code", () => {
 	});
 
 	// Somebody who knows the address must not fill the person's inbox, or get unlimited guesses.
-	it("sends at most five codes an hour to one person", async () => {
-		await setupOwner();
+	it("sends at most five codes an hour to one person, also after a change of the sign-in email", async () => {
+		const owner = await setupOwner();
 		const sent = await Promise.all(
 			Array.from({ length: 6 }, () => requestCode(OWNER_SIGN_IN_EMAIL).then((result) => result.sent.length)),
 		);
 		expect(sent.reduce((sum, n) => sum + n, 0)).toBe(5);
+		// The change stops the old codes, but it must not give a new hour of codes to the new inbox.
+		await owner.call("account.set_sign_in_email", { sign_in_email: "olive@new.example" });
+		expect((await requestCode("owner@dock.test")).sent).toEqual([]);
 		await env.DIRECTORY.prepare("UPDATE sign_in_codes SET created_at = ?")
 			.bind(new Date(Date.now() - 61 * 60 * 1000).toISOString())
 			.run();
-		expect((await requestCode(OWNER_SIGN_IN_EMAIL)).sent).toHaveLength(1);
+		expect((await requestCode("owner@dock.test")).sent.map((mail) => mail.to)).toEqual(["olive@new.example"]);
 	});
 
 	it("refuses a large sign-in body while it streams, before any lookup", async () => {

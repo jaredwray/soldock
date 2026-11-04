@@ -118,15 +118,25 @@ export const createPrincipal = defineOperation({
 	scopes: ["directory.write"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
-	input: z.strictObject({
-		kind: z.enum(["human", "agent"]),
-		display_name: DisplayName,
-		address: EmailAddress,
-		org_role: z.enum(["admin", "member"]).optional(),
-		sponsor_id: PrincipalId.optional(),
-		sign_in_email: EmailAddress.optional(),
-		key_scopes: z.array(ScopeName).min(1).optional(),
-	}),
+	input: z
+		.strictObject({
+			kind: z.enum(["human", "agent"]),
+			display_name: DisplayName,
+			address: EmailAddress,
+			org_role: z.enum(["admin", "member"]).optional(),
+			sponsor_id: PrincipalId.optional(),
+			/** Required for a human. An agent has none. */
+			sign_in_email: EmailAddress.optional(),
+			key_scopes: z.array(ScopeName).min(1).optional(),
+		})
+		.refine((input) => input.kind !== "human" || input.sign_in_email !== undefined, {
+			message: "a human needs a sign-in email",
+			path: ["sign_in_email"],
+		})
+		.refine((input) => input.kind !== "agent" || input.sign_in_email === undefined, {
+			message: "an agent has no sign-in email",
+			path: ["sign_in_email"],
+		}),
 	output: z.object({ principal: Principal, api_key: CreatedApiKey }),
 	errors: ["conflict", "not_found"],
 });
