@@ -99,8 +99,9 @@ Each call passes three checks:
    - A sign-in email gives a session with every human scope. So only a credential that holds every
      human scope can set one (`account.set_sign_in_email`, or `directory.create_principal` for a
      human). A narrow key cannot become a full session.
-   - `account.set_sign_in_email` ends the sessions of that person. When the person changes their
-     own email in a session, that session stays. This locks out somebody who got into the old email.
+   - `account.set_sign_in_email` ends the sessions of that person and deletes their sign-in codes.
+     When the person changes their own email in a session, that session stays. This locks out
+     somebody who got into the old email, also with a code that went there before the change.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
    `policy_denied`, before anything is stored.
 

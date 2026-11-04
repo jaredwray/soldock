@@ -338,8 +338,11 @@ describe("sign-in email", () => {
 		const owner = await setupOwner();
 		const here = await signIn(OWNER_SIGN_IN_EMAIL);
 		const elsewhere = await signIn(OWNER_SIGN_IN_EMAIL);
+		const pending = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
 		const res = await setSignInEmailWithCookie(here, { sign_in_email: "Olive@New.example" });
 		expect(await res.json()).toEqual({ principal_id: owner.id, sign_in_email: "olive@new.example" });
+		// A code that went to the old email must not work after the change, with any address.
+		expect((await submitCode("owner@dock.test", pending)).status).toBe(401);
 		expect((await request("/api/v1/account", { headers: { cookie: here } })).status).toBe(200);
 		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
 		expect((await requestCode(OWNER_SIGN_IN_EMAIL)).sent).toEqual([]);
