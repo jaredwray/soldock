@@ -61,8 +61,13 @@ describe("docToHtml", () => {
 		);
 	});
 
-	it("never writes a link that is not http, https or mailto", () => {
+	it("never writes an unsafe link or an attribute value that is not a list number", () => {
 		expect(docToHtml(doc(p(text("click", link("javascript:alert(1)")))))).toBe("<div>click</div>");
+		// A pasted ProseMirror slice can carry any attribute value.
+		const hostile = nodes.ordered_list.create({ order: '2"><script>alert(1)</script>' }, [li(p("x"))]);
+		expect(docToHtml(doc(hostile))).toBe('<ol start="2"><li><div>x</div></li></ol>');
+		const notNumber = nodes.ordered_list.create({ order: { start: 3 } }, [li(p("y"))]);
+		expect(docToHtml(doc(notNumber))).toBe("<ol><li><div>y</div></li></ol>");
 	});
 
 	it("keeps empty lines, line breaks and runs of spaces as the person typed them", () => {

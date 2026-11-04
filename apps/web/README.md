@@ -69,7 +69,7 @@ MCP clients. The app has no UI-only path.
     depth of 8 at most. Deeper `> ` markers stay as text.
   - Pasted HTML keeps only what the editor can show. Pasted plain text keeps its empty lines.
   - The composer and the editor are a separate chunk. The mail app loads the chunk after it starts.
-    If the chunk cannot load (the connection is down, or a deploy removed the files of this
+    While the chunk loads, the composer dialog shows a loading state. If the chunk cannot load (the connection is down, or a deploy removed the files of this
     version), a dialog asks for a reload.
   - The composer refuses a file before it reads the file, when the file makes the message larger
     than `MAIL_LIMITS.messageBytes`. Send shows the same error.
@@ -160,7 +160,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   nothing. Only the nodes and marks of the schema in
   [`richText.ts`](src/features/mail/richText.ts) come into the editor: paragraphs, line breaks,
   lists, quotes, bold, italic, underline, strikethrough and links. Images, scripts, frames, styles
-  and other attributes are dropped. A link must be an absolute `http`, `https` or `mailto` URL.
+  and other attributes are dropped. A link must be an absolute `http`, `https` or `mailto` URL. A
+  paste with nothing to parse, for example only an image, is stopped, so ProseMirror never uses its
+  fallback that lets the browser paste into a live element.
 - **The sent HTML is made from the document, not from the DOM.** `docToHtml` writes only the tags
   of the schema, escapes each text and attribute value, and leaves out a link that is not safe.
 - **Message HTML goes only into a sandboxed iframe.** The server sanitizes the HTML. The app puts it

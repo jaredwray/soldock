@@ -128,7 +128,8 @@ export function linkTargetAt(state: EditorState): LinkTarget {
 		href ??= (marks.link.isInSet(node.marks)?.attrs.href as string | undefined) ?? null;
 	});
 	const text = state.doc.textBetween(from, to, "\n", "\n");
-	return { from, to, href, text, textEditable: $from.sameParent($to) && !text.includes("\n") };
+	const oneLine = $from.sameParent($to) && $from.parent.isTextblock && !text.includes("\n");
+	return { from, to, href, text, textEditable: oneLine };
 }
 
 /**
@@ -168,6 +169,17 @@ export const removeLink: Command = (state, dispatch) => {
 	return true;
 };
 
+/**
+ * Runs the command and keeps the key from the browser, also when the command does nothing. On a
+ * Mac, ⌘[ and ⌘] are Back and Forward, which would close the app and lose the draft.
+ */
+function keepKey(command: Command): Command {
+	return (state, dispatch, view) => {
+		command(state, dispatch, view);
+		return true;
+	};
+}
+
 /** The keys of the editor. `openLink` opens the link dialog. */
 export function editorKeys(openLink: Command): Record<string, Command> {
 	return {
@@ -183,8 +195,8 @@ export function editorKeys(openLink: Command): Record<string, Command> {
 		"Shift-Mod-8": toggleList(nodes.bullet_list),
 		"Shift-Mod-9": toggleQuote,
 		"Mod-\\": clearFormatting,
-		"Mod-]": sinkListItem(nodes.list_item),
-		"Mod-[": liftListItem(nodes.list_item),
+		"Mod-]": keepKey(sinkListItem(nodes.list_item)),
+		"Mod-[": keepKey(liftListItem(nodes.list_item)),
 		Enter: splitListItem(nodes.list_item),
 		"Shift-Enter": insertHardBreak,
 	};

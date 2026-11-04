@@ -1,9 +1,10 @@
 import type { Mark, Node } from "prosemirror-model";
-import { type Command, EditorState, TextSelection } from "prosemirror-state";
+import { AllSelection, type Command, EditorState, TextSelection } from "prosemirror-state";
 import { describe, expect, it } from "vitest";
 import { docToHtml, schema } from "../src/features/mail/richText.ts";
 import {
 	clearFormatting,
+	editorKeys,
 	isQuoteActive,
 	linkTargetAt,
 	listTypeAt,
@@ -68,6 +69,13 @@ describe("toolbar commands", () => {
 		expect(lifted.doc.eq(start.doc)).toBe(true);
 	});
 
+	it("keeps Mod-[ and Mod-] from the browser outside a list, where a Mac goes back or forward", () => {
+		const keys = editorKeys(() => true);
+		const start = state([p("text")], 2);
+		expect(keys["Mod-["]?.(start, () => {})).toBe(true);
+		expect(keys["Mod-]"]?.(start, () => {})).toBe(true);
+	});
+
 	it("removes bold and italic but keeps a link", () => {
 		const start = state([p(text("styled", bold, italic, link("https://example.com/")), " plain")], 1, 7);
 		const cleared = run(start, clearFormatting);
@@ -102,6 +110,10 @@ describe("links", () => {
 	it("does not offer one text field for a selection over more than one paragraph", () => {
 		const start = state([p("one"), p("two")], 2, 8);
 		expect(linkTargetAt(start).textEditable).toBe(false);
+		// Select all in one paragraph: the selection is in the document, not in a paragraph.
+		const one = nodes.doc.create(null, [p("one")]);
+		const all = EditorState.create({ doc: one, selection: new AllSelection(one) });
+		expect(linkTargetAt(all).textEditable).toBe(false);
 		const linked = run(start, setLink("https://example.com/", ""));
 		expect(docToHtml(linked.doc)).toBe(
 			'<div>o<a href="https://example.com/">ne</a></div><div><a href="https://example.com/">tw</a>o</div>',

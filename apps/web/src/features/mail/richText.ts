@@ -35,9 +35,14 @@ export function normalizeLink(input: string): string | null {
 	return safeHref(`https://${value}`);
 }
 
-function listStart(value: string | null): number {
-	const start = Number.parseInt(value ?? "", 10);
-	return Number.isSafeInteger(start) && start >= 0 && start <= 99_999 ? start : 1;
+/**
+ * The first number of a numbered list. The attribute has no schema validation, because a pasted
+ * ProseMirror slice can hold any value, and a failed validation stops the paste in ProseMirror.
+ * Each reader of the attribute uses this function, so only a safe integer reaches the output.
+ */
+function listOrder(value: unknown): number {
+	const order = typeof value === "string" ? Number.parseInt(value, 10) : value;
+	return typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order <= 99_999 ? order : 1;
 }
 
 /** True when a CSS text-decoration value has the line. */
@@ -70,9 +75,12 @@ export const schema = new Schema({
 		ordered_list: {
 			content: "list_item+",
 			group: "block",
-			attrs: { order: { default: 1, validate: "number" } },
-			parseDOM: [{ tag: "ol", getAttrs: (dom) => ({ order: listStart(dom.getAttribute("start")) }) }],
-			toDOM: (node) => (node.attrs.order === 1 ? ["ol", 0] : ["ol", { start: String(node.attrs.order) }, 0]),
+			attrs: { order: { default: 1 } },
+			parseDOM: [{ tag: "ol", getAttrs: (dom) => ({ order: listOrder(dom.getAttribute("start")) }) }],
+			toDOM: (node) => {
+				const order = listOrder(node.attrs.order);
+				return order === 1 ? ["ol", 0] : ["ol", { start: String(order) }, 0];
+			},
 		},
 		list_item: {
 			content: "paragraph block*",
@@ -249,7 +257,7 @@ function blockLines(node: Node): string[] {
 				break;
 			case nodes.bullet_list:
 			case nodes.ordered_list: {
-				let number = child.attrs.order as number;
+				let number = listOrder(child.attrs.order);
 				child.forEach((item) => {
 					const marker = child.type === nodes.bullet_list ? "- " : `${number}. `;
 					number += 1;
@@ -350,12 +358,11 @@ function blocksHtml(node: Node): string {
 			case nodes.bullet_list:
 				html += `<ul>${blocksHtml(child)}</ul>`;
 				break;
-			case nodes.ordered_list:
-				html +=
-					child.attrs.order === 1
-						? `<ol>${blocksHtml(child)}</ol>`
-						: `<ol start="${child.attrs.order}">${blocksHtml(child)}</ol>`;
+			case nodes.ordered_list: {
+				const order = listOrder(child.attrs.order);
+				html += order === 1 ? `<ol>${blocksHtml(child)}</ol>` : `<ol start="${order}">${blocksHtml(child)}</ol>`;
 				break;
+			}
 			case nodes.list_item:
 				html += `<li>${blocksHtml(child)}</li>`;
 				break;

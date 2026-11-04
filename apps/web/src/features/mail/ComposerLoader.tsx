@@ -31,6 +31,18 @@ function ComposerUnavailable({ onClose }: Pick<ComposerProps, "onClose">) {
 	);
 }
 
+/** The dialog while the chunk loads, on a slow connection before the background load ends. */
+function ComposerLoading({ title, onClose }: { title: string; onClose: () => void }) {
+	return (
+		<Dialog title={title} onClose={onClose} className="dialog-small">
+			<p className="dialog-body composer-loading" role="status">
+				<span className="spinner spinner-small" aria-hidden="true" />
+				Loading the composer…
+			</p>
+		</Dialog>
+	);
+}
+
 const LazyComposer = lazy(() =>
 	loadComposer().then(
 		(module) => ({ default: module.Composer }),
@@ -51,7 +63,7 @@ export function usePreloadComposer(): void {
 
 export function Composer(props: ComposerProps) {
 	return (
-		<Suspense fallback={null}>
+		<Suspense fallback={<ComposerLoading title={props.draft.title} onClose={props.onClose} />}>
 			<LazyComposer {...props} />
 		</Suspense>
 	);

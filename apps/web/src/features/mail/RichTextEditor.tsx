@@ -189,6 +189,9 @@ export function RichTextEditor({ initialDoc, onChange, disabled, label, placehol
 			},
 			editable: () => !disabledRef.current,
 			clipboardTextParser: (text, $context) => plainTextSlice(text, $context.marks()),
+			// A paste with nothing to parse (only an image, for example) would go to the fallback of
+			// ProseMirror, which lets the browser paste into a live element. Nothing can be inserted, so stop it.
+			handlePaste: (_view, _event, slice) => slice.content.size === 0,
 			dispatchTransaction(tr) {
 				const next = view.state.apply(tr);
 				view.updateState(next);
