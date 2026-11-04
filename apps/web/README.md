@@ -49,6 +49,28 @@ MCP clients. The app has no UI-only path.
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
     attachments. One idempotency key for each composed message makes a retry safe.
+  - The message body is a rich-text editor on [ProseMirror](https://prosemirror.net). The
+    formatting toolbar under the editor has bold, italic, underline, strikethrough, link, numbered
+    list, bulleted list, quote and remove formatting. Each button has a shortcut, which its tooltip
+    shows: `Ctrl` (`⌘` on a Mac) with `B`, `I`, `U`, `K` or `\`, and `Ctrl+Shift` with `X`, `7`, `8`
+    or `9`. `Ctrl+[` and `Ctrl+]` change the level of a list item. `Shift+Enter` starts a new line in
+    the same paragraph.
+  - The toolbar is one tab stop. The arrow keys, Home and End move between its buttons. A toggle
+    button has `aria-pressed`. A click on a button does not take the focus from the editor.
+  - The link dialog takes the text to show and a web or email address. An address without a scheme
+    gets `https://`, or `mailto:` when it is an email address. Only `http`, `https` and `mailto`
+    links are accepted. With the cursor in a link, the dialog edits or removes the whole link.
+  - `mail.send` gets both forms of the body: `html` for the formatting, and `text` for mail apps
+    without HTML. In the HTML, each paragraph is a `<div>`, as in most mail apps. In the text, a
+    list item starts with `- ` or `1. `, a quote line starts with `> `, and a link is `text <address>`.
+  - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
+    Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
+    with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
+    depth of 8 at most. Deeper `> ` markers stay as text.
+  - Pasted HTML keeps only what the editor can show. Pasted plain text keeps its empty lines.
+  - The composer and the editor are a separate chunk. The mail app loads the chunk after it starts.
+    While the chunk loads, the composer dialog shows a loading state. If the chunk cannot load (the connection is down, or a deploy removed the files of this
+    version), a dialog asks for a reload.
   - The composer refuses a file before it reads the file, when the file makes the message larger
     than `MAIL_LIMITS.messageBytes`. Send shows the same error.
   - A recipient is external when its domain is not in `mail_domains` from `mail.get_profile`. When
@@ -107,7 +129,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/settings/`](src/features/settings/) | Settings, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, actions and shortcuts |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts |
 
 ## Commands
 
@@ -122,7 +144,8 @@ npx vitest run --project web            # the tests in test/
 ```
 
 The `web` Vitest project runs in Node, with no DOM. Thus the tests cover only modules that do not
-need the DOM. The label query test uses the real search parser of dock
+need the DOM. The rich-text schema, the body conversions and the editor commands need no DOM, so
+the tests run them on real ProseMirror documents and editor states. The label query test uses the real search parser of dock
 ([`apps/dock/src/mail/search.ts`](../dock/src/mail/search.ts)), so a quoted label name must parse
 back to the same name.
 
@@ -132,6 +155,16 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 
 - **No HTML from data in the page DOM.** The app never uses `dangerouslySetInnerHTML` or
   `innerHTML`. React escapes all text.
+- **The composer editor holds only its schema.** ProseMirror parses pasted and dropped HTML in a
+  detached document (`document.implementation.createHTMLDocument`), which loads nothing and runs
+  nothing. Only the nodes and marks of the schema in
+  [`richText.ts`](src/features/mail/richText.ts) come into the editor: paragraphs, line breaks,
+  lists, quotes, bold, italic, underline, strikethrough and links. Images, scripts, frames, styles
+  and other attributes are dropped. A link must be an absolute `http`, `https` or `mailto` URL. A
+  paste with nothing to parse, for example only an image, is stopped, so ProseMirror never uses its
+  fallback that lets the browser paste into a live element.
+- **The sent HTML is made from the document, not from the DOM.** `docToHtml` writes only the tags
+  of the schema, escapes each text and attribute value, and leaves out a link that is not safe.
 - **Message HTML goes only into a sandboxed iframe.** The server sanitizes the HTML. The app puts it
   in `<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="…">`. Never add
   `allow-scripts` or `allow-same-origin`. The frame has an opaque origin and runs no script.

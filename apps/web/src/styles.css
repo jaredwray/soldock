@@ -1621,17 +1621,25 @@ fieldset {
 	font-size: 13px;
 }
 
+/* The rich-text editor: a ProseMirror view, and the formatting toolbar under it. */
+
+.rich-editor {
+	display: flex;
+	flex-direction: column;
+	margin: 12px 24px 0;
+}
+
+.rich-editor-mount {
+	display: flex;
+	flex-direction: column;
+}
+
 .compose-body {
-	display: block;
-	width: calc(100% - 48px);
 	min-height: 260px;
 	height: 40vh;
-	margin: 12px 24px 0;
 	padding: 8px 0;
-	border: 0;
-	background: transparent;
+	overflow-y: auto;
 	color: var(--text);
-	font: inherit;
 	line-height: 1.55;
 	resize: vertical;
 }
@@ -1640,6 +1648,76 @@ fieldset {
 	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 	border-radius: 2px;
+}
+
+/* The same spacing as the HTML that the message gets: one line for each paragraph, and the
+   default list spacing of the browser. */
+.compose-body :is(p, blockquote) {
+	margin: 0;
+}
+
+.compose-body blockquote {
+	margin-left: 0.8ex;
+	padding-left: 1ex;
+	border-left: 1px solid var(--border);
+	color: var(--text-muted);
+}
+
+.compose-body a {
+	color: var(--accent);
+	text-decoration: underline;
+}
+
+.compose-body[contenteditable="false"] {
+	opacity: 0.7;
+}
+
+.rich-placeholder::before {
+	content: attr(data-placeholder);
+	float: left;
+	height: 0;
+	color: var(--text-muted);
+	pointer-events: none;
+}
+
+.format-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+	padding-top: 4px;
+	border-top: 1px solid var(--border);
+}
+
+.format-group-start:not(:first-child) {
+	margin-left: 10px;
+}
+
+.format-button[aria-pressed="true"] {
+	background: var(--accent-soft);
+	color: var(--accent);
+}
+
+.format-button:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.composer-loading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 24px;
+	color: var(--text-muted);
+}
+
+.link-fields {
+	display: grid;
+	gap: 16px;
+}
+
+.dialog-actions .link-remove {
+	margin-right: auto;
 }
 
 .compose-attachments {
@@ -2206,10 +2284,15 @@ h3.card-title {
 		border-radius: var(--radius-large);
 	}
 
+	.rich-editor,
+	.rich-editor-mount,
+	.compose-body {
+		flex: 1;
+	}
+
 	.compose-body {
 		height: auto;
 		min-height: 200px;
-		flex: 1;
 	}
 
 	.composer .compose-form {

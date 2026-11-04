@@ -13,5 +13,8 @@ The first flows to cover, because they are tested by hand only:
 - First-run setup: the page without a token, with a short token, and with a ready token. The owner
   form, the errors (wrong token, `+` address), the key dialog, Done into the app, and `409` into
   the sign-in page.
+- The rich-text composer: each toolbar button and its shortcut, the link dialog (a refused
+  `javascript:` link, and Enter applies the link and does not send), hostile pasted HTML, the reply
+  quote, and the HTML and text bodies that `mail.get_thread` returns after the send.
 
 Locally, run them against `pnpm dev` or `wrangler dev`. Every user-visible flow gets an e2e test. In cloud sessions Chromium is preinstalled. Don't run `playwright install`.

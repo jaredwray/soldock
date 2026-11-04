@@ -35,6 +35,16 @@ const PATHS = {
 	signOut: "M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l-5-5 5-5M5 12h11",
 	chevronDown: "M6 9l6 6 6-6",
 	external: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18",
+	bold: "M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z",
+	italic: "M10 5h8M6 19h8M14 5l-4 14",
+	underline: "M7 4v7a5 5 0 0 0 10 0V4M5 20h14",
+	strikethrough:
+		"M4 12h16M16.5 7c-.6-1.5-2.3-2.5-4.5-2.5-2.5 0-4.5 1.3-4.5 3.3 0 1.6 1.2 2.6 3 3.2M8 16.5c.6 1.7 2.3 3 4.5 3 2.5 0 4.5-1.4 4.5-3.4 0-1-.4-1.8-1.2-2.4",
+	link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+	listBulleted: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+	listNumbered: "M10 6h10M10 12h10M10 18h10M4 4.5l1.5-1V9M3.5 14a1.5 1.5 0 0 1 3 0c0 1-3 2.5-3 4.5h3",
+	quote: "M5 5v14M10 8h9M10 12h9M10 16h6",
+	clearFormat: "M6 5h11M11.5 5l-3 14M14 14l6 6M20 14l-6 6",
 } as const;
 
 export type IconName = keyof typeof PATHS;

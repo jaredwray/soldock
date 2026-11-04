@@ -318,6 +318,7 @@ export const send = defineOperation({
 	summary: "Send a message",
 	description: [
 		"Sends a message from your address. Recipients in this deployment get it directly. Other recipients get it through Cloudflare Email Service.",
+		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"An agent can send only to the recipients that its policy allows. Otherwise the call fails with policy_denied and nothing is sent.",
 		"Set idempotency_key to make a retry safe: a second call with the same key and the same message returns the first result and sends nothing. The same key with a different message fails with conflict.",

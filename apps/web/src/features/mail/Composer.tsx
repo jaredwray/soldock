@@ -1,11 +1,14 @@
 import { MAIL_LIMITS, type OutputOf } from "@soldock/contracts";
-import { type ChangeEvent, type FormEvent, useId, useRef, useState } from "react";
+import type { Node } from "prosemirror-model";
+import { type ChangeEvent, type FormEvent, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { type Draft, parseAddressList } from "./compose.ts";
+import { RichTextEditor } from "./RichTextEditor.tsx";
+import { docToHtml, docToText, textToDoc } from "./richText.ts";
 
 export type SendResult = OutputOf<"mail.send">;
 
@@ -27,6 +30,7 @@ function encodedSize(bytes: number): number {
 }
 
 const TOO_LARGE = `The message is too large. The limit is ${formatBytes(MAIL_LIMITS.messageBytes)}.`;
+const TOO_LONG = `The message text is too long. The limit is ${MAIL_LIMITS.bodyChars.toLocaleString("en-US")} characters.`;
 
 function domainOf(address: string): string {
 	return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
@@ -53,7 +57,11 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 	const [fields, setFields] = useState({ to: draft.to, cc: draft.cc, bcc: draft.bcc });
 	const [showCopies, setShowCopies] = useState(draft.cc !== "" || draft.bcc !== "");
 	const [subject, setSubject] = useState(draft.subject);
-	const [text, setText] = useState(draft.text);
+	// The body is a rich-text document. The draft text becomes paragraphs, and its "> " lines a quote.
+	const [initialDoc] = useState(() => textToDoc(draft.text));
+	const [doc, setDoc] = useState<Node>(initialDoc);
+	// Each send has both forms: HTML for the formatting, and plain text for mail apps without HTML.
+	const body = useMemo(() => ({ text: docToText(doc), html: docToHtml(doc) }), [doc]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const [reading, setReading] = useState(false);
 	const [sending, setSending] = useState(false);
@@ -67,7 +75,6 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 		cc: useId(),
 		bcc: useId(),
 		subject: useId(),
-		body: useId(),
 		files: useId(),
 		size: useId(),
 	};
@@ -77,11 +84,11 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 		fields.cc !== draft.cc ||
 		fields.bcc !== draft.bcc ||
 		subject !== draft.subject ||
-		text !== draft.text ||
+		!doc.eq(initialDoc) ||
 		attachments.length > 0;
 
 	const attachmentBytes = attachments.reduce((sum, file) => sum + file.size, 0);
-	const textBytes = new Blob([text, subject]).size;
+	const textBytes = new Blob([body.text, body.html, subject]).size;
 	const estimatedBytes = encodedSize(attachmentBytes) + textBytes;
 	const tooLarge = estimatedBytes > MAIL_LIMITS.messageBytes;
 	const allRecipients = [fields.to, fields.cc, fields.bcc].flatMap((value) => parseAddressList(value).addresses);
@@ -171,6 +178,10 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 			setError(`A message can have at most ${MAIL_LIMITS.recipients} recipients in To, Cc and Bcc together.`);
 			return;
 		}
+		if (body.text.length > MAIL_LIMITS.bodyChars || body.html.length > MAIL_LIMITS.bodyChars) {
+			setError(TOO_LONG);
+			return;
+		}
 		if (tooLarge) {
 			setError(TOO_LARGE);
 			return;
@@ -187,7 +198,8 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 				cc: parsed.cc.addresses,
 				bcc: parsed.bcc.addresses,
 				subject,
-				text,
+				text: body.text,
+				html: body.html,
 				attachments: attachments.map(({ filename, mime_type, content_base64 }) => ({
 					filename,
 					mime_type,
@@ -264,18 +276,13 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 						/>
 					</div>
 				</div>
-				<label htmlFor={ids.body} className="visually-hidden">
-					Message
-				</label>
-				<textarea
-					id={ids.body}
-					className="compose-body"
-					value={text}
-					maxLength={MAIL_LIMITS.bodyChars}
-					onChange={(event) => setText(event.target.value)}
+				<RichTextEditor
+					initialDoc={initialDoc}
+					onChange={setDoc}
 					disabled={sending}
+					label="Message"
 					placeholder="Write your message"
-					data-autofocus={draft.to !== "" ? true : undefined}
+					autofocus={draft.to !== ""}
 				/>
 				{attachments.length > 0 && (
 					<ul className="compose-attachments" aria-label="Attachments">
