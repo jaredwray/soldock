@@ -167,19 +167,25 @@ export function plainTextSlice(text: string, lineMarks: readonly Mark[] = []): S
 /** Deeper quotes stay as text. The limit stops a hostile message from nesting without end. */
 export const MAX_QUOTE_DEPTH = 8;
 
+/**
+ * The marker that `quote` in compose.ts puts before each line. A line that starts with `>` and no
+ * space stays text, so the text of a draft comes back the same from `docToText`.
+ */
+const QUOTE_MARKER = "> ";
+
 function textBlocks(lines: readonly string[], depth: number): Node[] {
 	const blocks: Node[] = [];
 	let index = 0;
 	while (index < lines.length) {
 		const line = lines[index] ?? "";
-		if (depth >= MAX_QUOTE_DEPTH || !line.startsWith(">")) {
+		if (depth >= MAX_QUOTE_DEPTH || !line.startsWith(QUOTE_MARKER)) {
 			blocks.push(paragraph(line));
 			index += 1;
 			continue;
 		}
 		const quoted: string[] = [];
-		for (let next = lines[index]; next?.startsWith(">"); next = lines[index]) {
-			quoted.push(next.replace(/^> ?/, ""));
+		for (let next = lines[index]; next?.startsWith(QUOTE_MARKER); next = lines[index]) {
+			quoted.push(next.slice(QUOTE_MARKER.length));
 			index += 1;
 		}
 		blocks.push(nodes.blockquote.create(null, textBlocks(quoted, depth + 1)));
@@ -189,7 +195,7 @@ function textBlocks(lines: readonly string[], depth: number): Node[] {
 
 /**
  * The first document of a composer, from the plain text of a draft. Each line is a paragraph. A
- * run of lines that start with `>` is a quote, as in a reply.
+ * run of lines that start with `> ` is a quote, as in a reply.
  */
 export function textToDoc(text: string): Node {
 	return nodes.doc.create(null, textBlocks(splitLines(text), 0));

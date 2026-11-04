@@ -145,7 +145,7 @@ describe("textToDoc", () => {
 			untrusted: false,
 			authentication: null,
 			body: {
-				text: "Hello\n\n> an older quote\nBye",
+				text: "Hello\n\n> an older quote\n>>no space, so not a quote marker\nBye",
 				html: null,
 				remote_images_blocked: 0,
 				truncated: false,
@@ -157,14 +157,18 @@ describe("textToDoc", () => {
 		const draft = replyDraft(original, "me@soldock.test", false);
 		const result = textToDoc(draft.text);
 		expect(result.childCount).toBe(4);
-		expect(result.child(3).type).toBe(nodes.blockquote);
+		const quote = result.child(3);
+		expect(quote.type).toBe(nodes.blockquote);
 		// The older quote in the original message is a quote in the quote.
-		expect(result.child(3).child(2).type).toBe(nodes.blockquote);
+		expect(quote.child(2).type).toBe(nodes.blockquote);
+		// Only "> " starts a quote. A line that starts with ">" and no space stays text.
+		expect(quote.child(3).type).toBe(nodes.paragraph);
+		expect(quote.child(3).textContent).toBe(">>no space, so not a quote marker");
 		expect(docToText(result)).toBe(draft.text);
 	});
 
 	it("stops nesting quotes at the limit, so a hostile message cannot overflow the stack", () => {
-		const result = textToDoc(`${">".repeat(100_000)} deep\r\nnext`);
+		const result = textToDoc(`${"> ".repeat(100_000)}deep\r\nnext`);
 		let depth = 0;
 		let node = result.child(0);
 		while (node.type === nodes.blockquote) {
@@ -172,7 +176,7 @@ describe("textToDoc", () => {
 			node = node.child(0);
 		}
 		expect(depth).toBe(MAX_QUOTE_DEPTH);
-		expect(node.textContent).toBe(`${">".repeat(100_000 - MAX_QUOTE_DEPTH)} deep`);
+		expect(node.textContent).toBe(`${"> ".repeat(100_000 - MAX_QUOTE_DEPTH)}deep`);
 		expect(result.child(1).textContent).toBe("next");
 	});
 });

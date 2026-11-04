@@ -64,8 +64,9 @@ MCP clients. The app has no UI-only path.
     without HTML. In the HTML, each paragraph is a `<div>`, as in most mail apps. In the text, a
     list item starts with `- ` or `1. `, a quote line starts with `> `, and a link is `text <address>`.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
-    Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. Quotes nest to a
-    depth of 8 at most. Deeper `>` characters stay as text.
+    Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
+    with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
+    depth of 8 at most. Deeper `> ` markers stay as text.
   - Pasted HTML keeps only what the editor can show. Pasted plain text keeps its empty lines.
   - The composer and the editor are a separate chunk. The mail app loads the chunk after it starts.
     If the chunk cannot load (the connection is down, or a deploy removed the files of this
