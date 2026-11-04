@@ -20,7 +20,7 @@ describe("setup recovery at boot", () => {
 		expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/auth/setup"]);
 	});
 
-	it("permits existing accounts and the new owner to continue while the token remains set", async () => {
+	it("opens the new owner's session after setup while the token remains set", async () => {
 		const fetcher = vi.fn(async (url: string) =>
 			url === "/api/v1/account"
 				? Response.json({ principal: { id: "owner" } })

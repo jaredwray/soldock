@@ -2342,6 +2342,21 @@ h3.card-title {
 	gap: 16px;
 }
 
+.setup-choices {
+	display: grid;
+	gap: 16px;
+	margin-top: 16px;
+}
+
+.setup-choices .field-hint {
+	margin: 0;
+}
+
+.setup-actions {
+	display: grid;
+	gap: 12px;
+}
+
 .setup-intro {
 	margin: 0;
 }
