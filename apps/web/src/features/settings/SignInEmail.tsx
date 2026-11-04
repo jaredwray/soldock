@@ -46,14 +46,7 @@ export function SignInEmailCard() {
 		<section className="card">
 			<h2 className="card-title">Sign-in email</h2>
 			<p className="muted">
-				When you sign in, we send a one-time code to this address.{" "}
-				{current ? (
-					<>
-						It is now <strong>{current}</strong>.
-					</>
-				) : (
-					"You have no sign-in email, so you cannot sign in on a different browser."
-				)}
+				When you sign in, we send a one-time code to this address. It is now <strong>{current}</strong>.
 			</p>
 			<form className="create-key" onSubmit={submit} noValidate>
 				<div className="field">

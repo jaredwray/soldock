@@ -181,16 +181,6 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    Sign-in codes leave through Email Service. Do step 3 (send) before you sign in on a different
    browser.
 
-   A deployment that ran setup before sign-in codes existed has an owner without a sign-in email,
-   and migration `0002` ends each session. Set the sign-in email with the owner's API key, then
-   sign in with a code:
-
-   ```sh
-   curl -X POST "https://<dock-host>/api/v1/account/sign-in-email" \
-     -H "authorization: Bearer <owner API key>" -H "content-type: application/json" \
-     -d '{"sign_in_email":"you@personal.example"}'
-   ```
-
 Email Service is in beta, and its terms and quotas are for transactional mail. The
 [Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person
 mail. Until it reports, send test mail only to seed accounts.

@@ -20,7 +20,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   only owner.
 - A human has a **sign-in email**: an address outside the mail domains, such as a personal address.
   Sign-in codes go there, because a code in a Soldock mailbox can be read only after sign-in. It is
-  stored lowercase, and only one person can have it. It is not in the `Principal` output: only
+  stored lowercase, and only one person can have it. A `CHECK` in D1 makes it required for each
+  human. It is not in the `Principal` output: only
   `account.whoami` shows it, to its owner. Agents have none.
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
   `allowlist` (domains and addresses) or `any`.
@@ -65,7 +66,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   - A human gets at most 5 codes an hour (`SIGN_IN_CODES_PER_HOUR`). More requests send nothing.
     The insert counts and writes in one guarded statement, so parallel requests cannot go past the
     limit. Rows older than one hour are deleted on the next request.
-  - Agents, unknown addresses and humans without a sign-in email get no code.
+  - Agents and unknown addresses get no code.
 - `POST /auth/session` (`{ email, code }`): step 2 of sign-in. Spaces and hyphens in the code are
   ignored. Each guess adds one to the attempts of the newest code before the compare, in one
   statement, so parallel guesses cannot go past 5. A correct code works one time. An unknown

@@ -160,7 +160,7 @@ export async function resolveAddress(db: D1Database, address: string): Promise<P
 
 /**
  * The human who signs in with this address: the address is their sign-in email or one of their
- * Soldock addresses. Returns null for an agent, an unknown address and a human without a sign-in email.
+ * Soldock addresses. Returns null for an agent and an unknown address.
  */
 export async function findSignInPrincipal(db: D1Database, email: string): Promise<PrincipalRecord | null> {
 	const row = await db
