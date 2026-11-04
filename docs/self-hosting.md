@@ -34,7 +34,7 @@ URLs are off, because each one is a second origin with the same data.
     - Turn on DNSSEC in the development account.
     - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
     - Send test mail only to seed accounts, inside the Email Service quota.
-  - production: `jaredwray.com`
+  - production: `soldock.org`
 - No DNS record for `work.soldock.org`. The development deploy attaches this custom domain to the
   Worker and makes its DNS record and certificate. In GitHub Actions, the deploy replaces a DNS record
   that conflicts. So do not use this name for a different service.
@@ -129,7 +129,7 @@ Email Routing can route only to a Worker that exists.
 | Environment | Mail domain | Dock host | Worker |
 | --- | --- | --- | --- |
 | `development` | `soldock.org` | `work.soldock.org` | `soldock-dock-dev` |
-| `production` | `jaredwray.com` | `dock.jaredwray.com` | `soldock-dock` |
+| `production` | `soldock.org` | `dock.jaredwray.com` | `soldock-dock` |
 
 The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
 top-level only and applies to each environment. So it cannot hold a rule for one environment.
