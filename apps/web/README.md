@@ -62,6 +62,7 @@ MCP clients. The app has no UI-only path.
     shows: `Ctrl` (`⌘` on a Mac) with `B`, `I`, `U`, `K` or `\`, and `Ctrl+Shift` with `X`, `7`, `8`
     or `9`. `Ctrl+[` and `Ctrl+]` change the level of a list item. `Shift+Enter` starts a new line in
     the same paragraph.
+  - The message body has no focus ring. The text caret shows the focus.
   - The toolbar is one tab stop. The arrow keys, Home and End move between its buttons. A toggle
     button has `aria-pressed`. A click on a button does not take the focus from the editor.
   - The link dialog takes the text to show and a web or email address. An address without a scheme

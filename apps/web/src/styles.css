@@ -1658,10 +1658,10 @@ fieldset {
 	resize: vertical;
 }
 
+/* The text caret shows the focus. A ring around the full message area is too much. */
+.compose-body:focus,
 .compose-body:focus-visible {
-	outline: 2px solid var(--focus);
-	outline-offset: 2px;
-	border-radius: 2px;
+	outline: none;
 }
 
 /* The same spacing as the HTML that the message gets: one line for each paragraph, and the
