@@ -12,7 +12,7 @@ import { z } from "zod";
 import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
-import { freshDirectoryStatements } from "./setup.ts";
+import { prepareFreshDirectory } from "./setup.ts";
 import { consumeSignInCode, requestSignInCode } from "./signin.ts";
 import {
 	assertPrimaryAddress,
@@ -108,15 +108,21 @@ export function mountAuthRoutes(app: AuthApp): void {
 		}
 		assertPrimaryAddress(address);
 		assertSignInEmail(c.env, sign_in_email);
-		const created = await createPrincipal(
-			c.env.DIRECTORY,
-			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, sign_in_email },
-			{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
-			{
-				onlyIfEmpty: true,
-				beforeCreate: parsed.data.start_fresh ? freshDirectoryStatements(c.env.DIRECTORY) : [],
-			},
-		);
+		const reset = parsed.data.start_fresh ? await prepareFreshDirectory(c.env) : null;
+		let created: Awaited<ReturnType<typeof createPrincipal>> = null;
+		try {
+			created = await createPrincipal(
+				c.env.DIRECTORY,
+				{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, sign_in_email },
+				{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
+				{
+					onlyIfEmpty: true,
+					beforeCreate: reset?.statements ?? [],
+				},
+			);
+		} finally {
+			await reset?.finish(created !== null);
+		}
 		if (!created) throw new OperationError("conflict", "Setup already ran: the directory has an owner.");
 		audit({
 			op: parsed.data.start_fresh ? "auth.setup_fresh" : "auth.setup",

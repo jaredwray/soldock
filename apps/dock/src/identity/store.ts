@@ -185,6 +185,9 @@ export interface NewPrincipal {
 /** Turns a unique-constraint failure of the directory into a conflict that the caller can read. */
 function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);
+	if (text.includes("CHECK constraint failed: id = 1")) {
+		return new OperationError("conflict", "Another reset replaced this request. Use the latest reset result.");
+	}
 	if (text.includes("UNIQUE constraint failed: addresses.address")) {
 		return new OperationError("conflict", "That address belongs to another principal.");
 	}
@@ -217,7 +220,7 @@ export async function createPrincipal(
 	const secret = `${API_KEY_PREFIX}${randomToken(32)}`;
 	const keyHash = await sha256Hex(secret);
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
-	const guard = options.onlyIfEmpty ? "WHERE NOT EXISTS (SELECT 1 FROM principals)" : "";
+	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
 	try {
 		const beforeCreate = options.beforeCreate ?? [];
 		const results = await db.batch([

@@ -276,7 +276,7 @@ interface MessageMetaRow extends Row {
  */
 export class MailboxDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
-	private draining = false;
+	private drainTask: Promise<void> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -919,6 +919,8 @@ export class MailboxDO extends DurableObject<Env> {
 	 * first result.
 	 */
 	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult } | Refusal> {
+		if (this.meta("delivery_pause"))
+			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
@@ -990,15 +992,53 @@ export class MailboxDO extends DurableObject<Env> {
 	 */
 	override async alarm(): Promise<void> {
 		// One drain at a time. A drain that is running schedules the next one when it ends.
-		if (this.draining) return;
-		this.draining = true;
+		if (this.drainTask) return this.drainTask;
+		if (this.meta("delivery_pause")) return;
+		this.drainTask = this.runAlarm();
 		try {
-			await this.drainOutbox();
+			await this.drainTask;
 		} finally {
-			this.draining = false;
+			this.drainTask = null;
 		}
+	}
+
+	private async runAlarm(): Promise<void> {
+		await this.drainOutbox();
+		if (this.meta("delivery_pause")) return;
 		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox")?.at ?? null;
 		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+	}
+
+	/** Blocks new sends and waits for every active delivery before the directory reset. */
+	async pauseDeliveries(token: string, generation: number): Promise<void> {
+		if (Number(this.meta("delivery_pause_generation") ?? 0) > generation) return;
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta("delivery_pause", token);
+			this.setMeta("delivery_pause_generation", String(generation));
+		});
+		if (this.drainTask) await this.drainTask;
+		await this.ctx.storage.deleteAlarm();
+	}
+
+	/** Resumes the mailbox if the directory transaction did not commit. */
+	async resumeDeliveries(token: string): Promise<void> {
+		if (this.meta("delivery_pause") !== token) return;
+		this.sql.exec("DELETE FROM meta WHERE key = 'delivery_pause'");
+		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n) await this.ctx.storage.setAlarm(Date.now());
+	}
+
+	/** Cancels the old outbox after the directory reset. The mailbox stays paused. */
+	cancelDeliveries(token: string): void {
+		if (this.meta("delivery_pause") !== token) return;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				"UPDATE delivery SET status = 'failed', error = ?, updated_at = ? WHERE status = 'queued'",
+				"The sender account no longer owns this address.",
+				Date.now(),
+			);
+			this.sql.exec("DELETE FROM outbox");
+			this.bump();
+		});
 	}
 
 	private async drainOutbox(): Promise<void> {
@@ -1039,6 +1079,7 @@ export class MailboxDO extends DurableObject<Env> {
 				// The raw key keeps the original principal ID, even if a reset reuses the address.
 				const senderId = /^mail\/raw\/([^/]+)\//.exec(row.raw_key)?.[1];
 				const sender = senderId ? await getPrincipal(this.env.DIRECTORY, senderId) : null;
+				if (this.meta("delivery_pause")) return;
 				if (!sender || sender.address !== row.from_addr) {
 					throw new SenderUnavailable("The sender account no longer owns this address.");
 				}

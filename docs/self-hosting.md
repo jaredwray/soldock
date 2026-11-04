@@ -203,7 +203,9 @@ The reset deletes all directory accounts, addresses, API keys, sessions, and sig
 It recreates the directory schema and creates the new owner in one D1 transaction.
 If that transaction fails, the old directory stays intact.
 R2 messages, queues, and mailbox Durable Objects stay in place. New accounts cannot access old mail.
-Mailbox alarms cancel pending deliveries from deleted accounts when they next run.
+The reset blocks new accounts, pauses the old mailboxes, and waits for active sends before it replaces the directory.
+It then cancels the remaining old outboxes. Mailboxes resume if the directory transaction fails.
+If a reset stops before cleanup, retry after ten minutes. The expired lease permits another reset.
 Mail that Email Service already accepted cannot be recalled.
 
 Select **Use existing accounts** to keep the data and proceed to the app or sign-in.

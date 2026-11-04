@@ -199,6 +199,9 @@ describe("first-run setup", () => {
 		});
 		expect(res.status).toBe(500);
 		expect(await api(owner.key)("account.whoami")).toMatchObject({ principal: { id: owner.id } });
+		expect(
+			(await owner.call("mail.send", { to: ["owner@dock.test"], text: "The mailbox resumed" })).recipients,
+		).toMatchObject([{ status: "delivered" }]);
 	});
 
 	it("recreates the old schema that lacks sign_in_email and supports a new session", async () => {

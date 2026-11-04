@@ -127,6 +127,10 @@ of the message that it answers.
    with outbox rows and no alarm, it sets an alarm, so a stop between the transaction and the
    alarm cannot lose mail.
 
+A directory reset pauses all old mailboxes and waits for their active deliveries before it replaces the accounts.
+The pause marker survives object eviction. A paused mailbox refuses new sends and starts no further deliveries.
+After the reset, setup cancels the old outboxes. A failed directory transaction resumes the mailboxes.
+
 Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, with `SENT` and
 `INBOX`.
 
@@ -157,6 +161,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
+| Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<principal>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |

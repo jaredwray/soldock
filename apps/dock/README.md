@@ -83,7 +83,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes, reset lock) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<principal>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
