@@ -69,7 +69,7 @@
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] }],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
-		"MAIL_DOMAINS": "jaredwray.com",
+		"MAIL_DOMAINS": "soldock.org",
 		// The receiving server whose Authentication-Results header the mailbox trusts.
 		"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
 	},
