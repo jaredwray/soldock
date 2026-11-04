@@ -3,9 +3,38 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.ts";
 import { identityHandlers } from "../src/identity/index.ts";
+import worker from "../src/index.ts";
 import { mailHandlers } from "../src/mail/index.ts";
 
 const ORIGIN = "https://dock.test";
+
+describe("GET /healthz", () => {
+	it("returns JSON through the Worker entry point for a browser navigation", async () => {
+		const res = await get("/healthz", { "sec-fetch-mode": "navigate", accept: "text/html" });
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toMatch(/^application\/json/);
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect(res.headers.get("x-request-id")).toBeTruthy();
+		expect(await res.json()).toEqual({ ok: true });
+	});
+
+	it("works without bindings even when the request has credentials", async () => {
+		const unavailable = new Proxy({} as Env, {
+			get() {
+				throw new Error("Bindings are unavailable");
+			},
+		});
+		const res = await worker.fetch(
+			new Request(`${ORIGIN}/healthz`, {
+				headers: { cookie: "__Host-soldock_session=old-session", authorization: "Bearer old-key" },
+			}),
+			unavailable,
+			createExecutionContext(),
+		);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true });
+	});
+});
 
 function get(path: string, headers?: Record<string, string>): Promise<Response> {
 	return exports.default.fetch(new Request(`${ORIGIN}${path}`, headers ? { headers } : {}));

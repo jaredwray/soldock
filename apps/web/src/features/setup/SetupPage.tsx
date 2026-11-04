@@ -1,23 +1,32 @@
-import { ApiError, DisplayName, EmailAddress, SETUP_TOKEN_MIN_LENGTH, type SetupResult } from "@soldock/contracts";
+import {
+	ApiError,
+	DisplayName,
+	EmailAddress,
+	SETUP_TOKEN_MIN_LENGTH,
+	type SetupInput,
+	type SetupResult,
+} from "@soldock/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { runSetup, type SetupNeeded, setupErrorMessage } from "./setup.ts";
 
 interface SetupPageProps {
 	status: SetupNeeded;
-	/** Gets the setup status again. After setup ran, the app shows the sign-in page. */
+	/** Gets the setup status again after a change to the Worker secret. */
 	onRecheck: () => Promise<void>;
 	/** Setup is done and the owner is signed in. */
 	onDone: () => void;
+	onContinue: () => void;
 }
 
 /**
- * First-run setup. It shows while the directory has no owner. The operator proves control of the
- * deployment with the SETUP_TOKEN Worker secret, and becomes the owner.
+ * Setup and optional directory reset. The operator proves control with the SETUP_TOKEN Worker secret.
  */
-export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
+export function SetupPage({ status, onRecheck, onDone, onContinue }: SetupPageProps) {
 	const [created, setCreated] = useState<SetupResult | null>(null);
+	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
 
 	useEffect(() => {
 		document.title = "Set up – Soldock";
@@ -34,7 +43,32 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 				</div>
 				<h1 className="sign-in-title">Set up Soldock</h1>
 				{status.setup_token === "ready" ? (
-					<OwnerForm mailDomains={status.mail_domains} onCreated={setCreated} onRecheck={onRecheck} />
+					status.start_fresh_available && choice === null ? (
+						<>
+							<p>The setup token is set. Do you want to start fresh?</p>
+							<p className="field-hint">
+								A fresh start deletes all accounts, API keys, sessions, and sign-in codes. Stored mail stays in storage,
+								but new accounts cannot access it.
+							</p>
+							<button type="button" className="button button-primary button-block" onClick={() => setChoice("new")}>
+								Set up without a reset
+							</button>
+							<button type="button" className="button button-danger button-block" onClick={() => setChoice("fresh")}>
+								Start fresh
+							</button>
+							<button type="button" className="button button-block" onClick={onContinue}>
+								Use existing accounts
+							</button>
+						</>
+					) : (
+						<OwnerForm
+							mailDomains={status.mail_domains}
+							startFresh={choice === "fresh"}
+							onCreated={setCreated}
+							onRecheck={onContinue}
+							onBack={() => setChoice(null)}
+						/>
+					)
 				) : (
 					<TokenSteps tooShort={status.setup_token === "too_short"} onRecheck={onRecheck} />
 				)}
@@ -46,8 +80,8 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 						enter your address, and we send a code to your sign-in email. You can make more keys in Settings.
 					</p>
 					<p className="notice">
-						Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. Setup cannot run again, so the
-						secret has no use.
+						Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. This disables the option to
+						start fresh.
 					</p>
 				</SecretDialog>
 			)}
@@ -101,11 +135,14 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 interface OwnerFormProps {
 	mailDomains: readonly string[];
 	onCreated: (result: SetupResult) => void;
-	onRecheck: () => Promise<void>;
+	onRecheck: () => void;
+	startFresh: boolean;
+	onBack: () => void;
 }
 
 /** Creates the owner with the setup token. */
-function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
+function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: OwnerFormProps) {
+	const [pending, setPending] = useState<SetupInput | null>(null);
 	const [token, setToken] = useState("");
 	const [name, setName] = useState("");
 	const [localPart, setLocalPart] = useState("");
@@ -151,20 +188,28 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 		if (mailDomains.includes(signInDomain)) {
 			return invalid("Your sign-in email must be outside Soldock, so that you can read a code before you sign in.");
 		}
+		const input: SetupInput = {
+			display_name: name.trim(),
+			address,
+			sign_in_email: signInEmail.trim(),
+			...(startFresh ? { start_fresh: "DELETE DIRECTORY" as const } : {}),
+		};
+		if (startFresh) return setPending(input);
+		await create(input).catch(() => {});
+	}
+
+	async function create(input: SetupInput) {
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await runSetup(token.trim(), {
-				display_name: name.trim(),
-				address,
-				sign_in_email: signInEmail.trim(),
-			});
+			const result = await runSetup(token.trim(), input);
 			setToken("");
 			onCreated(result);
 		} catch (caught) {
 			// 409: a different browser or a curl call ran setup first. The owner signs in instead.
 			setError({ message: setupErrorMessage(caught), alreadyRan: caught instanceof ApiError && caught.status === 409 });
 			setBusy(false);
+			throw caught;
 		}
 	}
 
@@ -179,7 +224,11 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 
 	return (
 		<form className="setup-form" onSubmit={submit} noValidate>
-			<p className="setup-intro">Soldock has no owner yet. Enter the setup token to become the owner.</p>
+			<p className="setup-intro">
+				{startFresh
+					? "Enter the setup token and the details of the new owner."
+					: "Enter the setup token to create the first owner."}
+			</p>
 			<div className="field">
 				<label htmlFor={ids.token} className="field-label">
 					Setup token
@@ -284,8 +333,24 @@ function OwnerForm({ mailDomains, onCreated, onRecheck }: OwnerFormProps) {
 				)}
 			</div>
 			<button type="submit" className="button button-primary button-block" disabled={busy}>
-				{busy ? "Creating the owner…" : "Create the owner"}
+				{busy ? "Please wait…" : startFresh ? "Review fresh start" : "Create the owner"}
 			</button>
+			<button type="button" className="button button-block" onClick={onBack} disabled={busy}>
+				Back
+			</button>
+			{pending && (
+				<ConfirmDialog
+					title="Start fresh?"
+					confirmLabel="Delete accounts and create the owner"
+					danger
+					onClose={() => setPending(null)}
+					onConfirm={() => create(pending)}
+				>
+					<p>This deletes all accounts, API keys, sessions, and sign-in codes. You cannot undo this action.</p>
+					<p>Stored mail stays in storage. The new accounts cannot access the old mail.</p>
+					<p>The new owner is {pending.address}.</p>
+				</ConfirmDialog>
+			)}
 		</form>
 	);
 }

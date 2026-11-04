@@ -12,6 +12,7 @@ import { z } from "zod";
 import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
+import { freshDirectoryStatements } from "./setup.ts";
 import { consumeSignInCode, requestSignInCode } from "./signin.ts";
 import {
 	assertPrimaryAddress,
@@ -55,12 +56,24 @@ async function jsonBody(request: Request): Promise<unknown> {
  * one-time code that goes to their sign-in email.
  */
 export function mountAuthRoutes(app: AuthApp): void {
-	// First-run setup status for the web app. Before setup, it tells if the SETUP_TOKEN secret is
-	// ready and which mail domains the owner can use. After setup, it tells nothing more.
+	// A valid setup secret permits recovery without a query against an old directory schema.
 	app.get("/auth/setup", async (c) => {
-		const status: SetupStatus = (await directoryIsEmpty(c.env.DIRECTORY))
-			? { setup_needed: true, setup_token: setupTokenState(c.env.SETUP_TOKEN), mail_domains: [...mailDomains(c.env)] }
-			: { setup_needed: false };
+		const tokenState = setupTokenState(c.env.SETUP_TOKEN);
+		const status: SetupStatus =
+			tokenState === "ready"
+				? {
+						setup_needed: true,
+						setup_token: tokenState,
+						mail_domains: [...mailDomains(c.env)],
+						start_fresh_available: true,
+					}
+				: (await directoryIsEmpty(c.env.DIRECTORY))
+					? {
+							setup_needed: true,
+							setup_token: setupTokenState(c.env.SETUP_TOKEN),
+							mail_domains: [...mailDomains(c.env)],
+						}
+					: { setup_needed: false };
 		return c.json(status, 200, { "cache-control": "no-store" });
 	});
 
@@ -99,11 +112,14 @@ export function mountAuthRoutes(app: AuthApp): void {
 			c.env.DIRECTORY,
 			{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, sign_in_email },
 			{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
-			{ onlyIfEmpty: true },
+			{
+				onlyIfEmpty: true,
+				beforeCreate: parsed.data.start_fresh ? freshDirectoryStatements(c.env.DIRECTORY) : [],
+			},
 		);
 		if (!created) throw new OperationError("conflict", "Setup already ran: the directory has an owner.");
 		audit({
-			op: "auth.setup",
+			op: parsed.data.start_fresh ? "auth.setup_fresh" : "auth.setup",
 			actor: created.principal.id,
 			actorKind: "human",
 			credential: "setup_token",

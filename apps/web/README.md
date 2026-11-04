@@ -19,9 +19,15 @@ MCP clients. The app has no UI-only path.
     to step 1.
   - Agents have no sign-in email, so they cannot sign in to the UI. Each 401 from an operation
     shows the sign-in page again.
-- **Boot.** The app calls `account.whoami`. On a 401, it calls `GET /auth/setup`: while the
-  directory has no owner, the setup page shows. Otherwise, the sign-in page shows.
-- **First-run setup.** The setup page shows until an owner exists.
+- **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
+  An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
+  Otherwise, the session decides between the app and the sign-in page.
+- **Setup.** A valid token offers setup without a reset, a fresh start, or use of existing accounts.
+  - A fresh start asks for the token and new owner details, then shows a confirmation with Cancel first.
+    It deletes all directory accounts, addresses, keys, sessions, and sign-in codes.
+    Old mail stays in storage. New accounts cannot access it.
+  - The reset and new owner share one transaction. A failure leaves the old directory intact.
+  - After setup or sign-in, the app opens without another setup prompt. A reload shows setup until the operator deletes the token.
   - While the `SETUP_TOKEN` secret is missing or too short, the page shows how to set it, and a
     "Check again" button.
   - When the secret is ready, the form takes the setup token, the name, the address and the

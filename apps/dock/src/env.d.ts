@@ -1,6 +1,6 @@
 // Bindings that `wrangler types` cannot see. Secrets are set with `wrangler secret put`, never in
 // wrangler.jsonc.
 interface Env {
-	/** Turns on `POST /auth/setup` while it has at least 32 characters. Delete it after the first-run setup. */
+	/** Permits setup and a directory reset at 32 characters or more. Delete it after setup. */
 	SETUP_TOKEN?: string;
 }

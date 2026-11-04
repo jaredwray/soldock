@@ -11,6 +11,7 @@
 	// Pinned. Bump deliberately, in its own PR, after reading the compatibility-flag changelog.
 	"compatibility_date": "2026-10-01",
 	"compatibility_flags": ["nodejs_compat"],
+	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
 	// Production serves only its custom domain, never a second origin on workers.dev.
 	"workers_dev": false,
 	// Preview URLs are also workers.dev origins, with the same bindings. Each env inherits this value.
@@ -26,6 +27,7 @@
 		// Browser navigations go straight to assets, so every Worker-owned prefix must be listed here.
 		// Keep in sync with WORKER_PREFIXES in src/routes.ts; a test enforces it.
 		"run_worker_first": [
+			"/healthz*",
 			"/api/*",
 			"/mcp*",
 			"/oauth/*",

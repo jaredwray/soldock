@@ -1,40 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { endSession } from "./features/auth/auth.ts";
+import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
-import { type Session, SessionContext, type Whoami } from "./features/auth/session.tsx";
+import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
-import { getSetupStatus, type SetupNeeded } from "./features/setup/setup.ts";
-import { api, errorMessage, isUnauthenticated, onUnauthenticated } from "./lib/api.ts";
+import { api, onUnauthenticated } from "./lib/api.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
 
-type SessionState =
-	| { status: "loading" }
-	| { status: "setup"; setup: SetupNeeded }
-	| { status: "signed-out"; expired: boolean }
-	| { status: "error"; message: string }
-	| { status: "signed-in"; whoami: Whoami };
-
 /**
- * Boot: `account.whoami` decides if the app shows. Without a session, `GET /auth/setup` decides
- * between first-run setup (no owner yet) and the sign-in page.
+ * Boot checks setup before session authentication. A setup token also permits a fresh start.
  */
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 
-	const load = useCallback(async () => {
-		try {
-			const whoami = await api.call("account.whoami");
-			setState({ status: "signed-in", whoami });
-		} catch (error) {
-			if (!isUnauthenticated(error)) return setState({ status: "error", message: errorMessage(error) });
-			try {
-				const setup = await getSetupStatus();
-				setState(setup.setup_needed ? { status: "setup", setup } : { status: "signed-out", expired: false });
-			} catch (setupError) {
-				setState({ status: "error", message: errorMessage(setupError) });
-			}
-		}
+	const load = useCallback(async (showSetup = true) => {
+		setState(await loadSession(showSetup));
 	}, []);
 
 	useEffect(() => {
@@ -94,9 +75,16 @@ export function App() {
 					</main>
 				);
 			case "setup":
-				return <SetupPage status={state.setup} onRecheck={load} onDone={() => void load()} />;
+				return (
+					<SetupPage
+						status={state.setup}
+						onRecheck={load}
+						onContinue={() => void load(false)}
+						onDone={() => void load(false)}
+					/>
+				);
 			case "signed-out":
-				return <SignInPage expired={state.expired} onSignedIn={() => void load()} />;
+				return <SignInPage expired={state.expired} onSignedIn={() => void load(false)} />;
 			case "signed-in":
 				return (
 					<SessionContext.Provider value={session}>

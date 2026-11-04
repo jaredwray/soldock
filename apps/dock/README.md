@@ -28,6 +28,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   `/blob/`, `/dl/`, `/hooks/`) go to the Hono app. Unknown ones get a `404` with an
   `application/problem+json` body, never the SPA.
 - Every app response carries a server-generated `x-request-id`. A client-supplied one is ignored.
+- `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).

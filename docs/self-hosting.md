@@ -176,7 +176,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
      -d '{"display_name":"Your Name","address":"you@<mail-domain>","sign_in_email":"you@personal.example"}'
    ```
 
-   After setup, the setup page does not show again, and a second setup gets `409`.
+   After you delete the token, the setup page does not show again. Setup without a reset gets `409` when accounts exist.
 
    Sign-in codes leave through Email Service. Do step 3 (send) before you sign in on a different
    browser.
@@ -187,6 +187,33 @@ mail. Until it reports, send test mail only to seed accounts.
 
 Messages that the Worker sends with `send_email` show as "dropped" in the Email Routing summary.
 That is expected: they leave through Email Service, not through a routing rule.
+
+### Start fresh from setup
+
+A valid `SETUP_TOKEN` shows the setup page even when accounts exist or the directory has an old schema.
+The page checks setup before it checks the session. An old session therefore cannot hide the reset option.
+
+1. Set the Worker secret `SETUP_TOKEN` to a random value with at least 32 characters.
+2. Reload the dock host. Select **Start fresh**.
+3. Enter the token and the details of the new owner.
+4. Select **Review fresh start**. Read the confirmation, then confirm the reset.
+5. Copy the new API key. Delete the `SETUP_TOKEN` secret to disable further resets.
+
+The reset deletes all directory accounts, addresses, API keys, sessions, and sign-in codes.
+It recreates the directory schema and creates the new owner in one D1 transaction.
+If that transaction fails, the old directory stays intact.
+R2 messages, queues, and mailbox Durable Objects stay in place. New accounts cannot access old mail.
+
+Select **Use existing accounts** to keep the data and proceed to the app or sign-in.
+Select **Set up without a reset** to create an owner only when the directory is empty.
+A token alone never deletes data. The reset needs the token and `start_fresh: "DELETE DIRECTORY"` in `POST /auth/setup`.
+
+D1 records applied migrations by filename. A change to an applied migration does not change an existing database.
+The reset can replace the old directory schema without `principals.sign_in_email`.
+Keep applied migrations unchanged in future schema changes. Add a new migration file instead.
+Add each new migration to the bundled reset schema in `apps/dock/src/identity/setup.ts` too.
+
+`GET /healthz` checks Worker liveness without D1, authentication, or static assets.
 
 ### Dead letters
 
