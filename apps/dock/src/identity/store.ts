@@ -100,8 +100,8 @@ export function normalizeSignInEmail(email: string): string {
  * A sign-in email must be outside the mail domains. A code sent to a Soldock mailbox can be read only
  * after sign-in, so the person could never sign in.
  */
-export function assertSignInEmail(env: Pick<Env, "MAIL_DOMAINS">, email: string): void {
-	if (mailDomains(env).has(domainOf(email))) {
+export function assertSignInEmail(domains: ReadonlySet<string>, email: string): void {
+	if (domains.has(domainOf(email))) {
 		throw new OperationError(
 			"invalid",
 			"The sign-in email must be outside the mail domains of Soldock, so that you can read a code before you sign in.",
@@ -109,13 +109,26 @@ export function assertSignInEmail(env: Pick<Env, "MAIL_DOMAINS">, email: string)
 	}
 }
 
-/** The mail domains of the deployment, from the `MAIL_DOMAINS` var (comma-separated). */
-export function mailDomains(env: Pick<Env, "MAIL_DOMAINS">): Set<string> {
-	return new Set(
-		env.MAIL_DOMAINS.split(",")
-			.map((domain) => domain.trim().toLowerCase())
-			.filter(Boolean),
-	);
+/** The saved mail domains. Each request reads the current settings. */
+export async function mailDomains(db: D1Database): Promise<Set<string>> {
+	const { results } = await db.prepare("SELECT domain FROM mail_domains ORDER BY domain").all<{ domain: string }>();
+	return new Set(results.map(({ domain }) => domain));
+}
+
+export async function addMailDomain(db: D1Database, domain: string): Promise<void> {
+	try {
+		await db.prepare("INSERT INTO mail_domains (domain) VALUES (?) ON CONFLICT DO NOTHING").bind(domain).run();
+	} catch (error) {
+		throw conflictOf(error) ?? error;
+	}
+}
+
+export async function removeMailDomain(db: D1Database, domain: string): Promise<void> {
+	try {
+		await db.prepare("DELETE FROM mail_domains WHERE domain = ?").bind(domain).run();
+	} catch (error) {
+		throw conflictOf(error) ?? error;
+	}
 }
 
 export function domainOf(address: string): string {
@@ -182,9 +195,24 @@ export interface NewPrincipal {
 	sign_in_email: string | null;
 }
 
-/** Turns a unique-constraint failure of the directory into a conflict that the caller can read. */
+/** Turns a directory constraint failure into an error that the caller can read. */
 function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);
+	if (text.includes("mail_domain_in_use")) {
+		return new OperationError("conflict", "This domain has mailbox addresses. You cannot remove it.");
+	}
+	if (text.includes("mail_domain_sign_in")) {
+		return new OperationError(
+			"conflict",
+			"A person uses this domain for sign-in email. Change that email before you add the domain.",
+		);
+	}
+	if (text.includes("principal_sign_in_domain")) {
+		return new OperationError("invalid", "The sign-in email must be outside the saved mail domains.");
+	}
+	if (text.includes("address_mail_domain")) {
+		return new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
+	}
 	if (text.includes("CHECK constraint failed: id = 1")) {
 		return new OperationError("conflict", "Another reset replaced this request. Use the latest reset result.");
 	}
@@ -212,7 +240,7 @@ export async function createPrincipal(
 	db: D1Database,
 	principal: NewPrincipal,
 	key: NewApiKey,
-	options: { onlyIfEmpty?: boolean; beforeCreate?: D1PreparedStatement[] } = {},
+	options: { onlyIfEmpty?: boolean; beforeCreate?: D1PreparedStatement[]; mailDomain?: string } = {},
 ): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null> {
 	const now = new Date().toISOString();
 	const id = newId("prn");
@@ -222,7 +250,15 @@ export async function createPrincipal(
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
 	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
 	try {
-		const beforeCreate = options.beforeCreate ?? [];
+		const beforeCreate = [...(options.beforeCreate ?? [])];
+		if (options.mailDomain) {
+			// The domain and owner share one transaction and the same guard. A lost setup race writes neither.
+			beforeCreate.push(
+				db
+					.prepare(`INSERT INTO mail_domains (domain) SELECT ? ${guard} ON CONFLICT DO NOTHING`)
+					.bind(options.mailDomain),
+			);
+		}
 		const results = await db.batch([
 			...beforeCreate,
 			db

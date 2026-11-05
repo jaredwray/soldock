@@ -134,9 +134,9 @@ Email Routing can route only to a Worker that exists.
 The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
 top-level only and applies to each environment. So it cannot hold a rule for one environment.
 
-1. Set `MAIL_DOMAINS` in `apps/dock/wrangler.jsonc` to the mail domains of the environment
-   (comma-separated). An address on one of these domains is local: mail between local addresses
-   never leaves the deployment.
+1. Choose a domain you own for email. Enter it during first-run setup below.
+   The directory database stores mail domains. Owners and admins manage them under **Admin settings: email domains**.
+   Changes need no environment variable or new deployment. Mail between addresses on saved domains stays inside Soldock.
 2. Receive: in the dashboard, open the mail zone, then **Email › Email Routing**.
    - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
      providers.
@@ -158,7 +158,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
       Secrets**, and add the secret `SETUP_TOKEN` with that token.
    3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, then select **Continue**.
-      Select **Set up without a reset**. Enter your name, address, and sign-in email, then select **Create the owner**.
+      Select **Set up without a reset**. Enter your name, email domain, mailbox name, and sign-in email. Select **Create the owner**.
       The sign-in email must be outside the mail domains, for example a personal address. Sign-in codes go there.
    4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
       with the API and MCP. To sign in on a different browser, enter your address: Soldock sends
@@ -172,7 +172,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    ```sh
    curl -X POST "https://<dock-host>/auth/setup" \
      -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-     -d '{"display_name":"Your Name","address":"you@<mail-domain>","sign_in_email":"you@personal.example"}'
+     -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","sign_in_email":"you@personal.example"}'
    ```
 
    After you delete the token, the setup page does not show again. Setup without a reset gets `409` when accounts exist.
@@ -187,6 +187,16 @@ mail. Until it reports, send test mail only to seed accounts.
 Messages that the Worker sends with `send_email` show as "dropped" in the Email Routing summary.
 That is expected: they leave through Email Service, not through a routing rule.
 
+### Manage email domains
+
+Open **Admin** and use **Admin settings: email domains** to add or remove domains.
+A domain with mailbox addresses cannot be removed. A domain with a sign-in email cannot be added.
+Configure Email Routing, Email Service, and DNS for each added domain as described above.
+The saved list does not confirm that mail delivery is ready.
+
+On upgrade, migration `0003_mail_domains.sql` copies domains from existing mailbox addresses into settings.
+Add any unused domains from the old `MAIL_DOMAINS` configuration on the Admin page. Soldock no longer reads that variable.
+
 ### Start fresh from setup
 
 A valid `SETUP_TOKEN` shows the setup page even when accounts exist or the directory has an old schema.
@@ -199,6 +209,7 @@ The page checks setup before it checks the session. An old session therefore can
 5. Copy the new API key. Delete the `SETUP_TOKEN` secret to disable further resets.
 
 The reset deletes all directory accounts, addresses, API keys, sessions, and sign-in codes.
+Saved mail domains stay in place. Setup adds the new owner domain in the same transaction.
 It recreates the directory schema and creates the new owner in one D1 transaction.
 If that transaction fails, the old directory stays intact.
 R2 messages, queues, and mailbox Durable Objects stay in place. New accounts cannot access old mail.

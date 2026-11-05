@@ -8,6 +8,7 @@ import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AgentPanel } from "./AgentPanel.tsx";
 import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
+import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { PrincipalTable } from "./PrincipalTable.tsx";
 
 type DirectoryState =
@@ -70,6 +71,7 @@ export function AdminPage() {
 				<>
 					{elevated && (
 						<>
+							<MailDomainsCard />
 							<PrincipalTable principals={principals} />
 							<CreatePrincipalForm
 								me={me}

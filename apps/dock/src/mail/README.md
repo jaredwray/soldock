@@ -96,7 +96,8 @@ of the message that it answers.
 
 ## Outbound
 
-1. `mail.send` resolves each recipient. An address on a mail domain must exist, or the call fails
+1. `mail.send` reads the saved mail domains from the directory and resolves each recipient.
+   An address on a mail domain must exist, or the call fails
    with `not_found`. Other addresses are external.
 2. An agent's outbound policy is checked before anything is stored:
    - `internal-only` (the default): external recipients get `policy_denied`.

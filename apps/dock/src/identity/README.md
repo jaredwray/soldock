@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. Sends sign-in codes through the `EMAIL` binding (Email Service). |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_sign_in_email`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy` |
-| **Data inventory** | D1 `directory`: `principals` (with `sign_in_email`), `addresses`, `api_keys`, `sessions`, `sign_in_codes`, `setup_lock` ([`migrations/`](../../migrations/)). Backups: not built yet. |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_sign_in_email`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain` |
+| **Data inventory** | D1 `directory`: `principals` (with `sign_in_email`), `addresses`, `api_keys`, `sessions`, `sign_in_codes`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -25,10 +25,24 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `account.whoami` shows it, to its owner. Agents have none.
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
   `allowlist` (domains and addresses) or `any`.
-- Each principal has one primary address on a mail domain (`MAIL_DOMAINS`). Addresses are stored
+- Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
   `no-reply@` is reserved on each mail domain: it sends sign-in codes, so a reply to a code reaches
   no mailbox.
+
+## Mail domain settings
+
+Owners and admins manage email domains on the Admin page. The `mail_domains` table in D1 stores each domain.
+`directory.list_mail_domains`, `directory.add_mail_domain`, and `directory.remove_mail_domain` expose the same settings through REST and MCP.
+The read operation needs `directory.read`. Changes need `directory.write`. Members and agents cannot use these operations.
+
+Domains use lowercase DNS names, without a URL scheme, path, wildcard, or mailbox name. Duplicate additions have no effect.
+A domain with mailbox addresses cannot be removed. A domain that contains a sign-in email cannot be added.
+Database constraints enforce these rules during concurrent account and domain changes.
+
+Migration `0003_mail_domains.sql` copies the domains of existing mailbox addresses into settings.
+Add unused domains from the old deployment configuration on the Admin page after the upgrade.
+A saved domain does not verify DNS or configure Cloudflare Email Routing or Email Service.
 
 ## Credentials
 
@@ -42,12 +56,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 `/auth/*` routes (not operations, because they create credentials):
 
 - `GET /auth/setup`: public. A valid `SETUP_TOKEN` returns `setup_needed: true`,
-  `start_fresh_available: true`, the token state, and the mail domains without a D1 query.
-  Without a valid token, an empty directory gets the token state and mail domains.
+  `start_fresh_available: true`, and the token state without a D1 query.
+  Without a valid token, an empty directory gets the token state.
   A directory with accounts gets only `setup_needed: false` in that case.
 - `POST /auth/setup`: creates the owner and a first key, once, when the directory is empty. A
-  guarded insert in one D1 transaction stops two concurrent setups. The owner address cannot
-  contain `+`. The body also holds the owner's sign-in email, which must be outside the mail
+  guarded insert in one D1 transaction stops two concurrent setups. The request includes `mail_domain`.
+  Setup saves that domain and the owner in the same transaction. The owner address must use that domain.
+  The owner address cannot contain `+`. The body also holds the owner's sign-in email, which must be outside the mail
   domains. When the request has an `Origin` header of this origin (the web app), setup also
   signs the owner in with a session. A request from a different origin gets `403`. A request
   without an `Origin` header (`curl`) gets the key and no session. If the session cannot be made
@@ -59,7 +74,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, and sign-in codes. It recreates the schema from the bundled migration.
-  The reset and the new owner share one D1 transaction. A failure rolls back both.
+  The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
+  Saved mail domains stay in place. The reset restores the domain constraints after it recreates the account tables.
   The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
   R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
   The `setup_lock` row blocks new principals during the reset. Each old mailbox persists a pause marker.

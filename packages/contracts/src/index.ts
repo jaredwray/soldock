@@ -9,6 +9,7 @@ export {
 	OutboundPolicy,
 	Principal,
 } from "./directory.ts";
+export { MailDomain } from "./domains.ts";
 export { ERRORS, type ErrorCode, isErrorCode } from "./errors.ts";
 export {
 	DeliveryStatus,

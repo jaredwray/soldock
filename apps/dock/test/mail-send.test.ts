@@ -159,6 +159,7 @@ describe("mail.send to the internet", () => {
 			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
 			body: JSON.stringify({
 				display_name: "New owner",
+				mail_domain: "dock.test",
 				address: "ada@dock.test",
 				sign_in_email: "new@home.example",
 				start_fresh: "DELETE DIRECTORY",
@@ -215,6 +216,7 @@ describe("mail.send to the internet", () => {
 				headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
 				body: JSON.stringify({
 					display_name: "New owner",
+					mail_domain: "dock.test",
 					address: "ada@dock.test",
 					sign_in_email: "new@home.example",
 					start_fresh: "DELETE DIRECTORY",

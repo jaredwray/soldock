@@ -1,4 +1,5 @@
 import directorySchema from "../../migrations/0001_directory.sql";
+import mailDomainSchema from "../../migrations/0003_mail_domains.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 
 /** Freezes principal creation and waits for old outbound side effects before a reset. */
@@ -46,7 +47,7 @@ export async function prepareFreshDirectory(env: Env) {
 
 /** Recreates the directory in the same transaction as the new owner and key. */
 function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
-	// The schema has no triggers or semicolons in string literals. Add future migrations here too.
+	// The base schema has no triggers. The domain migration uses explicit statement markers for its triggers.
 	const schema = directorySchema
 		.replace(/--[^\n]*/g, "")
 		.split(";")
@@ -61,5 +62,6 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
 		...schema,
+		...mailDomainSchema.split("--> statement-breakpoint"),
 	].map((statement) => db.prepare(statement));
 }

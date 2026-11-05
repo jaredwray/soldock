@@ -52,7 +52,12 @@ function withEnv(
 	);
 }
 
-const OWNER = { display_name: "Olive Owner", address: "owner@dock.test", sign_in_email: OWNER_SIGN_IN_EMAIL };
+const OWNER = {
+	mail_domain: "dock.test",
+	display_name: "Olive Owner",
+	address: "owner@dock.test",
+	sign_in_email: OWNER_SIGN_IN_EMAIL,
+};
 
 const SESSION_COOKIE =
 	/^__Host-soldock_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/;
@@ -111,8 +116,10 @@ describe("first-run setup", () => {
 		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x@elsewhere.example" })).status).toBe(400);
 		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x+tag@dock.test" })).status).toBe(400);
 		// The owner needs a sign-in email, outside the mail domains: a code in a Soldock mailbox cannot be read.
-		expect((await setup(SETUP_TOKEN, { display_name: "X", address: "x@dock.test" })).status).toBe(400);
-		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@second.test" })).status).toBe(400);
+		expect(
+			(await setup(SETUP_TOKEN, { mail_domain: "dock.test", display_name: "X", address: "x@dock.test" })).status,
+		).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@dock.test" })).status).toBe(400);
 		const res = await setup(SETUP_TOKEN, OWNER);
 		expect(res.status).toBe(201);
 		// Without an Origin header (curl), setup makes no session.
@@ -135,7 +142,6 @@ describe("first-run setup", () => {
 			expect(await status.json()).toEqual({
 				setup_needed: true,
 				setup_token: state,
-				mail_domains: ["dock.test", "second.test"],
 			});
 			const res = await withEnv({ SETUP_TOKEN: token }, "/auth/setup", {
 				method: "POST",
@@ -152,7 +158,6 @@ describe("first-run setup", () => {
 		expect(await before.json()).toEqual({
 			setup_needed: true,
 			setup_token: "ready",
-			mail_domains: ["dock.test", "second.test"],
 			start_fresh_available: true,
 		});
 		await setupOwner();
@@ -180,7 +185,11 @@ describe("first-run setup", () => {
 		const { owner, bot } = await seedOrg();
 		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
 		await requestCode(OWNER_SIGN_IN_EMAIL);
-		const res = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
+		const res = await setup(
+			SETUP_TOKEN,
+			{ ...OWNER, mail_domain: "new.example", address: "owner@new.example", start_fresh: "DELETE DIRECTORY" },
+			ORIGIN,
+		);
 		expect(res.status).toBe(201);
 		expect(res.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
 		const result = (await res.json()) as { principal: { id: string }; api_key: { secret: string } };
@@ -192,6 +201,12 @@ describe("first-run setup", () => {
 		expect(await api(result.api_key.secret)("account.whoami")).toMatchObject({
 			principal: { id: result.principal.id },
 		});
+		expect(await api(result.api_key.secret)("directory.list_mail_domains")).toEqual({
+			mail_domains: ["dock.test", "new.example", "second.test"],
+		});
+		expect(
+			await denied(api(result.api_key.secret)("account.set_sign_in_email", { sign_in_email: "owner@new.example" })),
+		).toBe("invalid");
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM sign_in_codes").first("count")).toBe(0);
 		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
@@ -229,9 +244,15 @@ describe("first-run setup", () => {
 		const res = await withEnv({ DIRECTORY: failing }, "/auth/setup", {
 			method: "POST",
 			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
-			body: JSON.stringify({ ...OWNER, start_fresh: "DELETE DIRECTORY" }),
+			body: JSON.stringify({
+				...OWNER,
+				mail_domain: "failed.example",
+				address: "owner@failed.example",
+				start_fresh: "DELETE DIRECTORY",
+			}),
 		});
 		expect(res.status).toBe(500);
+		expect(await owner.call("directory.list_mail_domains")).toEqual({ mail_domains: ["dock.test", "second.test"] });
 		expect(await api(owner.key)("account.whoami")).toMatchObject({ principal: { id: owner.id } });
 		expect(
 			(await owner.call("mail.send", { to: ["owner@dock.test"], text: "The mailbox resumed" })).recipients,

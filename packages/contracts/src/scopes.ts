@@ -6,8 +6,8 @@ export const SCOPES = {
 	"account.read": "Read your own account",
 	"account.keys":
 		"Create, list and revoke API keys for yourself and for the agents that you sponsor, and change a sign-in email",
-	"directory.read": "Read the directory of people and agents",
-	"directory.write": "Create people and agents, and change the policy of an agent (owners, admins and sponsors)",
+	"directory.read": "Read the directory; owners and admins can also read mail domain settings",
+	"directory.write": "Create accounts and change agent policies; owners and admins can also manage mail domains",
 	"mail.read": "Read your mail and labels",
 	"mail.modify": "Change labels, archive, trash, star and mark your mail",
 	"mail.send": "Send mail from your address",

@@ -10,7 +10,6 @@ describe("setup recovery at boot", () => {
 				? Response.json({
 						setup_needed: true,
 						setup_token: "ready",
-						mail_domains: ["dock.test"],
 						start_fresh_available: true,
 					})
 				: Response.json({ title: "Internal Server Error" }, { status: 500 }),
@@ -27,7 +26,6 @@ describe("setup recovery at boot", () => {
 				: Response.json({
 						setup_needed: true,
 						setup_token: "ready",
-						mail_domains: ["dock.test"],
 						start_fresh_available: true,
 					}),
 		);

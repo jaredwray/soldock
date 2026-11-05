@@ -15,5 +15,6 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare("DELETE FROM addresses"),
 		env.DIRECTORY.prepare("DELETE FROM principals WHERE kind = 'agent'"),
 		env.DIRECTORY.prepare("DELETE FROM principals"),
+		env.DIRECTORY.prepare("DELETE FROM mail_domains"),
 	]);
 });

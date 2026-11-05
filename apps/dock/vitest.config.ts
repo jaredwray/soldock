@@ -6,7 +6,7 @@ import { defineProject } from "vitest/config";
 const migrations = fileURLToPath(new URL("./migrations", import.meta.url).href);
 
 // Runs inside workerd with the bindings from wrangler.jsonc. test/setup.ts applies the D1 migrations
-// from ./migrations to the local DIRECTORY database. The tests use their own mail domain and setup token.
+// from ./migrations to the local DIRECTORY database. Tests save their own mail domains through setup and the API.
 export default defineProject(async () => ({
 	plugins: [
 		cloudflareTest({
@@ -14,7 +14,6 @@ export default defineProject(async () => ({
 			miniflare: {
 				bindings: {
 					TEST_MIGRATIONS: await readD1Migrations(migrations),
-					MAIL_DOMAINS: "dock.test,second.test",
 					// At least SETUP_TOKEN_MIN_LENGTH (32) characters, or setup stays off.
 					SETUP_TOKEN: "test-setup-token-0123456789abcdef",
 				},
