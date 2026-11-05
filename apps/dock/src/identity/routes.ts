@@ -23,7 +23,6 @@ import {
 	directoryIsEmpty,
 	domainOf,
 	findSignInPrincipal,
-	mailDomains,
 	SESSION_TTL_SECONDS,
 } from "./store.ts";
 
@@ -83,14 +82,12 @@ export function mountAuthRoutes(app: AuthApp): void {
 				? {
 						setup_needed: true,
 						setup_token: tokenState,
-						mail_domains: [...mailDomains(c.env)],
 						start_fresh_available: true,
 					}
 				: (await directoryIsEmpty(c.env.DIRECTORY))
 					? {
 							setup_needed: true,
 							setup_token: setupTokenState(c.env.SETUP_TOKEN),
-							mail_domains: [...mailDomains(c.env)],
 						}
 					: { setup_needed: false };
 		return c.json(status, 200, { "cache-control": "no-store" });
@@ -109,12 +106,12 @@ export function mountAuthRoutes(app: AuthApp): void {
 		const fromBrowser = authorizeSetup(c.req.raw, c.env);
 		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const { display_name, address, sign_in_email } = parsed.data;
-		if (!mailDomains(c.env).has(domainOf(address))) {
-			throw new OperationError("invalid", `The address must be on a mail domain: ${c.env.MAIL_DOMAINS}.`);
+		const { display_name, address, sign_in_email, mail_domain } = parsed.data;
+		if (domainOf(address) !== mail_domain) {
+			throw new OperationError("invalid", "The owner address must use the email domain from setup.");
 		}
 		assertPrimaryAddress(address);
-		assertSignInEmail(c.env, sign_in_email);
+		assertSignInEmail(new Set([mail_domain]), sign_in_email);
 		const reset = parsed.data.start_fresh ? await prepareFreshDirectory(c.env) : null;
 		let created: Awaited<ReturnType<typeof createPrincipal>> = null;
 		try {
@@ -125,6 +122,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 				{
 					onlyIfEmpty: true,
 					beforeCreate: reset?.statements ?? [],
+					mailDomain: mail_domain,
 				},
 			);
 		} finally {

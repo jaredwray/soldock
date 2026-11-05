@@ -129,7 +129,7 @@ interface Recipient {
  * gets one delivery, and each local mailbox gets one copy, also when two of its addresses appear.
  */
 async function resolveRecipients(call: CallContext, addresses: string[]): Promise<Recipient[]> {
-	const domains = mailDomains(call.env);
+	const domains = await mailDomains(call.env.DIRECTORY);
 	const byAddress = new Map<string, Recipient>();
 	const localMailboxes = new Set<string>();
 	for (const raw of addresses) {
@@ -180,7 +180,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		return {
 			address: call.caller.principal.address,
 			display_name: call.caller.principal.display_name,
-			mail_domains: [...mailDomains(call.env)],
+			mail_domains: [...(await mailDomains(call.env.DIRECTORY))],
 			...profile,
 		};
 	},

@@ -114,10 +114,16 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 	const res = await request("/auth/setup", {
 		method: "POST",
 		headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json" },
-		body: JSON.stringify({ display_name: "Olive Owner", address, sign_in_email: OWNER_SIGN_IN_EMAIL }),
+		body: JSON.stringify({
+			mail_domain: address.split("@")[1],
+			display_name: "Olive Owner",
+			address,
+			sign_in_email: OWNER_SIGN_IN_EMAIL,
+		}),
 	});
 	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as { principal: { id: string; address: string }; api_key: { secret: string } };
+	await api(body.api_key.secret)("directory.add_mail_domain", { domain: "second.test" });
 	return {
 		id: body.principal.id,
 		address: body.principal.address,

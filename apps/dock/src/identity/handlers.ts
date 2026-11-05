@@ -3,6 +3,7 @@ import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import {
+	addMailDomain,
 	assertPrimaryAddress,
 	assertSignInEmail,
 	createApiKey,
@@ -14,6 +15,7 @@ import {
 	listPrincipals,
 	mailDomains,
 	type PrincipalRecord,
+	removeMailDomain,
 	revokeApiKey,
 	scopeCeiling,
 	setSignInEmail,
@@ -28,6 +30,9 @@ type IdentityOperation =
 	| "account.set_sign_in_email"
 	| "directory.list_principals"
 	| "directory.create_principal"
+	| "directory.list_mail_domains"
+	| "directory.add_mail_domain"
+	| "directory.remove_mail_domain"
 	| "directory.update_agent_policy";
 
 function isAdmin(caller: AuthContext): boolean {
@@ -100,6 +105,26 @@ function auditOk(call: CallContext, op: string, target: string): void {
 }
 
 export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> = {
+	async "directory.list_mail_domains"(call) {
+		if (!isAdmin(call.caller))
+			throw new OperationError("forbidden", "Only owners and admins can read mail domain settings.");
+		return { mail_domains: [...(await mailDomains(call.env.DIRECTORY))] };
+	},
+
+	async "directory.add_mail_domain"(call, input) {
+		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can add mail domains.");
+		await addMailDomain(call.env.DIRECTORY, input.domain);
+		auditOk(call, "directory.add_mail_domain", input.domain);
+		return { mail_domains: [...(await mailDomains(call.env.DIRECTORY))] };
+	},
+
+	async "directory.remove_mail_domain"(call, input) {
+		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can remove mail domains.");
+		await removeMailDomain(call.env.DIRECTORY, input.domain);
+		auditOk(call, "directory.remove_mail_domain", input.domain);
+		return { mail_domains: [...(await mailDomains(call.env.DIRECTORY))] };
+	},
+
 	async "account.whoami"(call) {
 		return {
 			principal: toPrincipalOutput(call.caller.principal),
@@ -115,8 +140,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 
 	async "directory.create_principal"(call, input) {
 		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can create principals.");
-		if (!mailDomains(call.env).has(domainOf(input.address))) {
-			throw new OperationError("invalid", `The address must be on a mail domain: ${call.env.MAIL_DOMAINS}.`);
+		const domains = await mailDomains(call.env.DIRECTORY);
+		if (!domains.has(domainOf(input.address))) {
+			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
 		}
 		assertPrimaryAddress(input.address);
 		let sponsorId: string | null = null;
@@ -132,7 +158,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 			if (!input.sign_in_email) {
 				throw new OperationError("invalid", "A person needs a sign-in email. Sign-in codes go to it.");
 			}
-			assertSignInEmail(call.env, input.sign_in_email);
+			assertSignInEmail(domains, input.sign_in_email);
 			assertCanSetSignInEmail(call.caller);
 		}
 		const target = { kind: input.kind, sponsor_id: sponsorId } as PrincipalRecord;
@@ -208,7 +234,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		const target = await credentialOwner(call, input.principal_id);
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a sign-in email.");
 		assertCanSetSignInEmail(call.caller);
-		assertSignInEmail(call.env, input.sign_in_email);
+		assertSignInEmail(await mailDomains(call.env.DIRECTORY), input.sign_in_email);
 		// The change ends the other sessions of the person, so a person who lost control of the old
 		// email can lock out each session made with it. The session that makes its own change stays.
 		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;

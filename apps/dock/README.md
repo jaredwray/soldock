@@ -45,12 +45,11 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals, addresses, API keys, sessions, sign-in codes |
+| `DIRECTORY` | D1 `soldock-directory` | Principals, addresses, API keys, sessions, sign-in codes, mail domains |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `EMAIL` | `send_email` | Outbound mail and sign-in codes through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal |
-| `MAIL_DOMAINS` | Var | The mail domains, comma-separated |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
 | `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup` while it has at least 32 characters. `GET /auth/setup` reports its state, never its value. Delete it after setup |
 
@@ -83,7 +82,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes, reset lock) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals and their sign-in emails, addresses, API keys, sessions, sign-in codes, reset lock, mail domains) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<principal>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |

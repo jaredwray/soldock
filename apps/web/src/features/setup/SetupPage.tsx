@@ -2,6 +2,7 @@ import {
 	ApiError,
 	DisplayName,
 	EmailAddress,
+	MailDomain,
 	SETUP_TOKEN_MIN_LENGTH,
 	type SetupInput,
 	type SetupResult,
@@ -80,7 +81,6 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 					) : (
 						<OwnerForm
 							token={verifiedToken}
-							mailDomains={status.mail_domains}
 							startFresh={choice === "fresh"}
 							onCreated={ownerCreated}
 							onBack={() => setChoice(null)}
@@ -207,18 +207,17 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 
 interface OwnerFormProps {
 	token: string;
-	mailDomains: readonly string[];
 	onCreated: (result: SetupResult) => void;
 	startFresh: boolean;
 	onBack: () => void;
 }
 
 /** Creates the owner with the setup token. */
-function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerFormProps) {
+function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 	const [pending, setPending] = useState<SetupInput | null>(null);
 	const [name, setName] = useState("");
 	const [localPart, setLocalPart] = useState("");
-	const [domain, setDomain] = useState(mailDomains[0] ?? "");
+	const [domain, setDomain] = useState("");
 	const [signInEmail, setSignInEmail] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -227,6 +226,7 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 		name: useId(),
 		address: useId(),
 		domain: useId(),
+		domainHint: useId(),
 		hint: useId(),
 		signInEmail: useId(),
 		signInHint: useId(),
@@ -242,7 +242,9 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		const address = `${localPart.trim()}@${domain}`;
+		const parsedDomain = MailDomain.safeParse(domain);
+		if (!parsedDomain.success) return invalid("Enter an email domain you own, such as example.com.");
+		const address = `${localPart.trim()}@${parsedDomain.data}`;
 		if (!DisplayName.safeParse(name).success) {
 			return invalid("Enter your name: 100 characters at most, without quotes, angle brackets or backslashes.");
 		}
@@ -255,10 +257,11 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 			.trim()
 			.slice(signInEmail.trim().lastIndexOf("@") + 1)
 			.toLowerCase();
-		if (mailDomains.includes(signInDomain)) {
+		if (parsedDomain.data === signInDomain) {
 			return invalid("Your sign-in email must be outside Soldock, so that you can read a code before you sign in.");
 		}
 		const input: SetupInput = {
+			mail_domain: parsedDomain.data,
 			display_name: name.trim(),
 			address,
 			sign_in_email: signInEmail.trim(),
@@ -285,15 +288,6 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 		}
 	}
 
-	if (mailDomains.length === 0) {
-		return (
-			<p className="form-error" role="alert">
-				This deployment has no mail domain. Set <code>MAIL_DOMAINS</code> in <code>wrangler.jsonc</code>, deploy again,
-				then reload this page.
-			</p>
-		);
-	}
-
 	return (
 		<form className="setup-form" onSubmit={submit} noValidate>
 			<p className="setup-intro">
@@ -314,6 +308,27 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 				/>
 			</div>
 			<div className="field">
+				<label htmlFor={ids.domain} className="field-label">
+					Email domain
+				</label>
+				<input
+					id={ids.domain}
+					className="input"
+					type="text"
+					autoComplete="off"
+					autoCapitalize="none"
+					spellCheck={false}
+					placeholder="example.com"
+					value={domain}
+					onChange={(event) => setDomain(event.target.value)}
+					aria-describedby={ids.domainHint}
+					disabled={busy}
+				/>
+				<p id={ids.domainHint} className="field-hint">
+					Use a domain you own for your email addresses. You can manage domains later in Admin settings.
+				</p>
+			</div>
+			<div className="field">
 				<label htmlFor={ids.address} className="field-label">
 					Your address
 				</label>
@@ -332,27 +347,11 @@ function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerF
 					<span className="address-at" aria-hidden="true">
 						@
 					</span>
-					{mailDomains.length > 1 ? (
-						<select
-							id={ids.domain}
-							className="input address-domain"
-							aria-label="Mail domain"
-							value={domain}
-							onChange={(event) => setDomain(event.target.value)}
-							disabled={busy}
-						>
-							{mailDomains.map((item) => (
-								<option key={item} value={item}>
-									{item}
-								</option>
-							))}
-						</select>
-					) : (
-						<span className="address-domain">{domain}</span>
-					)}
+					<span className="address-domain">{domain.trim().toLowerCase() || "example.com"}</span>
 				</div>
 				<p id={ids.hint} className="field-hint">
-					Mail to this address arrives in your Soldock inbox.
+					Use this address to sign in to Soldock. Configure DNS and Cloudflare email for this domain to receive and send
+					mail.
 				</p>
 			</div>
 			<div className="field">
