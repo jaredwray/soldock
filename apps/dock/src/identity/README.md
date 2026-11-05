@@ -53,6 +53,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   without an `Origin` header (`curl`) gets the key and no session. If the session cannot be made
   after the owner exists, the response still holds the key, without a session, because setup
   cannot run again. The owner then signs in with a code.
+- `POST /auth/setup/verify`: checks the setup token and origin before the web app offers setup choices.
+  It returns `204` without a directory query or a session. The final setup request checks the token again.
 - The schemas of both routes are in `@soldock/contracts` (`SetupStatus`, `SetupInput`,
   `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,

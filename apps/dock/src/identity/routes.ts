@@ -35,6 +35,25 @@ function setupTokenState(token: string | undefined): "missing" | "too_short" | "
 	return token.length < SETUP_TOKEN_MIN_LENGTH ? "too_short" : "ready";
 }
 
+/** Checks operator credentials without a directory query. Returns true for a browser request. */
+function authorizeSetup(request: Request, env: Env): boolean {
+	const token = env.SETUP_TOKEN;
+	const state = setupTokenState(token);
+	if (state === "missing")
+		throw new OperationError("unavailable", "Setup is off. Set the SETUP_TOKEN Worker secret to turn it on.");
+	if (state === "too_short")
+		throw new OperationError(
+			"unavailable",
+			`Setup is off. The SETUP_TOKEN Worker secret must have at least ${SETUP_TOKEN_MIN_LENGTH} characters.`,
+		);
+	const fromBrowser = request.headers.has("origin");
+	if (fromBrowser && !isSameOrigin(request))
+		throw new OperationError("forbidden", "Run setup from the Soldock web app.");
+	if (!sameSecret(request.headers.get("authorization") ?? "", `Bearer ${token}`))
+		throw new OperationError("unauthenticated", "Send the setup token as a bearer token.");
+	return fromBrowser;
+}
+
 function sessionCookie(value: string, maxAge: number): string {
 	return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
@@ -77,29 +96,17 @@ export function mountAuthRoutes(app: AuthApp): void {
 		return c.json(status, 200, { "cache-control": "no-store" });
 	});
 
+	app.post("/auth/setup/verify", (c) => {
+		authorizeSetup(c.req.raw, c.env);
+		return c.body(null, 204, { "cache-control": "no-store" });
+	});
+
 	// First-run setup: creates the owner, once, when the directory is empty. The operator sends the
 	// SETUP_TOKEN Worker secret. Without that secret, or with a short one, setup is off. From the web
 	// app (an Origin header of this origin), setup also signs the owner in. A request from another
 	// origin gets 403. A request without an Origin header (curl) gets no session.
 	app.post("/auth/setup", async (c) => {
-		const token = c.env.SETUP_TOKEN;
-		const state = setupTokenState(token);
-		if (state === "missing") {
-			throw new OperationError("unavailable", "Setup is off. Set the SETUP_TOKEN Worker secret to turn it on.");
-		}
-		if (state === "too_short") {
-			throw new OperationError(
-				"unavailable",
-				`Setup is off. The SETUP_TOKEN Worker secret must have at least ${SETUP_TOKEN_MIN_LENGTH} characters.`,
-			);
-		}
-		const fromBrowser = c.req.header("origin") !== undefined;
-		if (fromBrowser && !isSameOrigin(c.req.raw)) {
-			throw new OperationError("forbidden", "Run setup from the Soldock web app.");
-		}
-		if (!sameSecret(c.req.header("authorization") ?? "", `Bearer ${token}`)) {
-			throw new OperationError("unauthenticated", "Send the setup token as a bearer token.");
-		}
+		const fromBrowser = authorizeSetup(c.req.raw, c.env);
 		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
 		const { display_name, address, sign_in_email } = parsed.data;

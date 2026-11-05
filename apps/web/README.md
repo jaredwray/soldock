@@ -22,20 +22,22 @@ MCP clients. The app has no UI-only path.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
   An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
   Otherwise, the session decides between the app and the sign-in page.
-- **Setup.** A valid token offers setup without a reset, a fresh start, or use of existing accounts.
-  - A fresh start asks for the token and new owner details, then shows a confirmation with Cancel first.
+- **Setup.** The page first asks for the setup token. The server verifies it without a directory query or a new session.
+  - Only a correct token reveals two choices: setup without a reset, or a fresh start.
+    The buttons have a separate group with a 12 px gap.
+  - A fresh start asks for new owner details, then shows a confirmation with Cancel first.
     It deletes all directory accounts, addresses, keys, sessions, and sign-in codes.
     Old mail stays in storage. New accounts cannot access it.
   - The reset and new owner share one transaction. A failure leaves the old directory intact.
   - After setup or sign-in, the app opens without another setup prompt. A reload shows setup until the operator deletes the token.
   - While the `SETUP_TOKEN` secret is missing or too short, the page shows how to set it, and a
     "Check again" button.
-  - When the secret is ready, the form takes the setup token, the name, the address and the
+  - After token verification, the owner form takes the name, the address and the
     sign-in email. The domain comes from the mail domains of the deployment, so the person types
     only the part before the @. The form refuses a sign-in email on a mail domain.
   - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
     with a copy button and a reminder to delete the `SETUP_TOKEN` secret. Done opens the app.
-  - If a different browser ran setup first (`409`), the page offers the sign-in page.
+  - If accounts exist during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
   labels, a thread list and a thread view.
   - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as

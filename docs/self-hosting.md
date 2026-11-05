@@ -157,10 +157,9 @@ top-level only and applies to each environment. So it cannot hold a rule for one
       shorter token keeps setup off.
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
       Secrets**, and add the secret `SETUP_TOKEN` with that token.
-   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, your
-      name, your address and your sign-in email, then select **Create the owner**. The sign-in
-      email must be outside the mail domains, for example a personal address. Sign-in codes go
-      there.
+   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, then select **Continue**.
+      Select **Set up without a reset**. Enter your name, address, and sign-in email, then select **Create the owner**.
+      The sign-in email must be outside the mail domains, for example a personal address. Sign-in codes go there.
    4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
       with the API and MCP. To sign in on a different browser, enter your address: Soldock sends
       a one-time code to your sign-in email.
@@ -194,8 +193,8 @@ A valid `SETUP_TOKEN` shows the setup page even when accounts exist or the direc
 The page checks setup before it checks the session. An old session therefore cannot hide the reset option.
 
 1. Set the Worker secret `SETUP_TOKEN` to a random value with at least 32 characters.
-2. Reload the dock host. Select **Start fresh**.
-3. Enter the token and the details of the new owner.
+2. Reload the dock host. Enter the token, then select **Continue**.
+3. After the server accepts the token, select **Start fresh**. Enter the details of the new owner.
 4. Select **Review fresh start**. Read the confirmation, then confirm the reset.
 5. Copy the new API key. Delete the `SETUP_TOKEN` secret to disable further resets.
 
@@ -208,7 +207,6 @@ It then cancels the remaining old outboxes. Mailboxes resume if the directory tr
 If a reset stops before cleanup, retry after ten minutes. The expired lease permits another reset.
 Mail that Email Service already accepted cannot be recalled.
 
-Select **Use existing accounts** to keep the data and proceed to the app or sign-in.
 Select **Set up without a reset** to create an owner only when the directory is empty.
 A token alone never deletes data. The reset needs the token and `start_fresh: "DELETE DIRECTORY"` in `POST /auth/setup`.
 

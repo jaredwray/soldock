@@ -72,6 +72,40 @@ function setSignInEmailWithCookie(cookie: string, body: Record<string, string>) 
 }
 
 describe("first-run setup", () => {
+	it("verifies the setup token before the choices without a directory query or a session", async () => {
+		const unavailable = new Proxy(env.DIRECTORY, {
+			get() {
+				throw new Error("D1 is unavailable");
+			},
+		});
+		const res = await withEnv({ DIRECTORY: unavailable }, "/auth/setup/verify", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, origin: ORIGIN },
+		});
+		expect(res.status).toBe(204);
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect(res.headers.get("set-cookie")).toBeNull();
+		expect(await res.text()).toBe("");
+	});
+
+	it.each([
+		{ token: undefined, credential: SETUP_TOKEN, origin: ORIGIN, status: 503 },
+		{ token: "short", credential: SETUP_TOKEN, origin: ORIGIN, status: 503 },
+		{ token: SETUP_TOKEN, credential: "wrong", origin: ORIGIN, status: 401 },
+		{ token: SETUP_TOKEN, credential: "", origin: ORIGIN, status: 401 },
+		{ token: SETUP_TOKEN, credential: SETUP_TOKEN, origin: "https://evil.example", status: 403 },
+	])(
+		"refuses setup token verification for invalid credentials or origins ($status)",
+		async ({ token, credential, origin, status }) => {
+			const res = await withEnv({ SETUP_TOKEN: token }, "/auth/setup/verify", {
+				method: "POST",
+				headers: { ...(credential ? { authorization: `Bearer ${credential}` } : {}), origin },
+			});
+			expect(res.status).toBe(status);
+			expect(res.headers.get("set-cookie")).toBeNull();
+		},
+	);
+
 	it("creates the owner once, only with the setup token, and only on a mail domain", async () => {
 		expect((await setup("wrong", OWNER)).status).toBe(401);
 		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x@elsewhere.example" })).status).toBe(400);

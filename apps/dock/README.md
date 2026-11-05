@@ -32,7 +32,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).
-- `/auth/setup` (`GET` status, `POST` setup), `/auth/code`, `/auth/session`, `/auth/sign-out`:
+- `/auth/setup` (`GET` status, `POST` setup), `/auth/setup/verify`, `/auth/code`, `/auth/session`, `/auth/sign-out`:
   first-run setup and browser sign-in with a one-time code to the sign-in email
   ([`src/identity/`](src/identity/)).
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`

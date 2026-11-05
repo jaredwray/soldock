@@ -75,14 +75,7 @@ export function App() {
 					</main>
 				);
 			case "setup":
-				return (
-					<SetupPage
-						status={state.setup}
-						onRecheck={load}
-						onContinue={() => void load(false)}
-						onDone={() => void load(false)}
-					/>
-				);
+				return <SetupPage status={state.setup} onRecheck={load} onDone={() => void load(false)} />;
 			case "signed-out":
 				return <SignInPage expired={state.expired} onSignedIn={() => void load(false)} />;
 			case "signed-in":

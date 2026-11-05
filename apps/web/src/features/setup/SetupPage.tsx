@@ -10,7 +10,7 @@ import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
-import { runSetup, type SetupNeeded, setupErrorMessage } from "./setup.ts";
+import { runSetup, type SetupNeeded, setupErrorMessage, verifySetupToken } from "./setup.ts";
 
 interface SetupPageProps {
 	status: SetupNeeded;
@@ -18,15 +18,24 @@ interface SetupPageProps {
 	onRecheck: () => Promise<void>;
 	/** Setup is done and the owner is signed in. */
 	onDone: () => void;
-	onContinue: () => void;
 }
 
 /**
  * Setup and optional directory reset. The operator proves control with the SETUP_TOKEN Worker secret.
  */
-export function SetupPage({ status, onRecheck, onDone, onContinue }: SetupPageProps) {
+export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 	const [created, setCreated] = useState<SetupResult | null>(null);
 	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
+	const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
+	const choiceRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (verifiedToken !== null && choice === null) choiceRef.current?.focus();
+	}, [verifiedToken, choice]);
+
+	function ownerCreated(result: SetupResult) {
+		setVerifiedToken(null);
+		setCreated(result);
+	}
 
 	useEffect(() => {
 		document.title = "Set up – Soldock";
@@ -42,30 +51,38 @@ export function SetupPage({ status, onRecheck, onDone, onContinue }: SetupPagePr
 					<span>Soldock</span>
 				</div>
 				<h1 className="sign-in-title">Set up Soldock</h1>
-				{status.setup_token === "ready" ? (
-					status.start_fresh_available && choice === null ? (
-						<>
-							<p>The setup token is set. Do you want to start fresh?</p>
+				{created ? (
+					<p>The owner is ready. Copy your API key before you continue.</p>
+				) : status.setup_token === "ready" ? (
+					verifiedToken === null ? (
+						<TokenForm onVerified={setVerifiedToken} />
+					) : choice === null ? (
+						<div className="setup-choices">
+							<p className="setup-intro">The token is correct. Do you want to start fresh?</p>
 							<p className="field-hint">
 								A fresh start deletes all accounts, API keys, sessions, and sign-in codes. Stored mail stays in storage,
 								but new accounts cannot access it.
 							</p>
-							<button type="button" className="button button-primary button-block" onClick={() => setChoice("new")}>
-								Set up without a reset
-							</button>
-							<button type="button" className="button button-danger button-block" onClick={() => setChoice("fresh")}>
-								Start fresh
-							</button>
-							<button type="button" className="button button-block" onClick={onContinue}>
-								Use existing accounts
-							</button>
-						</>
+							<div className="setup-actions">
+								<button
+									ref={choiceRef}
+									type="button"
+									className="button button-primary button-block"
+									onClick={() => setChoice("new")}
+								>
+									Set up without a reset
+								</button>
+								<button type="button" className="button button-danger button-block" onClick={() => setChoice("fresh")}>
+									Start fresh
+								</button>
+							</div>
+						</div>
 					) : (
 						<OwnerForm
+							token={verifiedToken}
 							mailDomains={status.mail_domains}
 							startFresh={choice === "fresh"}
-							onCreated={setCreated}
-							onRecheck={onContinue}
+							onCreated={ownerCreated}
 							onBack={() => setChoice(null)}
 						/>
 					)
@@ -86,6 +103,62 @@ export function SetupPage({ status, onRecheck, onDone, onContinue }: SetupPagePr
 				</SecretDialog>
 			)}
 		</main>
+	);
+}
+
+function TokenForm({ onVerified }: { onVerified: (token: string) => void }) {
+	const [token, setToken] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const tokenId = useId();
+	const tokenRef = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		tokenRef.current?.focus();
+	}, []);
+
+	async function submit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const value = token.trim();
+		if (!value) return setError("Enter the setup token.");
+		setBusy(true);
+		setError(null);
+		try {
+			await verifySetupToken(value);
+			onVerified(value);
+		} catch (caught) {
+			setError(setupErrorMessage(caught));
+			setBusy(false);
+		}
+	}
+
+	return (
+		<form className="setup-form" onSubmit={submit}>
+			<p className="setup-intro">Enter the setup token to continue.</p>
+			<div className="field">
+				<label htmlFor={tokenId} className="field-label">
+					Setup token
+				</label>
+				<input
+					ref={tokenRef}
+					id={tokenId}
+					className="input input-mono"
+					type="password"
+					autoComplete="off"
+					spellCheck={false}
+					value={token}
+					onChange={(event) => setToken(event.target.value)}
+					disabled={busy}
+				/>
+			</div>
+			{error && (
+				<p className="form-error" role="alert">
+					{error}
+				</p>
+			)}
+			<button type="submit" className="button button-primary button-block" disabled={busy}>
+				{busy ? "Please wait…" : "Continue"}
+			</button>
+		</form>
 	);
 }
 
@@ -133,26 +206,24 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 }
 
 interface OwnerFormProps {
+	token: string;
 	mailDomains: readonly string[];
 	onCreated: (result: SetupResult) => void;
-	onRecheck: () => void;
 	startFresh: boolean;
 	onBack: () => void;
 }
 
 /** Creates the owner with the setup token. */
-function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: OwnerFormProps) {
+function OwnerForm({ token, mailDomains, startFresh, onCreated, onBack }: OwnerFormProps) {
 	const [pending, setPending] = useState<SetupInput | null>(null);
-	const [token, setToken] = useState("");
 	const [name, setName] = useState("");
 	const [localPart, setLocalPart] = useState("");
 	const [domain, setDomain] = useState(mailDomains[0] ?? "");
 	const [signInEmail, setSignInEmail] = useState("");
 	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<{ message: string; alreadyRan: boolean } | null>(null);
-	const tokenRef = useRef<HTMLInputElement>(null);
+	const [error, setError] = useState<string | null>(null);
+	const nameRef = useRef<HTMLInputElement>(null);
 	const ids = {
-		token: useId(),
 		name: useId(),
 		address: useId(),
 		domain: useId(),
@@ -162,17 +233,16 @@ function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: Ow
 	};
 
 	useEffect(() => {
-		tokenRef.current?.focus();
+		nameRef.current?.focus();
 	}, []);
 
 	function invalid(message: string) {
-		setError({ message, alreadyRan: false });
+		setError(message);
 	}
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const address = `${localPart.trim()}@${domain}`;
-		if (!token.trim()) return invalid("Enter the setup token.");
 		if (!DisplayName.safeParse(name).success) {
 			return invalid("Enter your name: 100 characters at most, without quotes, angle brackets or backslashes.");
 		}
@@ -203,11 +273,13 @@ function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: Ow
 		setError(null);
 		try {
 			const result = await runSetup(token.trim(), input);
-			setToken("");
 			onCreated(result);
 		} catch (caught) {
-			// 409: a different browser or a curl call ran setup first. The owner signs in instead.
-			setError({ message: setupErrorMessage(caught), alreadyRan: caught instanceof ApiError && caught.status === 409 });
+			setError(
+				caught instanceof ApiError && caught.status === 409 && !startFresh
+					? "This directory already has an owner. Select Back, then Start fresh to replace the accounts."
+					: setupErrorMessage(caught),
+			);
 			setBusy(false);
 			throw caught;
 		}
@@ -225,31 +297,14 @@ function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: Ow
 	return (
 		<form className="setup-form" onSubmit={submit} noValidate>
 			<p className="setup-intro">
-				{startFresh
-					? "Enter the setup token and the details of the new owner."
-					: "Enter the setup token to create the first owner."}
+				{startFresh ? "Enter the details of the new owner." : "Enter the details of the first owner."}
 			</p>
-			<div className="field">
-				<label htmlFor={ids.token} className="field-label">
-					Setup token
-				</label>
-				<input
-					ref={tokenRef}
-					id={ids.token}
-					className="input input-mono"
-					type="password"
-					autoComplete="off"
-					spellCheck={false}
-					value={token}
-					onChange={(event) => setToken(event.target.value)}
-					disabled={busy}
-				/>
-			</div>
 			<div className="field">
 				<label htmlFor={ids.name} className="field-label">
 					Your name
 				</label>
 				<input
+					ref={nameRef}
 					id={ids.name}
 					className="input"
 					autoComplete="name"
@@ -323,12 +378,7 @@ function OwnerForm({ mailDomains, startFresh, onCreated, onRecheck, onBack }: Ow
 			<div aria-live="assertive">
 				{error && (
 					<div className="form-error" role="alert">
-						<p>{error.message}</p>
-						{error.alreadyRan && (
-							<button type="button" className="link-button" onClick={() => void onRecheck()}>
-								Go to sign-in
-							</button>
-						)}
+						<p>{error}</p>
 					</div>
 				)}
 			</div>
