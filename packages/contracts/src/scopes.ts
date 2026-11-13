@@ -16,6 +16,8 @@ export const SCOPES = {
 	"drive.write":
 		"Create, change, move and delete the items of your drive, and change the items that others let you edit",
 	"drive.share": "Give and remove access to the items of your drive",
+	"chat.read": "Read your rooms and direct messages, and find the public rooms",
+	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -25,6 +27,7 @@ export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
 /**
  * The most that an agent token can hold. An agent cannot manage keys or the directory, so it can
  * never change its own policy or mint a wider token. An agent has its own drive, as it has its own mailbox.
+ * An agent is a member of rooms, as a person is.
  */
 export const AGENT_SCOPES: readonly Scope[] = [
 	"account.read",
@@ -35,6 +38,8 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"drive.read",
 	"drive.write",
 	"drive.share",
+	"chat.read",
+	"chat.write",
 ];
 
 export function isScope(value: string): value is Scope {

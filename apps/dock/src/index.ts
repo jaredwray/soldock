@@ -6,6 +6,7 @@ import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/inde
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
 
+export { ChatRoomDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";
 export { DriveSpaceDO } from "./drive/index.ts";
 export { MailboxDO } from "./mail/index.ts";

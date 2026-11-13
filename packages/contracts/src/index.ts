@@ -1,4 +1,14 @@
 // Public surface of @soldock/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
+export {
+	CHAT_LIMITS,
+	ChatMember,
+	ChatMessage,
+	ChatRoom,
+	ROOM_KINDS,
+	ROOM_ROLES,
+	type RoomKind,
+	type RoomRole,
+} from "./chat.ts";
 export { ApiError, type ClientOptions, createClient, type FetchLike } from "./client.ts";
 export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {
