@@ -1,6 +1,6 @@
 # `web` — the SPA
 
-> Status: **started**. Mail, admin and settings exist. Drive, Docs, Sheets, Slides and Meet are planned.
+> Status: **started**. Mail, Drive, Docs, Sheets, admin and settings exist. Slides and Meet are planned.
 
 The web app is a React 19 single-page app that Vite builds. The `dock` Worker serves the build
 (`dist/`) as static assets on the dock host. The app makes each call through the typed client from
@@ -156,6 +156,123 @@ MCP clients. The app has no UI-only path.
     and as text. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
     (`account.disable_totp`) asks for a confirmation first. The secret comes from a click, not from
     an effect, because each request replaces the waiting secret on the server.
+- **Products.** The top bar has links to Mail and Drive. The brand link and the search box follow
+  the product on screen: in Drive, the search box finds items (`/drive/search?q=<query>`). The
+  editors of Docs and Sheets are part of Drive.
+- **Drive** (`/drive`). A sidebar with the **New** menu, the views and the storage in use, an item
+  list, and dialogs. Drive is a separate chunk, which loads when a Drive page first shows.
+  - The views are My Drive, Shared with me, Recent, Starred, Trash and the search results
+    (`drive.list_items`). A folder has its own path with the drive of the item
+    (`/drive/folders/<prn_id>/<itm_id>`), so one link works for the owner and for each person with access.
+  - The list shows the name with an icon for the kind, the owner (in Shared with me and Starred),
+    the last change and the size. A folder view sorts by the name or by the last change. "More" loads
+    the next page. The list has loading, empty and error states. The error state has "Try again".
+  - A folder view shows the path of the folder (`drive.get_item`). The first entry is "My Drive" in
+    the own drive, and "Shared with me" in the drive of somebody else.
+  - **New** creates a folder, uploads files, and creates a doc or a sheet, which opens in its editor.
+    In a folder of somebody else, New works only with the editor role. From each view that is not a
+    folder, the new item goes to the root of the own drive.
+  - An upload refuses a file larger than `DRIVE_LIMITS.fileBytes` before it reads the file. Files
+    upload one at a time, each with an idempotency key. A drop of files on a folder view uploads them
+    to that folder.
+  - A folder, a doc and a sheet open as links. A file opens a preview dialog. A PNG, JPEG, GIF or
+    WebP image shows from a `blob:` URL, and text shows as plain text. Each other type shows its
+    details and a Download button. The content of a file never goes into the page as HTML.
+  - The More menu of an item follows the role. The owner can rename, move, copy, share, see the
+    versions and move the item to the trash. An editor can rename, copy and upload a version. A
+    viewer can open, download and copy. Each person can put a star on an item: the star is their own.
+  - The toolbar acts on the selection: star, move and trash, or Restore and Delete forever in the
+    trash view. "Move to trash" shows a toast with "Undo". Delete forever and "Empty trash" ask for
+    a confirmation, with the first focus on Cancel.
+  - The move dialog shows the folders of the own drive, one level at a time. The server refuses a
+    move of a folder into itself, and the dialog shows that error.
+  - The share dialog lists the owner and each grant (`drive.list_permissions`). The owner adds a
+    person or an agent as a viewer or an editor, changes a role and removes a grant. A grant from a
+    folder above shows as text. "Copy link" copies the address of the item, or of the folder of a
+    file. Each other person sees the list only.
+  - In Shared with me, "Remove from my list" removes the own grant of the person, after a confirmation.
+  - The versions dialog lists the versions of a file. Each person with access can download one. An
+    owner or an editor can upload a new version and make an older version the current version.
+  - The menus close on Escape, and the focus goes back to the button. The arrow keys, Home and End
+    move between the entries.
+  - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
+    When the version changes, the list loads again without a loading state. A view that can show
+    items of other drives loads again on the same timer.
+  - Under 768px, the sidebar is a drawer, and the list hides the owner and the size.
+- **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
+  name (an owner or an editor changes it in place), the star, the save state, and a Share button
+  for the owner. A viewer sees "View only".
+- **Docs** (`/docs/<prn_id>/<itm_id>`). The editor for one doc: the document header, a formatting
+  toolbar and the text on a sheet of paper. The path has the drive of the doc, so one link works
+  for the owner and for each person with access.
+  - The editor is on [ProseMirror](https://prosemirror.net). The JSON form of its schema is
+    `DocContent` of the contracts: `docs.get` gives the content, and `docs.update` gets it back.
+    The app writes no HTML into the page.
+  - The toolbar has undo, redo, the text style (Normal text, Heading 1 to 3), bold, italic,
+    underline, strikethrough, code, link, bulleted list, numbered list, quote, code block,
+    horizontal rule and remove formatting. The tooltip of each button shows its shortcut.
+  - Shortcuts: `Ctrl` (`⌘` on a Mac) with `B`, `I`, `U`, `E`, `K` or `\`, `Ctrl+Shift` with `X`,
+    `E`, `7`, `8` or `9`, and `Ctrl+Alt` with `0` to `3` for the text style. In a list, `Tab` and
+    `Shift+Tab` change the level of an item. Outside a list, `Tab` moves the focus.
+  - The buttons of the toolbar are one tab stop. The arrow keys, Home and End move between them.
+    A click on a button does not take the focus from the text.
+  - The link dialog accepts only `http`, `https` and `mailto` links. Pasted HTML keeps only what
+    the schema has. Pasted plain text keeps its lines.
+  - The page saves 1.5 seconds after the last change, with one request at a time. Each save sends
+    `base_revision`. The header shows the state of the save. The page also saves when the tab
+    hides and when the page closes, and the browser asks before it closes a tab with changes
+    that are not saved.
+  - When the server answers `conflict`, the page stops the save and shows a notice. **Load the new
+    version** gets the doc again. The changes that are not saved are lost.
+  - When a save fails, the page keeps the changes and shows the error with **Try again**. The next
+    change also tries again.
+  - While the editor has no changes of its own, it gets the doc again every 15 seconds and on
+    window focus, and shows the changes of other people and agents.
+  - A viewer gets the text without the toolbar, and cannot change it. A link opens in a new tab.
+  - **Download as Markdown** saves the `markdown` of `docs.get` as `<name>.md`, after the save of
+    the last changes.
+  - The editor does not make blocks deeper than `DOC_LIMITS.depth` minus 2, because the server
+    refuses a doc that is too deep.
+  - The editor is a separate chunk. A person who uses only Mail does not load it.
+- **Sheets** (`/sheets/<prn_id>/<itm_id>`). The editor of one sheet: the document header, a formula
+  bar and a grid with the columns A to AZ and the rows 1 to 1000.
+  - The server calculates each formula. The page sends the inputs that change
+    (`sheets.update_cells`) and shows the results that come back. The page never calculates.
+  - The grid shows A to Z and 50 rows at least. It grows to 5 columns and 20 rows after the last
+    cell that has an input, and it always holds the selection. It draws only the rows near the
+    rows on screen. The column letters and the row numbers stay in view.
+  - A number is on the right, with at most 10 significant digits. Text is on the left. TRUE and
+    FALSE are in the center. An error such as `#DIV/0!` has the danger color, and its tooltip
+    shows the input.
+  - A click selects a cell. Shift-click and a drag select a range. A click on a column letter, a
+    row number or the corner selects the column, the row or all cells. On a touch screen, a tap
+    selects, so a scroll does not move the selection.
+  - Keyboard: the arrow keys move, and Shift with an arrow key grows the range. Tab and Shift+Tab
+    move right and left. Home goes to column A, and `Ctrl+Home` (`⌘` on a Mac) to A1. Page Up and
+    Page Down move one page. `Ctrl+A` selects all cells.
+  - A typed character starts an edit that replaces the input. F2, Enter or a double click start an
+    edit that keeps the input. Enter saves and moves down, Shift+Enter moves up, Tab moves right,
+    and Escape cancels. In an edit that a typed character started, an arrow key also saves and
+    moves. Delete and Backspace clear the selected cells.
+  - The formula bar shows the input of the active cell, and an edit there does the same save. The
+    name box shows the active cell. Type a cell such as `F6` in it and press Enter to go there.
+  - Copy puts the inputs of the range on the clipboard as tab-separated text, so a paste keeps
+    each formula. Cut also clears the range. Paste writes a block from the first cell of the range
+    and stops at the last row and column. One pasted value fills a range of more than one cell.
+  - `Ctrl+Z` undoes the last change of this page, and `Ctrl+Y` or `Ctrl+Shift+Z` does it again.
+  - The grid is one tab stop (`role="grid"` with `aria-activedescendant`). Escape and then Tab
+    leave the grid.
+  - A changed input shows at once, in a muted color until the server answers. The page sends one
+    request at a time with `base_revision`. Changes that arrive during a request go into the next
+    request. A change of more than 5,000 cells goes in parts. An input of more than 2,000
+    characters is refused with a message.
+  - On `conflict`, the page gets the sheet again and sends the same changes one more time. When a
+    save fails, a notice shows the error with **Try again** and **Discard my changes**, and the
+    changes stay on screen. The browser asks before it closes a tab with a change that is not
+    saved.
+  - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
+  - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
+    and on window focus.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.
 
@@ -173,6 +290,12 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/admin` | Admin |
+| `/drive` | The root of the own drive |
+| `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
+| `/drive/shared`, `/drive/recent`, `/drive/starred`, `/drive/trash` | The other views of Drive |
+| `/drive/search?q=<query>` | The search results of Drive |
+| `/docs/<prn_id>/<itm_id>` | The editor of one doc |
+| `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
@@ -191,10 +314,13 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | The directory, the create form, the agent panels and the team mailboxes card |
+| [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
+| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
+| [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, and the Sheets cells, clipboard text and save queue |
 
 ## Commands
 

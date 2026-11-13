@@ -217,6 +217,7 @@ Saved mail domains stay in place. Setup adds the new owner domain in the same tr
 It recreates the directory schema and creates the new owner in one D1 transaction.
 If that transaction fails, the old directory stays intact.
 R2 messages, queues, and mailbox Durable Objects stay in place. New accounts cannot access old mail.
+The drives, files, docs and sheets of the old accounts also stay in place. New accounts get new, empty drives and cannot open the old ones.
 The reset blocks new accounts, pauses the old mailboxes, and waits for active sends before it replaces the directory.
 It then cancels the remaining old outboxes. Mailboxes resume if the directory transaction fails.
 If a reset stops before cleanup, retry after ten minutes. The expired lease permits another reset.
