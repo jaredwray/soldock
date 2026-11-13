@@ -146,6 +146,11 @@ describe("the formula engine", () => {
 		expect(result.A16).toBe("#LIMIT!");
 		expect(result.A40).toBe("#LIMIT!");
 		expect(result.B1).toBe("#LIMIT!");
+		// A change of case can make a text longer: each ß becomes SS.
+		expect(run({ A1: "ß".repeat(20_000), B1: "=UPPER(A1)", B2: "=LOWER(A1)" })).toMatchObject({
+			B1: "#LIMIT!",
+			B2: "ß".repeat(20_000),
+		});
 	});
 
 	// Each text here is under the limit for one cell. Without a limit for the total, 2,000 such cells

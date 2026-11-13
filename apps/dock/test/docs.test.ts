@@ -107,6 +107,18 @@ describe("a retry with the same idempotency key", () => {
 	});
 });
 
+// Two calls with one key can run at the same time, for example a client that sends a retry too early.
+describe("two copies of a doc with one idempotency key at the same time", () => {
+	it("give the same copy to the two calls, with the content", async () => {
+		const { item } = await ada.call("docs.create", { name: "Plan", markdown: "the original" });
+		const input = { item_id: item.id, idempotency_key: "copy-2" };
+		const [first, second] = await Promise.all([ada.call("drive.copy_item", input), ada.call("drive.copy_item", input)]);
+		expect(second.item.id).toBe(first.item.id);
+		expect((await ada.call("docs.get", { item_id: first.item.id })).markdown).toBe("the original\n");
+		expect((await ada.call("drive.list_items")).items).toHaveLength(2);
+	});
+});
+
 describe("docs.update", () => {
 	it("replaces the content, adds 1 to the revision, and shows in the drive with the author and the time", async () => {
 		const { item } = await ada.call("docs.create", { name: "Plan", markdown: "first" });

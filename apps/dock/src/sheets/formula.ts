@@ -317,7 +317,9 @@ function textual(count: [number, number], fn: (text: string, ...values: number[]
 			if (value < 0) return ERRORS["#VALUE!"];
 			values.push(Math.floor(value));
 		}
-		return fn(text, ...values);
+		// A change of case can make a text longer: the capital form of ß is SS.
+		const result = fn(text, ...values);
+		return typeof result === "string" ? boundedText(result) : result;
 	};
 }
 
