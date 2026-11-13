@@ -679,6 +679,90 @@ describe("passwords", () => {
 	});
 });
 
+/**
+ * A D1 binding that runs `change` just before the batch or the write that a call makes, as a request
+ * that lands during the call would. `write` names the SQL of a write that is not in a batch.
+ */
+function racing(change: string, bind: string, write?: string) {
+	const run = () => env.DIRECTORY.prepare(change).bind(bind).run();
+	return new Proxy(env.DIRECTORY, {
+		get(target, property) {
+			if (property === "batch") {
+				return async (statements: D1PreparedStatement[]) => {
+					await run();
+					return target.batch(statements);
+				};
+			}
+			if (property === "prepare") {
+				return (sql: string) => {
+					const statement = target.prepare(sql);
+					if (!write || !sql.includes(write)) return statement;
+					return {
+						bind: (...values: unknown[]) => ({ run: async () => (await run(), statement.bind(...values).run()) }),
+					};
+				};
+			}
+			const value = Reflect.get(target, property);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}
+
+describe("sessions that end during a change", () => {
+	// A reset by an admin ends the sessions of a person. A slow request from one of those sessions must
+	// not commit after it, or the holder of a stolen session chooses the new sign-in.
+	it.each([
+		{ op: "password", body: () => ({ password: "the attacker's choice" }), status: 401 },
+		{ op: "totp/disable", body: () => ({ current_password: PASSWORD }), status: 401 },
+		{
+			op: "totp/enable",
+			body: async (secret: string) => ({ code: await totpNow(secret), current_password: PASSWORD }),
+			status: 409,
+		},
+	])("refuses $op from a session that a reset ended during the request", async ({ op, body, status }) => {
+		const owner = await setupOwner();
+		const { secret } = await owner.call("account.create_totp_secret");
+		// Turning on the second step ends each session, so it comes before the sign-in.
+		if (op === "totp/disable") await owner.call("account.enable_totp", { code: await totpNow(secret) });
+		const signedIn = await submitSignIn(owner.address, PASSWORD, {
+			...(op === "totp/disable" ? { totpCode: await totpNow(secret, 1) } : {}),
+		});
+		const cookie = cookieOf(signedIn);
+		// A person from before the upgrade has no password, so no current password protects the change.
+		if (op === "password") await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL").run();
+		const before = await env.DIRECTORY.prepare("SELECT password_hash, totp_secret FROM principals").first();
+		const res = await withEnv(
+			{ DIRECTORY: racing("DELETE FROM sessions WHERE principal_id = ?", owner.id, "SET totp_secret = NULL") },
+			`/api/v1/account/${op}`,
+			{
+				method: "POST",
+				headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+				body: JSON.stringify(await body(secret)),
+			},
+		);
+		expect(res.status).toBe(status);
+		// The session was live at authentication, so the refusal comes from the write.
+		expect(((await res.json()) as { detail: string }).detail).toMatch(/session ended/);
+		expect(await env.DIRECTORY.prepare("SELECT password_hash, totp_secret FROM principals").first()).toEqual(before);
+	});
+
+	// Two clicks can send the same code twice. The request that loses changes nothing, also no session.
+	it("ends no session when a parallel request turned on two-step verification first", async () => {
+		const owner = await setupOwner();
+		const here = await signIn(owner.address);
+		const elsewhere = await signIn(owner.address);
+		const { secret } = await owner.call("account.create_totp_secret");
+		const winner = "UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL WHERE id = ?";
+		const res = await withEnv({ DIRECTORY: racing(winner, owner.id) }, "/api/v1/account/totp/enable", {
+			method: "POST",
+			headers: { cookie: here, origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ code: await totpNow(secret), current_password: PASSWORD }),
+		});
+		expect(res.status).toBe(409);
+		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(200);
+	});
+});
+
 describe("two-step verification", () => {
 	it("turns on only with a correct code for the newest secret", async () => {
 		const owner = await setupOwner();
@@ -790,9 +874,10 @@ describe("directory upgrade", () => {
 		]);
 		expect(await db.prepare("PRAGMA foreign_key_check").all()).toMatchObject({ results: [] });
 		// The deploy migrates while the old Worker runs. It reads the sign-in email and writes codes, so
-		// both stay until a later migration. The old codes are gone.
+		// the column and the table stay until a later migration, empty. A kept address could receive codes
+		// after a rollback, so the values go.
 		expect(await db.prepare("SELECT sign_in_email FROM principals WHERE id = 'prn_owner'").first()).toEqual({
-			sign_in_email: "olive@home.example",
+			sign_in_email: null,
 		});
 		expect(await db.prepare("SELECT COUNT(*) AS count FROM sign_in_codes").first("count")).toBe(0);
 		await db

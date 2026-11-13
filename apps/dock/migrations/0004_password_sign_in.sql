@@ -1,11 +1,13 @@
 -- Sign-in with a password and an optional TOTP code replaces sign-in codes by email. This migration
 -- adds the password and TOTP columns.
 --
--- The deploy applies migrations while the old Worker still runs, so this migration only adds. The old
--- Worker reads `sign_in_email` and writes `sign_in_codes`, so both stay, unused by the new Worker:
--- `sign_in_email` becomes optional, and `sign_in_codes` comes back empty. A later migration removes
--- them, after the new Worker runs everywhere. The triggers that kept sign-in emails outside the mail
--- domains go away, because the new Worker does not set sign-in emails.
+-- The deploy applies migrations while the old Worker still runs, so the old Worker must still be able to
+-- read the directory. It reads `sign_in_email` and writes `sign_in_codes`, so both stay, unused by the
+-- new Worker: `sign_in_email` becomes optional and empty, and `sign_in_codes` comes back empty. The old
+-- Worker then sends no code, but sessions and API keys keep working. The values are not kept: a kept
+-- sign-in email without the triggers that kept it outside the mail domains could let somebody who adds
+-- its domain read codes after a rollback. The triggers go away. A later migration removes the column
+-- and the table, after the new Worker runs everywhere.
 --
 -- A D1 migration cannot turn off foreign keys, and a deferred check counts each row of a dropped parent
 -- table as a violation. So the migration copies `principals` and each table that refers to it into a
@@ -33,7 +35,7 @@ CREATE TABLE principals_v2 (
 	-- Who an agent can send mail to. Only the sponsor, an owner or an admin can change it.
 	outbound_mode TEXT CHECK (outbound_mode IN ('internal-only', 'allowlist', 'any')),
 	outbound_allowlist TEXT NOT NULL DEFAULT '[]',
-	-- Unused since this migration, and optional. Only the Worker from before this migration reads it.
+	-- Unused and empty since this migration. Only the Worker from before this migration reads it.
 	sign_in_email TEXT,
 	-- The PBKDF2 hash of the password of a human: `pbkdf2-sha256$<iterations>$<salt>$<hash>`. Null until
 	-- somebody sets a password. Agents have none.
@@ -58,7 +60,7 @@ CREATE TABLE principals_v2 (
 --> statement-breakpoint
 INSERT INTO principals_v2 (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
 	sign_in_email, created_at)
-SELECT id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist, sign_in_email, created_at
+SELECT id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist, NULL, created_at
 FROM principals;
 --> statement-breakpoint
 CREATE TABLE addresses_v2 (

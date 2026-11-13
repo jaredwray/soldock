@@ -234,10 +234,10 @@ Add each new migration to the bundled reset schema in `apps/dock/src/identity/se
 ### Upgrade to password sign-in
 
 Migration `0004_password_sign_in.sql` replaces sign-in codes by email with passwords and optional
-two-step verification. It only adds, so the old Worker keeps working between the migration and the
-deploy, and you can deploy the old Worker again. The old sign-in emails stay unused until a later
-migration removes them. Accounts, addresses, API keys, and browser sessions stay. Nobody has a
-password after the migration. Do one of these steps:
+two-step verification. The old Worker keeps working between the migration and the deploy, and you can
+deploy the old Worker again, but it cannot send sign-in codes: the migration deletes the old sign-in
+emails. Accounts, addresses, API keys, and browser sessions stay. Nobody has a password after the
+migration. Do one of these steps:
 
 - In a browser session from before the upgrade, open **Settings** and set a password. Each page shows
   a notice until you do.

@@ -278,27 +278,40 @@ export async function updateOutboundPolicy(
 }
 
 /**
+ * The condition that the session which makes a change still exists, in the transaction of the change.
+ * A change from a session that a password reset ended during the request must not commit. Null (an API
+ * key) always passes. It reads the session hash from parameter `?n`.
+ */
+function liveSession(n: number): string {
+	return `(?${n} IS NULL OR EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?${n}))`;
+}
+
+/**
  * Sets the password of a human, clears a sign-in lock, and ends the sessions of that human, except
  * `keepSessionHash`: the session that made the change, when the human changes their own password.
- * Somebody who knew the old password must not keep a session after the change.
+ * Somebody who knew the old password must not keep a session after the change. Returns false, and
+ * changes nothing, when `liveSessionHash` names a session that ended.
  */
 export async function setPassword(
 	db: D1Database,
 	principalId: string,
 	passwordHash: string,
 	keepSessionHash: string | null,
-): Promise<void> {
-	await db.batch([
+	liveSessionHash: string | null,
+): Promise<boolean> {
+	// changes() in the delete reads the count of the update, so a refused update ends no session.
+	const [updated] = await db.batch([
 		db
 			.prepare(
-				`UPDATE principals SET password_hash = ?, sign_in_failures = 0, sign_in_locked_until = NULL
-				WHERE id = ? AND kind = 'human'`,
+				`UPDATE principals SET password_hash = ?1, sign_in_failures = 0, sign_in_locked_until = NULL
+				WHERE id = ?2 AND kind = 'human' AND ${liveSession(3)}`,
 			)
-			.bind(passwordHash, principalId),
+			.bind(passwordHash, principalId, liveSessionHash),
 		db
-			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ?")
+			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
 			.bind(principalId, keepSessionHash),
 	]);
+	return updated?.meta.changes === 1;
 }
 
 /** Keeps a new TOTP secret that waits for a code. It replaces an older waiting secret. Sign-in does not change. */
@@ -321,7 +334,8 @@ export async function pendingTotpSecret(db: D1Database, principalId: string): Pr
  * Makes the waiting secret the TOTP secret of the person, and ends the other sessions of the person,
  * except `keepSessionHash`. A session that somebody else holds must not stay after the change. The code
  * of `step` cannot sign in again. Returns false, and changes nothing, when the waiting secret changed
- * after the check, for example in a parallel request.
+ * after the check (for example in a parallel request), or when `liveSessionHash` names a session that
+ * ended.
  */
 export async function enableTotp(
 	db: D1Database,
@@ -329,30 +343,40 @@ export async function enableTotp(
 	secret: string,
 	step: number,
 	keepSessionHash: string | null,
+	liveSessionHash: string | null,
 ): Promise<boolean> {
+	// changes() in the delete reads the count of the update, so a refused update ends no session.
 	const [enabled] = await db.batch([
 		db
 			.prepare(
-				`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?
-				WHERE id = ? AND totp_pending_secret = ?`,
+				`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?1
+				WHERE id = ?2 AND totp_pending_secret = ?3 AND ${liveSession(4)}`,
 			)
-			.bind(step, principalId, secret),
+			.bind(step, principalId, secret, liveSessionHash),
 		db
-			.prepare(
-				`DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ?
-				AND EXISTS (SELECT 1 FROM principals WHERE id = ? AND totp_secret = ?)`,
-			)
-			.bind(principalId, keepSessionHash, principalId, secret),
+			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
+			.bind(principalId, keepSessionHash),
 	]);
 	return enabled?.meta.changes === 1;
 }
 
-/** Turns off two-step verification for a human, and removes a secret that waits for a code. */
-export async function disableTotp(db: D1Database, principalId: string): Promise<void> {
-	await db
-		.prepare("UPDATE principals SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL WHERE id = ?")
-		.bind(principalId)
+/**
+ * Turns off two-step verification for a human, and removes a secret that waits for a code. Returns
+ * false, and changes nothing, when `liveSessionHash` names a session that ended.
+ */
+export async function disableTotp(
+	db: D1Database,
+	principalId: string,
+	liveSessionHash: string | null,
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE principals SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL
+			WHERE id = ?1 AND ${liveSession(2)}`,
+		)
+		.bind(principalId, liveSessionHash)
 		.run();
+	return result.meta.changes === 1;
 }
 
 export async function createApiKey(

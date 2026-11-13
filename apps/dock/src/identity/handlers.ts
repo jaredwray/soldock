@@ -124,6 +124,13 @@ async function confirmCurrentPassword(
 	}
 }
 
+/** The session that makes the call. A credential change from it commits only while it still exists. */
+function liveSession(call: CallContext): string | null {
+	return call.caller.credential === "session" ? call.caller.sessionHash : null;
+}
+
+const SESSION_ENDED = "This session ended during the request. Sign in again.";
+
 function auditOk(call: CallContext, op: string, target: string): void {
 	audit({
 		op,
@@ -270,7 +277,10 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		// The change ends the other sessions of the person, so somebody who knew the old password loses
 		// each session made with it. The session that makes its own change stays.
 		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;
-		await setPassword(call.env.DIRECTORY, target.id, await hashPassword(input.password), keep);
+		const hash = await hashPassword(input.password);
+		if (!(await setPassword(call.env.DIRECTORY, target.id, hash, keep, liveSession(call)))) {
+			throw new OperationError("unauthenticated", SESSION_ENDED);
+		}
 		auditOk(call, "account.set_password", target.id);
 		return { principal_id: target.id };
 	},
@@ -296,8 +306,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 				"The code is not correct. Make sure that the clock of the device is correct, then try the newest code.",
 			);
 		}
-		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step, call.caller.sessionHash))) {
-			throw new OperationError("conflict", "A newer setup replaced this secret. Start again.");
+		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step, call.caller.sessionHash, liveSession(call)))) {
+			throw new OperationError("conflict", "A newer setup replaced this secret, or this session ended. Start again.");
 		}
 		auditOk(call, "account.enable_totp", id);
 		return { totp_enabled: true };
@@ -308,7 +318,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has two-step verification.");
 		assertFullCredential(call.caller);
 		await confirmCurrentPassword(call, target, input.current_password);
-		await disableTotp(call.env.DIRECTORY, target.id);
+		if (!(await disableTotp(call.env.DIRECTORY, target.id, liveSession(call)))) {
+			throw new OperationError("unauthenticated", SESSION_ENDED);
+		}
 		auditOk(call, "account.disable_totp", target.id);
 		return { principal_id: target.id, totp_enabled: false };
 	},

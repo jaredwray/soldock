@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and an empty `sign_in_codes`. A later migration removes them. Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -152,9 +152,11 @@ their own with the API key from setup.
   password. While `sign_in.password_set` is false, the web app shows a notice in each page and in
   Settings. A person in a kept session sets a password there. The owner can also use the API key
   from setup, and then set passwords for the others.
-- Migration `0004` only adds, because the deploy applies migrations while the old Worker runs. It
-  keeps `sign_in_email` (now optional) and `sign_in_codes` (empty again) for the old Worker, and
-  drops only the old codes and the triggers for sign-in emails. A later migration removes the column
+- Migration `0004` keeps the old Worker working, because the deploy applies migrations while the
+  old Worker runs. The old Worker reads `sign_in_email` and writes `sign_in_codes`, so both stay,
+  empty. The old Worker then sends no code, but sessions and API keys keep working, also after a
+  rollback. The sign-in email values and their triggers go: a kept address without the triggers could
+  let an admin who adds its domain read codes after a rollback. A later migration removes the column
   and the table.
 
 ## Authorization
@@ -187,6 +189,10 @@ Each call passes three checks:
      counts toward the sign-in lock. A wrong or missing password gets `forbidden`. An API key does not
      need it: a key with every human scope is the recovery credential of the owner. An owner or an
      admin who changes the sign-in of somebody else does not need it either.
+   - A change of sign-in from a browser session commits only while that session still exists, in the
+     same transaction. So a slow request from a session that a password reset ended cannot choose the
+     new password or second step. It gets `unauthenticated` (`conflict` for `account.enable_totp`).
+     The sessions that a change ends are deleted only when the change itself matched.
    - `account.set_password` ends the sessions of that person and clears a sign-in lock. When the
      person changes their own password in a session, that session stays. This locks out somebody who
      knew the old password.
