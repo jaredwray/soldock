@@ -94,6 +94,32 @@ describe("the sync of an open room", () => {
 		expect(applied).toEqual([1, 2]);
 	});
 
+	// A reload of the room replaces the list with an older snapshot while a sync reads newer changes.
+	// The page of that read is for the old list: after it, the list has a gap that no later sync fills.
+	it("drops a page that it read before a new start, and reads again from the new version", async () => {
+		const changes = [10, 11, 12, 13].map((version) => message(version, version));
+		const calls: number[] = [];
+		let releaseFirst = () => {};
+		const firstRead = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const read = async (changedAfter: number): Promise<ChangePage> => {
+			calls.push(changedAfter);
+			if (calls.length === 1) await firstRead;
+			return { messages: changes.filter((change) => change.version > changedAfter), version: 13, has_more: false };
+		};
+		const applied: number[] = [];
+		const sync = createRoomSync(read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(12);
+		const running = sync.run();
+		// The reload installs a snapshot of version 10 during the read after version 12.
+		sync.start(10);
+		releaseFirst();
+		await running;
+		expect(calls).toEqual([12, 10]);
+		expect(applied).toEqual([11, 12, 13]);
+	});
+
 	// React runs the cleanup of an effect and then the effect again, on the same sync, in development.
 	it("works again when it starts after a stop", async () => {
 		const room = fakeRoom([message(1, 1), message(2, 2)]);

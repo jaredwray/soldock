@@ -10,7 +10,10 @@ export interface ChangePage {
 }
 
 export interface RoomSync {
-	/** Sets the version of the room that the page has, after a load. It also starts a sync that stopped. */
+	/**
+	 * Sets the version of the room that the page has, after a load of the room. It also starts a sync
+	 * that stopped. Call it in the same step as the list of that load goes on the page.
+	 */
 	start(version: number): void;
 	/**
 	 * Takes the version of the room from a room list, and gets the changes when the room is ahead. Call
@@ -26,7 +29,9 @@ export interface RoomSync {
 /**
  * Gets each new, changed and deleted message after the version that the page has, and gives them to
  * `apply`. One sync runs at a time. A call during a sync makes the sync run one more time. After a
- * failed read, the version stays, so the next sync asks for the same changes again.
+ * failed read, the version stays, so the next sync asks for the same changes again. A page that was
+ * read before a new `start` is dropped, and the sync reads again from the new version: that page was
+ * for the list from before the load.
  */
 export function createRoomSync(
 	read: (changedAfter: number) => Promise<ChangePage>,
@@ -36,6 +41,8 @@ export function createRoomSync(
 	let running = false;
 	let again = false;
 	let stopped = false;
+	/** The number of starts. A read knows from it that a load replaced the list during the read. */
+	let starts = 0;
 
 	async function run(): Promise<void> {
 		if (version === null || stopped) return;
@@ -49,8 +56,13 @@ export function createRoomSync(
 				again = false;
 				let more = true;
 				while (more) {
+					const startsBefore = starts;
 					const page = await read(version);
 					if (stopped) return;
+					if (startsBefore !== starts) {
+						again = true;
+						break;
+					}
 					const last = page.messages[page.messages.length - 1];
 					more = page.has_more && last !== undefined;
 					// A page that is not the last one continues from the version of its last message.
@@ -69,6 +81,7 @@ export function createRoomSync(
 		start(loaded) {
 			version = loaded;
 			stopped = false;
+			starts += 1;
 		},
 		notice(listedVersion) {
 			return version !== null && listedVersion > version ? run() : Promise.resolve();
