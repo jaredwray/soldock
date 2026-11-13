@@ -98,9 +98,10 @@ keys.
 - `drive.unshare_item`: the owner removes each grant. A principal removes its own grant.
 - The scopes of the credential apply first: `drive.read`, `drive.write` and `drive.share`. An agent
   key can hold all three. A copy needs `drive.read` and `drive.write`.
-- Known limit: a change to a doc or a sheet checks the role in the drive, then writes the content
-  in the `DocumentDO`. A grant that the owner removes between the two steps does not stop that one
-  write.
+- Known limit: a call for a doc or a sheet checks the role in the drive, then reads or writes the
+  content in the `DocumentDO`. A grant that the owner removes between the two steps does not stop
+  that one call. For a read or a copy, the caller gets only what the role allowed at the time of
+  the check. For a write, one change of a former editor can still arrive.
 
 ### Shared with me, and stars
 
