@@ -1,5 +1,6 @@
 import directorySchema from "../../migrations/0001_directory.sql";
 import mailDomainSchema from "../../migrations/0003_mail_domains.sql";
+import passwordSchema from "../../migrations/0004_password_sign_in.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 
 /** Freezes principal creation and waits for old outbound side effects before a reset. */
@@ -45,9 +46,12 @@ export async function prepareFreshDirectory(env: Env) {
 	}
 }
 
-/** Recreates the directory in the same transaction as the new owner and key. */
+/**
+ * Recreates the directory in the same transaction as the new owner and key. It runs the directory
+ * migrations in order, so a fresh directory has the same schema as an upgraded one.
+ */
 function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
-	// The base schema has no triggers. The domain migration uses explicit statement markers for its triggers.
+	// The base schema has no triggers. Later migrations use explicit statement markers for their triggers.
 	const schema = directorySchema
 		.replace(/--[^\n]*/g, "")
 		.split(";")
@@ -63,5 +67,20 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE principals",
 		...schema,
 		...mailDomainSchema.split("--> statement-breakpoint"),
+		...passwordSchema.split("--> statement-breakpoint"),
+		// The directory now has the schema of each bundled migration. Record them in the table that
+		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
+		// copy the principals without their passwords. The columns are the ones that wrangler creates.
+		`CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)`,
+		`INSERT OR IGNORE INTO d1_migrations (name) VALUES ${BUNDLED_MIGRATIONS.map((name) => `('${name}')`).join(", ")}`,
 	].map((statement) => db.prepare(statement));
 }
+
+/** The directory migrations that a fresh start leaves applied. 0002 made `setup_lock`, which the reset needs. */
+const BUNDLED_MIGRATIONS = [
+	"0001_directory.sql",
+	"0002_setup_lock.sql",
+	"0003_mail_domains.sql",
+	"0004_password_sign_in.sql",
+] as const;

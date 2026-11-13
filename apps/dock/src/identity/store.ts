@@ -15,8 +15,10 @@ export interface PrincipalRecord {
 	sponsor_id: string | null;
 	outbound_mode: OutboundMode | null;
 	outbound_allowlist: string[];
-	/** Where a human gets sign-in codes, lowercase. Null for an agent. */
-	sign_in_email: string | null;
+	/** True when a human has a password. The hash never leaves the sign-in code. */
+	password_set: boolean;
+	/** True when sign-in also needs a TOTP code. The secret never leaves the sign-in code. */
+	totp_enabled: boolean;
 	created_at: string;
 }
 
@@ -30,16 +32,21 @@ export interface ApiKeyRecord {
 	revoked_at: string | null;
 }
 
-interface PrincipalRow extends Omit<PrincipalRecord, "outbound_allowlist"> {
+interface PrincipalRow extends Omit<PrincipalRecord, "outbound_allowlist" | "password_set" | "totp_enabled"> {
 	outbound_allowlist: string;
+	password_set: number;
+	totp_enabled: number;
 }
 
 interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
 	scopes: string;
 }
 
-const PRINCIPAL_SELECT = `SELECT p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode,
-	p.outbound_allowlist, p.sign_in_email, p.created_at, a.address
+/** The principal columns of a PrincipalRecord. Only flags come from the credential columns, never their values. */
+const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
+	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at`;
+
+const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
 
 const API_KEY_SELECT = "SELECT id, principal_id, label, scopes, created_at, last_used_at, revoked_at FROM api_keys";
@@ -50,14 +57,13 @@ export const API_KEY_PREFIX = "sdk_";
 /** A session lasts 30 days. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/**
- * The local part of the address that sends sign-in codes, on the mail domain of the person. No
- * principal can have it, so a reply to a code never reaches a mailbox.
- */
-export const SIGN_IN_SENDER = "no-reply";
-
 function toPrincipal(row: PrincipalRow): PrincipalRecord {
-	return { ...row, outbound_allowlist: JSON.parse(row.outbound_allowlist) as string[] };
+	return {
+		...row,
+		outbound_allowlist: JSON.parse(row.outbound_allowlist) as string[],
+		password_set: row.password_set === 1,
+		totp_enabled: row.totp_enabled === 1,
+	};
 }
 
 function toApiKey(row: ApiKeyRow): ApiKeyRecord {
@@ -77,35 +83,11 @@ export function normalizeAddress(address: string): string {
 	return `${plus > 0 ? local.slice(0, plus) : local}${lower.slice(at)}`;
 }
 
-/**
- * A primary address cannot hold a `+tag`, because mail to `user+tag@` reaches `user@`. It also cannot
- * be the sender of sign-in codes, because a reply to a code would then reach a mailbox.
- */
+/** A primary address cannot hold a `+tag`, because mail to `user+tag@` reaches `user@`. */
 export function assertPrimaryAddress(address: string): void {
 	const local = address.slice(0, address.lastIndexOf("@"));
 	if (local.includes("+")) {
 		throw new OperationError("invalid", "A primary address cannot contain +. Mail to user+tag reaches user.");
-	}
-	if (local.toLowerCase() === SIGN_IN_SENDER) {
-		throw new OperationError("invalid", `The address ${SIGN_IN_SENDER} is reserved. It sends sign-in codes.`);
-	}
-}
-
-/** The form of a sign-in email that the directory stores: trimmed and lowercase. */
-export function normalizeSignInEmail(email: string): string {
-	return email.trim().toLowerCase();
-}
-
-/**
- * A sign-in email must be outside the mail domains. A code sent to a Soldock mailbox can be read only
- * after sign-in, so the person could never sign in.
- */
-export function assertSignInEmail(domains: ReadonlySet<string>, email: string): void {
-	if (domains.has(domainOf(email))) {
-		throw new OperationError(
-			"invalid",
-			"The sign-in email must be outside the mail domains of Soldock, so that you can read a code before you sign in.",
-		);
 	}
 }
 
@@ -159,8 +141,7 @@ export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]>
 export async function resolveAddress(db: D1Database, address: string): Promise<PrincipalRecord | null> {
 	const row = await db
 		.prepare(
-			`SELECT p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
-			p.sign_in_email, p.created_at, primary_address.address
+			`SELECT ${PRINCIPAL_COLUMNS}, primary_address.address
 			FROM addresses target
 			JOIN principals p ON p.id = target.principal_id
 			JOIN addresses primary_address ON primary_address.principal_id = p.id AND primary_address.is_primary = 1
@@ -171,28 +152,14 @@ export async function resolveAddress(db: D1Database, address: string): Promise<P
 	return row ? toPrincipal(row) : null;
 }
 
-/**
- * The human who signs in with this address: the address is their sign-in email or one of their
- * Soldock addresses. Returns null for an agent and an unknown address.
- */
-export async function findSignInPrincipal(db: D1Database, email: string): Promise<PrincipalRecord | null> {
-	const row = await db
-		.prepare(`${PRINCIPAL_SELECT} WHERE p.kind = 'human' AND p.sign_in_email = ?`)
-		.bind(normalizeSignInEmail(email))
-		.first<PrincipalRow>();
-	if (row) return toPrincipal(row);
-	const principal = await resolveAddress(db, email);
-	return principal?.kind === "human" && principal.sign_in_email ? principal : null;
-}
-
 export interface NewPrincipal {
 	kind: PrincipalKind;
 	display_name: string;
 	address: string;
 	org_role: OrgRole | null;
 	sponsor_id: string | null;
-	/** Humans only. */
-	sign_in_email: string | null;
+	/** The stored form of the first password (`hashPassword`). Humans only. */
+	password_hash: string | null;
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
@@ -200,15 +167,6 @@ function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);
 	if (text.includes("mail_domain_in_use")) {
 		return new OperationError("conflict", "This domain has mailbox addresses. You cannot remove it.");
-	}
-	if (text.includes("mail_domain_sign_in")) {
-		return new OperationError(
-			"conflict",
-			"A person uses this domain for sign-in email. Change that email before you add the domain.",
-		);
-	}
-	if (text.includes("principal_sign_in_domain")) {
-		return new OperationError("invalid", "The sign-in email must be outside the saved mail domains.");
 	}
 	if (text.includes("address_mail_domain")) {
 		return new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
@@ -218,9 +176,6 @@ function conflictOf(error: unknown): OperationError | null {
 	}
 	if (text.includes("UNIQUE constraint failed: addresses.address")) {
 		return new OperationError("conflict", "That address belongs to another principal.");
-	}
-	if (text.includes("UNIQUE constraint failed: principals.sign_in_email")) {
-		return new OperationError("conflict", "That sign-in email belongs to another person.");
 	}
 	return null;
 }
@@ -264,7 +219,7 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-					sign_in_email, created_at)
+					password_hash, created_at)
 					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ? ${guard}`,
 				)
 				.bind(
@@ -274,7 +229,7 @@ export async function createPrincipal(
 					principal.org_role,
 					principal.sponsor_id,
 					outboundMode,
-					principal.kind === "human" && principal.sign_in_email ? normalizeSignInEmail(principal.sign_in_email) : null,
+					principal.kind === "human" ? principal.password_hash : null,
 					now,
 				),
 			db
@@ -323,34 +278,105 @@ export async function updateOutboundPolicy(
 }
 
 /**
- * Sets the sign-in email of a human, stops the sign-in codes of that human, and ends the sessions of
- * that human, except `keepSessionHash`: the session that made the change, when the human changes their
- * own email. A code that went to the old email must not sign in after the change. The codes are marked
- * used, not deleted, because the hourly limit counts them.
+ * The condition that the session which makes a change still exists, in the transaction of the change.
+ * A change from a session that a password reset ended during the request must not commit. Null (an API
+ * key) always passes. It reads the session hash from parameter `?n`.
  */
-export async function setSignInEmail(
+function liveSession(n: number): string {
+	return `(?${n} IS NULL OR EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?${n}))`;
+}
+
+/**
+ * Sets the password of a human, clears a sign-in lock, and ends the sessions of that human, except
+ * `keepSessionHash`: the session that made the change, when the human changes their own password.
+ * Somebody who knew the old password must not keep a session after the change. Returns false, and
+ * changes nothing, when `liveSessionHash` names a session that ended.
+ */
+export async function setPassword(
 	db: D1Database,
 	principalId: string,
-	email: string,
+	passwordHash: string,
 	keepSessionHash: string | null,
-): Promise<string> {
-	const normalized = normalizeSignInEmail(email);
-	try {
-		await db.batch([
-			db
-				.prepare("UPDATE principals SET sign_in_email = ? WHERE id = ? AND kind = 'human'")
-				.bind(normalized, principalId),
-			db
-				.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ?")
-				.bind(principalId, keepSessionHash),
-			db
-				.prepare("UPDATE sign_in_codes SET used_at = COALESCE(used_at, ?) WHERE principal_id = ?")
-				.bind(new Date().toISOString(), principalId),
-		]);
-	} catch (error) {
-		throw conflictOf(error) ?? error;
-	}
-	return normalized;
+	liveSessionHash: string | null,
+): Promise<boolean> {
+	// changes() in the delete reads the count of the update, so a refused update ends no session.
+	const [updated] = await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET password_hash = ?1, sign_in_failures = 0, sign_in_locked_until = NULL
+				WHERE id = ?2 AND kind = 'human' AND ${liveSession(3)}`,
+			)
+			.bind(passwordHash, principalId, liveSessionHash),
+		db
+			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
+			.bind(principalId, keepSessionHash),
+	]);
+	return updated?.meta.changes === 1;
+}
+
+/** Keeps a new TOTP secret that waits for a code. It replaces an older waiting secret. Sign-in does not change. */
+export async function setPendingTotpSecret(db: D1Database, principalId: string, secret: string): Promise<void> {
+	await db
+		.prepare("UPDATE principals SET totp_pending_secret = ? WHERE id = ? AND kind = 'human'")
+		.bind(secret, principalId)
+		.run();
+}
+
+/** The TOTP secret that waits for a code, or null. */
+export async function pendingTotpSecret(db: D1Database, principalId: string): Promise<string | null> {
+	return await db
+		.prepare("SELECT totp_pending_secret FROM principals WHERE id = ?")
+		.bind(principalId)
+		.first<string | null>("totp_pending_secret");
+}
+
+/**
+ * Makes the waiting secret the TOTP secret of the person, and ends the other sessions of the person,
+ * except `keepSessionHash`. A session that somebody else holds must not stay after the change. The code
+ * of `step` cannot sign in again. Returns false, and changes nothing, when the waiting secret changed
+ * after the check (for example in a parallel request), or when `liveSessionHash` names a session that
+ * ended.
+ */
+export async function enableTotp(
+	db: D1Database,
+	principalId: string,
+	secret: string,
+	step: number,
+	keepSessionHash: string | null,
+	liveSessionHash: string | null,
+): Promise<boolean> {
+	// changes() in the delete reads the count of the update, so a refused update ends no session.
+	const [enabled] = await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?1
+				WHERE id = ?2 AND totp_pending_secret = ?3 AND ${liveSession(4)}`,
+			)
+			.bind(step, principalId, secret, liveSessionHash),
+		db
+			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
+			.bind(principalId, keepSessionHash),
+	]);
+	return enabled?.meta.changes === 1;
+}
+
+/**
+ * Turns off two-step verification for a human, and removes a secret that waits for a code. Returns
+ * false, and changes nothing, when `liveSessionHash` names a session that ended.
+ */
+export async function disableTotp(
+	db: D1Database,
+	principalId: string,
+	liveSessionHash: string | null,
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE principals SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL
+			WHERE id = ?1 AND ${liveSession(2)}`,
+		)
+		.bind(principalId, liveSessionHash)
+		.run();
+	return result.meta.changes === 1;
 }
 
 export async function createApiKey(
@@ -426,17 +452,38 @@ export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<vo
 
 /**
  * Creates a browser session for a human, and deletes the expired sessions of the same human. Returns
- * the cookie value. A session holds every human scope.
+ * the cookie value. A session holds every human scope, because sign-in proves the password and, when
+ * it is on, the TOTP code.
  */
 export async function createSession(db: D1Database, principalId: string): Promise<string> {
+	const token = await createSessionIf(db, principalId, null);
+	if (!token) throw new Error(`session for ${principalId} was not stored`);
+	return token;
+}
+
+/**
+ * Creates a session in the same transaction as `guard`, and only when `guard` changes exactly one row.
+ * Returns null when it does not. Sign-in uses it, so a password change during the check wins: a guard
+ * that names the checked credentials then matches no row, and no session comes into existence.
+ */
+export async function createSessionIf(
+	db: D1Database,
+	principalId: string,
+	guard: D1PreparedStatement | null,
+): Promise<string | null> {
 	const token = randomToken(32);
 	const now = Date.now();
-	await db.batch([
+	// changes() reads the count of the statement just before the insert: the guard.
+	const results = await db.batch([
 		db
 			.prepare("DELETE FROM sessions WHERE principal_id = ? AND expires_at <= ?")
 			.bind(principalId, new Date(now).toISOString()),
+		...(guard ? [guard] : []),
 		db
-			.prepare("INSERT INTO sessions (token_hash, principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+			.prepare(
+				`INSERT INTO sessions (token_hash, principal_id, created_at, expires_at)
+				SELECT ?, ?, ?, ?${guard ? " WHERE changes() = 1" : ""}`,
+			)
 			.bind(
 				await sha256Hex(token),
 				principalId,
@@ -444,7 +491,7 @@ export async function createSession(db: D1Database, principalId: string): Promis
 				new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
 			),
 	]);
-	return token;
+	return results.at(-1)?.meta.changes === 1 ? token : null;
 }
 
 /** The live session with this cookie value, its principal, and the SHA-256 that identifies it. */

@@ -1,26 +1,15 @@
 import { describe, expect, it } from "vitest";
-import {
-	type Actor,
-	callTool,
-	inject,
-	mcp,
-	ORIGIN,
-	OWNER_SIGN_IN_EMAIL,
-	rawMessage,
-	request,
-	seedOrg,
-	signIn,
-} from "./helpers.ts";
+import { type Actor, callTool, inject, mcp, ORIGIN, rawMessage, request, seedOrg, signIn } from "./helpers.ts";
 
 const names = (body: Record<string, unknown> | null) =>
 	((body?.result ?? { tools: [] }) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
 
 describe("the MCP endpoint", () => {
 	it("needs an API key, and never accepts the session cookie", async () => {
-		await seedOrg();
+		const { owner } = await seedOrg();
 		const unauthenticated = await mcp(null, "initialize");
 		expect(unauthenticated.status).toBe(401);
-		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
+		const cookie = await signIn(owner.address);
 		const withCookie = await request("/mcp", {
 			method: "POST",
 			headers: { cookie, "content-type": "application/json" },
@@ -51,7 +40,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(21);
+		expect(all).toHaveLength(24);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",

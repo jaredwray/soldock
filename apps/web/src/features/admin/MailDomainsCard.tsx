@@ -109,9 +109,7 @@ export function MailDomainsCard() {
 						</table>
 					</div>
 					{domains.length === 0 && <p className="muted">There are no email domains yet.</p>}
-					<p className="field-hint">
-						You cannot remove a domain with mailbox addresses. A domain must not contain a sign-in email.
-					</p>
+					<p className="field-hint">You cannot remove a domain with mailbox addresses.</p>
 					<form className="create-key" onSubmit={add} noValidate>
 						<div className="field">
 							<label htmlFor={inputId} className="field-label">

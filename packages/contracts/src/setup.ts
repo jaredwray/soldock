@@ -2,6 +2,7 @@ import { z } from "zod";
 import { EmailAddress } from "./common.ts";
 import { CreatedApiKey, DisplayName, Principal } from "./directory.ts";
 import { MailDomain } from "./domains.ts";
+import { Password } from "./signin.ts";
 
 // First-run setup (`/auth/setup`). Setup creates a credential, so it is a ceremony and not an
 // operation: it has no REST route in the registry and no MCP tool. The dock Worker and the web app
@@ -35,14 +36,15 @@ export const SetupVerifyResult = z.object({ directory: z.enum(["empty", "has_acc
 export type SetupVerifyResult = z.infer<typeof SetupVerifyResult>;
 
 /**
- * The body of `POST /auth/setup`. The setup token goes in the `Authorization` header. The sign-in
- * email is an address outside the mail domains: the owner gets sign-in codes there.
+ * The body of `POST /auth/setup`. The setup token goes in the `Authorization` header. The owner signs
+ * in with the address and the password. After setup, the owner can turn on two-step verification
+ * (`account.create_totp_secret` and `account.enable_totp`).
  */
 export const SetupInput = z.strictObject({
 	mail_domain: MailDomain,
 	display_name: DisplayName,
 	address: EmailAddress,
-	sign_in_email: EmailAddress,
+	password: Password,
 	/** Explicit consent to delete the directory before the new owner is created. */
 	start_fresh: z.literal("DELETE DIRECTORY").optional(),
 });

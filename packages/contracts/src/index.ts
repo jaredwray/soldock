@@ -44,9 +44,14 @@ export {
 export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope } from "./scopes.ts";
 export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
 export {
-	SIGN_IN_CODE_LENGTH,
-	SIGN_IN_CODE_MAX_ATTEMPTS,
-	SIGN_IN_CODE_TTL_MINUTES,
-	SignInCodeRequest,
+	PASSWORD_MAX_LENGTH,
+	PASSWORD_MIN_LENGTH,
+	Password,
+	SIGN_IN_LOCK_MINUTES,
+	SIGN_IN_MAX_FAILURES,
 	SignInInput,
+	SignInResult,
+	TOTP_DIGITS,
+	TOTP_PERIOD_SECONDS,
+	TotpCode,
 } from "./signin.ts";

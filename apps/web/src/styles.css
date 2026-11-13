@@ -552,6 +552,18 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
+.sign-in-fields {
+	display: grid;
+	gap: 16px;
+	margin-bottom: 16px;
+}
+
+.sign-in-help {
+	margin: 16px 0 0;
+	color: var(--text-muted);
+	font-size: 13px;
+}
+
 .sign-in-links {
 	display: flex;
 	flex-wrap: wrap;
@@ -592,6 +604,24 @@ fieldset {
 	display: grid;
 	grid-template-rows: var(--topbar-height) minmax(0, 1fr);
 	height: 100%;
+}
+
+.app-with-banner {
+	grid-template-rows: var(--topbar-height) auto minmax(0, 1fr);
+}
+
+.app-banner {
+	margin: 0;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--warning-border);
+	background: var(--warning-bg);
+	color: var(--warning-text);
+	font-size: 14px;
+}
+
+.app-banner a {
+	color: inherit;
+	font-weight: 600;
 }
 
 .topbar {
@@ -2363,6 +2393,52 @@ h3.card-title {
 
 .setup-form .form-error {
 	margin: 0;
+}
+
+/* Two-step verification setup */
+
+.totp-setup {
+	display: grid;
+	gap: 12px;
+}
+
+.totp-setup .setup-steps {
+	margin: 0;
+}
+
+.totp-setup .field-label,
+.totp-setup .field-hint {
+	margin: 0;
+}
+
+.totp-qr {
+	justify-self: start;
+	padding: 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: #ffffff;
+	line-height: 0;
+}
+
+.qr-code {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+
+.totp-secret {
+	margin: 0;
+	font-family: var(--mono);
+	font-size: 15px;
+	letter-spacing: 0.04em;
+	overflow-wrap: anywhere;
+	user-select: all;
+}
+
+.totp-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
 }
 
 .address-row {

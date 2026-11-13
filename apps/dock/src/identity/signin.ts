@@ -1,136 +1,122 @@
-import { SIGN_IN_CODE_LENGTH, SIGN_IN_CODE_MAX_ATTEMPTS, SIGN_IN_CODE_TTL_MINUTES } from "@soldock/contracts";
-import { log, newId, sameSecret, sha256Hex } from "../platform/index.ts";
-import { domainOf, findSignInPrincipal, type PrincipalRecord, SIGN_IN_SENDER } from "./store.ts";
+import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@soldock/contracts";
+import { verifyPassword } from "./password.ts";
+import { createSessionIf, type PrincipalRecord, resolveAddress } from "./store.ts";
+import { matchTotp } from "./totp.ts";
 
-/** A person can ask for this number of codes in one hour. More requests send nothing. */
-export const SIGN_IN_CODES_PER_HOUR = 5;
+export type SignInOutcome =
+	| {
+			result: "signed_in";
+			principal: PrincipalRecord;
+			credential: "password" | "password_totp";
+			/** The value of the new session cookie. */
+			sessionToken: string;
+	  }
+	| { result: "totp_required"; principal: PrincipalRecord }
+	| { result: "refused"; principalId: string | null; reason: string };
 
-const HOUR_MS = 60 * 60 * 1000;
-const CODE_SPACE = 10 ** SIGN_IN_CODE_LENGTH;
-/** The largest multiple of CODE_SPACE below 2^32. A larger random value is refused, so each code is equally likely. */
-const UNBIASED_LIMIT = Math.floor(2 ** 32 / CODE_SPACE) * CODE_SPACE;
-
-/** A uniform random code of SIGN_IN_CODE_LENGTH digits. */
-function newCode(): string {
-	const value = new Uint32Array(1);
-	do {
-		crypto.getRandomValues(value);
-	} while ((value[0] as number) >= UNBIASED_LIMIT);
-	return String((value[0] as number) % CODE_SPACE).padStart(SIGN_IN_CODE_LENGTH, "0");
-}
-
-/** The stored form of a code. The code id is in the hash, so two rows with the same code differ. */
-function codeHash(id: string, code: string): Promise<string> {
-	return sha256Hex(`${id}:${code}`);
+interface Attempt {
+	password_hash: string | null;
+	totp_secret: string | null;
+	totp_last_step: number | null;
 }
 
 /**
- * Stores a new sign-in code for a human and returns it. The new code replaces the older ones, because
- * only the newest code works. Returns null when the human asked for SIGN_IN_CODES_PER_HOUR codes in
- * the last hour. The guarded insert counts and writes in one statement, so parallel requests cannot
- * go past the limit.
+ * Counts one attempt before the compare, in one statement, so parallel guesses cannot go past the
+ * limit. The attempt that reaches SIGN_IN_MAX_FAILURES locks sign-in for SIGN_IN_LOCK_MINUTES and
+ * starts the count again. Returns null while the lock is on.
  */
-export async function issueSignInCode(db: D1Database, principalId: string): Promise<string | null> {
-	const now = Date.now();
-	const id = newId("sic", now);
-	const code = newCode();
-	const hourAgo = new Date(now - HOUR_MS).toISOString();
-	const [, inserted] = await db.batch([
-		db.prepare("DELETE FROM sign_in_codes WHERE principal_id = ? AND created_at <= ?").bind(principalId, hourAgo),
-		db
-			.prepare(
-				`INSERT INTO sign_in_codes (id, principal_id, code_hash, attempts, created_at, expires_at)
-				SELECT ?, ?, ?, 0, ?, ?
-				WHERE (SELECT COUNT(*) FROM sign_in_codes WHERE principal_id = ? AND created_at > ?) < ?`,
-			)
-			.bind(
-				id,
-				principalId,
-				await codeHash(id, code),
-				new Date(now).toISOString(),
-				new Date(now + SIGN_IN_CODE_TTL_MINUTES * 60 * 1000).toISOString(),
-				principalId,
-				hourAgo,
-				SIGN_IN_CODES_PER_HOUR,
-			),
-	]);
-	return inserted?.meta.changes ? code : null;
-}
-
-/**
- * Uses the newest sign-in code of a human. Each guess adds one to the attempts of the code before
- * the compare, in one statement, so parallel guesses cannot go past SIGN_IN_CODE_MAX_ATTEMPTS. A
- * correct code works one time. Returns true when the code is correct.
- */
-export async function consumeSignInCode(db: D1Database, principalId: string, code: string): Promise<boolean> {
-	const now = new Date().toISOString();
-	const row = await db
+async function reserveAttempt(db: D1Database, principalId: string, nowMs: number): Promise<Attempt | null> {
+	const now = new Date(nowMs).toISOString();
+	const lockedUntil = new Date(nowMs + SIGN_IN_LOCK_MINUTES * 60 * 1000).toISOString();
+	return await db
 		.prepare(
-			`UPDATE sign_in_codes SET attempts = attempts + 1
-			WHERE id = (SELECT id FROM sign_in_codes WHERE principal_id = ? ORDER BY rowid DESC LIMIT 1)
-			AND attempts < ? AND used_at IS NULL AND expires_at > ?
-			RETURNING id, code_hash`,
+			`UPDATE principals SET
+				sign_in_failures = CASE WHEN sign_in_failures + 1 >= ?1 THEN 0 ELSE sign_in_failures + 1 END,
+				sign_in_locked_until = CASE WHEN sign_in_failures + 1 >= ?1 THEN ?2 ELSE NULL END
+			WHERE id = ?3 AND kind = 'human' AND (sign_in_locked_until IS NULL OR sign_in_locked_until <= ?4)
+			RETURNING password_hash, totp_secret, totp_last_step`,
 		)
-		.bind(principalId, SIGN_IN_CODE_MAX_ATTEMPTS, now)
-		.first<{ id: string; code_hash: string }>();
-	if (!row || !sameSecret(await codeHash(row.id, code), row.code_hash)) return false;
-	const used = await db
-		.prepare("UPDATE sign_in_codes SET used_at = ? WHERE id = ? AND used_at IS NULL")
-		.bind(now, row.id)
+		.bind(SIGN_IN_MAX_FAILURES, lockedUntil, principalId, now)
+		.first<Attempt>();
+}
+
+async function clearFailures(db: D1Database, principalId: string): Promise<void> {
+	await db
+		.prepare("UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL WHERE id = ?")
+		.bind(principalId)
 		.run();
-	return used.meta.changes === 1;
-}
-
-/** `12345678` becomes `1234 5678`, which is easier to read. The sign-in form ignores the space. */
-function displayCode(code: string): string {
-	const half = Math.ceil(code.length / 2);
-	return `${code.slice(0, half)} ${code.slice(half)}`;
-}
-
-/** Sends a code to the sign-in email of a human, through Email Service. */
-async function sendSignInCode(env: Env, principal: PrincipalRecord, code: string, origin: string): Promise<void> {
-	if (!principal.sign_in_email) throw new Error(`principal ${principal.id} has no sign-in email`);
-	const text = [
-		"Your Soldock sign-in code is:",
-		"",
-		`    ${displayCode(code)}`,
-		"",
-		`Use it to sign in as ${principal.address} at ${origin}.`,
-		`The code works one time and stops working after ${SIGN_IN_CODE_TTL_MINUTES} minutes.`,
-		"",
-		"If you did not ask for this code, ignore this message. Nobody can sign in without the code.",
-		"Do not give the code to a person or an agent.",
-		"",
-	].join("\n");
-	await env.EMAIL.send({
-		from: { name: "Soldock", email: `${SIGN_IN_SENDER}@${domainOf(principal.address)}` },
-		to: principal.sign_in_email,
-		subject: "Your Soldock sign-in code",
-		text,
-	});
 }
 
 /**
- * Sends a sign-in code when the address belongs to a human with a sign-in email. It runs after the
- * response, and the response is the same for each address, so nobody can find out which addresses
- * have an account. A failure is logged, never shown.
+ * True when the password is the current password of a human. It counts an attempt and obeys the lock
+ * like a sign-in, so a stolen session cannot guess the password without a limit.
  */
-export async function requestSignInCode(env: Env, email: string, origin: string, requestId: string): Promise<void> {
-	try {
-		const principal = await findSignInPrincipal(env.DIRECTORY, email);
-		if (!principal) {
-			log("info", "sign-in code not sent: no person signs in with that address", { requestId });
-			return;
-		}
-		const code = await issueSignInCode(env.DIRECTORY, principal.id);
-		if (!code) {
-			log("warn", "sign-in code not sent: too many codes in the last hour", { principalId: principal.id, requestId });
-			return;
-		}
-		await sendSignInCode(env, principal, code, origin);
-		log("info", "sign-in code sent", { principalId: principal.id, requestId });
-	} catch (error) {
-		// Only the error name: a message from Email Service can hold the sign-in email, a personal address.
-		log("error", "sign-in code failed", { requestId, err: error instanceof Error ? error.name : typeof error });
+export async function confirmPassword(db: D1Database, principalId: string, password: string): Promise<boolean> {
+	const attempt = await reserveAttempt(db, principalId, Date.now());
+	if (!(await verifyPassword(password, attempt?.password_hash ?? null)) || !attempt) return false;
+	await clearFailures(db, principalId);
+	return true;
+}
+
+/**
+ * Clears the failure count and creates the session in one transaction, only while the password hash and
+ * the TOTP secret are still the ones that the attempt checked. A password change, or two-step
+ * verification that turns on, during the check makes the sign-in fail, so no session outlives the
+ * change. With a TOTP step, only a step after the last used one counts, so a parallel request with the
+ * same code fails. Returns the session cookie value, or null.
+ */
+function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, step: number | null) {
+	const guard = db
+		.prepare(
+			`UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL,
+				totp_last_step = COALESCE(?1, totp_last_step)
+			WHERE id = ?2 AND password_hash = ?3 AND totp_secret IS ?4
+			AND (?1 IS NULL OR totp_last_step IS NULL OR totp_last_step < ?1)`,
+		)
+		.bind(step, principalId, attempt.password_hash, attempt.totp_secret);
+	return createSessionIf(db, principalId, guard);
+}
+
+/**
+ * Checks an address, a password and, when the person turned it on, a TOTP code.
+ *
+ * - An unknown address, an agent, a person without a password, a wrong password, a wrong or used
+ *   code and a lock all give `refused`. Each of them runs one password derivation.
+ * - A correct password without a code, for a person with two-step verification, gives
+ *   `totp_required` and no session.
+ * - A success clears the failure count. A TOTP code works one time.
+ */
+export async function signInWithPassword(
+	db: D1Database,
+	input: { address: string; password: string; totp_code?: string | undefined },
+	nowMs = Date.now(),
+): Promise<SignInOutcome> {
+	const principal = await resolveAddress(db, input.address);
+	if (principal?.kind !== "human") {
+		await verifyPassword(input.password, null);
+		return { result: "refused", principalId: null, reason: "unknown address" };
 	}
+	const attempt = await reserveAttempt(db, principal.id, nowMs);
+	if (!attempt) {
+		await verifyPassword(input.password, null);
+		return { result: "refused", principalId: principal.id, reason: "locked" };
+	}
+	if (!(await verifyPassword(input.password, attempt.password_hash))) {
+		return {
+			result: "refused",
+			principalId: principal.id,
+			reason: attempt.password_hash ? "wrong password" : "no password",
+		};
+	}
+	let step: number | null = null;
+	if (attempt.totp_secret) {
+		if (input.totp_code === undefined) return { result: "totp_required", principal };
+		step = await matchTotp(attempt.totp_secret, input.totp_code, attempt.totp_last_step, nowMs);
+		if (step === null) return { result: "refused", principalId: principal.id, reason: "wrong code" };
+	}
+	const sessionToken = await finishSignIn(db, principal.id, attempt, step);
+	if (!sessionToken) {
+		return { result: "refused", principalId: principal.id, reason: "credentials changed or code used" };
+	}
+	return { result: "signed_in", principal, credential: step === null ? "password" : "password_totp", sessionToken };
 }

@@ -9,15 +9,15 @@ MCP clients. The app has no UI-only path.
 
 ## What exists
 
-- **Sign-in.** Two steps on one page.
-  1. The person enters their Soldock address or their sign-in email. `POST /auth/code` sends a
-     one-time code to the sign-in email. The page always says "If this address belongs to an
-     account, we sent a code", because the server does not tell.
-  2. The person enters the 8 digits (`autocomplete="one-time-code"`, numeric keypad). `POST
-     /auth/session` trades the code for an HttpOnly session cookie.
-  - "Send a new code" asks again: only the newest code works. "Use a different address" goes back
-    to step 1.
-  - Agents have no sign-in email, so they cannot sign in to the UI. Each 401 from an operation
+- **Sign-in.** The person enters their Soldock address and their password
+  (`autocomplete="username"` and `"current-password"`, so a password manager can fill them).
+  `POST /auth/session` sets an HttpOnly session cookie.
+  - When the person has two-step verification, the server answers `totp_required`. A second step
+    asks for the 6 digits from the authenticator app (`autocomplete="one-time-code"`, numeric
+    keypad), and the page sends the password again with the code. The password stays only in the
+    memory of the page. "Use a different account" goes back to step 1 and clears the password.
+  - Each refusal shows the same message from the server, also during a lock after 10 failed attempts.
+  - Agents have no password, so they cannot sign in to the UI. Each 401 from an operation
     shows the sign-in page again.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
   An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
@@ -33,18 +33,21 @@ MCP clients. The app has no UI-only path.
   - If the server cannot read the directory, for example with an old schema, the page offers both usual choices.
     The buttons have a separate group with a 12 px gap.
   - A fresh start asks for new owner details, then shows a confirmation with Cancel first.
-    It deletes all directory accounts, addresses, keys, sessions, and sign-in codes.
+    It deletes all directory accounts, addresses, keys, sessions, and passwords.
     Old mail stays in storage. New accounts cannot access it.
   - The reset and new owner share one transaction. A failure leaves the old directory intact.
   - After setup or sign-in, the app opens without another setup prompt. A reload shows setup until the operator deletes the token.
   - While the `SETUP_TOKEN` secret is missing or too short, the page shows how to set it, and a
     "Check again" button.
-  - After token verification, the owner form takes the name, email domain, mailbox name, and sign-in email.
+  - After token verification, the owner form takes the name, email domain, mailbox name, and a
+    password, typed two times (at least 12 characters).
     The address suffix follows the domain field. Setup saves the domain and owner together.
-    The owner can sign in with the full mailbox address. Codes still go to the external sign-in email.
+    The owner signs in with the full mailbox address and the password.
     The form explains that DNS and Cloudflare email need separate configuration.
   - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
-    with a copy button and a reminder to delete the `SETUP_TOKEN` secret. Done opens the app.
+    with a copy button and a reminder to delete the `SETUP_TOKEN` secret.
+  - Done goes to an optional step for two-step verification: the same panel as in Settings, and
+    **Skip for now**. If the setup session failed, the panel shows the error, and the owner can skip.
   - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
   labels, a thread list and a thread view.
@@ -110,17 +113,31 @@ MCP clients. The app has no UI-only path.
 - **Admin** (`/admin`). Owners and admins see the directory, and create people and agents.
   - **Admin settings: email domains** lists the saved domains and provides Add and Remove controls.
     Changes take effect without a new deployment. A confirmation precedes removal.
-    The server refuses removal of a domain with mailboxes and addition of a domain with a sign-in email.
+    The server refuses removal of a domain with mailboxes.
     The page explains the separate Cloudflare email and DNS steps. Members and agents cannot change these settings.
   - **Accounts.** The first API key of a new principal shows once, with a copy button.
     A credential cannot grant a scope that it does not hold.
     The form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`.
-    For a person, the app sends these scopes as `key_scopes`. A person also needs a sign-in email outside the mail domains.
+    For a person, the app sends these scopes as `key_scopes`. A person also needs a first password,
+    which the admin gives to the person.
     For each agent, the page sets the outbound mail policy and manages the API keys.
     A member who sponsors an agent sees only those agents on the page.
-- **Settings** (`/settings`). Your account, your sign-in email, your API keys (list, create, revoke)
-  and sign out. A change of the sign-in email (`account.set_sign_in_email`) ends your sessions on
-  other browsers. A new key can hold only the scopes of the session.
+  - **Help a person sign in.** An owner or an admin selects a person, then sets a new password
+    (`account.set_password`) or turns off two-step verification (`account.disable_totp`). An admin
+    does not see the owner in the list, because only the owner manages the owner's sign-in.
+- **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
+  (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
+  on other browsers. A new key can hold only the scopes of the session.
+  - Each change to your own sign-in asks for your current password, because the server needs it
+    from a browser session. On the setup page, the two-step step uses the password that the owner
+    just typed.
+  - A person without a password (after the upgrade to passwords) sees **Set a password**, and a
+    notice under the top bar of each other page until they set one.
+  - **Two-step verification.** A click on **Set up two-step verification** calls
+    `account.create_totp_secret` and shows the secret as a QR code (black on white in both themes)
+    and as text. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
+    (`account.disable_totp`) asks for a confirmation first. The secret comes from a click, not from
+    an effect, because each request replaces the waiting secret on the server.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.
 
@@ -155,7 +172,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | The directory, the create form and the agent panels |
-| [`src/features/settings/`](src/features/settings/) | Settings, the sign-in email card, the API key manager and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts |
@@ -214,7 +231,7 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
   `new Function`, and the CSP reports no violation.
 - **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The app does
-  not keep the sign-in code after the sign-in.
+  not keep the password or the TOTP code after the sign-in.
 
 ## Data inventory
 

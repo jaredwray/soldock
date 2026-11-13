@@ -12,6 +12,8 @@ import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
+import { newPasswordError } from "../settings/SignInSettings.tsx";
+import { TotpSetup } from "../settings/TotpSetup.tsx";
 import { runSetup, type SetupNeeded, setupErrorMessage, verifySetupToken } from "./setup.ts";
 
 interface SetupPageProps {
@@ -26,9 +28,14 @@ interface SetupPageProps {
 
 /**
  * Setup and optional directory reset. The operator proves control with the SETUP_TOKEN Worker secret.
+ * The owner gets an address and a password. After the API key shows, the page offers two-step
+ * verification, which the owner can skip.
  */
 export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPageProps) {
 	const [created, setCreated] = useState<SetupResult | null>(null);
+	// The password from the owner form. Turning on two-step verification asks for it, and the owner just typed it.
+	const [ownerPassword, setOwnerPassword] = useState("");
+	const [keyCopied, setKeyCopied] = useState(false);
 	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
 	const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
 	const [directory, setDirectory] = useState<SetupVerifyResult["directory"]>("unknown");
@@ -37,8 +44,9 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 		if (verifiedToken !== null && choice === null) choiceRef.current?.focus();
 	}, [verifiedToken, choice]);
 
-	function ownerCreated(result: SetupResult) {
+	function ownerCreated(result: SetupResult, password: string) {
 		setVerifiedToken(null);
+		setOwnerPassword(password);
 		setCreated(result);
 	}
 
@@ -57,7 +65,17 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 				</div>
 				<h1 className="sign-in-title">Set up Soldock</h1>
 				{created ? (
-					<p>The owner is ready. Copy your API key before you continue.</p>
+					keyCopied ? (
+						<TwoStepStep
+							password={ownerPassword}
+							onDone={() => {
+								setOwnerPassword("");
+								onDone();
+							}}
+						/>
+					) : (
+						<p>The owner is ready. Copy your API key before you continue.</p>
+					)
 				) : status.setup_token === "ready" ? (
 					verifiedToken === null ? (
 						<TokenForm
@@ -71,7 +89,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 							<p className="setup-intro">The token is correct. This directory already has accounts.</p>
 							<p className="field-hint">
 								Continue to use the existing accounts. A fresh start deletes all accounts, API keys, sessions, and
-								sign-in codes. Stored mail stays in storage, but new accounts cannot access it.
+								passwords. Stored mail stays in storage, but new accounts cannot access it.
 							</p>
 							<p className="notice">
 								This page shows until you delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard.
@@ -94,8 +112,8 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 						<div className="setup-choices">
 							<p className="setup-intro">The token is correct. Do you want to start fresh?</p>
 							<p className="field-hint">
-								A fresh start deletes all accounts, API keys, sessions, and sign-in codes. Stored mail stays in storage,
-								but new accounts cannot access it.
+								A fresh start deletes all accounts, API keys, sessions, and passwords. Stored mail stays in storage, but
+								new accounts cannot access it.
 							</p>
 							<div className="setup-actions">
 								<button
@@ -123,11 +141,11 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 					<TokenSteps tooShort={status.setup_token === "too_short"} onRecheck={onRecheck} />
 				)}
 			</div>
-			{created && (
-				<SecretDialog apiKey={created.api_key} title="Copy your API key" onClose={onDone}>
+			{created && !keyCopied && (
+				<SecretDialog apiKey={created.api_key} title="Copy your API key" onClose={() => setKeyCopied(true)}>
 					<p className="field-hint">
-						You are signed in on this browser. Use this key with the API and MCP. To sign in on a different browser,
-						enter your address, and we send a code to your sign-in email. You can make more keys in Settings.
+						You are signed in on this browser. Use this key with the API and MCP. To sign in on a different browser, use
+						your address and your password. Keep this key: it can also set a new password if you forget yours.
 					</p>
 					<p className="notice">
 						Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. This disables the option to
@@ -239,7 +257,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 
 interface OwnerFormProps {
 	token: string;
-	onCreated: (result: SetupResult) => void;
+	onCreated: (result: SetupResult, password: string) => void;
 	startFresh: boolean;
 	onBack: () => void;
 }
@@ -250,7 +268,8 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 	const [name, setName] = useState("");
 	const [localPart, setLocalPart] = useState("");
 	const [domain, setDomain] = useState("");
-	const [signInEmail, setSignInEmail] = useState("");
+	const [password, setPassword] = useState("");
+	const [confirmation, setConfirmation] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const nameRef = useRef<HTMLInputElement>(null);
@@ -260,8 +279,9 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 		domain: useId(),
 		domainHint: useId(),
 		hint: useId(),
-		signInEmail: useId(),
-		signInHint: useId(),
+		password: useId(),
+		passwordHint: useId(),
+		confirmation: useId(),
 	};
 
 	useEffect(() => {
@@ -282,21 +302,13 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 		}
 		if (localPart.includes("+")) return invalid("Your address cannot contain +. Mail to user+tag reaches user.");
 		if (!EmailAddress.safeParse(address).success) return invalid("Enter the part of your address before the @.");
-		if (!EmailAddress.safeParse(signInEmail).success) {
-			return invalid("Enter your sign-in email, such as ada@example.com.");
-		}
-		const signInDomain = signInEmail
-			.trim()
-			.slice(signInEmail.trim().lastIndexOf("@") + 1)
-			.toLowerCase();
-		if (parsedDomain.data === signInDomain) {
-			return invalid("Your sign-in email must be outside Soldock, so that you can read a code before you sign in.");
-		}
+		const passwordProblem = newPasswordError(password, confirmation);
+		if (passwordProblem) return invalid(passwordProblem);
 		const input: SetupInput = {
 			mail_domain: parsedDomain.data,
 			display_name: name.trim(),
 			address,
-			sign_in_email: signInEmail.trim(),
+			password,
 			...(startFresh ? { start_fresh: "DELETE DIRECTORY" as const } : {}),
 		};
 		if (startFresh) return setPending(input);
@@ -308,7 +320,7 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 		setError(null);
 		try {
 			const result = await runSetup(token.trim(), input);
-			onCreated(result);
+			onCreated(result, input.password);
 		} catch (caught) {
 			setError(
 				caught instanceof ApiError && caught.status === 409 && !startFresh
@@ -387,24 +399,37 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 				</p>
 			</div>
 			<div className="field">
-				<label htmlFor={ids.signInEmail} className="field-label">
-					Sign-in email
+				<label htmlFor={ids.password} className="field-label">
+					Password
 				</label>
 				<input
-					id={ids.signInEmail}
+					id={ids.password}
 					className="input"
-					type="email"
-					autoComplete="email"
-					spellCheck={false}
-					placeholder="ada@example.com"
-					value={signInEmail}
-					onChange={(event) => setSignInEmail(event.target.value)}
-					aria-describedby={ids.signInHint}
+					type="password"
+					autoComplete="new-password"
+					value={password}
+					onChange={(event) => setPassword(event.target.value)}
+					aria-describedby={ids.passwordHint}
 					disabled={busy}
 				/>
-				<p id={ids.signInHint} className="field-hint">
-					An address outside Soldock. When you sign in, we send a one-time code to it.
+				<p id={ids.passwordHint} className="field-hint">
+					At least 12 characters. You sign in with your address and this password. You can add two-step verification
+					after this step.
 				</p>
+			</div>
+			<div className="field">
+				<label htmlFor={ids.confirmation} className="field-label">
+					Type the password again
+				</label>
+				<input
+					id={ids.confirmation}
+					className="input"
+					type="password"
+					autoComplete="new-password"
+					value={confirmation}
+					onChange={(event) => setConfirmation(event.target.value)}
+					disabled={busy}
+				/>
 			</div>
 			<div aria-live="assertive">
 				{error && (
@@ -427,11 +452,40 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 					onClose={() => setPending(null)}
 					onConfirm={() => create(pending)}
 				>
-					<p>This deletes all accounts, API keys, sessions, and sign-in codes. You cannot undo this action.</p>
+					<p>This deletes all accounts, API keys, sessions, and passwords. You cannot undo this action.</p>
 					<p>Stored mail stays in storage. The new accounts cannot access the old mail.</p>
 					<p>The new owner is {pending.address}.</p>
 				</ConfirmDialog>
 			)}
 		</form>
+	);
+}
+
+/** The last setup step: the owner can turn on two-step verification now, or later in Settings. */
+function TwoStepStep({ password, onDone }: { password: string; onDone: () => void }) {
+	const [enabled, setEnabled] = useState(false);
+	const continueRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (enabled) continueRef.current?.focus();
+	}, [enabled]);
+
+	return (
+		<div className="setup-form">
+			<p className="setup-intro">Two-step verification (optional)</p>
+			{enabled ? (
+				<p className="notice">Two-step verification is on. Each sign-in needs your password and a code.</p>
+			) : (
+				<>
+					<p className="setup-intro muted">
+						Add a code from an authenticator app to each sign-in, so that a stolen password alone cannot sign in. You
+						can also do this later in Settings.
+					</p>
+					<TotpSetup needsPassword currentPassword={password} onEnabled={() => setEnabled(true)} />
+				</>
+			)}
+			<button ref={continueRef} type="button" className="button button-block" onClick={onDone}>
+				{enabled ? "Continue" : "Skip for now"}
+			</button>
+		</div>
 	);
 }

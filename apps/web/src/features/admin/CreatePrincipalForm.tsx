@@ -4,6 +4,9 @@ import {
 	type CreatedApiKey,
 	EmailAddress,
 	type InputOf,
+	PASSWORD_MAX_LENGTH,
+	PASSWORD_MIN_LENGTH,
+	Password,
 	type Principal,
 	SCOPES,
 	type Scope,
@@ -27,7 +30,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	const [kind, setKind] = useState<"human" | "agent">("human");
 	const [name, setName] = useState("");
 	const [address, setAddress] = useState("");
-	const [signInEmail, setSignInEmail] = useState("");
+	const [password, setPassword] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
 	const [sponsorId, setSponsorId] = useState(me.id);
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(agentScopes));
@@ -36,8 +39,8 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	const ids = {
 		name: useId(),
 		address: useId(),
-		signInEmail: useId(),
-		signInHint: useId(),
+		password: useId(),
+		passwordHint: useId(),
 		role: useId(),
 		sponsor: useId(),
 	};
@@ -46,8 +49,8 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 		event.preventDefault();
 		if (!name.trim()) return setError("Enter a name.");
 		if (!EmailAddress.safeParse(address).success) return setError("Enter one address, such as ada@example.com.");
-		if (kind === "human" && !EmailAddress.safeParse(signInEmail).success) {
-			return setError("Enter the sign-in email of the person, outside Soldock, such as ada@example.org.");
+		if (kind === "human" && !Password.safeParse(password).success) {
+			return setError(`Enter a first password of ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters.`);
 		}
 		if (kind === "agent" && scopes.size === 0) return setError("Select at least one scope for the first key.");
 		setBusy(true);
@@ -59,7 +62,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 						display_name: name.trim(),
 						address: address.trim(),
 						org_role: role,
-						sign_in_email: signInEmail.trim(),
+						password,
 						key_scopes: humanScopes,
 					}
 				: {
@@ -73,7 +76,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 			const result = await api.call("directory.create_principal", input);
 			setName("");
 			setAddress("");
-			setSignInEmail("");
+			setPassword("");
 			onCreated(result.principal, result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -142,21 +145,21 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 				{kind === "human" ? (
 					<>
 						<div className="field">
-							<label htmlFor={ids.signInEmail} className="field-label">
-								Sign-in email
+							<label htmlFor={ids.password} className="field-label">
+								First password
 							</label>
 							<input
-								id={ids.signInEmail}
+								id={ids.password}
 								className="input"
-								type="email"
-								value={signInEmail}
-								onChange={(event) => setSignInEmail(event.target.value)}
-								aria-describedby={ids.signInHint}
+								type="password"
+								autoComplete="new-password"
+								value={password}
+								onChange={(event) => setPassword(event.target.value)}
+								aria-describedby={ids.passwordHint}
 								disabled={busy}
-								placeholder="ada@example.org"
 							/>
-							<p id={ids.signInHint} className="field-hint">
-								Outside Soldock. The person gets sign-in codes here.
+							<p id={ids.passwordHint} className="field-hint">
+								At least {PASSWORD_MIN_LENGTH} characters. Give it to the person, who can change it in Settings.
 							</p>
 						</div>
 						<div className="field">

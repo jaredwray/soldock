@@ -10,6 +10,7 @@ import {
 	drainOutbox,
 	fakeEmailService,
 	ORIGIN,
+	PASSWORD,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
@@ -161,7 +162,7 @@ describe("mail.send to the internet", () => {
 				display_name: "New owner",
 				mail_domain: "dock.test",
 				address: "ada@dock.test",
-				sign_in_email: "new@home.example",
+				password: PASSWORD,
 				start_fresh: "DELETE DIRECTORY",
 			}),
 		});
@@ -218,7 +219,7 @@ describe("mail.send to the internet", () => {
 					display_name: "New owner",
 					mail_domain: "dock.test",
 					address: "ada@dock.test",
-					sign_in_email: "new@home.example",
+					password: PASSWORD,
 					start_fresh: "DELETE DIRECTORY",
 				}),
 			};
@@ -242,7 +243,7 @@ describe("mail.send to the internet", () => {
 							kind: "human",
 							display_name: "Late account",
 							address: "late@dock.test",
-							sign_in_email: "late@home.example",
+							password: PASSWORD,
 						}),
 					),
 				).toBe("conflict");
@@ -460,7 +461,7 @@ describe("idempotency", () => {
 			kind: "human",
 			display_name: "Bob",
 			address: "bob@dock.test",
-			sign_in_email: "bob@home.example",
+			password: PASSWORD,
 		});
 		const keyedByMailbox = await other.call("mail.send", {
 			to: ["ada@dock.test"],

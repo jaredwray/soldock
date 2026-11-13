@@ -5,25 +5,25 @@ import {
 	type SetupResult,
 	type SetupStatus,
 	type SetupVerifyResult,
-	SignInCodeRequest,
+	SIGN_IN_LOCK_MINUTES,
 	SignInInput,
+	type SignInResult,
 } from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
+import { hashPassword } from "./password.ts";
 import { prepareFreshDirectory } from "./setup.ts";
-import { consumeSignInCode, requestSignInCode } from "./signin.ts";
+import { signInWithPassword } from "./signin.ts";
 import {
 	assertPrimaryAddress,
-	assertSignInEmail,
 	createPrincipal,
 	createSession,
 	deleteSession,
 	directoryIsEmpty,
 	domainOf,
-	findSignInPrincipal,
 	SESSION_TTL_SECONDS,
 } from "./store.ts";
 
@@ -71,8 +71,8 @@ async function jsonBody(request: Request): Promise<unknown> {
 }
 
 /**
- * The `/auth/*` ceremonies. They are not operations: they create credentials. A human signs in with a
- * one-time code that goes to their sign-in email.
+ * The `/auth/*` ceremonies. They are not operations: they create credentials. A human signs in with
+ * their Soldock address, their password and, when they turned it on, a TOTP code.
  */
 export function mountAuthRoutes(app: AuthApp): void {
 	// A valid setup secret permits recovery without a query against an old directory schema.
@@ -119,18 +119,18 @@ export function mountAuthRoutes(app: AuthApp): void {
 		const fromBrowser = authorizeSetup(c.req.raw, c.env);
 		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const { display_name, address, sign_in_email, mail_domain } = parsed.data;
+		const { display_name, address, password, mail_domain } = parsed.data;
 		if (domainOf(address) !== mail_domain) {
 			throw new OperationError("invalid", "The owner address must use the email domain from setup.");
 		}
 		assertPrimaryAddress(address);
-		assertSignInEmail(new Set([mail_domain]), sign_in_email);
+		const passwordHash = await hashPassword(password);
 		const reset = parsed.data.start_fresh ? await prepareFreshDirectory(c.env) : null;
 		let created: Awaited<ReturnType<typeof createPrincipal>> = null;
 		try {
 			created = await createPrincipal(
 				c.env.DIRECTORY,
-				{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, sign_in_email },
+				{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, password_hash: passwordHash },
 				{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
 				{
 					onlyIfEmpty: true,
@@ -155,7 +155,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		if (fromBrowser) {
 			// The owner and the key exist now, so setup cannot run again. A failed session must not lose
 			// the only key: the response still holds the key, without a session, and the owner signs in
-			// with a code from the sign-in email.
+			// with the password.
 			try {
 				const session = await createSession(c.env.DIRECTORY, created.principal.id);
 				headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
@@ -175,40 +175,42 @@ export function mountAuthRoutes(app: AuthApp): void {
 		return c.json(result, 201, headers);
 	});
 
-	// Step 1 of sign-in: a code goes to the sign-in email of the human who signs in with this address.
-	// The response is 202 for each valid address, and the work runs after the response, so neither the
-	// status nor the time tells if the address has an account. Agents have no sign-in email.
-	app.post("/auth/code", async (c) => {
-		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Soldock web app.");
-		const parsed = SignInCodeRequest.safeParse(await jsonBody(c.req.raw));
-		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const origin = new URL(c.req.url).origin;
-		c.executionCtx.waitUntil(requestSignInCode(c.env, parsed.data.email, origin, c.var.requestId));
-		return c.body(null, 202, { "cache-control": "no-store" });
-	});
-
-	// Step 2 of sign-in: the code from the sign-in email becomes a session. An unknown address and a
-	// wrong, used or expired code get the same 401.
+	// Sign-in: the address and the password, and a TOTP code when the person turned it on. Each refusal
+	// gets the same 401, so the answer does not tell which part is wrong, or if the address has an account.
 	app.post("/auth/session", async (c) => {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Soldock web app.");
 		const parsed = SignInInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const principal = await findSignInPrincipal(c.env.DIRECTORY, parsed.data.email);
-		if (!principal || !(await consumeSignInCode(c.env.DIRECTORY, principal.id, parsed.data.code))) {
-			log("info", "sign-in code refused", { principalId: principal?.id ?? null, requestId: c.var.requestId });
-			throw new OperationError("unauthenticated", "The code is not correct, or it expired. Ask for a new code.");
+		const outcome = await signInWithPassword(c.env.DIRECTORY, parsed.data);
+		if (outcome.result === "refused") {
+			log("info", "sign-in refused", {
+				principalId: outcome.principalId,
+				reason: outcome.reason,
+				requestId: c.var.requestId,
+			});
+			throw new OperationError(
+				"unauthenticated",
+				`The address, the password, or the code is not correct. After too many failed attempts, sign-in stops for ${SIGN_IN_LOCK_MINUTES} minutes.`,
+			);
 		}
-		const token = await createSession(c.env.DIRECTORY, principal.id);
+		if (outcome.result === "totp_required") {
+			const result: SignInResult = { status: "totp_required" };
+			return c.json(result, 200, { "cache-control": "no-store" });
+		}
 		audit({
 			op: "auth.sign_in",
-			actor: principal.id,
+			actor: outcome.principal.id,
 			actorKind: "human",
-			credential: "sign_in_code",
-			target: principal.id,
+			credential: outcome.credential,
+			target: outcome.principal.id,
 			result: "ok",
 			requestId: c.var.requestId,
 		});
-		return c.body(null, 204, { "set-cookie": sessionCookie(token, SESSION_TTL_SECONDS), "cache-control": "no-store" });
+		const result: SignInResult = { status: "signed_in" };
+		return c.json(result, 200, {
+			"set-cookie": sessionCookie(outcome.sessionToken, SESSION_TTL_SECONDS),
+			"cache-control": "no-store",
+		});
 	});
 
 	app.post("/auth/sign-out", async (c) => {

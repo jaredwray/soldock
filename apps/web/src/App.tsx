@@ -37,7 +37,7 @@ export function App() {
 		setState({ status: "signed-out", expired: false });
 	}, []);
 
-	// After a change to the account, for example the sign-in email, so each page shows the new value. A
+	// After a change to the account, for example two-step verification, so each page shows the new value. A
 	// late answer applies only to the same person: after a sign-out and a sign-in as somebody else, it is dropped.
 	const refresh = useCallback(async () => {
 		const whoami = await api.call("account.whoami");

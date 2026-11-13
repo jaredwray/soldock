@@ -24,21 +24,19 @@ Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.
 Open http://localhost:8787. The setup page shows, because the local directory has no owner. Enter
 the token, then enter an email domain and create the owner. For the examples below, use `example.com`.
 Setup saves the domain in D1. Use the Admin page to manage domains later.
-The sign-in email must be on a different domain, for
-example `you@home.example`. The page signs you in and shows the first API key once.
+Enter a password of at least 12 characters. The page signs you in, shows the first API key once, and
+offers two-step verification, which you can skip.
 
 To create the owner without a browser:
 
 ```sh
 curl -X POST http://localhost:8787/auth/setup \
   -H "authorization: Bearer local-setup-token-0123456789abcdef" -H "content-type: application/json" \
-  -d '{"mail_domain":"example.com","display_name":"Local Owner","address":"owner@example.com","sign_in_email":"you@home.example"}'
+  -d '{"mail_domain":"example.com","display_name":"Local Owner","address":"owner@example.com","password":"local owner password"}'
 ```
 
-Then open http://localhost:8787 and sign in. Enter `owner@example.com` or the sign-in email.
-`wrangler dev` does not send the code: it writes the message to a file and prints
-`send_email binding called with MessageBuilder`, with the path of the text after `Text:`. The code
-is in that file.
+Then open http://localhost:8787 and sign in with `owner@example.com` and the password. While the
+`SETUP_TOKEN` var is set, the setup page shows first: select **Continue with the existing accounts**.
 
 For the SPA with hot reload, run `pnpm --filter @soldock/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.
