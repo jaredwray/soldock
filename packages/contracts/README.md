@@ -1,6 +1,6 @@
 # `@soldock/contracts`
 
-> Status: **started**. The registry holds the Mail, Drive, Docs, Sheets, account and directory
+> Status: **started**. The registry holds the Mail, Drive, Docs, Sheets, Chat, account and directory
 > operations. Events and the SDK build come later.
 
 The operation registry: operation definitions (Zod schemas, scopes, annotations, errors), the error
@@ -15,6 +15,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/sheets.ts` | The Sheets operations, the cell schema, the error values and `SHEET_LIMITS` |
+| `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS` |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
