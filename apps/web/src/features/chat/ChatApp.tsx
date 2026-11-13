@@ -85,6 +85,7 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 						roomId={roomId}
 						listed={listed}
 						listReady={rooms.status === "ready"}
+						listTick={rooms.tick}
 						onRoomsChanged={rooms.refresh}
 					/>
 				)}
@@ -184,7 +185,9 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 
 function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 	const title = roomTitle(room);
-	const className = ["nav-item", active ? "nav-item-active" : "", room.unread ? "chat-nav-unread" : ""]
+	// The open room is read while it shows. Its marker reaches the list a moment later, so it gets no dot.
+	const unread = room.unread && !active;
+	const className = ["nav-item", active ? "nav-item-active" : "", unread ? "chat-nav-unread" : ""]
 		.filter(Boolean)
 		.join(" ");
 	return (
@@ -201,7 +204,7 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 					{title}
 					{room.kind === "dm" && room.peer?.kind === "agent" && " (agent)"}
 				</span>
-				{room.unread && (
+				{unread && (
 					<span className="chat-nav-dot">
 						<span className="visually-hidden">Unread messages</span>
 					</span>

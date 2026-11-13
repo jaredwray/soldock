@@ -1,7 +1,8 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { withChanges, withOlder } from "./model.ts";
+import { createRoomSync } from "./sync.ts";
 
 /** The time between two reads of the room list. A read is one query of the index, not a call to each room. */
 const POLL_MS = 4000;
@@ -20,6 +21,8 @@ export interface RoomsState {
 	status: "loading" | "ready" | "error";
 	rooms: ChatRoom[];
 	error: string | null;
+	/** The number of lists that arrived. An open room reads it to get its changes after each list. */
+	tick: number;
 }
 
 /**
@@ -28,19 +31,25 @@ export interface RoomsState {
  * a change that this tab made. This first layer shows the first 100 rooms.
  */
 export function useRooms() {
-	const [state, setState] = useState<RoomsState>({ status: "loading", rooms: [], error: null });
-	const latest = useRef(0);
+	const [state, setState] = useState<RoomsState>({ status: "loading", rooms: [], error: null, tick: 0 });
+	const started = useRef(0);
+	const applied = useRef(0);
 
 	const refresh = useCallback(async () => {
-		const request = ++latest.current;
+		const request = ++started.current;
 		try {
 			const result = await api.call("chat.list_rooms", { limit: CHAT_LIMITS.pageSize });
-			// An older answer never replaces a newer one.
-			if (request === latest.current) setState({ status: "ready", rooms: result.rooms, error: null });
+			// An answer applies when it is newer than the one that shows. On a slow connection, the next
+			// poll starts before an answer arrives, and that answer must still show.
+			if (request < applied.current) return;
+			applied.current = request;
+			setState((current) => ({ status: "ready", rooms: result.rooms, error: null, tick: current.tick + 1 }));
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
 			setState((current) =>
-				current.status === "ready" ? current : { status: "error", rooms: [], error: errorMessage(caught) },
+				current.status === "ready"
+					? current
+					: { status: "error", rooms: [], error: errorMessage(caught), tick: current.tick },
 			);
 		}
 	}, []);
@@ -84,16 +93,22 @@ const ROOM_LOADING: RoomState = {
 };
 
 /**
- * One open room: the room and its messages. `listedVersion` is the version of the room in the room
- * list. When it is higher than the version that this hook has, the hook gets the changes: new, changed
- * and deleted messages. Use one hook for each room (a `key` on the component).
+ * One open room: the room and its messages. `listed` is the version of the room in the room list, with
+ * the `tick` of that list. After each list, the hook gets the changes when the room is ahead of the
+ * page: new, changed and deleted messages. Use one hook for each room (a `key` on the component).
  */
-export function useRoom(roomId: string, listedVersion: number | null) {
+export function useRoom(roomId: string, listed: { version: number | null; tick: number }) {
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
-	const version = useRef(0);
-	const syncing = useRef(false);
-	const syncAgain = useRef(false);
 	const alive = useRef(true);
+
+	const sync = useMemo(
+		() =>
+			createRoomSync(
+				(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
+				(changes) => setState((current) => ({ ...current, messages: withChanges(current.messages, changes) })),
+			),
+		[roomId],
+	);
 
 	const load = useCallback(async () => {
 		try {
@@ -101,7 +116,7 @@ export function useRoom(roomId: string, listedVersion: number | null) {
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!alive.current) return;
-			version.current = page?.version ?? 0;
+			if (page) sync.start(page.version);
 			setState({
 				status: "ready",
 				room,
@@ -113,49 +128,23 @@ export function useRoom(roomId: string, listedVersion: number | null) {
 		} catch (caught) {
 			if (alive.current) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
-	}, [roomId]);
+	}, [roomId, sync]);
 
 	useEffect(() => {
 		alive.current = true;
 		void load();
 		return () => {
 			alive.current = false;
+			sync.stop();
 		};
-	}, [load]);
+	}, [load, sync]);
 
-	/** Gets each change after the version that the hook has. One sync runs at a time. */
-	const sync = useCallback(async () => {
-		if (syncing.current) {
-			syncAgain.current = true;
-			return;
-		}
-		syncing.current = true;
-		try {
-			do {
-				syncAgain.current = false;
-				let more = true;
-				while (more) {
-					const page = await api.call("chat.list_messages", { room_id: roomId, changed_after: version.current });
-					if (!alive.current) return;
-					const last = page.messages[page.messages.length - 1];
-					more = page.has_more && last !== undefined;
-					version.current = more && last ? last.version : page.version;
-					if (page.messages.length > 0) {
-						setState((current) => ({ ...current, messages: withChanges(current.messages, page.messages) }));
-					}
-				}
-			} while (syncAgain.current);
-		} catch {
-			// The next poll of the room list starts a sync again. A 401 shows the sign-in page through lib/api.ts.
-		} finally {
-			syncing.current = false;
-		}
-	}, [roomId]);
-
-	const member = state.status === "ready" && state.room?.role !== null;
+	// Each room list is a new chance to sync: `tick` changes also when the version is the same, so a
+	// sync that failed runs again.
+	const { version: listedVersion, tick } = listed;
 	useEffect(() => {
-		if (member && listedVersion !== null && listedVersion > version.current) void sync();
-	}, [member, listedVersion, sync]);
+		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
+	}, [tick, listedVersion, sync]);
 
 	const loadOlder = useCallback(async () => {
 		const first = state.messages[0];
@@ -180,10 +169,10 @@ export function useRoom(roomId: string, listedVersion: number | null) {
 	const apply = useCallback(
 		(message: ChatMessage) => {
 			setState((current) => ({ ...current, messages: withChanges(current.messages, [message]) }));
-			void sync();
+			void sync.run();
 		},
 		[sync],
 	);
 
-	return { ...state, reload: load, sync, loadOlder, apply };
+	return { ...state, reload: load, sync: sync.run, loadOlder, apply };
 }

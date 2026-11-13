@@ -139,7 +139,8 @@ export const listRooms = defineOperation({
 	input: z.strictObject({
 		view: z.enum(["joined", "public"]).default("joined"),
 		query: z.string().trim().min(1).max(CHAT_LIMITS.queryChars).optional(),
-		cursor: z.string().max(600).optional(),
+		// A cursor of the public view holds a room name. NFC can make a name three times as long.
+		cursor: z.string().max(2000).optional(),
 		limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
 	}),
 	output: z.object({
@@ -349,7 +350,7 @@ export const markRead = defineOperation({
 	name: "chat.mark_read",
 	summary: "Set what you read in a room",
 	description:
-		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker.",
+		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room has the new marker at once, and chat.list_rooms a few seconds later.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/read" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

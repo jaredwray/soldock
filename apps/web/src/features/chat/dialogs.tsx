@@ -1,11 +1,11 @@
 import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@soldock/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
-import { usePrincipals } from "../drive/data.ts";
 import { roomTitle } from "./model.ts";
 
 function principalLabel(principal: Principal): string {
@@ -128,15 +128,20 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 	const [applied, setApplied] = useState("");
 	const [state, setState] = useState<Browse>({ status: "loading", rooms: [], nextCursor: null, error: null });
 	const [busyId, setBusyId] = useState<string | null>(null);
+	const [loadingMore, setLoadingMore] = useState(false);
+	const latest = useRef(0);
 	const queryId = useId();
 
+	/** Gets the first page of a query, or the page after `cursor`. Only the answer of the last call shows. */
 	const load = useCallback(async (text: string, cursor: string | null) => {
+		const request = ++latest.current;
 		try {
 			const page = await api.call("chat.list_rooms", {
 				view: "public",
 				...(text ? { query: text } : {}),
 				...(cursor ? { cursor } : {}),
 			});
+			if (request !== latest.current) return;
 			setState((current) => ({
 				status: "ready",
 				rooms: cursor ? [...current.rooms, ...page.rooms] : page.rooms,
@@ -144,6 +149,7 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 				error: null,
 			}));
 		} catch (caught) {
+			if (request !== latest.current) return;
 			setState((current) => ({ ...current, status: "error", error: errorMessage(caught) }));
 		}
 	}, []);
@@ -152,6 +158,12 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 		setState({ status: "loading", rooms: [], nextCursor: null, error: null });
 		void load(applied, null);
 	}, [applied, load]);
+
+	async function more(cursor: string) {
+		setLoadingMore(true);
+		await load(applied, cursor);
+		setLoadingMore(false);
+	}
 
 	async function join(room: ChatRoom) {
 		setBusyId(room.id);
@@ -238,8 +250,13 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 				</ul>
 				{state.nextCursor && (
 					<p className="chat-more">
-						<button type="button" className="button" onClick={() => void load(applied, state.nextCursor)}>
-							Show more rooms
+						<button
+							type="button"
+							className="button"
+							disabled={loadingMore}
+							onClick={() => state.nextCursor && void more(state.nextCursor)}
+						>
+							{loadingMore ? "Loading…" : "Show more rooms"}
 						</button>
 					</p>
 				)}

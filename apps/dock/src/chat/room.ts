@@ -145,6 +145,7 @@ const MIGRATIONS: string[][] = [
 			message_id TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		"CREATE INDEX idempotency_created ON idempotency (created_at)",
 	],
 ];
 
@@ -152,6 +153,16 @@ const OUTBOX_BATCH = 100;
 /** The most passes of one drain. A room that changes all the time lets the next drain continue. */
 const DRAIN_ROUNDS = 10;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * The time that the object can be without an alarm after a change, if it stops during the write to the
+ * index. The end of each write moves or removes this alarm.
+ */
+const ALARM_GUARD_MS = 30_000;
+/**
+ * A read marker goes to the index after this time, with the alarm. Each member that reads a new
+ * message moves its marker, so one write then holds the markers of all of them.
+ */
+const MARKER_DELAY_MS = 3000;
 
 const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
@@ -367,9 +378,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { room: this.record(call.actor.principal_id), created: true };
 	}
 
-	get(call: RoomCall): { room: RoomRecord; members: MemberRecord[] } | Refusal {
+	/**
+	 * True while the index of the current directory has this room as a public room. After a fresh start
+	 * of the directory, a room from before is not there, so no new account can find it or join it.
+	 */
+	private async inDirectory(roomId: string): Promise<boolean> {
+		const row = await this.env.DIRECTORY.prepare("SELECT 1 AS found FROM chat_rooms WHERE id = ? AND kind = 'public'")
+			.bind(roomId)
+			.first();
+		return row !== null;
+	}
+
+	async get(call: RoomCall): Promise<{ room: RoomRecord; members: MemberRecord[] } | Refusal> {
 		const opened = this.open(call, "visible");
 		if ("error" in opened) return opened;
+		if (!opened.member && !(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
 		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) => ({
 			...(JSON.parse(row.actor_json) as ActorRecord),
 			role: row.role,
@@ -398,22 +421,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/** Makes the caller a member of a public room. A room without an owner gets the caller as its owner. */
-	async join(call: RoomCall): Promise<RoomRecord | Refusal> {
+	async join(call: RoomCall): Promise<{ room: RoomRecord; joined: boolean } | Refusal> {
 		const opened = this.open(call, "visible");
 		if ("error" in opened) return opened;
-		if (opened.member) return this.record(call.actor.principal_id);
+		if (opened.member) return { room: this.record(call.actor.principal_id), joined: false };
+		if (!(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
+		// A different call can run during the read of the directory. Read the state of the room again.
+		if (this.member(call.actor.principal_id)) return { room: this.record(call.actor.principal_id), joined: false };
 		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 		const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
+		const lastSeq = (this.room() as RoomRow).last_seq;
 		this.ctx.storage.transactionSync(() => {
-			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), opened.room.last_seq);
+			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq);
 			this.touch("room");
 		});
 		await this.flush();
-		return this.record(call.actor.principal_id);
+		return { room: this.record(call.actor.principal_id), joined: true };
 	}
 
 	/** Adds principals as members. A new member starts with each message read, and can read them all. */
-	async addMembers(call: RoomCall, actors: ActorRecord[]): Promise<{ added: number; room: RoomRecord } | Refusal> {
+	async addMembers(call: RoomCall, actors: ActorRecord[]): Promise<{ added: string[]; room: RoomRecord } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (opened.room.kind === "dm") {
@@ -430,7 +457,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			});
 			await this.flush();
 		}
-		return { added: fresh.size, room: this.record(call.actor.principal_id) };
+		return { added: [...fresh.keys()], room: this.record(call.actor.principal_id) };
 	}
 
 	/**
@@ -622,7 +649,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { deleted: true };
 	}
 
-	/** Sets the read marker of the caller. Without `seq`, the marker goes to the newest message. */
+	/**
+	 * Sets the read marker of the caller. Without `seq`, the marker goes to the newest message. The
+	 * object has the marker at once. The index gets it a moment later, with the markers of the other
+	 * members that read the same message.
+	 */
 	async markRead(call: RoomCall, seq: number | null): Promise<{ lastReadSeq: number; unread: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
@@ -634,23 +665,34 @@ export class ChatRoomDO extends DurableObject<Env> {
 					lastReadSeq,
 					call.actor.principal_id,
 				);
-				this.touch(`member:${call.actor.principal_id}`);
+				this.touch(`member:${call.actor.principal_id}`, MARKER_DELAY_MS);
 			});
-			await this.flush();
+			await this.schedule();
 		}
 		return { lastReadSeq, unread: opened.room.last_seq > lastReadSeq };
 	}
 
 	// --- The index in D1 ------------------------------------------------------------------------
 
-	/** Records that a row of the index is behind. `gen` shows a change that came during a write. */
-	private touch(target: string): void {
+	/**
+	 * Records that a row of the index is behind. `gen` shows a change that came during a write. With a
+	 * delay, the row waits for the alarm. A row that waits already keeps the earlier time.
+	 */
+	private touch(target: string, delayMs = 0): void {
 		this.sql.exec(
 			`INSERT INTO outbox (target, gen, next_attempt_at) VALUES (?, 1, ?)
-			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0,
+				next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at)`,
 			target,
-			Date.now(),
+			Date.now() + delayMs,
 		);
+	}
+
+	/** Sets the alarm to the first row of the outbox, or removes the alarm when the outbox is empty. */
+	private async schedule(): Promise<void> {
+		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox")?.at ?? null;
+		if (next === null) await this.ctx.storage.deleteAlarm();
+		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
 
 	/**
@@ -658,7 +700,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * waits for it, so a list that comes after a change has that change. A failure does not fail the
 	 * change: the alarm tries the write again.
 	 */
-	private flush(): Promise<void> {
+	private async flush(): Promise<void> {
+		// The alarm comes first. If the object stops during the write, the alarm does the write later.
+		await this.ctx.storage.setAlarm(Date.now() + ALARM_GUARD_MS);
 		const run = this.flushed.then(() => this.drain());
 		this.flushed = run.catch((error: unknown) => {
 			log("error", "chat index drain failed", { error: error instanceof Error ? error.message : String(error) });
@@ -706,8 +750,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A row that changed during the write has a new gen. It stays, and the next pass writes it.
 			for (const row of rows) this.sql.exec("DELETE FROM outbox WHERE target = ? AND gen = ?", row.target, row.gen);
 		}
-		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox")?.at ?? null;
-		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+		await this.schedule();
 	}
 
 	/**

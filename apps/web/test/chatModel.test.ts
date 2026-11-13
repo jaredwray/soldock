@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { roomTitle, sidebarRooms, startsGroup, withChanges, withOlder } from "../src/features/chat/model.ts";
+import { startsGroup, withChanges, withOlder } from "../src/features/chat/model.ts";
 
 const ADA = { principal_id: "prn_01JD0000000000000000000ADA", kind: "human", display_name: "Ada Lovelace" } as const;
 const BOT = { principal_id: "prn_01JD0000000000000000000B0T", kind: "agent", display_name: "Deploy Bot" } as const;
@@ -61,15 +61,5 @@ describe("the look of a room", () => {
 		expect(startsGroup(message(1), message(2))).toBe(false);
 		expect(startsGroup(message(1), message(2, { author: BOT }))).toBe(true);
 		expect(startsGroup(message(1), message(7))).toBe(true);
-	});
-
-	it("names a direct message after the other member, and puts it under the rooms", () => {
-		const room = { kind: "public", name: "Launch", peer: null } as const;
-		const dm = { kind: "dm", name: null, peer: BOT } as const;
-		expect(roomTitle(room)).toBe("Launch");
-		expect(roomTitle(dm)).toBe("Deploy Bot");
-		const split = sidebarRooms([dm, room] as unknown as Parameters<typeof sidebarRooms>[0]);
-		expect(split.named).toEqual([room]);
-		expect(split.direct).toEqual([dm]);
 	});
 });

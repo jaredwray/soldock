@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry, type Principal } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry } from "@soldock/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
@@ -59,30 +59,8 @@ export function useAboutPoll(onVersionChange: () => void, onTick: () => void) {
 	return { about, sync };
 }
 
-/**
- * The people and agents of the organization, by id. The lists show the name of an owner, and the
- * share dialog offers them. Null while the list loads. An empty list when it does not load.
- */
-export function usePrincipals(): Principal[] | null {
-	const [principals, setPrincipals] = useState<Principal[] | null>(null);
-
-	useEffect(() => {
-		let active = true;
-		api.call("directory.list_principals").then(
-			(result) => {
-				if (active) setPrincipals(result.principals);
-			},
-			() => {
-				if (active) setPrincipals([]);
-			},
-		);
-		return () => {
-			active = false;
-		};
-	}, []);
-
-	return principals;
-}
+// The share dialog and the item list get the people and agents from the hook that Chat also uses.
+export { usePrincipals } from "../../lib/usePrincipals.ts";
 
 export interface ListState {
 	status: "loading" | "ready" | "error";

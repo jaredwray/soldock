@@ -58,6 +58,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A private room and a direct message are `not_found` for a principal that is not a member. A
   public room is visible to each principal: `chat.get_room` shows the room and its members. The
   messages of each room are for its members: a call from a different principal gets `forbidden`.
+- For a principal that is not a member, `chat.get_room` and `chat.join_room` need the room in the
+  index of the directory as a public room. See [A fresh start of the directory](#a-fresh-start-of-the-directory).
 - The organization role gives no access. An owner or an admin of the organization reads a room
   only as a member of it.
 - `chat.join_room` works for a public room only. A new member can read each message of the room,
@@ -104,6 +106,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   read.
 - `chat.mark_read` sets the marker of the caller: to the newest message, or to `seq`. A lower
   `seq` makes the room unread again. Only the member sees its own marker.
+- The room object has the new marker at once (`chat.get_room`). The index gets it 3 seconds later,
+  with the alarm. See [The lists, and the index in D1](#the-lists-and-the-index-in-d1).
 
 ## The lists, and the index in D1
 
@@ -118,6 +122,11 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   table which rows are behind (`room`, or `member:<principal id>`). Then it writes the current
   state of those rows to D1, in one batch, before it answers. So a list that comes after a change
   has that change.
+- A read marker is the exception. `chat.mark_read` does not write to D1 in the call. The row waits
+  3 seconds for the alarm. Each member that reads a new message moves its marker, so one batch
+  then holds the markers of all of them, and D1 gets one write, not one for each reader.
+- The object sets an alarm before each write. If the object stops during the write, the alarm does
+  the write later. The end of a write moves the alarm to the next row, or removes it.
 - A write holds the state at the time of the write, not at the time of the change. So a write is
   safe to run two times, and the order of two writes does not matter. The object runs one write
   at a time.
@@ -131,8 +140,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - The `joined` view has the newest message first. The `public` view has the names in the order of
   their NFC lowercase form. The two use keyset pages (`next_cursor`). `query` keeps the rooms whose
   name has that text. A direct message has no name, so it never matches.
-- Each post makes one D1 batch: the room row and the member row of the author. A later layer can
-  join the writes of a busy room.
+- Each post makes one D1 batch: the room row and the member row of the author. Each message also
+  gives one batch for the markers of its readers. `DIRECTORY` is one database, and it also
+  authenticates each request. A later layer can join the writes of a busy room, or move the index
+  of each principal into its own object (the planned `PrincipalDO`).
 
 ## Clients without a live connection
 
@@ -149,14 +160,16 @@ room is higher than the version that the client has, the client calls `chat.list
 - A room object writes a row to the index only while its principal is in the directory: the
   creator for the room row, the member for a member row. So a room from before a fresh start
   cannot come back into the new index. This rule assumes that no operation deletes a principal.
-- Known limit: a new account that has the id of an old public room can join that room. The ids are
-  not in the new index, and an id has 74 random bits.
+- A principal that is not a member gets a public room only while the index has it
+  (`chat.get_room`, `chat.join_room`). A room from before a fresh start is not in the new index.
+  So a new account cannot see or join an old room, also when it has the id of that room.
 
 ## Safety
 
 - Each change writes an audit line (`audit: true`): the room, and the message or the principal. The
-  line has no text of a message. `chat.mark_read` writes no line. A refused change is audited by
-  the operation invoker.
+  line has no text of a message. `chat.mark_read` writes no line, and a call that changed nothing
+  writes no line. The operation invoker audits a change that got `forbidden`. A change on a room
+  that the caller cannot see gets `not_found`, which has no line.
 - Chat holds text that principals of this organization wrote. No operation brings in content from
   outside, so no output has `untrusted: true`. When a bot or a webhook can post text from outside,
   those messages must get the mark.

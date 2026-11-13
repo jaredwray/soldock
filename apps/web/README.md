@@ -285,8 +285,10 @@ MCP clients. The app has no UI-only path.
     window focus. When the `version` of the open room is higher than the version of the page, the
     page calls `chat.list_messages` with `changed_after`. It then shows each new, changed and
     deleted message. The page has no WebSocket.
-  - An open room is read: the page calls `chat.mark_read` one time for each new message, only while
-    the tab is visible.
+  - A sync that fails runs again after the next room list, also when the version did not change.
+  - An open room is read: the page calls `chat.mark_read` with the `seq` of the last message that
+    it shows, one time for each new message, only while the tab is visible. The open room has no
+    dot in the sidebar, because its marker reaches the room list a few seconds later.
   - Enter sends the message. Shift+Enter makes a new line. A send has an `idempotency_key`, so a
     retry after a lost answer does not post the text two times.
   - The text of a message shows as plain text, with its line breaks. An agent has an "agent" mark
@@ -347,11 +349,11 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, and the pure rules in `model.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, and the message list rules of Chat |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, and the message list rules and the room sync of Chat |
 
 ## Commands
 

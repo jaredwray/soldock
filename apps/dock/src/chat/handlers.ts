@@ -172,17 +172,17 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.join_room"(call, input) {
 		const opened = openRoom(call, input.room_id);
-		const room = accept(await opened.room.join(opened.ctx));
-		auditOk(call, "chat.join_room", input.room_id);
-		return { room: toRoom(room) };
+		const result = accept(await opened.room.join(opened.ctx));
+		if (result.joined) auditOk(call, "chat.join_room", input.room_id);
+		return { room: toRoom(result.room) };
 	},
 
 	async "chat.add_members"(call, input) {
 		const members = await actorsOf(call, input.principal_ids);
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.addMembers(opened.ctx, members));
-		if (result.added > 0) auditOk(call, "chat.add_members", `${input.room_id}:${input.principal_ids.join(",")}`);
-		return { members_added: result.added, room: toRoom(result.room) };
+		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
+		return { members_added: result.added.length, room: toRoom(result.room) };
 	},
 
 	async "chat.remove_member"(call, input) {

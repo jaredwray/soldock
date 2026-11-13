@@ -18,6 +18,8 @@ export interface RoomViewProps {
 	listed: ChatRoom | null;
 	/** True after the room list loaded. */
 	listReady: boolean;
+	/** The number of room lists that arrived. */
+	listTick: number;
 	/** Gets the room list again, after a change that this view made. */
 	onRoomsChanged: () => Promise<void>;
 }
@@ -28,10 +30,10 @@ type RoomDialog = { type: "members" } | { type: "settings" } | { type: "delete";
 const STICK_PX = 80;
 
 /** One room: its header, its messages and the box for a new message. */
-export function RoomView({ roomId, listed, listReady, onRoomsChanged }: RoomViewProps) {
+export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }: RoomViewProps) {
 	const ownId = useSession().whoami.principal.id;
 	const toast = useToast();
-	const view = useRoom(roomId, listed?.version ?? null);
+	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick });
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
 	const [draft, setDraft] = useState("");
@@ -63,22 +65,25 @@ export function RoomView({ roomId, listed, listReady, onRoomsChanged }: RoomView
 		if (stale) void reload();
 	}, [stale, reload]);
 
-	// A room that shows is read. The marker goes to the newest message one time for each new message.
-	const unreadSeq = room?.unread ? room.last_seq : 0;
+	// A room that shows is read, up to the last message that the page shows. The marker never goes past
+	// a message that did not arrive. After a failed call, the next room list tries again.
+	const messages = view.messages;
+	const lastShown = messages[messages.length - 1];
+	const unreadSeq =
+		room?.role != null && lastShown && lastShown.author.principal_id !== ownId && lastShown.seq > room.last_read_seq
+			? lastShown.seq
+			: 0;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: listTick starts a new attempt after a failed call.
 	useEffect(() => {
 		if (view.status !== "ready" || !visible || unreadSeq <= markedSeq.current) return;
 		markedSeq.current = unreadSeq;
-		api.call("chat.mark_read", { room_id: roomId }).then(
-			() => void onRoomsChanged(),
-			() => {
-				markedSeq.current = 0;
-			},
-		);
-	}, [view.status, visible, unreadSeq, roomId, onRoomsChanged]);
+		api.call("chat.mark_read", { room_id: roomId, seq: unreadSeq }).catch(() => {
+			markedSeq.current = 0;
+		});
+	}, [view.status, visible, unreadSeq, roomId, listTick]);
 
 	// After older messages come in, the list stays at the same message. After a new message, it moves
 	// to the end, if it was at the end.
-	const messages = view.messages;
 	useLayoutEffect(() => {
 		const list = scrollRef.current;
 		if (!list || messages.length === 0) return;
@@ -107,17 +112,19 @@ export function RoomView({ roomId, listed, listReady, onRoomsChanged }: RoomView
 
 	async function send() {
 		if (!draft.trim() || sending) return;
+		const text = draft;
 		setSending(true);
 		// One key for one text, so a retry after a lost answer does not post the text two times.
 		sendKey.current ??= crypto.randomUUID();
 		try {
 			const { message } = await api.call("chat.post_message", {
 				room_id: roomId,
-				text: draft,
+				text,
 				idempotency_key: sendKey.current,
 			});
 			sendKey.current = null;
-			setDraft("");
+			// The person can type during the send. Only the text that went out goes away.
+			setDraft((current) => (current === text ? "" : current));
 			stick.current = true;
 			view.apply(message);
 			void onRoomsChanged();
