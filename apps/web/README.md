@@ -25,8 +25,12 @@ MCP clients. The app has no UI-only path.
   - After a deploy, an open tab can run an older SPA than the Worker. If the setup status then has
     an unknown shape, the boot error tells the person to reload.
   - "Try again" on the boot error reloads the page, so the tab gets the current SPA.
-- **Setup.** The page first asks for the setup token. The server verifies it without a directory query or a new session.
+- **Setup.** The page first asks for the setup token. The server verifies it without a new session.
   - Only a correct token reveals two choices: setup without a reset, or a fresh start.
+  - If the directory already has accounts, the first choice is **Continue with the existing accounts**.
+    It opens the app with the current session, or shows the sign-in page. A notice says that the page
+    shows until the operator deletes the `SETUP_TOKEN` secret.
+  - If the server cannot read the directory, for example with an old schema, the page offers both usual choices.
     The buttons have a separate group with a 12 px gap.
   - A fresh start asks for new owner details, then shows a confirmation with Cancel first.
     It deletes all directory accounts, addresses, keys, sessions, and sign-in codes.
@@ -41,7 +45,7 @@ MCP clients. The app has no UI-only path.
     The form explains that DNS and Cloudflare email need separate configuration.
   - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
     with a copy button and a reminder to delete the `SETUP_TOKEN` secret. Done opens the app.
-  - If accounts exist during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
+  - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
   labels, a thread list and a thread view.
   - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as

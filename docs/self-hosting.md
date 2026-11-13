@@ -175,7 +175,8 @@ top-level only and applies to each environment. So it cannot hold a rule for one
      -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","sign_in_email":"you@personal.example"}'
    ```
 
-   After you delete the token, the setup page does not show again. Setup without a reset gets `409` when accounts exist.
+   After you delete the token, the setup page does not show again. While the token exists and accounts exist,
+   the page offers **Continue with the existing accounts** in place of **Set up without a reset**.
 
    Sign-in codes leave through Email Service. Do step 3 (send) before you sign in on a different
    browser.
@@ -219,6 +220,7 @@ If a reset stops before cleanup, retry after ten minutes. The expired lease perm
 Mail that Email Service already accepted cannot be recalled.
 
 Select **Set up without a reset** to create an owner only when the directory is empty.
+When accounts exist, select **Continue with the existing accounts** to keep them. The app opens, or the sign-in page shows.
 A token alone never deletes data. The reset needs the token and `start_fresh: "DELETE DIRECTORY"` in `POST /auth/setup`.
 
 D1 records applied migrations by filename. A change to an applied migration does not change an existing database.
