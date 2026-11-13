@@ -20,25 +20,33 @@ export function newPasswordError(password: string, confirmation: string): string
  * this session stays.
  */
 export function PasswordCard() {
-	const { refresh } = useSession();
+	const { whoami, refresh } = useSession();
 	const toast = useToast();
+	// A person from before the upgrade to passwords has none. The server asks for the current one otherwise.
+	const [hasPassword, setHasPassword] = useState(whoami.sign_in?.password_set !== false);
+	const [current, setCurrent] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirmation, setConfirmation] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { password: useId(), confirmation: useId(), hint: useId() };
+	const ids = { current: useId(), password: useId(), confirmation: useId(), hint: useId() };
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (hasPassword && !current) return setError("Enter your current password.");
 		const problem = newPasswordError(password, confirmation);
 		if (problem) return setError(problem);
 		setBusy(true);
 		setError(null);
 		try {
-			await api.call("account.set_password", { password });
+			await api.call("account.set_password", { password, ...(hasPassword ? { current_password: current } : {}) });
+			setCurrent("");
 			setPassword("");
 			setConfirmation("");
-			toast({ message: "Password changed. Your sessions on other browsers ended." });
+			toast({
+				message: hasPassword ? "Password changed. Your sessions on other browsers ended." : "Password set.",
+			});
+			setHasPassword(true);
 			await refresh().catch(() => undefined);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -50,8 +58,30 @@ export function PasswordCard() {
 	return (
 		<section className="card">
 			<h2 className="card-title">Password</h2>
-			<p className="muted">You sign in with your address and your password.</p>
+			{hasPassword ? (
+				<p className="muted">You sign in with your address and your password.</p>
+			) : (
+				<p className="notice">
+					You have no password yet. Set one now: after this session ends, you sign in with your address and a password.
+				</p>
+			)}
 			<form className="create-key" onSubmit={submit} noValidate>
+				{hasPassword && (
+					<div className="field">
+						<label htmlFor={ids.current} className="field-label">
+							Current password
+						</label>
+						<input
+							id={ids.current}
+							className="input"
+							type="password"
+							autoComplete="current-password"
+							value={current}
+							onChange={(event) => setCurrent(event.target.value)}
+							disabled={busy}
+						/>
+					</div>
+				)}
 				<div className="field">
 					<label htmlFor={ids.password} className="field-label">
 						New password
@@ -90,7 +120,7 @@ export function PasswordCard() {
 					</p>
 				)}
 				<button type="submit" className="button button-primary" disabled={busy}>
-					{busy ? "Saving…" : "Change password"}
+					{busy ? "Saving…" : hasPassword ? "Change password" : "Set password"}
 				</button>
 			</form>
 		</section>
@@ -104,10 +134,14 @@ export function TwoStepCard() {
 	// The new state shows at once. The session context gets it too, so the card shows it after a remount.
 	const [changed, setChanged] = useState<boolean | null>(null);
 	const enabled = changed ?? whoami.sign_in?.totp_enabled ?? false;
+	const hasPassword = whoami.sign_in?.password_set !== false;
 	const [confirmOff, setConfirmOff] = useState(false);
+	const [current, setCurrent] = useState("");
+	const currentId = useId();
 
 	async function turnOff() {
-		await api.call("account.disable_totp");
+		await api.call("account.disable_totp", hasPassword ? { current_password: current } : {});
+		setCurrent("");
 		setChanged(false);
 		toast({ message: "Two-step verification is off." });
 		await refresh().catch(() => undefined);
@@ -132,6 +166,7 @@ export function TwoStepCard() {
 						cannot sign in.
 					</p>
 					<TotpSetup
+						needsPassword={hasPassword}
 						onEnabled={() => {
 							setChanged(true);
 							toast({ message: "Two-step verification is on." });
@@ -145,10 +180,28 @@ export function TwoStepCard() {
 					title="Turn off two-step verification?"
 					confirmLabel="Turn off"
 					danger
-					onClose={() => setConfirmOff(false)}
+					onClose={() => {
+						setConfirmOff(false);
+						setCurrent("");
+					}}
 					onConfirm={turnOff}
 				>
 					<p>After this, your password alone signs in to your account.</p>
+					{hasPassword && (
+						<div className="field">
+							<label htmlFor={currentId} className="field-label">
+								Current password
+							</label>
+							<input
+								id={currentId}
+								className="input"
+								type="password"
+								autoComplete="current-password"
+								value={current}
+								onChange={(event) => setCurrent(event.target.value)}
+							/>
+						</div>
+					)}
 				</ConfirmDialog>
 			)}
 		</section>

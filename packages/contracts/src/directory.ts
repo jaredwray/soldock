@@ -1,7 +1,7 @@
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
-import { Password, TotpCode } from "./signin.ts";
+import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
 
 const PrincipalId = prefixedId("prn");
@@ -218,6 +218,13 @@ export const revokeApiKey = defineOperation({
 const FULL_CREDENTIAL =
 	"The credential must hold every human scope, because a sign-in gives a session with every human scope.";
 
+/** A browser session proves the password again before it changes its own sign-in. */
+const CURRENT_PASSWORD =
+	"A browser session that changes its own sign-in must also send current_password, when the person has a password. An API key does not need it.";
+
+/** The password that the person signs in with now. Wrong guesses count toward the sign-in lock. */
+const CurrentPassword = z.string().min(1).max(PASSWORD_MAX_LENGTH).optional();
+
 export const setPassword = defineOperation({
 	name: "account.set_password",
 	summary: "Set the password of a person",
@@ -225,13 +232,18 @@ export const setPassword = defineOperation({
 		"Sets the password that a human signs in with: yourself by default.",
 		"Owners and admins can set it for anyone except the owner.",
 		FULL_CREDENTIAL,
+		CURRENT_PASSWORD,
 		"The change ends the other browser sessions of that person and clears a sign-in lock.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/password" },
 	scopes: ["account.keys"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
-	input: z.strictObject({ principal_id: PrincipalId.optional(), password: Password }),
+	input: z.strictObject({
+		principal_id: PrincipalId.optional(),
+		password: Password,
+		current_password: CurrentPassword,
+	}),
 	output: z.object({ principal_id: z.string() }),
 	errors: ["not_found"],
 });
@@ -265,14 +277,15 @@ export const enableTotp = defineOperation({
 	description: [
 		"Checks a code from the authenticator app against the secret from account.create_totp_secret.",
 		"A correct code turns on two-step verification: each sign-in then needs a code.",
-		"A wrong code changes nothing.",
+		"It also ends your other browser sessions. A wrong code changes nothing.",
 		FULL_CREDENTIAL,
+		CURRENT_PASSWORD,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/totp/enable" },
 	scopes: ["account.keys"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
-	input: z.strictObject({ code: TotpCode }),
+	input: z.strictObject({ code: TotpCode, current_password: CurrentPassword }),
 	output: z.object({ totp_enabled: z.boolean() }),
 	errors: ["conflict"],
 });
@@ -284,12 +297,13 @@ export const disableTotp = defineOperation({
 		"Turns off two-step verification for a human: yourself by default.",
 		"Owners and admins can turn it off for anyone except the owner, for example after a person loses a phone.",
 		FULL_CREDENTIAL,
+		CURRENT_PASSWORD,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/totp/disable" },
 	scopes: ["account.keys"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
-	input: z.strictObject({ principal_id: PrincipalId.optional() }),
+	input: z.strictObject({ principal_id: PrincipalId.optional(), current_password: CurrentPassword }),
 	output: z.object({ principal_id: z.string(), totp_enabled: z.boolean() }),
 	errors: ["not_found"],
 });

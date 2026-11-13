@@ -128,6 +128,11 @@ MCP clients. The app has no UI-only path.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
   on other browsers. A new key can hold only the scopes of the session.
+  - Each change to your own sign-in asks for your current password, because the server needs it
+    from a browser session. On the setup page, the two-step step uses the password that the owner
+    just typed.
+  - A person without a password (after the upgrade to passwords) sees **Set a password**, and a
+    notice under the top bar of each other page until they set one.
   - **Two-step verification.** A click on **Set up two-step verification** calls
     `account.create_totp_secret` and shows the secret as a QR code (black on white in both themes)
     and as text. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**

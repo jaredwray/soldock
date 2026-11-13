@@ -1,11 +1,11 @@
-import { createExecutionContext } from "cloudflare:test";
+import { applyD1Migrations, createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
-import { totpCode } from "../src/identity/totp.ts";
+import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -70,9 +70,9 @@ function wrong(code: string): string {
 	return String((Number(code) + 1) % 10 ** code.length).padStart(code.length, "0");
 }
 
-/** Sets a password with a session cookie, as the web app does. */
-function setPasswordWithCookie(cookie: string, body: Record<string, string>) {
-	return request("/api/v1/account/password", {
+/** Calls an account route with a session cookie, as the web app does. */
+function postWithCookie(cookie: string, path: string, body: Record<string, string> = {}) {
+	return request(`/api/v1/account/${path}`, {
 		method: "POST",
 		headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
 		body: JSON.stringify(body),
@@ -309,6 +309,18 @@ describe("first-run setup", () => {
 		await signIn(OWNER.address);
 	});
 
+	// A fresh start replays the bundled migrations. If wrangler ran 0004 again later, it would copy the
+	// principals without their passwords.
+	it("records the migrations that a fresh start replays, so a later migration run keeps passwords", async () => {
+		await setupOwner();
+		// A directory one migration behind the Worker, as after a deploy before `migrations apply`.
+		await env.DIRECTORY.prepare("DELETE FROM d1_migrations WHERE name = '0004_password_sign_in.sql'").run();
+		const res = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
+		expect(res.status).toBe(201);
+		await applyD1Migrations(env.DIRECTORY, (env as unknown as { TEST_MIGRATIONS: D1Migration[] }).TEST_MIGRATIONS);
+		await signIn(OWNER.address);
+	});
+
 	// The owner and the key exist after the first D1 batch, so setup cannot run again. If the session
 	// batch then fails, the response must still hold the key, or nobody can sign in.
 	it("returns the key without a session when the session after setup fails", async () => {
@@ -422,6 +434,11 @@ describe("sign-in with a password", () => {
 	// A password is safe only while the number of guesses stays small.
 	it("locks sign-in for 15 minutes after 10 failed attempts, also for parallel guesses", async () => {
 		const owner = await setupOwner();
+		// A success starts the count again, so a person who sometimes mistypes is never locked.
+		for (let round = 0; round < 2; round++) {
+			await Promise.all(Array.from({ length: 9 }, () => submitSignIn(owner.address, "wrong password")));
+			await signIn(owner.address);
+		}
 		const guesses = await Promise.all(
 			Array.from({ length: 10 }, () => submitSignIn(owner.address, "wrong password").then((res) => res.status)),
 		);
@@ -454,6 +471,39 @@ describe("sign-in with a password", () => {
 		expect((await submitSignIn(owner.address, PASSWORD, { totpCode: "12345" })).status).toBe(400);
 	});
 
+	// Two isolates can check the same code at the same time. The tests run requests one at a time, so a
+	// D1 proxy plays the other request: it records the step just before this request writes it.
+	it("refuses a code that a parallel sign-in used between the check and the write", async () => {
+		const owner = await setupOwner();
+		const secret = await turnOnTotp(owner.call);
+		const racing = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property !== "prepare") {
+					const value = Reflect.get(target, property);
+					return typeof value === "function" ? value.bind(target) : value;
+				}
+				return (sql: string) => {
+					const statement = target.prepare(sql);
+					if (!sql.includes("SET totp_last_step")) return statement;
+					return {
+						bind: (step: number, ...rest: unknown[]) => ({
+							run: async () => {
+								await target.prepare("UPDATE principals SET totp_last_step = ?").bind(step).run();
+								return statement.bind(step, ...rest).run();
+							},
+						}),
+					};
+				};
+			},
+		});
+		const res = await withEnv({ DIRECTORY: racing }, "/auth/session", {
+			method: "POST",
+			headers: { origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ address: owner.address, password: PASSWORD, totp_code: await totpNow(secret, 1) }),
+		});
+		await refusal(res);
+	});
+
 	// Authenticator apps compute codes with RFC 6238, so the server must give the same codes.
 	it.each([
 		[59, "287082"],
@@ -465,6 +515,16 @@ describe("sign-in with a password", () => {
 	])("gives the RFC 6238 code at %i seconds", async (seconds, code) => {
 		// The base32 form of the RFC test key "12345678901234567890".
 		expect(await totpCode("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", Math.floor(seconds / 30))).toBe(code);
+	});
+
+	// A clock can be a little wrong, but each extra step lets a stolen code work for longer.
+	it("accepts a code from one step before or after the current step, and no further", async () => {
+		const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+		const step = 1000;
+		const now = step * 30_000 + 15_000;
+		const at = async (offset: number) => matchTotp(secret, await totpCode(secret, step + offset), null, now);
+		expect(await Promise.all([-1, 0, 1].map(at))).toEqual([step - 1, step, step + 1]);
+		expect(await Promise.all([-2, 2].map(at))).toEqual([null, null]);
 	});
 
 	it("refuses a large sign-in body while it streams, before any lookup", async () => {
@@ -517,13 +577,40 @@ describe("passwords", () => {
 		const owner = await setupOwner();
 		const here = await signIn(owner.address);
 		const elsewhere = await signIn(owner.address);
-		const res = await setPasswordWithCookie(here, { password: "a new long password" });
+		const res = await postWithCookie(here, "password", { password: "a new long password", current_password: PASSWORD });
 		expect(await res.json()).toEqual({ principal_id: owner.id });
 		expect((await request("/api/v1/account", { headers: { cookie: here } })).status).toBe(200);
 		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
 		await refusal(await submitSignIn(owner.address, PASSWORD));
 		await signIn(owner.address, "a new long password");
-		expect((await setPasswordWithCookie(here, { password: "too short" })).status).toBe(400);
+		expect((await postWithCookie(here, "password", { password: "too short" })).status).toBe(400);
+	});
+
+	// A stolen session cookie must not replace the password or the second step. An API key with every
+	// human scope stays the recovery credential, so it needs no current password.
+	it("asks a browser session for the current password before it changes its own sign-in", async () => {
+		const owner = await setupOwner();
+		const here = await signIn(owner.address);
+		const elsewhere = await signIn(owner.address);
+		const password = { password: "a new long password" };
+		expect((await postWithCookie(here, "password", password)).status).toBe(403);
+		expect((await postWithCookie(here, "password", { ...password, current_password: "a wrong one" })).status).toBe(403);
+		const { secret } = (await (await postWithCookie(here, "totp/secret")).json()) as { secret: string };
+		const code = { code: await totpNow(secret) };
+		expect((await postWithCookie(here, "totp/enable", code)).status).toBe(403);
+		expect((await postWithCookie(here, "totp/enable", { ...code, current_password: PASSWORD })).status).toBe(200);
+		// Turning on the second step also ends the other sessions.
+		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
+		expect((await postWithCookie(here, "totp/disable")).status).toBe(403);
+		expect((await postWithCookie(here, "totp/disable", { current_password: PASSWORD })).status).toBe(200);
+		await refusal(await submitSignIn(owner.address, "a new long password"));
+		// Wrong current passwords count toward the sign-in lock, like wrong sign-ins.
+		await Promise.all(
+			Array.from({ length: 10 }, () => postWithCookie(here, "totp/disable", { current_password: "a wrong one" })),
+		);
+		await refusal(await submitSignIn(owner.address, PASSWORD));
+		await owner.call("account.set_password", password);
+		await signIn(owner.address, password.password);
 	});
 
 	// A sign-in gives every human scope, so a narrow key must not choose how a person signs in.
@@ -648,10 +735,11 @@ describe("two-step verification", () => {
 
 describe("directory upgrade", () => {
 	// Production directories have sign-in emails. The migration must keep each account, key and session.
-	it("moves a directory with sign-in emails to passwords, and keeps keys, sessions and agents", async () => {
+	it("moves a directory with sign-in emails to passwords, and keeps keys, sessions, agents and the old columns", async () => {
 		const db = env.DIRECTORY;
 		const run = (statements: string[]) => db.batch(statements.map((sql) => db.prepare(sql)));
 		await run([
+			"DROP TABLE sign_in_codes",
 			"DROP TABLE sessions",
 			"DROP TABLE api_keys",
 			"DROP TABLE addresses",
@@ -698,8 +786,16 @@ describe("directory upgrade", () => {
 			{ id: "prn_bot", sponsor_id: "prn_owner" },
 			{ id: "prn_owner" },
 		]);
-		expect(await db.prepare("SELECT name FROM sqlite_master WHERE name = 'sign_in_codes'").first()).toBeNull();
 		expect(await db.prepare("PRAGMA foreign_key_check").all()).toMatchObject({ results: [] });
+		// The deploy migrates while the old Worker runs. It reads the sign-in email and writes codes, so
+		// both stay until a later migration. The old codes are gone.
+		expect(await db.prepare("SELECT sign_in_email FROM principals WHERE id = 'prn_owner'").first()).toEqual({
+			sign_in_email: "olive@home.example",
+		});
+		expect(await db.prepare("SELECT COUNT(*) AS count FROM sign_in_codes").first("count")).toBe(0);
+		await db
+			.prepare("INSERT INTO sign_in_codes VALUES ('sic_2', 'prn_owner', 'x', 0, '2026-01-01', '2999-01-01', NULL)")
+			.run();
 		// Without a password, the person signs in after somebody sets one: the person in a kept session,
 		// or the owner with the setup key.
 		await refusal(await submitSignIn("owner@dock.test", "olive@home.example"));

@@ -606,6 +606,24 @@ fieldset {
 	height: 100%;
 }
 
+.app-with-banner {
+	grid-template-rows: var(--topbar-height) auto minmax(0, 1fr);
+}
+
+.app-banner {
+	margin: 0;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--warning-border);
+	background: var(--warning-bg);
+	color: var(--warning-text);
+	font-size: 14px;
+}
+
+.app-banner a {
+	color: inherit;
+	font-weight: 600;
+}
+
 .topbar {
 	display: flex;
 	align-items: center;

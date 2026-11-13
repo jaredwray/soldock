@@ -68,5 +68,19 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...schema,
 		...mailDomainSchema.split("--> statement-breakpoint"),
 		...passwordSchema.split("--> statement-breakpoint"),
+		// The directory now has the schema of each bundled migration. Record them in the table that
+		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
+		// copy the principals without their passwords. The columns are the ones that wrangler creates.
+		`CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)`,
+		`INSERT OR IGNORE INTO d1_migrations (name) VALUES ${BUNDLED_MIGRATIONS.map((name) => `('${name}')`).join(", ")}`,
 	].map((statement) => db.prepare(statement));
 }
+
+/** The directory migrations that a fresh start leaves applied. 0002 made `setup_lock`, which the reset needs. */
+const BUNDLED_MIGRATIONS = [
+	"0001_directory.sql",
+	"0002_setup_lock.sql",
+	"0003_mail_domains.sql",
+	"0004_password_sign_in.sql",
+] as const;

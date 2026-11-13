@@ -25,6 +25,14 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 	const passwordRef = useRef<HTMLInputElement>(null);
 	const codeRef = useRef<HTMLInputElement>(null);
 	const ids = { address: useId(), password: useId(), code: useId(), codeHint: useId() };
+	// A field gets the focus after the render that enables it again, or the browser ignores the focus.
+	const [focusRequest, setFocusRequest] = useState<{ field: "address" | "password" | "code" } | null>(null);
+
+	useEffect(() => {
+		if (!focusRequest || busy) return;
+		({ address: addressRef, password: passwordRef, code: codeRef })[focusRequest.field].current?.focus();
+		setFocusRequest(null);
+	}, [focusRequest, busy]);
 
 	useEffect(() => {
 		document.title = "Sign in – Soldock";
@@ -38,12 +46,12 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 		event.preventDefault();
 		if (!EmailAddress.safeParse(address).success) {
 			setError("Enter your Soldock address, such as ada@example.com.");
-			addressRef.current?.focus();
+			setFocusRequest({ field: "address" });
 			return;
 		}
 		if (!password) {
 			setError("Enter your password.");
-			passwordRef.current?.focus();
+			setFocusRequest({ field: "password" });
 			return;
 		}
 		setBusy(true);
@@ -57,7 +65,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 		} catch (caught) {
 			setError(signInErrorMessage(caught));
 			setBusy(false);
-			passwordRef.current?.focus();
+			setFocusRequest({ field: "password" });
 		}
 	}
 
@@ -66,7 +74,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 		const digits = code.replace(/[\s-]/g, "");
 		if (!new RegExp(`^\\d{${TOTP_DIGITS}}$`).test(digits)) {
 			setError(`Enter the ${TOTP_DIGITS} digits from your authenticator app.`);
-			codeRef.current?.focus();
+			setFocusRequest({ field: "code" });
 			return;
 		}
 		setBusy(true);
@@ -79,7 +87,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 		} catch (caught) {
 			setError(signInErrorMessage(caught));
 			setBusy(false);
-			codeRef.current?.focus();
+			setFocusRequest({ field: "code" });
 		}
 	}
 

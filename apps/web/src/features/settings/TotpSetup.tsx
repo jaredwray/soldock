@@ -1,5 +1,5 @@
 import { TOTP_DIGITS } from "@soldock/contracts";
-import { type FormEvent, useId, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { QrCode } from "../../lib/QrCode.tsx";
 
@@ -20,13 +20,29 @@ function grouped(secret: string): string {
  * it on (`account.enable_totp`). Sign-in does not change until the code is correct. The secret comes
  * from a click, not from an effect, because each request replaces the secret on the server.
  */
-export function TotpSetup({ onEnabled }: { onEnabled: () => void }) {
+interface TotpSetupProps {
+	onEnabled: () => void;
+	/** The server asks a browser session for the current password, when the person has one. */
+	needsPassword: boolean;
+	/** The password that the person typed a moment ago, on the setup page. The panel then does not ask. */
+	currentPassword?: string;
+}
+
+export function TotpSetup({ onEnabled, needsPassword, currentPassword }: TotpSetupProps) {
 	const [state, setState] = useState<SecretState>({ status: "idle" });
 	const [code, setCode] = useState("");
+	const [password, setPassword] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// A field gets the focus after the render that enables it again, or the browser ignores the focus.
+	const [focusCode, setFocusCode] = useState(0);
 	const codeRef = useRef<HTMLInputElement>(null);
-	const ids = { code: useId(), codeHint: useId() };
+	const ids = { code: useId(), codeHint: useId(), password: useId() };
+	const askPassword = needsPassword && currentPassword === undefined;
+
+	useEffect(() => {
+		if (focusCode > 0) codeRef.current?.focus();
+	}, [focusCode]);
 
 	async function start() {
 		setState({ status: "loading" });
@@ -35,7 +51,7 @@ export function TotpSetup({ onEnabled }: { onEnabled: () => void }) {
 		try {
 			const result = await api.call("account.create_totp_secret");
 			setState({ status: "ready", secret: result.secret, uri: result.otpauth_uri });
-			requestAnimationFrame(() => codeRef.current?.focus());
+			setFocusCode((n) => n + 1);
 		} catch (caught) {
 			setState({ status: "error", error: errorMessage(caught) });
 		}
@@ -46,18 +62,21 @@ export function TotpSetup({ onEnabled }: { onEnabled: () => void }) {
 		const digits = code.replace(/[\s-]/g, "");
 		if (!new RegExp(`^\\d{${TOTP_DIGITS}}$`).test(digits)) {
 			setError(`Enter the ${TOTP_DIGITS} digits from your authenticator app.`);
-			codeRef.current?.focus();
+			setFocusCode((n) => n + 1);
 			return;
 		}
+		if (askPassword && !password) return setError("Enter your current password.");
+		const current = askPassword ? password : needsPassword ? currentPassword : undefined;
 		setBusy(true);
 		setError(null);
 		try {
-			await api.call("account.enable_totp", { code: digits });
+			await api.call("account.enable_totp", { code: digits, ...(current ? { current_password: current } : {}) });
 			setState({ status: "idle" });
+			setPassword("");
 			onEnabled();
 		} catch (caught) {
 			setError(errorMessage(caught));
-			codeRef.current?.focus();
+			setFocusCode((n) => n + 1);
 		} finally {
 			setBusy(false);
 		}
@@ -120,9 +139,25 @@ export function TotpSetup({ onEnabled }: { onEnabled: () => void }) {
 					disabled={busy}
 				/>
 				<p id={ids.codeHint} className="field-hint">
-					After this step, each sign-in needs your password and a code from the app.
+					After this step, each sign-in needs your password and a code from the app. Your other sessions end.
 				</p>
 			</div>
+			{askPassword && (
+				<div className="field">
+					<label htmlFor={ids.password} className="field-label">
+						Current password
+					</label>
+					<input
+						id={ids.password}
+						className="input"
+						type="password"
+						autoComplete="current-password"
+						value={password}
+						onChange={(event) => setPassword(event.target.value)}
+						disabled={busy}
+					/>
+				</div>
+			)}
 			<div aria-live="assertive">
 				{error && (
 					<p className="form-error" role="alert">

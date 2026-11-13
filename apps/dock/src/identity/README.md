@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and an empty `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -78,6 +78,9 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, and passwords. It recreates the schema from the bundled migrations
   (`0001`, `0003` and `0004`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0004` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
+  the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
   Saved mail domains stay in place. The reset restores the domain constraints after it recreates the account tables.
   The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
@@ -124,8 +127,9 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
    and returns it once with an `otpauth://totp/Soldock:<address>` URI for a QR code. Sign-in does
    not change. A new call replaces the waiting secret.
 2. `account.enable_totp` checks a code against the waiting secret. A correct code moves it to
-   `totp_secret` and records its step, so that code cannot also sign in. A wrong code gets `invalid`
-   and changes nothing. Without a waiting secret, the call gets `conflict`.
+   `totp_secret` and records its step, so that code cannot also sign in. It also ends the other
+   sessions of the person, so a session that somebody else holds does not stay. A wrong code gets
+   `invalid` and changes nothing. Without a waiting secret, the call gets `conflict`.
 3. `account.disable_totp` removes both secrets: yourself by default, or a person that you can manage.
 
 The web app shows the QR code and the secret as text. Recovery codes do not exist yet: after a lost
@@ -139,9 +143,14 @@ their own with the API key from setup.
 - The owner sets a new password with a credential that holds every human scope, for example the API
   key from setup.
 - The operator can still start fresh with `SETUP_TOKEN`, which deletes the directory.
-- Upgrade: migration `0004` removes the sign-in emails and the sign-in codes. People keep their
-  addresses, keys and sessions, but they have no password. A person in a kept session sets one in
-  Settings. The owner can also use the API key from setup, and then set passwords for the others.
+- Upgrade: after migration `0004`, people keep their addresses, keys and sessions, but they have no
+  password. While `sign_in.password_set` is false, the web app shows a notice in each page and in
+  Settings. A person in a kept session sets a password there. The owner can also use the API key
+  from setup, and then set passwords for the others.
+- Migration `0004` only adds, because the deploy applies migrations while the old Worker runs. It
+  keeps `sign_in_email` (now optional) and `sign_in_codes` (empty again) for the old Worker, and
+  drops only the old codes and the triggers for sign-in emails. A later migration removes the column
+  and the table.
 
 ## Authorization
 
@@ -167,6 +176,12 @@ Each call passes three checks:
      narrow key cannot become a full session or lock a person out.
    - Only the person turns on their own two-step verification: the TOTP operations that make or
      check a secret take no `principal_id`.
+   - A browser session that changes its own sign-in (`account.set_password`, `account.enable_totp`,
+     `account.disable_totp`) must also send `current_password`, when the person has a password. So
+     somebody with a stolen session cookie cannot replace the password or the second step. Each check
+     counts toward the sign-in lock. A wrong or missing password gets `forbidden`. An API key does not
+     need it: a key with every human scope is the recovery credential of the owner. An owner or an
+     admin who changes the sign-in of somebody else does not need it either.
    - `account.set_password` ends the sessions of that person and clears a sign-in lock. When the
      person changes their own password in a session, that session stays. This locks out somebody who
      knew the old password.
@@ -179,9 +194,9 @@ alone does not stop each cross-site request. `/mcp` accepts API keys only.
 Delegated tokens (OAuth for MCP clients that act for a human) do not exist yet. Until then, a
 narrow API key is the way to give a client less than the full access of its principal.
 
-Not built yet: recovery codes for two-step verification, a check of the current password before a
-change, a notice to the person when an admin changes their sign-in, and "sign out everywhere" without
-a new password.
+Not built yet: recovery codes for two-step verification, a notice to the person when an admin
+changes their sign-in, "sign out everywhere" without a new password, a sign-in limit by client
+address, and the migration that removes `sign_in_email` and `sign_in_codes`.
 
 ## Audit
 

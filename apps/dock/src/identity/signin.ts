@@ -34,6 +34,24 @@ async function reserveAttempt(db: D1Database, principalId: string, nowMs: number
 		.first<Attempt>();
 }
 
+async function clearFailures(db: D1Database, principalId: string): Promise<void> {
+	await db
+		.prepare("UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL WHERE id = ?")
+		.bind(principalId)
+		.run();
+}
+
+/**
+ * True when the password is the current password of a human. It counts an attempt and obeys the lock
+ * like a sign-in, so a stolen session cannot guess the password without a limit.
+ */
+export async function confirmPassword(db: D1Database, principalId: string, password: string): Promise<boolean> {
+	const attempt = await reserveAttempt(db, principalId, Date.now());
+	if (!(await verifyPassword(password, attempt?.password_hash ?? null)) || !attempt) return false;
+	await clearFailures(db, principalId);
+	return true;
+}
+
 /**
  * Checks an address, a password and, when the person turned it on, a TOTP code.
  *
@@ -66,10 +84,7 @@ export async function signInWithPassword(
 		};
 	}
 	if (!attempt.totp_secret) {
-		await db
-			.prepare("UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL WHERE id = ?")
-			.bind(principal.id)
-			.run();
+		await clearFailures(db, principal.id);
 		return { result: "signed_in", principal, credential: "password" };
 	}
 	if (input.totp_code === undefined) return { result: "totp_required", principal };

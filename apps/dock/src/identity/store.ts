@@ -318,18 +318,33 @@ export async function pendingTotpSecret(db: D1Database, principalId: string): Pr
 }
 
 /**
- * Makes the waiting secret the TOTP secret of the person. The code of `step` cannot sign in again.
- * Returns false when the waiting secret changed after the check, for example in a parallel request.
+ * Makes the waiting secret the TOTP secret of the person, and ends the other sessions of the person,
+ * except `keepSessionHash`. A session that somebody else holds must not stay after the change. The code
+ * of `step` cannot sign in again. Returns false, and changes nothing, when the waiting secret changed
+ * after the check, for example in a parallel request.
  */
-export async function enableTotp(db: D1Database, principalId: string, secret: string, step: number): Promise<boolean> {
-	const result = await db
-		.prepare(
-			`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?
-			WHERE id = ? AND totp_pending_secret = ?`,
-		)
-		.bind(step, principalId, secret)
-		.run();
-	return result.meta.changes === 1;
+export async function enableTotp(
+	db: D1Database,
+	principalId: string,
+	secret: string,
+	step: number,
+	keepSessionHash: string | null,
+): Promise<boolean> {
+	const [enabled] = await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?
+				WHERE id = ? AND totp_pending_secret = ?`,
+			)
+			.bind(step, principalId, secret),
+		db
+			.prepare(
+				`DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ?
+				AND EXISTS (SELECT 1 FROM principals WHERE id = ? AND totp_secret = ?)`,
+			)
+			.bind(principalId, keepSessionHash, principalId, secret),
+	]);
+	return enabled?.meta.changes === 1;
 }
 
 /** Turns off two-step verification for a human, and removes a secret that waits for a code. */

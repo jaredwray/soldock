@@ -33,6 +33,8 @@ interface SetupPageProps {
  */
 export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPageProps) {
 	const [created, setCreated] = useState<SetupResult | null>(null);
+	// The password from the owner form. Turning on two-step verification asks for it, and the owner just typed it.
+	const [ownerPassword, setOwnerPassword] = useState("");
 	const [keyCopied, setKeyCopied] = useState(false);
 	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
 	const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
@@ -42,8 +44,9 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 		if (verifiedToken !== null && choice === null) choiceRef.current?.focus();
 	}, [verifiedToken, choice]);
 
-	function ownerCreated(result: SetupResult) {
+	function ownerCreated(result: SetupResult, password: string) {
 		setVerifiedToken(null);
+		setOwnerPassword(password);
 		setCreated(result);
 	}
 
@@ -63,7 +66,13 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 				<h1 className="sign-in-title">Set up Soldock</h1>
 				{created ? (
 					keyCopied ? (
-						<TwoStepStep onDone={onDone} />
+						<TwoStepStep
+							password={ownerPassword}
+							onDone={() => {
+								setOwnerPassword("");
+								onDone();
+							}}
+						/>
 					) : (
 						<p>The owner is ready. Copy your API key before you continue.</p>
 					)
@@ -248,7 +257,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 
 interface OwnerFormProps {
 	token: string;
-	onCreated: (result: SetupResult) => void;
+	onCreated: (result: SetupResult, password: string) => void;
 	startFresh: boolean;
 	onBack: () => void;
 }
@@ -311,7 +320,7 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 		setError(null);
 		try {
 			const result = await runSetup(token.trim(), input);
-			onCreated(result);
+			onCreated(result, input.password);
 		} catch (caught) {
 			setError(
 				caught instanceof ApiError && caught.status === 409 && !startFresh
@@ -453,7 +462,7 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 }
 
 /** The last setup step: the owner can turn on two-step verification now, or later in Settings. */
-function TwoStepStep({ onDone }: { onDone: () => void }) {
+function TwoStepStep({ password, onDone }: { password: string; onDone: () => void }) {
 	const [enabled, setEnabled] = useState(false);
 	const continueRef = useRef<HTMLButtonElement>(null);
 	useEffect(() => {
@@ -471,7 +480,7 @@ function TwoStepStep({ onDone }: { onDone: () => void }) {
 						Add a code from an authenticator app to each sign-in, so that a stolen password alone cannot sign in. You
 						can also do this later in Settings.
 					</p>
-					<TotpSetup onEnabled={() => setEnabled(true)} />
+					<TotpSetup needsPassword currentPassword={password} onEnabled={() => setEnabled(true)} />
 				</>
 			)}
 			<button ref={continueRef} type="button" className="button button-block" onClick={onDone}>

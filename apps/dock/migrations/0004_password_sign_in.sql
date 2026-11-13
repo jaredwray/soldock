@@ -1,5 +1,11 @@
 -- Sign-in with a password and an optional TOTP code replaces sign-in codes by email. This migration
--- removes `sign_in_email` and `sign_in_codes`, and adds the password and TOTP columns.
+-- adds the password and TOTP columns.
+--
+-- The deploy applies migrations while the old Worker still runs, so this migration only adds. The old
+-- Worker reads `sign_in_email` and writes `sign_in_codes`, so both stay, unused by the new Worker:
+-- `sign_in_email` becomes optional, and `sign_in_codes` comes back empty. A later migration removes
+-- them, after the new Worker runs everywhere. The triggers that kept sign-in emails outside the mail
+-- domains go away, because the new Worker does not set sign-in emails.
 --
 -- A D1 migration cannot turn off foreign keys, and a deferred check counts each row of a dropped parent
 -- table as a violation. So the migration copies `principals` and each table that refers to it into a
@@ -27,6 +33,8 @@ CREATE TABLE principals_v2 (
 	-- Who an agent can send mail to. Only the sponsor, an owner or an admin can change it.
 	outbound_mode TEXT CHECK (outbound_mode IN ('internal-only', 'allowlist', 'any')),
 	outbound_allowlist TEXT NOT NULL DEFAULT '[]',
+	-- Unused since this migration, and optional. Only the Worker from before this migration reads it.
+	sign_in_email TEXT,
 	-- The PBKDF2 hash of the password of a human: `pbkdf2-sha256$<iterations>$<salt>$<hash>`. Null until
 	-- somebody sets a password. Agents have none.
 	password_hash TEXT,
@@ -48,8 +56,10 @@ CREATE TABLE principals_v2 (
 	)
 );
 --> statement-breakpoint
-INSERT INTO principals_v2 (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist, created_at)
-SELECT id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist, created_at FROM principals;
+INSERT INTO principals_v2 (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
+	sign_in_email, created_at)
+SELECT id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist, sign_in_email, created_at
+FROM principals;
 --> statement-breakpoint
 CREATE TABLE addresses_v2 (
 	address TEXT PRIMARY KEY,
@@ -111,11 +121,26 @@ ALTER TABLE sessions_v2 RENAME TO sessions;
 --> statement-breakpoint
 CREATE INDEX principals_sponsor ON principals (sponsor_id);
 --> statement-breakpoint
+CREATE UNIQUE INDEX principals_sign_in_email ON principals (sign_in_email);
+--> statement-breakpoint
 CREATE INDEX addresses_principal ON addresses (principal_id);
 --> statement-breakpoint
 CREATE INDEX api_keys_principal ON api_keys (principal_id);
 --> statement-breakpoint
 CREATE INDEX sessions_principal ON sessions (principal_id);
+--> statement-breakpoint
+-- Unused since this migration. It stays for the Worker from before this migration, without the old codes.
+CREATE TABLE sign_in_codes (
+	id TEXT PRIMARY KEY,
+	principal_id TEXT NOT NULL REFERENCES principals (id),
+	code_hash TEXT NOT NULL,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL,
+	expires_at TEXT NOT NULL,
+	used_at TEXT
+);
+--> statement-breakpoint
+CREATE INDEX sign_in_codes_principal ON sign_in_codes (principal_id, created_at);
 --> statement-breakpoint
 CREATE TRIGGER mail_domain_in_use BEFORE DELETE ON mail_domains
 WHEN EXISTS (SELECT 1 FROM addresses WHERE substr(address, instr(address, '@') + 1) = OLD.domain)

@@ -1,8 +1,9 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@soldock/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, type Scope, SIGN_IN_LOCK_MINUTES } from "@soldock/contracts";
 import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
+import { confirmPassword } from "./signin.ts";
 import {
 	addMailDomain,
 	assertPrimaryAddress,
@@ -96,6 +97,29 @@ function assertFullCredential(caller: AuthContext): void {
 		throw new OperationError(
 			"forbidden",
 			`A sign-in gives every human scope. Your credential does not hold ${missing.join(", ")}.`,
+		);
+	}
+}
+
+/**
+ * A browser session that changes its own sign-in proves the current password again, so somebody with a
+ * stolen session cookie cannot replace the password or the second step. A wrong password counts toward
+ * the sign-in lock. An API key does not need it: a key with every human scope is the recovery credential
+ * of the owner. A person without a password has nothing to prove.
+ */
+async function confirmCurrentPassword(
+	call: CallContext,
+	target: PrincipalRecord,
+	currentPassword: string | undefined,
+): Promise<void> {
+	if (call.caller.credential !== "session" || target.id !== call.caller.principal.id || !target.password_set) return;
+	if (currentPassword === undefined) {
+		throw new OperationError("forbidden", "Enter your current password to change how you sign in.");
+	}
+	if (!(await confirmPassword(call.env.DIRECTORY, target.id, currentPassword))) {
+		throw new OperationError(
+			"forbidden",
+			`The current password is not correct. After too many failed attempts, sign-in stops for ${SIGN_IN_LOCK_MINUTES} minutes.`,
 		);
 	}
 }
@@ -242,6 +266,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		const target = await credentialOwner(call, input.principal_id);
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a password.");
 		assertFullCredential(call.caller);
+		await confirmCurrentPassword(call, target, input.current_password);
 		// The change ends the other sessions of the person, so somebody who knew the old password loses
 		// each session made with it. The session that makes its own change stays.
 		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;
@@ -260,6 +285,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 
 	async "account.enable_totp"(call, input) {
 		assertFullCredential(call.caller);
+		await confirmCurrentPassword(call, call.caller.principal, input.current_password);
 		const id = call.caller.principal.id;
 		const secret = await pendingTotpSecret(call.env.DIRECTORY, id);
 		if (!secret) throw new OperationError("conflict", "Start with account.create_totp_secret, then send a code.");
@@ -270,7 +296,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 				"The code is not correct. Make sure that the clock of the device is correct, then try the newest code.",
 			);
 		}
-		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step))) {
+		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step, call.caller.sessionHash))) {
 			throw new OperationError("conflict", "A newer setup replaced this secret. Start again.");
 		}
 		auditOk(call, "account.enable_totp", id);
@@ -281,6 +307,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		const target = await credentialOwner(call, input.principal_id);
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has two-step verification.");
 		assertFullCredential(call.caller);
+		await confirmCurrentPassword(call, target, input.current_password);
 		await disableTotp(call.env.DIRECTORY, target.id);
 		auditOk(call, "account.disable_totp", target.id);
 		return { principal_id: target.id, totp_enabled: false };
