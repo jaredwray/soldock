@@ -25,11 +25,15 @@ const seqs = (messages: readonly ChatMessage[]) => messages.map((entry) => entry
 describe("the message list of a room", () => {
 	it("puts a new message at the end, and replaces a changed or deleted message", () => {
 		const list = [message(3), message(4)];
-		const next = withChanges(list, [
-			message(4, { text: "changed", version: 6 }),
-			message(5, { version: 5 }),
-			message(3, { text: "", deleted: true, version: 7 }),
-		]);
+		const next = withChanges(
+			list,
+			[
+				message(4, { text: "changed", version: 6 }),
+				message(5, { version: 5 }),
+				message(3, { text: "", deleted: true, version: 7 }),
+			],
+			true,
+		);
 		expect(next.map((entry) => [entry.seq, entry.text, entry.deleted])).toEqual([
 			[3, "", true],
 			[4, "changed", false],
@@ -38,16 +42,22 @@ describe("the message list of a room", () => {
 	});
 
 	// "Show older messages" continues from the first message. A message before it would make a gap.
-	it("drops a change to a message that is older than the first message of the list", () => {
-		const next = withChanges([message(3), message(4)], [message(1, { text: "old edit", version: 9 })]);
+	it("drops a change to a message that is older than the first message, while older messages are not loaded", () => {
+		const next = withChanges([message(3), message(4)], [message(1, { text: "old edit", version: 9 })], true);
 		expect(seqs(next)).toEqual([3, 4]);
-		expect(seqs(withChanges([], [message(1)]))).toEqual([1]);
+	});
+
+	// A room loads empty. A different member posts message 1, then the person posts message 2, and the
+	// answer of that post shows first. The sync must still add message 1.
+	it("keeps a message from before the first message when the list has the start of the room", () => {
+		const afterOwnPost = withChanges([], [message(2)], false);
+		expect(seqs(withChanges(afterOwnPost, [message(1), message(2)], false))).toEqual([1, 2]);
 	});
 
 	// The answer of an edit can arrive after a sync that has a newer change of the same message.
 	it("keeps the newer version of a message when an older answer arrives later", () => {
-		const list = withChanges([message(3)], [message(3, { text: "second edit", version: 8 })]);
-		expect(withChanges(list, [message(3, { text: "first edit", version: 6 })])[0]?.text).toBe("second edit");
+		const list = withChanges([message(3)], [message(3, { text: "second edit", version: 8 })], true);
+		expect(withChanges(list, [message(3, { text: "first edit", version: 6 })], true)[0]?.text).toBe("second edit");
 	});
 
 	it("puts a page of older messages before the list, without a message two times", () => {

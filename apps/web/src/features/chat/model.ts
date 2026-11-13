@@ -25,12 +25,18 @@ export function withOlder(current: readonly ChatMessage[], page: readonly ChatMe
 
 /**
  * The list with the changes of a sync: a new message goes to the end, and a changed or deleted message
- * replaces the old one. A change to a message that is older than the first message of the list is
- * dropped: the list has no gap, so "load older" continues from its first message.
+ * replaces the old one. `hasOlder` is true while the room has messages before the first message of the
+ * list. Then a change to a message before the first one is dropped: the list has no gap, so "load
+ * older" continues from its first message. Without older messages, the list has the start of the room,
+ * and each change goes in.
  */
-export function withChanges(current: readonly ChatMessage[], changes: readonly ChatMessage[]): ChatMessage[] {
+export function withChanges(
+	current: readonly ChatMessage[],
+	changes: readonly ChatMessage[],
+	hasOlder: boolean,
+): ChatMessage[] {
 	const first = current[0];
-	return merged(current, first ? changes.filter((message) => message.seq >= first.seq) : changes);
+	return merged(current, hasOlder && first ? changes.filter((message) => message.seq >= first.seq) : changes);
 }
 
 const GROUP_MS = 5 * 60 * 1000;

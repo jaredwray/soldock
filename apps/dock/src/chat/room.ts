@@ -439,6 +439,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { room: this.record(call.actor.principal_id), joined: true };
 	}
 
+	/**
+	 * Refuses a caller that cannot add members to this room. The handler asks this before it reads the
+	 * directory, so a caller without access to the room learns nothing about a principal id.
+	 */
+	checkAddMembers(call: RoomCall): { ok: true } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if (opened.room.kind === "dm") {
+			return refuse("invalid", "A direct message keeps its two members. Create a room for more people.");
+		}
+		return { ok: true };
+	}
+
 	/** Adds principals as members. A new member starts with each message read, and can read them all. */
 	async addMembers(call: RoomCall, actors: ActorRecord[]): Promise<{ added: string[]; room: RoomRecord } | Refusal> {
 		const opened = this.openAsMember(call);

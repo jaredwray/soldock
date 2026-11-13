@@ -10,7 +10,7 @@ export interface ChangePage {
 }
 
 export interface RoomSync {
-	/** Sets the version of the room that the page has, after the first load. */
+	/** Sets the version of the room that the page has, after a load. It also starts a sync that stopped. */
 	start(version: number): void;
 	/**
 	 * Takes the version of the room from a room list, and gets the changes when the room is ahead. Call
@@ -19,7 +19,7 @@ export interface RoomSync {
 	notice(listedVersion: number): Promise<void>;
 	/** Gets the changes now, for example after a change that this page made. */
 	run(): Promise<void>;
-	/** Stops the sync. A page of changes that arrives later is dropped. */
+	/** Stops the sync until the next `start`. A page of changes that arrives before that is dropped. */
 	stop(): void;
 }
 
@@ -68,6 +68,7 @@ export function createRoomSync(
 	return {
 		start(loaded) {
 			version = loaded;
+			stopped = false;
 		},
 		notice(listedVersion) {
 			return version !== null && listedVersion > version ? run() : Promise.resolve();

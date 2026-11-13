@@ -65,7 +65,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - `chat.join_room` works for a public room only. A new member can read each message of the room,
   also the messages from before. A room has at most 500 members (`CHAT_LIMITS.membersPerRoom`).
 - Each member can add members (`chat.add_members`). The handler asks the directory for each id, so
-  only a principal becomes a member. The room stores the name of each member at that time.
+  only a principal becomes a member. The room stores the name of each member at that time. The
+  room checks the caller before the handler reads the directory, so a caller without access to
+  the room gets the same answer for each id.
 - `chat.remove_member` with the own id of the caller is how a member leaves. Only the owner
   removes a different member. When the owner leaves, the member that joined first becomes the
   owner. A public room without members stays in the public list, and the first principal that

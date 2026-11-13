@@ -93,4 +93,18 @@ describe("the sync of an open room", () => {
 		await late;
 		expect(applied).toEqual([1, 2]);
 	});
+
+	// React runs the cleanup of an effect and then the effect again, on the same sync, in development.
+	it("works again when it starts after a stop", async () => {
+		const room = fakeRoom([message(1, 1), message(2, 2)]);
+		const applied: number[] = [];
+		const sync = createRoomSync(room.read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(1);
+		sync.stop();
+		await sync.notice(2);
+		expect(room.calls).toEqual([]);
+		sync.start(1);
+		await sync.notice(2);
+		expect(applied).toEqual([2]);
+	});
 });

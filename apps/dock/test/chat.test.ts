@@ -88,6 +88,13 @@ describe("a private room", () => {
 			expect(await codeOf(other.call("chat.post_message", { ...target, text: "Hello" }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.update_room", { ...target, name: "Mine" }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.add_members", { ...target, principal_ids: [other.id] }))).toBe("not_found");
+			// The answer is the same for an id that no principal has, so the call tells nothing about an id.
+			const refusals = await Promise.all(
+				[other.id, "prn_01JD0000000000000000000000"].map((id) =>
+					other.call("chat.add_members", { ...target, principal_ids: [id] }).catch((error: Error) => error.message),
+				),
+			);
+			expect(refusals[1]).toBe(refusals[0]);
 			expect(await codeOf(other.call("chat.remove_member", { ...target, principal_id: ada.id }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.mark_read", target))).toBe("not_found");
 			expect(await codeOf(other.call("chat.edit_message", { ...target, message_id: message.id, text: "x" }))).toBe(

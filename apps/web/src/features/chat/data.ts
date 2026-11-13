@@ -105,7 +105,11 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		() =>
 			createRoomSync(
 				(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
-				(changes) => setState((current) => ({ ...current, messages: withChanges(current.messages, changes) })),
+				(changes) =>
+					setState((current) => ({
+						...current,
+						messages: withChanges(current.messages, changes, current.hasOlder),
+					})),
 			),
 		[roomId],
 	);
@@ -168,7 +172,10 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	/** Puts a message that an operation returned into the list, then gets what else changed. */
 	const apply = useCallback(
 		(message: ChatMessage) => {
-			setState((current) => ({ ...current, messages: withChanges(current.messages, [message]) }));
+			setState((current) => ({
+				...current,
+				messages: withChanges(current.messages, [message], current.hasOlder),
+			}));
 			void sync.run();
 		},
 		[sync],

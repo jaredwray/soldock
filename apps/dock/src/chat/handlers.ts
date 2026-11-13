@@ -178,8 +178,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.add_members"(call, input) {
-		const members = await actorsOf(call, input.principal_ids);
 		const opened = openRoom(call, input.room_id);
+		// The room comes first. A caller without access gets the same answer for each principal id.
+		accept(await opened.room.checkAddMembers(opened.ctx));
+		const members = await actorsOf(call, input.principal_ids);
 		const result = accept(await opened.room.addMembers(opened.ctx, members));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		return { members_added: result.added.length, room: toRoom(result.room) };
