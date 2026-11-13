@@ -10,14 +10,21 @@ async function problemOf(response: Response): Promise<ApiError> {
 	return new ApiError(response.status, problem);
 }
 
-/** Reports setup availability and the state of the SETUP_TOKEN secret. */
+/**
+ * Reports setup availability and the state of the SETUP_TOKEN secret. After a deploy, a tab can run
+ * an older SPA than the Worker. Then the status has a different shape, and the error tells the person to reload.
+ */
 export async function getSetupStatus(): Promise<SetupStatus> {
 	const response = await fetch("/auth/setup", {
 		headers: { accept: "application/json, application/problem+json" },
 		credentials: "same-origin",
 	});
 	if (!response.ok) throw await problemOf(response);
-	return SetupStatus.parse(await response.json());
+	const status = SetupStatus.safeParse(await response.json());
+	if (!status.success) {
+		throw new Error("This page and the server are different versions. Reload the page to get the current version.");
+	}
+	return status.data;
 }
 
 /** Verifies the operator token before the page offers setup choices. Creates no session. */

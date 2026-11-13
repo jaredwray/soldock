@@ -65,11 +65,12 @@ export function App() {
 					</div>
 				);
 			case "error":
+				// A reload gets the current SPA. The old code of a tab from before a deploy cannot recover.
 				return (
 					<main className="boot">
 						<h1 className="boot-title">Soldock is not available</h1>
 						<p role="alert">{state.message}</p>
-						<button type="button" className="button button-primary" onClick={() => void load()}>
+						<button type="button" className="button button-primary" onClick={() => window.location.reload()}>
 							Try again
 						</button>
 					</main>

@@ -22,6 +22,9 @@ MCP clients. The app has no UI-only path.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
   An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
   Otherwise, the session decides between the app and the sign-in page.
+  - After a deploy, an open tab can run an older SPA than the Worker. If the setup status then has
+    an unknown shape, the boot error tells the person to reload.
+  - "Try again" on the boot error reloads the page, so the tab gets the current SPA.
 - **Setup.** The page first asks for the setup token. The server verifies it without a directory query or a new session.
   - Only a correct token reveals two choices: setup without a reset, or a fresh start.
     The buttons have a separate group with a 12 px gap.
