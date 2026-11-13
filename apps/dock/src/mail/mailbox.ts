@@ -1,9 +1,9 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
 import { MAIL_LIMITS } from "@soldock/contracts";
-import { getPrincipal } from "../identity/index.ts";
+import { getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
-import { deliverInternal } from "./delivery.ts";
+import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
@@ -35,7 +35,15 @@ export interface SendInput {
 	parsed: ParsedMail;
 	bcc: MailAddress[];
 	replyThreadId: string | null;
-	recipients: { address: string; kind: "local" | "external"; principalId: string | null; self: boolean }[];
+	recipients: { address: string; kind: "local" | "external"; mailboxId: string | null; self: boolean }[];
+	sentBy: SentBy;
+}
+
+/** The person or agent that sent a message from this mailbox, with the name at that time. */
+export interface SentBy {
+	principal_id: string;
+	kind: "human" | "agent";
+	display_name: string;
 }
 
 export interface DeliveryRecord {
@@ -74,6 +82,7 @@ export interface StoredMessage {
 	authentication: AuthenticationResults | null;
 	labels: string[];
 	delivery: DeliveryRecord[] | null;
+	sentBy: SentBy | null;
 }
 
 export interface ThreadSummaryRecord {
@@ -197,6 +206,8 @@ const MIGRATIONS: string[][] = [
 				`INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('${id}', '${id}', '${id.toLowerCase()}', 'system', 0)`,
 		),
 	],
+	// Who sent a message from this mailbox. In a team mailbox, it tells which member sent it.
+	["ALTER TABLE messages ADD COLUMN sent_by_json TEXT"],
 ];
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -243,7 +254,8 @@ function backoff(attempts: number): number {
 type Row = Record<string, SqlStorageValue>;
 
 const MESSAGE_META_COLUMNS = `seq, id, thread_id, origin, message_id_header, subject, from_name, from_addr,
-	to_json, cc_json, bcc_json, reply_to_json, sent_date, internal_date, snippet, body_truncated, attachments_json, auth_json`;
+	to_json, cc_json, bcc_json, reply_to_json, sent_date, internal_date, snippet, body_truncated, attachments_json, auth_json,
+	sent_by_json`;
 
 interface MessageMetaRow extends Row {
 	seq: number;
@@ -264,12 +276,14 @@ interface MessageMetaRow extends Row {
 	body_truncated: number;
 	attachments_json: string;
 	auth_json: string | null;
+	sent_by_json: string | null;
 	text_chars?: number | null;
 	html_chars?: number | null;
 }
 
 /**
- * One mailbox, keyed by the principal id of its owner. It holds the messages, threads, labels,
+ * One mailbox, keyed by its mailbox id: the id of the principal that owns it, or the id of a team
+ * mailbox. The object does not know which callers can use it: the Worker checks that. It holds the messages, threads, labels,
  * search index, delivery status and outbox of that mailbox in its SQLite database. Raw messages
  * stay in R2. Side effects on other objects (local delivery, Email Service) go through the outbox
  * and its alarm, with retries.
@@ -350,6 +364,7 @@ export class MailboxDO extends DurableObject<Env> {
 				bcc: [],
 				labels,
 				subjectFallback: !input.spam,
+				sentBy: null,
 			});
 			this.bump();
 			return inserted;
@@ -370,6 +385,7 @@ export class MailboxDO extends DurableObject<Env> {
 		labels: string[];
 		/** False for spam: a forged sender must not join a thread by its subject. */
 		subjectFallback: boolean;
+		sentBy: SentBy | null;
 	}): { seq: number; id: string; threadId: string } {
 		const { parsed } = m;
 		const threadId = this.resolveThread(parsed, m.internalDate, m.threadHint, m.subjectFallback);
@@ -381,8 +397,8 @@ export class MailboxDO extends DurableObject<Env> {
 			`INSERT INTO messages (id, thread_id, content_hash, raw_key, origin, message_id_header, subject, from_name,
 				from_addr, to_json, cc_json, bcc_json, reply_to_json, to_text, cc_text, bcc_text, participants, sent_date,
 				internal_date, snippet, text_body, html_body, body_truncated, size, has_attachments, attachments_json,
-				attachment_names, auth_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+				attachment_names, auth_json, sent_by_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 			m.id,
 			threadId,
 			m.contentHash,
@@ -411,6 +427,7 @@ export class MailboxDO extends DurableObject<Env> {
 			JSON.stringify(attachments),
 			attachments.map((a) => a.filename).join(" "),
 			parsed.authentication ? JSON.stringify(parsed.authentication) : null,
+			m.sentBy ? JSON.stringify(m.sentBy) : null,
 		)?.seq as number;
 		const refs = [...new Set([...parsed.references, ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])])];
 		refs.forEach((ref, position) => {
@@ -762,6 +779,7 @@ export class MailboxDO extends DurableObject<Env> {
 			authentication: row.auth_json ? (JSON.parse(row.auth_json) as AuthenticationResults) : null,
 			labels: labels.get(row.seq) ?? [],
 			delivery: row.origin === "sent" ? (delivery.get(row.seq) ?? []) : null,
+			sentBy: row.sent_by_json ? (JSON.parse(row.sent_by_json) as SentBy) : null,
 		};
 	}
 
@@ -942,6 +960,7 @@ export class MailboxDO extends DurableObject<Env> {
 				bcc: input.bcc,
 				labels: selfDelivery ? ["SENT", "INBOX"] : ["SENT"],
 				subjectFallback: true,
+				sentBy: input.sentBy,
 			});
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
@@ -960,7 +979,7 @@ export class MailboxDO extends DurableObject<Env> {
 					"INSERT INTO outbox (message_seq, kind, target, address, next_attempt_at) VALUES (?, ?, ?, ?, ?)",
 					stored.seq,
 					recipient.kind === "local" ? "deliver" : "smtp",
-					recipient.kind === "local" ? (recipient.principalId as string) : recipient.address,
+					recipient.kind === "local" ? (recipient.mailboxId as string) : recipient.address,
 					recipient.address,
 					now,
 				);
@@ -1076,9 +1095,9 @@ export class MailboxDO extends DurableObject<Env> {
 				const raw = currentRaw;
 				let status: "delivered" | "sent";
 				let providerId: string | null = null;
-				// The raw key keeps the original principal ID, even if a reset reuses the address.
-				const senderId = /^mail\/raw\/([^/]+)\//.exec(row.raw_key)?.[1];
-				const sender = senderId ? await getPrincipal(this.env.DIRECTORY, senderId) : null;
+				// The raw key keeps the original mailbox id, even if a reset reuses the address.
+				const senderId = mailboxIdOfRawKey(row.raw_key);
+				const sender = senderId ? await getMailbox(this.env.DIRECTORY, senderId) : null;
 				if (this.meta("delivery_pause")) return;
 				if (!sender || sender.address !== row.from_addr) {
 					throw new SenderUnavailable("The sender account no longer owns this address.");

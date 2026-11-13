@@ -1,14 +1,15 @@
 # `mail` module
 
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
-> read and send. Keep this README current as the module grows. It is the module's contract.
+> read and send, in the own mailbox of a principal and in team mailboxes. Keep this README current
+> as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
-| **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups/shared mailboxes, delegation, agent outbound policy enforcement. |
+| **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, idempotency keys); raw MIME in R2 `blobs`. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -20,20 +21,57 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `inbound.ts` | The `email()` handler and the `soldock-mail-inbound` queue consumer |
 | `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
 | `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends and the outbox alarm |
-| `handlers.ts` | The operation handlers. They run in the Worker and call the caller's own `MailboxDO` |
+| `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `search.ts` | Gmail-style query parser, and the compiler to SQL with bound values |
 | `sanitize.ts` | The HTML allowlist sanitizer on `HTMLRewriter` |
 | `threading.ts` | Subject normalization, snippets, and HTML to text for previews and the index |
 | `mime/parse.ts` | `postal-mime` wrapper. It also reads the trusted Authentication-Results header |
 | `mime/compose.ts` | RFC 5322 and MIME composer (quoted-printable, RFC 2047, RFC 2231) |
 
+## Mailboxes
+
+A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part of its R2 keys.
+
+| Kind | Mailbox id | Who can use it |
+| --- | --- | --- |
+| `personal` | The id of the principal (`prn_…`) | That principal only |
+| `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox |
+
+- Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
+  mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use.
+- The handler checks the mailbox on each call (`openMailbox`), so removed access ends at once. An
+  unknown team mailbox gets `not_found`. A team mailbox without membership, and the id of a
+  different principal, get `forbidden`. The `MailboxDO` does not know its callers.
+- The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
+  mailbox and cannot send from it.
+- The [`identity`](../identity/README.md#team-mailboxes) module owns the team mailboxes, their
+  addresses and their members.
+
+### Team mailboxes
+
+- A team mailbox has its own address. Inbound mail and local mail for that address go to the team
+  mailbox, and not to the own mailbox of a member.
+- The members share one state: threads, labels, the read state, stars and the Sent view. A change by
+  one member shows for each member.
+- A send from a team mailbox has the name and the address of the team mailbox in `From`. The sent
+  copy is in the team mailbox, with the member in `sent_by` (the id, the kind and the name at that
+  time). `sent_by` is in the stored message only. The mail that leaves has no header that names the member.
+- The outbound policy of an agent applies to each send of that agent, also from a team mailbox. So
+  a team mailbox never lets an agent reach more recipients. Mail from an agent keeps the header
+  `X-Soldock-Agent: true`.
+- In a team mailbox, each idempotency key of `mail.send` belongs to its caller (the stored key has
+  the principal id in front). The key of one member cannot return or stop the send of a different member.
+- `from:me` and `to:me` in a search mean the address of the mailbox: in a team mailbox, the team address.
+- The audit line of a change in a team mailbox has the field `mailbox` with the team mailbox id.
+
 ## Inbound
 
 1. Email Routing calls `email()` once for each recipient.
-2. `email()` resolves the recipient in the directory: lowercase, without a `+tag`. An unknown
+2. `email()` resolves the recipient in the directory: lowercase, without a `+tag`. The recipient is
+   the own mailbox of a principal or a team mailbox. An unknown
    address gets `setReject("5.1.1 …")`, so the sender gets a bounce during the SMTP session.
 3. A message over 25 MiB gets `setReject("5.3.4 …")` before the body is read.
-4. `email()` writes the raw bytes to R2 at `mail/raw/<principal>/<sha256>` and sends an
+4. `email()` writes the raw bytes to R2 at `mail/raw/<mailbox id>/<sha256>` and sends an
    `InboundJob` to `soldock-mail-inbound`.
 5. The consumer reads the raw bytes, parses them, and calls `MailboxDO.deliver()`.
 6. The mailbox drops a second copy of the same content (`UNIQUE(content_hash)`), and the consumer
@@ -158,14 +196,15 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal, keyed by principal id |
+| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`) |
+| Who sent a message from the mailbox | `MailboxDO` table `messages`, column `sent_by_json` | The principal id, the kind and the name at the time of the send. Null for mail that arrived, and for mail sent before this column |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
-| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
+| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
-| Raw MIME of each message | R2 `blobs`, key `mail/raw/<principal>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
+| Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
 
 Blob reference counts: each raw object has exactly one owner (the mailbox in its key), so no shared
@@ -195,7 +234,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 
 - Drafts, undo send and scheduled send
 - Filters, vacation responder and forwarding
-- Aliases, groups, shared mailboxes, delegation and send-as
+- Aliases, groups, delegation and send-as
+- For team mailboxes: a read state for each member, assignment of a thread to a member, unread
+  counts for each mailbox in `mail.list_mailboxes`, and rename or removal of a team mailbox
 - Email Service lifecycle events (bounces, complaints) and inbound DSN parsing
 - Permanent delete, retention and blob GC
 - Live updates through `/ws/events`. The web app polls `mail.get_profile` and compares `version`.

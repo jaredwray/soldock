@@ -3,6 +3,7 @@ import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { mailboxInput, useMailboxId } from "./mailbox.tsx";
 
 export function NewLabelDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (label: Label) => void }) {
 	const [name, setName] = useState("");
@@ -10,6 +11,7 @@ export function NewLabelDialog({ onClose, onCreated }: { onClose: () => void; on
 	const [error, setError] = useState<string | null>(null);
 	const inputId = useId();
 	const hintId = useId();
+	const mailboxId = useMailboxId();
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -21,7 +23,7 @@ export function NewLabelDialog({ onClose, onCreated }: { onClose: () => void; on
 		setBusy(true);
 		setError(null);
 		try {
-			const label = await api.call("mail.create_label", { name: trimmed });
+			const label = await api.call("mail.create_label", { ...mailboxInput(mailboxId), name: trimmed });
 			onCreated(label);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -77,6 +79,7 @@ export function DeleteLabelDialog({
 	onClose: () => void;
 	onDeleted: () => void;
 }) {
+	const mailboxId = useMailboxId();
 	return (
 		<ConfirmDialog
 			title="Delete label?"
@@ -84,13 +87,12 @@ export function DeleteLabelDialog({
 			danger
 			onClose={onClose}
 			onConfirm={async () => {
-				await api.call("mail.delete_label", { label_id: label.id });
+				await api.call("mail.delete_label", { ...mailboxInput(mailboxId), label_id: label.id });
 				onDeleted();
 			}}
 		>
 			<p>
-				Delete the label <strong>{label.name}</strong>? The conversations stay in your mailbox. Only the label goes
-				away.
+				Delete the label <strong>{label.name}</strong>? The conversations stay in the mailbox. Only the label goes away.
 			</p>
 		</ConfirmDialog>
 	);

@@ -1,5 +1,5 @@
 import { MAIL_LIMITS } from "@soldock/contracts";
-import { resolveAddress } from "../identity/index.ts";
+import { resolveMailboxAddress } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { deliverStoredRaw, storeRaw } from "./delivery.ts";
 
@@ -9,6 +9,10 @@ export const MAIL_INBOUND_QUEUE = "soldock-mail-inbound";
 /** One message for one mailbox. The raw bytes are in R2. Version 1. */
 export interface InboundJob {
 	v: 1;
+	/**
+	 * The id of the mailbox: the id of a principal, or the id of a team mailbox. The name is from before
+	 * team mailboxes, and it stays, so jobs that wait in the queue during a deploy stay valid.
+	 */
 	principalId: string;
 	rawKey: string;
 	contentHash: string;
@@ -37,7 +41,7 @@ function isInboundJob(body: unknown): body is InboundJob {
  */
 export async function handleEmail(message: ForwardableEmailMessage, env: Env): Promise<void> {
 	const recipientDomain = message.to.split("@").pop()?.toLowerCase();
-	const recipient = await resolveAddress(env.DIRECTORY, message.to);
+	const recipient = await resolveMailboxAddress(env.DIRECTORY, message.to);
 	if (!recipient) {
 		log("info", "inbound mail rejected: unknown recipient", { recipientDomain });
 		message.setReject("5.1.1 Recipient address rejected: no such mailbox");
@@ -56,7 +60,7 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env): P
 	const { contentHash, rawKey } = await storeRaw(env, recipient.id, bytes);
 	const job: InboundJob = { v: 1, principalId: recipient.id, rawKey, contentHash, receivedAt: Date.now() };
 	await env.MAIL_INBOUND.send(job);
-	log("info", "inbound mail accepted", { principalId: recipient.id, size: bytes.byteLength });
+	log("info", "inbound mail accepted", { mailboxId: recipient.id, size: bytes.byteLength });
 }
 
 /**
@@ -78,7 +82,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 			if (!object) throw new Error("the raw message is missing from R2");
 			const bytes = new Uint8Array(await object.arrayBuffer());
 			const result = await deliverStoredRaw(env, {
-				principalId: job.principalId,
+				mailboxId: job.principalId,
 				bytes,
 				rawKey: job.rawKey,
 				contentHash: job.contentHash,
@@ -86,7 +90,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 				receivedAt: job.receivedAt,
 			});
 			log("info", "inbound mail delivered", {
-				principalId: job.principalId,
+				mailboxId: job.principalId,
 				status: result.status,
 				messageId: result.messageId,
 			});
@@ -95,7 +99,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 			const detail = error instanceof Error ? error.message : String(error);
 			if (message.attempts >= MAX_ATTEMPTS) {
 				log("error", "inbound delivery failed; sent to the dead-letter queue", {
-					principalId: job.principalId,
+					mailboxId: job.principalId,
 					attempts: message.attempts,
 					error: detail,
 				});
@@ -103,7 +107,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 				message.ack();
 			} else {
 				log("warn", "inbound delivery failed; retrying", {
-					principalId: job.principalId,
+					mailboxId: job.principalId,
 					attempts: message.attempts,
 					error: detail,
 				});

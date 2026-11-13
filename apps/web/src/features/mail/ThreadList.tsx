@@ -5,6 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, threadPath } from "../../routes.ts";
 import type { ListState } from "./data.ts";
+import { useMailboxId } from "./mailbox.tsx";
 import { isUserLabelId } from "./views.ts";
 
 interface ThreadListProps {
@@ -27,6 +28,7 @@ interface ThreadListProps {
 
 export function ThreadList(props: ThreadListProps) {
 	const { list, view } = props;
+	const inTeamMailbox = useMailboxId() !== null;
 
 	if (list.status === "loading") {
 		return (
@@ -50,7 +52,7 @@ export function ThreadList(props: ThreadListProps) {
 		return (
 			<div className="list-state list-empty">
 				<Icon name={view.kind === "search" ? "search" : "inbox"} size={40} />
-				<p>{emptyText(view, props.title)}</p>
+				<p>{emptyText(view, props.title, inTeamMailbox)}</p>
 			</div>
 		);
 	}
@@ -89,9 +91,11 @@ export function ThreadList(props: ThreadListProps) {
 	);
 }
 
-function emptyText(view: MailView, title: string): string {
+function emptyText(view: MailView, title: string, inTeamMailbox: boolean): string {
 	if (view.kind === "search") return `No conversations match “${view.query}”.`;
-	if (view.kind === "system" && view.view === "inbox") return "Your inbox is empty.";
+	if (view.kind === "system" && view.view === "inbox") {
+		return inTeamMailbox ? "The inbox of this team mailbox is empty." : "Your inbox is empty.";
+	}
 	return `No conversations in ${title}.`;
 }
 
@@ -121,6 +125,7 @@ function ThreadRow({
 	onFocus,
 }: ThreadRowProps) {
 	const linkRef = useRef<HTMLAnchorElement>(null);
+	const mailboxId = useMailboxId();
 	const subject = thread.subject.trim() || "(no subject)";
 	const userLabels = thread.label_ids.filter(isUserLabelId).flatMap((id) => {
 		const label = labelsById.get(id);
@@ -155,7 +160,7 @@ function ThreadRow({
 			>
 				<Icon name="star" size={18} filled={thread.starred} />
 			</button>
-			<Link ref={linkRef} to={threadPath(view, thread.id)} className="thread-link" onFocus={onFocus}>
+			<Link ref={linkRef} to={threadPath(view, thread.id, mailboxId)} className="thread-link" onFocus={onFocus}>
 				<span className="thread-from">
 					{thread.unread && <span className="visually-hidden">Unread, </span>}
 					<span className="thread-from-names">{participantsLabel(thread.participants, myAddress)}</span>

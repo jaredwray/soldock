@@ -1,5 +1,14 @@
 import { MAIL_LIMITS, type Message } from "@soldock/contracts";
-import { type CallContext, domainOf, mailDomains, resolveAddress } from "../identity/index.ts";
+import {
+	type CallContext,
+	domainOf,
+	isTeamMailboxId,
+	type MailboxRecord,
+	mailDomains,
+	resolveMailboxAddress,
+	teamMailboxesOf,
+	teamMailboxFor,
+} from "../identity/index.ts";
 import {
 	audit,
 	base64ToBytes,
@@ -19,6 +28,7 @@ import { compileQuery, parseQuery, QueryError } from "./search.ts";
 import { htmlToText, replySubject } from "./threading.ts";
 
 type MailOperation =
+	| "mail.list_mailboxes"
 	| "mail.get_profile"
 	| "mail.list_labels"
 	| "mail.create_label"
@@ -33,8 +43,28 @@ type MailOperation =
 const DEFAULT_QUERY = "in:inbox";
 const DEFAULT_PAGE = 25;
 
-function mailbox(call: CallContext) {
-	return mailboxStub(call.env, call.caller.id);
+/** The own mailbox of the caller. Its id is the id of the principal. */
+function ownMailbox(call: CallContext): MailboxRecord {
+	const { principal } = call.caller;
+	return { id: principal.id, kind: "personal", address: principal.address, display_name: principal.display_name };
+}
+
+/**
+ * The mailbox of a call: the own mailbox of the caller by default, or a team mailbox that the caller
+ * is a member of. This is the resource check of each mail operation. The scopes of the credential
+ * decide what the caller can do, and this decides in which mailbox.
+ */
+async function openMailbox(call: CallContext, mailboxId: string | undefined) {
+	let record: MailboxRecord;
+	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
+	else if (isTeamMailboxId(mailboxId)) record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id);
+	else {
+		throw new OperationError(
+			"forbidden",
+			"You can use only your own mailbox and the team mailboxes that you are a member of.",
+		);
+	}
+	return { record, box: mailboxStub(call.env, record.id) };
 }
 
 /** Turns a refusal from the mailbox into an OperationError, and returns any other result. */
@@ -50,13 +80,14 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function auditOk(call: CallContext, op: string, target: string): void {
+function auditOk(call: CallContext, mailbox: MailboxRecord, op: string, target: string): void {
 	audit({
 		op,
 		actor: call.caller.id,
 		actorKind: call.caller.kind,
 		credential: call.caller.credential,
 		target,
+		...(mailbox.kind === "team" ? { mailbox: mailbox.id } : {}),
 		result: "ok",
 		requestId: call.requestId,
 	});
@@ -114,13 +145,16 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 			inline: a.inline,
 		})),
 		delivery: stored.delivery,
+		sent_by: stored.sentBy,
 	};
 }
 
 interface Recipient {
 	address: string;
 	kind: "local" | "external";
-	principalId: string | null;
+	/** The mailbox of a local recipient: the id of a principal or of a team mailbox. */
+	mailboxId: string | null;
+	/** True when the recipient is the mailbox that sends the message. */
 	self: boolean;
 }
 
@@ -128,7 +162,7 @@ interface Recipient {
  * Sorts the recipients into mailboxes of this deployment and external addresses. Each address
  * gets one delivery, and each local mailbox gets one copy, also when two of its addresses appear.
  */
-async function resolveRecipients(call: CallContext, addresses: string[]): Promise<Recipient[]> {
+async function resolveRecipients(call: CallContext, sender: MailboxRecord, addresses: string[]): Promise<Recipient[]> {
 	const domains = await mailDomains(call.env.DIRECTORY);
 	const byAddress = new Map<string, Recipient>();
 	const localMailboxes = new Set<string>();
@@ -138,25 +172,24 @@ async function resolveRecipients(call: CallContext, addresses: string[]): Promis
 		const key = raw.trim().toLowerCase();
 		if (byAddress.has(key)) continue;
 		if (!domains.has(domainOf(key))) {
-			byAddress.set(key, { address: normalizeCase(raw.trim()), kind: "external", principalId: null, self: false });
+			byAddress.set(key, { address: normalizeCase(raw.trim()), kind: "external", mailboxId: null, self: false });
 			continue;
 		}
 		const address = key;
-		const principal = await resolveAddress(call.env.DIRECTORY, address);
-		if (!principal) throw new OperationError("not_found", `No mailbox has the address ${address}.`);
-		if (localMailboxes.has(principal.id)) continue;
-		localMailboxes.add(principal.id);
-		byAddress.set(key, {
-			address,
-			kind: "local",
-			principalId: principal.id,
-			self: principal.id === call.caller.id,
-		});
+		const recipient = await resolveMailboxAddress(call.env.DIRECTORY, address);
+		if (!recipient) throw new OperationError("not_found", `No mailbox has the address ${address}.`);
+		if (localMailboxes.has(recipient.id)) continue;
+		localMailboxes.add(recipient.id);
+		byAddress.set(key, { address, kind: "local", mailboxId: recipient.id, self: recipient.id === sender.id });
 	}
 	return [...byAddress.values()];
 }
 
-/** Refuses an agent send to recipients outside its outbound policy, before anything is stored. */
+/**
+ * Refuses an agent send to recipients outside its outbound policy, before anything is stored. The
+ * policy belongs to the agent, not to the mailbox: it also applies to mail from a team mailbox, so a
+ * team mailbox never widens what an agent can reach.
+ */
 function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 	const { principal } = call.caller;
 	if (principal.kind !== "agent") return;
@@ -175,36 +208,48 @@ function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 }
 
 export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
-	async "mail.get_profile"(call) {
-		const profile = await mailbox(call).profile();
+	async "mail.list_mailboxes"(call) {
+		return { mailboxes: [ownMailbox(call), ...(await teamMailboxesOf(call.env.DIRECTORY, call.caller.id))] };
+	},
+
+	async "mail.get_profile"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id);
+		const profile = await box.profile();
 		return {
-			address: call.caller.principal.address,
-			display_name: call.caller.principal.display_name,
+			mailbox_id: record.id,
+			kind: record.kind,
+			address: record.address,
+			display_name: record.display_name,
 			mail_domains: [...(await mailDomains(call.env.DIRECTORY))],
 			...profile,
 		};
 	},
 
-	async "mail.list_labels"(call) {
-		return { labels: await mailbox(call).listLabels() };
+	async "mail.list_labels"(call, input) {
+		const { box } = await openMailbox(call, input.mailbox_id);
+		return { labels: await box.listLabels() };
 	},
 
 	async "mail.create_label"(call, input) {
-		const label = accept(await mailbox(call).createLabel(input.name));
-		auditOk(call, "mail.create_label", label.id);
+		const { record, box } = await openMailbox(call, input.mailbox_id);
+		const label = accept(await box.createLabel(input.name));
+		auditOk(call, record, "mail.create_label", label.id);
 		return label;
 	},
 
 	async "mail.delete_label"(call, input) {
-		const result = accept(await mailbox(call).deleteLabel(input.label_id));
-		auditOk(call, "mail.delete_label", input.label_id);
+		const { record, box } = await openMailbox(call, input.mailbox_id);
+		const result = accept(await box.deleteLabel(input.label_id));
+		auditOk(call, record, "mail.delete_label", input.label_id);
 		return result;
 	},
 
 	async "mail.list_threads"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id);
 		const query = input.query ?? DEFAULT_QUERY;
 		const now = Date.now();
-		const self = [call.caller.principal.address];
+		// "me" in a search is the mailbox: in a team mailbox, from:me finds mail from the team address.
+		const self = [record.address];
 		try {
 			// Fails fast here with a clear error. The mailbox compiles the same query again.
 			compileQuery(parseQuery(query), { self, now });
@@ -213,7 +258,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			throw error;
 		}
 		const result = accept(
-			await mailbox(call).listThreads({
+			await box.listThreads({
 				query,
 				cursor: input.cursor ?? null,
 				limit: input.limit ?? DEFAULT_PAGE,
@@ -240,7 +285,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_thread"(call, input) {
-		const thread = await mailbox(call).getThread(input.thread_id);
+		const { box } = await openMailbox(call, input.mailbox_id);
+		const thread = await box.getThread(input.thread_id);
 		if (!thread) throw new OperationError("not_found", "No thread has that id.");
 		const messages = await Promise.all(thread.messages.map(toMessage));
 		return {
@@ -253,34 +299,44 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_message"(call, input) {
-		const stored = await mailbox(call).getMessage(input.message_id);
+		const { box } = await openMailbox(call, input.mailbox_id);
+		const stored = await box.getMessage(input.message_id);
 		if (!stored) throw new OperationError("not_found", "No message has that id.");
 		return toMessage(stored);
 	},
 
 	async "mail.modify_threads"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id);
 		const result = accept(
-			await mailbox(call).modifyThreads({
+			await box.modifyThreads({
 				threadIds: input.thread_ids,
 				add: input.add_label_ids,
 				remove: input.remove_label_ids,
 				dryRun: input.dry_run,
 			}),
 		);
-		if (!input.dry_run) auditOk(call, "mail.modify_threads", input.thread_ids.join(","));
+		if (!input.dry_run) auditOk(call, record, "mail.modify_threads", input.thread_ids.join(","));
 		return result;
 	},
 
 	async "mail.send"(call, input) {
-		const box = mailbox(call);
+		const { record, box } = await openMailbox(call, input.mailbox_id);
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));
-		if (input.idempotency_key) {
-			const earlier = await box.idempotentResult(input.idempotency_key, requestHash);
+		// The members of a team mailbox share its key store. Each key belongs to its caller there, so the
+		// key of one member can never return or block the send of a different member.
+		const idempotencyKey =
+			input.idempotency_key === undefined
+				? null
+				: record.kind === "team"
+					? `${call.caller.id}:${input.idempotency_key}`
+					: input.idempotency_key;
+		if (idempotencyKey) {
+			const earlier = await box.idempotentResult(idempotencyKey, requestHash);
 			if (earlier) return accept(earlier);
 		}
-		const recipients = await resolveRecipients(call, [...input.to, ...input.cc, ...input.bcc]);
+		const recipients = await resolveRecipients(call, record, [...input.to, ...input.cc, ...input.bcc]);
 		checkOutboundPolicy(call, recipients);
 
 		let reply: Awaited<ReturnType<typeof box.getReplyContext>> = null;
@@ -319,13 +375,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		let raw: string;
 		try {
 			raw = composeMessage({
-				from: { name: principal.display_name, address: principal.address },
+				from: { name: record.display_name, address: record.address },
 				to: input.to.map(normalizeCase),
 				cc: input.cc.map(normalizeCase),
 				subject: input.subject ?? (reply ? replySubject(reply.subject) : ""),
 				text: input.text,
 				html: input.html,
-				messageId: `<${messageId.toLowerCase()}@${domainOf(principal.address)}>`,
+				messageId: `<${messageId.toLowerCase()}@${domainOf(record.address)}>`,
 				inReplyTo: reply?.messageIdHeader ?? null,
 				references: reply
 					? [...reply.references.slice(-19), ...(reply.messageIdHeader ? [reply.messageIdHeader] : [])]
@@ -339,11 +395,11 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		}
 		const bytes = new TextEncoder().encode(raw);
 		if (bytes.byteLength > limit) throw tooLarge(bytes.byteLength);
-		const { contentHash, rawKey } = await storeRaw(call.env, call.caller.id, bytes);
+		const { contentHash, rawKey } = await storeRaw(call.env, record.id, bytes);
 		const parsed = await parseMail(bytes, { authservId: "" });
 		const sendInput: SendInput = {
 			messageId,
-			idempotencyKey: input.idempotency_key ?? null,
+			idempotencyKey,
 			requestHash,
 			contentHash,
 			rawKey,
@@ -353,6 +409,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			bcc: input.bcc.map((address) => ({ name: null, address: normalizeCase(address) })),
 			replyThreadId: reply?.threadId ?? null,
 			recipients,
+			sentBy: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
 		};
 		// The raw object belongs to this attempt only: its key comes from bytes with a new Message-ID.
 		// When the mailbox answers that the key was used, no message references the object, so delete it.
@@ -366,12 +423,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		}
 		const sent = answer;
 		if (sent.duplicate) await call.env.BLOBS.delete(rawKey);
-		else auditOk(call, "mail.send", sent.result.message_id);
+		else auditOk(call, record, "mail.send", sent.result.message_id);
 		return sent.result;
 	},
 
 	async "mail.get_attachment"(call, input) {
-		const source = await mailbox(call).getAttachmentSource(input.message_id);
+		const { box } = await openMailbox(call, input.mailbox_id);
+		const source = await box.getAttachmentSource(input.message_id);
 		if (!source) throw new OperationError("not_found", "No message has that id.");
 		const meta = source.attachments[input.index];
 		if (!meta) throw new OperationError("not_found", "The message has no attachment with that index.");

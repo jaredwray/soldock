@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
+import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import {
 	api,
 	callTool,
@@ -139,12 +140,15 @@ describe("mail domain settings", () => {
 
 	it("carries existing mailbox domains into settings on upgrade", async () => {
 		const { owner } = await seedOrg();
-		await env.DIRECTORY.prepare("DROP TABLE mail_domains").run();
-		// A directory from before 0003 gets 0003 and then 0004 on deploy.
+		// A directory from before 0003 has no team mailbox tables. It gets 0003, 0004 and then 0005 on deploy.
 		await env.DIRECTORY.batch(
 			[
+				"DROP TABLE team_mailbox_members",
+				"DROP TABLE team_mailboxes",
+				"DROP TABLE mail_domains",
 				...domainMigration.split("--> statement-breakpoint"),
 				...passwordMigration.split("--> statement-breakpoint"),
+				...teamMailboxMigration.split("--> statement-breakpoint"),
 			].map((sql) => env.DIRECTORY.prepare(sql)),
 		);
 		expect(await (await domains(owner.key)).json()).toEqual({ mail_domains: ["dock.test"] });

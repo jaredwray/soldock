@@ -7,10 +7,11 @@ export const SCOPES = {
 	"account.keys":
 		"Create, list and revoke API keys for yourself and for the agents that you sponsor, and change passwords and two-step verification",
 	"directory.read": "Read the directory; owners and admins can also read mail domain settings",
-	"directory.write": "Create accounts and change agent policies; owners and admins can also manage mail domains",
-	"mail.read": "Read your mail and labels",
-	"mail.modify": "Change labels, archive, trash, star and mark your mail",
-	"mail.send": "Send mail from your address",
+	"directory.write":
+		"Create accounts and change agent policies; owners and admins can also manage mail domains and team mailboxes",
+	"mail.read": "Read your mail and labels, and those of your team mailboxes",
+	"mail.modify": "Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes",
+	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
 } as const;
 
 export type Scope = keyof typeof SCOPES;

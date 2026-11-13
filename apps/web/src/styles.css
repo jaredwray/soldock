@@ -883,6 +883,11 @@ fieldset {
 	font-weight: 600;
 }
 
+/* The first section follows the Compose button, which has its own margin. */
+.nav-section-first {
+	margin-top: 0;
+}
+
 .nav-label-row {
 	position: relative;
 	display: flex;
@@ -1637,6 +1642,15 @@ fieldset {
 	font-size: 13px;
 }
 
+/* The sender of a message from a team mailbox. It is text: the mailbox decides it. */
+.compose-from {
+	min-height: 40px;
+	padding: 10px 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .compose-input {
 	width: 100%;
 	min-height: 40px;
@@ -2059,6 +2073,11 @@ h3.card-title {
 
 .create-key .scope-list {
 	width: 100%;
+}
+
+/* The form to add a team mailbox, under the list of team mailboxes. */
+.team-mailbox-form {
+	margin-top: 20px;
 }
 
 .agent-list {

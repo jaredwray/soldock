@@ -49,13 +49,15 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 function SearchBox({ route }: { route: Route }) {
 	const current = route.page === "mail" && route.view.kind === "search" ? route.view.query : "";
 	const [value, setValue] = useState(current);
+	// A search from a team mailbox stays in that mailbox.
+	const mailboxId = route.page === "mail" ? route.mailboxId : null;
 
 	useOnChange(current, () => setValue(current));
 
 	function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const query = value.trim();
-		navigate(query ? viewPath({ kind: "search", query }) : INBOX_PATH);
+		navigate(viewPath(query ? { kind: "search", query } : { kind: "system", view: "inbox" }, mailboxId));
 		(document.activeElement as HTMLElement | null)?.blur();
 	}
 

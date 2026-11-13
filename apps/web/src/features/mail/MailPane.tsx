@@ -19,6 +19,7 @@ import {
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
+import { useMailboxId } from "./mailbox.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -33,6 +34,8 @@ interface MailPaneProps {
 	threadId: string | null;
 	query: ViewQuery;
 	title: string;
+	/** The name of the team mailbox of the views, or null in the own mailbox. */
+	mailboxName: string | null;
 	labels: readonly Label[] | null;
 	labelsById: ReadonlyMap<string, Label>;
 	myAddress: string;
@@ -48,8 +51,9 @@ interface MailPaneProps {
 export function MailPane(props: MailPaneProps) {
 	const { view, threadId, query, title, labelsById, myAddress, onChanged, onCompose } = props;
 	const toast = useToast();
-	const list = useThreadList(query.status === "ready" ? query.query : null);
-	const thread = useThread(threadId);
+	const mailboxId = useMailboxId();
+	const list = useThreadList(mailboxId, query.status === "ready" ? query.query : null);
+	const thread = useThread(mailboxId, threadId);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
 	const [cursor, setCursor] = useState(0);
 	const [focusToken, setFocusToken] = useState(0);
@@ -106,10 +110,10 @@ export function MailPane(props: MailPaneProps) {
 		const change = actionChange("read");
 		patchThread(change);
 		patchList([openThread.id], change, view);
-		modifyThreads([openThread.id], change).then(onChanged, (error: unknown) =>
+		modifyThreads(mailboxId, [openThread.id], change).then(onChanged, (error: unknown) =>
 			toast({ message: `The conversation was not marked as read. ${errorMessage(error)}`, tone: "error" }),
 		);
-	}, [openThread, patchThread, patchList, view, onChanged, toast]);
+	}, [mailboxId, openThread, patchThread, patchList, view, onChanged, toast]);
 
 	const labelsOf = useCallback(
 		(id: string): readonly string[] | null =>
@@ -130,13 +134,13 @@ export function MailPane(props: MailPaneProps) {
 		if (openThread && ids.includes(openThread.id)) thread.patch(change);
 		if (threadId && ids.includes(threadId)) {
 			const leaves = LEAVE_THREAD.includes(action) || !belongsInView(changeLabels(openLabels ?? [], change), view);
-			if (leaves) navigate(viewPath(view));
+			if (leaves) navigate(viewPath(view, mailboxId));
 		}
 		if (actionNotice(action, ids.length)) {
 			setSelected((current) => new Set([...current].filter((id) => !ids.includes(id))));
 		}
 		try {
-			await modifyThreads(ids, change);
+			await modifyThreads(mailboxId, ids, change);
 			const notice = actionNotice(action, ids.length);
 			if (notice) {
 				toast(
@@ -153,7 +157,7 @@ export function MailPane(props: MailPaneProps) {
 
 	async function undo(ids: readonly string[], change: ReturnType<typeof actionChange>) {
 		try {
-			await modifyThreads(ids, invertChange(change));
+			await modifyThreads(mailboxId, ids, invertChange(change));
 			toast({ message: "Action undone." });
 		} catch (error) {
 			toast({ message: `The undo failed. ${errorMessage(error)}`, tone: "error" });
@@ -199,20 +203,20 @@ export function MailPane(props: MailPaneProps) {
 				} else {
 					const index = threads.findIndex((item) => item.id === threadId);
 					const next = index >= 0 ? threads[index + step] : undefined;
-					if (next) navigate(threadPath(view, next.id));
+					if (next) navigate(threadPath(view, next.id, mailboxId));
 				}
 				break;
 			}
 			case "Enter":
 				// A focused link or button handles Enter itself.
 				if (event.target instanceof HTMLElement && event.target.closest("a, button, summary, label")) return;
-				if (listMode && current) navigate(threadPath(view, current.id));
+				if (listMode && current) navigate(threadPath(view, current.id, mailboxId));
 				break;
 			case "o":
-				if (listMode && current) navigate(threadPath(view, current.id));
+				if (listMode && current) navigate(threadPath(view, current.id, mailboxId));
 				break;
 			case "u":
-				if (!listMode) navigate(viewPath(view));
+				if (!listMode) navigate(viewPath(view, mailboxId));
 				break;
 			case "e":
 				if (!inSpamOrTrash) void run("archive", keyTargets);
@@ -257,7 +261,7 @@ export function MailPane(props: MailPaneProps) {
 		<main id="main" className="mail-main" tabIndex={-1}>
 			<Toolbar
 				view={view}
-				title={title}
+				title={props.mailboxName ? `${props.mailboxName}: ${title}` : title}
 				mode={listMode ? "list" : "thread"}
 				targetCount={targets.length}
 				selection={selection}
@@ -267,7 +271,7 @@ export function MailPane(props: MailPaneProps) {
 				listEmpty={threads.length === 0}
 				onToggleAll={() => setSelected(selection === "all" ? new Set() : new Set(threads.map((item) => item.id)))}
 				onAction={(action) => void run(action, targets)}
-				onBack={() => navigate(viewPath(view))}
+				onBack={() => navigate(viewPath(view, mailboxId))}
 				onRefresh={() => {
 					void list.refresh();
 					onChanged();
@@ -283,7 +287,8 @@ export function MailPane(props: MailPaneProps) {
 						view={view}
 						title={title}
 						list={list}
-						myAddress={myAddress}
+						// In a team mailbox, more than one person sends from the address, so no sender shows as "me".
+						myAddress={mailboxId ? "" : myAddress}
 						labelsById={labelsById}
 						selected={selected}
 						cursor={cursorIndex}

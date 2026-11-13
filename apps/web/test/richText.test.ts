@@ -158,6 +158,7 @@ describe("textToDoc", () => {
 			},
 			attachments: [],
 			delivery: null,
+			sent_by: null,
 		};
 		const draft = replyDraft(original, "me@soldock.test", false);
 		const result = textToDoc(draft.text);

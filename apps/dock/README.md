@@ -49,7 +49,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
-| `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal |
+| `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
 | `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup` while it has at least 32 characters. `GET /auth/setup` reports its state, never its value. Delete it after setup |
 
@@ -82,9 +82,9 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains, team mailboxes and their members) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
-| Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<principal>/<sha256>` |
+| Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<mailbox id>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
 
 `MailboxDO` does not extend a `SoldockObject` base class yet. It has its own migrations, outbox and

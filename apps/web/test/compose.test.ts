@@ -29,6 +29,7 @@ function message(values: Partial<Message> = {}): Message {
 		body: { text: "Hello", html: null, remote_images_blocked: 0, truncated: false, omitted: false },
 		attachments: [],
 		delivery: null,
+		sent_by: null,
 		...values,
 	};
 }

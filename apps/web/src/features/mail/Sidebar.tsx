@@ -1,4 +1,4 @@
-import type { Label } from "@soldock/contracts";
+import type { Label, Mailbox } from "@soldock/contracts";
 import { useEffect, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
@@ -7,6 +7,10 @@ import { MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
 import { labelRows, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
+	/** The team mailbox of the views, or null for the own mailbox. */
+	mailboxId: string | null;
+	/** The mailboxes that the person can use. The switcher shows when a team mailbox is in the list. */
+	mailboxes: readonly Mailbox[] | null;
 	view: MailView;
 	labels: Label[] | null;
 	labelsError: string | null;
@@ -19,6 +23,8 @@ interface SidebarProps {
 
 /** The left navigation. Under 768px it is a drawer that the menu button in the top bar opens. */
 export function Sidebar({
+	mailboxId,
+	mailboxes,
 	view,
 	labels,
 	labelsError,
@@ -32,6 +38,9 @@ export function Sidebar({
 	const rows = labelRows(labels ?? []);
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
+	const teamMailboxes = (mailboxes ?? []).filter((mailbox) => mailbox.kind === "team");
+	// A deep link can open a team mailbox before the list loads, or after the access ended.
+	const showMailboxes = teamMailboxes.length > 0 || mailboxId !== null;
 
 	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
@@ -55,12 +64,44 @@ export function Sidebar({
 				id="mail-nav"
 				ref={navRef}
 				className={open ? "sidebar sidebar-open" : "sidebar"}
-				aria-label="Mail folders and labels"
+				aria-label="Mailboxes, folders and labels"
 			>
 				<button type="button" className="compose-button" onClick={onCompose}>
 					<Icon name="pencil" />
 					Compose
 				</button>
+				{showMailboxes && (
+					<>
+						<div className="nav-section nav-section-first">
+							<h2 className="nav-heading">Mailboxes</h2>
+						</div>
+						<ul className="nav-list nav-mailboxes">
+							{(mailboxes ?? []).map((mailbox) => {
+								const id = mailbox.kind === "team" ? mailbox.id : null;
+								const active = id === mailboxId;
+								return (
+									<li key={mailbox.id}>
+										<Link
+											to={viewPath({ kind: "system", view: "inbox" }, id)}
+											className={active ? "nav-item nav-item-active" : "nav-item"}
+											aria-current={active ? "true" : undefined}
+											title={mailbox.address}
+										>
+											<Icon name={mailbox.kind === "team" ? "team" : "mail"} />
+											<span className="nav-name">
+												{mailbox.kind === "team" ? mailbox.display_name : "My mailbox"}
+												<span className="visually-hidden">{`, ${mailbox.address}`}</span>
+											</span>
+										</Link>
+									</li>
+								);
+							})}
+						</ul>
+						<div className="nav-section">
+							<h2 className="nav-heading">Folders</h2>
+						</div>
+					</>
+				)}
 				<ul className="nav-list">
 					{SYSTEM_NAV.map((item) => {
 						const active = view.kind === "system" && view.view === item.view;
@@ -68,7 +109,7 @@ export function Sidebar({
 						return (
 							<li key={item.view}>
 								<Link
-									to={viewPath({ kind: "system", view: item.view })}
+									to={viewPath({ kind: "system", view: item.view }, mailboxId)}
 									className={active ? "nav-item nav-item-active" : "nav-item"}
 									aria-current={active ? "page" : undefined}
 								>
@@ -120,7 +161,7 @@ export function Sidebar({
 						return (
 							<li key={row.key} className="nav-label-row">
 								<Link
-									to={viewPath({ kind: "label", labelId: label.id })}
+									to={viewPath({ kind: "label", labelId: label.id }, mailboxId)}
 									className={active ? "nav-item nav-item-active" : "nav-item"}
 									aria-current={active ? "page" : undefined}
 									style={indent}

@@ -149,7 +149,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    `p=quarantine` or stricter before the first send.
 4. Confirm `MAIL_AUTHSERV_ID`: send a message from an external account, and read the topmost
    `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
-   `mail/raw/<principal>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
+   `mail/raw/<mailbox id>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
    change the var: the mailbox ignores results from any other server.
 5. First-run setup (once). Until setup runs, the dock host shows a setup page, and the deploy job
    summary shows "First-run setup: not done".

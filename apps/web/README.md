@@ -110,6 +110,19 @@ MCP clients. The app has no UI-only path.
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list. Shortcuts do not work while the focus is in a text field.
+- **Team mailboxes.** When the person is a member of a team mailbox, the sidebar shows a
+  **Mailboxes** section: "My mailbox" and each team mailbox (`mail.list_mailboxes`).
+  - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
+    it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
+    same mailbox.
+  - The shell keeps the list of mailboxes and gets it again on window focus. Each mailbox has its
+    own mail app (a React key), so the data of one mailbox never shows in a different one.
+  - The composer shows a **From** row with the name and the address of the team mailbox. A reply
+    leaves out the team address, not the address of the person.
+  - A sent message shows **Sent by** and the member (`sent_by`). No sender shows as "me", because
+    more than one person sends from the address.
+  - A person who is not a member gets the error from the server in the list, for example after an
+    admin removed the access.
 - **Admin** (`/admin`). Owners and admins see the directory, and create people and agents.
   - **Admin settings: email domains** lists the saved domains and provides Add and Remove controls.
     Changes take effect without a new deployment. A confirmation precedes removal.
@@ -125,6 +138,10 @@ MCP clients. The app has no UI-only path.
   - **Help a person sign in.** An owner or an admin selects a person, then sets a new password
     (`account.set_password`) or turns off two-step verification (`account.disable_totp`). An admin
     does not see the owner in the list, because only the owner manages the owner's sign-in.
+  - **Team mailboxes.** Owners and admins see each team mailbox with its members. A form creates one
+    with a name, an address and its first members (`directory.create_team_mailbox`). Each mailbox
+    has a control to add a member and a button to remove each member, with a confirmation
+    (`directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`).
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
   on other browsers. A new key can hold only the scopes of the session.
@@ -153,6 +170,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
+| `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/admin` | Admin |
 | `/settings` | Settings |
 
@@ -171,7 +189,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the top bar, the search box and the account menu |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | The directory, the create form and the agent panels |
+| [`src/features/admin/`](src/features/admin/) | The directory, the create form, the agent panels and the team mailboxes card |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
