@@ -66,7 +66,8 @@ function readLink(src: string, start: number): { label: string; href: string; en
 	if (close < 0) return "none";
 	if (src[close + 1] !== "(") return null;
 	const target = /^\(\s*(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/.exec(
-		src.slice(close + 1),
+		// A target is at most a link and a title. The slice has a limit, so many links cost no more than their text.
+		src.slice(close + 1, close + 1 + DOC_LIMITS.hrefChars + 600),
 	);
 	if (!target) return null;
 	const href = (target[1] ?? target[2] ?? "").replace(/\\(.)/g, "$1");

@@ -1,3 +1,5 @@
+import { runDurableObjectAlarm } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { DOC_LIMITS, type DocContent } from "@soldock/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, codeOf, drainDrive, seedOrg } from "./helpers.ts";
@@ -160,6 +162,31 @@ describe("docs and the drive", () => {
 		await ada.call("docs.update", { item_id: item.id, markdown: "The airship budget" });
 		expect((await ada.call("drive.list_items", { view: "search", query: "zeppelin" })).items).toEqual([]);
 		expect((await ada.call("drive.list_items", { view: "search", query: "airship" })).items).toHaveLength(1);
+	});
+
+	// The document object sends each change to the drive with retries, so the drive can get a change two
+	// times, and an old change after a new one. Only a newer revision changes the item.
+	it("keeps the item as it is when a change arrives again, or arrives late", async () => {
+		const { item } = await ada.call("docs.create", { name: "Plan", markdown: "first text" });
+		await ada.call("docs.update", { item_id: item.id, markdown: "second text, which is longer" });
+		const before = await ada.call("drive.get_item", { item_id: item.id });
+		const { version } = await ada.call("drive.get_about");
+
+		// The alarm of the document object sends the change that the handler sent before.
+		await runDurableObjectAlarm(env.DOCUMENT.get(env.DOCUMENT.idFromName(item.id)));
+		// A late message with the first revision.
+		await env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id)).applyDocumentChange({
+			itemId: item.id,
+			revision: 1,
+			modifiedAt: 1,
+			modifiedBy: { principal_id: bot.id, kind: "agent", display_name: "Late" },
+			size: 1,
+			text: "zeppelin",
+		});
+
+		expect(await ada.call("drive.get_item", { item_id: item.id })).toEqual(before);
+		expect((await ada.call("drive.get_about")).version).toBe(version);
+		expect((await ada.call("drive.list_items", { view: "search", query: "zeppelin" })).items).toEqual([]);
 	});
 
 	it("lets a viewer read and an editor write, and no other person", async () => {

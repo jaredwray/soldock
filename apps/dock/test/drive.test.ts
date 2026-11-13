@@ -122,6 +122,19 @@ describe("drive.upload_file with an idempotency key", () => {
 		expect(await driveBlobKeys(ada.id)).toHaveLength(1);
 	});
 
+	// Two calls can pass the first key check together. The drive then accepts one, and the handler
+	// deletes the bytes of the other.
+	it("stores the bytes one time when two calls with one key run at the same time", async () => {
+		const input = { name: "once.txt", content_base64: base64("once"), idempotency_key: "key-2" };
+		const [first, second] = await Promise.all([
+			ada.call("drive.upload_file", input),
+			ada.call("drive.upload_file", input),
+		]);
+		expect(second.item.id).toBe(first.item.id);
+		expect(await names()).toEqual(["once.txt"]);
+		expect(await driveBlobKeys(ada.id)).toHaveLength(1);
+	});
+
 	it("refuses the same key with a different request", async () => {
 		await ada.call("drive.upload_file", { name: "a.txt", content_base64: base64("a"), idempotency_key: "key-1" });
 		expect(
