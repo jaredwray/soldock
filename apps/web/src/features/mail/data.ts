@@ -74,9 +74,10 @@ export interface LabelsState {
 /**
  * The mailboxes that the person can use: the own mailbox first, then the team mailboxes. Null while
  * the list loads, and when it does not load: the mail views then work with the own mailbox only.
- * The list loads again when the window gets the focus, because an admin can change the members.
+ * The list loads again when the window gets the focus and when `page` changes, because an admin can
+ * change the members, for example on the Admin page of this tab.
  */
-export function useMailboxes(): Mailbox[] | null {
+export function useMailboxes(page: string): Mailbox[] | null {
 	const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
 
 	useEffect(() => {
@@ -91,13 +92,14 @@ export function useMailboxes(): Mailbox[] | null {
 				},
 			);
 		};
-		load();
+		// `page` is read so that a change of page runs this effect again.
+		if (page) load();
 		window.addEventListener("focus", load);
 		return () => {
 			active = false;
 			window.removeEventListener("focus", load);
 		};
-	}, []);
+	}, [page]);
 
 	return mailboxes;
 }

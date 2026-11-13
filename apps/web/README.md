@@ -115,7 +115,8 @@ MCP clients. The app has no UI-only path.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
-  - The shell keeps the list of mailboxes and gets it again on window focus. Each mailbox has its
+  - The shell keeps the list of mailboxes and gets it again on window focus and when the page
+    changes, for example from Admin to Mail. Each mailbox has its
     own mail app (a React key), so the data of one mailbox never shows in a different one.
   - The composer shows a **From** row with the name and the address of the team mailbox. A reply
     leaves out the team address, not the address of the person.

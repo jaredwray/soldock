@@ -15,7 +15,7 @@ export function Shell() {
 	const route = useMemo(() => parseRoute(location), [location]);
 	const [navOpen, setNavOpen] = useState(false);
 	// The shell keeps the list of mailboxes, so the switcher does not empty when the mailbox changes.
-	const mailboxes = useMailboxes();
+	const mailboxes = useMailboxes(route.page);
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
 	// sign in again after the session ends. Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
