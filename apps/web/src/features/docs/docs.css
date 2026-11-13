@@ -1,0 +1,291 @@
+/* The Docs editor. The colors come from the custom properties of styles.css, so dark mode follows them. */
+
+.doc-page {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.doc-page:focus {
+	outline: none;
+}
+
+.doc-state-title {
+	color: var(--text);
+	font-size: 20px;
+}
+
+.doc-state-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
+}
+
+/* A notice between the header and the text: read only, a failed save, or a conflict. */
+
+.doc-notice {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 10px;
+	margin: 0 16px 8px;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--text-muted);
+}
+
+.doc-notice .icon {
+	flex: none;
+}
+
+.doc-notice p {
+	flex: 1;
+	min-width: 0;
+}
+
+.doc-notice-warning {
+	border-color: var(--warning-border);
+	background: var(--warning-bg);
+	color: var(--warning-text);
+}
+
+.doc-notice-error {
+	border-color: var(--danger);
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+/* The editor: the toolbar stays in view, and only the paper scrolls. */
+
+.doc-editor {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.doc-toolbar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 2px;
+	margin: 0 16px;
+	padding: 4px 12px;
+	border-radius: 999px;
+	background: var(--surface);
+	box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+
+.doc-toolbar .format-button {
+	border-radius: var(--radius);
+}
+
+.doc-toolbar .format-button[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.doc-toolbar .format-button[aria-disabled="true"]:hover {
+	background: transparent;
+	color: var(--text-muted);
+}
+
+.doc-block-type {
+	flex: none;
+	height: 32px;
+	margin-right: 8px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+}
+
+.doc-block-type:hover {
+	background: var(--surface-3);
+}
+
+.doc-scroll {
+	flex: 1;
+	min-height: 0;
+	padding: 16px 16px 48px;
+	overflow-y: auto;
+}
+
+.doc-paper {
+	display: flex;
+	flex-direction: column;
+	max-width: 816px;
+	min-height: 100%;
+	margin: 0 auto;
+	padding: 72px 80px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--surface);
+	box-shadow: 0 1px 3px rgb(15 23 42 / 0.1);
+	cursor: text;
+}
+
+.doc-mount {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+}
+
+/* The text. The caret shows the focus, so the text area has no focus ring. */
+
+.doc-body {
+	flex: 1;
+	min-height: 320px;
+	color: var(--text);
+	font-size: 16px;
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+}
+
+.doc-body:focus,
+.doc-body:focus-visible {
+	outline: none;
+}
+
+.doc-body > :first-child {
+	margin-top: 0;
+}
+
+.doc-body p {
+	margin: 0 0 0.75em;
+}
+
+.doc-body h1,
+.doc-body h2,
+.doc-body h3 {
+	margin: 1.2em 0 0.5em;
+	line-height: 1.25;
+}
+
+.doc-body h1 {
+	font-size: 2em;
+	font-weight: 600;
+}
+
+.doc-body h2 {
+	font-size: 1.5em;
+	font-weight: 600;
+}
+
+.doc-body h3 {
+	font-size: 1.2em;
+	font-weight: 600;
+}
+
+.doc-body :is(ul, ol) {
+	margin: 0 0 0.75em;
+	padding-left: 1.75em;
+}
+
+.doc-body li > p {
+	margin-bottom: 0.25em;
+}
+
+.doc-body li > :is(ul, ol) {
+	margin-bottom: 0.25em;
+}
+
+.doc-body blockquote {
+	margin: 0 0 0.75em;
+	padding: 2px 0 2px 16px;
+	border-left: 3px solid var(--border);
+	color: var(--text-muted);
+}
+
+.doc-body blockquote > :last-child,
+.doc-body li > :last-child {
+	margin-bottom: 0;
+}
+
+.doc-body code {
+	padding: 1px 5px;
+	border-radius: 4px;
+	background: var(--surface-3);
+	font-family: var(--mono);
+	font-size: 0.9em;
+}
+
+.doc-body pre {
+	margin: 0 0 0.75em;
+	padding: 12px 16px;
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	font-family: var(--mono);
+	font-size: 14px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+.doc-body pre code {
+	padding: 0;
+	background: none;
+	font-size: inherit;
+}
+
+.doc-body hr {
+	height: 0;
+	margin: 1.25em 0;
+	border: 0;
+	border-top: 2px solid var(--border);
+}
+
+/* A click on a rule selects it. Enter then makes a paragraph below it. */
+.doc-body hr.ProseMirror-selectednode {
+	outline: 2px solid var(--focus);
+	outline-offset: 4px;
+}
+
+.doc-body a {
+	color: var(--accent);
+	text-decoration: underline;
+}
+
+.doc-body[contenteditable="false"] a {
+	cursor: pointer;
+}
+
+@media (max-width: 767px) {
+	.doc-notice {
+		flex-wrap: wrap;
+		margin: 0 8px 8px;
+	}
+
+	.doc-toolbar {
+		margin: 0 8px;
+		border-radius: var(--radius);
+	}
+
+	.doc-scroll {
+		padding: 8px 0 32px;
+	}
+
+	.doc-paper {
+		padding: 24px 20px;
+		border-right: 0;
+		border-left: 0;
+		border-radius: 0;
+	}
+}
+
+@media print {
+	.doc-toolbar,
+	.doc-notice {
+		display: none;
+	}
+}

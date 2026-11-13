@@ -8,15 +8,30 @@ export type MailView =
 	| { kind: "label"; labelId: string }
 	| { kind: "search"; query: string };
 
+/** The views of Drive that are not a folder. Each has one path under `/drive`. */
+export const DRIVE_LISTS = ["shared", "recent", "starred", "trash"] as const;
+export type DriveList = (typeof DRIVE_LISTS)[number];
+
+export type DriveView =
+	/** A folder of a drive. `spaceId` and `folderId` are null for the root of the own drive of the person. */
+	| { kind: "folder"; spaceId: string | null; folderId: string | null }
+	| { kind: DriveList }
+	| { kind: "search"; query: string };
+
 export type Route =
 	/** `mailboxId` is the id of a team mailbox, or null for the own mailbox of the person. */
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
+	| { page: "drive"; view: DriveView }
+	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
+	| { page: "doc"; spaceId: string; itemId: string }
+	| { page: "sheet"; spaceId: string; itemId: string }
 	| { page: "admin" }
 	| { page: "settings" }
 	| { page: "redirect"; to: string }
 	| { page: "not-found" };
 
 export const INBOX_PATH = "/mail/inbox";
+export const DRIVE_PATH = "/drive";
 
 /** The path part before the view. A team mailbox has its own paths: `/mail/team/<id>/inbox`. */
 function mailBase(mailboxId: string | null): string {
@@ -43,6 +58,10 @@ export function parseRoute(location: string): Route {
 	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
 	if (first === "admin" && parts.length === 1) return { page: "admin" };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
+	if (first === "drive") return parseDriveView(parts.slice(1), url);
+	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
+		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
+	}
 	if (first !== "mail") return { page: "not-found" };
 	if (second === undefined) return { page: "redirect", to: INBOX_PATH };
 	if (second !== "team") return parseMailView(null, parts.slice(1), url);
@@ -65,6 +84,69 @@ function parseMailView(mailboxId: string | null, parts: string[], url: URL): Rou
 		return { page: "mail", mailboxId, view: { kind: "search", query }, threadId: second ?? null };
 	}
 	return { page: "not-found" };
+}
+
+function isSpaceId(value: string | undefined): value is string {
+	return value?.startsWith("prn_") === true;
+}
+
+function isItemId(value: string | undefined): value is string {
+	return value?.startsWith("itm_") === true;
+}
+
+function isDriveList(value: string | undefined): value is DriveList {
+	return (DRIVE_LISTS as readonly string[]).includes(value ?? "");
+}
+
+/** The view of a Drive path, from the parts after `/drive`. */
+function parseDriveView(parts: string[], url: URL): Route {
+	const [first, second, third] = parts;
+	if (first === undefined) return { page: "drive", view: { kind: "folder", spaceId: null, folderId: null } };
+	if (isDriveList(first) && parts.length === 1) return { page: "drive", view: { kind: first } };
+	if (first === "search" && parts.length === 1) {
+		return { page: "drive", view: { kind: "search", query: url.searchParams.get("q") ?? "" } };
+	}
+	if (first === "folders" && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
+		return { page: "drive", view: { kind: "folder", spaceId: second, folderId: third } };
+	}
+	return { page: "not-found" };
+}
+
+/** The path of a view of Drive. */
+export function drivePath(view: DriveView): string {
+	switch (view.kind) {
+		case "folder":
+			return view.spaceId && view.folderId
+				? `${DRIVE_PATH}/folders/${encodeURIComponent(view.spaceId)}/${encodeURIComponent(view.folderId)}`
+				: DRIVE_PATH;
+		case "search":
+			return `${DRIVE_PATH}/search?q=${encodeURIComponent(view.query)}`;
+		default:
+			return `${DRIVE_PATH}/${view.kind}`;
+	}
+}
+
+/**
+ * The path that opens an item: the folder view for a folder, and the editor for a doc or a sheet. A
+ * file has no page of its own, so the result is null. The path has the drive of the item, so the same
+ * link works for the owner and for each person that the item is shared with.
+ */
+export function itemPath(item: {
+	kind: "folder" | "file" | "doc" | "sheet";
+	space_id: string;
+	id: string;
+}): string | null {
+	const tail = `${encodeURIComponent(item.space_id)}/${encodeURIComponent(item.id)}`;
+	switch (item.kind) {
+		case "folder":
+			return `${DRIVE_PATH}/folders/${tail}`;
+		case "doc":
+			return `/docs/${tail}`;
+		case "sheet":
+			return `/sheets/${tail}`;
+		case "file":
+			return null;
+	}
 }
 
 /** The path of the thread list of a view, in the own mailbox or in a team mailbox. */

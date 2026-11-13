@@ -4,10 +4,16 @@ import { useSession } from "../features/auth/session.tsx";
 import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { SettingsPage } from "../features/settings/SettingsPage.tsx";
+import { lazyPage } from "../lib/lazyPage.tsx";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
 import { useOnChange } from "../lib/useOnChange.ts";
 import { INBOX_PATH, parseRoute } from "../routes.ts";
 import { TopBar } from "./TopBar.tsx";
+
+// Drive and its editors are separate chunks. A person who uses only Mail does not load them.
+const DriveApp = lazyPage(() => import("../features/drive/DriveApp.tsx").then((module) => module.DriveApp));
+const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((module) => module.DocPage));
+const SheetPage = lazyPage(() => import("../features/sheets/SheetPage.tsx").then((module) => module.SheetPage));
 
 /** The signed-in app: the top bar and the page for the current route. */
 export function Shell() {
@@ -56,6 +62,13 @@ export function Shell() {
 						onCloseNav={() => setNavOpen(false)}
 					/>
 				);
+			case "drive":
+				return <DriveApp view={route.view} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
+			case "doc":
+				// The key gives each doc its own editor, so the text of one never shows in a different one.
+				return <DocPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;
+			case "sheet":
+				return <SheetPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;
 			case "admin":
 				return <AdminPage />;
 			case "settings":

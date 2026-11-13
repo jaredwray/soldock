@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type MailView, parseRoute, threadPath, viewPath } from "../src/routes.ts";
+import { type DriveView, drivePath, itemPath, type MailView, parseRoute, threadPath, viewPath } from "../src/routes.ts";
 
 const VIEWS: readonly MailView[] = [
 	{ kind: "system", view: "inbox" },
@@ -11,6 +11,20 @@ const VIEWS: readonly MailView[] = [
 	{ kind: "label", labelId: "lbl_01JD0000000000000000000000" },
 	{ kind: "search", query: "" },
 	{ kind: "search", query: 'from:ada@example.com label:"Clients/Acme & Co" -is:read #1 100%?' },
+];
+
+const SPACE = "prn_01JD0000000000000000000000";
+const ITEM = "itm_01JD0000000000000000000000";
+
+const DRIVE_VIEWS: readonly DriveView[] = [
+	{ kind: "folder", spaceId: null, folderId: null },
+	{ kind: "folder", spaceId: SPACE, folderId: ITEM },
+	{ kind: "shared" },
+	{ kind: "recent" },
+	{ kind: "starred" },
+	{ kind: "trash" },
+	{ kind: "search", query: "" },
+	{ kind: "search", query: "q3 report & plan #1 100%?" },
 ];
 
 const THREAD = "thr_01JD0000000000000000000000";
@@ -48,13 +62,44 @@ describe("routes", () => {
 		expect(threadPath({ kind: "label", labelId: "lbl_1" }, "thr_1")).toBe("/mail/label/lbl_1/thr_1");
 	});
 
+	it("parses the path of each Drive view back to that view", () => {
+		for (const view of DRIVE_VIEWS)
+			expect(parseRoute(drivePath(view)), drivePath(view)).toEqual({ page: "drive", view });
+		expect(drivePath({ kind: "folder", spaceId: null, folderId: null })).toBe("/drive");
+		expect(drivePath({ kind: "search", query: "a b" })).toBe("/drive/search?q=a%20b");
+	});
+
+	// The path of an item has its drive, so one link works for the owner and for a person with access.
+	it("gives a folder, a doc and a sheet a path with the drive of the item, and a file no path", () => {
+		const item = { space_id: SPACE, id: ITEM };
+		expect(parseRoute(itemPath({ ...item, kind: "folder" }) ?? "")).toEqual({
+			page: "drive",
+			view: { kind: "folder", spaceId: SPACE, folderId: ITEM },
+		});
+		expect(parseRoute(itemPath({ ...item, kind: "doc" }) ?? "")).toEqual({ page: "doc", spaceId: SPACE, itemId: ITEM });
+		expect(parseRoute(itemPath({ ...item, kind: "sheet" }) ?? "")).toEqual({
+			page: "sheet",
+			spaceId: SPACE,
+			itemId: ITEM,
+		});
+		expect(itemPath({ ...item, kind: "file" })).toBeNull();
+	});
+
 	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
 		expect(parseRoute("/")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/admin")).toEqual({ page: "admin" });
 		expect(parseRoute("/settings")).toEqual({ page: "settings" });
 		for (const path of [
-			"/drive",
+			"/drive/outbox",
+			"/drive/trash/extra",
+			"/drive/folders",
+			`/drive/folders/${SPACE}`,
+			`/drive/folders/tmb_1/${ITEM}`,
+			`/drive/folders/${SPACE}/thr_1`,
+			`/docs/${SPACE}`,
+			`/docs/${SPACE}/${ITEM}/extra`,
+			`/sheets/${ITEM}/${SPACE}`,
 			"/admin/extra",
 			"/mail/outbox",
 			"/mail/label",

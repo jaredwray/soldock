@@ -1,0 +1,752 @@
+/* Drive: the item list, its dialogs, and the header of the Docs and Sheets editors. The colors come
+   from the custom properties of styles.css, so dark mode needs no rules here. */
+
+.drive-layout {
+	display: grid;
+	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+	min-height: 0;
+}
+
+.drive-main {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	margin: 0 16px 16px 0;
+	border-radius: var(--radius-large);
+	background: var(--surface);
+	overflow: hidden;
+}
+
+.drive-main:focus {
+	outline: none;
+}
+
+.drive-main-drop {
+	outline: 2px dashed var(--accent);
+	outline-offset: -4px;
+}
+
+.drive-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+}
+
+.drive-storage {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: auto;
+	padding: 24px 24px 0;
+	font-size: 13px;
+}
+
+/* Header: the title of a view, or the path of a folder */
+
+.drive-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 56px;
+	padding: 8px 20px 0;
+}
+
+.drive-title,
+.drive-crumb {
+	font-size: 20px;
+	font-weight: 500;
+}
+
+.drive-title {
+	padding: 4px 8px;
+}
+
+.drive-crumbs {
+	min-width: 0;
+}
+
+.drive-crumbs ol {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.drive-crumbs li {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	color: var(--text-muted);
+}
+
+.drive-crumb {
+	max-width: 280px;
+	padding: 4px 8px;
+	overflow: hidden;
+	border-radius: var(--radius);
+	color: var(--text-muted);
+	text-decoration: none;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+a.drive-crumb:hover {
+	background: var(--surface-3);
+	color: var(--text);
+}
+
+.drive-crumb-current {
+	color: var(--text);
+}
+
+.drive-note {
+	padding: 8px 20px;
+	border-bottom: 1px solid var(--border);
+	background: var(--surface-2);
+	color: var(--text-muted);
+	font-size: 13px;
+}
+
+/* Item table */
+
+.drive-table {
+	width: 100%;
+	border-collapse: collapse;
+	table-layout: fixed;
+}
+
+.drive-table th,
+.drive-table td {
+	height: 48px;
+	padding: 0 8px;
+	border-bottom: 1px solid var(--border);
+	overflow: hidden;
+	font-weight: 400;
+	text-align: left;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.drive-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	height: 40px;
+	background: var(--surface);
+	color: var(--text-muted);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.drive-col-check {
+	width: 48px;
+	padding-left: 12px;
+}
+
+.drive-table .drive-col-star {
+	width: 36px;
+	padding: 0;
+}
+
+.drive-col-owner {
+	width: 16%;
+}
+
+.drive-col-modified {
+	width: 24%;
+	color: var(--text-muted);
+}
+
+.drive-col-size {
+	width: 96px;
+	color: var(--text-muted);
+}
+
+.drive-table .drive-col-more {
+	width: 48px;
+	padding: 0 8px 0 0;
+	overflow: visible;
+}
+
+.drive-row:hover {
+	background: var(--surface-2);
+}
+
+.drive-row-selected,
+.drive-row-selected:hover {
+	background: var(--accent-soft);
+}
+
+.drive-check {
+	display: inline-grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	cursor: pointer;
+}
+
+.drive-sort {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: -8px;
+	padding: 4px 8px;
+	border: 0;
+	border-radius: var(--radius);
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.drive-sort:hover {
+	background: var(--surface-3);
+	color: var(--text);
+}
+
+.drive-sort-active {
+	color: var(--text);
+}
+
+.drive-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.drive-name-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	max-width: 100%;
+	padding: 6px 4px;
+	border: 0;
+	border-radius: var(--radius);
+	background: none;
+	color: var(--text);
+	font: inherit;
+	font-weight: 500;
+	text-align: left;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.drive-name-plain {
+	cursor: default;
+}
+
+.drive-name-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+a.drive-name-link:hover .drive-name-text,
+button.drive-name-link:hover .drive-name-text {
+	text-decoration: underline;
+}
+
+.drive-kind {
+	color: var(--text-muted);
+}
+
+.drive-kind-doc {
+	color: var(--accent);
+}
+
+.drive-kind-sheet {
+	color: var(--success);
+}
+
+.drive-shared-mark {
+	display: inline-flex;
+	flex: none;
+	color: var(--text-muted);
+}
+
+.drive-modified-by {
+	color: var(--text-muted);
+}
+
+/* Menu of actions */
+
+.drive-menu {
+	position: fixed;
+	z-index: 60;
+	min-width: 200px;
+	max-width: calc(100vw - 16px);
+	padding: 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	box-shadow: var(--shadow);
+}
+
+.drive-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 36px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.drive-menu-item .icon {
+	color: var(--text-muted);
+}
+
+.drive-menu-item:hover,
+.drive-menu-item:focus {
+	background: var(--surface-3);
+	outline: none;
+}
+
+.drive-menu-item:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.drive-menu-item-danger,
+.drive-menu-item-danger .icon {
+	color: var(--danger);
+}
+
+/* The New button is a menu button. A disabled one stays visible. */
+
+.compose-button:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	box-shadow: none;
+}
+
+/* Upload state and drop target */
+
+.drive-drop {
+	position: absolute;
+	inset: 0;
+	z-index: 5;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 16px;
+	background: color-mix(in srgb, var(--surface) 88%, transparent);
+	color: var(--accent);
+	font-size: 16px;
+	font-weight: 600;
+	text-align: center;
+	pointer-events: none;
+}
+
+.drive-upload {
+	position: absolute;
+	right: 16px;
+	bottom: 16px;
+	z-index: 6;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	box-shadow: var(--shadow);
+}
+
+/* Dialogs */
+
+.drive-picker-path {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+	margin-bottom: 8px;
+}
+
+.drive-picker-path .link-button:disabled {
+	color: var(--text);
+	font-weight: 600;
+	text-decoration: none;
+	cursor: default;
+}
+
+.drive-picker-crumb {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	color: var(--text-muted);
+}
+
+.drive-picker {
+	min-height: 180px;
+	max-height: 320px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	overflow-y: auto;
+}
+
+.drive-picker-state {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 16px;
+	color: var(--text-muted);
+	text-align: center;
+}
+
+.drive-picker-list,
+.drive-share-list,
+.drive-version-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.drive-picker-item {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	min-height: 40px;
+	padding: 0 12px;
+	border: 0;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.drive-picker-item .icon {
+	color: var(--text-muted);
+}
+
+.drive-picker-item:hover:not(:disabled) {
+	background: var(--surface-2);
+}
+
+.drive-picker-item:focus-visible {
+	outline-offset: -2px;
+}
+
+.drive-picker-item:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.drive-picker-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.drive-share-add {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 120px auto;
+	align-items: end;
+	gap: 12px;
+}
+
+.drive-share-add .button {
+	min-height: 40px;
+}
+
+.drive-share-heading {
+	margin: 20px 0 4px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.drive-share-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 52px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.drive-share-row:last-child {
+	border-bottom: 0;
+}
+
+.drive-share-who {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.drive-share-who > * {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.drive-share-who .muted {
+	font-size: 13px;
+}
+
+.drive-share-control {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+}
+
+.drive-share-role {
+	width: 110px;
+	min-height: 34px;
+	padding: 4px 8px;
+}
+
+.drive-share-actions {
+	justify-content: space-between;
+}
+
+.drive-version {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 52px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.drive-version-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.drive-version-text .muted {
+	font-size: 13px;
+}
+
+.drive-version-current {
+	margin: 0 0 0 8px;
+	background: var(--success-soft);
+	color: var(--success);
+}
+
+.drive-version-status {
+	min-height: 20px;
+	margin-top: 8px;
+	color: var(--text-muted);
+	font-size: 13px;
+}
+
+.drive-preview {
+	width: min(880px, calc(100vw - 32px));
+}
+
+.drive-preview .dialog-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.drive-preview-body {
+	overflow-y: auto;
+}
+
+.drive-preview-image {
+	display: block;
+	max-width: 100%;
+	max-height: 60dvh;
+	margin: 0 auto;
+	border-radius: var(--radius);
+	/* A light pattern, so a transparent image shows in the two themes. */
+	background: repeating-conic-gradient(var(--surface-3) 0% 25%, var(--surface) 0% 50%) 50% / 16px 16px;
+	object-fit: contain;
+}
+
+.drive-preview-text {
+	max-height: 60dvh;
+	margin: 0;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	font: 13px / 1.5 var(--mono);
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.drive-preview-none {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	padding: 32px 16px;
+	color: var(--text-muted);
+}
+
+.drive-details {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: 4px 16px;
+	margin: 16px 0 0;
+	font-size: 13px;
+}
+
+.drive-details dt {
+	color: var(--text-muted);
+}
+
+.drive-details dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+/* The header of the Docs and Sheets editors */
+
+.document-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 56px;
+	padding: 4px 16px 4px 8px;
+	background: var(--bg);
+}
+
+.document-header-title {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.document-header-name {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 18px;
+	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.document-header-rename {
+	/* The negative margin puts the text in line with the save state. The width gets it back. */
+	max-width: calc(100% + 7px);
+	margin-left: -7px;
+	padding: 2px 6px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	overflow: hidden;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: text;
+}
+
+.document-header-rename:hover {
+	border-color: var(--border);
+}
+
+.document-header-input {
+	width: min(420px, 50vw);
+	min-height: 32px;
+	padding: 2px 6px;
+	font-size: 18px;
+	font-weight: 500;
+}
+
+.document-header-state {
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.document-header-state-error {
+	color: var(--danger);
+}
+
+.document-header-spacer {
+	flex: 1;
+}
+
+@media (max-width: 767px) {
+	.drive-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.drive-main {
+		margin: 0;
+		border-radius: 0;
+	}
+
+	.drive-header {
+		min-height: 48px;
+		padding: 4px 12px 0;
+	}
+
+	.drive-title,
+	.drive-crumb {
+		font-size: 18px;
+	}
+
+	.drive-crumb {
+		max-width: 160px;
+	}
+
+	.drive-col-owner,
+	.drive-col-size,
+	.drive-modified-by {
+		display: none;
+	}
+
+	.drive-col-modified {
+		width: 100px;
+	}
+
+	.drive-col-check {
+		width: 40px;
+		padding-left: 4px;
+	}
+
+	.drive-share-add {
+		grid-template-columns: minmax(0, 1fr) 110px;
+	}
+
+	.drive-share-add .button {
+		grid-column: 1 / -1;
+	}
+
+	.document-header {
+		padding-right: 8px;
+	}
+
+	.document-header-share {
+		display: none;
+	}
+
+	.document-header .button-primary {
+		padding: 0 12px;
+	}
+}

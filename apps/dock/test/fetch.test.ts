@@ -2,9 +2,8 @@ import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.ts";
-import { identityHandlers } from "../src/identity/index.ts";
+import { handlers } from "../src/handlers.ts";
 import worker from "../src/index.ts";
-import { mailHandlers } from "../src/mail/index.ts";
 
 const ORIGIN = "https://dock.test";
 
@@ -97,7 +96,7 @@ describe("unknown Worker paths", () => {
 
 describe("unhandled errors", () => {
 	it("return a problem+json 500 that carries the request id and hides the error", async () => {
-		const app = createApp({ ...identityHandlers, ...mailHandlers });
+		const app = createApp(handlers);
 		app.get("/api/v1/test/boom", () => {
 			throw new Error("secret detail");
 		});
