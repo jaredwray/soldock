@@ -1,7 +1,7 @@
 # `@soldock/contracts`
 
-> Status: **started**. The registry holds the Mail, account and directory operations. Events and
-> the SDK build come later.
+> Status: **started**. The registry holds the Mail, Drive, Docs, Sheets, account and directory
+> operations. Events and the SDK build come later.
 
 The operation registry: operation definitions (Zod schemas, scopes, annotations, errors), the error
 catalogue, the scope catalogue and the typed client. Shared by `dock`, `web` and `sdk`. Must stay
@@ -12,6 +12,9 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, callers, annotations, input and output schemas, errors |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`) |
+| `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
+| `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
+| `src/sheets.ts` | The Sheets operations, the cell schema, the error values and `SHEET_LIMITS` |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |

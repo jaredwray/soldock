@@ -9,7 +9,20 @@ export {
 	OutboundPolicy,
 	Principal,
 } from "./directory.ts";
+export { DOC_LIMITS, type DocBlock, DocContent, type DocInline, type DocMark } from "./docs.ts";
 export { MailDomain } from "./domains.ts";
+export {
+	Actor,
+	DRIVE_LIMITS,
+	DRIVE_ROLES,
+	DriveItem,
+	type DriveRole,
+	FileVersion,
+	ITEM_KINDS,
+	type ItemKind,
+	PathEntry,
+	Permission,
+} from "./drive.ts";
 export { ERRORS, type ErrorCode, isErrorCode } from "./errors.ts";
 export {
 	DeliveryStatus,
@@ -45,6 +58,7 @@ export {
 } from "./registry.ts";
 export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope } from "./scopes.ts";
 export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
+export { Cell, SHEET_ERRORS, SHEET_LIMITS, type SheetError } from "./sheets.ts";
 export {
 	PASSWORD_MAX_LENGTH,
 	PASSWORD_MIN_LENGTH,

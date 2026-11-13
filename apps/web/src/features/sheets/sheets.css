@@ -1,0 +1,251 @@
+/* The Sheets editor. The sizes of the grid come from SheetEditor.tsx as custom properties. */
+
+.sheet-page {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	background: var(--surface);
+}
+
+.sheet-page:focus {
+	outline: none;
+}
+
+.sheet-save-error {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	padding: 8px 16px;
+	border-bottom: 1px solid var(--border);
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+.sheet-save-error p {
+	flex: 1 1 240px;
+}
+
+.sheet-editor {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+/* The formula bar */
+
+.sheet-bar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--surface);
+}
+
+.sheet-name-box,
+.sheet-formula {
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text);
+	font: 13px / 1 var(--mono);
+}
+
+.sheet-name-box {
+	flex: none;
+	width: 72px;
+	border-color: var(--border);
+	text-align: center;
+}
+
+.sheet-formula {
+	flex: 1;
+	min-width: 0;
+}
+
+.sheet-formula:hover:not(:read-only) {
+	border-color: var(--border);
+}
+
+.sheet-name-box:focus,
+.sheet-formula:focus {
+	border-color: var(--accent);
+	outline: none;
+}
+
+.sheet-fx {
+	flex: none;
+	color: var(--text-muted);
+	font: italic 600 13px / 1 var(--mono);
+}
+
+.sheet-view-only {
+	flex: none;
+	padding: 2px 10px;
+	border-radius: 999px;
+	background: var(--surface-3);
+	color: var(--text-muted);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+/* The grid */
+
+.sheet-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+	background: var(--surface-2);
+}
+
+.sheet-canvas {
+	position: relative;
+	background: var(--surface);
+}
+
+.sheet-grid {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	table-layout: fixed;
+	font-size: 13px;
+	line-height: calc(var(--sheet-row-height) - 1px);
+	cursor: cell;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.sheet-grid:focus,
+.sheet-grid:focus-visible {
+	outline: none;
+}
+
+.sheet-col-first {
+	width: var(--sheet-head-width);
+}
+
+.sheet-col {
+	width: var(--sheet-column-width);
+}
+
+.sheet-spacer td {
+	padding: 0;
+}
+
+.sheet-corner,
+.sheet-col-head,
+.sheet-row-head,
+.sheet-cell {
+	height: var(--sheet-row-height);
+	padding: 0 6px;
+	overflow: hidden;
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+}
+
+.sheet-corner,
+.sheet-col-head,
+.sheet-row-head {
+	position: sticky;
+	background: var(--surface-2);
+	color: var(--text-muted);
+	font-size: 12px;
+	font-weight: 400;
+	text-align: center;
+	cursor: pointer;
+}
+
+.sheet-col-head {
+	top: 0;
+	z-index: 2;
+}
+
+.sheet-row-head {
+	left: 0;
+	z-index: 2;
+}
+
+.sheet-corner {
+	top: 0;
+	left: 0;
+	z-index: 3;
+}
+
+.sheet-col-head.sheet-head-selected,
+.sheet-row-head.sheet-head-selected {
+	background: var(--accent-soft);
+	color: var(--text);
+	font-weight: 600;
+}
+
+.sheet-cell {
+	background: var(--surface);
+	text-overflow: ellipsis;
+	white-space: pre;
+}
+
+.sheet-cell-number {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.sheet-cell-boolean {
+	text-align: center;
+}
+
+.sheet-cell-error {
+	color: var(--danger);
+	text-align: center;
+}
+
+/* The server did not send the result of this input yet. */
+.sheet-cell-pending {
+	color: var(--text-muted);
+}
+
+.sheet-cell-selected {
+	background: var(--accent-soft);
+}
+
+.sheet-cell-active {
+	background: var(--surface);
+	box-shadow: inset 0 0 0 2px var(--text-muted);
+}
+
+.sheet-grid:focus .sheet-cell-active {
+	box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+.sheet-cell-editor {
+	position: absolute;
+	z-index: 1;
+	height: var(--sheet-row-height);
+	padding: 0 5px;
+	border: 2px solid var(--focus);
+	border-radius: 0;
+	background: var(--surface);
+	box-shadow: var(--shadow);
+	color: var(--text);
+	font: 13px / 1 var(--font);
+}
+
+.sheet-cell-editor:focus {
+	outline: none;
+}
+
+@media (max-width: 767px) {
+	.sheet-bar {
+		padding: 6px 8px;
+	}
+
+	.sheet-name-box {
+		width: 56px;
+	}
+}

@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, viewPath } from "../../routes.ts";
-import { MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
 import { labelRows, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
@@ -61,7 +61,7 @@ export function Sidebar({
 				<button type="button" className="nav-backdrop" aria-label="Close the menu" tabIndex={-1} onClick={onClose} />
 			)}
 			<nav
-				id="mail-nav"
+				id={MAIL_NAV_ID}
 				ref={navRef}
 				className={open ? "sidebar sidebar-open" : "sidebar"}
 				aria-label="Mailboxes, folders and labels"

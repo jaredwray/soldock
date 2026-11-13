@@ -1,8 +1,11 @@
 import type { z } from "zod";
 import { directoryOperations } from "./directory.ts";
+import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
+import { driveOperations } from "./drive.ts";
 import { mailOperations } from "./mail.ts";
 import type { Operation } from "./operation.ts";
+import { sheetsOperations } from "./sheets.ts";
 import { teamMailboxOperations } from "./team-mailboxes.ts";
 
 /** Every operation, by name. Adapters and the client are generated from this registry. */
@@ -11,6 +14,9 @@ export const operations = {
 	...directoryOperations,
 	...domainOperations,
 	...teamMailboxOperations,
+	...driveOperations,
+	...docsOperations,
+	...sheetsOperations,
 } as const;
 
 export type Operations = typeof operations;

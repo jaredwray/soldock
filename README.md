@@ -16,7 +16,9 @@ endpoint, the same way people work through the web app.
 
 > **Status:** early development. Mail has its first end-to-end layer. It receives mail through
 > Email Routing and sends mail through Email Service. It has threads, labels, search and a
-> Gmail-like web app. People use it in the browser, and agents use it through MCP.
+> Gmail-like web app. Drive has its first end-to-end layer too: folders, files with versions,
+> Docs, Sheets with formulas, the trash, search, and access for people and agents. People use
+> both in the browser, and agents use them through MCP.
 
 ## Start here
 

@@ -6,7 +6,14 @@ import {
 	runInDurableObject,
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { createClient, type FetchLike, type InputOf, type OperationName, type OutputOf } from "@soldock/contracts";
+import {
+	ApiError,
+	createClient,
+	type FetchLike,
+	type InputOf,
+	type OperationName,
+	type OutputOf,
+} from "@soldock/contracts";
 import { vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
@@ -279,6 +286,52 @@ export async function drainOutbox(principalId: string): Promise<void> {
 		},
 		{ timeout: 5000, interval: 20 },
 	);
+}
+
+/** The error code of a call that must fail. */
+export async function codeOf(promise: Promise<unknown>): Promise<string> {
+	const error = await promise.then(
+		() => null,
+		(caught: unknown) => caught,
+	);
+	if (!(error instanceof ApiError)) throw new Error(`the call did not fail with an ApiError: ${String(error)}`);
+	return error.code;
+}
+
+/** The base64 of a text, as the upload operations take file content. */
+export function base64(text: string): string {
+	return btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+}
+
+/** The text of base64 file content. */
+export function fromBase64(content: string): string {
+	return new TextDecoder().decode(Uint8Array.from(atob(content), (char) => char.charCodeAt(0)));
+}
+
+/**
+ * Waits until the outbox of a drive is empty: the shared index of other drives, the R2 deletes and the
+ * deletes of doc content are then done. The runtime fires the alarm by itself, so this runs a pending
+ * alarm and then waits for one in flight.
+ */
+export async function drainDrive(principalId: string): Promise<void> {
+	const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(principalId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const waiting = await runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+			);
+			if (waiting > 0) throw new Error(`${waiting} drive outbox rows wait`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** The keys of the R2 objects of one drive. */
+export async function driveBlobKeys(principalId: string): Promise<string[]> {
+	const listed = await env.BLOBS.list({ prefix: `drive/${principalId}/` });
+	return listed.objects.map((object) => object.key);
 }
 
 /** Sends one JSON-RPC request to /mcp. */

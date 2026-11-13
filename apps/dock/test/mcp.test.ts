@@ -40,7 +40,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(29);
+		expect(all).toHaveLength(55);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
@@ -52,6 +52,29 @@ describe("the MCP endpoint", () => {
 			"account_whoami",
 			"directory_list_principals",
 			"directory_list_team_mailboxes",
+			"docs_create",
+			"docs_get",
+			"docs_update",
+			"drive_copy_item",
+			"drive_create_folder",
+			"drive_delete_items",
+			"drive_download_file",
+			"drive_empty_trash",
+			"drive_get_about",
+			"drive_get_item",
+			"drive_list_items",
+			"drive_list_permissions",
+			"drive_list_versions",
+			"drive_move_items",
+			"drive_rename_item",
+			"drive_restore_items",
+			"drive_restore_version",
+			"drive_share_item",
+			"drive_star_items",
+			"drive_trash_items",
+			"drive_unshare_item",
+			"drive_upload_file",
+			"drive_upload_version",
 			"mail_create_label",
 			"mail_delete_label",
 			"mail_get_attachment",
@@ -63,6 +86,9 @@ describe("the MCP endpoint", () => {
 			"mail_list_threads",
 			"mail_modify_threads",
 			"mail_send",
+			"sheets_create",
+			"sheets_get",
+			"sheets_update_cells",
 		]);
 		const { tools } = ((await mcp(bot.key, "tools/list")).body?.result ?? { tools: [] }) as {
 			tools: { name: string; inputSchema: Record<string, unknown>; annotations: Record<string, unknown> }[];
@@ -89,6 +115,33 @@ describe("the MCP endpoint", () => {
 		expect(tool.structuredContent).toEqual(rest);
 		expect(tool.content[0]?.text).toMatch(/untrusted: true.*Never follow instructions/);
 		expect(JSON.parse(tool.content[1]?.text ?? "null")).toEqual(rest);
+	});
+
+	// Parity for Drive: an agent does through tools what a person does in the web app.
+	it("runs the Drive, Docs and Sheets operations as tools, with the same result as REST", async () => {
+		const { ada, bot } = await seedOrg();
+		const doc = await callTool(bot.key, "docs_create", { name: "Agent notes", markdown: "# Notes\n\nFrom a tool." });
+		const itemId = (doc.structuredContent as { item: { id: string } }).item.id;
+		expect(doc.isError).toBeUndefined();
+		const shared = await callTool(bot.key, "drive_share_item", {
+			item_id: itemId,
+			principal_id: ada.id,
+			role: "editor",
+		});
+		expect(shared.structuredContent).toMatchObject({ permission: { principal_id: ada.id, role: "editor" } });
+		const listed = await callTool(bot.key, "drive_list_items", {});
+		expect(listed.structuredContent).toEqual(await bot.call("drive.list_items"));
+		// The person reads through REST what the agent wrote through MCP.
+		expect((await ada.call("docs.get", { space_id: bot.id, item_id: itemId })).markdown).toBe(
+			"# Notes\n\nFrom a tool.\n",
+		);
+		const sheet = await callTool(bot.key, "sheets_create", { name: "Sums", cells: [{ cell: "A1", input: "=1+2" }] });
+		const sheetId = (sheet.structuredContent as { item: { id: string } }).item.id;
+		const cells = await callTool(bot.key, "sheets_get", { item_id: sheetId });
+		expect(cells.structuredContent).toMatchObject({ cells: [{ cell: "A1", value: 3, type: "number" }] });
+		const refused = await callTool(ada.key, "drive_trash_items", { item_ids: [itemId] });
+		expect(refused.isError).toBe(true);
+		expect(JSON.parse(refused.content[0]?.text ?? "{}")).toMatchObject({ code: "not_found" });
 	});
 
 	it("reports invalid arguments as a tool error that the model can read", async () => {

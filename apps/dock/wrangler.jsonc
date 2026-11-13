@@ -43,7 +43,8 @@
 	// the queues by name on the first deploy, and finds them by name after that.
 	// The directory: principals, addresses, API keys and sessions. Migrations are in ./migrations.
 	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
-	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>).
+	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), and the bytes of each version of
+	// each Drive file (key drive/<space id>/<item id>/<version id>).
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
 	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
 	"queues": {
@@ -65,10 +66,19 @@
 	// sender's own address, so the binding has no address list.
 	"send_email": [{ "name": "EMAIL" }],
 	// One MailboxDO for each principal and each team mailbox (messages, threads, labels, search index, outbox).
+	// One DriveSpaceDO for each principal (items, versions, grants, trash, search index, stars, outbox).
+	// One DocumentDO for each doc and each sheet (the content and its revision).
 	"durable_objects": {
-		"bindings": [{ "name": "MAILBOX", "class_name": "MailboxDO" }]
+		"bindings": [
+			{ "name": "MAILBOX", "class_name": "MailboxDO" },
+			{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
+			{ "name": "DOCUMENT", "class_name": "DocumentDO" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] }],
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] },
+		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] }
+	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
 		// The receiving server whose Authentication-Results header the mailbox trusts.
@@ -106,7 +116,11 @@
 			},
 			"send_email": [{ "name": "EMAIL" }],
 			"durable_objects": {
-				"bindings": [{ "name": "MAILBOX", "class_name": "MailboxDO" }]
+				"bindings": [
+					{ "name": "MAILBOX", "class_name": "MailboxDO" },
+					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
+					{ "name": "DOCUMENT", "class_name": "DocumentDO" }
+				]
 			},
 			"vars": {
 				"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
