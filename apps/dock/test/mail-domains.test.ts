@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
+import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import {
 	api,
 	callTool,
@@ -8,6 +9,7 @@ import {
 	drainOutbox,
 	inject,
 	ORIGIN,
+	PASSWORD,
 	rawMessage,
 	request,
 	SETUP_TOKEN,
@@ -19,7 +21,7 @@ function setup(domain: string, address: string) {
 	return request("/auth/setup", {
 		method: "POST",
 		headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json" },
-		body: JSON.stringify({ mail_domain: domain, address, display_name: "Owner", sign_in_email: "owner@home.example" }),
+		body: JSON.stringify({ mail_domain: domain, address, display_name: "Owner", password: PASSWORD }),
 	});
 }
 
@@ -68,7 +70,7 @@ describe("mail domain settings", () => {
 			display_name: "Admin",
 			address: "admin@dock.test",
 			org_role: "admin",
-			sign_in_email: "admin@home.example",
+			password: PASSWORD,
 		});
 		expect((await domains(admin.key, "POST", " Team.Example ")).status).toBe(200);
 		expect((await domains(admin.key, "POST", "team.example")).status).toBe(200);
@@ -81,7 +83,7 @@ describe("mail domain settings", () => {
 			kind: "human",
 			display_name: "Team",
 			address: "member@team.example",
-			sign_in_email: "team@home.example",
+			password: PASSWORD,
 		});
 		await owner.call("mail.send", { to: [member.address], subject: "Local mail", text: "Hello" });
 		await drainOutbox(owner.id);
@@ -135,28 +137,15 @@ describe("mail domain settings", () => {
 		expect((await domains(owner.key, "POST", domain)).status).toBe(400);
 	});
 
-	it("keeps sign-in emails outside saved domains, including concurrent changes", async () => {
-		const { owner } = await seedOrg();
-		expect((await domains(owner.key, "POST", "home.example")).status).toBe(409);
-		const results = await Promise.all([
-			domains(owner.key, "POST", "login.example"),
-			request("/api/v1/account/sign-in-email", {
-				method: "POST",
-				headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
-				body: JSON.stringify({ sign_in_email: "owner@login.example" }),
-			}),
-		]);
-		expect(results.filter((res) => res.ok)).toHaveLength(1);
-		const saved = await env.DIRECTORY.prepare("SELECT domain FROM mail_domains WHERE domain = 'login.example'").first();
-		const { sign_in_email } = await owner.call("account.whoami");
-		expect(Boolean(saved) && sign_in_email === "owner@login.example").toBe(false);
-	});
-
 	it("carries existing mailbox domains into settings on upgrade", async () => {
 		const { owner } = await seedOrg();
 		await env.DIRECTORY.prepare("DROP TABLE mail_domains").run();
+		// A directory from before 0003 gets 0003 and then 0004 on deploy.
 		await env.DIRECTORY.batch(
-			domainMigration.split("--> statement-breakpoint").map((sql) => env.DIRECTORY.prepare(sql)),
+			[
+				...domainMigration.split("--> statement-breakpoint"),
+				...passwordMigration.split("--> statement-breakpoint"),
+			].map((sql) => env.DIRECTORY.prepare(sql)),
 		);
 		expect(await (await domains(owner.key)).json()).toEqual({ mail_domains: ["dock.test"] });
 		expect((await domains(owner.key, "DELETE", "dock.test")).status).toBe(409);
@@ -174,7 +163,7 @@ describe("mail domain settings", () => {
 					kind: "human",
 					display_name: "Race",
 					address: "race@race.example",
-					sign_in_email: "race@home.example",
+					password: PASSWORD,
 				}),
 			}),
 		]);

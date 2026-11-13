@@ -16,7 +16,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
 | `src/setup.ts` | The schemas of setup (`/auth/setup`), including the first `mail_domain`. Token verification (`POST /auth/setup/verify`) returns `SetupVerifyResult`, the directory state. Setup creates a credential, so it is not an operation |
-| `src/signin.ts` | The schemas and limits of sign-in with a one-time code (`/auth/code`, `/auth/session`). Sign-in creates a credential, so it is not an operation |
+| `src/signin.ts` | The schemas and limits of sign-in with a password and an optional TOTP code (`/auth/session`): `Password`, `TotpCode`, `SignInInput`, `SignInResult`. Sign-in creates a credential, so it is not an operation |
 | `src/client.ts` | `createClient()`: a typed REST client built from each operation's route. The web app uses it |
 
 ## Rules

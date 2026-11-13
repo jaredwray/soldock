@@ -69,7 +69,7 @@ export async function authenticate(
 	if (!token) return null;
 	const session = await findSession(env.DIRECTORY, token);
 	if (session?.principal.kind !== "human") return null;
-	// A human signs in with a code from their sign-in email, so a session holds every human scope.
+	// A human signs in with a password and, when it is on, a TOTP code, so a session holds every human scope.
 	return {
 		id: session.principal.id,
 		principal: session.principal,

@@ -2,24 +2,27 @@ import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
+import baseMigration from "../migrations/0001_directory.sql?raw";
+import domainMigration from "../migrations/0003_mail_domains.sql?raw";
+import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
+import { totpCode } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
 	api,
 	callTool,
-	codeIn,
 	cookieOf,
 	createActor,
 	mcp,
 	ORIGIN,
-	OWNER_SIGN_IN_EMAIL,
+	PASSWORD,
 	request,
-	requestCode,
 	SETUP_TOKEN,
 	seedOrg,
 	setupOwner,
 	signIn,
-	submitCode,
+	submitSignIn,
+	totpNow,
 } from "./helpers.ts";
 
 async function denied(promise: Promise<unknown>): Promise<string> {
@@ -56,7 +59,7 @@ const OWNER = {
 	mail_domain: "dock.test",
 	display_name: "Olive Owner",
 	address: "owner@dock.test",
-	sign_in_email: OWNER_SIGN_IN_EMAIL,
+	password: PASSWORD,
 };
 
 const SESSION_COOKIE =
@@ -67,13 +70,27 @@ function wrong(code: string): string {
 	return String((Number(code) + 1) % 10 ** code.length).padStart(code.length, "0");
 }
 
-/** Changes the sign-in email with a session cookie, as the web app does. */
-function setSignInEmailWithCookie(cookie: string, body: Record<string, string>) {
-	return request("/api/v1/account/sign-in-email", {
+/** Sets a password with a session cookie, as the web app does. */
+function setPasswordWithCookie(cookie: string, body: Record<string, string>) {
+	return request("/api/v1/account/password", {
 		method: "POST",
 		headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
 		body: JSON.stringify(body),
 	});
+}
+
+/** Turns on two-step verification for the caller of `call`, and returns the secret. */
+async function turnOnTotp(call: ReturnType<typeof api>): Promise<string> {
+	const { secret } = await call("account.create_totp_secret");
+	await call("account.enable_totp", { code: await totpNow(secret) });
+	return secret;
+}
+
+/** The body of the 401 that each refused sign-in gets. */
+async function refusal(res: Response) {
+	expect(res.status).toBe(401);
+	expect(res.headers.get("set-cookie")).toBeNull();
+	return ((await res.json()) as { detail?: string }).detail;
 }
 
 describe("first-run setup", () => {
@@ -129,11 +146,12 @@ describe("first-run setup", () => {
 		expect((await setup("wrong", OWNER)).status).toBe(401);
 		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x@elsewhere.example" })).status).toBe(400);
 		expect((await setup(SETUP_TOKEN, { ...OWNER, address: "x+tag@dock.test" })).status).toBe(400);
-		// The owner needs a sign-in email, outside the mail domains: a code in a Soldock mailbox cannot be read.
+		// The owner needs a password of at least 12 characters, and setup takes no sign-in email.
 		expect(
 			(await setup(SETUP_TOKEN, { mail_domain: "dock.test", display_name: "X", address: "x@dock.test" })).status,
 		).toBe(400);
-		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@dock.test" })).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, password: "short pass" })).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@home.example" })).status).toBe(400);
 		const res = await setup(SETUP_TOKEN, OWNER);
 		expect(res.status).toBe(201);
 		// Without an Origin header (curl), setup makes no session.
@@ -142,7 +160,9 @@ describe("first-run setup", () => {
 		expect(await api(api_key.secret)("account.whoami")).toMatchObject({
 			principal: { kind: "human", org_role: "owner", address: "owner@dock.test" },
 			credential: "api_key",
+			sign_in: { password_set: true, totp_enabled: false },
 		});
+		await signIn("owner@dock.test");
 		const again = await setup(SETUP_TOKEN, { ...OWNER, display_name: "Mallory", address: "mallory@dock.test" });
 		expect(again.status).toBe(409);
 	});
@@ -195,10 +215,9 @@ describe("first-run setup", () => {
 		expect(await res.json()).toMatchObject({ setup_needed: true, start_fresh_available: true });
 	});
 
-	it("replaces the directory and invalidates old keys, sessions, and sign-in codes", async () => {
-		const { owner, bot } = await seedOrg();
-		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
-		await requestCode(OWNER_SIGN_IN_EMAIL);
+	it("replaces the directory and invalidates old keys, sessions, and passwords", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const cookie = await signIn(owner.address);
 		const res = await setup(
 			SETUP_TOKEN,
 			{ ...OWNER, mail_domain: "new.example", address: "owner@new.example", start_fresh: "DELETE DIRECTORY" },
@@ -218,11 +237,9 @@ describe("first-run setup", () => {
 		expect(await api(result.api_key.secret)("directory.list_mail_domains")).toEqual({
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
-		expect(
-			await denied(api(result.api_key.secret)("account.set_sign_in_email", { sign_in_email: "owner@new.example" })),
-		).toBe("invalid");
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
-		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM sign_in_codes").first("count")).toBe(0);
+		await refusal(await submitSignIn(ada.address, PASSWORD));
+		await signIn("owner@new.example");
 		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
 	});
 
@@ -232,7 +249,7 @@ describe("first-run setup", () => {
 		expect((await setup("wrong", body, ORIGIN)).status).toBe(401);
 		expect((await setup(SETUP_TOKEN, body, "https://evil.example")).status).toBe(403);
 		expect((await setup(SETUP_TOKEN, { ...body, start_fresh: true }, ORIGIN)).status).toBe(400);
-		expect((await setup(SETUP_TOKEN, { ...body, sign_in_email: "owner@dock.test" }, ORIGIN)).status).toBe(400);
+		expect((await setup(SETUP_TOKEN, { ...body, password: "short" }, ORIGIN)).status).toBe(400);
 		for (const token of [undefined, "short"]) {
 			const res = await withEnv({ SETUP_TOKEN: token }, "/auth/setup", {
 				method: "POST",
@@ -275,9 +292,7 @@ describe("first-run setup", () => {
 
 	it("recreates the old schema that lacks sign_in_email and supports a new session", async () => {
 		await env.DIRECTORY.batch([
-			...["sessions", "sign_in_codes", "api_keys", "addresses", "principals"].map((name) =>
-				env.DIRECTORY.prepare(`DROP TABLE ${name}`),
-			),
+			...["sessions", "api_keys", "addresses", "principals"].map((name) => env.DIRECTORY.prepare(`DROP TABLE ${name}`)),
 			...legacyDirectory
 				.split(";")
 				.map((sql) => sql.trim())
@@ -291,8 +306,7 @@ describe("first-run setup", () => {
 		expect(res.status).toBe(201);
 		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(res) } })).status).toBe(200);
 		expect(await env.DIRECTORY.prepare("SELECT name FROM d1_migrations").first("name")).toBe("0001_directory.sql");
-		const { sent } = await requestCode(OWNER_SIGN_IN_EMAIL);
-		expect(sent).toHaveLength(1);
+		await signIn(OWNER.address);
 	});
 
 	// The owner and the key exist after the first D1 batch, so setup cannot run again. If the session
@@ -372,95 +386,85 @@ describe("credentials", () => {
 	});
 });
 
-describe("sign-in with a code", () => {
-	it("sends a code to the sign-in email, and the code signs the person in once, with every human scope", async () => {
+describe("sign-in with a password", () => {
+	it("signs a person in with the address and the password, with every human scope", async () => {
 		await setupOwner();
-		const { res, sent } = await requestCode(OWNER_SIGN_IN_EMAIL);
-		expect(res.status).toBe(202);
-		expect(sent).toHaveLength(1);
-		expect(sent[0]).toMatchObject({
-			from: { name: "Soldock", email: "no-reply@dock.test" },
-			to: OWNER_SIGN_IN_EMAIL,
-			subject: "Your Soldock sign-in code",
-		});
-		expect(sent[0]?.text).toContain(`sign in as owner@dock.test at ${ORIGIN}`);
-		const code = codeIn(sent[0]);
-		const signedIn = await submitCode(OWNER_SIGN_IN_EMAIL, code);
-		expect(signedIn.status).toBe(204);
-		expect(signedIn.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
-		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(signedIn) } });
-		const body = (await whoami.json()) as { credential: string; scopes: string[]; sign_in_email: string };
-		expect(body).toMatchObject({ credential: "session", sign_in_email: OWNER_SIGN_IN_EMAIL });
+		const res = await submitSignIn("Owner@Dock.TEST", PASSWORD);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ status: "signed_in" });
+		expect(res.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
+		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(res) } });
+		const body = (await whoami.json()) as { credential: string; scopes: string[]; sign_in: unknown };
+		expect(body).toMatchObject({ credential: "session", sign_in: { password_set: true, totp_enabled: false } });
 		expect(body.scopes.sort()).toEqual([...ALL_SCOPES].sort());
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, code)).status).toBe(401);
 	});
 
-	// People type their Soldock address as often as their sign-in email. The code never goes to the mailbox.
-	it("accepts the Soldock address or the sign-in email in any case, and ignores spaces and hyphens in the code", async () => {
-		await setupOwner();
-		const { sent } = await requestCode("Owner@Dock.TEST");
-		expect(sent.map((mail) => mail.to)).toEqual([OWNER_SIGN_IN_EMAIL]);
-		const code = codeIn(sent[0]);
-		expect((await submitCode("OLIVE@home.example", ` ${code.slice(0, 4)}-${code.slice(4)} `)).status).toBe(204);
-	});
-
-	// The answer must not tell an attacker which addresses have an account.
-	it("answers each address the same, and sends nothing for an unknown address, an agent or another origin", async () => {
-		await seedOrg();
-		for (const email of ["nobody@dock.test", "nobody@home.example", "bot@dock.test"]) {
-			const { res, sent } = await requestCode(email);
-			expect(res.status).toBe(202);
-			expect(sent).toEqual([]);
-			expect((await submitCode(email, "12345678")).status).toBe(401);
+	// The answer must not tell an attacker which part is wrong, or which addresses have an account.
+	it("gives the same 401 for an unknown address, an agent, and a wrong password, and refuses another origin", async () => {
+		const { owner, bot } = await seedOrg();
+		const details = new Set<string | undefined>();
+		for (const [address, password] of [
+			["nobody@dock.test", PASSWORD],
+			[bot.address, PASSWORD],
+			[owner.address, `${PASSWORD}!`],
+			[owner.address, "x"],
+		] as const) {
+			details.add(await refusal(await submitSignIn(address, password)));
 		}
+		expect(details.size).toBe(1);
 		for (const origin of ["https://evil.example", null]) {
-			const { res, sent } = await requestCode(OWNER_SIGN_IN_EMAIL, origin);
-			expect(res.status).toBe(403);
-			expect(sent).toEqual([]);
-			expect((await submitCode(OWNER_SIGN_IN_EMAIL, "12345678", origin)).status).toBe(403);
+			expect((await submitSignIn(owner.address, PASSWORD, { origin })).status).toBe(403);
 		}
-		expect((await requestCode("not an address")).res.status).toBe(400);
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, "1234")).status).toBe(400);
+		expect((await submitSignIn("not an address", PASSWORD)).status).toBe(400);
+		expect((await submitSignIn(owner.address, "")).status).toBe(400);
 	});
 
-	// An 8-digit code is safe only while the number of guesses stays small.
-	it("allows five guesses on one code, after which the correct code also fails", async () => {
-		await setupOwner();
-		const code = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
-		const guesses = await Promise.all(
-			Array.from({ length: 5 }, () => submitCode(OWNER_SIGN_IN_EMAIL, wrong(code)).then((res) => res.status)),
-		);
-		expect(guesses).toEqual([401, 401, 401, 401, 401]);
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, code)).status).toBe(401);
-	});
-
-	it("makes a new code replace the older ones, and refuses an expired code", async () => {
-		await setupOwner();
-		const first = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
-		const second = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, first)).status).toBe(401);
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, second)).status).toBe(204);
-		const third = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
-		await env.DIRECTORY.prepare("UPDATE sign_in_codes SET expires_at = ?")
-			.bind(new Date(Date.now() - 1).toISOString())
-			.run();
-		expect((await submitCode(OWNER_SIGN_IN_EMAIL, third)).status).toBe(401);
-	});
-
-	// Somebody who knows the address must not fill the person's inbox, or get unlimited guesses.
-	it("sends at most five codes an hour to one person, also after a change of the sign-in email", async () => {
+	// A password is safe only while the number of guesses stays small.
+	it("locks sign-in for 15 minutes after 10 failed attempts, also for parallel guesses", async () => {
 		const owner = await setupOwner();
-		const sent = await Promise.all(
-			Array.from({ length: 6 }, () => requestCode(OWNER_SIGN_IN_EMAIL).then((result) => result.sent.length)),
+		const guesses = await Promise.all(
+			Array.from({ length: 10 }, () => submitSignIn(owner.address, "wrong password").then((res) => res.status)),
 		);
-		expect(sent.reduce((sum, n) => sum + n, 0)).toBe(5);
-		// The change stops the old codes, but it must not give a new hour of codes to the new inbox.
-		await owner.call("account.set_sign_in_email", { sign_in_email: "olive@new.example" });
-		expect((await requestCode("owner@dock.test")).sent).toEqual([]);
-		await env.DIRECTORY.prepare("UPDATE sign_in_codes SET created_at = ?")
-			.bind(new Date(Date.now() - 61 * 60 * 1000).toISOString())
+		expect(guesses).toEqual(Array(10).fill(401));
+		await refusal(await submitSignIn(owner.address, PASSWORD));
+		// The API key still works during the lock.
+		await owner.call("account.whoami");
+		await env.DIRECTORY.prepare("UPDATE principals SET sign_in_locked_until = ? WHERE id = ?")
+			.bind(new Date(Date.now() - 1).toISOString(), owner.id)
 			.run();
-		expect((await requestCode("owner@dock.test")).sent.map((mail) => mail.to)).toEqual(["olive@new.example"]);
+		await signIn(owner.address);
+	});
+
+	it("asks for a TOTP code after a correct password, and a code works one time", async () => {
+		const owner = await setupOwner();
+		const secret = await turnOnTotp(owner.call);
+		expect((await owner.call("account.whoami")).sign_in).toEqual({ password_set: true, totp_enabled: true });
+		const first = await submitSignIn(owner.address, PASSWORD);
+		expect(first.status).toBe(200);
+		expect(await first.json()).toEqual({ status: "totp_required" });
+		expect(first.headers.get("set-cookie")).toBeNull();
+		// The code that turned on two-step verification is used, so the next code signs in.
+		const code = await totpNow(secret, 1);
+		const wrongPassword = await refusal(await submitSignIn(owner.address, "wrong password", { totpCode: code }));
+		expect(await refusal(await submitSignIn(owner.address, PASSWORD, { totpCode: wrong(code) }))).toBe(wrongPassword);
+		const signedIn = await submitSignIn(owner.address, PASSWORD, { totpCode: ` ${code.slice(0, 3)} ${code.slice(3)}` });
+		expect(await signedIn.json()).toEqual({ status: "signed_in" });
+		expect(signedIn.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
+		await refusal(await submitSignIn(owner.address, PASSWORD, { totpCode: code }));
+		expect((await submitSignIn(owner.address, PASSWORD, { totpCode: "12345" })).status).toBe(400);
+	});
+
+	// Authenticator apps compute codes with RFC 6238, so the server must give the same codes.
+	it.each([
+		[59, "287082"],
+		[1111111109, "081804"],
+		[1111111111, "050471"],
+		[1234567890, "005924"],
+		[2000000000, "279037"],
+		[20000000000, "353130"],
+	])("gives the RFC 6238 code at %i seconds", async (seconds, code) => {
+		// The base32 form of the RFC test key "12345678901234567890".
+		expect(await totpCode("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", Math.floor(seconds / 30))).toBe(code);
 	});
 
 	it("refuses a large sign-in body while it streams, before any lookup", async () => {
@@ -472,7 +476,7 @@ describe("sign-in with a code", () => {
 				else controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20));
 			},
 		});
-		const res = await request("/auth/code", {
+		const res = await request("/auth/session", {
 			method: "POST",
 			headers: { origin: ORIGIN, "content-type": "application/json" },
 			body,
@@ -484,8 +488,8 @@ describe("sign-in with a code", () => {
 
 	// SameSite=Lax still sends the cookie on some cross-site requests, so changes also need the Origin.
 	it("refuses a change made with the cookie unless it comes from this origin", async () => {
-		await setupOwner();
-		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
+		const owner = await setupOwner();
+		const cookie = await signIn(owner.address);
 		const create = (headers: Record<string, string>) =>
 			request("/api/v1/mail/labels", {
 				method: "POST",
@@ -498,8 +502,8 @@ describe("sign-in with a code", () => {
 	});
 
 	it("ends the session on sign-out", async () => {
-		await setupOwner();
-		const cookie = await signIn(OWNER_SIGN_IN_EMAIL);
+		const owner = await setupOwner();
+		const cookie = await signIn(owner.address);
 		const out = await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } });
 		expect(out.status).toBe(204);
 		expect(out.headers.get("set-cookie")).toMatch(/Max-Age=0/);
@@ -507,25 +511,22 @@ describe("sign-in with a code", () => {
 	});
 });
 
-describe("sign-in email", () => {
-	// A new email is the way to lock out somebody who got into the old one, so it ends the other sessions.
-	it("lets a person change their own sign-in email with a full credential, and ends their other sessions", async () => {
+describe("passwords", () => {
+	// A new password is the way to lock out somebody who knew the old one, so it ends the other sessions.
+	it("lets a person change their own password with a full credential, and ends their other sessions", async () => {
 		const owner = await setupOwner();
-		const here = await signIn(OWNER_SIGN_IN_EMAIL);
-		const elsewhere = await signIn(OWNER_SIGN_IN_EMAIL);
-		const pending = codeIn((await requestCode(OWNER_SIGN_IN_EMAIL)).sent[0]);
-		const res = await setSignInEmailWithCookie(here, { sign_in_email: "Olive@New.example" });
-		expect(await res.json()).toEqual({ principal_id: owner.id, sign_in_email: "olive@new.example" });
-		// A code that went to the old email must not work after the change, with any address.
-		expect((await submitCode("owner@dock.test", pending)).status).toBe(401);
+		const here = await signIn(owner.address);
+		const elsewhere = await signIn(owner.address);
+		const res = await setPasswordWithCookie(here, { password: "a new long password" });
+		expect(await res.json()).toEqual({ principal_id: owner.id });
 		expect((await request("/api/v1/account", { headers: { cookie: here } })).status).toBe(200);
 		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
-		expect((await requestCode(OWNER_SIGN_IN_EMAIL)).sent).toEqual([]);
-		expect((await requestCode("owner@dock.test")).sent.map((mail) => mail.to)).toEqual(["olive@new.example"]);
-		expect((await setSignInEmailWithCookie(here, { sign_in_email: "olive@dock.test" })).status).toBe(400);
+		await refusal(await submitSignIn(owner.address, PASSWORD));
+		await signIn(owner.address, "a new long password");
+		expect((await setPasswordWithCookie(here, { password: "too short" })).status).toBe(400);
 	});
 
-	// A sign-in gives every human scope, so a narrow key must not choose where the codes go.
+	// A sign-in gives every human scope, so a narrow key must not choose how a person signs in.
 	it("refuses a credential that does not hold every human scope", async () => {
 		const owner = await setupOwner();
 		const { api_key } = await owner.call("account.create_api_key", {
@@ -533,67 +534,182 @@ describe("sign-in email", () => {
 			scopes: ["account.keys", "directory.write"],
 		});
 		const narrow = api(api_key.secret);
-		expect(await denied(narrow("account.set_sign_in_email", { sign_in_email: "mallory@evil.example" }))).toBe(
-			"forbidden",
-		);
+		expect(await denied(narrow("account.set_password", { password: "mallory's password" }))).toBe("forbidden");
+		expect(await denied(narrow("account.create_totp_secret"))).toBe("forbidden");
+		expect(await denied(narrow("account.enable_totp", { code: "123456" }))).toBe("forbidden");
+		expect(await denied(narrow("account.disable_totp"))).toBe("forbidden");
 		expect(
 			await denied(
 				narrow("directory.create_principal", {
 					kind: "human",
 					display_name: "Mallory",
 					address: "mallory@dock.test",
-					sign_in_email: "mallory@evil.example",
+					password: "mallory's password",
 				}),
 			),
 		).toBe("forbidden");
-		expect((await requestCode("mallory@evil.example")).sent).toEqual([]);
+		await refusal(await submitSignIn("mallory@dock.test", "mallory's password"));
 	});
 
-	it("lets admins change the sign-in email of others except the owner, and refuses agents", async () => {
+	it("lets admins set the password of others except the owner, which also clears a lock", async () => {
 		const { owner, ada, bot } = await seedOrg();
 		const admin = await createActor(owner, {
 			kind: "human",
 			display_name: "Ann",
 			address: "ann@dock.test",
 			org_role: "admin",
-			sign_in_email: "ann@home.example",
+			password: PASSWORD,
 		});
-		const adaSession = await signIn("ada@home.example");
-		await admin.call("account.set_sign_in_email", { principal_id: ada.id, sign_in_email: "ada@new.example" });
+		const adaSession = await signIn(ada.address);
+		await Promise.all(Array.from({ length: 10 }, () => submitSignIn(ada.address, "wrong password")));
+		await refusal(await submitSignIn(ada.address, PASSWORD));
+		await admin.call("account.set_password", { principal_id: ada.id, password: "ada's new password" });
 		expect((await request("/api/v1/account", { headers: { cookie: adaSession } })).status).toBe(401);
+		await signIn(ada.address, "ada's new password");
 		expect(
-			await denied(
-				admin.call("account.set_sign_in_email", { principal_id: owner.id, sign_in_email: "x@evil.example" }),
-			),
+			await denied(admin.call("account.set_password", { principal_id: owner.id, password: "taken over now" })),
 		).toBe("forbidden");
-		expect(
-			await denied(ada.call("account.set_sign_in_email", { principal_id: admin.id, sign_in_email: "x@evil.example" })),
-		).toBe("forbidden");
-		expect(
-			await denied(
-				admin.call("account.set_sign_in_email", { principal_id: ada.id, sign_in_email: OWNER_SIGN_IN_EMAIL }),
-			),
-		).toBe("conflict");
-		expect(
-			await denied(ada.call("account.set_sign_in_email", { principal_id: bot.id, sign_in_email: "bot@home.example" })),
-		).toBe("invalid");
-		// MCP gives the same operation, with the same rules.
-		const tool = await callTool(admin.key, "account_set_sign_in_email", {
-			principal_id: ada.id,
-			sign_in_email: "ada@third.example",
-		});
-		expect(tool.structuredContent).toEqual({ principal_id: ada.id, sign_in_email: "ada@third.example" });
-		expect(
-			(
-				await callTool(admin.key, "account_set_sign_in_email", {
-					principal_id: owner.id,
-					sign_in_email: "x@evil.example",
-				})
-			).isError,
-		).toBe(true);
-		expect(await denied(bot.call("account.set_sign_in_email", { sign_in_email: "bot@home.example" }))).toBe(
+		expect(await denied(ada.call("account.set_password", { principal_id: admin.id, password: "taken over now" }))).toBe(
 			"forbidden",
 		);
+		expect(await denied(ada.call("account.set_password", { principal_id: bot.id, password: "agents have none" }))).toBe(
+			"invalid",
+		);
+		// MCP gives the same operation, with the same rules.
+		const tool = await callTool(admin.key, "account_set_password", {
+			principal_id: ada.id,
+			password: "third password!",
+		});
+		expect(tool.structuredContent).toEqual({ principal_id: ada.id });
+		await signIn(ada.address, "third password!");
+		expect(
+			(await callTool(admin.key, "account_set_password", { principal_id: owner.id, password: "taken over now" }))
+				.isError,
+		).toBe(true);
+		expect(await denied(bot.call("account.set_password", { password: "agents have none" }))).toBe("forbidden");
+	});
+});
+
+describe("two-step verification", () => {
+	it("turns on only with a correct code for the newest secret", async () => {
+		const owner = await setupOwner();
+		expect(await denied(owner.call("account.enable_totp", { code: "123456" }))).toBe("conflict");
+		const first = await owner.call("account.create_totp_secret");
+		expect(first.secret).toMatch(/^[A-Z2-7]{32}$/);
+		const uri = new URL(first.otpauth_uri);
+		expect(`${uri.protocol}//${uri.host}${decodeURIComponent(uri.pathname)}`).toBe(
+			"otpauth://totp/Soldock:owner@dock.test",
+		);
+		expect(Object.fromEntries(uri.searchParams)).toEqual({
+			secret: first.secret,
+			issuer: "Soldock",
+			algorithm: "SHA1",
+			digits: "6",
+			period: "30",
+		});
+		expect(await denied(owner.call("account.enable_totp", { code: wrong(await totpNow(first.secret)) }))).toBe(
+			"invalid",
+		);
+		// A new secret replaces the one that waits, so a code for the first secret does nothing.
+		const second = await owner.call("account.create_totp_secret");
+		expect(await denied(owner.call("account.enable_totp", { code: await totpNow(first.secret) }))).toBe("invalid");
+		expect((await owner.call("account.whoami")).sign_in).toEqual({ password_set: true, totp_enabled: false });
+		await signIn(owner.address);
+		expect(await owner.call("account.enable_totp", { code: await totpNow(second.secret) })).toEqual({
+			totp_enabled: true,
+		});
+		expect(await (await submitSignIn(owner.address, PASSWORD)).json()).toEqual({ status: "totp_required" });
+	});
+
+	it("lets the person or an admin turn it off, but only the owner turns off the owner's", async () => {
+		const { owner, ada } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+			password: PASSWORD,
+		});
+		await turnOnTotp(ada.call);
+		await turnOnTotp(owner.call);
+		expect(await admin.call("account.disable_totp", { principal_id: ada.id })).toEqual({
+			principal_id: ada.id,
+			totp_enabled: false,
+		});
+		await signIn(ada.address);
+		expect(await denied(admin.call("account.disable_totp", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await denied(ada.call("account.disable_totp", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await (await submitSignIn(owner.address, PASSWORD)).json()).toEqual({ status: "totp_required" });
+		const tool = await callTool(owner.key, "account_disable_totp", {});
+		expect(tool.structuredContent).toEqual({ principal_id: owner.id, totp_enabled: false });
+		await signIn(owner.address);
+	});
+});
+
+describe("directory upgrade", () => {
+	// Production directories have sign-in emails. The migration must keep each account, key and session.
+	it("moves a directory with sign-in emails to passwords, and keeps keys, sessions and agents", async () => {
+		const db = env.DIRECTORY;
+		const run = (statements: string[]) => db.batch(statements.map((sql) => db.prepare(sql)));
+		await run([
+			"DROP TABLE sessions",
+			"DROP TABLE api_keys",
+			"DROP TABLE addresses",
+			"DROP TABLE principals",
+			"DROP TABLE mail_domains",
+		]);
+		await run([
+			...baseMigration
+				.replace(/--[^\n]*/g, "")
+				.split(";")
+				.map((sql) => sql.trim())
+				.filter(Boolean),
+			...domainMigration.split("--> statement-breakpoint"),
+		]);
+		const key = "sdk_upgrade-key-0123456789abcdefghijklmnopqrstuvw";
+		const session = "upgrade-session-token";
+		const hash = async (value: string) =>
+			[...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))]
+				.map((byte) => byte.toString(16).padStart(2, "0"))
+				.join("");
+		await run([
+			"INSERT INTO mail_domains (domain) VALUES ('dock.test')",
+			`INSERT INTO principals (id, kind, display_name, org_role, sign_in_email, created_at)
+				VALUES ('prn_owner', 'human', 'Olive', 'owner', 'olive@home.example', '2026-01-01T00:00:00.000Z')`,
+			`INSERT INTO principals (id, kind, display_name, sponsor_id, outbound_mode, created_at)
+				VALUES ('prn_bot', 'agent', 'Bot', 'prn_owner', 'internal-only', '2026-01-01T00:00:00.000Z')`,
+			"INSERT INTO addresses VALUES ('owner@dock.test', 'prn_owner', 1, '2026-01-01T00:00:00.000Z')",
+			"INSERT INTO addresses VALUES ('bot@dock.test', 'prn_bot', 1, '2026-01-01T00:00:00.000Z')",
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
+				VALUES ('key_owner', 'prn_owner', '${await hash(key)}', 'Setup', '${JSON.stringify(ALL_SCOPES)}', 'prn_owner', '2026-01-01T00:00:00.000Z')`,
+			`INSERT INTO sessions VALUES ('${await hash(session)}', 'prn_owner', '2026-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z')`,
+			`INSERT INTO sign_in_codes VALUES ('sic_1', 'prn_owner', 'x', 0, '2026-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z', NULL)`,
+		]);
+		await run(passwordMigration.split("--> statement-breakpoint"));
+
+		const owner = api(key);
+		expect(await owner("account.whoami")).toMatchObject({
+			principal: { id: "prn_owner", address: "owner@dock.test" },
+			sign_in: { password_set: false, totp_enabled: false },
+		});
+		const cookie = `__Host-soldock_session=${session}`;
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
+		expect((await owner("directory.list_principals")).principals).toMatchObject([
+			{ id: "prn_bot", sponsor_id: "prn_owner" },
+			{ id: "prn_owner" },
+		]);
+		expect(await db.prepare("SELECT name FROM sqlite_master WHERE name = 'sign_in_codes'").first()).toBeNull();
+		expect(await db.prepare("PRAGMA foreign_key_check").all()).toMatchObject({ results: [] });
+		// Without a password, the person signs in after somebody sets one: the person in a kept session,
+		// or the owner with the setup key.
+		await refusal(await submitSignIn("owner@dock.test", "olive@home.example"));
+		await owner("account.set_password", { password: PASSWORD });
+		await signIn("owner@dock.test");
+		// The domain rules and the foreign keys still apply.
+		expect(await denied(owner("directory.remove_mail_domain", { domain: "dock.test" }))).toBe("conflict");
+		await expect(
+			db.prepare("INSERT INTO addresses VALUES ('ghost@dock.test', 'prn_nobody', 1, '2026-01-01')").run(),
+		).rejects.toThrow(/FOREIGN KEY/);
 	});
 });
 
@@ -604,7 +720,7 @@ describe("directory authorization", () => {
 			kind: "human",
 			display_name: "Eve",
 			address: "eve@dock.test",
-			sign_in_email: "eve@home.example",
+			password: PASSWORD,
 		} as const;
 		expect(await denied(ada.call("directory.create_principal", input))).toBe("forbidden");
 		expect(await denied(bot.call("directory.create_principal", input))).toBe("forbidden");
@@ -613,7 +729,7 @@ describe("directory authorization", () => {
 			display_name: "Ann Admin",
 			address: "ann@dock.test",
 			org_role: "admin",
-			sign_in_email: "ann@home.example",
+			password: PASSWORD,
 		});
 		await admin.call("directory.create_principal", input);
 	});
@@ -631,29 +747,26 @@ describe("directory authorization", () => {
 			sponsor_id: owner.id,
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
-		const create = (address: string, signInEmail: string | null = "x@home.example") =>
+		const create = (address: string, password: string | null = PASSWORD) =>
 			owner.call("directory.create_principal", {
 				kind: "human",
 				display_name: "X",
 				address,
-				...(signInEmail ? { sign_in_email: signInEmail } : {}),
+				...(password ? { password } : {}),
 			});
 		expect(await denied(create("x@not-ours.example"))).toBe("invalid");
 		expect(await denied(create("x+tag@dock.test"))).toBe("invalid");
 		expect(await denied(create("HELPER@dock.test"))).toBe("conflict");
-		// The sender of sign-in codes is reserved, so a reply to a code reaches no mailbox.
-		expect(await denied(create("No-Reply@dock.test"))).toBe("invalid");
-		// A person needs a sign-in email outside the mail domains, and only one person can have it.
+		// A person needs a password of at least 12 characters. An agent has none.
 		expect(await denied(create("x@dock.test", null))).toBe("invalid");
-		expect(await denied(create("x@dock.test", "x@second.test"))).toBe("invalid");
-		expect(await denied(create("x@dock.test", "OLIVE@home.example"))).toBe("conflict");
+		expect(await denied(create("x@dock.test", "eleven char"))).toBe("invalid");
 		expect(
 			await denied(
 				owner.call("directory.create_principal", {
 					kind: "agent",
 					display_name: "Z",
 					address: "z@dock.test",
-					sign_in_email: "z@home.example",
+					password: PASSWORD,
 				}),
 			),
 		).toBe("invalid");
@@ -675,7 +788,7 @@ describe("directory authorization", () => {
 			kind: "human",
 			display_name: "Bob",
 			address: "bob@dock.test",
-			sign_in_email: "bob@home.example",
+			password: PASSWORD,
 		});
 		const change = (mode: "any" | "internal-only") => ({ principal_id: bot.id, mode });
 		await ada.call("directory.update_agent_policy", change("any"));
@@ -698,7 +811,7 @@ describe("directory authorization", () => {
 			kind: "human",
 			display_name: "Bob",
 			address: "bob@dock.test",
-			sign_in_email: "bob@home.example",
+			password: PASSWORD,
 		});
 		const { api_key } = await ada.call("account.create_api_key", {
 			principal_id: bot.id,
@@ -722,7 +835,7 @@ describe("directory authorization", () => {
 			display_name: "Ann",
 			address: "ann@dock.test",
 			org_role: "admin",
-			sign_in_email: "ann@home.example",
+			password: PASSWORD,
 		});
 		await admin.call("account.list_api_keys", { principal_id: ada.id });
 		expect(await denied(admin.call("account.list_api_keys", { principal_id: owner.id }))).toBe("forbidden");

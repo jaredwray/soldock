@@ -2,32 +2,40 @@ import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@soldock/contracts";
 import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
+import { hashPassword } from "./password.ts";
 import {
 	addMailDomain,
 	assertPrimaryAddress,
-	assertSignInEmail,
 	createApiKey,
 	createPrincipal,
+	disableTotp,
 	domainOf,
+	enableTotp,
 	getApiKey,
 	getPrincipal,
 	listApiKeys,
 	listPrincipals,
 	mailDomains,
 	type PrincipalRecord,
+	pendingTotpSecret,
 	removeMailDomain,
 	revokeApiKey,
 	scopeCeiling,
-	setSignInEmail,
+	setPassword,
+	setPendingTotpSecret,
 	updateOutboundPolicy,
 } from "./store.ts";
+import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
 type IdentityOperation =
 	| "account.whoami"
 	| "account.list_api_keys"
 	| "account.create_api_key"
 	| "account.revoke_api_key"
-	| "account.set_sign_in_email"
+	| "account.set_password"
+	| "account.create_totp_secret"
+	| "account.enable_totp"
+	| "account.disable_totp"
 	| "directory.list_principals"
 	| "directory.create_principal"
 	| "directory.list_mail_domains"
@@ -40,8 +48,8 @@ function isAdmin(caller: AuthContext): boolean {
 }
 
 /**
- * A human manages their own credentials (keys and sign-in email), the keys of the agents that they
- * sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
+ * A human manages their own credentials (keys, password and two-step verification), the keys of the
+ * agents that they sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
  * credentials, so an admin can never act as the owner.
  */
 function canManageCredentialsOf(caller: AuthContext, target: PrincipalRecord): boolean {
@@ -79,15 +87,15 @@ function grantableScopes(caller: AuthContext, target: PrincipalRecord, requested
 }
 
 /**
- * A sign-in email gives a session with every human scope. So only a credential that holds every
- * human scope can set one, and a narrow key cannot become a full session.
+ * A sign-in gives a session with every human scope. So only a credential that holds every human scope
+ * can change how a person signs in, and a narrow key cannot become a full session or lock a person out.
  */
-function assertCanSetSignInEmail(caller: AuthContext): void {
+function assertFullCredential(caller: AuthContext): void {
 	const missing = ALL_SCOPES.filter((scope) => !caller.scopes.has(scope));
 	if (missing.length > 0) {
 		throw new OperationError(
 			"forbidden",
-			`A sign-in email gives every human scope. Your credential does not hold ${missing.join(", ")}.`,
+			`A sign-in gives every human scope. Your credential does not hold ${missing.join(", ")}.`,
 		);
 	}
 }
@@ -130,7 +138,10 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 			principal: toPrincipalOutput(call.caller.principal),
 			scopes: [...call.caller.scopes],
 			credential: call.caller.credential,
-			sign_in_email: call.caller.principal.sign_in_email,
+			sign_in:
+				call.caller.kind === "human"
+					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }
+					: null,
 		};
 	},
 
@@ -148,18 +159,15 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		let sponsorId: string | null = null;
 		if (input.kind === "agent") {
 			if (input.org_role) throw new OperationError("invalid", "An agent has no organization role.");
-			if (input.sign_in_email) throw new OperationError("invalid", "An agent has no sign-in email.");
+			if (input.password) throw new OperationError("invalid", "An agent has no password.");
 			sponsorId = input.sponsor_id ?? call.caller.principal.id;
 			const sponsor = await getPrincipal(call.env.DIRECTORY, sponsorId);
 			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
 			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
 		} else {
 			if (input.sponsor_id) throw new OperationError("invalid", "Only an agent has a sponsor.");
-			if (!input.sign_in_email) {
-				throw new OperationError("invalid", "A person needs a sign-in email. Sign-in codes go to it.");
-			}
-			assertSignInEmail(domains, input.sign_in_email);
-			assertCanSetSignInEmail(call.caller);
+			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
+			assertFullCredential(call.caller);
 		}
 		const target = { kind: input.kind, sponsor_id: sponsorId } as PrincipalRecord;
 		const scopes = grantableScopes(
@@ -175,7 +183,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 				address: input.address,
 				org_role: input.kind === "human" ? (input.org_role ?? "member") : null,
 				sponsor_id: sponsorId,
-				sign_in_email: input.kind === "human" ? (input.sign_in_email ?? null) : null,
+				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 		);
@@ -230,17 +238,52 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		return { revoked: true };
 	},
 
-	async "account.set_sign_in_email"(call, input) {
+	async "account.set_password"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
-		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a sign-in email.");
-		assertCanSetSignInEmail(call.caller);
-		assertSignInEmail(await mailDomains(call.env.DIRECTORY), input.sign_in_email);
-		// The change ends the other sessions of the person, so a person who lost control of the old
-		// email can lock out each session made with it. The session that makes its own change stays.
+		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a password.");
+		assertFullCredential(call.caller);
+		// The change ends the other sessions of the person, so somebody who knew the old password loses
+		// each session made with it. The session that makes its own change stays.
 		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;
-		const email = await setSignInEmail(call.env.DIRECTORY, target.id, input.sign_in_email, keep);
-		auditOk(call, "account.set_sign_in_email", target.id);
-		return { principal_id: target.id, sign_in_email: email };
+		await setPassword(call.env.DIRECTORY, target.id, await hashPassword(input.password), keep);
+		auditOk(call, "account.set_password", target.id);
+		return { principal_id: target.id };
+	},
+
+	async "account.create_totp_secret"(call) {
+		assertFullCredential(call.caller);
+		const secret = newTotpSecret();
+		await setPendingTotpSecret(call.env.DIRECTORY, call.caller.principal.id, secret);
+		auditOk(call, "account.create_totp_secret", call.caller.principal.id);
+		return { secret, otpauth_uri: otpauthUri(secret, call.caller.principal.address) };
+	},
+
+	async "account.enable_totp"(call, input) {
+		assertFullCredential(call.caller);
+		const id = call.caller.principal.id;
+		const secret = await pendingTotpSecret(call.env.DIRECTORY, id);
+		if (!secret) throw new OperationError("conflict", "Start with account.create_totp_secret, then send a code.");
+		const step = await matchTotp(secret, input.code, null);
+		if (step === null) {
+			throw new OperationError(
+				"invalid",
+				"The code is not correct. Make sure that the clock of the device is correct, then try the newest code.",
+			);
+		}
+		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step))) {
+			throw new OperationError("conflict", "A newer setup replaced this secret. Start again.");
+		}
+		auditOk(call, "account.enable_totp", id);
+		return { totp_enabled: true };
+	},
+
+	async "account.disable_totp"(call, input) {
+		const target = await credentialOwner(call, input.principal_id);
+		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has two-step verification.");
+		assertFullCredential(call.caller);
+		await disableTotp(call.env.DIRECTORY, target.id);
+		auditOk(call, "account.disable_totp", target.id);
+		return { principal_id: target.id, totp_enabled: false };
 	},
 };
 

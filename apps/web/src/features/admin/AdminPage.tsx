@@ -9,6 +9,7 @@ import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AgentPanel } from "./AgentPanel.tsx";
 import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
+import { PersonSignInCard } from "./PersonSignInCard.tsx";
 import { PrincipalTable } from "./PrincipalTable.tsx";
 
 type DirectoryState =
@@ -81,6 +82,7 @@ export function AdminPage() {
 									void load();
 								}}
 							/>
+							<PersonSignInCard me={me} people={humans} />
 						</>
 					)}
 					<section className="card">

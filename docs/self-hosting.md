@@ -158,13 +158,16 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
       Secrets**, and add the secret `SETUP_TOKEN` with that token.
    3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, then select **Continue**.
-      Select **Set up without a reset**. Enter your name, email domain, mailbox name, and sign-in email. Select **Create the owner**.
-      The sign-in email must be outside the mail domains, for example a personal address. Sign-in codes go there.
+      Select **Set up without a reset**. Enter your name, email domain, mailbox name, and a password
+      of at least 12 characters. Select **Create the owner**.
    4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
-      with the API and MCP. To sign in on a different browser, enter your address: Soldock sends
-      a one-time code to your sign-in email.
-   5. Delete the `SETUP_TOKEN` secret.
-   6. Create people and agents on the **Admin** page. Each person needs a sign-in email.
+      with the API and MCP. Keep it: it can also set a new owner password (`account.set_password`).
+      To sign in on a different browser, use your address and your password.
+   5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
+      the code. You can also do this later in **Settings**, or select **Skip for now**.
+   6. Delete the `SETUP_TOKEN` secret.
+   7. Create people and agents on the **Admin** page. Each person needs a first password. Give it to
+      the person, who can change it in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
    and gives no session:
@@ -172,14 +175,14 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    ```sh
    curl -X POST "https://<dock-host>/auth/setup" \
      -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-     -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","sign_in_email":"you@personal.example"}'
+     -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","password":"<a password of at least 12 characters>"}'
    ```
+
+   To turn on two-step verification without a browser, call `account.create_totp_secret` with the
+   key, add the `otpauth_uri` to an authenticator app, and send a code to `account.enable_totp`.
 
    After you delete the token, the setup page does not show again. While the token exists and accounts exist,
    the page offers **Continue with the existing accounts** in place of **Set up without a reset**.
-
-   Sign-in codes leave through Email Service. Do step 3 (send) before you sign in on a different
-   browser.
 
 Email Service is in beta, and its terms and quotas are for transactional mail. The
 [Email Service spike](../spikes/email-service/README.md) finds out if it can carry person-to-person
@@ -191,7 +194,7 @@ That is expected: they leave through Email Service, not through a routing rule.
 ### Manage email domains
 
 Open **Admin** and use **Admin settings: email domains** to add or remove domains.
-A domain with mailbox addresses cannot be removed. A domain with a sign-in email cannot be added.
+A domain with mailbox addresses cannot be removed.
 Configure Email Routing, Email Service, and DNS for each added domain as described above.
 The saved list does not confirm that mail delivery is ready.
 
@@ -209,7 +212,7 @@ The page checks setup before it checks the session. An old session therefore can
 4. Select **Review fresh start**. Read the confirmation, then confirm the reset.
 5. Copy the new API key. Delete the `SETUP_TOKEN` secret to disable further resets.
 
-The reset deletes all directory accounts, addresses, API keys, sessions, and sign-in codes.
+The reset deletes all directory accounts, addresses, API keys, sessions, and passwords.
 Saved mail domains stay in place. Setup adds the new owner domain in the same transaction.
 It recreates the directory schema and creates the new owner in one D1 transaction.
 If that transaction fails, the old directory stays intact.
@@ -227,6 +230,32 @@ D1 records applied migrations by filename. A change to an applied migration does
 The reset can replace the old directory schema without `principals.sign_in_email`.
 Keep applied migrations unchanged in future schema changes. Add a new migration file instead.
 Add each new migration to the bundled reset schema in `apps/dock/src/identity/setup.ts` too.
+
+### Upgrade to password sign-in
+
+Migration `0004_password_sign_in.sql` replaces sign-in codes by email with passwords and optional
+two-step verification. It removes the sign-in emails and the sign-in codes. Accounts, addresses, API
+keys, and browser sessions stay. Nobody has a password after the migration. Do one of these steps:
+
+- In a browser session from before the upgrade, open **Settings** and set a password.
+- With the owner API key from setup, call `account.set_password`:
+
+  ```sh
+  curl -X POST "https://<dock-host>/api/v1/account/password" \
+    -H "authorization: Bearer <owner API key>" -H "content-type: application/json" \
+    -d '{"password":"<a password of at least 12 characters>"}'
+  ```
+
+Then sign in, and set passwords for the other people on the **Admin** page (**Help a person sign in**).
+Without a session or the owner key, start fresh with `SETUP_TOKEN`.
+
+### Recover a sign-in
+
+- A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an
+  admin. The **Admin** page sets a new password or turns off two-step verification.
+- The owner uses the API key from setup: `account.set_password`, or `account.disable_totp`.
+- After 10 failed attempts, sign-in to that account stops for 15 minutes. API keys and existing
+  sessions still work.
 
 `GET /healthz` checks Worker liveness without D1, authentication, or static assets.
 

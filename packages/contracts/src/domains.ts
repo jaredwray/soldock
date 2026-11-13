@@ -31,8 +31,7 @@ export const domainOperations = {
 	"directory.add_mail_domain": defineOperation({
 		name: "directory.add_mail_domain",
 		summary: "Add a mail domain to admin settings",
-		description:
-			"Owners and admins only. The domain must not contain a sign-in email. Configure DNS and Cloudflare email separately.",
+		description: "Owners and admins only. Configure DNS and Cloudflare email separately.",
 		http: { method: "POST", path: "/api/v1/directory/mail-domains" },
 		scopes: ["directory.write"],
 		callers: ["human"],

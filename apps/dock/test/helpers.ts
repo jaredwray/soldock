@@ -4,11 +4,11 @@ import {
 	getQueueResult,
 	runDurableObjectAlarm,
 	runInDurableObject,
-	waitOnExecutionContext,
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { createClient, type FetchLike, type InputOf, type OperationName, type OutputOf } from "@soldock/contracts";
 import { vi } from "vitest";
+import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 
 export const ORIGIN = "https://dock.test";
@@ -22,52 +22,26 @@ export function request(path: string, init: RequestInit = {}): Promise<Response>
 	return exports.default.fetch(new Request(`${ORIGIN}${path}`, init));
 }
 
-/**
- * Sends a request through the real Worker entry point with a fake Email Service binding, and waits
- * for the work that runs after the response. Email Service is the boundary: the test sees each
- * message that the Worker hands to it.
- */
-export async function requestWithEmail(
-	path: string,
-	init: RequestInit = {},
-): Promise<{ res: Response; sent: EmailMessageBuilder[] }> {
-	const sent: EmailMessageBuilder[] = [];
-	const email = {
-		async send(builder: EmailMessageBuilder) {
-			sent.push(builder);
-			return { messageId: `<fake-${sent.length}@email.test>` };
-		},
-	} as unknown as SendEmail;
-	const ctx = createExecutionContext();
-	const incoming = new Request(`${ORIGIN}${path}`, init) as unknown as Request<unknown, IncomingRequestCfProperties>;
-	const res = await handlers.fetch(incoming, { ...env, EMAIL: email } as Env, ctx);
-	await waitOnExecutionContext(ctx);
-	return { res, sent };
-}
+/** The password of each human that these helpers create. */
+export const PASSWORD = "correct horse battery staple";
 
-/** Asks for a sign-in code for an address, as the web app does. */
-export function requestCode(email: string, origin: string | null = ORIGIN) {
-	return requestWithEmail("/auth/code", {
-		method: "POST",
-		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
-		body: JSON.stringify({ email }),
-	});
-}
-
-/** The code in a sign-in mail. The mail shows it as two groups of four digits on its own line. */
-export function codeIn(mail: EmailMessageBuilder | undefined): string {
-	const match = /^\s+(\d{4}) (\d{4})$/m.exec(mail?.text ?? "");
-	if (!match) throw new Error(`no sign-in code in the mail: ${mail?.text}`);
-	return `${match[1]}${match[2]}`;
-}
-
-/** Sends a sign-in code, as the web app does. */
-export function submitCode(email: string, code: string, origin: string | null = ORIGIN) {
+/** Sends a sign-in request, as the web app does. */
+export function submitSignIn(
+	address: string,
+	password: string,
+	options: { totpCode?: string; origin?: string | null } = {},
+) {
+	const origin = options.origin === undefined ? ORIGIN : options.origin;
 	return request("/auth/session", {
 		method: "POST",
 		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
-		body: JSON.stringify({ email, code }),
+		body: JSON.stringify({ address, password, ...(options.totpCode ? { totp_code: options.totpCode } : {}) }),
 	});
+}
+
+/** The TOTP code of an authenticator app for this secret, `offset` steps after the current step. */
+export function totpNow(secret: string, offset = 0): Promise<string> {
+	return totpCode(secret, totpStep(Date.now()) + offset);
 }
 
 /** The `name=value` part of the Set-Cookie header of a response. */
@@ -75,11 +49,13 @@ export function cookieOf(res: Response): string {
 	return (res.headers.get("set-cookie") ?? "").split(";")[0] as string;
 }
 
-/** Signs a human in with a code from their sign-in email, and returns the session cookie. */
-export async function signIn(email: string): Promise<string> {
-	const { sent } = await requestCode(email);
-	const res = await submitCode(email, codeIn(sent[0]));
-	if (res.status !== 204) throw new Error(`sign-in failed: ${res.status} ${await res.text()}`);
+/** Signs a human in with the address and the password, and returns the session cookie. */
+export async function signIn(address: string, password = PASSWORD): Promise<string> {
+	const res = await submitSignIn(address, password);
+	const body = (await res.json()) as { status?: string };
+	if (res.status !== 200 || body.status !== "signed_in") {
+		throw new Error(`sign-in failed: ${res.status} ${JSON.stringify(body)}`);
+	}
 	return cookieOf(res);
 }
 
@@ -106,9 +82,6 @@ export interface Actor {
 	call: ReturnType<typeof api>;
 }
 
-/** The sign-in email of the owner that setupOwner creates. */
-export const OWNER_SIGN_IN_EMAIL = "olive@home.example";
-
 /** Runs first-run setup and returns the owner. */
 export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 	const res = await request("/auth/setup", {
@@ -118,7 +91,7 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 			mail_domain: address.split("@")[1],
 			display_name: "Olive Owner",
 			address,
-			sign_in_email: OWNER_SIGN_IN_EMAIL,
+			password: PASSWORD,
 		}),
 	});
 	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
@@ -154,7 +127,7 @@ export async function seedOrg() {
 		kind: "human",
 		display_name: "Ada Lovelace",
 		address: "ada@dock.test",
-		sign_in_email: "ada@home.example",
+		password: PASSWORD,
 	});
 	const bot = await createActor(owner, {
 		kind: "agent",
