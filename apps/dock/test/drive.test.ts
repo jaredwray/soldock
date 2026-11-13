@@ -123,6 +123,17 @@ describe("folders and files", () => {
 		expect(await codeOf(ada.call("drive.create_folder", { name: "too deep", parent_id: parent as string }))).toBe(
 			"invalid",
 		);
+		// The limit is for folders. The last folder holds files, and a move cannot go past the limit.
+		expect((await file("in the last folder.txt", "x", parent as string)).parent_id).toBe(parent);
+		const other = await folder("Other");
+		await folder("Inside other", other.id);
+		expect(await codeOf(ada.call("drive.move_items", { item_ids: [other.id], parent_id: parent as string }))).toBe(
+			"invalid",
+		);
+		const leaf = await file("leaf.txt", "x");
+		expect(
+			(await ada.call("drive.move_items", { item_ids: [leaf.id], parent_id: parent as string })).items,
+		).toHaveLength(1);
 	});
 });
 
@@ -225,6 +236,26 @@ describe("the trash", () => {
 		expect(await names({ parent_id: reports.id })).toEqual([]);
 	});
 
+	// A person selects a folder and an item in it. The order of the ids in the call must not matter.
+	it("gives the same result for each order of the ids", async () => {
+		const state = async (order: "folder first" | "item first") => {
+			const reports = await folder(`Reports, ${order}`);
+			const item = await file("a.txt", "x", reports.id);
+			const ids = order === "folder first" ? [reports.id, item.id] : [item.id, reports.id];
+			await ada.call("drive.trash_items", { item_ids: [item.id] });
+			await ada.call("drive.trash_items", { item_ids: [reports.id] });
+			await ada.call("drive.restore_items", { item_ids: ids });
+			const restored = (await ada.call("drive.get_item", { item_id: item.id })).item;
+			await ada.call("drive.trash_items", { item_ids: ids });
+			await ada.call("drive.restore_items", { item_ids: [reports.id] });
+			const afterTrash = (await ada.call("drive.get_item", { item_id: item.id })).item;
+			return { parent: restored.parent_id === reports.id, trashed: restored.trashed, comesBack: !afterTrash.trashed };
+		};
+		// The item stays in its folder, and it comes back with its folder.
+		expect(await state("folder first")).toEqual({ parent: true, trashed: false, comesBack: true });
+		expect(await state("item first")).toEqual({ parent: true, trashed: false, comesBack: true });
+	});
+
 	it("refuses changes to an item in the trash", async () => {
 		const item = await file("a.txt", "x");
 		await ada.call("drive.trash_items", { item_ids: [item.id] });
@@ -311,6 +342,15 @@ describe("versions of a file", () => {
 		).toBe("version 1");
 		await drainDrive(ada.id);
 		expect(await driveBlobKeys(ada.id)).toHaveLength(DRIVE_LIMITS.versionsPerFile);
+
+		// A person makes the oldest version current, then uploads. That version was the content until
+		// the upload, so it stays, and the next oldest version goes.
+		await ada.call("drive.restore_version", { item_id: item.id, version_id: oldest });
+		await ada.call("drive.upload_version", { item_id: item.id, content_base64: base64("after the restore") });
+		const after = (await ada.call("drive.list_versions", { item_id: item.id })).versions;
+		expect(after).toHaveLength(DRIVE_LIMITS.versionsPerFile);
+		expect(after.map((version) => version.id)).toContain(oldest);
+		expect(after.map((version) => version.id)).not.toContain(versions[versions.length - 2]?.id);
 	});
 
 	it("has versions for a file only", async () => {
@@ -376,6 +416,15 @@ describe("drive.copy_item", () => {
 		await ada.call("drive.delete_items", { item_ids: [item.id] });
 		await drainDrive(ada.id);
 		expect(fromBase64((await ada.call("drive.download_file", { item_id: copy.id })).content_base64)).toBe("content");
+	});
+
+	// A name can be as long as the limit, and can end with a character of two UTF-16 units.
+	it("cuts the default name of a copy at a whole character", async () => {
+		const item = await file(`${"n".repeat(DRIVE_LIMITS.nameChars - 9)}😀`, "x");
+		const { item: copy } = await ada.call("drive.copy_item", { item_id: item.id });
+		expect(copy.name.length).toBeLessThanOrEqual(DRIVE_LIMITS.nameChars);
+		expect(copy.name).not.toContain("\uFFFD");
+		expect(copy.name.isWellFormed()).toBe(true);
 	});
 
 	it("refuses a folder", async () => {

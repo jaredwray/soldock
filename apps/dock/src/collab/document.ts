@@ -195,8 +195,13 @@ export class DocumentDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM pending WHERE id = 1 AND payload = ?", row.payload);
 				return;
 			}
-			this.sql.exec("UPDATE pending SET attempts = ? WHERE id = 1 AND payload = ?", attempts, row.payload);
-			await this.ctx.storage.setAlarm(Date.now() + backoff(attempts));
+			const same = this.sql.exec(
+				"UPDATE pending SET attempts = ? WHERE id = 1 AND payload = ?",
+				attempts,
+				row.payload,
+			).rowsWritten;
+			// A change during the call replaced the message and set its own alarm. That alarm stays.
+			if (same > 0) await this.ctx.storage.setAlarm(Date.now() + backoff(attempts));
 			return;
 		}
 		if (!this.hasTables()) return;

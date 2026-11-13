@@ -96,7 +96,7 @@ export class SheetStore {
 	 * change that gives a cell the input that it has is dropped. A viewer cannot change cells.
 	 */
 	commit(changes: readonly CellChange[]): void {
-		if (this.status !== "ready" || this.item?.role === "viewer") return;
+		if (this.status !== "ready" || this.item?.role === "viewer" || this.item?.trashed) return;
 		let changed = false;
 		for (const { cell, input } of changes) {
 			if (this.inputOf(cell) === input) continue;

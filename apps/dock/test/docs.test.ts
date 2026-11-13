@@ -178,6 +178,15 @@ describe("docs.update", () => {
 		const read = await ada.call("docs.get", { item_id: numbered.item.id });
 		expect(read.content.content.map((block) => block.type)).toEqual(["ordered_list", "paragraph"]);
 
+		// Input with thousands of levels must get an answer, not use up the call stack of the Worker.
+		let nested: unknown = { type: "paragraph" };
+		for (let level = 0; level < 5000; level++) nested = { type: "blockquote", content: [nested] };
+		expect(
+			await codeOf(
+				ada.call("docs.update", { item_id: item.id, content: { type: "doc", content: [nested] } as DocContent }),
+			),
+		).toBe("invalid");
+
 		const large: DocContent = {
 			type: "doc",
 			content: Array.from({ length: 12 }, () => ({

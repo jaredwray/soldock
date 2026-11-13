@@ -1,6 +1,6 @@
 import { SHEET_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { cellName, ErrorValue, evaluateSheet, parseCellName } from "../src/sheets/formula.ts";
+import { cellName, ErrorValue, evaluateSheet, parseCellName, WORK_BUDGET } from "../src/sheets/formula.ts";
 
 /** The results of a sheet, with each error as its code. */
 function run(cells: Record<string, string>, budget?: number): Record<string, unknown> {
@@ -146,6 +146,20 @@ describe("the formula engine", () => {
 		expect(result.A16).toBe("#LIMIT!");
 		expect(result.A40).toBe("#LIMIT!");
 		expect(result.B1).toBe("#LIMIT!");
+	});
+
+	// Each text here is under the limit for one cell. Without a limit for the total, 2,000 such cells
+	// make an answer of 64 million characters from a sheet of a few kilobytes.
+	it("stops when the text results of one calculation are too long in total", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000) };
+		const join = `=${Array.from({ length: 16 }, () => "A1").join("&")}`;
+		for (let row = 2; row <= 1000; row++) cells[`A${row}`] = join;
+		for (let row = 1; row <= 1000; row++) cells[`B${row}`] = join;
+		const results = Object.values(run(cells));
+		const characters = results.reduce<number>((sum, value) => sum + (typeof value === "string" ? value.length : 0), 0);
+		expect(characters).toBeLessThan(2 * WORK_BUDGET);
+		expect(results).toContain("#LIMIT!");
+		expect(results.filter((value) => typeof value === "string" && value.length === 32_000).length).toBeGreaterThan(0);
 	});
 
 	it("calculates a cell after the cells that it reads, in each order of the inputs", () => {

@@ -50,6 +50,23 @@ export async function invokeOperation<C extends { caller: Caller; requestId: str
 	}
 }
 
+/** The most levels of objects and lists in the input of an operation. No operation needs more. */
+const MAX_INPUT_DEPTH = 64;
+
+/**
+ * True when a value has more levels of objects and lists than the limit. The check uses its own stack.
+ * A schema reads its input with recursion, so input with thousands of levels would use up the call stack.
+ */
+function isTooDeep(input: unknown): boolean {
+	const stack: { value: unknown; depth: number }[] = [{ value: input, depth: 1 }];
+	for (let entry = stack.pop(); entry; entry = stack.pop()) {
+		if (typeof entry.value !== "object" || entry.value === null) continue;
+		if (entry.depth > MAX_INPUT_DEPTH) return true;
+		for (const child of Object.values(entry.value)) stack.push({ value: child, depth: entry.depth + 1 });
+	}
+	return false;
+}
+
 async function run<C extends { caller: Caller }>(
 	operation: Operation,
 	handler: AnyHandler<C>,
@@ -62,6 +79,9 @@ async function run<C extends { caller: Caller }>(
 	const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
 	if (missing.length > 0) {
 		throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
+	}
+	if (isTooDeep(rawInput)) {
+		throw new OperationError("invalid", `The input has more than ${MAX_INPUT_DEPTH} levels of objects and lists.`);
 	}
 	const parsed = operation.input.safeParse(rawInput);
 	if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));

@@ -193,18 +193,43 @@ describe("docToMarkdown and markdownToDoc", () => {
 		expect(docText(deep)).toContain("deep");
 		const nested = markdownToDoc(Array.from({ length: 60 }, (_, level) => `${"  ".repeat(level)}- item`).join("\n"));
 		expect(checkDoc(nested)).toBeNull();
+	});
 
+	// One request can hold 1 MB of Markdown, and a doc can hold a text of 100,000 characters. Work that
+	// grows with the square of the length takes minutes at these sizes, and a request has a CPU limit.
+	// Each input here is the slow case of one step. With linear work, all of them take a few
+	// milliseconds, so the time limit has a wide margin.
+	it("do work in proportion to the length of hostile input", () => {
+		const n = 200_000;
+		const runs = Array.from({ length: 600 }, (_, length) => `${"`".repeat(length + 1)}a`).join("");
+		const hostile = [
+			`${"[".repeat(n / 2)}${"]".repeat(n / 2)}`,
+			`${"[a".repeat(n / 4)}${"](b".repeat(n / 4)}`,
+			`# x${" ".repeat(n)}x`,
+			`a${" ".repeat(n)}x\nb`,
+			`a${"\\".repeat(n)}x\nb`,
+			runs,
+			"*a ".repeat(n / 4),
+			`${"*a ".repeat(20_000)}${"a* ".repeat(20_000)}`,
+			`${"**a ".repeat(20_000)}${"a** ".repeat(20_000)}`,
+		];
 		const start = Date.now();
-		for (const hostile of [
-			"*a ".repeat(20_000),
-			"[".repeat(20_000),
-			"`".repeat(9_999),
-			"**a**".repeat(10_000),
-			"[a](".repeat(10_000),
-		]) {
-			expect(DocContent.safeParse(markdownToDoc(hostile)).success).toBe(true);
+		for (const markdown of hostile) {
+			const read = markdownToDoc(markdown);
+			docToMarkdown(read);
+			docText(read);
 		}
-		expect(Date.now() - start).toBeLessThan(5000);
+		// The slow cases of the writer and of the search text.
+		docToMarkdown(doc(p(text(`x${" ".repeat(DOC_LIMITS.textChars - 2)}x`))));
+		docText({ type: "doc", content: Array.from({ length: 40_000 }, () => p(text("x"))) });
+		expect(Date.now() - start).toBeLessThan(3000);
+	});
+
+	// Marks in marks stop at a limit, so the text of a hostile doc cannot use up the call stack.
+	it("keep emphasis marks over the limit as text", () => {
+		const read = markdownToDoc(`${"*a ".repeat(100)}b${" a*".repeat(100)}`);
+		expect(DocContent.safeParse(read).success).toBe(true);
+		expect(docText(read)).toContain("*a *a");
 	});
 });
 

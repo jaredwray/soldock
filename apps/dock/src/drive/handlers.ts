@@ -73,6 +73,13 @@ async function fillCopy(call: CallContext, own: OpenSpace, sourceId: string, cop
 	if (state) await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
 }
 
+/** The default name of a copy, at most as long as a name can be. The cut is never in the middle of a character. */
+function copyName(name: string): string {
+	const characters = [...`Copy of ${name}`];
+	while (characters.join("").length > DRIVE_LIMITS.nameChars) characters.pop();
+	return characters.join("").trimEnd();
+}
+
 /** The own drive of the caller. */
 async function ownSpace(call: CallContext): Promise<OpenSpace> {
 	return openSpace(call, undefined);
@@ -254,7 +261,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			}
 		}
 		accept(await own.space.checkCreate(own.ctx, input.parent_id ?? null));
-		const name = input.name ?? `Copy of ${original.name}`.slice(0, DRIVE_LIMITS.nameChars);
+		const name = input.name ?? copyName(original.name);
 		const itemId = newId("itm");
 		const parentId = input.parent_id ?? null;
 		if (original.kind === "file") {

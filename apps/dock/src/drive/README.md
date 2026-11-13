@@ -46,7 +46,8 @@ keys.
   content is in a `DocumentDO` of the [`collab`](../collab/README.md) module.
 - Ids are `itm_…`. Two items in one folder can have the same name. A name has at most 255
   characters, and no control characters, slashes or backslashes.
-- A drive has at most 30 levels of folders. A move checks the levels of all that a folder holds.
+- A drive has at most 30 levels of folders. A folder at the last level can hold files, docs and
+  sheets, and no folder. A move checks the levels of each folder in the moved item.
 - A folder cannot move into itself or into a folder under it. `drive.move_items` moves each item
   or no item.
 - The folder view has folders first, then names in the order of their NFC lowercase form. The
@@ -58,7 +59,8 @@ keys.
 - Each version of a file is one R2 object: `drive/<space id>/<item id>/<version id>`. R2 stores it
   as `application/octet-stream`. The MIME type that the client gave is in the version row.
 - `drive.upload_version` adds a version and makes it the current version. A file keeps 50
-  versions. An upload over that deletes the oldest version and, through the outbox, its bytes.
+  versions. An upload over that deletes the oldest version and, through the outbox, its bytes. It
+  never deletes the version that was current before the upload.
 - `drive.restore_version` makes an older version the current version. It deletes no version.
 - The handler checks the access before it writes to R2. When the drive then refuses the item, or
   answers that the idempotency key was used, the handler deletes the object of that attempt.
@@ -76,6 +78,9 @@ keys.
 - An item that the owner put in the trash before its folder stays in the trash when the folder
   comes back.
 - An item in the trash refuses each change. The owner can still read it.
+- A call with a folder and an item in it handles the folder first. Thus the result does not
+  depend on the order of the ids: the item goes to the trash with its folder, and comes back
+  with it.
 - `drive.delete_items` deletes only an item that the owner put in the trash, with all that it
   holds. `drive.empty_trash` deletes each such item. `dry_run` returns the count without a change.
 

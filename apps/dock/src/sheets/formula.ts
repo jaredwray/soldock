@@ -497,6 +497,15 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 		return { values, range: true };
 	}
 
+	/**
+	 * A text result costs its length. Thus the texts of one calculation have a total limit, and many
+	 * cells that each make a long text cannot make an answer larger than the memory of the Worker.
+	 */
+	function charged(value: Value): Value {
+		if (typeof value === "string") spend(value.length);
+		return value;
+	}
+
 	function evaluate(node: Node): Value {
 		spend(1);
 		switch (node.t) {
@@ -519,7 +528,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 				const right = evaluate(node.right);
 				const error = firstError([left, right]);
 				if (error) return error;
-				if (node.op === "&") return boundedText(`${toText(left)}${toText(right)}`);
+				if (node.op === "&") return charged(boundedText(`${toText(left)}${toText(right)}`));
 				if (["=", "<>", "<", ">", "<=", ">="].includes(node.op)) {
 					const order = compare(left, right);
 					return {
@@ -563,14 +572,14 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 					return value instanceof ErrorValue ? evaluate(node.args[1] as Node) : value;
 				}
 				const fn = FUNCTIONS[node.name];
-				return fn ? fn(node.args.map(argument)) : ERRORS["#NAME?"];
+				return fn ? charged(fn(node.args.map(argument))) : ERRORS["#NAME?"];
 			}
 		}
 	}
 
 	/** The result of a formula as the value of its cell. A formula that reads an empty cell gives 0. */
 	function cellValue(node: Node): Value {
-		const value = evaluate(node);
+		const value = charged(evaluate(node));
 		return value === null ? 0 : value;
 	}
 

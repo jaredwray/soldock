@@ -271,11 +271,12 @@ export const uploadFile = defineOperation({
 export const uploadVersion = defineOperation({
 	name: "drive.upload_version",
 	summary: "Upload a new version of a file",
-	description: `Replaces the content of a file. The file keeps its id, name and place. The old content stays as a version: see drive.list_versions. A file keeps at most ${DRIVE_LIMITS.versionsPerFile} versions, and the oldest is then deleted. You need the editor role. ${IN_SPACE}`,
+	description: `Replaces the content of a file. The file keeps its id, name and place. The old content stays as a version: see drive.list_versions. A file keeps at most ${DRIVE_LIMITS.versionsPerFile} versions. An upload over that deletes the oldest version, but never the version that was current before the upload. You need the editor role. ${IN_SPACE}`,
 	http: { method: "POST", path: "/api/v1/drive/items/{item_id}/versions" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent"],
-	annotations: CREATE,
+	// At the limit of versions, the call deletes the oldest version.
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
 		item_id: ItemId,
