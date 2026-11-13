@@ -101,8 +101,6 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
 	const alive = useRef(true);
 	const loads = useRef(0);
-	/** The version of the room in the last room list. A load compares it with its own version. */
-	const lastListed = useRef(listed.version);
 
 	const sync = useMemo(
 		() =>
@@ -137,8 +135,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 				error: null,
 			});
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
-			// When the room list is ahead of that list, get the changes at once, not after the next list.
-			if (page && lastListed.current !== null) void sync.notice(lastListed.current);
+			// One read after each load gets the changes after that list at once, in each order of the answers.
+			if (page) void sync.run();
 		} catch (caught) {
 			if (current()) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
@@ -157,7 +155,6 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	// sync that failed runs again.
 	const { version: listedVersion, tick } = listed;
 	useEffect(() => {
-		lastListed.current = listedVersion;
 		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
 	}, [tick, listedVersion, sync]);
 
