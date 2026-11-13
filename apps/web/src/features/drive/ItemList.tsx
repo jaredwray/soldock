@@ -51,10 +51,17 @@ export function ItemList(props: ItemListProps) {
 		);
 	}
 	if (list.items.length === 0) {
+		// A page of the starred or the shared view can have no item, because the person lost the access
+		// to each item of that page. The list can still have more pages.
 		return (
 			<div className="list-state list-empty">
 				<Icon name={view.kind === "search" ? "search" : view.kind === "trash" ? "trash" : "folder"} size={40} />
-				<p>{emptyText(view)}</p>
+				<p>{list.nextCursor !== null ? "This page has no items that you can open." : emptyText(view)}</p>
+				{list.nextCursor !== null && (
+					<button type="button" className="button" onClick={props.onLoadMore} disabled={list.loadingMore}>
+						{list.loadingMore ? "Loading…" : "More"}
+					</button>
+				)}
 			</div>
 		);
 	}

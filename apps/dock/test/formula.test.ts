@@ -117,6 +117,8 @@ describe("the formula engine", () => {
 			["=SUM(A1:ZZ9)", "#REF!"],
 			["=SQRT(-1)", "#NUM!"],
 			["=10^400", "#NUM!"],
+			["=1e309", "#NUM!"],
+			["=2*1e999", "#NUM!"],
 			["=1+", "#ERROR!"],
 			["=(1+2", "#ERROR!"],
 			["=1 2", "#ERROR!"],
@@ -129,6 +131,21 @@ describe("the formula engine", () => {
 			["=SUM(D1:D2)", "#DIV/0!"],
 		];
 		for (const [formula, expected] of table) expect(calc(formula, { ...DATA, D1: "=1/0" }), formula).toBe(expected);
+	});
+
+	// Each cell joins the cell before with itself, so the text doubles at each step. Without a limit,
+	// 30 steps make a text of a gigabyte.
+	it("stops a text result that grows over the limit", () => {
+		const cells: Record<string, string> = { A1: "x" };
+		for (let row = 2; row <= 40; row++) cells[`A${row}`] = `=A${row - 1}&A${row - 1}`;
+		cells.B1 = "=CONCAT(A15,A15,A15)";
+		cells.B2 = "=LEN(A15)";
+		const result = run(cells);
+		// A15 has 16,384 characters. A16 has 32,768: one more than the limit.
+		expect(result.B2).toBe(16_384);
+		expect(result.A16).toBe("#LIMIT!");
+		expect(result.A40).toBe("#LIMIT!");
+		expect(result.B1).toBe("#LIMIT!");
 	});
 
 	it("calculates a cell after the cells that it reads, in each order of the inputs", () => {

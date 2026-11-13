@@ -79,6 +79,34 @@ describe("docs.create and docs.get", () => {
 	});
 });
 
+// The first call can stop after the item exists and before its content is stored. `destroy()` puts the
+// content object in that state: it is the call that the drive makes for a deleted item.
+describe("a retry with the same idempotency key", () => {
+	const loseContent = (itemId: string) => env.DOCUMENT.get(env.DOCUMENT.idFromName(itemId)).destroy();
+
+	it("writes the content of a new doc that the first call did not store", async () => {
+		const input = { name: "Once", markdown: "the text", idempotency_key: "doc-2" };
+		const first = await ada.call("docs.create", input);
+		await loseContent(first.item.id);
+		const second = await ada.call("docs.create", input);
+		expect(second.item.id).toBe(first.item.id);
+		expect((await ada.call("docs.get", { item_id: first.item.id })).markdown).toBe("the text\n");
+	});
+
+	it("writes the content of a copy that the first call did not store, and never replaces a changed copy", async () => {
+		const { item } = await ada.call("docs.create", { name: "Plan", markdown: "the original" });
+		const input = { item_id: item.id, idempotency_key: "copy-1" };
+		const { item: copy } = await ada.call("drive.copy_item", input);
+		await loseContent(copy.id);
+		expect((await ada.call("drive.copy_item", input)).item.id).toBe(copy.id);
+		expect((await ada.call("docs.get", { item_id: copy.id })).markdown).toBe("the original\n");
+		// A later retry finds a copy with content, and leaves the changes of the person in it.
+		await ada.call("docs.update", { item_id: copy.id, markdown: "changed in the copy" });
+		await ada.call("drive.copy_item", input);
+		expect((await ada.call("docs.get", { item_id: copy.id })).markdown).toBe("changed in the copy\n");
+	});
+});
+
 describe("docs.update", () => {
 	it("replaces the content, adds 1 to the revision, and shows in the drive with the author and the time", async () => {
 		const { item } = await ada.call("docs.create", { name: "Plan", markdown: "first" });
@@ -140,6 +168,15 @@ describe("docs.update", () => {
 		expect(await codeOf(ada.call("docs.update", { item_id: item.id, content: { type: "doc", content: [deep] } }))).toBe(
 			"invalid",
 		);
+
+		// Markdown can make content over a limit of the schema. It must not go into storage, because no
+		// read can return it.
+		expect(
+			await codeOf(ada.call("docs.update", { item_id: item.id, markdown: "x".repeat(DOC_LIMITS.textChars + 1) })),
+		).toBe("invalid");
+		const numbered = await ada.call("docs.create", { name: "Numbers", markdown: "99999. last\n\n100000. not a list" });
+		const read = await ada.call("docs.get", { item_id: numbered.item.id });
+		expect(read.content.content.map((block) => block.type)).toEqual(["ordered_list", "paragraph"]);
 
 		const large: DocContent = {
 			type: "doc",

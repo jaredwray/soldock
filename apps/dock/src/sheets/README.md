@@ -69,10 +69,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `#VALUE!` | A text where a number is necessary, a range that is not an argument, or a wrong number of arguments |
 | `#REF!` | A cell outside the grid |
 | `#NAME?` | A function or a name that does not exist |
-| `#NUM!` | A result that is not a finite number |
+| `#NUM!` | A result, or a number in a formula such as `1e309`, that is not a finite number |
 | `#CYCLE!` | The cell reads itself, directly or through other cells |
 | `#ERROR!` | The formula cannot be read |
-| `#LIMIT!` | The sheet needs more work than one calculation allows |
+| `#LIMIT!` | The sheet needs more work than one calculation allows, or a text result has more than 32,767 characters |
 
 A formula that reads a cell with an error gets the same error.
 

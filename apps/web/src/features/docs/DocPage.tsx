@@ -9,7 +9,7 @@ import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { DRIVE_PATH } from "../../routes.ts";
 import { DocumentHeader, type SaveState } from "../drive/DocumentHeader.tsx";
-import { Autosaver } from "./autosave.ts";
+import { Autosaver, isStalePoll } from "./autosave.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import { contentToDoc, docToContent } from "./schema.ts";
 
@@ -129,10 +129,14 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 			const saver = saverRef.current;
 			if (!active || !saver || saver.busy || document.visibilityState !== "visible") return;
 			const request = ++requestRef.current;
+			const before = saver.revision;
 			try {
 				const result = await api.call("docs.get", { space_id: spaceId, item_id: itemId });
 				// A change in the editor during the request wins: the save then reports a conflict.
 				if (!active || request !== requestRef.current || saver.busy) return;
+				// A save can start and end during the request. The answer is then older than the text on
+				// screen, and it must not replace that text.
+				if (isStalePoll(before, saver.revision, result.revision)) return;
 				if (result.revision === saver.revision) {
 					setLoaded((current) => (current ? { ...current, item: result.item } : current));
 					return;

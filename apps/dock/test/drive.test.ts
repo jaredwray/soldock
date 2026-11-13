@@ -73,6 +73,20 @@ describe("folders and files", () => {
 		expect(await codeOf(ada.call("drive.list_items", { cursor: "not-a-cursor" }))).toBe("invalid");
 	});
 
+	// The cursor of a name-ordered page holds the name. A name can have characters of each script.
+	it("pages a folder whose names are not Latin text", async () => {
+		const wanted = ["αβγ.txt", "файл.txt", "日本語.txt", "😀 notes.txt"];
+		for (const name of wanted) await file(name, "x");
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await ada.call("drive.list_items", { limit: 1, ...(cursor ? { cursor } : {}) });
+			seen.push(...page.items.map((item) => item.name));
+			cursor = page.next_cursor ?? undefined;
+		} while (cursor);
+		expect(seen.sort()).toEqual([...wanted].sort());
+	});
+
 	it("returns the path from the root to an item", async () => {
 		const a = await folder("A");
 		const b = await folder("B", a.id);

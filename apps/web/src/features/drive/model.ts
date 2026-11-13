@@ -224,6 +224,16 @@ export function itemActions(item: DriveItem, options: { sharedView?: boolean } =
 	return actions;
 }
 
+/**
+ * The ids of a bulk action, in parts that one call can take. A person can select more items than
+ * `DRIVE_LIMITS.itemsPerCall`, for example after "More" loaded three pages.
+ */
+export function idBatches(ids: readonly string[], size: number = DRIVE_LIMITS.itemsPerCall): string[][] {
+	const batches: string[][] = [];
+	for (let start = 0; start < ids.length; start += size) batches.push(ids.slice(start, start + size));
+	return batches;
+}
+
 export type BulkAction = "move" | "trash" | "restore" | "delete";
 
 /** The actions that apply to each item of a selection. Only the owner can move, trash, restore and delete. */

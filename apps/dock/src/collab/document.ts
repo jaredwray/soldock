@@ -183,6 +183,8 @@ export class DocumentDO extends DurableObject<Env> {
 			const { spaceId, ...change } = payload;
 			await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(spaceId)).applyDocumentChange(change);
 		} catch (error) {
+			// `destroy()` can run while the call waits. The message and its table are then gone.
+			if (!this.hasTables()) return;
 			const attempts = row.attempts + 1;
 			log(attempts >= NOTIFY_MAX_ATTEMPTS ? "error" : "warn", "document change did not reach its drive", {
 				attempts,
@@ -197,6 +199,7 @@ export class DocumentDO extends DurableObject<Env> {
 			await this.ctx.storage.setAlarm(Date.now() + backoff(attempts));
 			return;
 		}
+		if (!this.hasTables()) return;
 		// A change during the call replaced the message. That one stays, and its own alarm sends it.
 		this.sql.exec("DELETE FROM pending WHERE id = 1 AND payload = ?", row.payload);
 	}

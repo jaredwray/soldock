@@ -63,7 +63,17 @@ async function copyBlob(call: CallContext, from: string, to: string): Promise<vo
 	await call.env.BLOBS.put(to, object.body, STORED_TYPE);
 }
 
-/** A folder of the own drive of the caller. Returns the drive. */
+/**
+ * Writes the content of a doc or a sheet into its copy, when the copy has no content yet. A copy with
+ * content stays as it is, so a second call never replaces what a person wrote in the copy.
+ */
+async function fillCopy(call: CallContext, own: OpenSpace, sourceId: string, copyId: string): Promise<void> {
+	if ((await readDocument(call, copyId)) !== null) return;
+	const state = await readDocument(call, sourceId);
+	if (state) await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
+}
+
+/** The own drive of the caller. */
 async function ownSpace(call: CallContext): Promise<OpenSpace> {
 	return openSpace(call, undefined);
 }
@@ -231,13 +241,18 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const source = await openSpace(call, input.space_id);
 		const own = await ownSpace(call);
 		const idempotency = await idempotencyOf(call, "drive.copy_item", input);
-		if (idempotency) {
-			const earlier = await own.space.idempotentResult(own.ctx, idempotency.key, idempotency.requestHash);
-			if (earlier !== null) return { item: toItem(accept(earlier)) };
-		}
 		const original = accept(
 			await source.space.checkItem(source.ctx, input.item_id, "viewer", ["file", "doc", "sheet"]),
 		);
+		if (idempotency) {
+			const earlier = await own.space.idempotentResult(own.ctx, idempotency.key, idempotency.requestHash);
+			if (earlier !== null) {
+				const copy = accept(earlier);
+				// The first call can stop after the item and before the content. The retry then writes the content.
+				if (copy.kind !== "file") await fillCopy(call, own, input.item_id, copy.id);
+				return { item: toItem(accept(await own.space.checkItem(own.ctx, copy.id, "viewer", [copy.kind]))) };
+			}
+		}
 		accept(await own.space.checkCreate(own.ctx, input.parent_id ?? null));
 		const name = input.name ?? `Copy of ${original.name}`.slice(0, DRIVE_LIMITS.nameChars);
 		const itemId = newId("itm");
@@ -266,16 +281,14 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			if (!created.duplicate) auditOk(call, own, "drive.copy_item", created.item.id);
 			return { item: toItem(created.item) };
 		}
-		const state = await readDocument(call, input.item_id);
 		const created = accept(
 			await own.space.createItem(own.ctx, { id: itemId, parentId, kind: original.kind, name, idempotency }),
 		);
-		if (created.duplicate) return { item: toItem(created.item) };
-		if (state) {
-			await writeDocument(call, own, itemId, { content: state.content, text: state.text, baseRevision: null });
-		}
-		auditOk(call, own, "drive.copy_item", itemId);
-		return { item: toItem(accept(await own.space.checkItem(own.ctx, itemId, "viewer", [original.kind]))) };
+		await fillCopy(call, own, input.item_id, created.item.id);
+		if (!created.duplicate) auditOk(call, own, "drive.copy_item", created.item.id);
+		return {
+			item: toItem(accept(await own.space.checkItem(own.ctx, created.item.id, "viewer", [original.kind]))),
+		};
 	},
 
 	async "drive.star_items"(call, input) {

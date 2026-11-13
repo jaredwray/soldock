@@ -23,6 +23,7 @@ import {
 	createTarget,
 	type ItemAction,
 	type ItemOrder,
+	idBatches,
 	isForeignFolder,
 	itemActions,
 	listInput,
@@ -188,15 +189,19 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		const bySpace = new Map<string, string[]>();
 		for (const item of items) bySpace.set(item.space_id, [...(bySpace.get(item.space_id) ?? []), item.id]);
 		try {
-			await Promise.all(
-				[...bySpace].map(([spaceId, itemIds]) =>
-					api.call("drive.star_items", { ...spaceInput(spaceId, ownId), item_ids: itemIds, starred }),
-				),
-			);
+			for (const [spaceId, itemIds] of bySpace) {
+				for (const batch of idBatches(itemIds)) {
+					await api.call("drive.star_items", { ...spaceInput(spaceId, ownId), item_ids: batch, starred });
+				}
+			}
 		} catch (caught) {
 			fail(caught);
 			refresh();
 		}
+	}
+
+	async function restoreAll(ids: readonly string[]) {
+		for (const batch of idBatches(ids)) await api.call("drive.restore_items", { item_ids: batch });
 	}
 
 	async function trash(items: readonly DriveItem[]) {
@@ -204,13 +209,13 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		list.patch(ids, () => null);
 		clearSelection();
 		try {
-			await api.call("drive.trash_items", { item_ids: ids });
+			for (const batch of idBatches(ids)) await api.call("drive.trash_items", { item_ids: batch });
 			toast({
 				message: `Moved ${describe(items)} to the trash.`,
 				action: {
 					label: "Undo",
 					run: () => {
-						api.call("drive.restore_items", { item_ids: ids }).then(changed, fail);
+						restoreAll(ids).then(changed, fail);
 					},
 				},
 			});
@@ -226,7 +231,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		list.patch(ids, () => null);
 		clearSelection();
 		try {
-			await api.call("drive.restore_items", { item_ids: ids });
+			await restoreAll(ids);
 			toast({ message: `Restored ${describe(items)}.` });
 			changed();
 		} catch (caught) {
@@ -614,7 +619,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					danger
 					onClose={() => setDialog(null)}
 					onConfirm={async () => {
-						await api.call("drive.delete_items", { item_ids: dialog.items.map((item) => item.id) });
+						for (const batch of idBatches(dialog.items.map((item) => item.id))) {
+							await api.call("drive.delete_items", { item_ids: batch });
+						}
 						toast({ message: `Deleted ${describe(dialog.items)}.` });
 						clearSelection();
 						changed();

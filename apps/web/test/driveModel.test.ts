@@ -5,6 +5,7 @@ import {
 	breadcrumbs,
 	bulkActions,
 	createTarget,
+	idBatches,
 	itemActions,
 	linkPath,
 	listInput,
@@ -206,5 +207,23 @@ describe("uploads", () => {
 		expect(uploadMimeType("")).toBeUndefined();
 		expect(uploadMimeType("text/plain; charset=utf-8")).toBe("text/plain");
 		expect(uploadMimeType("not a type")).toBeUndefined();
+	});
+});
+
+// A person can select more items than one call takes. The server refuses a call over the limit.
+describe("bulk actions", () => {
+	it("send the ids in parts that the contract of each bulk operation accepts", () => {
+		const ids = Array.from(
+			{ length: 2 * DRIVE_LIMITS.itemsPerCall + 50 },
+			(_, n) => `itm_${String(n).padStart(26, "0")}`,
+		);
+		const batches = idBatches(ids);
+		expect(batches.flat()).toEqual(ids);
+		expect(batches.map((batch) => batch.length)).toEqual([100, 100, 50]);
+		for (const batch of batches) {
+			expect(operations["drive.trash_items"].input.safeParse({ item_ids: batch }).success).toBe(true);
+		}
+		expect(operations["drive.trash_items"].input.safeParse({ item_ids: ids }).success).toBe(false);
+		expect(idBatches([])).toEqual([]);
 	});
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTOSAVE_DELAY_MS, Autosaver } from "../src/features/docs/autosave.ts";
+import { AUTOSAVE_DELAY_MS, Autosaver, isStalePoll } from "../src/features/docs/autosave.ts";
 
 class Conflict extends Error {}
 
@@ -141,5 +141,22 @@ describe("the Docs autosave", () => {
 		expect(states).toHaveLength(seen);
 		expect(calls).toHaveLength(1);
 		expect(saver.revision).toBe(4);
+	});
+});
+
+// The page gets the doc again every 15 seconds. An answer that is older than the text on screen
+// must not replace it, or the editor shows old text as saved and the next save is a conflict.
+describe("an answer to a poll", () => {
+	it("is dropped when a save ended during the poll, or when it is older than the editor", () => {
+		// The poll started at revision 1. A save then made revision 2. The answer has revision 1.
+		expect(isStalePoll(1, 2, 1)).toBe(true);
+		// The answer has the revision of that save. The text on screen is the same or newer.
+		expect(isStalePoll(1, 2, 2)).toBe(true);
+		expect(isStalePoll(3, 3, 2)).toBe(true);
+	});
+
+	it("goes on screen when no save ended during the poll and it is not older", () => {
+		expect(isStalePoll(3, 3, 3)).toBe(false);
+		expect(isStalePoll(3, 3, 5)).toBe(false);
 	});
 });

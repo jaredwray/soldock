@@ -59,6 +59,9 @@ Markdown is the form for agents and for the download in the web app.
   lists with levels, `>` quotes, code fences, `---` rules, and hard breaks (two spaces or a
   backslash at the end of a line).
 - Text that is not Markdown of this subset stays text: HTML, tables and images are not read.
+- The handler checks the result against `DocContent` before it stores it. Markdown that makes
+  content over a limit, for example one text of more than 100,000 characters, gets `invalid`. A
+  list number has at most 5 digits, and a longer number is text.
 - A link with a different scheme than `http`, `https` or `mailto` keeps its text and loses its
   target.
 - `docToMarkdown` writes Markdown that `markdownToDoc` reads back to the same doc. It escapes text

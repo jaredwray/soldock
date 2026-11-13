@@ -1,4 +1,5 @@
-import { DOC_LIMITS, type DocContent, type OperationName } from "@soldock/contracts";
+import { DOC_LIMITS, DocContent, type OperationName } from "@soldock/contracts";
+import { z } from "zod";
 import {
 	accept,
 	auditOk,
@@ -19,7 +20,16 @@ type DocsOperation = Extract<OperationName, `docs.${string}`>;
 /** The content of a call, from `content` or from `markdown`. Null when the call has neither. */
 function contentOf(input: { content?: DocContent | undefined; markdown?: string | undefined }): DocContent | null {
 	if (input.content === undefined && input.markdown === undefined) return null;
-	const content = input.content ?? markdownToDoc(input.markdown as string);
+	let content = input.content;
+	if (content === undefined) {
+		// Markdown can make content over a limit of the schema, for example one text of more than
+		// 100,000 characters. Such content must not go into storage: no read can return it.
+		const parsed = DocContent.safeParse(markdownToDoc(input.markdown as string));
+		if (!parsed.success) {
+			throw new OperationError("invalid", `The Markdown makes a doc over a limit. ${z.prettifyError(parsed.error)}`);
+		}
+		content = parsed.data;
+	}
 	const error = checkDoc(content);
 	if (error) throw new OperationError("invalid", error);
 	return content;

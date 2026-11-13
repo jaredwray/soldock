@@ -144,6 +144,8 @@ class Parser {
 	private primary(): Node {
 		const token = this.tokens[this.position++];
 		if (!token) throw new FormulaError();
+		// A literal such as 1e309 is not a finite number.
+		if (token.t === "num" && !Number.isFinite(token.value)) return { t: "error", code: "#NUM!" };
 		if (token.t === "num" || token.t === "str") return { t: "value", value: token.value };
 		if (token.t === "op") {
 			if (token.value !== "(") throw new FormulaError();
@@ -344,12 +346,24 @@ function aggregate(fn: (values: number[]) => number | ErrorValue): Fn {
 	};
 }
 
+/** The most characters of a text result, as in the usual spreadsheets. */
+export const MAX_TEXT_RESULT = 32_767;
+
+/**
+ * A text result, or #LIMIT! when it is too long. Without this limit, a chain of cells that each
+ * join the cell before with itself makes a text that doubles at each step, and uses all the memory.
+ */
+function boundedText(text: string): string | ErrorValue {
+	return text.length > MAX_TEXT_RESULT ? ERRORS["#LIMIT!"] : text;
+}
+
 function concatenate(args: Arg[]): Value {
 	let out = "";
 	for (const arg of args) {
 		for (const value of arg.values) {
 			const text = toText(value);
 			if (text instanceof ErrorValue) return text;
+			if (out.length + text.length > MAX_TEXT_RESULT) return ERRORS["#LIMIT!"];
 			out += text;
 		}
 	}
@@ -505,7 +519,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 				const right = evaluate(node.right);
 				const error = firstError([left, right]);
 				if (error) return error;
-				if (node.op === "&") return `${toText(left)}${toText(right)}`;
+				if (node.op === "&") return boundedText(`${toText(left)}${toText(right)}`);
 				if (["=", "<>", "<", ">", "<=", ">="].includes(node.op)) {
 					const order = compare(left, right);
 					return {

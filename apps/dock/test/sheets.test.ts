@@ -119,6 +119,13 @@ describe("sheets.update_cells", () => {
 		]);
 	});
 
+	// A result must always be a value that the output can hold, or the sheet cannot be read again.
+	it("stores a formula whose number is not finite, and returns an error value for it", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Large", cells: [{ cell: "A1", input: "=1e309" }] });
+		const sheet = await ada.call("sheets.get", { item_id: item.id });
+		expect(sheet.cells).toEqual([{ cell: "A1", input: "=1e309", value: "#NUM!", type: "error" }]);
+	});
+
 	it("makes no revision when the inputs are the same", async () => {
 		const { item } = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
 		const again = await ada.call("sheets.update_cells", { item_id: item.id, cells: [{ cell: "B2", input: "120" }] });

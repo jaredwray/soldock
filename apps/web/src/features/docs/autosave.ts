@@ -2,6 +2,15 @@ import type { SaveState } from "../drive/DocumentHeader.tsx";
 
 // The save logic of the Docs editor. It uses no DOM and no React, so the Node tests can run it.
 
+/**
+ * True when the answer to a poll must not go on screen. A save can start and end while the poll
+ * waits, so the answer is older than the text of the editor. `before` is the revision of the editor
+ * when the poll started, and `now` is its revision when the answer arrives.
+ */
+export function isStalePoll(before: number, now: number, answer: number): boolean {
+	return now !== before || answer < now;
+}
+
 export interface AutosaveOptions {
 	/**
 	 * Sends the current content to the server with the revision that the editor has. Returns the new

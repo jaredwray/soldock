@@ -269,7 +269,8 @@ const FENCE = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const QUOTE = /^ {0,3}>/;
-const LIST = /^( {0,3})([-*+]|\d{1,9}[.)])( +|$)(.*)$/;
+// A list number has at most 5 digits: the limit of `order` in the content schema. A longer number is text.
+const LIST = /^( {0,3})([-*+]|\d{1,5}[.)])( +|$)(.*)$/;
 
 function isBlank(line: string): boolean {
 	return line.trim() === "";

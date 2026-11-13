@@ -5,7 +5,7 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useSession } from "../auth/session.tsx";
-import { type CreateTarget, kindName, spaceInput } from "./model.ts";
+import { type CreateTarget, idBatches, kindName, spaceInput } from "./model.ts";
 
 interface NameDialogProps {
 	title: string;
@@ -213,10 +213,9 @@ export function MoveDialog({
 		setBusy(true);
 		setError(null);
 		try {
-			await api.call("drive.move_items", {
-				item_ids: items.map((item) => item.id),
-				...(currentId ? { parent_id: currentId } : {}),
-			});
+			for (const batch of idBatches(items.map((item) => item.id))) {
+				await api.call("drive.move_items", { item_ids: batch, ...(currentId ? { parent_id: currentId } : {}) });
+			}
 			onMoved(current?.name ?? "My Drive");
 		} catch (caught) {
 			setError(errorMessage(caught));
