@@ -250,7 +250,8 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 	}
 
 	const { item } = loaded;
-	const editable = item.role !== "viewer";
+	// The server refuses a change to a doc in the trash, so its owner gets the text read-only too.
+	const editable = item.role !== "viewer" && !item.trashed;
 
 	return (
 		<main id="main" className="doc-page" tabIndex={-1}>

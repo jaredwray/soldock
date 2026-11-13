@@ -68,8 +68,10 @@ Markdown is the form for agents and for the download in the web app.
   that looks like Markdown. Two lists of one kind, one after the other, get different marks.
 - Markdown has no underline and no empty paragraph. An update with `markdown` loses those. Each
   other format stays.
-- The parser does a bounded amount of work for each character, so hostile input cannot use up the
-  CPU time of a request. Blocks in blocks stop at the limit, and deeper lines become text.
+- The parser and the writer do work in proportion to the length of the text, so hostile input
+  cannot use up the CPU time of a request. Blocks in blocks stop at the limit, and deeper lines
+  become text. At most 32 emphasis marks can be open at one time: a further mark stays text. A run of
+  more than 6 of one emphasis character is text too.
 
 ## Not built yet
 

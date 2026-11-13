@@ -118,7 +118,8 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 		);
 	}
 
-	const readOnly = sheet.item.role === "viewer";
+	// The server refuses a change to a sheet in the trash, so its owner gets the grid read-only too.
+	const readOnly = sheet.item.role === "viewer" || sheet.item.trashed;
 	const saveFailed = !readOnly && (sheet.saveState === "error" || sheet.saveState === "conflict");
 
 	return (

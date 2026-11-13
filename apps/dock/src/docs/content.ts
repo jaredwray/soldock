@@ -33,16 +33,22 @@ function inlineText(content: readonly DocInline[] | undefined): string {
 /** The plain text of a doc, one line for each block. The search index of Drive uses it. */
 export function docText(doc: DocContent): string {
 	const lines: string[] = [];
+	let chars = 0;
+	const add = (line: string) => {
+		if (line.trim() === "") return;
+		lines.push(line);
+		chars += line.length + 1;
+	};
 	function walk(blocks: readonly DocBlock[]): void {
 		for (const block of blocks) {
-			if (lines.join("\n").length > DOC_LIMITS.textChars) return;
+			if (chars > DOC_LIMITS.textChars) return;
 			switch (block.type) {
 				case "paragraph":
 				case "heading":
-					lines.push(inlineText(block.content));
+					add(inlineText(block.content));
 					break;
 				case "code_block":
-					lines.push((block.content ?? []).map((node) => node.text).join(""));
+					add((block.content ?? []).map((node) => node.text).join(""));
 					break;
 				case "blockquote":
 					walk(block.content);
@@ -57,8 +63,5 @@ export function docText(doc: DocContent): string {
 		}
 	}
 	walk(doc.content);
-	return lines
-		.filter((line) => line.trim() !== "")
-		.join("\n")
-		.slice(0, DOC_LIMITS.textChars);
+	return lines.join("\n").slice(0, DOC_LIMITS.textChars);
 }

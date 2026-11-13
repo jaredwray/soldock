@@ -1,3 +1,5 @@
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	type Actor,
@@ -124,6 +126,102 @@ describe("a viewer", () => {
 		expect(await codeOf(owner.call("drive.list_items", { space_id: ada.id, parent_id: top.id }))).toBe("not_found");
 		const { permissions } = await owner.call("drive.list_permissions", { space_id: ada.id, item_id: leaf.id });
 		expect(permissions).toMatchObject([{ principal_id: owner.id, item_id: project.id, inherited: true }]);
+	});
+});
+
+describe("the role for an item", () => {
+	it("lets a viewer of a folder add nothing to it, and change no version", async () => {
+		const project = (await ada.call("drive.create_folder", { name: "Project" })).item;
+		const item = await upload(ada, "plan.txt", "v1", { parent_id: project.id });
+		await ada.call("drive.upload_version", { item_id: item.id, content_base64: base64("v2") });
+		await share(project.id, owner, "viewer");
+		const place = { space_id: ada.id, parent_id: project.id };
+		expect(await codeOf(owner.call("drive.create_folder", { ...place, name: "mine" }))).toBe("forbidden");
+		expect(
+			await codeOf(owner.call("drive.upload_file", { ...place, name: "mine.txt", content_base64: base64("x") })),
+		).toBe("forbidden");
+		expect(await codeOf(owner.call("docs.create", { ...place, name: "mine" }))).toBe("forbidden");
+		expect(await codeOf(owner.call("sheets.create", { ...place, name: "mine" }))).toBe("forbidden");
+		const { versions } = await owner.call("drive.list_versions", { space_id: ada.id, item_id: item.id });
+		expect(
+			await codeOf(
+				owner.call("drive.restore_version", {
+					space_id: ada.id,
+					item_id: item.id,
+					version_id: versions[1]?.id as string,
+				}),
+			),
+		).toBe("forbidden");
+		expect((await ada.call("drive.list_items", { parent_id: project.id })).items).toHaveLength(1);
+		expect(await driveBlobKeys(ada.id)).toHaveLength(2);
+	});
+
+	it("is the highest of the grants on the item and on the folders above it", async () => {
+		const project = (await ada.call("drive.create_folder", { name: "Project" })).item;
+		const item = await upload(ada, "plan.txt", "v1", { parent_id: project.id });
+		const other = await upload(ada, "other.txt", "v1", { parent_id: project.id });
+		await share(project.id, owner, "viewer");
+		await share(item.id, owner, "editor");
+		const listed = await owner.call("drive.list_items", { space_id: ada.id, parent_id: project.id });
+		expect(listed.items.map((entry) => [entry.name, entry.role])).toEqual([
+			["other.txt", "viewer"],
+			["plan.txt", "editor"],
+		]);
+		await owner.call("drive.rename_item", { space_id: ada.id, item_id: item.id, name: "plan 2.txt" });
+		expect(await codeOf(owner.call("drive.rename_item", { space_id: ada.id, item_id: other.id, name: "x.txt" }))).toBe(
+			"forbidden",
+		);
+	});
+
+	it("ends when the owner moves the item out of the shared folder", async () => {
+		const project = (await ada.call("drive.create_folder", { name: "Project" })).item;
+		const item = await upload(ada, "plan.txt", "v1", { parent_id: project.id });
+		await share(project.id, owner, "editor");
+		expect((await owner.call("drive.get_item", { space_id: ada.id, item_id: item.id })).item.role).toBe("editor");
+		await ada.call("drive.move_items", { item_ids: [item.id] });
+		expect(await codeOf(owner.call("drive.get_item", { space_id: ada.id, item_id: item.id }))).toBe("not_found");
+		expect(await codeOf(owner.call("drive.download_file", { space_id: ada.id, item_id: item.id }))).toBe("not_found");
+	});
+});
+
+// R2 is the boundary. The fake makes each delete fail while `fail` is set.
+describe("the outbox of a drive", () => {
+	it("stops at an effect that fails, and delivers the effects in order after that", async () => {
+		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id));
+		const old = await upload(ada, "old.txt", "bytes to delete");
+		const shared = await upload(ada, "report.txt", "numbers");
+		const state = { fail: true };
+		await runInDurableObject(stub, (instance) => {
+			const target = instance as unknown as { env: Env };
+			const blobs = target.env.BLOBS;
+			target.env = {
+				...target.env,
+				BLOBS: {
+					delete: async (key: string) => {
+						if (state.fail) throw new Error("R2 is not available");
+						await blobs.delete(key);
+					},
+				} as unknown as R2Bucket,
+			};
+		});
+		await ada.call("drive.trash_items", { item_ids: [old.id] });
+		await ada.call("drive.delete_items", { item_ids: [old.id] });
+		await ada.call("drive.share_item", { item_id: shared.id, principal_id: owner.id, role: "viewer" });
+		await runDurableObjectAlarm(stub);
+
+		// The delete failed, so the share waits behind it. The grant itself is in the drive of the item.
+		expect(await driveBlobKeys(ada.id)).toHaveLength(2);
+		expect(await sharedNames(owner)).toEqual([]);
+		expect((await owner.call("drive.get_item", { space_id: ada.id, item_id: shared.id })).item.role).toBe("viewer");
+
+		// R2 works again, and the time of the next attempt comes.
+		state.fail = false;
+		await runInDurableObject(stub, (_instance, storage) => {
+			storage.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+		});
+		await drainDrive(ada.id);
+		expect(await driveBlobKeys(ada.id)).toHaveLength(1);
+		expect(await sharedNames(owner)).toEqual(["report.txt"]);
 	});
 });
 

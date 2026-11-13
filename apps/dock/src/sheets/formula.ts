@@ -317,7 +317,9 @@ function textual(count: [number, number], fn: (text: string, ...values: number[]
 			if (value < 0) return ERRORS["#VALUE!"];
 			values.push(Math.floor(value));
 		}
-		return fn(text, ...values);
+		// A change of case can make a text longer: the capital form of ß is SS.
+		const result = fn(text, ...values);
+		return typeof result === "string" ? boundedText(result) : result;
 	};
 }
 
@@ -493,8 +495,18 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 	function argument(node: Node): Arg {
 		if (node.t !== "range") return { values: [evaluate(node)], range: false };
 		const values: Value[] = [];
-		for (const name of cellsIn(node)) values.push(results.get(name) ?? null);
+		for (const name of cellsIn(node)) values.push(charged(results.get(name) ?? null));
 		return { values, range: true };
+	}
+
+	/**
+	 * A text costs its length when a formula reads it from a cell, and when an operator or a function
+	 * makes it. Thus the text work of one calculation has a total limit: many cells that each make,
+	 * copy or compare a long text cannot use all the memory or the CPU time of a request.
+	 */
+	function charged(value: Value): Value {
+		if (typeof value === "string") spend(value.length);
+		return value;
 	}
 
 	function evaluate(node: Node): Value {
@@ -505,7 +517,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 			case "error":
 				return ERRORS[node.code];
 			case "ref":
-				return results.get(cellName(node)) ?? null;
+				return charged(results.get(cellName(node)) ?? null);
 			case "range":
 				// A range is a value only as an argument of a function.
 				return ERRORS["#VALUE!"];
@@ -519,7 +531,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 				const right = evaluate(node.right);
 				const error = firstError([left, right]);
 				if (error) return error;
-				if (node.op === "&") return boundedText(`${toText(left)}${toText(right)}`);
+				if (node.op === "&") return charged(boundedText(`${toText(left)}${toText(right)}`));
 				if (["=", "<>", "<", ">", "<=", ">="].includes(node.op)) {
 					const order = compare(left, right);
 					return {
@@ -563,7 +575,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 					return value instanceof ErrorValue ? evaluate(node.args[1] as Node) : value;
 				}
 				const fn = FUNCTIONS[node.name];
-				return fn ? fn(node.args.map(argument)) : ERRORS["#NAME?"];
+				return fn ? charged(fn(node.args.map(argument))) : ERRORS["#NAME?"];
 			}
 		}
 	}

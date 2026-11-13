@@ -1,6 +1,6 @@
 import { SHEET_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { cellName, ErrorValue, evaluateSheet, parseCellName } from "../src/sheets/formula.ts";
+import { cellName, ErrorValue, evaluateSheet, parseCellName, WORK_BUDGET } from "../src/sheets/formula.ts";
 
 /** The results of a sheet, with each error as its code. */
 function run(cells: Record<string, string>, budget?: number): Record<string, unknown> {
@@ -146,6 +146,46 @@ describe("the formula engine", () => {
 		expect(result.A16).toBe("#LIMIT!");
 		expect(result.A40).toBe("#LIMIT!");
 		expect(result.B1).toBe("#LIMIT!");
+		// A change of case can make a text longer: each ß becomes SS.
+		expect(run({ A1: "ß".repeat(20_000), B1: "=UPPER(A1)", B2: "=LOWER(A1)" })).toMatchObject({
+			B1: "#LIMIT!",
+			B2: "ß".repeat(20_000),
+		});
+	});
+
+	// Each text here is under the limit for one cell. Without a limit for the total, 2,000 such cells
+	// make an answer of 64 million characters from a sheet of a few kilobytes.
+	it("stops when the text results of one calculation are too long in total", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000) };
+		const join = `=${Array.from({ length: 16 }, () => "A1").join("&")}`;
+		for (let row = 2; row <= 1000; row++) cells[`A${row}`] = join;
+		for (let row = 1; row <= 1000; row++) cells[`B${row}`] = join;
+		const results = Object.values(run(cells));
+		const characters = results.reduce<number>((sum, value) => sum + (typeof value === "string" ? value.length : 0), 0);
+		expect(characters).toBeLessThan(2 * WORK_BUDGET);
+		expect(results).toContain("#LIMIT!");
+		expect(results.filter((value) => typeof value === "string" && value.length === 32_000).length).toBeGreaterThan(0);
+	});
+
+	// A long text costs its length each time that a formula reads it. Without that, thousands of cells
+	// that only compare one long text do gigabytes of text work for a few units of the budget.
+	it("counts the texts that formulas read, also in a comparison", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000), A2: `=CONCAT(${Array(16).fill("A1").join(",")})` };
+		for (let row = 1; row <= 500; row++) cells[`B${row}`] = "=A2=A2";
+		const results = run(cells);
+		expect(results.A2).toHaveLength(32_000);
+		expect(Object.values(results)).toContain(true);
+		expect(Object.values(results)).toContain("#LIMIT!");
+	});
+
+	// The budget is 2,000,000. A cell here reads 32,000 characters and makes 32,000, so 30 cells fit.
+	it("gives each result when the text work is in the budget", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000) };
+		for (let row = 1; row <= 30; row++) cells[`B${row}`] = `=CONCAT(${Array(16).fill("A1").join(",")})`;
+		const results = run(cells);
+		expect(Object.values(results).filter((value) => typeof value === "string" && value.length === 32_000)).toHaveLength(
+			30,
+		);
 	});
 
 	it("calculates a cell after the cells that it reads, in each order of the inputs", () => {

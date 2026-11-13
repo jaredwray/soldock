@@ -42,6 +42,12 @@ type Token =
 
 type Delim = Extract<Token, { kind: "delim" }>;
 
+/** The most emphasis marks in emphasis marks. More than a person writes, and few enough for the call stack. */
+const MAX_OPEN_MARKS = 32;
+
+/** The longest run of one emphasis character that can be marks: three that close and three that open. */
+const MAX_MARK_RUN = 6;
+
 const ESCAPABLE = /[\\`*_{}[\]()#+\-.!~<>|"']/;
 const WORD = /[\p{L}\p{N}]/u;
 
@@ -49,21 +55,39 @@ function isSpace(ch: string | undefined): boolean {
 	return ch === undefined || /\s/.test(ch);
 }
 
-/** The end of the link that starts with `[` at `start`, with its label and target, or null. */
-function readLink(src: string, start: number): { label: string; href: string; end: number } | null | "none" {
-	let depth = 0;
-	let close = -1;
-	for (let i = start; i < src.length; i++) {
+/**
+ * The closing bracket of each opening bracket, by position. One pass finds all pairs, so text with
+ * many brackets costs no more than its length.
+ */
+function matchBrackets(src: string): Map<number, number> {
+	const pairs = new Map<number, number>();
+	const open: number[] = [];
+	for (let i = 0; i < src.length; i++) {
 		const ch = src[i];
 		if (ch === "\\") i++;
-		else if (ch === "[") depth++;
-		else if (ch === "]" && --depth === 0) {
-			close = i;
-			break;
-		}
+		else if (ch === "[") open.push(i);
+		else if (ch === "]" && open.length > 0) pairs.set(open.pop() as number, i);
 	}
-	// No bracket closes after this point, so no later link can exist in this text.
-	if (close < 0) return "none";
+	return pairs;
+}
+
+/** The start of each run of backticks, by the length of the run, in the order of the text. */
+function backtickRuns(src: string): Map<number, number[]> {
+	const runs = new Map<number, number[]>();
+	for (let i = 0; i < src.length; i++) {
+		if (src[i] !== "`") continue;
+		let length = 1;
+		while (src[i + length] === "`") length++;
+		const starts = runs.get(length);
+		if (starts) starts.push(i);
+		else runs.set(length, [i]);
+		i += length - 1;
+	}
+	return runs;
+}
+
+/** The link that starts with `[` at `start` and has its `]` at `close`: its label, its target and its end. */
+function readLink(src: string, start: number, close: number): { label: string; href: string; end: number } | null {
 	if (src[close + 1] !== "(") return null;
 	const target = /^\(\s*(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/.exec(
 		// A target is at most a link and a title. The slice has a limit, so many links cost no more than their text.
@@ -78,9 +102,11 @@ function readLink(src: string, start: number): { label: string; href: string; en
 function tokenize(src: string, linkDepth: number): Token[] {
 	const tokens: Token[] = [];
 	let text = "";
-	let links = linkDepth < 4;
-	/** The lengths of backtick runs that have no closing run after the current position. */
-	const openRuns = new Set<number>();
+	const links = linkDepth < 4;
+	let brackets: Map<number, number> | null = null;
+	let runs: Map<number, number[]> | null = null;
+	/** For each length of a backtick run, the place in its list of starts that the scan passed. */
+	const passed = new Map<number, number>();
 	const flush = () => {
 		if (text !== "") tokens.push({ kind: "text", text });
 		text = "";
@@ -98,20 +124,13 @@ function tokenize(src: string, linkDepth: number): Token[] {
 		} else if (ch === "`") {
 			let length = 1;
 			while (src[i + length] === "`") length++;
-			let close = -1;
-			if (!openRuns.has(length)) {
-				for (let j = i + length; j < src.length; j++) {
-					if (src[j] !== "`") continue;
-					let run = 1;
-					while (src[j + run] === "`") run++;
-					if (run === length) {
-						close = j;
-						break;
-					}
-					j += run - 1;
-				}
-				if (close < 0) openRuns.add(length);
-			}
+			// The closing run is the next run of the same length.
+			runs ??= backtickRuns(src);
+			const starts = runs.get(length) ?? [];
+			let at = passed.get(length) ?? 0;
+			while (at < starts.length && (starts[at] as number) < i + length) at++;
+			passed.set(length, at);
+			const close = at < starts.length ? (starts[at] as number) : -1;
 			if (close < 0) {
 				text += src.slice(i, i + length);
 				i += length;
@@ -124,9 +143,10 @@ function tokenize(src: string, linkDepth: number): Token[] {
 				i = close + length;
 			}
 		} else if (ch === "[" && links) {
-			const link = readLink(src, i);
-			if (link === "none") links = false;
-			if (link === null || link === "none") {
+			brackets ??= matchBrackets(src);
+			const close = brackets.get(i);
+			const link = close === undefined ? null : readLink(src, i, close);
+			if (link === null) {
 				text += ch;
 				i++;
 			} else {
@@ -152,6 +172,13 @@ function tokenize(src: string, linkDepth: number): Token[] {
 		} else if (ch === "*" || ch === "_" || ch === "~") {
 			let count = 1;
 			while (src[i + count] === ch) count++;
+			// A longer run than the marks of two texts that touch is text. One run of thousands of marks
+			// would make thousands of marks in marks.
+			if (count > MAX_MARK_RUN) {
+				text += src.slice(i, i + count);
+				i += count;
+				continue;
+			}
 			const before = src[i - 1];
 			const after = src[i + count];
 			const left = !isSpace(after);
@@ -181,6 +208,8 @@ function tokenize(src: string, linkDepth: number): Token[] {
  */
 function matchDelims(tokens: Token[]): Token[] {
 	const out: Token[] = [];
+	/** The opening marks that wait for a pair. Over the limit, a new mark stays text, so marks in marks stop there. */
+	let waiting = 0;
 	const openers: Record<Delim["ch"], number[]> = { "*": [], _: [], "~": [] };
 	for (const token of tokens) {
 		if (token.kind !== "delim") {
@@ -197,19 +226,26 @@ function matchDelims(tokens: Token[]): Token[] {
 			const children = out.splice(index + 1);
 			// The opening marks in the children have no pair now. They stay text.
 			for (const other of Object.values(openers)) {
-				while (other.length > 0 && (other[other.length - 1] as number) > index) other.pop();
+				while (other.length > 0 && (other[other.length - 1] as number) > index) {
+					other.pop();
+					waiting--;
+				}
 			}
 			opener.count -= use;
 			delim.count -= use;
 			if (opener.count === 0) {
 				out.pop();
 				stack.pop();
+				waiting--;
 			}
 			out.push({ kind: "group", mark: delim.ch === "~" ? "strike" : use === 2 ? "strong" : "em", children });
 		}
 		if (delim.count > 0) {
 			out.push(delim);
-			if (delim.canOpen) stack.push(out.length - 1);
+			if (delim.canOpen && waiting < MAX_OPEN_MARKS) {
+				stack.push(out.length - 1);
+				waiting++;
+			}
 		}
 	}
 	return out;
@@ -266,7 +302,7 @@ function withContent<T extends object>(node: T, content: DocInline[]): T & { con
 
 // The text after a fence of backticks has no backtick. Thus a line that starts with a code span is not a fence.
 const FENCE = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
-const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
 const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 const QUOTE = /^ {0,3}>/;
 // A list number has at most 5 digits: the limit of `order` in the content schema. A longer number is text.
@@ -289,15 +325,31 @@ function startsBlock(line: string): boolean {
 	return FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || LIST.test(line);
 }
 
+/** The text of a heading, without the closing run of # that some tools write. */
+function headingText(raw: string): string {
+	const text = raw.trim();
+	let end = text.length;
+	while (end > 0 && text[end - 1] === "#") end--;
+	const closed = end < text.length && (end === 0 || text[end - 1] === " " || text[end - 1] === "\t");
+	return closed ? text.slice(0, end).trim() : text;
+}
+
+/** The number of times that `ch` is at the end of `line`. */
+function trailing(line: string, ch: string): number {
+	let count = 0;
+	while (count < line.length && line[line.length - 1 - count] === ch) count++;
+	return count;
+}
+
 /** The text of the lines of a paragraph. A line that ends with two spaces or a backslash ends with a hard break. */
 function paragraphText(lines: string[]): string {
 	let text = "";
 	lines.forEach((line, index) => {
 		const last = index === lines.length - 1;
 		// An odd number of backslashes at the end: the last one is the hard break. An even number is text.
-		const slashes = /\\+$/.exec(line)?.[0].length ?? 0;
-		const hard = slashes % 2 === 1 ? { index: line.length - 1 } : / {2,}$/.exec(line);
-		const body = (hard && !last ? line.slice(0, hard.index) : line).trim();
+		const cut = trailing(line, "\\") % 2 === 1 ? 1 : trailing(line, " ") >= 2 ? trailing(line, " ") : 0;
+		const hard = cut > 0;
+		const body = (hard && !last ? line.slice(0, line.length - cut) : line).trim();
 		text += body;
 		if (!last) text += hard ? "\n" : " ";
 	});
@@ -333,7 +385,9 @@ function parseBlocks(lines: string[], depth: number): DocBlock[] {
 		const heading = HEADING.exec(line);
 		if (heading) {
 			const level = Math.min((heading[1] as string).length, 3);
-			blocks.push(withContent({ type: "heading" as const, attrs: { level } }, parseInline((heading[2] ?? "").trim())));
+			blocks.push(
+				withContent({ type: "heading" as const, attrs: { level } }, parseInline(headingText(heading[2] ?? ""))),
+			);
 			i++;
 			continue;
 		}
@@ -440,13 +494,16 @@ function hrefOf(node: DocInline): string | null {
 /** One text with its marks. Spaces at the start and at the end go out of the marks, as Markdown needs. */
 function textToMarkdown(node: Extract<DocInline, { type: "text" }>): string {
 	const types = new Set((node.marks ?? []).map((mark) => mark.type));
-	const [, lead, body, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(node.text) as RegExpExecArray;
+	const body = node.text.trim();
 	if (body === "") return escapeText(node.text);
-	let text = types.has("code") ? codeSpan(body as string) : escapeText(body as string);
+	const start = node.text.length - node.text.trimStart().length;
+	const lead = node.text.slice(0, start);
+	const trail = node.text.slice(start + body.length);
+	let text = types.has("code") ? codeSpan(body) : escapeText(body);
 	if (types.has("strike")) text = `~~${text}~~`;
 	if (types.has("em")) text = `*${text}*`;
 	if (types.has("strong")) text = `**${text}**`;
-	return `${escapeText(lead as string)}${text}${escapeText(trail as string)}`;
+	return `${escapeText(lead)}${text}${escapeText(trail)}`;
 }
 
 function inlineToMarkdown(content: readonly DocInline[] | undefined, oneLine = false): string {

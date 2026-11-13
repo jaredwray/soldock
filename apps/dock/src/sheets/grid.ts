@@ -39,6 +39,9 @@ export function toCell(name: string, input: string | undefined, value: Value | u
 	if (input === undefined) return { cell: name, input: "", value: null, type: "empty" };
 	if (value instanceof ErrorValue) return { cell: name, input, value: value.code, type: "error" };
 	if (value === null || value === undefined) return { cell: name, input, value: null, type: "empty" };
+	// The output holds finite numbers only. The engine makes no other number, and this keeps a sheet
+	// readable if it ever does.
+	if (typeof value === "number" && !Number.isFinite(value)) return { cell: name, input, value: "#NUM!", type: "error" };
 	return {
 		cell: name,
 		input,

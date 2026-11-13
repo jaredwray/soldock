@@ -20,4 +20,4 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `crypto/crypto.ts`: SHA-256, random tokens, base64 and a constant-time secret comparison.
 - `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
-- `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes.
+- `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, refuses input with more than 64 levels of objects and lists (a schema reads its input with recursion), validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes.

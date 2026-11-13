@@ -80,9 +80,10 @@ A formula that reads a cell with an error gets the same error.
 
 - The engine calculates a cell after the formula cells that it reads. It walks the cells with its
   own stack, so a chain as long as the grid does not use up the call stack.
-- One calculation has a budget of 2,000,000 cell reads. The formulas without a result then get
-  `#LIMIT!`. Thus a sheet with many formulas on large ranges cannot use all the CPU time of a
-  request.
+- One calculation has a budget of 2,000,000 units of work. A cell read costs 1. A text costs
+  its number of characters when a formula reads it from a cell, and when an operator or a function
+  makes it. The formulas without a result then get `#LIMIT!`. Thus a sheet with many formulas on large ranges cannot use all the CPU time of a
+  request, and many long text results cannot make an answer larger than the memory of the Worker.
 - The engine finds the cells that a formula reads from its text, before the calculation. A cell
   in an argument that `IF` or `IFERROR` does not use still counts: `=IF(TRUE,1,A1)` in `A1` gets
   `#CYCLE!`, as in Excel. Thus the value of a different cell cannot make a circle appear or go away.

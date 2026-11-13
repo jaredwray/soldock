@@ -698,7 +698,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return this.recordOf(call, itemId);
 	}
 
-	/** Checks that the caller can create an item in a folder, or at the root. Returns the depth of the new item. */
+	/**
+	 * Checks that the caller can create an item in a folder, or at the root. Returns the level of the
+	 * new item: 1 at the root. The limit is for folders, so a folder at the last level can still hold
+	 * files, docs and sheets. The caller checks the level of a new folder with `tooDeep`.
+	 */
 	checkCreate(call: SpaceCall, parentId: string | null): { depth: number } | Refusal {
 		this.enter(call);
 		if (parentId === null) {
@@ -709,11 +713,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if ("error" in parent) return parent;
 		if (parent.item.kind !== "folder") return refuse("invalid", "The item parent_id is not a folder.");
 		if (parent.item.trash_root !== null) return refuse("invalid", "The folder is in the trash. Restore it first.");
-		const depth = (this.one<{ n: number }>(`${UP} SELECT COUNT(*) AS n FROM up`, parentId)?.n ?? 0) + 1;
-		if (depth > DRIVE_LIMITS.depth) {
-			return refuse("invalid", `A drive can have at most ${DRIVE_LIMITS.depth} levels of folders.`);
-		}
-		return { depth };
+		return { depth: (this.one<{ n: number }>(`${UP} SELECT COUNT(*) AS n FROM up`, parentId)?.n ?? 0) + 1 };
+	}
+
+	/** The refusal for a folder at a level over the limit, or null. */
+	private tooDeep(folderLevel: number): Refusal | null {
+		return folderLevel > DRIVE_LIMITS.depth
+			? refuse("invalid", `A drive can have at most ${DRIVE_LIMITS.depth} levels of folders.`)
+			: null;
 	}
 
 	permissions(call: SpaceCall, itemId: string): { owner_id: string; permissions: PermissionRecord[] } | Refusal {
@@ -840,6 +847,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 		const allowed = this.checkCreate(call, input.parentId);
 		if ("error" in allowed) return allowed;
+		const deep = input.kind === "folder" ? this.tooDeep(allowed.depth) : null;
+		if (deep) return deep;
 		const now = Date.now();
 		const actor = JSON.stringify(call.actor);
 		this.ctx.storage.transactionSync(() => {
@@ -914,11 +923,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				actor,
 				itemId,
 			);
+			// The new version and the version that was current until now always stay. A person who made an
+			// old version current, and then uploads, can still go back to it.
+			const keep = found.item.head_version_id === null ? 1 : 2;
 			const extra = this.all<VersionRow>(
-				"SELECT * FROM versions WHERE item_id = ?1 AND id != ?2 ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?3",
+				`SELECT * FROM versions WHERE item_id = ?1 AND id != ?2 AND id IS NOT ?3
+				ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?4`,
 				itemId,
 				input.id,
-				DRIVE_LIMITS.versionsPerFile - 1,
+				found.item.head_version_id,
+				DRIVE_LIMITS.versionsPerFile - keep,
 			);
 			for (const version of extra) {
 				this.sql.exec("DELETE FROM versions WHERE id = ?", version.id);
@@ -998,10 +1012,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (!item) return refuse("not_found", `No item has the id ${id}.`);
 			if (item.trash_root !== null) return refuse("invalid", `${item.name} is in the trash. Restore it first.`);
 			if (above.has(id)) return refuse("invalid", `${item.name} cannot move into itself or into a folder under it.`);
-			const height = this.one<{ n: number }>(`${DOWN} SELECT MAX(depth) AS n FROM down`, id)?.n ?? 0;
-			if (target.depth + height > DRIVE_LIMITS.depth) {
-				return refuse("invalid", `A drive can have at most ${DRIVE_LIMITS.depth} levels of folders.`);
-			}
+			// The lowest folder in the moved item, counted from the item. Null when the item holds no folder and is none.
+			const height = this.one<{ n: number | null }>(
+				`${DOWN} SELECT MAX(down.depth) AS n FROM down JOIN items i ON i.id = down.id WHERE i.kind = 'folder'`,
+				id,
+			)?.n;
+			const deep = height === null || height === undefined ? null : this.tooDeep(target.depth + height);
+			if (deep) return deep;
 		}
 		this.ctx.storage.transactionSync(() => {
 			let changed = false;
@@ -1045,6 +1062,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { items_changed: changed };
 	}
 
+	/** The rows of a call, folders before the items in them. Thus the result does not depend on the order of the ids. */
+	private topDown(rows: ItemRow[]): ItemRow[] {
+		const level = new Map(
+			rows.map((row) => [row.id, this.one<{ n: number }>(`${UP} SELECT COUNT(*) AS n FROM up`, row.id)?.n ?? 0]),
+		);
+		return [...rows].sort((a, b) => (level.get(a.id) ?? 0) - (level.get(b.id) ?? 0));
+	}
+
 	/** Puts items in the trash. A folder hides all that it holds. Nothing is deleted. */
 	trash(call: SpaceCall, itemIds: string[], dryRun: boolean): { items_changed: number } | Refusal {
 		this.enter(call);
@@ -1057,23 +1082,27 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			// An item that is in the trash, or under a folder in the trash, stays as it is.
 			if (item.trash_root === null) rows.push(item);
 		}
-		if (dryRun || rows.length === 0) return { items_changed: rows.length };
-		let changed = 0;
+		// An item in a folder of the same call goes to the trash with that folder. It does not count.
+		const selected = new Set(rows.map((row) => row.id));
+		const changed = rows.filter(
+			(row) =>
+				!this.all<{ id: string }>(`${UP} SELECT id FROM up WHERE depth >= 1`, row.id).some((above) =>
+					selected.has(above.id),
+				),
+		);
+		if (dryRun || changed.length === 0) return { items_changed: changed.length };
 		this.ctx.storage.transactionSync(() => {
 			const now = Date.now();
-			for (const item of rows) {
-				// An earlier item of this call can hold this one. It is then in the trash with that folder.
-				if (this.row(item.id)?.trash_root !== null) continue;
+			for (const item of changed) {
 				this.sql.exec("UPDATE items SET trashed_at = ?, trash_root = id WHERE id = ?", now, item.id);
 				this.sql.exec(
 					`${DOWN} UPDATE items SET trash_root = ?1 WHERE trash_root IS NULL AND id IN (SELECT id FROM down)`,
 					item.id,
 				);
-				changed++;
 			}
 			this.bump();
 		});
-		return { items_changed: changed };
+		return { items_changed: changed.length };
 	}
 
 	/** Takes items out of the trash. An item whose folder is gone or in the trash goes to the root. */
@@ -1081,9 +1110,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		this.enter(call);
 		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
 		const rows: ItemRow[] = [];
-		for (const id of new Set(itemIds)) {
+		const wanted = new Set(itemIds);
+		for (const id of wanted) {
 			const item = this.row(id);
 			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			// An item that went to the trash with its folder comes back with that folder.
+			if (item.trash_root !== null && wanted.has(item.trash_root) && item.trash_root !== item.id) continue;
 			if (item.trash_root !== null && item.trash_root !== item.id) {
 				return refuse("invalid", `${item.name} is in a folder that is in the trash. Restore that folder.`);
 			}
@@ -1091,7 +1123,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 		if (rows.length === 0) return { items_changed: 0 };
 		this.ctx.storage.transactionSync(() => {
-			for (const item of rows) {
+			// A folder comes back before the items in it, so such an item stays in its folder.
+			for (const item of this.topDown(rows)) {
 				const parent = item.parent_id === null ? null : this.row(item.parent_id);
 				const parentId = parent && parent.trash_root === null ? parent.id : null;
 				this.sql.exec(

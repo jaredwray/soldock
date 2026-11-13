@@ -48,7 +48,7 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 	const renamingRef = useRef(false);
 	// True after a rename ends from the keyboard: the focus then goes back to the name.
 	const refocusRef = useRef(false);
-	const canEdit = item.role === "owner" || item.role === "editor";
+	const canEdit = (item.role === "owner" || item.role === "editor") && !item.trashed;
 	const space = spaceInput(item.space_id, ownId);
 	const failed = saveState === "error" || saveState === "conflict";
 
@@ -166,7 +166,7 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 					className={failed ? "document-header-state document-header-state-error" : "document-header-state"}
 					role="status"
 				>
-					{saveState === null ? "View only" : SAVE_TEXT[saveState]}
+					{saveState === null ? (item.trashed ? "In the trash" : "View only") : SAVE_TEXT[saveState]}
 				</p>
 			</div>
 			<button

@@ -70,7 +70,22 @@ async function copyBlob(call: CallContext, from: string, to: string): Promise<vo
 async function fillCopy(call: CallContext, own: OpenSpace, sourceId: string, copyId: string): Promise<void> {
 	if ((await readDocument(call, copyId)) !== null) return;
 	const state = await readDocument(call, sourceId);
-	if (state) await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
+	if (!state) return;
+	try {
+		await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
+	} catch (error) {
+		// Two calls with one key can run at the same time. The other call then wrote the content first,
+		// and this call has nothing more to do.
+		const filled = error instanceof OperationError && error.code === "conflict";
+		if (!filled || (await readDocument(call, copyId)) === null) throw error;
+	}
+}
+
+/** The default name of a copy, at most as long as a name can be. The cut is never in the middle of a character. */
+function copyName(name: string): string {
+	const characters = [...`Copy of ${name}`];
+	while (characters.join("").length > DRIVE_LIMITS.nameChars) characters.pop();
+	return characters.join("").trimEnd();
 }
 
 /** The own drive of the caller. */
@@ -254,7 +269,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			}
 		}
 		accept(await own.space.checkCreate(own.ctx, input.parent_id ?? null));
-		const name = input.name ?? `Copy of ${original.name}`.slice(0, DRIVE_LIMITS.nameChars);
+		const name = input.name ?? copyName(original.name);
 		const itemId = newId("itm");
 		const parentId = input.parent_id ?? null;
 		if (original.kind === "file") {
