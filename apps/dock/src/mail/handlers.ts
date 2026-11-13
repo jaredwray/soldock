@@ -411,6 +411,19 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			recipients,
 			sentBy: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
 		};
+		// A send has slow steps: it resolves the recipients, composes the message and writes it to R2. An
+		// admin can remove the member in that time. So the handler checks the membership again, just before
+		// the mailbox stores the message. This check and the store are not one transaction: a removal
+		// between them is too late to stop this send.
+		if (record.kind === "team") {
+			try {
+				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id);
+			} catch (error) {
+				// No message references this attempt's object.
+				await call.env.BLOBS.delete(rawKey);
+				throw error;
+			}
+		}
 		// The raw object belongs to this attempt only: its key comes from bytes with a new Message-ID.
 		// When the mailbox answers that the key was used, no message references the object, so delete it.
 		// After an error the mailbox can still have committed, so the object stays: a dangling reference

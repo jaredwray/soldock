@@ -39,7 +39,10 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 
 - Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
   mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use.
-- The handler checks the mailbox on each call (`openMailbox`), so removed access ends at once. An
+- The handler checks the mailbox on each call (`openMailbox`), so removed access ends at once.
+  `mail.send` has slow steps, so it checks the membership again just before the mailbox stores the
+  message. Known limit: this check and the store are not one transaction, so a removal between
+  them does not stop that one send. An
   unknown team mailbox gets `not_found`. A team mailbox without membership, and the id of a
   different principal, get `forbidden`. The `MailboxDO` does not know its callers.
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team

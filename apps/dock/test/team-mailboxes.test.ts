@@ -1,7 +1,8 @@
-import { runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
+import worker from "../src/index.ts";
 import {
 	type Actor,
 	api,
@@ -339,6 +340,36 @@ describe("mail in a team mailbox", () => {
 		expect((await ada.call("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal"]);
 		// The other member keeps the access.
 		expect(await subjects(bot, support.id)).toEqual(["Order 42"]);
+	});
+
+	// A send writes the message to R2 before the mailbox stores it. A removal in that time must stop the send.
+	it("refuses a send when the member is removed while the send is in progress", async () => {
+		const support = await createSupport();
+		const blobs = new Proxy(env.BLOBS, {
+			get(target, property) {
+				if (property === "put") {
+					return async (...args: Parameters<R2Bucket["put"]>) => {
+						await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: ada.id });
+						return target.put(...args);
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+			new Request(`${ORIGIN}/api/v1/mail/messages`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ mailbox_id: support.id, to: ["cy@customer.example"], text: "Too late" }),
+			}),
+			{ ...env, BLOBS: blobs } as unknown as Env,
+			createExecutionContext(),
+		);
+		expect(res.status).toBe(403);
+		expect(await subjects(bot, support.id, "in:anywhere")).toEqual([]);
+		// The raw message of the refused send does not stay in R2.
+		expect((await env.BLOBS.list({ prefix: `mail/raw/${support.id}/` })).objects).toEqual([]);
 	});
 
 	// The members share the key store of the mailbox. The key of one member must not block or answer another.
