@@ -1106,9 +1106,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		this.enter(call);
 		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
 		const rows: ItemRow[] = [];
-		for (const id of new Set(itemIds)) {
+		const wanted = new Set(itemIds);
+		for (const id of wanted) {
 			const item = this.row(id);
 			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			// An item that went to the trash with its folder comes back with that folder.
+			if (item.trash_root !== null && wanted.has(item.trash_root) && item.trash_root !== item.id) continue;
 			if (item.trash_root !== null && item.trash_root !== item.id) {
 				return refuse("invalid", `${item.name} is in a folder that is in the trash. Restore that folder.`);
 			}

@@ -251,6 +251,19 @@ describe("the trash", () => {
 			const afterTrash = (await ada.call("drive.get_item", { item_id: item.id })).item;
 			return { parent: restored.parent_id === reports.id, trashed: restored.trashed, comesBack: !afterTrash.trashed };
 		};
+		// One call for the folder and the item, as the Undo of the web app sends after a search.
+		for (const ids of [(a: string, b: string) => [a, b], (a: string, b: string) => [b, a]]) {
+			const reports = await folder("Together");
+			const item = await file("b.txt", "x", reports.id);
+			await ada.call("drive.trash_items", { item_ids: ids(reports.id, item.id) });
+			expect(await ada.call("drive.restore_items", { item_ids: ids(reports.id, item.id) })).toEqual({
+				items_changed: 1,
+			});
+			expect((await ada.call("drive.get_item", { item_id: item.id })).item).toMatchObject({
+				trashed: false,
+				parent_id: reports.id,
+			});
+		}
 		// The item stays in its folder, and it comes back with its folder.
 		expect(await state("folder first")).toEqual({ parent: true, trashed: false, comesBack: true });
 		expect(await state("item first")).toEqual({ parent: true, trashed: false, comesBack: true });
