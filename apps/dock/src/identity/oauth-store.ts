@@ -11,8 +11,23 @@ export const REFRESH_TOKEN_PREFIX = "sdr_";
 /** The prefix of each authorization code. */
 export const CODE_PREFIX = "sdc_";
 
-/** A registration without a request or a grant goes after one day, because anybody can register. */
-const UNUSED_CLIENT_MS = 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Anybody can register a client and start a request, so the directory keeps only a limited number of
+ * them. A registration deletes the clients without a grant that nobody used for 30 days. Above the
+ * limit, it deletes the clients without a grant whose last use is the oldest. A client with a grant
+ * stays.
+ */
+export const OAUTH_STORE_LIMITS = {
+	idleClientMs: 30 * DAY_MS,
+	clientsWithoutGrant: 1000,
+	requests: 1000,
+	/** The refresh token before the current one works for this long after the refresh that replaced it. */
+	refreshGraceMs: 60 * 1000,
+	/** A new grant of a principal deletes its grants that were revoked or expired this long before. */
+	endedGrantMs: 30 * DAY_MS,
+} as const;
 
 export interface OAuthClientRecord {
 	id: string;
@@ -87,21 +102,29 @@ function isoAfter(now: number, ms: number): string {
 	return new Date(now + ms).toISOString();
 }
 
-/** Registers a public client, and deletes old registrations that never got a request or a grant. */
+/** Registers a public client. It deletes idle clients without a grant, and keeps their number below the limit. */
 export async function registerClient(
 	db: D1Database,
 	client: { name: string; uri: string | null; redirect_uris: string[] },
 ): Promise<OAuthClientRecord> {
 	const now = Date.now();
 	const record: OAuthClientRecord = { id: newId("cli", now), ...client, created_at: new Date(now).toISOString() };
+	// A client with a request is kept, so a delete never breaks the foreign key of a request.
+	const withoutGrant = `NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = c.id)
+		AND NOT EXISTS (SELECT 1 FROM oauth_requests r WHERE r.client_id = c.id)`;
 	await db.batch([
 		db
 			.prepare(
-				`DELETE FROM oauth_clients WHERE created_at < ?
-				AND NOT EXISTS (SELECT 1 FROM oauth_requests r WHERE r.client_id = oauth_clients.id)
-				AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.id)`,
+				`DELETE FROM oauth_clients WHERE id IN (SELECT c.id FROM oauth_clients c
+				WHERE COALESCE(c.last_used_at, c.created_at) < ? AND ${withoutGrant})`,
 			)
-			.bind(new Date(now - UNUSED_CLIENT_MS).toISOString()),
+			.bind(new Date(now - OAUTH_STORE_LIMITS.idleClientMs).toISOString()),
+		db
+			.prepare(
+				`DELETE FROM oauth_clients WHERE id IN (SELECT c.id FROM oauth_clients c WHERE ${withoutGrant}
+				ORDER BY COALESCE(c.last_used_at, c.created_at) DESC LIMIT -1 OFFSET ?)`,
+			)
+			.bind(OAUTH_STORE_LIMITS.clientsWithoutGrant - 1),
 		db
 			.prepare("INSERT INTO oauth_clients (id, name, uri, redirect_uris, created_at) VALUES (?, ?, ?, ?, ?)")
 			.bind(record.id, record.name, record.uri, JSON.stringify(record.redirect_uris), record.created_at),
@@ -117,19 +140,30 @@ export async function getClient(db: D1Database, id: string): Promise<OAuthClient
 	return row ? toClient(row) : null;
 }
 
-/** Keeps a new authorization request, and deletes the expired ones. Returns its id. */
+/**
+ * Keeps a new authorization request, deletes the expired ones, and keeps the number of requests below
+ * the limit. An approved request lives until its code expires. Returns null when the client no longer
+ * exists, for example after a registration deleted it.
+ */
 export async function createRequest(
 	db: D1Database,
 	request: { client_id: string; redirect_uri: string; state: string | null; code_challenge: string; scopes: Scope[] },
-): Promise<string> {
+): Promise<string | null> {
 	const now = Date.now();
+	const nowIso = new Date(now).toISOString();
 	const id = newId("oar", now);
-	await db.batch([
-		db.prepare("DELETE FROM oauth_requests WHERE expires_at < ?").bind(new Date(now).toISOString()),
+	const results = await db.batch([
+		db.prepare("DELETE FROM oauth_requests WHERE expires_at < ?").bind(nowIso),
+		db
+			.prepare(
+				"DELETE FROM oauth_requests WHERE id IN (SELECT id FROM oauth_requests ORDER BY created_at DESC LIMIT -1 OFFSET ?)",
+			)
+			.bind(OAUTH_STORE_LIMITS.requests - 1),
+		db.prepare("UPDATE oauth_clients SET last_used_at = ? WHERE id = ?").bind(nowIso, request.client_id),
 		db
 			.prepare(
 				`INSERT INTO oauth_requests (id, client_id, redirect_uri, state, code_challenge, scopes, created_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM oauth_clients WHERE id = ?)`,
 			)
 			.bind(
 				id,
@@ -138,11 +172,12 @@ export async function createRequest(
 				request.state,
 				request.code_challenge,
 				JSON.stringify(request.scopes),
-				new Date(now).toISOString(),
+				nowIso,
 				isoAfter(now, OAUTH_LIMITS.requestSeconds * 1000),
+				request.client_id,
 			),
 	]);
-	return id;
+	return results.at(-1)?.meta.changes === 1 ? id : null;
 }
 
 /** The SQL condition that request `?` still waits for a person. It reads the current time from the next `?`. */
@@ -187,23 +222,24 @@ export async function getPendingRequest(db: D1Database, id: string): Promise<OAu
 	};
 }
 
-/** The condition of a principal insert that request `?` still waits, for `createPrincipal`. */
-export function pendingRequestCondition(requestId: string): { sql: string; params: unknown[] } {
-	return {
-		sql: `EXISTS (SELECT 1 FROM oauth_requests WHERE id = ? AND ${PENDING})`,
-		params: [requestId, new Date().toISOString()],
-	};
+/**
+ * The condition of a principal insert that request `?` still waits, for `createPrincipal`. Pass the same
+ * `now` to `approveStatement`, so that the insert and the approval in one transaction agree.
+ */
+export function pendingRequestCondition(requestId: string, now: string): { sql: string; params: unknown[] } {
+	return { sql: `EXISTS (SELECT 1 FROM oauth_requests WHERE id = ? AND ${PENDING})`, params: [requestId, now] };
 }
 
 /** A new authorization code and the time after which it stops. */
-export async function newCode(): Promise<{ code: string; hash: string; expires_at: string }> {
+export async function newCode(now: number): Promise<{ code: string; hash: string; expires_at: string }> {
 	const code = `${CODE_PREFIX}${randomToken(32)}`;
-	return { code, hash: await sha256Hex(code), expires_at: isoAfter(Date.now(), OAUTH_LIMITS.codeSeconds * 1000) };
+	return { code, hash: await sha256Hex(code), expires_at: isoAfter(now, OAUTH_LIMITS.codeSeconds * 1000) };
 }
 
 /**
  * The statement that approves request `requestId` for a principal. It changes the row only while the
- * request waits and the principal exists, so it can share a transaction with the insert of a new agent.
+ * request waits at `now` and the principal exists, so it can share a transaction with the insert of a
+ * new agent. The row then lives until the code expires.
  */
 export function approveStatement(
 	db: D1Database,
@@ -214,12 +250,15 @@ export function approveStatement(
 		approvedBy: string;
 		codeHash: string;
 		codeExpiresAt: string;
+		now: string;
 	},
 ): D1PreparedStatement {
 	return db
 		.prepare(
-			`UPDATE oauth_requests SET principal_id = ?, granted_scopes = ?, approved_by = ?, code_hash = ?, code_expires_at = ?
-			WHERE id = ? AND ${PENDING} AND EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
+			`UPDATE oauth_requests SET principal_id = ?1, granted_scopes = ?2, approved_by = ?3, code_hash = ?4,
+			code_expires_at = ?5, expires_at = ?5
+			WHERE id = ?6 AND code_hash IS NULL AND denied_at IS NULL AND expires_at > ?7
+			AND EXISTS (SELECT 1 FROM principals WHERE id = ?1)`,
 		)
 		.bind(
 			approval.principalId,
@@ -228,8 +267,7 @@ export function approveStatement(
 			approval.codeHash,
 			approval.codeExpiresAt,
 			approval.requestId,
-			new Date().toISOString(),
-			approval.principalId,
+			approval.now,
 		);
 }
 
@@ -267,13 +305,18 @@ export async function redeemCode(db: D1Database, code: string): Promise<Redeemed
 			approved_by: string;
 		}>();
 	if (!row) {
-		await db
-			.prepare(
-				`UPDATE oauth_grants SET revoked_at = ?1 WHERE revoked_at IS NULL
-				AND id = (SELECT grant_id FROM oauth_requests WHERE code_hash = ?2 AND used_at IS NOT NULL)`,
-			)
-			.bind(now, hash)
-			.run();
+		// The grant of the first use can still be on its way: createGrant then revokes it, because of replayed_at.
+		await db.batch([
+			db
+				.prepare("UPDATE oauth_requests SET replayed_at = ? WHERE code_hash = ? AND used_at IS NOT NULL")
+				.bind(now, hash),
+			db
+				.prepare(
+					`UPDATE oauth_grants SET revoked_at = ?1 WHERE revoked_at IS NULL
+					AND id = (SELECT grant_id FROM oauth_requests WHERE code_hash = ?2 AND used_at IS NOT NULL)`,
+				)
+				.bind(now, hash),
+		]);
 		return null;
 	}
 	return {
@@ -300,12 +343,21 @@ async function newTokens(now: number) {
 	};
 }
 
-/** Creates the grant of a redeemed code, with its first tokens. */
-export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promise<IssuedTokens> {
+/**
+ * Creates the grant of a redeemed code, with its first tokens. It deletes the grants of the principal
+ * that ended long ago. Returns null when somebody sent the code again before the grant existed: the
+ * grant is then revoked at once.
+ */
+export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promise<IssuedTokens | null> {
 	const now = Date.now();
+	const nowIso = new Date(now).toISOString();
 	const id = newId("grt", now);
 	const tokens = await newTokens(now);
+	const ended = new Date(now - OAUTH_STORE_LIMITS.endedGrantMs).toISOString();
 	await db.batch([
+		db
+			.prepare("DELETE FROM oauth_grants WHERE principal_id = ?1 AND (revoked_at < ?2 OR refresh_expires_at < ?2)")
+			.bind(redeemed.principal_id, ended),
 		db
 			.prepare(
 				`INSERT INTO oauth_grants (id, client_id, principal_id, scopes, created_by, created_at, access_hash,
@@ -317,39 +369,50 @@ export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promi
 				redeemed.principal_id,
 				JSON.stringify(redeemed.scopes),
 				redeemed.approved_by,
-				new Date(now).toISOString(),
+				nowIso,
 				tokens.access_hash,
 				tokens.access_expires_at,
 				tokens.refresh_hash,
 				tokens.refresh_expires_at,
 			),
 		db.prepare("UPDATE oauth_requests SET grant_id = ? WHERE id = ?").bind(id, redeemed.request_id),
+		db
+			.prepare(
+				`UPDATE oauth_grants SET revoked_at = ?1 WHERE id = ?2
+				AND EXISTS (SELECT 1 FROM oauth_requests WHERE id = ?3 AND replayed_at IS NOT NULL)`,
+			)
+			.bind(nowIso, id, redeemed.request_id),
 	]);
 	const grant = await getGrant(db, id);
 	if (!grant) throw new Error(`grant ${id} missing after insert`);
+	if (grant.revoked_at !== null) return null;
 	return { grant, access_token: tokens.access_token, refresh_token: tokens.refresh_token };
 }
 
 /**
- * Gives a grant new tokens for a refresh token of the client. The current refresh token and the one that
- * the client used before it both work, so a lost response does not end the connection. After the
- * refresh, the token that the client sent and the new one work. The old access token stops.
+ * Gives a grant new tokens for a refresh token of the client, and replaces the refresh token
+ * (rotation). The refresh token before the current one also works for 60 seconds after the refresh
+ * that replaced it, so a lost response does not end the connection. A later use of that token revokes
+ * the grant: somebody else can hold a copy of it (reuse detection). The old access token stops.
  */
 export async function refreshGrant(
 	db: D1Database,
 	refreshToken: string,
 	clientId: string,
-): Promise<IssuedTokens | null> {
+): Promise<{ tokens: IssuedTokens } | { reused: string } | null> {
 	if (!refreshToken.startsWith(REFRESH_TOKEN_PREFIX)) return null;
 	const used = await sha256Hex(refreshToken);
 	const now = Date.now();
+	const nowIso = new Date(now).toISOString();
 	const tokens = await newTokens(now);
+	// SQLite reads the old row in each SET expression, so the CASE sees the refresh token before the change.
 	const row = await db
 		.prepare(
 			`UPDATE oauth_grants SET access_hash = ?1, access_expires_at = ?2, refresh_hash = ?3, refresh_expires_at = ?4,
-			previous_refresh_hash = ?5
-			WHERE (refresh_hash = ?5 OR previous_refresh_hash = ?5) AND client_id = ?6 AND revoked_at IS NULL
-			AND refresh_expires_at > ?7
+			previous_refresh_hash = CASE WHEN refresh_hash = ?5 THEN ?5 ELSE previous_refresh_hash END,
+			previous_refresh_until = CASE WHEN refresh_hash = ?5 THEN ?6 ELSE previous_refresh_until END
+			WHERE client_id = ?7 AND revoked_at IS NULL AND refresh_expires_at > ?8
+			AND (refresh_hash = ?5 OR (previous_refresh_hash = ?5 AND previous_refresh_until > ?8))
 			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id)
 			RETURNING id`,
 		)
@@ -359,14 +422,24 @@ export async function refreshGrant(
 			tokens.refresh_hash,
 			tokens.refresh_expires_at,
 			used,
+			isoAfter(now, OAUTH_STORE_LIMITS.refreshGraceMs),
 			clientId,
-			new Date(now).toISOString(),
+			nowIso,
 		)
 		.first<{ id: string }>();
-	if (!row) return null;
+	if (!row) {
+		const reused = await db
+			.prepare(
+				`UPDATE oauth_grants SET revoked_at = ?1
+				WHERE previous_refresh_hash = ?2 AND previous_refresh_until <= ?1 AND revoked_at IS NULL RETURNING id`,
+			)
+			.bind(nowIso, used)
+			.first<{ id: string }>();
+		return reused ? { reused: reused.id } : null;
+	}
 	const grant = await getGrant(db, row.id);
 	if (!grant) return null;
-	return { grant, access_token: tokens.access_token, refresh_token: tokens.refresh_token };
+	return { tokens: { grant, access_token: tokens.access_token, refresh_token: tokens.refresh_token } };
 }
 
 /** The live grant of an access token, and its principal. */

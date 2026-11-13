@@ -5,22 +5,34 @@ export const REDIRECT_URI_MAX_LENGTH = 2000;
 
 /**
  * Schemes that a redirect URI can never use. The web app sends the browser to the redirect URI, so a
- * `javascript:` or `data:` URI would run code on this origin. `http:` is allowed only for a loopback
- * address (RFC 8252).
+ * `javascript:` or `data:` URI would run code on this origin. The others open a file, a call or a
+ * system handler instead of an app. `http:` is allowed only for a loopback address (RFC 8252).
  */
 const REFUSED_SCHEMES = new Set([
 	"about:",
 	"blob:",
+	"callto:",
+	"chrome:",
 	"data:",
+	"facetime:",
+	"facetime-audio:",
 	"file:",
 	"filesystem:",
 	"ftp:",
+	"intent:",
+	"jar:",
 	"javascript:",
 	"mailto:",
+	"sms:",
+	"tel:",
 	"vbscript:",
+	"view-source:",
 	"ws:",
 	"wss:",
 ]);
+
+/** Windows system handlers, such as `ms-msdt:` and `search-ms:`, which open tools of the system. */
+const REFUSED_SCHEME_PATTERN = /^(?:ms-[a-z0-9.+-]*|search-ms|shell|res):$/;
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -40,7 +52,9 @@ export function redirectUriProblem(value: string): string | null {
 	}
 	if (url.hash !== "" || value.includes("#")) return "has a fragment";
 	if (url.username !== "" || url.password !== "") return "has a user name or a password";
-	if (REFUSED_SCHEMES.has(url.protocol)) return `uses the ${url.protocol} scheme`;
+	if (REFUSED_SCHEMES.has(url.protocol) || REFUSED_SCHEME_PATTERN.test(url.protocol)) {
+		return `uses the ${url.protocol} scheme`;
+	}
 	if (url.protocol === "http:" && !LOOPBACK_HOSTS.has(url.hostname))
 		return "uses http: for a host that is not loopback";
 	return null;

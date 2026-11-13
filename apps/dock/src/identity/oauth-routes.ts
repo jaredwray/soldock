@@ -17,7 +17,7 @@ import {
 	refreshGrant,
 	registerClient,
 } from "./oauth-store.ts";
-import { REDIRECT_URI_MAX_LENGTH, redirectUriProblem, redirectWith } from "./oauth-urls.ts";
+import { REDIRECT_URI_MAX_LENGTH, redirectUriProblem } from "./oauth-urls.ts";
 
 type OAuthApp = Hono<{ Bindings: Env; Variables: RequestIdVariables }>;
 type OAuthContext = Context<{ Bindings: Env; Variables: RequestIdVariables }>;
@@ -204,8 +204,9 @@ export function mountOAuthRoutes(app: OAuthApp): void {
 		);
 	});
 
-	// The start of the authorization code flow. After the client and the redirect URI check, each error
-	// goes back to the client. A valid request waits for a person on the /connect page of the web app.
+	// The start of the authorization code flow. A valid request waits for a person on the /connect page of
+	// the web app. Each error shows a page and never redirects: anybody can register a redirect URI, so a
+	// redirect before a person acts would make this origin an open redirect (RFC 9700 section 4.11.2).
 	app.get("/oauth/authorize", async (c) => {
 		const query = new URL(c.req.url).searchParams;
 		const clientId = query.get("client_id");
@@ -216,27 +217,18 @@ export function mountOAuthRoutes(app: OAuthApp): void {
 			return authorizePageError("The redirect address of the app is not registered.");
 		}
 		const state = query.get("state");
-		const fail = (error: string, description: string) =>
-			c.redirect(
-				redirectWith(redirectUri, {
-					error,
-					error_description: description,
-					state: state && state.length <= STATE_MAX_LENGTH ? state : null,
-				}),
-				302,
-			);
 		if (query.get("response_type") !== "code") {
-			return fail("unsupported_response_type", "Only response_type=code is supported.");
+			return authorizePageError("The app asked for a response type other than code (unsupported_response_type).");
 		}
 		const challenge = query.get("code_challenge");
 		if (!challenge || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || query.get("code_challenge_method") !== "S256") {
-			return fail("invalid_request", "PKCE is required: send code_challenge with code_challenge_method=S256.");
+			return authorizePageError("The app did not send a PKCE S256 code challenge (invalid_request).");
 		}
 		if (state !== null && state.length > STATE_MAX_LENGTH) {
-			return fail("invalid_request", `state can have at most ${STATE_MAX_LENGTH} characters.`);
+			return authorizePageError(`The state of the app has more than ${STATE_MAX_LENGTH} characters (invalid_request).`);
 		}
 		if (!isOwnResource(query.get("resource"), originOf(c))) {
-			return fail("invalid_target", "The resource must be the MCP endpoint of this server.");
+			return authorizePageError("The app asked for a resource that is not this server (invalid_target).");
 		}
 		const id = await createRequest(c.env.DIRECTORY, {
 			client_id: client.id,
@@ -245,6 +237,7 @@ export function mountOAuthRoutes(app: OAuthApp): void {
 			code_challenge: challenge,
 			scopes: agentScopesOf(query.get("scope")),
 		});
+		if (!id) return authorizePageError("The app is not registered. Connect it again from the app.");
 		const response = c.redirect(`/connect/${id}`, 302);
 		response.headers.set("cache-control", "no-store");
 		return response;
@@ -280,16 +273,31 @@ export function mountOAuthRoutes(app: OAuthApp): void {
 					return oauthError("invalid_grant", "The code does not match the client, the redirect URI or the verifier.");
 				}
 				const tokens = await createGrant(c.env.DIRECTORY, redeemed);
+				if (!tokens) return oauthError("invalid_grant", "The code was used two times.");
 				auditToken(c, tokens, "oauth_code");
 				return tokenResponse(tokens);
 			}
 			case "refresh_token": {
 				const refreshToken = form.get("refresh_token");
 				if (!refreshToken) return oauthError("invalid_request", "Send refresh_token.");
-				const tokens = await refreshGrant(c.env.DIRECTORY, refreshToken, clientId);
-				if (!tokens) return oauthError("invalid_grant", "The refresh token is not valid, expired, or was revoked.");
-				auditToken(c, tokens, "oauth_refresh");
-				return tokenResponse(tokens);
+				const refreshed = await refreshGrant(c.env.DIRECTORY, refreshToken, clientId);
+				if (refreshed && "reused" in refreshed) {
+					// A replaced refresh token came back after its grace period: somebody else can hold a copy.
+					audit({
+						op: "oauth.revoke_grant",
+						actor: refreshed.reused,
+						actorKind: "system",
+						credential: "oauth_refresh_reuse",
+						target: refreshed.reused,
+						result: "ok",
+						requestId: c.var.requestId,
+					});
+				}
+				if (!refreshed || "reused" in refreshed) {
+					return oauthError("invalid_grant", "The refresh token is not valid, expired, or was revoked.");
+				}
+				auditToken(c, refreshed.tokens, "oauth_refresh");
+				return tokenResponse(refreshed.tokens);
 			}
 			default:
 				return oauthError("unsupported_grant_type", "Use authorization_code or refresh_token.");

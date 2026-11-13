@@ -30,6 +30,7 @@ const GONE = "This request expired, or somebody approved or denied it. Start the
 function toAuthorizationOutput(request: OAuthRequestRecord): OAuthAuthorization {
 	return {
 		id: request.id,
+		untrusted: true,
 		client: { id: request.client.id, name: request.client.name, uri: request.client.uri },
 		redirect_uri: request.redirect_uri,
 		redirect_host: redirectHost(request.redirect_uri),
@@ -41,6 +42,7 @@ function toAuthorizationOutput(request: OAuthRequestRecord): OAuthAuthorization 
 function toGrantOutput(record: OAuthGrantRecord): OAuthGrant {
 	return {
 		id: record.id,
+		untrusted: true,
 		principal_id: record.principal_id,
 		client_id: record.client_id,
 		client_name: record.client_name,
@@ -71,8 +73,16 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 
 	async "oauth.approve_authorization"(call, input) {
 		const request = await pendingRequest(call, input.request_id);
-		const code = await newCode();
-		const approval = { requestId: request.id, approvedBy: call.caller.principal.id, codeHash: code.hash };
+		// One time for the whole transaction, so the insert of a new agent and the approval agree.
+		const now = Date.now();
+		const code = await newCode(now);
+		const approval = {
+			requestId: request.id,
+			approvedBy: call.caller.principal.id,
+			codeHash: code.hash,
+			codeExpiresAt: code.expires_at,
+			now: new Date(now).toISOString(),
+		};
 		if (input.new_agent) {
 			// The same rules as directory.create_principal for an agent: owners and admins only, with directory.write.
 			if (!isAdmin(call.caller) || !call.caller.scopes.has("directory.write")) {
@@ -99,10 +109,8 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				},
 				null,
 				{
-					condition: pendingRequestCondition(request.id),
-					afterCreate: (principalId) => [
-						approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes, codeExpiresAt: code.expires_at }),
-					],
+					condition: pendingRequestCondition(request.id, approval.now),
+					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes })],
 				},
 			);
 			if (!created) throw new OperationError("conflict", `${GONE} A directory reset can also cause this.`);
@@ -119,12 +127,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			);
 		}
 		const scopes = grantableScopes(call.caller, agent, input.scopes);
-		const statement = approveStatement(call.env.DIRECTORY, {
-			...approval,
-			principalId: agent.id,
-			scopes,
-			codeExpiresAt: code.expires_at,
-		});
+		const statement = approveStatement(call.env.DIRECTORY, { ...approval, principalId: agent.id, scopes });
 		if ((await statement.run()).meta.changes !== 1) throw new OperationError("conflict", GONE);
 		auditOk(call, "oauth.approve_authorization", `${request.id}:${agent.id}`);
 		return { principal: toPrincipalOutput(agent), redirect_to: codeRedirect(request, code.code) };

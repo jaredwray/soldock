@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	type Actor,
@@ -172,6 +173,8 @@ describe("OAuth client registration", () => {
 			["http://attacker.example/callback"],
 			["https://claude.example/callback#x"],
 			["https://user:pass@claude.example/callback"],
+			["ms-msdt:/id PCWDiagnostic"],
+			["tel:+15551234567"],
 			["/relative"],
 			[],
 			"https://claude.example/callback",
@@ -182,39 +185,56 @@ describe("OAuth client registration", () => {
 		}
 	});
 
-	// Anybody can register, so a registration that nobody used must not stay.
-	it("deletes old registrations that never got a request or a grant", async () => {
-		const old = await registerClient();
-		const used = await registerClient();
-		await startAuthorization(used);
-		const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-		await env.DIRECTORY.prepare("UPDATE oauth_clients SET created_at = ?").bind(dayAgo).run();
+	// Anybody can register, so idle registrations must not stay, but a client must keep its id for weeks.
+	it("keeps a registration for 30 days after its last use, and keeps a client with a grant", async () => {
+		const owner = await setupOwner();
+		const idle = await registerClient();
+		const recent = await registerClient();
+		const { clientId: connected } = await connectNewAgent(owner);
+		const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+		await env.DIRECTORY.prepare("UPDATE oauth_clients SET created_at = ?, last_used_at = NULL").bind(old).run();
+		await env.DIRECTORY.prepare("DELETE FROM oauth_requests").run();
+		await env.DIRECTORY.prepare("UPDATE oauth_clients SET last_used_at = ? WHERE id = ?")
+			.bind(new Date().toISOString(), recent)
+			.run();
 		await registerClient();
-		const ids = await env.DIRECTORY.prepare("SELECT id FROM oauth_clients").all<{ id: string }>();
-		expect(ids.results.map((row) => row.id)).not.toContain(old);
-		expect(ids.results.map((row) => row.id)).toContain(used);
+		const ids = (await env.DIRECTORY.prepare("SELECT id FROM oauth_clients").all<{ id: string }>()).results.map(
+			(row) => row.id,
+		);
+		expect(ids).not.toContain(idle);
+		expect(ids).toContain(recent);
+		expect(ids).toContain(connected);
+	});
+
+	// Unauthenticated writes must not fill the directory database of the whole deployment.
+	it("keeps at most 1,000 clients without a grant and 1,000 requests, and removes the oldest first", async () => {
+		const seed = (table: string, sql: string) =>
+			env.DIRECTORY.prepare(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) INSERT INTO ${table} ${sql}`,
+			).run();
+		await seed(
+			"oauth_clients (id, name, redirect_uris, created_at)",
+			`SELECT 'cli_seed_' || i, 'Seed', '[]', '${new Date(Date.now() - 60 * 60 * 1000).toISOString()}' FROM n`,
+		);
+		const clientId = await registerClient();
+		const clients = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM oauth_clients").first<number>("n");
+		expect(clients).toBe(1000);
+		await seed(
+			"oauth_requests (id, client_id, redirect_uri, code_challenge, scopes, created_at, expires_at)",
+			`SELECT 'oar_seed_' || i, '${clientId}', '${REDIRECT}', 'x', '[]', '2026-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z' FROM n`,
+		);
+		const { requestId } = await startAuthorization(clientId);
+		const requests = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM oauth_requests").first<number>("n");
+		expect(requests).toBe(1000);
+		const owner = await setupOwner();
+		expect((await owner.call("oauth.get_authorization", { request_id: requestId })).authorization.id).toBe(requestId);
 	});
 });
 
 describe("OAuth authorization requests", () => {
-	// A redirect to an address that the client did not register could send the code to somebody else.
-	it("shows an unknown client or redirect URI to the person, and never redirects", async () => {
-		const clientId = await registerClient();
-		const { challenge } = await pkce();
-		const base = { response_type: "code", code_challenge: challenge, code_challenge_method: "S256" };
-		for (const params of [
-			{ ...base, client_id: "cli_unknown", redirect_uri: REDIRECT },
-			{ ...base, client_id: clientId, redirect_uri: "http://localhost:9999/other" },
-			{ ...base, client_id: clientId },
-		]) {
-			const res = await authorize(params);
-			expect(res.status).toBe(400);
-			expect(res.headers.get("location")).toBeNull();
-			expect(res.headers.get("content-type")).toContain("text/plain");
-		}
-	});
-
-	it("sends other errors back to the client, with its state", async () => {
+	// Anybody can register a redirect URI. A redirect before a person acts would make this origin an open
+	// redirect, and a redirect to an address that the client did not register could leak the code.
+	it("shows each error to the person, and never redirects before a person acts", async () => {
 		const clientId = await registerClient();
 		const { challenge } = await pkce();
 		const base = {
@@ -225,18 +245,21 @@ describe("OAuth authorization requests", () => {
 			code_challenge_method: "S256",
 			state: "s1",
 		};
-		for (const [params, error] of [
-			[{ ...base, response_type: "token" }, "unsupported_response_type"],
-			[{ ...base, code_challenge_method: "plain" }, "invalid_request"],
-			[{ ...base, code_challenge: "" }, "invalid_request"],
-			[{ ...base, resource: "https://other.example/mcp" }, "invalid_target"],
-		] as const) {
+		for (const params of [
+			{ ...base, client_id: "cli_unknown" },
+			{ ...base, redirect_uri: "http://localhost:9999/other" },
+			{ ...base, redirect_uri: "" },
+			{ ...base, response_type: "token" },
+			{ ...base, response_type: "" },
+			{ ...base, code_challenge_method: "plain" },
+			{ ...base, code_challenge: "" },
+			{ ...base, state: "s".repeat(1001) },
+			{ ...base, resource: "https://other.example/mcp" },
+		]) {
 			const res = await authorize(params);
-			expect(res.status).toBe(302);
-			const location = new URL(res.headers.get("location") ?? "");
-			expect(`${location.origin}${location.pathname}`).toBe(REDIRECT);
-			expect(location.searchParams.get("error")).toBe(error);
-			expect(location.searchParams.get("state")).toBe("s1");
+			expect(res.status, JSON.stringify(params)).toBe(400);
+			expect(res.headers.get("location")).toBeNull();
+			expect(res.headers.get("content-type")).toContain("text/plain");
 		}
 	});
 });
@@ -254,9 +277,11 @@ describe("OAuth approval", () => {
 			redirect_host: "localhost:33418",
 			requested_scopes: ["mail.read", "chat.read"],
 		});
-		// Parity: the MCP tool returns the same request.
+		expect(authorization.untrusted).toBe(true);
+		// Parity: the MCP tool returns the same request. The client wrote its name, so a notice comes first.
 		const viaMcp = await callTool(owner.key, "oauth_get_authorization", { request_id: requestId });
 		expect(viaMcp.structuredContent).toEqual({ authorization });
+		expect(viaMcp.content[0]?.text).toBe(UNTRUSTED_NOTICE);
 
 		const approved = await owner.call("oauth.approve_authorization", {
 			request_id: requestId,
@@ -286,7 +311,10 @@ describe("OAuth approval", () => {
 			scope: "account.read mail.read chat.read",
 		});
 
+		const init = await mcp(tokens.access_token, "initialize", { protocolVersion: "2025-11-25" });
+		expect(((init.body?.result ?? {}) as { instructions?: string }).instructions).toContain("claude@dock.test");
 		const tools = toolNames((await mcp(tokens.access_token, "tools/list")).body);
+		expect(tools.filter((name) => name.startsWith("oauth_") || name.startsWith("account_create"))).toEqual([]);
 		expect(tools).toContain("mail_list_threads");
 		expect(tools).toContain("chat_list_rooms");
 		expect(tools).not.toContain("mail_send");
@@ -439,6 +467,24 @@ describe("OAuth tokens", () => {
 		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 	});
 
+	// The code works for 60 seconds after the approval, also when the request itself would have expired.
+	it("keeps an approved request until its code expires, when a new request deletes the expired ones", async () => {
+		const owner = await setupOwner();
+		const clientId = await registerClient();
+		const { requestId, verifier } = await startAuthorization(clientId);
+		await env.DIRECTORY.prepare("UPDATE oauth_requests SET expires_at = ?")
+			.bind(new Date(Date.now() + 300).toISOString())
+			.run();
+		const { redirect_to } = await owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			new_agent: { display_name: "Claude", address: "claude@dock.test" },
+			scopes: ["mail.read"],
+		});
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		await startAuthorization(clientId);
+		expect((await exchange(clientId, redirect_to, verifier)).status).toBe(200);
+	});
+
 	it("refuses a code with a wrong verifier, client or redirect URI", async () => {
 		const owner = await setupOwner();
 		const clientId = await registerClient();
@@ -463,7 +509,7 @@ describe("OAuth tokens", () => {
 		}
 	});
 
-	it("rotates the refresh token, and the last used refresh token works until the client uses the new one", async () => {
+	it("rotates the refresh token, and the replaced token works for a short time after a lost response", async () => {
 		const owner = await setupOwner();
 		const { clientId, tokens: first } = await connectNewAgent(owner);
 		const second = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
@@ -471,16 +517,32 @@ describe("OAuth tokens", () => {
 		expect((await mcp(first.access_token, "tools/list")).status).toBe(401);
 		expect((await mcp(second.access_token, "tools/list")).status).toBe(200);
 
-		// The response with `second` got lost: the client sends the first refresh token again.
+		// The response with `second` got lost: the client sends the first refresh token again at once.
 		const third = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
 		expect((await mcp(third.access_token, "tools/list")).status).toBe(200);
 		expect(await (await refresh(clientId, second.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		const fourth = (await (await refresh(clientId, third.refresh_token)).json()) as Tokens;
 		expect(fourth.access_token).toMatch(/^sdo_/);
-		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		expect(await (await refresh(await registerClient(), fourth.refresh_token)).json()).toMatchObject({
 			error: "invalid_grant",
 		});
+		expect((await mcp(fourth.access_token, "tools/list")).status).toBe(200);
+	});
+
+	// OAuth 2.1 reuse detection: a replaced refresh token that comes back later can be a stolen copy.
+	it("revokes the grant when a replaced refresh token comes back after its grace period", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens: first } = await connectNewAgent(owner);
+		const second = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
+		await env.DIRECTORY.prepare("UPDATE oauth_grants SET previous_refresh_until = ?")
+			.bind(new Date(Date.now() - 1000).toISOString())
+			.run();
+		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		expect((await mcp(second.access_token, "tools/list")).status).toBe(401);
+		expect(await (await refresh(clientId, second.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants).toMatchObject([
+			{ revoked: true },
+		]);
 	});
 
 	it("refuses an expired access token, and the refresh token still works", async () => {
@@ -503,6 +565,20 @@ describe("OAuth tokens", () => {
 		expect(await (await refresh(clientId, tokens.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants).toMatchObject([
 			{ revoked: true },
+		]);
+
+		// A new connection of the agent deletes the connections that ended 30 days before.
+		const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+		await env.DIRECTORY.prepare("UPDATE oauth_grants SET revoked_at = ?").bind(old).run();
+		const { requestId, verifier } = await startAuthorization(clientId);
+		const { redirect_to } = await owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			agent_id: agent.id,
+			scopes: ["mail.read"],
+		});
+		expect((await exchange(clientId, redirect_to, verifier)).status).toBe(200);
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants).toMatchObject([
+			{ revoked: false },
 		]);
 	});
 

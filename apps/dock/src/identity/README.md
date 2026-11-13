@@ -181,28 +181,42 @@ These routes are ceremonies, not operations, because the client has no credentia
   `grant_types` and `response_types`, as RFC 7591 allows.
   - A client has 1 to 5 redirect URIs (`OAUTH_LIMITS.redirectUris`), each at most 2,000 characters.
   - A redirect URI uses `https:`, `http:` with a loopback host, or the scheme of a native app. Soldock
-    refuses `javascript:`, `data:`, `file:` and other schemes that can run code or read files. The web
-    app sends the browser to the redirect URI, so a refused scheme cannot run code on this origin.
+    refuses `javascript:`, `data:`, `file:` and other schemes that can run code or read files, and
+    system handlers such as `tel:`, `intent:`, `ms-*:` and `search-ms:`. The web app sends the browser
+    to the redirect URI, so a refused scheme cannot run code on this origin.
   - A redirect URI cannot have a fragment, a user name or a password.
-  - Anybody can register. So each registration deletes the registrations older than one day that
-    have no request and no grant. The client name is cut to 100 characters, without control
-    characters. The approval page says that Soldock does not check it.
-- `GET /oauth/authorize`: checks the client and the exact redirect URI first. An unknown client or
-  redirect URI gets a `400` text page, and no redirect. Other errors go to the redirect URI with the
-  `state` of the client: a `response_type` other than `code`, no `S256` PKCE challenge, a `state` of
-  more than 1,000 characters, or a `resource` that is not this origin or its `/mcp`. A valid request
-  is kept for 10 minutes (`OAUTH_LIMITS.requestSeconds`), and the browser goes to `/connect/<id>`
-  in the web app. Each new request deletes the expired requests. Only the agent scopes of `scope`
-  are kept.
+  - Anybody can register. So each registration deletes the clients without a grant that nobody used
+    for 30 days (`last_used_at` is the time of the last authorization request). It also keeps at most
+    1,000 clients without a grant: above the limit, it deletes the client with the oldest use first.
+    A client with a request or a grant stays. So the stored rows have a fixed limit, and a flood of
+    registrations removes only unused registrations.
+  - The client name is cut to 100 characters, without control characters. The approval page says that
+    Soldock does not check it. `oauth.get_authorization` and `oauth.list_grants` mark their result
+    `untrusted: true`, so MCP puts the untrusted notice first.
+- `GET /oauth/authorize`: each error gets a `400` text page, and never a redirect. Anybody can
+  register a redirect URI, so a redirect before a person acts would make this origin an open redirect
+  (RFC 9700 section 4.11.2). The errors are:
+  - an unknown client, or a redirect URI that the client did not register
+  - a `response_type` other than `code`, or no `S256` PKCE challenge
+  - a `state` of more than 1,000 characters
+  - a `resource` that is not this origin or its `/mcp`
+
+  A valid request is kept for 10 minutes (`OAUTH_LIMITS.requestSeconds`), and the browser goes to
+  `/connect/<id>` in the web app. Only the agent scopes of `scope` are kept. Each new request deletes
+  the expired requests and keeps at most 1,000 requests: above the limit, it deletes the oldest first. Only
+  the approval and the denial send the browser to the redirect URI.
 - `POST /oauth/token` (`application/x-www-form-urlencoded`), with the OAuth error format:
   - `authorization_code`: the code, its PKCE verifier, the `client_id` and the `redirect_uri` of the
-    request. The code works one time, for 60 seconds. A second use fails and revokes the grant of the
-    first use (RFC 9700). The result has an access token for one hour, a refresh token, and the
-    granted `scope`.
+    request. The code works one time, for 60 seconds. The approval moves the end of the request to the
+    end of the code, so the cleanup does not delete a code that still works. A second use fails and
+    revokes the grant of the first use (RFC 9700). When the second use comes before the grant exists,
+    `replayed_at` records it, and the grant is revoked when it is made. The result has an access token
+    for one hour, a refresh token, and the granted `scope`.
   - `refresh_token`: the refresh token and its `client_id`. A refresh gives a new access token and a
-    new refresh token for 30 more days. The old access token stops. The refresh token that the client
-    sent also stays valid until the client uses the new one, so a lost response does not end the
-    connection. At most two refresh tokens of a grant work at the same time.
+    new refresh token for 30 more days (rotation). The old access token stops. The replaced refresh
+    token works for 60 more seconds, so a lost response does not end the connection. After that, a use
+    of the replaced token revokes the grant, because somebody else can hold a copy (reuse detection).
+    An older token gets `invalid_grant`.
 
 The approval is a set of operations, so the web app, REST and MCP share it. Each one is for humans
 with `account.keys`.
@@ -214,19 +228,22 @@ with `account.keys`.
   - A new agent follows the rules of `directory.create_principal`: owners and admins only, with
     `directory.write`, and an address on a saved mail domain. The approver is the sponsor. The agent
     gets the `internal-only` policy and no API key. The insert of the agent and the approval share
-    one transaction, and the insert runs only while the request waits. So an expired or decided
-    request creates no agent.
+    one transaction and one time, and the insert runs only while the request waits. So an expired or
+    decided request creates no agent.
   - An agent that exists follows the rules of API keys: its sponsor, an owner or an admin.
   - The scopes must be agent scopes that the credential of the approver holds (`grantableScopes`).
 - `oauth.deny_authorization` returns `redirect_to` with `error=access_denied` and the `state`.
 - `oauth.list_grants` and `oauth.revoke_grant` follow the rules of `account.list_api_keys` and
-  `account.revoke_api_key`. A revoke stops the access token and the refresh tokens at once.
+  `account.revoke_api_key`. A revoke stops the access token and the refresh tokens at once. A new
+  grant of a principal deletes its grants that were revoked or expired 30 days before.
 
 Each approval, denial, revoke, registration and token issue writes an audit line.
 
 Known limits:
 
-- Registration has no rate limit. The cleanup of unused registrations limits the stored rows.
+- Registration and authorization requests have no rate limit for each client address. The limits
+  above keep the stored rows below a fixed number, but a flood can remove registrations and requests
+  that nobody used yet. A Workers rate limit is the next layer.
 - Client ID metadata documents (an HTTPS URL as `client_id`) are not supported yet. Clients use
   registration.
 - The tokens are not bound to a resource: they work on `/api/v1` and on `/mcp`, as API keys do.

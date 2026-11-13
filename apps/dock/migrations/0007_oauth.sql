@@ -3,7 +3,8 @@
 -- The statement markers let a fresh reset replay this file without a SQL parser.
 
 -- MCP clients that registered themselves (RFC 7591). Each one is a public client: it has no secret and
--- uses PKCE. Anybody can register, so a registration without a request or a grant goes after one day.
+-- uses PKCE. Anybody can register. So a registration deletes the clients without a grant that nobody
+-- used for 30 days. It keeps at most 1,000 clients without a grant, and deletes the oldest use first.
 CREATE TABLE IF NOT EXISTS oauth_clients (
 	id TEXT PRIMARY KEY,
 	-- The name that the client gave itself. Soldock does not check it.
@@ -11,12 +12,15 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 	uri TEXT,
 	-- A JSON list of the exact redirect URIs.
 	redirect_uris TEXT NOT NULL,
-	created_at TEXT NOT NULL
+	created_at TEXT NOT NULL,
+	-- The time of the last authorization request of the client.
+	last_used_at TEXT
 );
 --> statement-breakpoint
 -- Authorization requests. A request waits for a person until `expires_at`. The approval sets the agent,
--- the scopes and the code. The token request uses the code one time and records the grant that it made,
--- so a second use of the code can revoke that grant. Expired rows go at the next request.
+-- the scopes and the code, and moves `expires_at` to the end of the code. The token request uses the
+-- code one time and records the grant that it made, so a second use of the code can revoke that grant.
+-- Each new request deletes the expired rows. It keeps at most 1,000 rows, and deletes the oldest first.
 CREATE TABLE IF NOT EXISTS oauth_requests (
 	id TEXT PRIMARY KEY,
 	client_id TEXT NOT NULL REFERENCES oauth_clients (id),
@@ -36,7 +40,9 @@ CREATE TABLE IF NOT EXISTS oauth_requests (
 	-- Set when the person denies the request.
 	denied_at TEXT,
 	used_at TEXT,
-	grant_id TEXT
+	grant_id TEXT,
+	-- Set when somebody sends a used code again. The grant of the code is then revoked.
+	replayed_at TEXT
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS oauth_requests_client ON oauth_requests (client_id);
@@ -44,8 +50,9 @@ CREATE INDEX IF NOT EXISTS oauth_requests_client ON oauth_requests (client_id);
 CREATE INDEX IF NOT EXISTS oauth_requests_expires ON oauth_requests (expires_at);
 --> statement-breakpoint
 -- Approved connections. Each grant has one access token and one refresh token. A refresh replaces both.
--- The refresh token that the client used last also stays valid until the client uses the new one, so a
--- lost response does not end the connection.
+-- The refresh token before the current one stays valid until `previous_refresh_until` (60 seconds), so a
+-- lost response does not end the connection. A later use of that token revokes the grant, because
+-- somebody else can hold it. A new grant of a principal deletes its grants that ended 30 days before.
 CREATE TABLE IF NOT EXISTS oauth_grants (
 	id TEXT PRIMARY KEY,
 	client_id TEXT NOT NULL REFERENCES oauth_clients (id),
@@ -59,6 +66,7 @@ CREATE TABLE IF NOT EXISTS oauth_grants (
 	access_expires_at TEXT NOT NULL,
 	refresh_hash TEXT NOT NULL UNIQUE,
 	previous_refresh_hash TEXT UNIQUE,
+	previous_refresh_until TEXT,
 	refresh_expires_at TEXT NOT NULL
 );
 --> statement-breakpoint
