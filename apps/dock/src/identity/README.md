@@ -69,9 +69,12 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   after the owner exists, the response still holds the key, without a session, because setup
   cannot run again. The owner then signs in with a code.
 - `POST /auth/setup/verify`: checks the setup token and origin before the web app offers setup choices.
-  It returns `204` without a directory query or a session. The final setup request checks the token again.
-- The schemas of both routes are in `@soldock/contracts` (`SetupStatus`, `SetupInput`,
-  `SetupResult`).
+  It creates no session. The final setup request checks the token again.
+  After a correct token, it returns `SetupVerifyResult`: `empty`, `has_accounts`, or `unknown`.
+  The value `unknown` means that the directory query failed, for example with an old schema.
+  A failed query does not fail the request, so a fresh start stays available.
+- The schemas of these routes are in `@soldock/contracts` (`SetupStatus`, `SetupVerifyResult`,
+  `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, and sign-in codes. It recreates the schema from the bundled migration.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.

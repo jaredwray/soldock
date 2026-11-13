@@ -42,7 +42,7 @@ export {
 	operations,
 } from "./registry.ts";
 export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope } from "./scopes.ts";
-export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus } from "./setup.ts";
+export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
 export {
 	SIGN_IN_CODE_LENGTH,
 	SIGN_IN_CODE_MAX_ATTEMPTS,

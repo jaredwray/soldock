@@ -1,4 +1,4 @@
-import { ApiError, type SetupInput, type SetupResult, SetupStatus } from "@soldock/contracts";
+import { ApiError, type SetupInput, type SetupResult, SetupStatus, SetupVerifyResult } from "@soldock/contracts";
 
 // The /auth/setup endpoints are not operations, so they use plain fetch, like features/auth/auth.ts.
 
@@ -27,14 +27,19 @@ export async function getSetupStatus(): Promise<SetupStatus> {
 	return status.data;
 }
 
-/** Verifies the operator token before the page offers setup choices. Creates no session. */
-export async function verifySetupToken(token: string): Promise<void> {
+/**
+ * Verifies the operator token before the page offers setup choices. Creates no session. Returns the
+ * directory state. A body of an unknown shape gives `unknown`, so the page still offers a fresh start.
+ */
+export async function verifySetupToken(token: string): Promise<SetupVerifyResult["directory"]> {
 	const response = await fetch("/auth/setup/verify", {
 		method: "POST",
-		headers: { authorization: `Bearer ${token}`, accept: "application/problem+json" },
+		headers: { authorization: `Bearer ${token}`, accept: "application/json, application/problem+json" },
 		credentials: "same-origin",
 	});
 	if (!response.ok) throw await problemOf(response);
+	const result = SetupVerifyResult.safeParse(await response.json().catch(() => null));
+	return result.success ? result.data.directory : "unknown";
 }
 
 /**

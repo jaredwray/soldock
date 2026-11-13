@@ -6,6 +6,7 @@ import {
 	SETUP_TOKEN_MIN_LENGTH,
 	type SetupInput,
 	type SetupResult,
+	type SetupVerifyResult,
 } from "@soldock/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -19,15 +20,18 @@ interface SetupPageProps {
 	onRecheck: () => Promise<void>;
 	/** Setup is done and the owner is signed in. */
 	onDone: () => void;
+	/** The directory has accounts, and the operator keeps them: the app opens, or the sign-in page shows. */
+	onKeepAccounts: () => void;
 }
 
 /**
  * Setup and optional directory reset. The operator proves control with the SETUP_TOKEN Worker secret.
  */
-export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
+export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPageProps) {
 	const [created, setCreated] = useState<SetupResult | null>(null);
 	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
 	const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
+	const [directory, setDirectory] = useState<SetupVerifyResult["directory"]>("unknown");
 	const choiceRef = useRef<HTMLButtonElement>(null);
 	useEffect(() => {
 		if (verifiedToken !== null && choice === null) choiceRef.current?.focus();
@@ -56,7 +60,36 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 					<p>The owner is ready. Copy your API key before you continue.</p>
 				) : status.setup_token === "ready" ? (
 					verifiedToken === null ? (
-						<TokenForm onVerified={setVerifiedToken} />
+						<TokenForm
+							onVerified={(token, state) => {
+								setDirectory(state);
+								setVerifiedToken(token);
+							}}
+						/>
+					) : choice === null && directory === "has_accounts" ? (
+						<div className="setup-choices">
+							<p className="setup-intro">The token is correct. This directory already has accounts.</p>
+							<p className="field-hint">
+								Continue to use the existing accounts. A fresh start deletes all accounts, API keys, sessions, and
+								sign-in codes. Stored mail stays in storage, but new accounts cannot access it.
+							</p>
+							<p className="notice">
+								This page shows until you delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard.
+							</p>
+							<div className="setup-actions">
+								<button
+									ref={choiceRef}
+									type="button"
+									className="button button-primary button-block"
+									onClick={onKeepAccounts}
+								>
+									Continue with the existing accounts
+								</button>
+								<button type="button" className="button button-danger button-block" onClick={() => setChoice("fresh")}>
+									Start fresh
+								</button>
+							</div>
+						</div>
 					) : choice === null ? (
 						<div className="setup-choices">
 							<p className="setup-intro">The token is correct. Do you want to start fresh?</p>
@@ -106,7 +139,7 @@ export function SetupPage({ status, onRecheck, onDone }: SetupPageProps) {
 	);
 }
 
-function TokenForm({ onVerified }: { onVerified: (token: string) => void }) {
+function TokenForm({ onVerified }: { onVerified: (token: string, directory: SetupVerifyResult["directory"]) => void }) {
 	const [token, setToken] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -123,8 +156,7 @@ function TokenForm({ onVerified }: { onVerified: (token: string) => void }) {
 		setBusy(true);
 		setError(null);
 		try {
-			await verifySetupToken(value);
-			onVerified(value);
+			onVerified(value, await verifySetupToken(value));
 		} catch (caught) {
 			setError(setupErrorMessage(caught));
 			setBusy(false);

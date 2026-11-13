@@ -4,6 +4,7 @@ import {
 	SetupInput,
 	type SetupResult,
 	type SetupStatus,
+	type SetupVerifyResult,
 	SignInCodeRequest,
 	SignInInput,
 } from "@soldock/contracts";
@@ -93,9 +94,21 @@ export function mountAuthRoutes(app: AuthApp): void {
 		return c.json(status, 200, { "cache-control": "no-store" });
 	});
 
-	app.post("/auth/setup/verify", (c) => {
+	// Only a correct token gets the directory state. A failed query must not block a fresh start.
+	app.post("/auth/setup/verify", async (c) => {
 		authorizeSetup(c.req.raw, c.env);
-		return c.body(null, 204, { "cache-control": "no-store" });
+		let directory: SetupVerifyResult["directory"];
+		try {
+			directory = (await directoryIsEmpty(c.env.DIRECTORY)) ? "empty" : "has_accounts";
+		} catch (error) {
+			directory = "unknown";
+			log("warn", "setup verify could not query the directory", {
+				requestId: c.var.requestId,
+				err: error instanceof Error ? error.message : String(error),
+			});
+		}
+		const result: SetupVerifyResult = { directory };
+		return c.json(result, 200, { "cache-control": "no-store" });
 	});
 
 	// First-run setup: creates the owner, once, when the directory is empty. The operator sends the

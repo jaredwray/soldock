@@ -77,7 +77,7 @@ function setSignInEmailWithCookie(cookie: string, body: Record<string, string>) 
 }
 
 describe("first-run setup", () => {
-	it("verifies the setup token before the choices without a directory query or a session", async () => {
+	it("verifies the setup token without a session, also when the directory query fails", async () => {
 		const unavailable = new Proxy(env.DIRECTORY, {
 			get() {
 				throw new Error("D1 is unavailable");
@@ -87,10 +87,24 @@ describe("first-run setup", () => {
 			method: "POST",
 			headers: { authorization: `Bearer ${SETUP_TOKEN}`, origin: ORIGIN },
 		});
-		expect(res.status).toBe(204);
+		expect(res.status).toBe(200);
 		expect(res.headers.get("cache-control")).toBe("no-store");
 		expect(res.headers.get("set-cookie")).toBeNull();
-		expect(await res.text()).toBe("");
+		// The page still offers a fresh start, because the directory state is not known.
+		expect(await res.json()).toEqual({ directory: "unknown" });
+	});
+
+	it("tells the operator if setup without a reset can keep existing accounts", async () => {
+		const verify = async () =>
+			(
+				await request("/auth/setup/verify", {
+					method: "POST",
+					headers: { authorization: `Bearer ${SETUP_TOKEN}`, origin: ORIGIN },
+				})
+			).json();
+		expect(await verify()).toEqual({ directory: "empty" });
+		await setupOwner();
+		expect(await verify()).toEqual({ directory: "has_accounts" });
 	});
 
 	it.each([

@@ -26,6 +26,15 @@ export const SetupStatus = z.discriminatedUnion("setup_needed", [
 export type SetupStatus = z.infer<typeof SetupStatus>;
 
 /**
+ * The `200` response of `POST /auth/setup/verify`, after the token is correct.
+ * - `empty`: setup without a reset creates the first owner.
+ * - `has_accounts`: setup without a reset keeps the directory, and the person signs in.
+ * - `unknown`: the directory query failed, for example with an old schema. A fresh start stays available.
+ */
+export const SetupVerifyResult = z.object({ directory: z.enum(["empty", "has_accounts", "unknown"]) });
+export type SetupVerifyResult = z.infer<typeof SetupVerifyResult>;
+
+/**
  * The body of `POST /auth/setup`. The setup token goes in the `Authorization` header. The sign-in
  * email is an address outside the mail domains: the owner gets sign-in codes there.
  */
