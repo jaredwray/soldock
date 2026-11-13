@@ -542,14 +542,27 @@ describe("OAuth tokens", () => {
 		// The response with `second` got lost: the client sends the first refresh token again at once.
 		const third = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
 		expect((await mcp(third.access_token, "tools/list")).status).toBe(200);
-		// A replaced token works one time only, so a copy of it cannot mint more tokens.
-		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		const fourth = (await (await refresh(clientId, third.refresh_token)).json()) as Tokens;
 		expect(fourth.access_token).toMatch(/^sdo_/);
 		expect(await (await refresh(await registerClient(), fourth.refresh_token)).json()).toMatchObject({
 			error: "invalid_grant",
 		});
 		expect((await mcp(fourth.access_token, "tools/list")).status).toBe(200);
+	});
+
+	// A replaced token works one time only. A copy of it cannot mint more tokens, and its second use revokes.
+	it("revokes the grant when a replaced refresh token comes back after its one more use", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens: first } = await connectNewAgent(owner);
+		await refresh(clientId, first.refresh_token);
+		const third = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
+		expect((await mcp(third.access_token, "tools/list")).status).toBe(200);
+		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		expect((await mcp(third.access_token, "tools/list")).status).toBe(401);
+		expect(await (await refresh(clientId, third.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants).toMatchObject([
+			{ revoked: true },
+		]);
 	});
 
 	// OAuth 2.1 reuse detection: a replaced refresh token that comes back later can be a stolen copy.

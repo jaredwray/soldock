@@ -395,8 +395,8 @@ export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promi
 /**
  * Gives a grant new tokens for a refresh token of the client, and replaces the refresh token
  * (rotation). The token that a refresh replaced works one more time, for 60 seconds, so a lost response
- * does not end the connection. A use of that token after the 60 seconds revokes the grant: somebody else
- * can hold a copy of it (reuse detection). The old access token stops.
+ * does not end the connection. A use of that token after the 60 seconds, or after its one more time,
+ * revokes the grant: somebody else can hold a copy of it (reuse detection). The old access token stops.
  */
 export async function refreshGrant(
 	db: D1Database,
@@ -408,13 +408,13 @@ export async function refreshGrant(
 	const now = Date.now();
 	const nowIso = new Date(now).toISOString();
 	const tokens = await newTokens(now);
-	// SQLite reads the old row in each SET expression, so previous_refresh_hash gets the current token before
-	// the change. The token that the client sent, when it was the previous one, becomes unknown: a replaced
-	// token works at most one time, and two holders of one grant soon send a token after its grace period.
+	// SQLite reads the old row in each SET expression, so each token moves one slot: the current token
+	// becomes the previous token, and the previous token becomes the consumed token. A replaced token thus
+	// works one time only, and a later use of a consumed token revokes the grant.
 	const row = await db
 		.prepare(
 			`UPDATE oauth_grants SET access_hash = ?1, access_expires_at = ?2, refresh_hash = ?3, refresh_expires_at = ?4,
-			previous_refresh_hash = refresh_hash, previous_refresh_until = ?6
+			consumed_refresh_hash = previous_refresh_hash, previous_refresh_hash = refresh_hash, previous_refresh_until = ?6
 			WHERE client_id = ?7 AND revoked_at IS NULL AND refresh_expires_at > ?8
 			AND (refresh_hash = ?5 OR (previous_refresh_hash = ?5 AND previous_refresh_until > ?8))
 			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id)
@@ -434,8 +434,9 @@ export async function refreshGrant(
 	if (!row) {
 		const reused = await db
 			.prepare(
-				`UPDATE oauth_grants SET revoked_at = ?1
-				WHERE previous_refresh_hash = ?2 AND previous_refresh_until <= ?1 AND revoked_at IS NULL RETURNING id`,
+				`UPDATE oauth_grants SET revoked_at = ?1 WHERE revoked_at IS NULL
+				AND (consumed_refresh_hash = ?2 OR (previous_refresh_hash = ?2 AND previous_refresh_until <= ?1))
+				RETURNING id`,
 			)
 			.bind(nowIso, used)
 			.first<{ id: string }>();

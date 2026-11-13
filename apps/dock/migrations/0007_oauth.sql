@@ -52,8 +52,9 @@ CREATE INDEX IF NOT EXISTS oauth_requests_expires ON oauth_requests (expires_at)
 --> statement-breakpoint
 -- Approved connections. Each grant has one access token and one refresh token. A refresh replaces both.
 -- The refresh token that the last refresh replaced works one more time until `previous_refresh_until`
--- (60 seconds), so a lost response does not end the connection. A later use of that token revokes the
--- grant, because somebody else can hold it. A new grant of a principal deletes its grants that ended 30 days before.
+-- (60 seconds), so a lost response does not end the connection. A use of that token after the 60 seconds
+-- revokes the grant, because somebody else can hold it. The token before it is kept as the consumed
+-- token, and a use of the consumed token also revokes the grant. A new grant of a principal deletes its grants that ended 30 days before.
 CREATE TABLE IF NOT EXISTS oauth_grants (
 	id TEXT PRIMARY KEY,
 	client_id TEXT NOT NULL REFERENCES oauth_clients (id),
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS oauth_grants (
 	refresh_hash TEXT NOT NULL UNIQUE,
 	previous_refresh_hash TEXT UNIQUE,
 	previous_refresh_until TEXT,
+	consumed_refresh_hash TEXT UNIQUE,
 	refresh_expires_at TEXT NOT NULL
 );
 --> statement-breakpoint
