@@ -203,8 +203,9 @@ These routes are ceremonies, not operations, because the client has no credentia
 
   A valid request is kept for 10 minutes (`OAUTH_LIMITS.requestSeconds`), and the browser goes to
   `/connect/<id>` in the web app. Only the agent scopes of `scope` are kept. Each new request deletes
-  the expired requests and keeps at most 1,000 requests: above the limit, it deletes the oldest first. Only
-  the approval and the denial send the browser to the redirect URI.
+  the expired requests and keeps at most 1,000 requests that wait for a person: above the limit, it
+  deletes the oldest first. An approved request stays until its code expires, so a second use of the
+  code can still revoke the grant. Only the approval and the denial send the browser to the redirect URI.
 - `POST /oauth/token` (`application/x-www-form-urlencoded`), with the OAuth error format:
   - `authorization_code`: the code, its PKCE verifier, the `client_id` and the `redirect_uri` of the
     request. The code works one time, for 60 seconds. The approval moves the end of the request to the

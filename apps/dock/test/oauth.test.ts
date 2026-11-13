@@ -485,6 +485,28 @@ describe("OAuth tokens", () => {
 		expect((await exchange(clientId, redirect_to, verifier)).status).toBe(200);
 	});
 
+	// A flood of requests must not remove an approved request: a second use of its code must still revoke.
+	it("keeps an approved request when a flood of new requests passes the limit", async () => {
+		const owner = await setupOwner();
+		const clientId = await registerClient();
+		const { requestId, verifier } = await startAuthorization(clientId);
+		const { redirect_to } = await owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			new_agent: { display_name: "Claude", address: "claude@dock.test" },
+			scopes: ["mail.read"],
+		});
+		const later = new Date(Date.now() + 1000).toISOString();
+		await env.DIRECTORY.prepare(
+			`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000)
+			INSERT INTO oauth_requests (id, client_id, redirect_uri, code_challenge, scopes, created_at, expires_at)
+			SELECT 'oar_flood_' || i, ?1, ?2, 'x', '[]', ?3, '2999-01-01T00:00:00.000Z' FROM n`,
+		)
+			.bind(clientId, REDIRECT, later)
+			.run();
+		await startAuthorization(clientId);
+		expect((await exchange(clientId, redirect_to, verifier)).status).toBe(200);
+	});
+
 	it("refuses a code with a wrong verifier, client or redirect URI", async () => {
 		const owner = await setupOwner();
 		const clientId = await registerClient();

@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 -- Authorization requests. A request waits for a person until `expires_at`. The approval sets the agent,
 -- the scopes and the code, and moves `expires_at` to the end of the code. The token request uses the
 -- code one time and records the grant that it made, so a second use of the code can revoke that grant.
--- Each new request deletes the expired rows. It keeps at most 1,000 rows, and deletes the oldest first.
+-- Each new request deletes the expired rows. It keeps at most 1,000 rows that wait for a person, and
+-- deletes the oldest first. An approved row stays until its code expires.
 CREATE TABLE IF NOT EXISTS oauth_requests (
 	id TEXT PRIMARY KEY,
 	client_id TEXT NOT NULL REFERENCES oauth_clients (id),

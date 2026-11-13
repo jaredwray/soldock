@@ -73,15 +73,21 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 
 	async "oauth.approve_authorization"(call, input) {
 		const request = await pendingRequest(call, input.request_id);
-		// One time for the whole transaction, so the insert of a new agent and the approval agree.
-		const now = Date.now();
-		const code = await newCode(now);
-		const approval = {
-			requestId: request.id,
-			approvedBy: call.caller.principal.id,
-			codeHash: code.hash,
-			codeExpiresAt: code.expires_at,
-			now: new Date(now).toISOString(),
+		/**
+		 * The approval of the transaction. Call it after each other check, just before the transaction, so its
+		 * time is current. The insert of a new agent and the approval use this one time, so they agree.
+		 */
+		const approvalAt = async () => {
+			const now = Date.now();
+			const code = await newCode(now);
+			const approval = {
+				requestId: request.id,
+				approvedBy: call.caller.principal.id,
+				codeHash: code.hash,
+				codeExpiresAt: code.expires_at,
+				now: new Date(now).toISOString(),
+			};
+			return { code, approval };
 		};
 		if (input.new_agent) {
 			// The same rules as directory.create_principal for an agent: owners and admins only, with directory.write.
@@ -97,6 +103,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			}
 			assertPrimaryAddress(input.new_agent.address);
 			const scopes = grantableScopes(call.caller, { kind: "agent" }, input.scopes);
+			const { code, approval } = await approvalAt();
 			const created = await createPrincipal(
 				call.env.DIRECTORY,
 				{
@@ -127,6 +134,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			);
 		}
 		const scopes = grantableScopes(call.caller, agent, input.scopes);
+		const { code, approval } = await approvalAt();
 		const statement = approveStatement(call.env.DIRECTORY, { ...approval, principalId: agent.id, scopes });
 		if ((await statement.run()).meta.changes !== 1) throw new OperationError("conflict", GONE);
 		auditOk(call, "oauth.approve_authorization", `${request.id}:${agent.id}`);

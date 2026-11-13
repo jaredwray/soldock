@@ -141,8 +141,8 @@ export async function getClient(db: D1Database, id: string): Promise<OAuthClient
 }
 
 /**
- * Keeps a new authorization request, deletes the expired ones, and keeps the number of requests below
- * the limit. An approved request lives until its code expires. Returns null when the client no longer
+ * Keeps a new authorization request, deletes the expired ones, and keeps the number of requests that wait
+ * for a person below the limit. An approved request lives until its code expires. Returns null when the client no longer
  * exists, for example after a registration deleted it.
  */
 export async function createRequest(
@@ -156,7 +156,10 @@ export async function createRequest(
 		db.prepare("DELETE FROM oauth_requests WHERE expires_at < ?").bind(nowIso),
 		db
 			.prepare(
-				"DELETE FROM oauth_requests WHERE id IN (SELECT id FROM oauth_requests ORDER BY created_at DESC LIMIT -1 OFFSET ?)",
+				// Only a request that waits for a person is removed. An approved request stays until its code expires,
+				// so a second use of the code can still revoke its grant. Only a person can approve, so these rows are few.
+				`DELETE FROM oauth_requests WHERE id IN (SELECT id FROM oauth_requests WHERE code_hash IS NULL
+				ORDER BY created_at DESC LIMIT -1 OFFSET ?)`,
 			)
 			.bind(OAUTH_STORE_LIMITS.requests - 1),
 		db.prepare("UPDATE oauth_clients SET last_used_at = ? WHERE id = ?").bind(nowIso, request.client_id),
