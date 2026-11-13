@@ -26,4 +26,10 @@ The first flows to cover, because they are tested by hand only:
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.
 
+- Chat: a new public room and a new private room, a join from the list of the public rooms, a
+  message with Enter and with Shift+Enter, a message from a second person that shows after a
+  poll, the unread dot, a change and a delete of a message, a direct message with an agent, the
+  members dialog (add, remove, leave), the name and the topic as the owner, and a private room
+  without access.
+
 Locally, run them against `pnpm dev` or `wrangler dev`. Every user-visible flow gets an e2e test. In cloud sessions Chromium is preinstalled. Don't run `playwright install`.

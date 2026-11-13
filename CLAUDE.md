@@ -2,7 +2,7 @@
 
 # Soldock: guide for agents (and humans)
 
-Soldock is an open-source Google Workspace replacement (Mail, Meet, Drive, Docs, Sheets, Slides)
+Soldock is an open-source Google Workspace replacement (Mail, Meet, Chat, Drive, Docs, Sheets, Slides)
 that runs **only on Cloudflare**, is served from **one hostname**, and treats **AI agents as
 first-class users** through a full MCP endpoint. Read [`README.md`](README.md) for the big
 picture.

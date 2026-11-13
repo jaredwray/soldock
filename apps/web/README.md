@@ -1,6 +1,6 @@
 # `web` — the SPA
 
-> Status: **started**. Mail, Drive, Docs, Sheets, admin and settings exist. Slides and Meet are planned.
+> Status: **started**. Mail, Drive, Docs, Sheets, Chat, admin and settings exist. Slides and Meet are planned.
 
 The web app is a React 19 single-page app that Vite builds. The `dock` Worker serves the build
 (`dist/`) as static assets on the dock host. The app makes each call through the typed client from
@@ -273,6 +273,36 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
+- **Chat** (`/chat`, `/chat/<room_id>`). A sidebar with the rooms and the direct messages of the
+  person, and one room with its messages and a box for a new message.
+  - The top bar has a third product link, **Chat**. Chat has no search yet, so the top bar shows no
+    search box on its pages.
+  - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
+    with the name of the other member. A room with a message that the person did not read shows in
+    bold with a dot. The magnifier opens the list of the public rooms, where the person joins a
+    room. The plus opens a list of people and agents for a new direct message.
+  - The room list comes from `chat.list_rooms` each 4 seconds while the tab is visible, and on
+    window focus. When the `version` of the open room is higher than the version of the page, the
+    page calls `chat.list_messages` with `changed_after`. It then shows each new, changed and
+    deleted message. The page has no WebSocket.
+  - A sync that fails runs again after the next room list, also when the version did not change.
+  - An open room is read: the page calls `chat.mark_read` with the `seq` of the last message that
+    it shows, one time for each new message, only while the tab is visible. The open room has no
+    dot in the sidebar, because its marker reaches the room list a few seconds later.
+  - Enter sends the message. Shift+Enter makes a new line. A send has an `idempotency_key`, so a
+    retry after a lost answer does not post the text two times.
+  - The text of a message shows as plain text, with its line breaks. An agent has an "agent" mark
+    next to its name. A message from the same author within 5 minutes shows without the name.
+  - The person changes their own message in place, and deletes it after a confirmation. The owner
+    of a room can delete each message. A deleted message shows "This message was deleted."
+  - **Show older messages** gets the page before the first message, and the list stays at the same
+    message. A new message moves the list to its end only when the list was at its end.
+  - The header shows the name, the topic and the number of members. The members dialog lists the
+    members, adds a person or an agent, lets the owner remove a member, and has **Leave the room**.
+    The owner changes the name and the topic in a second dialog.
+  - A public room that the person did not join shows **Join the room**, not its messages.
+  - This layer shows the first 100 rooms of the person.
+  - Chat is a separate chunk, as Drive is.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.
 
@@ -296,6 +326,8 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/drive/search?q=<query>` | The search results of Drive |
 | `/docs/<prn_id>/<itm_id>` | The editor of one doc |
 | `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
+| `/chat` | Chat, without an open room |
+| `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
@@ -317,10 +349,11 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons and format helpers |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, and the Sheets cells, clipboard text and save queue |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, and the message list rules and the room sync of Chat |
 
 ## Commands
 
@@ -368,6 +401,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
+- **A chat message is text.** The app puts the text of a message into a text node. It never makes
+  HTML or a link from it.
 - **External content is marked.** External mail shows the "External sender" notice. The server
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and

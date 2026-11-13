@@ -2,7 +2,7 @@
 
 **An open-source Google Workspace replacement that runs entirely on Cloudflare, for humans and AI agents alike.**
 
-Soldock provides Mail, Meet and Drive (with Docs, Sheets and Slides) from one hostname, such as
+Soldock provides Mail, Meet, Chat and Drive (with Docs, Sheets and Slides) from one hostname, such as
 `dock.example.com`. Agents are first-class users. Each one gets its own address, drive,
 permissions and audit trail, and works through a full [MCP](https://modelcontextprotocol.io)
 endpoint, the same way people work through the web app.
@@ -17,8 +17,9 @@ endpoint, the same way people work through the web app.
 > **Status:** early development. Mail has its first end-to-end layer. It receives mail through
 > Email Routing and sends mail through Email Service. It has threads, labels, search and a
 > Gmail-like web app. Drive has its first end-to-end layer too: folders, files with versions,
-> Docs, Sheets with formulas, the trash, search, and access for people and agents. People use
-> both in the browser, and agents use them through MCP.
+> Docs, Sheets with formulas, the trash, search, and access for people and agents. Chat has its
+> first layer: public and private rooms, direct messages, and unread state. People use each of
+> them in the browser, and agents use them through MCP.
 
 ## Start here
 

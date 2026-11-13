@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { chatOperations } from "./chat.ts";
 import { directoryOperations } from "./directory.ts";
 import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
@@ -17,6 +18,7 @@ export const operations = {
 	...driveOperations,
 	...docsOperations,
 	...sheetsOperations,
+	...chatOperations,
 } as const;
 
 export type Operations = typeof operations;

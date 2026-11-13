@@ -7,8 +7,11 @@ await applyD1Migrations(env.DIRECTORY, (env as unknown as { TEST_MIGRATIONS: D1M
 
 // Storage is shared by the tests of a file, so each test starts with an empty directory. Mailboxes and
 // raw messages are keyed by principal id, and each test makes new principals, so they need no reset.
+// The rooms of Chat have new ids in each test. Only their index is in the directory.
 beforeEach(async () => {
 	await env.DIRECTORY.batch([
+		env.DIRECTORY.prepare("DELETE FROM chat_members"),
+		env.DIRECTORY.prepare("DELETE FROM chat_rooms"),
 		env.DIRECTORY.prepare("DELETE FROM team_mailbox_members"),
 		env.DIRECTORY.prepare("DELETE FROM team_mailboxes"),
 		env.DIRECTORY.prepare("DELETE FROM sessions"),

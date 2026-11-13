@@ -2,6 +2,7 @@ import directorySchema from "../../migrations/0001_directory.sql";
 import mailDomainSchema from "../../migrations/0003_mail_domains.sql";
 import passwordSchema from "../../migrations/0004_password_sign_in.sql";
 import teamMailboxSchema from "../../migrations/0005_team_mailboxes.sql";
+import chatIndexSchema from "../../migrations/0006_chat_index.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -64,6 +65,10 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// The team mailbox tables refer to principals, and one trigger on mail_domains refers to them. They
 		// go first: a rename in the replay of 0004 fails while a trigger refers to a missing table.
 		"DROP TRIGGER IF EXISTS mail_domain_in_use_team",
+		// The room index of Chat names the old principals. The rooms stay in their objects, as old mail
+		// stays in storage, and no new account is a member of them.
+		"DROP TABLE IF EXISTS chat_members",
+		"DROP TABLE IF EXISTS chat_rooms",
 		"DROP TABLE IF EXISTS team_mailbox_members",
 		"DROP TABLE IF EXISTS team_mailboxes",
 		"DROP TABLE IF EXISTS sessions",
@@ -77,6 +82,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...mailDomainSchema.split("--> statement-breakpoint"),
 		...passwordSchema.split("--> statement-breakpoint"),
 		...teamMailboxSchema.split("--> statement-breakpoint"),
+		...chatIndexSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -93,4 +99,5 @@ const BUNDLED_MIGRATIONS = [
 	"0003_mail_domains.sql",
 	"0004_password_sign_in.sql",
 	"0005_team_mailboxes.sql",
+	"0006_chat_index.sql",
 ] as const;

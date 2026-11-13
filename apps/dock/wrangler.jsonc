@@ -41,7 +41,8 @@
 	},
 	// Resource IDs are left out on purpose: `wrangler deploy` provisions the D1 database, the R2 bucket and
 	// the queues by name on the first deploy, and finds them by name after that.
-	// The directory: principals, addresses, API keys and sessions. Migrations are in ./migrations.
+	// The directory: principals, addresses, API keys and sessions, and the room index of Chat.
+	// Migrations are in ./migrations.
 	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
 	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), and the bytes of each version of
 	// each Drive file (key drive/<space id>/<item id>/<version id>).
@@ -68,16 +69,19 @@
 	// One MailboxDO for each principal and each team mailbox (messages, threads, labels, search index, outbox).
 	// One DriveSpaceDO for each principal (items, versions, grants, trash, search index, stars, outbox).
 	// One DocumentDO for each doc and each sheet (the content and its revision).
+	// One ChatRoomDO for each room and each direct message of Chat (the members and the messages).
 	"durable_objects": {
 		"bindings": [
 			{ "name": "MAILBOX", "class_name": "MailboxDO" },
 			{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
-			{ "name": "DOCUMENT", "class_name": "DocumentDO" }
+			{ "name": "DOCUMENT", "class_name": "DocumentDO" },
+			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] },
-		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] }
+		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] },
+		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] }
 	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
@@ -119,7 +123,8 @@
 				"bindings": [
 					{ "name": "MAILBOX", "class_name": "MailboxDO" },
 					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
-					{ "name": "DOCUMENT", "class_name": "DocumentDO" }
+					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
+					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" }
 				]
 			},
 			"vars": {

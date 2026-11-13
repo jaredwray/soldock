@@ -132,6 +132,17 @@ export async function getPrincipal(db: D1Database, id: string): Promise<Principa
 	return row ? toPrincipal(row) : null;
 }
 
+/** The principals of the ids in the list. An id that no principal has gives no record. */
+export async function getPrincipals(db: D1Database, ids: readonly string[]): Promise<PrincipalRecord[]> {
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	const { results } = await db
+		.prepare(`${PRINCIPAL_SELECT} JOIN json_each(?) wanted ON wanted.value = p.id`)
+		.bind(JSON.stringify(unique))
+		.all<PrincipalRow>();
+	return results.map(toPrincipal);
+}
+
 /** The ids from the list that no principal has. */
 export async function unknownPrincipalIds(db: D1Database, ids: readonly string[]): Promise<string[]> {
 	const unique = [...new Set(ids)];

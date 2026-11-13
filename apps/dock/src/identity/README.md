@@ -14,6 +14,9 @@
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
+The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
+[`chat`](../chat/README.md) module. A fresh start of the directory drops them and makes them again.
+
 ## Principals
 
 - A **human** has an organization role: `owner`, `admin` or `member`. First-run setup creates the

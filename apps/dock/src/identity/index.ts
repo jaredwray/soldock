@@ -5,6 +5,7 @@ export { toPrincipalOutput } from "./output.ts";
 export { mountAuthRoutes } from "./routes.ts";
 export {
 	domainOf,
+	getPrincipals,
 	mailDomains,
 	normalizeAddress,
 	type OutboundMode,
