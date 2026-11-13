@@ -124,25 +124,35 @@ MCP clients. The app has no UI-only path.
     more than one person sends from the address.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
-- **Admin** (`/admin`). Owners and admins see the directory, and create people and agents.
-  - **Admin settings: email domains** lists the saved domains and provides Add and Remove controls.
-    Changes take effect without a new deployment. A confirmation precedes removal.
-    The server refuses removal of a domain with mailboxes.
-    The page explains the separate Cloudflare email and DNS steps. Members and agents cannot change these settings.
-  - **Accounts.** The first API key of a new principal shows once, with a copy button.
+- **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
+  its own path, so a deep link and a reload open the same section.
+  - Owners and admins see all six sections. A member who sponsors an agent sees only **Your agents**.
+    A member who opens a section for owners and admins sees a notice and not the section.
+  - `/admin` shows the first section that the person can use. The page then replaces the path with
+    the path of that section.
+  - The page loads the directory one time. The directory stays when the section changes. Each
+    section starts at its top.
+  - Under 768px, the navigation is a drawer behind the menu button in the top bar, as in Mail and Drive.
+  - **People and agents** (`people`) shows the directory: the kind, the name, the address, the role,
+    the sponsor and the agent policy of each principal.
+  - **New person or agent** (`new`). The first API key of a new principal shows once, with a copy button.
     A credential cannot grant a scope that it does not hold.
     The form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`.
     For a person, the app sends these scopes as `key_scopes`. A person also needs a first password,
     which the admin gives to the person.
-    For each agent, the page sets the outbound mail policy and manages the API keys.
-    A member who sponsors an agent sees only those agents on the page.
-  - **Help a person sign in.** An owner or an admin selects a person, then sets a new password
+  - **Agents** (`agents`). For each agent, the page sets the outbound mail policy and manages the API keys.
+    A member who sponsors an agent sees only those agents.
+  - **Help a person sign in** (`sign-in`). An owner or an admin selects a person, then sets a new password
     (`account.set_password`) or turns off two-step verification (`account.disable_totp`). An admin
     does not see the owner in the list, because only the owner manages the owner's sign-in.
-  - **Team mailboxes.** Owners and admins see each team mailbox with its members. A form creates one
+  - **Team mailboxes** (`team-mailboxes`). Owners and admins see each team mailbox with its members. A form creates one
     with a name, an address and its first members (`directory.create_team_mailbox`). Each mailbox
     has a control to add a member and a button to remove each member, with a confirmation
     (`directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`).
+  - **Email domains** (`domains`) lists the saved domains and provides Add and Remove controls.
+    Changes take effect without a new deployment. A confirmation precedes removal.
+    The server refuses removal of a domain with mailboxes.
+    The page explains the separate Cloudflare email and DNS steps. Members and agents cannot change these settings.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
   on other browsers. A new key can hold only the scopes of the session.
@@ -319,7 +329,8 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
-| `/admin` | Admin |
+| `/admin` | Goes to the first section of Admin that the person can use |
+| `/admin/<section>` | One section of Admin: `people`, `new`, `agents`, `sign-in`, `team-mailboxes` or `domains` |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
 | `/drive/shared`, `/drive/recent`, `/drive/starred`, `/drive/trash` | The other views of Drive |
@@ -345,7 +356,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the top bar, the search box and the account menu |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | The directory, the create form, the agent panels and the team mailboxes card |
+| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the agent panels, the sign-in help, the team mailboxes and the email domains |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |

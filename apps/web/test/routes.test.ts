@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	ADMIN_SECTIONS,
+	adminPath,
 	chatPath,
 	type DriveView,
 	drivePath,
@@ -105,10 +107,17 @@ describe("routes", () => {
 		}
 	});
 
+	// A deep link and a reload of a section open the same section.
+	it("parses the path of each admin section back to that section", () => {
+		expect(parseRoute("/admin")).toEqual({ page: "admin", section: null });
+		for (const section of ADMIN_SECTIONS) {
+			expect(parseRoute(adminPath(section))).toEqual({ page: "admin", section });
+		}
+	});
+
 	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
 		expect(parseRoute("/")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
-		expect(parseRoute("/admin")).toEqual({ page: "admin" });
 		expect(parseRoute("/settings")).toEqual({ page: "settings" });
 		for (const path of [
 			"/drive/outbox",
@@ -121,6 +130,7 @@ describe("routes", () => {
 			`/docs/${SPACE}/${ITEM}/extra`,
 			`/sheets/${ITEM}/${SPACE}`,
 			"/admin/extra",
+			"/admin/people/extra",
 			"/mail/outbox",
 			"/mail/label",
 			"/mail/inbox/thr_1/extra",
