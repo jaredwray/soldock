@@ -19,11 +19,10 @@ interface ApiKeyManagerProps {
 	 */
 	allowedScopes: readonly Scope[];
 	heading: string;
-	headingLevel?: 2 | 3;
 }
 
 /** Lists, creates and revokes the API keys of one principal. */
-export function ApiKeyManager({ principalId, allowedScopes, heading, headingLevel = 2 }: ApiKeyManagerProps) {
+export function ApiKeyManager({ principalId, allowedScopes, heading }: ApiKeyManagerProps) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const offeredScopes = allowedScopes.filter((scope) => whoami.scopes.includes(scope));
@@ -31,7 +30,6 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, headingLeve
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
 	const [revoking, setRevoking] = useState<ApiKey | null>(null);
-	const Heading = headingLevel === 2 ? "h2" : "h3";
 
 	const load = useCallback(async () => {
 		try {
@@ -52,7 +50,7 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, headingLeve
 
 	return (
 		<section className="card">
-			<Heading className="card-title">{heading}</Heading>
+			<h2 className="card-title">{heading}</h2>
 			{error && (
 				<p className="form-error" role="alert">
 					The keys did not load. {error}

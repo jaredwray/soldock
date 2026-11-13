@@ -75,7 +75,7 @@ export function Shell() {
 			case "chat":
 				return <ChatApp roomId={route.roomId} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "admin":
-				return <AdminPage />;
+				return <AdminPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "connect":
 				return <ConnectPage key={route.requestId} requestId={route.requestId} />;
 			case "settings":

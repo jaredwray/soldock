@@ -44,8 +44,7 @@ export function TeamMailboxesCard({ principals }: { principals: readonly Princip
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Team mailboxes</h2>
+		<div className="card">
 			<p className="muted">
 				A team mailbox is a shared mailbox with its own address, for example support@example.com. Each member, a person
 				or an agent, can read it and send from its address. The members share the labels and the read state.
@@ -72,7 +71,7 @@ export function TeamMailboxesCard({ principals }: { principals: readonly Princip
 					<CreateTeamMailboxForm principals={principals} onCreated={save} />
 				</>
 			)}
-		</section>
+		</div>
 	);
 }
 
@@ -275,7 +274,7 @@ function CreateTeamMailboxForm({ principals, onCreated }: CreateProps) {
 
 	return (
 		<form className="form-grid team-mailbox-form" onSubmit={submit} noValidate>
-			<h3 className="card-subtitle form-grid-wide">Add a team mailbox</h3>
+			<h2 className="card-subtitle form-grid-wide">Add a team mailbox</h2>
 			<div className="field">
 				<label htmlFor={ids.name} className="field-label">
 					Display name

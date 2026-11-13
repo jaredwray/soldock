@@ -26,6 +26,10 @@ The first flows to cover, because they are tested by hand only:
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.
 
+- Admin: each section of the side navigation, a deep link to a section, `/admin` as an owner and
+  as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
+  under 768px (open, Escape, a link).
+
 - OAuth for agents: the MCP endpoint banner and its copy button, a client that registers and opens
   `/oauth/authorize`, sign-in on the `/connect` page, a new agent with an address and scopes, an
   agent that exists, Deny, an expired request, the code exchange, an MCP call with the token, and

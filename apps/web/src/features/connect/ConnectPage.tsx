@@ -319,7 +319,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 							))}
 						</fieldset>
 						<p className="field-hint form-grid-wide">
-							A new agent can send mail only inside this organization. Change its policy on the Admin page.
+							A new agent can send mail only inside this organization. Change its policy under Admin › Agents.
 						</p>
 					</>
 				)}

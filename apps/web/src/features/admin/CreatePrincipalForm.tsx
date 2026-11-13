@@ -96,8 +96,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Add a person or an agent</h2>
+		<div className="card">
 			<form className="form-grid" onSubmit={submit} noValidate>
 				<fieldset className="segmented">
 					<legend className="field-label">Kind</legend>
@@ -242,6 +241,6 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 					</button>
 				</div>
 			</form>
-		</section>
+		</div>
 	);
 }

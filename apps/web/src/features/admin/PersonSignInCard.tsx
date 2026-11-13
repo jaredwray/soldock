@@ -51,8 +51,7 @@ export function PersonSignInCard({ me, people }: { me: Principal; people: readon
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Help a person sign in</h2>
+		<div className="card">
 			<p className="muted">
 				Set a new password for a person who forgot it, or turn off two-step verification after they lose their phone.
 			</p>
@@ -140,6 +139,6 @@ export function PersonSignInCard({ me, people }: { me: Principal; people: readon
 					<p>After this, the password alone signs in to {person.address}. They can turn it on again in Settings.</p>
 				</ConfirmDialog>
 			)}
-		</section>
+		</div>
 	);
 }

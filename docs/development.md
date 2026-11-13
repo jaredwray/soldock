@@ -23,7 +23,7 @@ Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.
 
 Open http://localhost:8787. The setup page shows, because the local directory has no owner. Enter
 the token, then enter an email domain and create the owner. For the examples below, use `example.com`.
-Setup saves the domain in D1. Use the Admin page to manage domains later.
+Setup saves the domain in D1. Use **Admin › Email domains** to manage domains later.
 Enter a password of at least 12 characters. The page signs you in, shows the first API key once, and
 offers two-step verification, which you can skip.
 

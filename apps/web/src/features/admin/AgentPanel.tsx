@@ -32,7 +32,6 @@ export function AgentPanel({ agent, sponsor, onChanged }: AgentPanelProps) {
 					principalId={agent.id}
 					allowedScopes={AGENT_SCOPES}
 					heading={`API keys of ${agent.display_name}`}
-					headingLevel={3}
 				/>
 			</div>
 		</details>

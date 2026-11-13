@@ -15,6 +15,7 @@ export const MENU_BUTTON_ID = "app-menu-button";
 export const MAIL_NAV_ID = "mail-nav";
 export const DRIVE_NAV_ID = "drive-nav";
 export const CHAT_NAV_ID = "chat-nav";
+export const ADMIN_NAV_ID = "admin-nav";
 
 /** The products of Soldock. A doc and a sheet are part of Drive. */
 export type Product = "mail" | "drive" | "chat";
@@ -30,6 +31,14 @@ const PRODUCTS = [
 	{ product: "chat", name: "Chat", icon: "chat", home: CHAT_PATH, label: "Soldock Chat, go to your rooms" },
 ] as const;
 
+/** The pages with a navigation drawer, and the element id of each drawer. */
+const NAV_IDS: Partial<Record<Route["page"], string>> = {
+	mail: MAIL_NAV_ID,
+	drive: DRIVE_NAV_ID,
+	chat: CHAT_NAV_ID,
+	admin: ADMIN_NAV_ID,
+};
+
 interface TopBarProps {
 	route: Route;
 	navOpen: boolean;
@@ -40,14 +49,7 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 	const product = productOf(route);
 	const current = PRODUCTS.find((entry) => entry.product === product) ?? PRODUCTS[0];
 	// Only the pages with a navigation drawer get the menu button.
-	const navId =
-		route.page === "mail"
-			? MAIL_NAV_ID
-			: route.page === "drive"
-				? DRIVE_NAV_ID
-				: route.page === "chat"
-					? CHAT_NAV_ID
-					: null;
+	const navId = NAV_IDS[route.page] ?? null;
 	return (
 		<header className="topbar">
 			{navId && (

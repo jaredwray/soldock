@@ -1,11 +1,13 @@
 import type { CreatedApiKey, Principal } from "@soldock/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { Link } from "../../lib/router.tsx";
-import { INBOX_PATH } from "../../routes.ts";
+import { Link, navigate } from "../../lib/router.tsx";
+import { useOnChange } from "../../lib/useOnChange.ts";
+import { type AdminSection, adminPath, INBOX_PATH } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
+import { AdminSidebar, defaultSection, isAdminOnly, sectionTitle } from "./AdminSidebar.tsx";
 import { AgentPanel } from "./AgentPanel.tsx";
 import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
@@ -19,14 +21,26 @@ type DirectoryState =
 	| { status: "error"; error: string }
 	| { status: "ready"; principals: Principal[] };
 
+interface AdminPageProps {
+	/** The section of the route, or null for `/admin`. */
+	section: AdminSection | null;
+	/** True while the navigation drawer is open, under 768px. */
+	navOpen: boolean;
+	onCloseNav: () => void;
+}
+
 /**
  * Owners and admins see the directory, create people and agents, and manage each agent. A member who
- * sponsors an agent sees only the agents that the member sponsors.
+ * sponsors an agent sees only the agents that the member sponsors. The side navigation selects one
+ * section. The page loads the directory once and keeps it while the section changes.
  */
-export function AdminPage() {
+export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminPageProps) {
 	const { whoami } = useSession();
 	const me = whoami.principal;
 	const elevated = isOrgAdmin(me);
+	const section = routeSection ?? defaultSection(elevated);
+	const title = sectionTitle(section, elevated);
+	const mainRef = useRef<HTMLElement>(null);
 	const [state, setState] = useState<DirectoryState>({ status: "loading" });
 	const [created, setCreated] = useState<{ principal: Principal; key: CreatedApiKey } | null>(null);
 
@@ -40,9 +54,20 @@ export function AdminPage() {
 	}, []);
 
 	useEffect(() => {
-		document.title = "Admin – Soldock";
 		void load();
 	}, [load]);
+
+	useEffect(() => {
+		document.title = `${title} – Admin – Soldock`;
+	}, [title]);
+
+	// `/admin` gets the path of the section that it shows, so a reload and the back button stay in that section.
+	useEffect(() => {
+		if (routeSection === null) navigate(adminPath(section), { replace: true });
+	}, [routeSection, section]);
+
+	// Each section starts at its top.
+	useOnChange(section, () => mainRef.current?.scrollTo({ top: 0 }));
 
 	const principals = state.status === "ready" ? state.principals : [];
 	const agents = principals.filter((p) => p.kind === "agent" && (elevated || p.sponsor_id === me.id));
@@ -50,46 +75,67 @@ export function AdminPage() {
 	const allowed = elevated || agents.length > 0;
 
 	return (
-		<main id="main" className="page page-wide" tabIndex={-1}>
-			<Link to={INBOX_PATH} className="back-link">
-				<Icon name="back" size={16} />
-				Back to Mail
-			</Link>
-			<h1>Admin</h1>
-			{state.status === "loading" && <p className="muted">Loading the directory…</p>}
-			{state.status === "error" && (
-				<div className="card" role="alert">
-					<p>The directory did not load. {state.error}</p>
-					<button type="button" className="button" onClick={() => void load()}>
-						Try again
-					</button>
-				</div>
-			)}
-			{state.status === "ready" && !allowed && (
-				<div className="card">
-					<p>Only owners, admins and the sponsors of agents can use this page.</p>
-				</div>
-			)}
-			{state.status === "ready" && allowed && (
-				<>
-					{elevated && (
-						<>
-							<MailDomainsCard />
-							<PrincipalTable principals={principals} />
-							<CreatePrincipalForm
-								me={me}
-								humans={humans}
-								onCreated={(principal, key) => {
-									setCreated({ principal, key });
-									void load();
-								}}
-							/>
-							<PersonSignInCard me={me} people={humans} />
-							<TeamMailboxesCard principals={principals} />
-						</>
+		<div className="admin-layout">
+			<AdminSidebar active={section} elevated={elevated} open={navOpen} onClose={onCloseNav} />
+			<main id="main" ref={mainRef} className="admin-main" tabIndex={-1}>
+				<div className="admin-content">
+					<Link to={INBOX_PATH} className="back-link">
+						<Icon name="back" size={16} />
+						Back to Mail
+					</Link>
+					<h1>{title}</h1>
+					{state.status === "loading" && <p className="muted">Loading the directory…</p>}
+					{state.status === "error" && (
+						<div className="card" role="alert">
+							<p>The directory did not load. {state.error}</p>
+							<button type="button" className="button" onClick={() => void load()}>
+								Try again
+							</button>
+						</div>
 					)}
-					<section className="card">
-						<h2 className="card-title">{elevated ? "Agents" : "Your agents"}</h2>
+					{state.status === "ready" && !allowed && (
+						<div className="card">
+							<p>Only owners, admins and the sponsors of agents can use this page.</p>
+						</div>
+					)}
+					{state.status === "ready" && allowed && content()}
+				</div>
+			</main>
+			{created && (
+				<SecretDialog
+					apiKey={created.key}
+					title={`${created.principal.display_name} is ready`}
+					onClose={() => setCreated(null)}
+				/>
+			)}
+		</div>
+	);
+
+	function content() {
+		if (!elevated && isAdminOnly(section)) {
+			return (
+				<div className="card">
+					<p>Only owners and admins can use this section.</p>
+				</div>
+			);
+		}
+		switch (section) {
+			case "team":
+				return <PrincipalTable principals={principals} />;
+			case "new":
+				return (
+					<CreatePrincipalForm
+						me={me}
+						humans={humans}
+						onCreated={(principal, key) => {
+							setCreated({ principal, key });
+							void load();
+						}}
+					/>
+				);
+			case "agents":
+				return (
+					<div className="card">
 						<McpEndpointBanner />
 						<p className="muted">
 							Set who each agent can send mail to, and manage its connected apps and its API keys. An agent can never
@@ -106,16 +152,14 @@ export function AdminPage() {
 								/>
 							))}
 						</div>
-					</section>
-				</>
-			)}
-			{created && (
-				<SecretDialog
-					apiKey={created.key}
-					title={`${created.principal.display_name} is ready`}
-					onClose={() => setCreated(null)}
-				/>
-			)}
-		</main>
-	);
+					</div>
+				);
+			case "sign-in":
+				return <PersonSignInCard me={me} people={humans} />;
+			case "team-mailboxes":
+				return <TeamMailboxesCard principals={principals} />;
+			case "domains":
+				return <MailDomainsCard />;
+		}
+	}
 }
