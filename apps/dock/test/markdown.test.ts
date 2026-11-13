@@ -212,6 +212,8 @@ describe("docToMarkdown and markdownToDoc", () => {
 			"*a ".repeat(n / 4),
 			`${"*a ".repeat(20_000)}${"a* ".repeat(20_000)}`,
 			`${"**a ".repeat(20_000)}${"a** ".repeat(20_000)}`,
+			`${"*".repeat(n / 2)}a${"*".repeat(n / 2)}`,
+			`${"~".repeat(n / 2)}a${"~".repeat(n / 2)}`,
 		];
 		const start = Date.now();
 		for (const markdown of hostile) {
@@ -230,6 +232,10 @@ describe("docToMarkdown and markdownToDoc", () => {
 		const read = markdownToDoc(`${"*a ".repeat(100)}b${" a*".repeat(100)}`);
 		expect(DocContent.safeParse(read).success).toBe(true);
 		expect(docText(read)).toContain("*a *a");
+		// One run of thousands of marks is text. Marks of two texts that touch still pair.
+		expect(docText(markdownToDoc(`${"*".repeat(5000)}a${"*".repeat(5000)}`))).toBe(
+			`${"*".repeat(5000)}a${"*".repeat(5000)}`,
+		);
 	});
 });
 

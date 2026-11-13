@@ -264,6 +264,12 @@ describe("the trash", () => {
 				parent_id: reports.id,
 			});
 		}
+		// The count of a dry run is the count of the real call: the item in the folder does not count.
+		const counted = await folder("Counted");
+		const inside = await file("c.txt", "x", counted.id);
+		const both = { item_ids: [inside.id, counted.id] };
+		expect((await ada.call("drive.trash_items", { ...both, dry_run: true })).items_changed).toBe(1);
+		expect((await ada.call("drive.trash_items", both)).items_changed).toBe(1);
 		// The item stays in its folder, and it comes back with its folder.
 		expect(await state("folder first")).toEqual({ parent: true, trashed: false, comesBack: true });
 		expect(await state("item first")).toEqual({ parent: true, trashed: false, comesBack: true });

@@ -495,13 +495,14 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 	function argument(node: Node): Arg {
 		if (node.t !== "range") return { values: [evaluate(node)], range: false };
 		const values: Value[] = [];
-		for (const name of cellsIn(node)) values.push(results.get(name) ?? null);
+		for (const name of cellsIn(node)) values.push(charged(results.get(name) ?? null));
 		return { values, range: true };
 	}
 
 	/**
-	 * A text result costs its length. Thus the texts of one calculation have a total limit, and many
-	 * cells that each make a long text cannot make an answer larger than the memory of the Worker.
+	 * A text costs its length when a formula reads it from a cell, and when an operator or a function
+	 * makes it. Thus the text work of one calculation has a total limit: many cells that each make,
+	 * copy or compare a long text cannot use all the memory or the CPU time of a request.
 	 */
 	function charged(value: Value): Value {
 		if (typeof value === "string") spend(value.length);
@@ -516,7 +517,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 			case "error":
 				return ERRORS[node.code];
 			case "ref":
-				return results.get(cellName(node)) ?? null;
+				return charged(results.get(cellName(node)) ?? null);
 			case "range":
 				// A range is a value only as an argument of a function.
 				return ERRORS["#VALUE!"];
@@ -581,7 +582,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 
 	/** The result of a formula as the value of its cell. A formula that reads an empty cell gives 0. */
 	function cellValue(node: Node): Value {
-		const value = charged(evaluate(node));
+		const value = evaluate(node);
 		return value === null ? 0 : value;
 	}
 

@@ -1082,23 +1082,27 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			// An item that is in the trash, or under a folder in the trash, stays as it is.
 			if (item.trash_root === null) rows.push(item);
 		}
-		if (dryRun || rows.length === 0) return { items_changed: rows.length };
-		let changed = 0;
+		// An item in a folder of the same call goes to the trash with that folder. It does not count.
+		const selected = new Set(rows.map((row) => row.id));
+		const changed = rows.filter(
+			(row) =>
+				!this.all<{ id: string }>(`${UP} SELECT id FROM up WHERE depth >= 1`, row.id).some((above) =>
+					selected.has(above.id),
+				),
+		);
+		if (dryRun || changed.length === 0) return { items_changed: changed.length };
 		this.ctx.storage.transactionSync(() => {
 			const now = Date.now();
-			for (const item of this.topDown(rows)) {
-				// An earlier item of this call can hold this one. It is then in the trash with that folder.
-				if (this.row(item.id)?.trash_root !== null) continue;
+			for (const item of changed) {
 				this.sql.exec("UPDATE items SET trashed_at = ?, trash_root = id WHERE id = ?", now, item.id);
 				this.sql.exec(
 					`${DOWN} UPDATE items SET trash_root = ?1 WHERE trash_root IS NULL AND id IN (SELECT id FROM down)`,
 					item.id,
 				);
-				changed++;
 			}
 			this.bump();
 		});
-		return { items_changed: changed };
+		return { items_changed: changed.length };
 	}
 
 	/** Takes items out of the trash. An item whose folder is gone or in the trash goes to the root. */

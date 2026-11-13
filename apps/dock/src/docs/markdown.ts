@@ -45,6 +45,9 @@ type Delim = Extract<Token, { kind: "delim" }>;
 /** The most emphasis marks in emphasis marks. More than a person writes, and few enough for the call stack. */
 const MAX_OPEN_MARKS = 32;
 
+/** The longest run of one emphasis character that can be marks: three that close and three that open. */
+const MAX_MARK_RUN = 6;
+
 const ESCAPABLE = /[\\`*_{}[\]()#+\-.!~<>|"']/;
 const WORD = /[\p{L}\p{N}]/u;
 
@@ -169,6 +172,13 @@ function tokenize(src: string, linkDepth: number): Token[] {
 		} else if (ch === "*" || ch === "_" || ch === "~") {
 			let count = 1;
 			while (src[i + count] === ch) count++;
+			// A longer run than the marks of two texts that touch is text. One run of thousands of marks
+			// would make thousands of marks in marks.
+			if (count > MAX_MARK_RUN) {
+				text += src.slice(i, i + count);
+				i += count;
+				continue;
+			}
 			const before = src[i - 1];
 			const after = src[i + count];
 			const left = !isSpace(after);

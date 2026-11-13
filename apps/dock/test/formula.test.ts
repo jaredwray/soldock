@@ -167,6 +167,27 @@ describe("the formula engine", () => {
 		expect(results.filter((value) => typeof value === "string" && value.length === 32_000).length).toBeGreaterThan(0);
 	});
 
+	// A long text costs its length each time that a formula reads it. Without that, thousands of cells
+	// that only compare one long text do gigabytes of text work for a few units of the budget.
+	it("counts the texts that formulas read, also in a comparison", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000), A2: `=CONCAT(${Array(16).fill("A1").join(",")})` };
+		for (let row = 1; row <= 500; row++) cells[`B${row}`] = "=A2=A2";
+		const results = run(cells);
+		expect(results.A2).toHaveLength(32_000);
+		expect(Object.values(results)).toContain(true);
+		expect(Object.values(results)).toContain("#LIMIT!");
+	});
+
+	// The budget is 2,000,000. A cell here reads 32,000 characters and makes 32,000, so 30 cells fit.
+	it("gives each result when the text work is in the budget", () => {
+		const cells: Record<string, string> = { A1: "x".repeat(2000) };
+		for (let row = 1; row <= 30; row++) cells[`B${row}`] = `=CONCAT(${Array(16).fill("A1").join(",")})`;
+		const results = run(cells);
+		expect(Object.values(results).filter((value) => typeof value === "string" && value.length === 32_000)).toHaveLength(
+			30,
+		);
+	});
+
 	it("calculates a cell after the cells that it reads, in each order of the inputs", () => {
 		expect(run({ A1: "=B1*2", B1: "=C1+1", C1: "5", D1: "=SUM(A1:C1)" })).toEqual({ A1: 12, B1: 6, C1: 5, D1: 23 });
 	});
