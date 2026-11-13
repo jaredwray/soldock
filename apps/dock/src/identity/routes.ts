@@ -197,7 +197,6 @@ export function mountAuthRoutes(app: AuthApp): void {
 			const result: SignInResult = { status: "totp_required" };
 			return c.json(result, 200, { "cache-control": "no-store" });
 		}
-		const token = await createSession(c.env.DIRECTORY, outcome.principal.id);
 		audit({
 			op: "auth.sign_in",
 			actor: outcome.principal.id,
@@ -209,7 +208,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		});
 		const result: SignInResult = { status: "signed_in" };
 		return c.json(result, 200, {
-			"set-cookie": sessionCookie(token, SESSION_TTL_SECONDS),
+			"set-cookie": sessionCookie(outcome.sessionToken, SESSION_TTL_SECONDS),
 			"cache-control": "no-store",
 		});
 	});

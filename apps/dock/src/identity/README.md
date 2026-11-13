@@ -107,6 +107,11 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
     guesses cannot go past the limit. The 10th attempt (`SIGN_IN_MAX_FAILURES`) locks sign-in for 15
     minutes (`SIGN_IN_LOCK_MINUTES`) and starts the count again. A success, and
     `account.set_password`, clear the count and the lock. The step without a code counts as an attempt.
+  - The success write and the new session share one D1 transaction. The write matches only while the
+    password hash and the TOTP secret are the ones that the attempt checked, and, with a code, while
+    its step is after the last used step. The session insert runs only when that write matched. So a
+    password change, or two-step verification that turns on, during the check makes the sign-in fail,
+    and two requests with one code give one session.
   - A success writes an `auth.sign_in` audit line with the credential `password` or `password_totp`.
     Each sign-in deletes the expired sessions of that human.
   - Known limit: a guess for a known address writes to D1 and an unknown address does not, so the

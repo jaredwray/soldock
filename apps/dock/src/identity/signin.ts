@@ -1,10 +1,16 @@
 import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@soldock/contracts";
 import { verifyPassword } from "./password.ts";
-import { type PrincipalRecord, resolveAddress } from "./store.ts";
+import { createSessionIf, type PrincipalRecord, resolveAddress } from "./store.ts";
 import { matchTotp } from "./totp.ts";
 
 export type SignInOutcome =
-	| { result: "signed_in"; principal: PrincipalRecord; credential: "password" | "password_totp" }
+	| {
+			result: "signed_in";
+			principal: PrincipalRecord;
+			credential: "password" | "password_totp";
+			/** The value of the new session cookie. */
+			sessionToken: string;
+	  }
 	| { result: "totp_required"; principal: PrincipalRecord }
 	| { result: "refused"; principalId: string | null; reason: string };
 
@@ -53,6 +59,25 @@ export async function confirmPassword(db: D1Database, principalId: string, passw
 }
 
 /**
+ * Clears the failure count and creates the session in one transaction, only while the password hash and
+ * the TOTP secret are still the ones that the attempt checked. A password change, or two-step
+ * verification that turns on, during the check makes the sign-in fail, so no session outlives the
+ * change. With a TOTP step, only a step after the last used one counts, so a parallel request with the
+ * same code fails. Returns the session cookie value, or null.
+ */
+function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, step: number | null) {
+	const guard = db
+		.prepare(
+			`UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL,
+				totp_last_step = COALESCE(?1, totp_last_step)
+			WHERE id = ?2 AND password_hash = ?3 AND totp_secret IS ?4
+			AND (?1 IS NULL OR totp_last_step IS NULL OR totp_last_step < ?1)`,
+		)
+		.bind(step, principalId, attempt.password_hash, attempt.totp_secret);
+	return createSessionIf(db, principalId, guard);
+}
+
+/**
  * Checks an address, a password and, when the person turned it on, a TOTP code.
  *
  * - An unknown address, an agent, a person without a password, a wrong password, a wrong or used
@@ -83,21 +108,15 @@ export async function signInWithPassword(
 			reason: attempt.password_hash ? "wrong password" : "no password",
 		};
 	}
-	if (!attempt.totp_secret) {
-		await clearFailures(db, principal.id);
-		return { result: "signed_in", principal, credential: "password" };
+	let step: number | null = null;
+	if (attempt.totp_secret) {
+		if (input.totp_code === undefined) return { result: "totp_required", principal };
+		step = await matchTotp(attempt.totp_secret, input.totp_code, attempt.totp_last_step, nowMs);
+		if (step === null) return { result: "refused", principalId: principal.id, reason: "wrong code" };
 	}
-	if (input.totp_code === undefined) return { result: "totp_required", principal };
-	const step = await matchTotp(attempt.totp_secret, input.totp_code, attempt.totp_last_step, nowMs);
-	if (step === null) return { result: "refused", principalId: principal.id, reason: "wrong code" };
-	// The guard on the last step makes a parallel request with the same code fail.
-	const used = await db
-		.prepare(
-			`UPDATE principals SET totp_last_step = ?1, sign_in_failures = 0, sign_in_locked_until = NULL
-			WHERE id = ?2 AND totp_secret = ?3 AND (totp_last_step IS NULL OR totp_last_step < ?1)`,
-		)
-		.bind(step, principal.id, attempt.totp_secret)
-		.run();
-	if (used.meta.changes !== 1) return { result: "refused", principalId: principal.id, reason: "used code" };
-	return { result: "signed_in", principal, credential: "password_totp" };
+	const sessionToken = await finishSignIn(db, principal.id, attempt, step);
+	if (!sessionToken) {
+		return { result: "refused", principalId: principal.id, reason: "credentials changed or code used" };
+	}
+	return { result: "signed_in", principal, credential: step === null ? "password" : "password_totp", sessionToken };
 }

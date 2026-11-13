@@ -432,14 +432,34 @@ export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<vo
  * it is on, the TOTP code.
  */
 export async function createSession(db: D1Database, principalId: string): Promise<string> {
+	const token = await createSessionIf(db, principalId, null);
+	if (!token) throw new Error(`session for ${principalId} was not stored`);
+	return token;
+}
+
+/**
+ * Creates a session in the same transaction as `guard`, and only when `guard` changes exactly one row.
+ * Returns null when it does not. Sign-in uses it, so a password change during the check wins: a guard
+ * that names the checked credentials then matches no row, and no session comes into existence.
+ */
+export async function createSessionIf(
+	db: D1Database,
+	principalId: string,
+	guard: D1PreparedStatement | null,
+): Promise<string | null> {
 	const token = randomToken(32);
 	const now = Date.now();
-	await db.batch([
+	// changes() reads the count of the statement just before the insert: the guard.
+	const results = await db.batch([
 		db
 			.prepare("DELETE FROM sessions WHERE principal_id = ? AND expires_at <= ?")
 			.bind(principalId, new Date(now).toISOString()),
+		...(guard ? [guard] : []),
 		db
-			.prepare("INSERT INTO sessions (token_hash, principal_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+			.prepare(
+				`INSERT INTO sessions (token_hash, principal_id, created_at, expires_at)
+				SELECT ?, ?, ?, ?${guard ? " WHERE changes() = 1" : ""}`,
+			)
 			.bind(
 				await sha256Hex(token),
 				principalId,
@@ -447,7 +467,7 @@ export async function createSession(db: D1Database, principalId: string): Promis
 				new Date(now + SESSION_TTL_SECONDS * 1000).toISOString(),
 			),
 	]);
-	return token;
+	return results.at(-1)?.meta.changes === 1 ? token : null;
 }
 
 /** The live session with this cookie value, its principal, and the SHA-256 that identifies it. */

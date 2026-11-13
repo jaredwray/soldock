@@ -471,37 +471,39 @@ describe("sign-in with a password", () => {
 		expect((await submitSignIn(owner.address, PASSWORD, { totpCode: "12345" })).status).toBe(400);
 	});
 
-	// Two isolates can check the same code at the same time. The tests run requests one at a time, so a
-	// D1 proxy plays the other request: it records the step just before this request writes it.
-	it("refuses a code that a parallel sign-in used between the check and the write", async () => {
+	// A password change, or a second request with the same code, can land while a sign-in checks the
+	// password. The tests run requests one at a time, so a D1 proxy plays the other request: it makes its
+	// change just before the batch that would create the session.
+	it.each([
+		{ race: "a parallel sign-in used the code", totp: true, change: "totp_last_step = totp_last_step + 1" },
+		{ race: "the password changed", totp: false, change: "password_hash = 'changed'" },
+		{ race: "two-step verification turned on", totp: false, change: "totp_secret = 'GEZDGNBVGY3TQOJQ'" },
+	])("refuses the sign-in and makes no session when $race during the check", async ({ totp, change }) => {
 		const owner = await setupOwner();
-		const secret = await turnOnTotp(owner.call);
+		const secret = totp ? await turnOnTotp(owner.call) : null;
 		const racing = new Proxy(env.DIRECTORY, {
 			get(target, property) {
-				if (property !== "prepare") {
-					const value = Reflect.get(target, property);
-					return typeof value === "function" ? value.bind(target) : value;
-				}
-				return (sql: string) => {
-					const statement = target.prepare(sql);
-					if (!sql.includes("SET totp_last_step")) return statement;
-					return {
-						bind: (step: number, ...rest: unknown[]) => ({
-							run: async () => {
-								await target.prepare("UPDATE principals SET totp_last_step = ?").bind(step).run();
-								return statement.bind(step, ...rest).run();
-							},
-						}),
+				if (property === "batch") {
+					return async (statements: D1PreparedStatement[]) => {
+						await target.prepare(`UPDATE principals SET ${change} WHERE id = ?`).bind(owner.id).run();
+						return target.batch(statements);
 					};
-				};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
 			},
 		});
 		const res = await withEnv({ DIRECTORY: racing }, "/auth/session", {
 			method: "POST",
 			headers: { origin: ORIGIN, "content-type": "application/json" },
-			body: JSON.stringify({ address: owner.address, password: PASSWORD, totp_code: await totpNow(secret, 1) }),
+			body: JSON.stringify({
+				address: owner.address,
+				password: PASSWORD,
+				...(secret ? { totp_code: await totpNow(secret, 1) } : {}),
+			}),
 		});
 		await refusal(res);
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
 	});
 
 	// Authenticator apps compute codes with RFC 6238, so the server must give the same codes.
