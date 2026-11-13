@@ -33,6 +33,8 @@ export type Route =
 	| { page: "chat"; roomId: string | null }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
+	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
+	| { page: "connect"; requestId: string }
 	| { page: "settings" }
 	| { page: "redirect"; to: string }
 	| { page: "not-found" };
@@ -68,6 +70,8 @@ export function parseRoute(location: string): Route {
 	if (first === "admin" && parts.length === 1) return { page: "admin", section: null };
 	if (first === "admin" && parts.length === 2 && isAdminSection(second)) return { page: "admin", section: second };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
+	if (first === "connect" && parts.length === 2 && second?.startsWith("oar_"))
+		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null };

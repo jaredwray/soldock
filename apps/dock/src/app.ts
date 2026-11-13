@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { mountRestApi } from "./api/index.ts";
-import { type CallContext, mountAuthRoutes } from "./identity/index.ts";
+import { type CallContext, mountAuthRoutes, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
 import {
 	type HandlerMap,
@@ -14,7 +14,8 @@ import {
 export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
- * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`). The REST routes and the MCP tools
+ * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
+ * `/.well-known/*`), REST and MCP. The REST routes and the MCP tools
  * come from the operation registry, with the handlers that the composition root passes in.
  */
 export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
@@ -25,6 +26,7 @@ export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
 	app.get("/healthz", (c) => c.json({ ok: true }, 200, { "cache-control": "no-store" }));
 	app.get("/api/v1/system/ping", (c) => c.json({ ok: true }));
 	mountAuthRoutes(app);
+	mountOAuthRoutes(app);
 	mountRestApi(app, handlers);
 	mountMcp(app, handlers);
 

@@ -47,6 +47,7 @@ export {
 	Thread,
 	ThreadSummary,
 } from "./mail.ts";
+export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {
 	COMMON_ERRORS,
 	defineOperation,

@@ -3,6 +3,7 @@ import mailDomainSchema from "../../migrations/0003_mail_domains.sql";
 import passwordSchema from "../../migrations/0004_password_sign_in.sql";
 import teamMailboxSchema from "../../migrations/0005_team_mailboxes.sql";
 import chatIndexSchema from "../../migrations/0006_chat_index.sql";
+import oauthSchema from "../../migrations/0007_oauth.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -69,6 +70,10 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// stays in storage, and no new account is a member of them.
 		"DROP TABLE IF EXISTS chat_members",
 		"DROP TABLE IF EXISTS chat_rooms",
+		// The OAuth connections act as the old principals. The clients go too: each must register again.
+		"DROP TABLE IF EXISTS oauth_grants",
+		"DROP TABLE IF EXISTS oauth_requests",
+		"DROP TABLE IF EXISTS oauth_clients",
 		"DROP TABLE IF EXISTS team_mailbox_members",
 		"DROP TABLE IF EXISTS team_mailboxes",
 		"DROP TABLE IF EXISTS sessions",
@@ -83,6 +88,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...passwordSchema.split("--> statement-breakpoint"),
 		...teamMailboxSchema.split("--> statement-breakpoint"),
 		...chatIndexSchema.split("--> statement-breakpoint"),
+		...oauthSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -100,4 +106,5 @@ const BUNDLED_MIGRATIONS = [
 	"0004_password_sign_in.sql",
 	"0005_team_mailboxes.sql",
 	"0006_chat_index.sql",
+	"0007_oauth.sql",
 ] as const;

@@ -11,6 +11,7 @@ import { AdminSidebar, defaultSection, isAdminOnly, sectionTitle } from "./Admin
 import { AgentPanel } from "./AgentPanel.tsx";
 import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
+import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
 import { PersonSignInCard } from "./PersonSignInCard.tsx";
 import { PrincipalTable } from "./PrincipalTable.tsx";
 import { TeamMailboxesCard } from "./TeamMailboxesCard.tsx";
@@ -135,8 +136,10 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 			case "agents":
 				return (
 					<div className="card">
+						<McpEndpointBanner />
 						<p className="muted">
-							Set who each agent can send mail to, and manage its API keys. An agent can never change its own policy.
+							Set who each agent can send mail to, and manage its connected apps and its API keys. An agent can never
+							change its own policy.
 						</p>
 						{agents.length === 0 && <p className="muted">There are no agents yet.</p>}
 						<div className="agent-list">

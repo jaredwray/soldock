@@ -85,7 +85,8 @@ export const whoami = defineOperation({
 	output: z.object({
 		principal: Principal,
 		scopes: z.array(z.string()),
-		credential: z.enum(["session", "api_key"]),
+		/** `oauth`: an access token that an MCP client got through OAuth. */
+		credential: z.enum(["session", "api_key", "oauth"]),
 		/** How a human signs in to the web app. Null for an agent, which never signs in. */
 		sign_in: z
 			.object({

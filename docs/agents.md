@@ -3,10 +3,60 @@
 > Status: **first draft**. It grows with each capability.
 
 An agent is a principal, like a person. It has its own address, its own mailbox, its own drive, its
-own rooms in Chat and its own API keys. A human **sponsor** is accountable for it. Agents use the same operations as the web app,
+own rooms in Chat, and its own OAuth connections and API keys. A human **sponsor** is accountable for it. Agents use the same operations as the web app,
 through MCP or REST.
 
-## Create an agent
+## Connect an agent with OAuth
+
+OAuth is the main way to add an agent. The agent needs only one URL.
+
+1. Copy the MCP endpoint from the banner in **Admin › Agents** (**Your agents** for a sponsor):
+   `https://<dock-host>/mcp`.
+2. Add the URL to the MCP client of the agent. For example, with Claude Code:
+
+   ```sh
+   claude mcp add --transport http soldock https://<dock-host>/mcp
+   ```
+
+3. The client opens Soldock in a browser. Sign in if necessary.
+4. The **Connect an agent** page shows the name of the app and the host that gets the access.
+   Approve only a connection that you started: the app gives its own name, and Soldock does not
+   check it.
+5. Select one of these:
+   - **A new agent** (owners and admins only): enter a name and an address on a mail domain. You
+     are the sponsor of the agent. It gets the `internal-only` outbound policy.
+   - **An agent that exists**: an agent that you sponsor, or any agent if you are an owner or an admin.
+6. Select the access (scopes) of the connection, then select **Approve and connect**. The scopes
+   that the app asked for show **Requested**. You can give fewer or more.
+
+The client then gets an access token for one hour and a refresh token. Each refresh gives a new
+refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
+the agent, with the scopes that you approved. The REST and MCP operations are
+`oauth.get_authorization`, `oauth.approve_authorization` and `oauth.deny_authorization`.
+
+The **Apps connected as …** list of each agent shows its connections. The sponsor, an owner or an
+admin can revoke a connection there (`oauth.list_grants`, `oauth.revoke_grant`). Its tokens stop at
+once.
+
+For client developers:
+
+- An unauthenticated call to `/mcp` gets `401` with
+  `WWW-Authenticate: Bearer resource_metadata="https://<dock-host>/.well-known/oauth-protected-resource/mcp"`.
+- The authorization server metadata is at `/.well-known/oauth-authorization-server`.
+- Register with dynamic client registration (`POST /oauth/register`). Each client is public: it gets
+  no secret, and it must use PKCE with `S256`.
+- A redirect URI can use `https:`, `http:` with a loopback host (`localhost`, `127.0.0.1`, `[::1]`),
+  or the scheme of an app, such as `cursor://`.
+- The scopes in `scope` are the agent scopes below. Soldock ignores other scopes, such as `openid`.
+- An error of `/oauth/authorize` shows a page to the person and does not redirect to the client.
+- Keep the newest refresh token after each refresh. The replaced token works one more time, for 60
+  seconds only. A later use of it revokes the connection.
+- Soldock deletes a registration that nobody used for 30 days. Register again when
+  `/oauth/authorize` shows that the app is not registered.
+
+## Connect an agent with an API key
+
+Use an API key for a client that cannot use OAuth.
 
 1. An owner or an admin opens **Admin › New person or agent** in the web app and creates an
    agent. The agent gets a display name, an address on a mail domain and a sponsor. The REST and
@@ -14,20 +64,21 @@ through MCP or REST.
 2. The result shows the agent's first API key once. Store it in the agent's secret store.
 3. The sponsor, an owner or an admin can create more keys for the agent, with fewer scopes, and
    revoke them (`account.create_api_key`, `account.revoke_api_key`).
+4. Send the key as a bearer token:
 
-An agent key can hold only `account.read`, `directory.read`, `mail.read`, `mail.modify`,
-`mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`. An agent can never manage keys, create principals or change its own policy.
+   ```sh
+   claude mcp add --transport http soldock https://<dock-host>/mcp --header "Authorization: Bearer sdk_..."
+   ```
 
-## Connect an MCP client
+An agent key or an OAuth connection can hold only `account.read`, `directory.read`, `mail.read`,
+`mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and
+`chat.write`. An agent can never manage keys or connections, create principals or change its own
+policy.
+
+## The MCP endpoint
 
 - URL: `https://<dock-host>/mcp` (Streamable HTTP, stateless, JSON responses)
-- Header: `Authorization: Bearer sdk_…`
-
-For example, with Claude Code:
-
-```sh
-claude mcp add --transport http soldock https://<dock-host>/mcp --header "Authorization: Bearer sdk_..."
-```
+- Header: `Authorization: Bearer <token>`, with an OAuth access token (`sdo_…`) or an API key (`sdk_…`)
 
 `tools/list` shows only the tools that the key can call. Each tool is one operation, named
 `<domain>_<verb>`: `mail_list_threads`, `mail_get_thread`, `mail_send`, `mail_modify_threads` and

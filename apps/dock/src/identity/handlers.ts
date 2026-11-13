@@ -1,6 +1,8 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
-import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
+import { AGENT_SCOPES, ALL_SCOPES, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
+import { type HandlerMap, OperationError } from "../platform/index.ts";
+import { auditOk, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
+import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
 import { confirmPassword } from "./signin.ts";
@@ -21,7 +23,6 @@ import {
 	pendingTotpSecret,
 	removeMailDomain,
 	revokeApiKey,
-	scopeCeiling,
 	setPassword,
 	setPendingTotpSecret,
 	unknownPrincipalIds,
@@ -57,47 +58,10 @@ type IdentityOperation =
 	| "directory.add_team_mailbox_member"
 	| "directory.remove_team_mailbox_member";
 
-function isAdmin(caller: AuthContext): boolean {
-	return caller.principal.org_role === "owner" || caller.principal.org_role === "admin";
-}
-
-/**
- * A human manages their own credentials (keys, password and two-step verification), the keys of the
- * agents that they sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
- * credentials, so an admin can never act as the owner.
- */
-function canManageCredentialsOf(caller: AuthContext, target: PrincipalRecord): boolean {
-	if (caller.kind !== "human") return false;
-	if (target.id === caller.principal.id) return true;
-	if (target.org_role === "owner") return false;
-	if (target.kind === "agent" && target.sponsor_id === caller.principal.id) return true;
-	return isAdmin(caller);
-}
-
 /** Only the sponsor of an agent, an owner or an admin can change the agent's policy. Never the agent. */
 function canChangePolicyOf(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human" || target.kind !== "agent") return false;
 	return target.sponsor_id === caller.principal.id || isAdmin(caller);
-}
-
-/**
- * The scopes for a new key. A key can never hold more than its principal kind allows, and never more
- * than the credential that creates it, so a narrow key cannot mint a wider one.
- */
-function grantableScopes(caller: AuthContext, target: PrincipalRecord, requested: readonly Scope[]): Scope[] {
-	const ceiling = new Set(scopeCeiling(target.kind));
-	const outside = requested.filter((scope) => !ceiling.has(scope));
-	if (outside.length > 0) {
-		throw new OperationError("invalid", `A key for an ${target.kind} cannot hold ${outside.join(", ")}.`);
-	}
-	const notHeld = requested.filter((scope) => !caller.scopes.has(scope));
-	if (notHeld.length > 0) {
-		throw new OperationError(
-			"forbidden",
-			`Your credential does not hold ${notHeld.join(", ")}, so it cannot grant it.`,
-		);
-	}
-	return [...new Set(requested)];
 }
 
 /**
@@ -144,19 +108,8 @@ function liveSession(call: CallContext): string | null {
 
 const SESSION_ENDED = "This session ended during the request. Sign in again.";
 
-function auditOk(call: CallContext, op: string, target: string): void {
-	audit({
-		op,
-		actor: call.caller.principal.id,
-		actorKind: call.caller.kind,
-		credential: call.caller.credential,
-		target,
-		result: "ok",
-		requestId: call.requestId,
-	});
-}
-
-export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> = {
+export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation | keyof typeof oauthHandlers> = {
+	...oauthHandlers,
 	async "directory.list_mail_domains"(call) {
 		if (!isAdmin(call.caller))
 			throw new OperationError("forbidden", "Only owners and admins can read mail domain settings.");
@@ -406,23 +359,4 @@ async function teamMailboxAfterChange(call: CallContext, mailboxId: string): Pro
 	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
 	if (!mailbox) throw new Error(`team mailbox ${mailboxId} missing after a member change`);
 	return mailbox;
-}
-
-/**
- * The principal whose credentials the call manages: the caller by default. Throws unless the caller may
- * manage them.
- */
-async function credentialOwner(call: CallContext, principalId: string | undefined): Promise<PrincipalRecord> {
-	const target =
-		principalId === undefined || principalId === call.caller.principal.id
-			? call.caller.principal
-			: await getPrincipal(call.env.DIRECTORY, principalId);
-	if (!target) throw new OperationError("not_found", "No principal has that id.");
-	if (!canManageCredentialsOf(call.caller, target)) {
-		throw new OperationError(
-			"forbidden",
-			"You can manage only your own credentials and the keys of agents that you sponsor.",
-		);
-	}
-	return target;
 }

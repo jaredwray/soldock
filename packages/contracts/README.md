@@ -16,6 +16,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/sheets.ts` | The Sheets operations, the cell schema, the error values and `SHEET_LIMITS` |
 | `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS` |
+| `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |

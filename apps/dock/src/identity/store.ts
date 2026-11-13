@@ -212,24 +212,52 @@ export interface NewApiKey {
 	created_by: string | null;
 }
 
+/** Options of `createPrincipal`. */
+export interface CreatePrincipalOptions {
+	/** Writes nothing when the directory already has a principal. First-run setup uses it. */
+	onlyIfEmpty?: boolean;
+	beforeCreate?: D1PreparedStatement[];
+	mailDomain?: string;
+	/**
+	 * One more condition of the principal insert, as SQL with `?` parameters. The transaction writes
+	 * nothing when it is false. An OAuth approval uses it, so an expired request creates no agent.
+	 */
+	condition?: { sql: string; params: unknown[] };
+	/** Statements after the inserts, in the same transaction. They get the id of the new principal. */
+	afterCreate?: (principalId: string) => D1PreparedStatement[];
+}
+
 /**
  * Creates a principal, its primary address and a first API key in one transaction. With
  * `onlyIfEmpty`, the transaction writes nothing when the directory already has a principal, so two
- * concurrent first-run setups cannot both create an owner. Returns null in that case.
+ * concurrent first-run setups cannot both create an owner. Returns null in that case. Without a key
+ * (`null`), the principal gets no API key: an agent that connects with OAuth gets tokens instead.
  */
 export async function createPrincipal(
 	db: D1Database,
 	principal: NewPrincipal,
+	key: null,
+	options?: CreatePrincipalOptions,
+): Promise<{ principal: PrincipalRecord; key: null; secret: null } | null>;
+export async function createPrincipal(
+	db: D1Database,
+	principal: NewPrincipal,
 	key: NewApiKey,
-	options: { onlyIfEmpty?: boolean; beforeCreate?: D1PreparedStatement[]; mailDomain?: string } = {},
-): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null> {
+	options?: CreatePrincipalOptions,
+): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null>;
+export async function createPrincipal(
+	db: D1Database,
+	principal: NewPrincipal,
+	key: NewApiKey | null,
+	options: CreatePrincipalOptions = {},
+): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord | null; secret: string | null } | null> {
 	const now = new Date().toISOString();
 	const id = newId("prn");
 	const keyId = newId("key");
-	const secret = `${API_KEY_PREFIX}${randomToken(32)}`;
-	const keyHash = await sha256Hex(secret);
+	const secret = key ? `${API_KEY_PREFIX}${randomToken(32)}` : null;
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
 	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
+	const condition = options.condition ? ` AND ${options.condition.sql}` : "";
 	try {
 		const beforeCreate = [...(options.beforeCreate ?? [])];
 		if (options.mailDomain) {
@@ -246,7 +274,7 @@ export async function createPrincipal(
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
 					password_hash, created_at)
-					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ? ${guard}`,
+					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ? ${guard}${condition}`,
 				)
 				.bind(
 					id,
@@ -257,18 +285,33 @@ export async function createPrincipal(
 					outboundMode,
 					principal.kind === "human" ? principal.password_hash : null,
 					now,
+					...(options.condition?.params ?? []),
 				),
 			db
 				.prepare(
 					"INSERT INTO addresses (address, principal_id, is_primary, created_at) SELECT ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)",
 				)
 				.bind(normalizeAddress(principal.address), id, now, id),
-			db
-				.prepare(
-					`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
-					SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
-				)
-				.bind(keyId, id, keyHash, key.label, JSON.stringify(key.scopes), key.created_by ?? id, now, id),
+			...(key && secret
+				? [
+						db
+							.prepare(
+								`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
+								SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)`,
+							)
+							.bind(
+								keyId,
+								id,
+								await sha256Hex(secret),
+								key.label,
+								JSON.stringify(key.scopes),
+								key.created_by ?? id,
+								now,
+								id,
+							),
+					]
+				: []),
+			...(options.afterCreate?.(id) ?? []),
 		]);
 		if (!results[beforeCreate.length]?.meta.changes) return null;
 	} catch (error) {
@@ -276,6 +319,7 @@ export async function createPrincipal(
 	}
 	const record = await getPrincipal(db, id);
 	if (!record) throw new Error(`principal ${id} missing after insert`);
+	if (!key || !secret) return { principal: record, key: null, secret: null };
 	return {
 		principal: record,
 		key: {

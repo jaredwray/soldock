@@ -30,6 +30,11 @@ The first flows to cover, because they are tested by hand only:
   as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
   under 768px (open, Escape, a link).
 
+- OAuth for agents: the MCP endpoint banner and its copy button, a client that registers and opens
+  `/oauth/authorize`, sign-in on the `/connect` page, a new agent with an address and scopes, an
+  agent that exists, Deny, an expired request, the code exchange, an MCP call with the token, and
+  Revoke in **Apps connected as …**.
+
 - Chat: a new public room and a new private room, a join from the list of the public rooms, a
   message with Enter and with Shift+Enter, a message from a second person that shows after a
   poll, the unread dot, a change and a delete of a message, a direct message with an agent, the
