@@ -100,6 +100,7 @@ const ROOM_LOADING: RoomState = {
 export function useRoom(roomId: string, listed: { version: number | null; tick: number }) {
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
 	const alive = useRef(true);
+	const loads = useRef(0);
 
 	const sync = useMemo(
 		() =>
@@ -115,11 +116,15 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	);
 
 	const load = useCallback(async () => {
+		// Two loads can run at the same time, for example after a reload. Only the last one applies, so
+		// an older answer never replaces newer messages or moves the version of the sync back.
+		const request = ++loads.current;
+		const current = () => alive.current && request === loads.current;
 		try {
 			const { room } = await api.call("chat.get_room", { room_id: roomId });
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
-			if (!alive.current) return;
+			if (!current()) return;
 			if (page) sync.start(page.version);
 			setState({
 				status: "ready",
@@ -130,7 +135,7 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 				error: null,
 			});
 		} catch (caught) {
-			if (alive.current) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
+			if (current()) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
 	}, [roomId, sync]);
 
