@@ -26,6 +26,10 @@ The first flows to cover, because they are tested by hand only:
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.
 
+- Admin: each section of the side navigation, a deep link to a section, `/admin` as an owner and
+  as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
+  under 768px (open, Escape, a link).
+
 - Chat: a new public room and a new private room, a join from the list of the public rooms, a
   message with Enter and with Shift+Enter, a message from a second person that shows after a
   poll, the unread dot, a change and a delete of a message, a direct message with an agent, the

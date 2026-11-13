@@ -18,6 +18,10 @@ export type DriveView =
 	| { kind: DriveList }
 	| { kind: "search"; query: string };
 
+/** The sections of the admin page. Each has one path under `/admin`. */
+export const ADMIN_SECTIONS = ["team", "new", "agents", "sign-in", "team-mailboxes", "domains"] as const;
+export type AdminSection = (typeof ADMIN_SECTIONS)[number];
+
 export type Route =
 	/** `mailboxId` is the id of a team mailbox, or null for the own mailbox of the person. */
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
@@ -27,7 +31,8 @@ export type Route =
 	| { page: "sheet"; spaceId: string; itemId: string }
 	/** Chat. `roomId` is null for the page without an open room. */
 	| { page: "chat"; roomId: string | null }
-	| { page: "admin" }
+	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
+	| { page: "admin"; section: AdminSection | null }
 	| { page: "settings" }
 	| { page: "redirect"; to: string }
 	| { page: "not-found" };
@@ -35,6 +40,7 @@ export type Route =
 export const INBOX_PATH = "/mail/inbox";
 export const DRIVE_PATH = "/drive";
 export const CHAT_PATH = "/chat";
+export const ADMIN_PATH = "/admin";
 
 /** The path part before the view. A team mailbox has its own paths: `/mail/team/<id>/inbox`. */
 function mailBase(mailboxId: string | null): string {
@@ -59,7 +65,8 @@ export function parseRoute(location: string): Route {
 	if (parts === null) return { page: "not-found" };
 	const [first, second, third, fourth] = parts;
 	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
-	if (first === "admin" && parts.length === 1) return { page: "admin" };
+	if (first === "admin" && parts.length === 1) return { page: "admin", section: null };
+	if (first === "admin" && parts.length === 2 && isAdminSection(second)) return { page: "admin", section: second };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
@@ -104,6 +111,10 @@ function isItemId(value: string | undefined): value is string {
 /** A room has an id that starts with `rm_`. A direct message has an id that starts with `dm_`. */
 function isRoomId(value: string | undefined): value is string {
 	return value?.startsWith("rm_") === true || value?.startsWith("dm_") === true;
+}
+
+function isAdminSection(value: string | undefined): value is AdminSection {
+	return (ADMIN_SECTIONS as readonly string[]).includes(value ?? "");
 }
 
 function isDriveList(value: string | undefined): value is DriveList {
@@ -159,6 +170,11 @@ export function itemPath(item: {
 		case "file":
 			return null;
 	}
+}
+
+/** The path of a section of the admin page. */
+export function adminPath(section: AdminSection): string {
+	return `${ADMIN_PATH}/${section}`;
 }
 
 /** The path of a room of Chat, or of the Chat page without an open room. */

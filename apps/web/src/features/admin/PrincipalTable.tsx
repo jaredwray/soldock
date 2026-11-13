@@ -9,8 +9,7 @@ export function PrincipalTable({ principals }: { principals: readonly Principal[
 		(a, b) => a.kind.localeCompare(b.kind) || a.display_name.localeCompare(b.display_name),
 	);
 	return (
-		<section className="card">
-			<h2 className="card-title">People and agents</h2>
+		<div className="card">
 			<div className="table-scroll">
 				<table className="table">
 					<caption className="visually-hidden">People and agents of the organization</caption>
@@ -42,6 +41,6 @@ export function PrincipalTable({ principals }: { principals: readonly Principal[
 					</tbody>
 				</table>
 			</div>
-		</section>
+		</div>
 	);
 }

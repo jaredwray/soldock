@@ -1938,7 +1938,7 @@ fieldset {
 	outline-color: #ffffff;
 }
 
-/* Admin and settings pages */
+/* Settings and the other pages with one column. Admin also uses the cards and the forms. */
 
 .page {
 	width: 100%;
@@ -1956,11 +1956,34 @@ fieldset {
 	outline: none;
 }
 
-.page-wide {
-	max-width: 1120px;
+/* Admin: the side navigation and one section at a time */
+
+.admin-layout {
+	display: grid;
+	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+	min-height: 0;
 }
 
-.page > h1 {
+/* Relative, so that the visually hidden captions stay inside the scroll area and the document does not scroll. */
+.admin-main {
+	position: relative;
+	min-width: 0;
+	min-height: 0;
+	padding: 8px 16px 48px;
+	overflow-y: auto;
+}
+
+.admin-main:focus {
+	outline: none;
+}
+
+.admin-content {
+	max-width: 1040px;
+	margin: 0 auto;
+}
+
+.page > h1,
+.admin-content > h1 {
 	margin: 12px 0 20px;
 	font-size: 26px;
 	font-weight: 500;
@@ -1999,7 +2022,7 @@ fieldset {
 	font-weight: 600;
 }
 
-h3.card-title {
+.card .card .card-title {
 	font-size: 15px;
 }
 
@@ -2234,7 +2257,8 @@ h3.card-title {
 		left: 14px;
 	}
 
-	.mail-layout {
+	.mail-layout,
+	.admin-layout {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
@@ -2414,7 +2438,8 @@ h3.card-title {
 		padding: 16px;
 	}
 
-	.page > h1 {
+	.page > h1,
+	.admin-content > h1 {
 		font-size: 22px;
 	}
 }

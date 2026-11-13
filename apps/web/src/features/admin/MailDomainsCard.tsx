@@ -56,8 +56,7 @@ export function MailDomainsCard() {
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Admin settings: email domains</h2>
+		<div className="card">
 			<p className="muted">
 				Manage the domains for your email addresses. Changes take effect without a new deployment.
 			</p>
@@ -149,6 +148,6 @@ export function MailDomainsCard() {
 					<p>Remove {remove} from Soldock? Cloudflare and DNS records stay in place.</p>
 				</ConfirmDialog>
 			)}
-		</section>
+		</div>
 	);
 }

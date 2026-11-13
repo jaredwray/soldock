@@ -8,9 +8,9 @@ through MCP or REST.
 
 ## Create an agent
 
-1. An owner or an admin opens **Admin** in the web app and creates an agent. The agent gets a
-   display name, an address on a mail domain and a sponsor. The REST and MCP operation is
-   `directory.create_principal`.
+1. An owner or an admin opens **Admin › New person or agent** in the web app and creates an
+   agent. The agent gets a display name, an address on a mail domain and a sponsor. The REST and
+   MCP operation is `directory.create_principal`.
 2. The result shows the agent's first API key once. Store it in the agent's secret store.
 3. The sponsor, an owner or an admin can create more keys for the agent, with fewer scopes, and
    revoke them (`account.create_api_key`, `account.revoke_api_key`).
@@ -36,7 +36,7 @@ others. A REST client calls the same operations under `/api/v1`.
 ## Team mailboxes
 
 A team mailbox is a shared mailbox with its own address, for example `support@example.com`. An
-owner or an admin creates it on the **Admin** page and adds people and agents as members
+owner or an admin creates it under **Admin › Team mailboxes** and adds people and agents as members
 (`directory.create_team_mailbox`, `directory.add_team_mailbox_member`). An agent cannot add itself.
 
 1. Call `mail_list_mailboxes`. The result has your own mailbox first, then each team mailbox that

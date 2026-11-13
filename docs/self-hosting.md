@@ -135,7 +135,7 @@ The Email Routing rule is a dashboard step. The wrangler `addresses` key can mak
 top-level only and applies to each environment. So it cannot hold a rule for one environment.
 
 1. Choose a domain you own for email. Enter it during first-run setup below.
-   The directory database stores mail domains. Owners and admins manage them under **Admin settings: email domains**.
+   The directory database stores mail domains. Owners and admins manage them under **Admin › Email domains**.
    Changes need no environment variable or new deployment. Mail between addresses on saved domains stays inside Soldock.
 2. Receive: in the dashboard, open the mail zone, then **Email › Email Routing**.
    - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
@@ -166,7 +166,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
       the code. You can also do this later in **Settings**, or select **Skip for now**.
    6. Delete the `SETUP_TOKEN` secret.
-   7. Create people and agents on the **Admin** page. Each person needs a first password. Give it to
+   7. Create people and agents under **Admin › New person or agent**. Each person needs a first password. Give it to
       the person, who can change it in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
@@ -193,7 +193,7 @@ That is expected: they leave through Email Service, not through a routing rule.
 
 ### Manage email domains
 
-Open **Admin** and use **Admin settings: email domains** to add or remove domains.
+Open **Admin › Email domains** to add or remove domains.
 A domain with mailbox addresses cannot be removed.
 Configure Email Routing, Email Service, and DNS for each added domain as described above.
 The saved list does not confirm that mail delivery is ready.
