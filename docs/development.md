@@ -15,6 +15,9 @@ pnpm --filter @soldock/dock migrate:local    # the D1 migrations, into the local
 pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
 ```
 
+Run `pnpm build` again after you pull or change `apps/web` or `packages/contracts`. Otherwise
+`wrangler dev` serves an old SPA, and the page can say "This page and the server are different versions".
+
 Pass the setup token with `--var`, not in `.dev.vars`: `wrangler types` reads `.dev.vars`, and
 `pnpm types:check` then fails. The token must have at least 32 characters, or setup stays off.
 
