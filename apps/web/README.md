@@ -133,8 +133,8 @@ MCP clients. The app has no UI-only path.
   - The page loads the directory one time. The directory stays when the section changes. Each
     section starts at its top.
   - Under 768px, the navigation is a drawer behind the menu button in the top bar, as in Mail and Drive.
-  - **People and agents** (`people`) shows the directory: the kind, the name, the address, the role,
-    the sponsor and the agent policy of each principal.
+  - **Team** (`team`) shows the directory: the kind, the name, the address, the role, the sponsor
+    and the agent policy of each person and agent.
   - **New person or agent** (`new`). The first API key of a new principal shows once, with a copy button.
     A credential cannot grant a scope that it does not hold.
     The form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`.
@@ -330,7 +330,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `people`, `new`, `agents`, `sign-in`, `team-mailboxes` or `domains` |
+| `/admin/<section>` | One section of Admin: `team`, `new`, `agents`, `sign-in`, `team-mailboxes` or `domains` |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
 | `/drive/shared`, `/drive/recent`, `/drive/starred`, `/drive/trash` | The other views of Drive |

@@ -6,7 +6,7 @@ import { ADMIN_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
 const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly: boolean }> = {
-	people: { title: "People and agents", icon: "team", adminOnly: true },
+	team: { title: "Team", icon: "team", adminOnly: true },
 	new: { title: "New person or agent", icon: "plus", adminOnly: true },
 	agents: { title: "Agents", icon: "bot", adminOnly: false },
 	"sign-in": { title: "Help a person sign in", icon: "lock", adminOnly: true },
@@ -25,7 +25,7 @@ export function isAdminOnly(section: AdminSection): boolean {
 
 /** The first section that the person can use. `/admin` shows it. */
 export function defaultSection(elevated: boolean): AdminSection {
-	return elevated ? "people" : "agents";
+	return elevated ? "team" : "agents";
 }
 
 interface AdminSidebarProps {

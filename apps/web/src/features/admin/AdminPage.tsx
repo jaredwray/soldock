@@ -119,7 +119,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 			);
 		}
 		switch (section) {
-			case "people":
+			case "team":
 				return <PrincipalTable principals={principals} />;
 			case "new":
 				return (

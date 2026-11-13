@@ -19,7 +19,7 @@ export type DriveView =
 	| { kind: "search"; query: string };
 
 /** The sections of the admin page. Each has one path under `/admin`. */
-export const ADMIN_SECTIONS = ["people", "new", "agents", "sign-in", "team-mailboxes", "domains"] as const;
+export const ADMIN_SECTIONS = ["team", "new", "agents", "sign-in", "team-mailboxes", "domains"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =

@@ -130,7 +130,7 @@ describe("routes", () => {
 			`/docs/${SPACE}/${ITEM}/extra`,
 			`/sheets/${ITEM}/${SPACE}`,
 			"/admin/extra",
-			"/admin/people/extra",
+			"/admin/team/extra",
 			"/mail/outbox",
 			"/mail/label",
 			"/mail/inbox/thr_1/extra",
