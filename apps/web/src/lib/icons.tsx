@@ -68,6 +68,9 @@ const PATHS = {
 	chevronRight: "M9 6l6 6-6 6",
 	eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6z",
 	codeBlock: "M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM10 9l-3 3 3 3M14 9l3 3-3 3",
+	chat: "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM8 9h8M8 13h5",
+	hash: "M9 4L7 20M17 4l-2 16M4 9h17M3 15h17",
+	lock: "M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1zM8 11V7a4 4 0 0 1 8 0v4",
 } as const;
 
 export type IconName = keyof typeof PATHS;

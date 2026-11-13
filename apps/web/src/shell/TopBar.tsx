@@ -2,7 +2,7 @@ import { type FormEvent, useState } from "react";
 import { Icon } from "../lib/icons.tsx";
 import { Link, navigate } from "../lib/router.tsx";
 import { useOnChange } from "../lib/useOnChange.ts";
-import { DRIVE_PATH, drivePath, INBOX_PATH, type Route, viewPath } from "../routes.ts";
+import { CHAT_PATH, DRIVE_PATH, drivePath, INBOX_PATH, type Route, viewPath } from "../routes.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 
 /** The element id of the search box. The `/` shortcut moves the focus to it. */
@@ -14,17 +14,20 @@ export const MENU_BUTTON_ID = "app-menu-button";
 /** The element ids of the navigation drawers. The menu button controls the drawer of the current product. */
 export const MAIL_NAV_ID = "mail-nav";
 export const DRIVE_NAV_ID = "drive-nav";
+export const CHAT_NAV_ID = "chat-nav";
 
 /** The products of Soldock. A doc and a sheet are part of Drive. */
-export type Product = "mail" | "drive";
+export type Product = "mail" | "drive" | "chat";
 
 export function productOf(route: Route): Product {
+	if (route.page === "chat") return "chat";
 	return route.page === "drive" || route.page === "doc" || route.page === "sheet" ? "drive" : "mail";
 }
 
 const PRODUCTS = [
-	{ product: "mail", name: "Mail", icon: "mail", home: INBOX_PATH },
-	{ product: "drive", name: "Drive", icon: "drive", home: DRIVE_PATH },
+	{ product: "mail", name: "Mail", icon: "mail", home: INBOX_PATH, label: "Soldock Mail, go to the inbox" },
+	{ product: "drive", name: "Drive", icon: "drive", home: DRIVE_PATH, label: "Soldock Drive, go to your drive" },
+	{ product: "chat", name: "Chat", icon: "chat", home: CHAT_PATH, label: "Soldock Chat, go to your rooms" },
 ] as const;
 
 interface TopBarProps {
@@ -37,7 +40,14 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 	const product = productOf(route);
 	const current = PRODUCTS.find((entry) => entry.product === product) ?? PRODUCTS[0];
 	// Only the pages with a navigation drawer get the menu button.
-	const navId = route.page === "mail" ? MAIL_NAV_ID : route.page === "drive" ? DRIVE_NAV_ID : null;
+	const navId =
+		route.page === "mail"
+			? MAIL_NAV_ID
+			: route.page === "drive"
+				? DRIVE_NAV_ID
+				: route.page === "chat"
+					? CHAT_NAV_ID
+					: null;
 	return (
 		<header className="topbar">
 			{navId && (
@@ -53,17 +63,14 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 					<Icon name="menu" />
 				</button>
 			)}
-			<Link
-				to={current.home}
-				className="brand"
-				aria-label={product === "drive" ? "Soldock Drive, go to your drive" : "Soldock Mail, go to the inbox"}
-			>
+			<Link to={current.home} className="brand" aria-label={current.label}>
 				<span className="brand-mark" aria-hidden="true">
 					<Icon name={current.icon} size={18} />
 				</span>
 				<span className="brand-name">Soldock</span>
 			</Link>
-			<SearchBox route={route} product={product} />
+			{/* Chat has no search yet. The empty element keeps the products at the right. */}
+			{product === "chat" ? <div className="search" /> : <SearchBox route={route} product={product} />}
 			<nav className="product-nav" aria-label="Products">
 				{PRODUCTS.map((entry) => (
 					<Link
@@ -84,7 +91,7 @@ export function TopBar({ route, navOpen, onToggleNav }: TopBarProps) {
 }
 
 /** The search box of the current product: mail in Mail, and items in Drive. */
-function SearchBox({ route, product }: { route: Route; product: Product }) {
+function SearchBox({ route, product }: { route: Route; product: Exclude<Product, "chat"> }) {
 	const current =
 		(route.page === "mail" || route.page === "drive") && route.view.kind === "search" ? route.view.query : "";
 	const [value, setValue] = useState(current);

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { type DriveView, drivePath, itemPath, type MailView, parseRoute, threadPath, viewPath } from "../src/routes.ts";
+import {
+	chatPath,
+	type DriveView,
+	drivePath,
+	itemPath,
+	type MailView,
+	parseRoute,
+	threadPath,
+	viewPath,
+} from "../src/routes.ts";
 
 const VIEWS: readonly MailView[] = [
 	{ kind: "system", view: "inbox" },
@@ -83,6 +92,17 @@ describe("routes", () => {
 			itemId: ITEM,
 		});
 		expect(itemPath({ ...item, kind: "file" })).toBeNull();
+	});
+
+	// A room and a direct message have different id prefixes. The two are rooms of Chat.
+	it("parses the path of Chat and of each room back to that room", () => {
+		expect(parseRoute(chatPath())).toEqual({ page: "chat", roomId: null });
+		for (const roomId of ["rm_01JD0000000000000000000000", "dm_01JD0000000000000000000000"]) {
+			expect(parseRoute(chatPath(roomId))).toEqual({ page: "chat", roomId });
+		}
+		for (const path of ["/chat/itm_01JD0000000000000000000000", "/chat/rm_1/extra"]) {
+			expect(parseRoute(path), path).toEqual({ page: "not-found" });
+		}
 	});
 
 	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {

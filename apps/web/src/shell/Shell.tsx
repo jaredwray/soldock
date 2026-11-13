@@ -10,7 +10,8 @@ import { useOnChange } from "../lib/useOnChange.ts";
 import { INBOX_PATH, parseRoute } from "../routes.ts";
 import { TopBar } from "./TopBar.tsx";
 
-// Drive and its editors are separate chunks. A person who uses only Mail does not load them.
+// Drive, its editors and Chat are separate chunks. A person who uses only Mail does not load them.
+const ChatApp = lazyPage(() => import("../features/chat/ChatApp.tsx").then((module) => module.ChatApp));
 const DriveApp = lazyPage(() => import("../features/drive/DriveApp.tsx").then((module) => module.DriveApp));
 const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((module) => module.DocPage));
 const SheetPage = lazyPage(() => import("../features/sheets/SheetPage.tsx").then((module) => module.SheetPage));
@@ -69,6 +70,8 @@ export function Shell() {
 				return <DocPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;
 			case "sheet":
 				return <SheetPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;
+			case "chat":
+				return <ChatApp roomId={route.roomId} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "admin":
 				return <AdminPage />;
 			case "settings":

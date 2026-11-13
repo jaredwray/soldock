@@ -25,6 +25,8 @@ export type Route =
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
 	| { page: "sheet"; spaceId: string; itemId: string }
+	/** Chat. `roomId` is null for the page without an open room. */
+	| { page: "chat"; roomId: string | null }
 	| { page: "admin" }
 	| { page: "settings" }
 	| { page: "redirect"; to: string }
@@ -32,6 +34,7 @@ export type Route =
 
 export const INBOX_PATH = "/mail/inbox";
 export const DRIVE_PATH = "/drive";
+export const CHAT_PATH = "/chat";
 
 /** The path part before the view. A team mailbox has its own paths: `/mail/team/<id>/inbox`. */
 function mailBase(mailboxId: string | null): string {
@@ -59,6 +62,10 @@ export function parseRoute(location: string): Route {
 	if (first === "admin" && parts.length === 1) return { page: "admin" };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
+	if (first === "chat") {
+		if (parts.length === 1) return { page: "chat", roomId: null };
+		return parts.length === 2 && isRoomId(second) ? { page: "chat", roomId: second } : { page: "not-found" };
+	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
 	}
@@ -92,6 +99,11 @@ function isSpaceId(value: string | undefined): value is string {
 
 function isItemId(value: string | undefined): value is string {
 	return value?.startsWith("itm_") === true;
+}
+
+/** A room has an id that starts with `rm_`. A direct message has an id that starts with `dm_`. */
+function isRoomId(value: string | undefined): value is string {
+	return value?.startsWith("rm_") === true || value?.startsWith("dm_") === true;
 }
 
 function isDriveList(value: string | undefined): value is DriveList {
@@ -147,6 +159,11 @@ export function itemPath(item: {
 		case "file":
 			return null;
 	}
+}
+
+/** The path of a room of Chat, or of the Chat page without an open room. */
+export function chatPath(roomId: string | null = null): string {
+	return roomId ? `${CHAT_PATH}/${encodeURIComponent(roomId)}` : CHAT_PATH;
 }
 
 /** The path of the thread list of a view, in the own mailbox or in a team mailbox. */
