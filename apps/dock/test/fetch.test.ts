@@ -61,8 +61,8 @@ describe("unknown Worker paths", () => {
 	it.each([
 		"/api/v1/nope",
 		"/api/v2/system/ping",
-		"/oauth/authorize",
-		"/.well-known/oauth-authorization-server",
+		"/oauth/nope",
+		"/.well-known/nope",
 		"/auth/sign-in",
 		"/ws/events",
 		"/blob/upload",

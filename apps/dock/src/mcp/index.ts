@@ -2,7 +2,7 @@
 import { type Operation, type OperationName, operationList, toolName, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
-import { type AuthContext, authenticate, type CallContext } from "../identity/index.ts";
+import { type AuthContext, authenticate, type CallContext, protectedResourceMetadataUrl } from "../identity/index.ts";
 import {
 	type HandlerMap,
 	invokeOperation,
@@ -113,8 +113,8 @@ async function callTool(call: CallContext, handlers: HandlerMap<CallContext>, pa
 }
 
 /**
- * Mounts the MCP endpoint: Streamable HTTP, stateless, with JSON responses. It accepts API keys
- * only, never the session cookie, so a web page cannot drive it with a person's session.
+ * Mounts the MCP endpoint: Streamable HTTP, stateless, with JSON responses. It accepts OAuth access
+ * tokens and API keys only, never the session cookie, so a web page cannot drive it with a person's session.
  */
 export function mountMcp(app: Hono<McpEnv>, handlers: HandlerMap<CallContext>): void {
 	app.on(["GET", "DELETE"], "/mcp", (c) => {
@@ -142,11 +142,16 @@ export function mountMcp(app: Hono<McpEnv>, handlers: HandlerMap<CallContext>): 
 		const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
 		const caller = await authenticate(c.req.raw, c.env, waitUntil, { allowSession: false });
 		if (!caller) {
-			const response = new OperationError("unauthenticated", "Send an API key as a bearer token.").toResponse({
-				requestId: c.var.requestId,
-				instance: "/mcp",
-			});
-			response.headers.set("www-authenticate", 'Bearer realm="soldock"');
+			const response = new OperationError(
+				"unauthenticated",
+				"Send an OAuth access token or an API key as a bearer token.",
+			).toResponse({ requestId: c.var.requestId, instance: "/mcp" });
+			// The metadata URL starts OAuth discovery (RFC 9728). invalid_token tells a client with an old token to refresh.
+			const tokenError = c.req.header("authorization") === undefined ? "" : ', error="invalid_token"';
+			response.headers.set(
+				"www-authenticate",
+				`Bearer realm="soldock", resource_metadata="${protectedResourceMetadataUrl(c.req.url)}"${tokenError}`,
+			);
 			return response;
 		}
 		const version = c.req.header("mcp-protocol-version");

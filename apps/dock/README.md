@@ -2,7 +2,7 @@
 
 > Status: **started**. Domain modules live in [`src/`](src/), workerd integration tests in
 > [`test/`](test/), and D1 migrations in [`migrations/`](migrations/). Mail, Drive (with Docs and
-> Sheets), Chat, identity, REST and MCP have their first layer.
+> Sheets), Chat, identity (with OAuth for agents), REST and MCP have their first layer.
 
 The entire backend as one deployable Worker (modular monolith): `fetch`, `email`, `queue` and `scheduled` handlers, every Durable Object and Workflow class, serving the SPA, REST, MCP, OAuth, WebSockets and file transfer from one origin.
 
@@ -14,9 +14,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers, and the Durable Object classes `MailboxDO`, `DriveSpaceDO`, `DocumentDO` and `ChatRoomDO` |
 | [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
-| [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, the REST routes and `/mcp` |
+| [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, `/oauth/*` and `/.well-known/*`, the REST routes and `/mcp` |
 | [`src/platform/`](src/platform/) | Cross-cutting runtime services: HTTP plumbing, ids, crypto, logs, the operation invoker |
-| [`src/identity/`](src/identity/) | Directory, API keys, sessions, first-run setup, account and directory operations |
+| [`src/identity/`](src/identity/) | Directory, API keys, sessions, first-run setup, the OAuth server for agents, account, directory and OAuth operations |
 | [`src/api/`](src/api/), [`src/mcp/`](src/mcp/) | The REST and MCP adapters, generated from `@soldock/contracts` |
 | [`src/mail/`](src/mail/) | Mail: inbound pipeline, `MailboxDO`, search, sanitizer, MIME, outbound |
 | [`src/drive/`](src/drive/) | Drive: `DriveSpaceDO` (items, versions, grants, trash, search, stars), uploads and downloads through R2 |
@@ -36,7 +36,12 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
-- `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)).
+- `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)). Its `401` names
+  the OAuth metadata.
+- `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server`,
+  `/oauth/register`, `/oauth/authorize` and `/oauth/token`: the OAuth server for MCP clients. A
+  person approves a client on the `/connect/<id>` page of the SPA
+  ([`src/identity/`](src/identity/README.md#oauth-for-agents)).
 - `/auth/setup` (`GET` status, `POST` setup), `/auth/setup/verify`, `/auth/session`, `/auth/sign-out`:
   first-run setup and browser sign-in with the address, the password and an optional TOTP code
   ([`src/identity/`](src/identity/)).
@@ -50,7 +55,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, mail domains, and the room index of Chat |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, and the room index of Chat |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
@@ -90,7 +95,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains, team mailboxes and their members) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains, team mailboxes and their members, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<mailbox id>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |

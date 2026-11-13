@@ -1,7 +1,7 @@
 # `identity` module
 
-> Status: **started**. The directory, team mailboxes, API keys, sign-in with a password and optional two-step
-> verification (TOTP), browser sessions for humans and first-run setup exist. Passkeys, OAuth, groups and the audit log in R2 are not built
+> Status: **started**. The directory, team mailboxes, API keys, OAuth for agents, sign-in with a password and optional two-step
+> verification (TOTP), browser sessions for humans and first-run setup exist. Passkeys, delegated OAuth tokens for humans, groups and the audit log in R2 are not built
 > yet. Keep this README current as the module grows. It is the module's contract.
 
 | | |
@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and the refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -77,6 +77,9 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 | API key `sdk_<43 base64url characters>` | Humans and agents | `Authorization: Bearer` on `/api/v1` and `/mcp`. Only the SHA-256 is stored |
 | Password (12 to 128 characters) | Humans only | `POST /auth/session`. Only a PBKDF2-HMAC-SHA256 hash is stored: 100,000 iterations (the most that workerd allows), a 16-byte random salt, NFKC normalization. The stored form names the scheme and the iterations, so a later version can raise the work |
 | TOTP code (6 digits, 30 seconds, HMAC-SHA1, RFC 6238) | Humans who turned it on | `POST /auth/session`, with the password. A code from one step before or after the current step also works. Each code works one time (`totp_last_step`) |
+| OAuth access token `sdo_<43 base64url characters>` | Agents, through an MCP client | `Authorization: Bearer` on `/api/v1` and `/mcp`. It works for one hour. Only the SHA-256 is stored |
+| OAuth refresh token `sdr_<43 base64url characters>` | MCP clients | `POST /oauth/token`. It works for 30 days, and each refresh gives a new one. Only the SHA-256 is stored |
+| Authorization code `sdc_<43 base64url characters>` | MCP clients | `POST /oauth/token`, with the PKCE verifier. It works one time, for 60 seconds. Only the SHA-256 is stored |
 | Session cookie `__Host-soldock_session` | Humans only | The web app. `Secure`, `HttpOnly`, `SameSite=Lax`, 30 days. It holds every human scope. Only the SHA-256 is stored |
 | `SETUP_TOKEN` Worker secret | The operator | `/auth/setup` only: `POST` checks it, and `GET` reports its state, never its value. At least 32 characters (`SETUP_TOKEN_MIN_LENGTH`), or setup stays off. Delete it after setup |
 
@@ -105,9 +108,9 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 - The schemas of these routes are in `@soldock/contracts` (`SetupStatus`, `SetupVerifyResult`,
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
-  addresses, keys, sessions, and passwords. It recreates the schema from the bundled migrations
-  (`0001`, `0003`, `0004` and `0005`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0005` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
+  (`0001`, then `0003` to `0007`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0007` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
@@ -157,6 +160,77 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 - The sign-in route needs an `Origin` header of this origin, or it gets `403`.
 - The bodies of `/auth/*` requests can be at most 4 KiB. A larger body gets `413` while it streams.
 - `POST /auth/sign-out`: deletes the session.
+
+## OAuth for agents
+
+An MCP client gets only the URL of `/mcp`. It registers itself, a person approves it for an agent,
+and it gets tokens that act as that agent. The code is in `oauth-routes.ts` (the ceremonies),
+`oauth-handlers.ts` (the operations) and `oauth-store.ts` (D1). It follows OAuth 2.1 with PKCE,
+RFC 8414 (server metadata), RFC 7591 (registration), RFC 9728 (resource metadata) and RFC 8707
+(`resource`).
+
+These routes are ceremonies, not operations, because the client has no credential yet:
+
+- `GET /.well-known/oauth-protected-resource/mcp`: the metadata of `/mcp`. The `401` of `/mcp` names
+  it in `WWW-Authenticate` (`resource_metadata`). A `401` for a token that is not valid also has
+  `error="invalid_token"`, so the client refreshes. `GET /.well-known/oauth-protected-resource` is the
+  same document for the origin.
+- `GET /.well-known/oauth-authorization-server`: the server metadata. The issuer is the origin.
+- `POST /oauth/register`: registration without a credential. Each client is public: it gets no
+  secret and must use PKCE. Soldock replaces other values of `token_endpoint_auth_method`,
+  `grant_types` and `response_types`, as RFC 7591 allows.
+  - A client has 1 to 5 redirect URIs (`OAUTH_LIMITS.redirectUris`), each at most 2,000 characters.
+  - A redirect URI uses `https:`, `http:` with a loopback host, or the scheme of a native app. Soldock
+    refuses `javascript:`, `data:`, `file:` and other schemes that can run code or read files. The web
+    app sends the browser to the redirect URI, so a refused scheme cannot run code on this origin.
+  - A redirect URI cannot have a fragment, a user name or a password.
+  - Anybody can register. So each registration deletes the registrations older than one day that
+    have no request and no grant. The client name is cut to 100 characters, without control
+    characters. The approval page says that Soldock does not check it.
+- `GET /oauth/authorize`: checks the client and the exact redirect URI first. An unknown client or
+  redirect URI gets a `400` text page, and no redirect. Other errors go to the redirect URI with the
+  `state` of the client: a `response_type` other than `code`, no `S256` PKCE challenge, a `state` of
+  more than 1,000 characters, or a `resource` that is not this origin or its `/mcp`. A valid request
+  is kept for 10 minutes (`OAUTH_LIMITS.requestSeconds`), and the browser goes to `/connect/<id>`
+  in the web app. Each new request deletes the expired requests. Only the agent scopes of `scope`
+  are kept.
+- `POST /oauth/token` (`application/x-www-form-urlencoded`), with the OAuth error format:
+  - `authorization_code`: the code, its PKCE verifier, the `client_id` and the `redirect_uri` of the
+    request. The code works one time, for 60 seconds. A second use fails and revokes the grant of the
+    first use (RFC 9700). The result has an access token for one hour, a refresh token, and the
+    granted `scope`.
+  - `refresh_token`: the refresh token and its `client_id`. A refresh gives a new access token and a
+    new refresh token for 30 more days. The old access token stops. The refresh token that the client
+    sent also stays valid until the client uses the new one, so a lost response does not end the
+    connection. At most two refresh tokens of a grant work at the same time.
+
+The approval is a set of operations, so the web app, REST and MCP share it. Each one is for humans
+with `account.keys`.
+
+- `oauth.get_authorization` returns a request while it waits: the client, the redirect URI and its
+  host, and the requested scopes.
+- `oauth.approve_authorization` takes `new_agent` (a name and an address) or `agent_id`, and the
+  scopes. It returns `redirect_to`, the redirect URI with the code and the `state`.
+  - A new agent follows the rules of `directory.create_principal`: owners and admins only, with
+    `directory.write`, and an address on a saved mail domain. The approver is the sponsor. The agent
+    gets the `internal-only` policy and no API key. The insert of the agent and the approval share
+    one transaction, and the insert runs only while the request waits. So an expired or decided
+    request creates no agent.
+  - An agent that exists follows the rules of API keys: its sponsor, an owner or an admin.
+  - The scopes must be agent scopes that the credential of the approver holds (`grantableScopes`).
+- `oauth.deny_authorization` returns `redirect_to` with `error=access_denied` and the `state`.
+- `oauth.list_grants` and `oauth.revoke_grant` follow the rules of `account.list_api_keys` and
+  `account.revoke_api_key`. A revoke stops the access token and the refresh tokens at once.
+
+Each approval, denial, revoke, registration and token issue writes an audit line.
+
+Known limits:
+
+- Registration has no rate limit. The cleanup of unused registrations limits the stored rows.
+- Client ID metadata documents (an HTTPS URL as `client_id`) are not supported yet. Clients use
+  registration.
+- The tokens are not bound to a resource: they work on `/api/v1` and on `/mcp`, as API keys do.
+- The `/mcp` endpoint refuses browser origins, so a browser-based MCP client cannot use it.
 
 ## Two-step verification
 
@@ -235,10 +309,12 @@ Each call passes three checks:
    to mail that the agent sends from a team mailbox.
 
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
-alone does not stop each cross-site request. `/mcp` accepts API keys only.
+alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.
 
+An OAuth access token acts as an agent, with the scopes of its grant, never more than the agent
+ceiling. An agent cannot call the `oauth.*` operations, so it cannot approve a connection for itself.
 Delegated tokens (OAuth for MCP clients that act for a human) do not exist yet. Until then, a
-narrow API key is the way to give a client less than the full access of its principal.
+narrow API key is the way to give a client less than the full access of a person.
 
 Not built yet: recovery codes for two-step verification, a notice to the person when an admin
 changes their sign-in, "sign out everywhere" without a new password, a sign-in limit by client

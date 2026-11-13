@@ -110,6 +110,10 @@ describe("routes", () => {
 		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/admin")).toEqual({ page: "admin" });
 		expect(parseRoute("/settings")).toEqual({ page: "settings" });
+		expect(parseRoute("/connect/oar_01JD0000000000000000000000")).toEqual({
+			page: "connect",
+			requestId: "oar_01JD0000000000000000000000",
+		});
 		for (const path of [
 			"/drive/outbox",
 			"/drive/trash/extra",
@@ -121,6 +125,8 @@ describe("routes", () => {
 			`/docs/${SPACE}/${ITEM}/extra`,
 			`/sheets/${ITEM}/${SPACE}`,
 			"/admin/extra",
+			"/connect",
+			"/connect/thr_01JD0000000000000000000000",
 			"/mail/outbox",
 			"/mail/label",
 			"/mail/inbox/thr_1/extra",

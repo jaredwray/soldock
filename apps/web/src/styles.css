@@ -2114,6 +2114,47 @@ h3.card-title {
 	margin-top: 20px;
 }
 
+/* The full URL of the MCP endpoint, at the top of the Agents section and in the agent form. */
+.mcp-banner {
+	margin: 0 0 16px;
+	padding: 12px 16px;
+	border: 1px solid var(--accent);
+	border-radius: var(--radius);
+	background: var(--accent-soft);
+}
+
+.mcp-banner-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+	font-weight: 600;
+}
+
+.mcp-banner-url {
+	flex: 1;
+	min-width: 0;
+}
+
+.mcp-banner .field-hint:empty {
+	display: none;
+}
+
+/* The OAuth approval page (/connect). */
+.connect-host {
+	overflow-wrap: anywhere;
+}
+
+.connect-requested {
+	margin-left: 8px;
+}
+
+.connect-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
 .agent-list {
 	display: flex;
 	flex-direction: column;

@@ -5,6 +5,7 @@ import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
 import { driveOperations } from "./drive.ts";
 import { mailOperations } from "./mail.ts";
+import { oauthOperations } from "./oauth.ts";
 import type { Operation } from "./operation.ts";
 import { sheetsOperations } from "./sheets.ts";
 import { teamMailboxOperations } from "./team-mailboxes.ts";
@@ -19,6 +20,7 @@ export const operations = {
 	...docsOperations,
 	...sheetsOperations,
 	...chatOperations,
+	...oauthOperations,
 } as const;
 
 export type Operations = typeof operations;

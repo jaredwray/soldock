@@ -1,6 +1,6 @@
 # `web` — the SPA
 
-> Status: **started**. Mail, Drive, Docs, Sheets, Chat, admin and settings exist. Slides and Meet are planned.
+> Status: **started**. Mail, Drive, Docs, Sheets, Chat, admin, settings and the OAuth approval page exist. Slides and Meet are planned.
 
 The web app is a React 19 single-page app that Vite builds. The `dock` Worker serves the build
 (`dist/`) as static assets on the dock host. The app makes each call through the typed client from
@@ -134,8 +134,12 @@ MCP clients. The app has no UI-only path.
     The form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`.
     For a person, the app sends these scopes as `key_scopes`. A person also needs a first password,
     which the admin gives to the person.
-    For each agent, the page sets the outbound mail policy and manages the API keys.
+    For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
+    OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
     A member who sponsors an agent sees only those agents on the page.
+  - **MCP endpoint.** A banner shows the full URL of `/mcp` (from the origin of the page), with a copy
+    button. It shows at the top of the Agents section, and in the create form when Agent is
+    selected. OAuth is the main way to add an agent: the client needs only this URL.
   - **Help a person sign in.** An owner or an admin selects a person, then sets a new password
     (`account.set_password`) or turns off two-step verification (`account.disable_totp`). An admin
     does not see the owner in the list, because only the owner manages the owner's sign-in.
@@ -143,6 +147,18 @@ MCP clients. The app has no UI-only path.
     with a name, an address and its first members (`directory.create_team_mailbox`). Each mailbox
     has a control to add a member and a button to remove each member, with a confirmation
     (`directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`).
+- **Connect an agent** (`/connect/<oar_id>`). `/oauth/authorize` sends the browser of a person here
+  for the request of an MCP client. A person who is not signed in signs in first, and then sees the
+  same page. The page loads the request (`oauth.get_authorization`) and shows the client name, the
+  host that gets the access, and a warning that Soldock does not check the name.
+  - An owner or an admin can create a new agent: the name and the address come from the client name
+    and the first mail domain, and the person can change them. A person can also select an agent
+    that they sponsor (each agent, for an admin).
+  - The scopes are the agent scopes that the session holds. The page selects the requested scopes
+    and `account.read` first, or each scope when the client asked for none.
+  - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
+    send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
+  - An expired or decided request shows a message to start again in the app.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
   on other browsers. A new key can hold only the scopes of the session.
@@ -320,6 +336,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/admin` | Admin |
+| `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
 | `/drive/shared`, `/drive/recent`, `/drive/starred`, `/drive/trash` | The other views of Drive |
@@ -345,7 +362,8 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the top bar, the search box and the account menu |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | The directory, the create form, the agent panels and the team mailboxes card |
+| [`src/features/admin/`](src/features/admin/) | The directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, and the team mailboxes card |
+| [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
@@ -353,7 +371,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, and the message list rules and the room sync of Chat |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, the message list rules and the room sync of Chat, and the first values of the OAuth approval page |
 
 ## Commands
 

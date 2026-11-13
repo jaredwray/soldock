@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
+import { OAuthGrants } from "./OAuthGrants.tsx";
 import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist, policySummary } from "./policy.ts";
 
 interface AgentPanelProps {
@@ -12,7 +13,7 @@ interface AgentPanelProps {
 	onChanged: () => void;
 }
 
-/** One agent: its outbound mail policy and its API keys. */
+/** One agent: its outbound mail policy, the apps that connected as it with OAuth, and its API keys. */
 export function AgentPanel({ agent, sponsor, onChanged }: AgentPanelProps) {
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
 	return (
@@ -26,6 +27,7 @@ export function AgentPanel({ agent, sponsor, onChanged }: AgentPanelProps) {
 			<div className="agent-body">
 				<p className="muted">Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
 				<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
+				<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
 				<ApiKeyManager
 					principalId={agent.id}
 					allowedScopes={AGENT_SCOPES}

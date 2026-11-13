@@ -14,6 +14,7 @@ import {
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useSession } from "../auth/session.tsx";
+import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
 
 interface CreatePrincipalFormProps {
 	me: Principal;
@@ -114,6 +115,12 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 						</label>
 					))}
 				</fieldset>
+				{kind === "agent" && (
+					// OAuth is the main way to add an agent. This form, with a first API key, is for clients without OAuth.
+					<div className="form-grid-wide">
+						<McpEndpointBanner />
+					</div>
+				)}
 				<div className="field">
 					<label htmlFor={ids.name} className="field-label">
 						Display name

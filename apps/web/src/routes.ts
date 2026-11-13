@@ -28,6 +28,8 @@ export type Route =
 	/** Chat. `roomId` is null for the page without an open room. */
 	| { page: "chat"; roomId: string | null }
 	| { page: "admin" }
+	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
+	| { page: "connect"; requestId: string }
 	| { page: "settings" }
 	| { page: "redirect"; to: string }
 	| { page: "not-found" };
@@ -61,6 +63,8 @@ export function parseRoute(location: string): Route {
 	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
 	if (first === "admin" && parts.length === 1) return { page: "admin" };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
+	if (first === "connect" && parts.length === 2 && second?.startsWith("oar_"))
+		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null };
