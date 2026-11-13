@@ -509,7 +509,7 @@ describe("OAuth tokens", () => {
 		}
 	});
 
-	it("rotates the refresh token, and the replaced token works for a short time after a lost response", async () => {
+	it("rotates the refresh token, and the replaced token works one more time after a lost response", async () => {
 		const owner = await setupOwner();
 		const { clientId, tokens: first } = await connectNewAgent(owner);
 		const second = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
@@ -520,7 +520,8 @@ describe("OAuth tokens", () => {
 		// The response with `second` got lost: the client sends the first refresh token again at once.
 		const third = (await (await refresh(clientId, first.refresh_token)).json()) as Tokens;
 		expect((await mcp(third.access_token, "tools/list")).status).toBe(200);
-		expect(await (await refresh(clientId, second.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		// A replaced token works one time only, so a copy of it cannot mint more tokens.
+		expect(await (await refresh(clientId, first.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		const fourth = (await (await refresh(clientId, third.refresh_token)).json()) as Tokens;
 		expect(fourth.access_token).toMatch(/^sdo_/);
 		expect(await (await refresh(await registerClient(), fourth.refresh_token)).json()).toMatchObject({

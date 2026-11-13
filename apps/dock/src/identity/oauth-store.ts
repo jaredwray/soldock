@@ -391,9 +391,9 @@ export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promi
 
 /**
  * Gives a grant new tokens for a refresh token of the client, and replaces the refresh token
- * (rotation). The refresh token before the current one also works for 60 seconds after the refresh
- * that replaced it, so a lost response does not end the connection. A later use of that token revokes
- * the grant: somebody else can hold a copy of it (reuse detection). The old access token stops.
+ * (rotation). The token that a refresh replaced works one more time, for 60 seconds, so a lost response
+ * does not end the connection. A use of that token after the 60 seconds revokes the grant: somebody else
+ * can hold a copy of it (reuse detection). The old access token stops.
  */
 export async function refreshGrant(
 	db: D1Database,
@@ -405,12 +405,13 @@ export async function refreshGrant(
 	const now = Date.now();
 	const nowIso = new Date(now).toISOString();
 	const tokens = await newTokens(now);
-	// SQLite reads the old row in each SET expression, so the CASE sees the refresh token before the change.
+	// SQLite reads the old row in each SET expression, so previous_refresh_hash gets the current token before
+	// the change. The token that the client sent, when it was the previous one, becomes unknown: a replaced
+	// token works at most one time, and two holders of one grant soon send a token after its grace period.
 	const row = await db
 		.prepare(
 			`UPDATE oauth_grants SET access_hash = ?1, access_expires_at = ?2, refresh_hash = ?3, refresh_expires_at = ?4,
-			previous_refresh_hash = CASE WHEN refresh_hash = ?5 THEN ?5 ELSE previous_refresh_hash END,
-			previous_refresh_until = CASE WHEN refresh_hash = ?5 THEN ?6 ELSE previous_refresh_until END
+			previous_refresh_hash = refresh_hash, previous_refresh_until = ?6
 			WHERE client_id = ?7 AND revoked_at IS NULL AND refresh_expires_at > ?8
 			AND (refresh_hash = ?5 OR (previous_refresh_hash = ?5 AND previous_refresh_until > ?8))
 			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id)

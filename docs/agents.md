@@ -49,8 +49,8 @@ For client developers:
   or the scheme of an app, such as `cursor://`.
 - The scopes in `scope` are the agent scopes below. Soldock ignores other scopes, such as `openid`.
 - An error of `/oauth/authorize` shows a page to the person and does not redirect to the client.
-- Keep the newest refresh token after each refresh. The replaced token works for 60 more seconds only.
-  A later use of it revokes the connection.
+- Keep the newest refresh token after each refresh. The replaced token works one more time, for 60
+  seconds only. A later use of it revokes the connection.
 - Soldock deletes a registration that nobody used for 30 days. Register again when
   `/oauth/authorize` shows that the app is not registered.
 

@@ -214,9 +214,9 @@ These routes are ceremonies, not operations, because the client has no credentia
     for one hour, a refresh token, and the granted `scope`.
   - `refresh_token`: the refresh token and its `client_id`. A refresh gives a new access token and a
     new refresh token for 30 more days (rotation). The old access token stops. The replaced refresh
-    token works for 60 more seconds, so a lost response does not end the connection. After that, a use
-    of the replaced token revokes the grant, because somebody else can hold a copy (reuse detection).
-    An older token gets `invalid_grant`.
+    token works one more time, for 60 seconds, so a lost response does not end the connection. After
+    the 60 seconds, a use of the replaced token revokes the grant, because somebody else can hold a
+    copy (reuse detection). An older token gets `invalid_grant`.
 
 The approval is a set of operations, so the web app, REST and MCP share it. Each one is for humans
 with `account.keys`.
