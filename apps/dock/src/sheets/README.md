@@ -83,6 +83,9 @@ A formula that reads a cell with an error gets the same error.
 - One calculation has a budget of 2,000,000 cell reads. The formulas without a result then get
   `#LIMIT!`. Thus a sheet with many formulas on large ranges cannot use all the CPU time of a
   request.
+- The engine finds the cells that a formula reads from its text, before the calculation. A cell
+  in an argument that `IF` or `IFERROR` does not use still counts: `=IF(TRUE,1,A1)` in `A1` gets
+  `#CYCLE!`, as in Excel. Thus the value of a different cell cannot make a circle appear or go away.
 - A formula has at most 64 levels of parentheses and calls.
 
 ## Limits
