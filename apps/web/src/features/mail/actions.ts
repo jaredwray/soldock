@@ -1,6 +1,7 @@
 import { MAIL_LIMITS, type ThreadSummary } from "@soldock/contracts";
 import { api } from "../../lib/api.ts";
 import type { MailView } from "../../routes.ts";
+import { mailboxInput } from "./mailbox.tsx";
 
 /** Labels to add and remove with `mail.modify_threads`. */
 export interface LabelChange {
@@ -115,9 +116,14 @@ export function belongsInView(labelIds: readonly string[], view: MailView): bool
 }
 
 /** Sends the change in batches, because one call accepts a limited number of threads. */
-export async function modifyThreads(threadIds: readonly string[], change: LabelChange): Promise<void> {
+export async function modifyThreads(
+	mailboxId: string | null,
+	threadIds: readonly string[],
+	change: LabelChange,
+): Promise<void> {
 	for (let start = 0; start < threadIds.length; start += MAIL_LIMITS.threadsPerModify) {
 		await api.call("mail.modify_threads", {
+			...mailboxInput(mailboxId),
 			thread_ids: threadIds.slice(start, start + MAIL_LIMITS.threadsPerModify),
 			add_label_ids: [...change.add],
 			remove_label_ids: [...change.remove],

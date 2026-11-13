@@ -3,12 +3,12 @@ export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION
 export { identityHandlers } from "./handlers.ts";
 export { toPrincipalOutput } from "./output.ts";
 export { mountAuthRoutes } from "./routes.ts";
+export { domainOf, mailDomains, normalizeAddress, type OutboundMode, type PrincipalRecord } from "./store.ts";
 export {
-	domainOf,
-	getPrincipal,
-	mailDomains,
-	normalizeAddress,
-	type OutboundMode,
-	type PrincipalRecord,
-	resolveAddress,
-} from "./store.ts";
+	getMailbox,
+	isTeamMailboxId,
+	type MailboxRecord,
+	resolveMailboxAddress,
+	teamMailboxesOf,
+	teamMailboxFor,
+} from "./team-mailboxes.ts";

@@ -1,6 +1,6 @@
 # `identity` module
 
-> Status: **started**. The directory, API keys, sign-in with a password and optional two-step
+> Status: **started**. The directory, team mailboxes, API keys, sign-in with a password and optional two-step
 > verification (TOTP), browser sessions for humans and first-run setup exist. Passkeys, OAuth, groups and the audit log in R2 are not built
 > yet. Keep this README current as the module grows. It is the module's contract.
 
@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains` ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -26,6 +26,32 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `allowlist` (domains and addresses) or `any`.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
+
+## Team mailboxes
+
+A team mailbox is a shared mailbox with its own address, for example `support@example.com`. It is
+not a principal: it has no credential, no scopes and no role, and nobody signs in as it. It is a
+resource with a list of members. Each member, a person or an agent, uses it with their own
+credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
+
+- Only owners and admins create a team mailbox and change its members
+  (`directory.create_team_mailbox`, `directory.add_team_mailbox_member`,
+  `directory.remove_team_mailbox_member`). These operations need `directory.write` and accept
+  humans only. So an agent can never add itself, and a member cannot add others.
+- An owner or an admin gets access to the mail only as a member. The creator is not a member
+  unless `member_ids` names them.
+- Each principal with `directory.read` sees each team mailbox and its members
+  (`directory.list_team_mailboxes`), as it sees each principal.
+- Principals and team mailboxes share one set of addresses. Triggers in D1 keep an address out of
+  `addresses` and `team_mailboxes` at the same time, in the transaction of the write. A team
+  address is lowercase, uses a saved mail domain, and cannot contain `+`. A domain with a team
+  mailbox address cannot be removed.
+- A team mailbox can have 100 members (`TEAM_MAILBOX_LIMITS.members`). A second add of the same
+  member, and a remove of a principal that is not a member, change nothing.
+- `resolveMailboxAddress` gives the mailbox of an address (the own mailbox of a principal, or a
+  team mailbox) for inbound and local delivery. `teamMailboxFor` is the membership check of each
+  mail operation. It reads D1 on each call, so removed access ends at once.
+- No operation renames or removes a team mailbox yet.
 
 ## Mail domain settings
 
@@ -77,15 +103,18 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, and passwords. It recreates the schema from the bundled migrations
-  (`0001`, `0003` and `0004`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0004` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  (`0001`, `0003`, `0004` and `0005`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0005` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
   Saved mail domains stay in place. The reset restores the domain constraints after it recreates the account tables.
   The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
   R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
-  The `setup_lock` row blocks new principals during the reset. Each old mailbox persists a pause marker.
+  The reset also removes each team mailbox and its members. It drops the team mailbox tables and the trigger
+  on `mail_domains` first: a table rename in the replay of `0004` fails while a trigger refers to a missing table.
+  The `setup_lock` row blocks new principals and new team mailboxes during the reset. Each old mailbox, also each
+  team mailbox, persists a pause marker.
   Setup waits for active deliveries before it replaces the directory, then cancels the remaining old outboxes.
   A failed directory transaction resumes the old mailboxes and releases the lock.
   The reset lease expires after ten minutes. A later reset can replace an abandoned lease.
@@ -170,6 +199,8 @@ Each call passes three checks:
    every human scope, because only a credential with every human scope can set a password.
 2. **Role and resource** (the handler):
    - Only owners and admins create principals.
+   - Only owners and admins create team mailboxes and change their members. A principal uses a team
+     mailbox only as a member. The mail handlers check the membership on each call.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never
      can: it has no `directory.write` scope, and the operation accepts humans only.
    - A human manages their own credentials (keys, password and two-step verification) and the keys
@@ -197,7 +228,8 @@ Each call passes three checks:
      person changes their own password in a session, that session stays. This locks out somebody who
      knew the old password.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
-   `policy_denied`, before anything is stored.
+   `policy_denied`, before anything is stored. The policy belongs to the agent, so it also applies
+   to mail that the agent sends from a team mailbox.
 
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
 alone does not stop each cross-site request. `/mcp` accepts API keys only.

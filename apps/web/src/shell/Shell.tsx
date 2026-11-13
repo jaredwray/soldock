@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "../features/admin/AdminPage.tsx";
 import { useSession } from "../features/auth/session.tsx";
+import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { SettingsPage } from "../features/settings/SettingsPage.tsx";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
@@ -13,6 +14,8 @@ export function Shell() {
 	const location = useLocation();
 	const route = useMemo(() => parseRoute(location), [location]);
 	const [navOpen, setNavOpen] = useState(false);
+	// The shell keeps the list of mailboxes, so the switcher does not empty when the mailbox changes.
+	const mailboxes = useMailboxes(route.page);
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
 	// sign in again after the session ends. Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
@@ -43,7 +46,16 @@ export function Shell() {
 	function page() {
 		switch (route.page) {
 			case "mail":
-				return <MailApp route={route} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
+				// The key gives each mailbox its own mail app, so the data of one never shows in a different one.
+				return (
+					<MailApp
+						key={route.mailboxId ?? "own"}
+						route={route}
+						mailboxes={mailboxes}
+						navOpen={navOpen}
+						onCloseNav={() => setNavOpen(false)}
+					/>
+				);
 			case "admin":
 				return <AdminPage />;
 			case "settings":

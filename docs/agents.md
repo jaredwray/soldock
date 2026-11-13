@@ -33,6 +33,24 @@ claude mcp add --transport http soldock https://<dock-host>/mcp --header "Author
 `<domain>_<verb>`: `mail_list_threads`, `mail_get_thread`, `mail_send`, `mail_modify_threads` and
 others. A REST client calls the same operations under `/api/v1`.
 
+## Team mailboxes
+
+A team mailbox is a shared mailbox with its own address, for example `support@example.com`. An
+owner or an admin creates it on the **Admin** page and adds people and agents as members
+(`directory.create_team_mailbox`, `directory.add_team_mailbox_member`). An agent cannot add itself.
+
+1. Call `mail_list_mailboxes`. The result has your own mailbox first, then each team mailbox that
+   you are a member of.
+2. Pass the `id` of a team mailbox as `mailbox_id` to a mail tool, for example `mail_list_threads`
+   or `mail_send`. Without `mailbox_id`, a mail tool uses your own mailbox.
+
+- The members share the threads, the labels and the read state. A change by one member shows for
+  each member.
+- A send from a team mailbox comes from the name and the address of the team mailbox. The sent copy
+  names the member in `sent_by`.
+- The outbound policy of an agent also applies to mail that it sends from a team mailbox.
+- A call for a team mailbox without membership fails with `forbidden`.
+
 ## Outbound policy
 
 Each agent has an outbound policy. Only its sponsor, an owner or an admin can change it
@@ -45,7 +63,7 @@ Each agent has an outbound policy. Only its sponsor, an owner or an admin can ch
 | `any` | Any address |
 
 A send outside the policy fails with `policy_denied`, and nothing is stored or sent. Mail from an
-agent carries the header `X-Soldock-Agent: true`.
+agent carries the header `X-Soldock-Agent: true`. The policy also applies in a team mailbox.
 
 ## Untrusted content
 
@@ -60,4 +78,5 @@ Mail from the internet can contain text that tries to give an agent instructions
 ## Retries
 
 Set `idempotency_key` on `mail_send` (or the `Idempotency-Key` header on REST). A retry with the
-same key returns the first result and sends nothing. Keys are kept for 24 hours.
+same key returns the first result and sends nothing. Keys are kept for 24 hours. In a team
+mailbox, a key belongs to its caller: the key of one member does not affect a different member.

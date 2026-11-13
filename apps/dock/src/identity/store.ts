@@ -132,6 +132,18 @@ export async function getPrincipal(db: D1Database, id: string): Promise<Principa
 	return row ? toPrincipal(row) : null;
 }
 
+/** The ids from the list that no principal has. */
+export async function unknownPrincipalIds(db: D1Database, ids: readonly string[]): Promise<string[]> {
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	const { results } = await db
+		.prepare("SELECT p.id FROM principals p JOIN json_each(?) wanted ON wanted.value = p.id")
+		.bind(JSON.stringify(unique))
+		.all<{ id: string }>();
+	const known = new Set(results.map((row) => row.id));
+	return unique.filter((id) => !known.has(id));
+}
+
 export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]> {
 	const { results } = await db.prepare(`${PRINCIPAL_SELECT} ORDER BY p.kind, p.display_name`).all<PrincipalRow>();
 	return results.map(toPrincipal);
@@ -163,7 +175,7 @@ export interface NewPrincipal {
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
-function conflictOf(error: unknown): OperationError | null {
+export function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);
 	if (text.includes("mail_domain_in_use")) {
 		return new OperationError("conflict", "This domain has mailbox addresses. You cannot remove it.");
@@ -176,6 +188,9 @@ function conflictOf(error: unknown): OperationError | null {
 	}
 	if (text.includes("UNIQUE constraint failed: addresses.address")) {
 		return new OperationError("conflict", "That address belongs to another principal.");
+	}
+	if (text.includes("address_in_use") || text.includes("UNIQUE constraint failed: team_mailboxes.address")) {
+		return new OperationError("conflict", "That address belongs to another principal or team mailbox.");
 	}
 	return null;
 }

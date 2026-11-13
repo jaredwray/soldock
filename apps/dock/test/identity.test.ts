@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
+import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
@@ -824,7 +825,10 @@ describe("directory upgrade", () => {
 	it("moves a directory with sign-in emails to passwords, and keeps keys, sessions, agents and the old columns", async () => {
 		const db = env.DIRECTORY;
 		const run = (statements: string[]) => db.batch(statements.map((sql) => db.prepare(sql)));
+		// A directory from before 0004 has no team mailbox tables.
 		await run([
+			"DROP TABLE team_mailbox_members",
+			"DROP TABLE team_mailboxes",
 			"DROP TABLE sign_in_codes",
 			"DROP TABLE sessions",
 			"DROP TABLE api_keys",
@@ -860,6 +864,7 @@ describe("directory upgrade", () => {
 			`INSERT INTO sign_in_codes VALUES ('sic_1', 'prn_owner', 'x', 0, '2026-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z', NULL)`,
 		]);
 		await run(passwordMigration.split("--> statement-breakpoint"));
+		await run(teamMailboxMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({

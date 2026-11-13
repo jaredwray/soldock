@@ -6,6 +6,7 @@ import { addressName, formatBytes, fullDate, sameAddress, shortDate } from "../.
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { MessageBody } from "./MessageBody.tsx";
+import { mailboxInput, useMailboxId } from "./mailbox.tsx";
 import { labelChipName } from "./views.ts";
 
 export type ReplyMode = "reply" | "replyAll" | "forward";
@@ -32,16 +33,17 @@ function useFullBody(message: Message, expanded: boolean) {
 	const [full, setFull] = useState<FullBody>({ status: "idle" });
 	const omitted = message.body.omitted;
 	const messageId = message.id;
+	const mailboxId = useMailboxId();
 
 	const load = useCallback(async () => {
 		setFull({ status: "loading" });
 		try {
-			const result = await api.call("mail.get_message", { message_id: messageId });
+			const result = await api.call("mail.get_message", { ...mailboxInput(mailboxId), message_id: messageId });
 			setFull({ status: "ready", body: result.body });
 		} catch (caught) {
 			setFull({ status: "error", error: errorMessage(caught) });
 		}
-	}, [messageId]);
+	}, [mailboxId, messageId]);
 
 	useEffect(() => {
 		if (expanded && omitted && full.status === "idle") void load();
@@ -55,12 +57,15 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 	const [expanded, setExpanded] = useState(defaultExpanded);
 	const { body, full, retry } = useFullBody(message, expanded);
 	const bodyId = useId();
+	// In a team mailbox, more than one person sends from the address, so the sender is not "me".
+	const inTeamMailbox = useMailboxId() !== null;
+	const selfAddress = inTeamMailbox ? "" : myAddress;
 	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
 	const withBody = body ? { ...message, body } : null;
 	const spam = message.label_ids.includes("SPAM");
 	const sender = message.from;
 	const senderName = sender
-		? sameAddress(sender.address, myAddress)
+		? sameAddress(sender.address, selfAddress)
 			? "me"
 			: addressName(sender)
 		: "(unknown sender)";
@@ -96,10 +101,19 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 				{expanded && (
 					<>
 						<dl className="message-recipients">
-							<RecipientLine term="To" addresses={message.to} myAddress={myAddress} />
-							<RecipientLine term="Cc" addresses={message.cc} myAddress={myAddress} />
-							<RecipientLine term="Bcc" addresses={message.bcc} myAddress={myAddress} />
-							<RecipientLine term="Reply-To" addresses={message.reply_to} myAddress={myAddress} />
+							<RecipientLine term="To" addresses={message.to} myAddress={selfAddress} />
+							<RecipientLine term="Cc" addresses={message.cc} myAddress={selfAddress} />
+							<RecipientLine term="Bcc" addresses={message.bcc} myAddress={selfAddress} />
+							<RecipientLine term="Reply-To" addresses={message.reply_to} myAddress={selfAddress} />
+							{inTeamMailbox && message.sent_by && (
+								<div className="recipient-line">
+									<dt>Sent by:</dt>
+									<dd>
+										{message.sent_by.display_name}
+										{message.sent_by.kind === "agent" ? " (agent)" : ""}
+									</dd>
+								</div>
+							)}
 						</dl>
 						{chips.length > 0 && (
 							<ul className="chips" aria-label="Labels">
@@ -239,12 +253,17 @@ function ExternalNotice({ message }: { message: Message }) {
 
 function Attachments({ message }: { message: Message }) {
 	const toast = useToast();
+	const mailboxId = useMailboxId();
 	const [busy, setBusy] = useState<number | null>(null);
 
 	async function download(index: number) {
 		setBusy(index);
 		try {
-			const file = await api.call("mail.get_attachment", { message_id: message.id, index });
+			const file = await api.call("mail.get_attachment", {
+				...mailboxInput(mailboxId),
+				message_id: message.id,
+				index,
+			});
 			saveBytes(base64ToBytes(file.content_base64), file.filename);
 		} catch (error) {
 			toast({ message: `The download failed. ${errorMessage(error)}`, tone: "error" });

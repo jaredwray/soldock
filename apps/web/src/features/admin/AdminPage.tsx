@@ -11,6 +11,7 @@ import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { PersonSignInCard } from "./PersonSignInCard.tsx";
 import { PrincipalTable } from "./PrincipalTable.tsx";
+import { TeamMailboxesCard } from "./TeamMailboxesCard.tsx";
 
 type DirectoryState =
 	| { status: "loading" }
@@ -83,6 +84,7 @@ export function AdminPage() {
 								}}
 							/>
 							<PersonSignInCard me={me} people={humans} />
+							<TeamMailboxesCard principals={principals} />
 						</>
 					)}
 					<section className="card">

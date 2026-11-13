@@ -21,6 +21,8 @@ export function audit(fields: {
 	actorKind: string;
 	credential: string;
 	target?: string;
+	/** The mailbox of a mail operation, when it is not the own mailbox of the actor. */
+	mailbox?: string;
 	result: "ok" | "denied" | "error";
 	requestId?: string;
 	code?: string;

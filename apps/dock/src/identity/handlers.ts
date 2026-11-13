@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope, SIGN_IN_LOCK_MINUTES } from "@soldock/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, type Scope, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
 import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
@@ -24,8 +24,17 @@ import {
 	scopeCeiling,
 	setPassword,
 	setPendingTotpSecret,
+	unknownPrincipalIds,
 	updateOutboundPolicy,
 } from "./store.ts";
+import {
+	addTeamMailboxMember,
+	createTeamMailbox,
+	getTeamMailbox,
+	listTeamMailboxes,
+	removeTeamMailboxMember,
+	type TeamMailboxRecord,
+} from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
 type IdentityOperation =
@@ -42,7 +51,11 @@ type IdentityOperation =
 	| "directory.list_mail_domains"
 	| "directory.add_mail_domain"
 	| "directory.remove_mail_domain"
-	| "directory.update_agent_policy";
+	| "directory.update_agent_policy"
+	| "directory.list_team_mailboxes"
+	| "directory.create_team_mailbox"
+	| "directory.add_team_mailbox_member"
+	| "directory.remove_team_mailbox_member";
 
 function isAdmin(caller: AuthContext): boolean {
 	return caller.principal.org_role === "owner" || caller.principal.org_role === "admin";
@@ -243,6 +256,55 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		return { principal: toPrincipalOutput(updated) };
 	},
 
+	async "directory.list_team_mailboxes"(call) {
+		return { team_mailboxes: await listTeamMailboxes(call.env.DIRECTORY) };
+	},
+
+	async "directory.create_team_mailbox"(call, input) {
+		if (!isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins can create team mailboxes.");
+		}
+		const domains = await mailDomains(call.env.DIRECTORY);
+		if (!domains.has(domainOf(input.address))) {
+			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
+		}
+		assertPrimaryAddress(input.address);
+		const unknown = await unknownPrincipalIds(call.env.DIRECTORY, input.member_ids);
+		if (unknown.length > 0) throw new OperationError("not_found", `No principal has the id ${unknown.join(", ")}.`);
+		const created = await createTeamMailbox(call.env.DIRECTORY, {
+			display_name: input.display_name,
+			address: input.address,
+			member_ids: input.member_ids,
+			created_by: call.caller.principal.id,
+		});
+		if (!created) {
+			throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
+		}
+		auditOk(call, "directory.create_team_mailbox", created.id);
+		for (const memberId of created.member_ids) {
+			auditOk(call, "directory.add_team_mailbox_member", `${created.id}:${memberId}`);
+		}
+		return { team_mailbox: created };
+	},
+
+	async "directory.add_team_mailbox_member"(call, input) {
+		await teamMailboxToManage(call, input.mailbox_id);
+		const member = await getPrincipal(call.env.DIRECTORY, input.principal_id);
+		if (!member) throw new OperationError("not_found", "No principal has that id.");
+		if (!(await addTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, member.id, call.caller.principal.id))) {
+			throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
+		}
+		auditOk(call, "directory.add_team_mailbox_member", `${input.mailbox_id}:${member.id}`);
+		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
+	},
+
+	async "directory.remove_team_mailbox_member"(call, input) {
+		await teamMailboxToManage(call, input.mailbox_id);
+		await removeTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, input.principal_id);
+		auditOk(call, "directory.remove_team_mailbox_member", `${input.mailbox_id}:${input.principal_id}`);
+		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
+	},
+
 	async "account.list_api_keys"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		return { api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map(toApiKeyOutput) };
@@ -325,6 +387,26 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation> 
 		return { principal_id: target.id, totp_enabled: false };
 	},
 };
+
+/**
+ * The team mailbox whose members the call changes. Only owners and admins change them. A member, also
+ * an agent, can never add itself or others: an agent holds no `directory.write` scope, and the member
+ * operations accept humans only.
+ */
+async function teamMailboxToManage(call: CallContext, mailboxId: string): Promise<TeamMailboxRecord> {
+	if (!isAdmin(call.caller)) {
+		throw new OperationError("forbidden", "Only owners and admins can change the members of a team mailbox.");
+	}
+	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
+	if (!mailbox) throw new OperationError("not_found", "No team mailbox has that id.");
+	return mailbox;
+}
+
+async function teamMailboxAfterChange(call: CallContext, mailboxId: string): Promise<TeamMailboxRecord> {
+	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
+	if (!mailbox) throw new Error(`team mailbox ${mailboxId} missing after a member change`);
+	return mailbox;
+}
 
 /**
  * The principal whose credentials the call manages: the caller by default. Throws unless the caller may

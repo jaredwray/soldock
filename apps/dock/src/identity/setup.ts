@@ -1,7 +1,9 @@
 import directorySchema from "../../migrations/0001_directory.sql";
 import mailDomainSchema from "../../migrations/0003_mail_domains.sql";
 import passwordSchema from "../../migrations/0004_password_sign_in.sql";
+import teamMailboxSchema from "../../migrations/0005_team_mailboxes.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
+import { allMailboxIds } from "./team-mailboxes.ts";
 
 /** Freezes principal creation and waits for old outbound side effects before a reset. */
 export async function prepareFreshDirectory(env: Env) {
@@ -24,8 +26,9 @@ export async function prepareFreshDirectory(env: Env) {
 		if (!committed) await env.DIRECTORY.prepare("UPDATE setup_lock SET token = NULL WHERE token = ?").bind(token).run();
 	}
 	try {
-		const { results } = await env.DIRECTORY.prepare("SELECT id FROM principals").all<{ id: string }>();
-		mailboxes = results.map(({ id }) => env.MAILBOX.get(env.MAILBOX.idFromName(id)));
+		// The mailbox of each principal and each team mailbox: a team mailbox also has an outbox.
+		const ids = await allMailboxIds(env.DIRECTORY);
+		mailboxes = ids.map((id) => env.MAILBOX.get(env.MAILBOX.idFromName(id)));
 		const paused = await Promise.allSettled(mailboxes.map((mailbox) => mailbox.pauseDeliveries(token, generation)));
 		const failed = paused.find((result) => result.status === "rejected");
 		if (failed?.status === "rejected") throw failed.reason;
@@ -58,6 +61,11 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		.map((statement) => statement.trim())
 		.filter(Boolean);
 	return [
+		// The team mailbox tables refer to principals, and one trigger on mail_domains refers to them. They
+		// go first: a rename in the replay of 0004 fails while a trigger refers to a missing table.
+		"DROP TRIGGER IF EXISTS mail_domain_in_use_team",
+		"DROP TABLE IF EXISTS team_mailbox_members",
+		"DROP TABLE IF EXISTS team_mailboxes",
 		"DROP TABLE IF EXISTS sessions",
 		"DROP TABLE IF EXISTS sign_in_codes",
 		"DROP TABLE IF EXISTS api_keys",
@@ -68,6 +76,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...schema,
 		...mailDomainSchema.split("--> statement-breakpoint"),
 		...passwordSchema.split("--> statement-breakpoint"),
+		...teamMailboxSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -83,4 +92,5 @@ const BUNDLED_MIGRATIONS = [
 	"0002_setup_lock.sql",
 	"0003_mail_domains.sql",
 	"0004_password_sign_in.sql",
+	"0005_team_mailboxes.sql",
 ] as const;

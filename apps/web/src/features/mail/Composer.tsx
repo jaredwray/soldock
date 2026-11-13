@@ -7,6 +7,7 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { type Draft, parseAddressList } from "./compose.ts";
+import { mailboxInput, useMailboxId } from "./mailbox.tsx";
 import { RichTextEditor } from "./RichTextEditor.tsx";
 import { docToHtml, docToText, textToDoc } from "./richText.ts";
 
@@ -49,11 +50,17 @@ interface ComposerProps {
 	 * external. Null while the profile loads.
 	 */
 	mailDomains: readonly string[] | null;
+	/**
+	 * The team mailbox that sends the message, when the composer is in one. The message then comes from
+	 * its name and address, so the composer shows them. Null for the own mailbox of the person.
+	 */
+	from: { display_name: string; address: string } | null;
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
 
-export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps) {
+export function Composer({ draft, mailDomains, from, onClose, onSent }: ComposerProps) {
+	const mailboxId = useMailboxId();
 	const [fields, setFields] = useState({ to: draft.to, cc: draft.cc, bcc: draft.bcc });
 	const [showCopies, setShowCopies] = useState(draft.cc !== "" || draft.bcc !== "");
 	const [subject, setSubject] = useState(draft.subject);
@@ -194,6 +201,7 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 		setError(null);
 		try {
 			const result = await api.call("mail.send", {
+				...mailboxInput(mailboxId),
 				to: parsed.to.addresses,
 				cc: parsed.cc.addresses,
 				bcc: parsed.bcc.addresses,
@@ -250,6 +258,14 @@ export function Composer({ draft, mailDomains, onClose, onSent }: ComposerProps)
 		<Dialog title={draft.title} onClose={requestClose} className="composer">
 			<form className="compose-form" onSubmit={submit} noValidate>
 				<div className="compose-fields">
+					{from && (
+						<div className="compose-row">
+							<span className="compose-label">From</span>
+							<span className="compose-from">
+								{from.display_name} &lt;{from.address}&gt;
+							</span>
+						</div>
+					)}
 					{addressInput("to", "To", draft.to === "")}
 					{showCopies ? (
 						<>

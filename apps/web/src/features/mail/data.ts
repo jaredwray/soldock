@@ -1,8 +1,16 @@
-import { type Label, MAIL_LIMITS, type OutputOf, type Thread, type ThreadSummary } from "@soldock/contracts";
+import {
+	type Label,
+	MAIL_LIMITS,
+	type Mailbox,
+	type OutputOf,
+	type Thread,
+	type ThreadSummary,
+} from "@soldock/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import type { MailView } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
+import { mailboxInput } from "./mailbox.tsx";
 
 export type Profile = OutputOf<"mail.get_profile">;
 
@@ -14,7 +22,7 @@ const PAGE_SIZE = 50;
  * Calls `onVersionChange` when the mailbox version changes. `sync()` reads the version after a change
  * that this tab made, so that change does not cause a second refresh.
  */
-export function useProfilePoll(onVersionChange: () => void) {
+export function useProfilePoll(mailboxId: string | null, onVersionChange: () => void) {
 	const [profile, setProfile] = useState<Profile | null>(null);
 	const versionRef = useRef<number | null>(null);
 	const changeRef = useRef(onVersionChange);
@@ -23,17 +31,20 @@ export function useProfilePoll(onVersionChange: () => void) {
 		changeRef.current = onVersionChange;
 	});
 
-	const poll = useCallback(async (notify: boolean) => {
-		try {
-			const next = await api.call("mail.get_profile");
-			const previous = versionRef.current;
-			versionRef.current = next.version;
-			setProfile(next);
-			if (notify && previous !== null && previous !== next.version) changeRef.current();
-		} catch {
-			// The next poll tries again. A 401 shows the sign-in page through lib/api.ts.
-		}
-	}, []);
+	const poll = useCallback(
+		async (notify: boolean) => {
+			try {
+				const next = await api.call("mail.get_profile", mailboxInput(mailboxId));
+				const previous = versionRef.current;
+				versionRef.current = next.version;
+				setProfile(next);
+				if (notify && previous !== null && previous !== next.version) changeRef.current();
+			} catch {
+				// The next poll tries again. A 401 shows the sign-in page through lib/api.ts.
+			}
+		},
+		[mailboxId],
+	);
 
 	useEffect(() => {
 		void poll(true);
@@ -60,19 +71,52 @@ export interface LabelsState {
 	reload: () => Promise<void>;
 }
 
-export function useLabels(): LabelsState {
+/**
+ * The mailboxes that the person can use: the own mailbox first, then the team mailboxes. Null while
+ * the list loads, and when it does not load: the mail views then work with the own mailbox only.
+ * The list loads again when the window gets the focus and when `page` changes, because an admin can
+ * change the members, for example on the Admin page of this tab.
+ */
+export function useMailboxes(page: string): Mailbox[] | null {
+	const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		const load = () => {
+			api.call("mail.list_mailboxes").then(
+				(result) => {
+					if (active) setMailboxes(result.mailboxes);
+				},
+				() => {
+					// The list stays as it is. A 401 shows the sign-in page through lib/api.ts.
+				},
+			);
+		};
+		// `page` is read so that a change of page runs this effect again.
+		if (page) load();
+		window.addEventListener("focus", load);
+		return () => {
+			active = false;
+			window.removeEventListener("focus", load);
+		};
+	}, [page]);
+
+	return mailboxes;
+}
+
+export function useLabels(mailboxId: string | null): LabelsState {
 	const [labels, setLabels] = useState<Label[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	const reload = useCallback(async () => {
 		try {
-			const result = await api.call("mail.list_labels");
+			const result = await api.call("mail.list_labels", mailboxInput(mailboxId));
 			setLabels(result.labels);
 			setError(null);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		}
-	}, []);
+	}, [mailboxId]);
 
 	useEffect(() => {
 		void reload();
@@ -92,7 +136,7 @@ export interface ListState {
 const LIST_LOADING: ListState = { status: "loading", threads: [], nextCursor: null, error: null, loadingOlder: false };
 
 /** The threads of one view. A null query waits, for example for the labels of a label view. */
-export function useThreadList(query: string | null) {
+export function useThreadList(mailboxId: string | null, query: string | null) {
 	const [state, setState] = useState<ListState>(LIST_LOADING);
 	const requestRef = useRef(0);
 	/** The request id of the last loadOlder call. Only that call clears `loadingOlder`. */
@@ -110,7 +154,7 @@ export function useThreadList(query: string | null) {
 				: PAGE_SIZE;
 			if (!quiet) setState(LIST_LOADING);
 			try {
-				const result = await api.call("mail.list_threads", { query, limit });
+				const result = await api.call("mail.list_threads", { ...mailboxInput(mailboxId), query, limit });
 				if (request !== requestRef.current) return;
 				setState({
 					status: "ready",
@@ -128,7 +172,7 @@ export function useThreadList(query: string | null) {
 				);
 			}
 		},
-		[query],
+		[mailboxId, query],
 	);
 
 	useEffect(() => {
@@ -147,7 +191,12 @@ export function useThreadList(query: string | null) {
 		olderRef.current = request;
 		setState((current) => ({ ...current, loadingOlder: true }));
 		try {
-			const result = await api.call("mail.list_threads", { query, cursor, limit: PAGE_SIZE });
+			const result = await api.call("mail.list_threads", {
+				...mailboxInput(mailboxId),
+				query,
+				cursor,
+				limit: PAGE_SIZE,
+			});
 			if (request !== requestRef.current) return;
 			setState((current) => {
 				const known = new Set(current.threads.map((thread) => thread.id));
@@ -159,7 +208,7 @@ export function useThreadList(query: string | null) {
 		} finally {
 			if (olderRef.current === request) setState((current) => ({ ...current, loadingOlder: false }));
 		}
-	}, [query]);
+	}, [mailboxId, query]);
 
 	/** Applies a change on screen before the server confirms it. Threads that leave the view go away. */
 	const patch = useCallback((threadIds: readonly string[], change: LabelChange, view: MailView) => {
@@ -187,7 +236,7 @@ export interface ThreadState {
 }
 
 /** One open thread, or nothing when `threadId` is null. */
-export function useThread(threadId: string | null) {
+export function useThread(mailboxId: string | null, threadId: string | null) {
 	const [state, setState] = useState<ThreadState>({
 		status: threadId ? "loading" : "idle",
 		thread: null,
@@ -204,7 +253,7 @@ export function useThread(threadId: string | null) {
 			}
 			if (!quiet) setState({ status: "loading", thread: null, error: null });
 			try {
-				const thread = await api.call("mail.get_thread", { thread_id: threadId });
+				const thread = await api.call("mail.get_thread", { ...mailboxInput(mailboxId), thread_id: threadId });
 				if (request !== requestRef.current) return;
 				setState({ status: "ready", thread, error: null });
 			} catch (caught) {
@@ -216,7 +265,7 @@ export function useThread(threadId: string | null) {
 				);
 			}
 		},
-		[threadId],
+		[mailboxId, threadId],
 	);
 
 	useEffect(() => {

@@ -16,6 +16,8 @@ export {
 	Label,
 	LabelId,
 	MAIL_LIMITS,
+	Mailbox,
+	MailboxId,
 	Message,
 	SYSTEM_LABELS,
 	type SystemLabel,
@@ -55,3 +57,4 @@ export {
 	TOTP_PERIOD_SECONDS,
 	TotpCode,
 } from "./signin.ts";
+export { TEAM_MAILBOX_LIMITS, TeamMailbox } from "./team-mailboxes.ts";
