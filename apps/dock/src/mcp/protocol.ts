@@ -40,6 +40,12 @@ export const RPC_ERRORS = {
 
 export type JsonRpcId = string | number;
 
+/**
+ * The longest string id of a request. Each message of a `subscriptions/listen` stream repeats the id,
+ * so a long id would make each queued event large.
+ */
+export const MAX_ID_CHARS = 256;
+
 /** One JSON-RPC request, after the envelope checks. */
 export interface RpcRequest {
 	id: JsonRpcId;

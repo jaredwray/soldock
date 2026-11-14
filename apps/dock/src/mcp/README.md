@@ -28,6 +28,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 - `POST /mcp` takes one JSON-RPC 2.0 message. The server has no sessions: no `Mcp-Session-Id`. `GET`
   and `DELETE` get `405`. Batches get `400`. Notifications from the client get `202`.
+- A string `id` can have at most 256 characters. A longer one gets `400` with error `-32600`. Each
+  message of a subscription stream repeats the id, so this keeps each queued event small.
 - Protocol versions: `2026-07-28` (modern) and `2025-11-25`, `2025-06-18` and `2025-03-26`
   (legacy). The `MCP-Protocol-Version` header selects the era of each request:
   - A modern version: the request is modern.

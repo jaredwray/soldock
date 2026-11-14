@@ -262,6 +262,7 @@ describe("the MCP endpoint with protocol 2026-07-28", () => {
 				400,
 				-32022,
 			],
+			["an id of 257 characters", modern(bot.key, "tools/list", {}, { id: "x".repeat(257) }), 400, -32600],
 			["a legacy method", modern(bot.key, "initialize"), 404, -32601],
 			["ping", modern(bot.key, "ping"), 404, -32601],
 			["no filter", modern(bot.key, "subscriptions/listen", {}), 200, -32602],

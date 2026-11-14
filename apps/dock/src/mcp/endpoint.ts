@@ -19,6 +19,7 @@ import {
 	eraOf,
 	isObject,
 	LEGACY_PROTOCOL_VERSIONS,
+	MAX_ID_CHARS,
 	MCP_PROTOCOL_VERSIONS,
 	RPC_ERRORS,
 	type RpcRequest,
@@ -127,6 +128,9 @@ export function mountMcp(
 			return rpcError(null, RPC_ERRORS.invalidRequest, "Invalid Request", 400);
 		}
 		const { id, method, params } = message;
+		if (typeof id === "string" && id.length > MAX_ID_CHARS) {
+			return rpcError(null, RPC_ERRORS.invalidRequest, `The id can have at most ${MAX_ID_CHARS} characters.`, 400);
+		}
 		const validId = typeof id === "string" || typeof id === "number" ? id : null;
 		const unsupported = unsupportedVersion(c.req.raw.headers, validId);
 		if (unsupported) return unsupported;
