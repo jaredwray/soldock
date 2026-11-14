@@ -130,19 +130,21 @@ describe("the mailbox of an agent", () => {
 		const { labels } = await bot.call("mail.list_labels");
 		const botLabel = await bot.call("mail.create_label", { name: "Billing" });
 		for (const reader of [owner, admin]) {
+			// Each attempt starts only when the loop awaits it, so no refusal is left without a handler.
 			const attempts = [
-				reader.call("mail.modify_threads", { ...inBox, thread_ids: [threadId], remove_label_ids: ["UNREAD"] }),
-				reader.call("mail.modify_threads", {
-					...inBox,
-					thread_ids: [threadId],
-					add_label_ids: ["TRASH"],
-					dry_run: true,
-				}),
-				reader.call("mail.create_label", { ...inBox, name: "Reviewed" }),
-				reader.call("mail.delete_label", { ...inBox, label_id: botLabel.id }),
-				reader.call("mail.send", { ...inBox, to: ["ada@dock.test"], text: "As the bot" }),
+				() => reader.call("mail.modify_threads", { ...inBox, thread_ids: [threadId], remove_label_ids: ["UNREAD"] }),
+				() =>
+					reader.call("mail.modify_threads", {
+						...inBox,
+						thread_ids: [threadId],
+						add_label_ids: ["TRASH"],
+						dry_run: true,
+					}),
+				() => reader.call("mail.create_label", { ...inBox, name: "Reviewed" }),
+				() => reader.call("mail.delete_label", { ...inBox, label_id: botLabel.id }),
+				() => reader.call("mail.send", { ...inBox, to: ["ada@dock.test"], text: "As the bot" }),
 			];
-			for (const attempt of attempts) expect(await codeOf(attempt)).toBe("forbidden");
+			for (const attempt of attempts) expect(await codeOf(attempt())).toBe("forbidden");
 			const tool = await callTool(reader.key, "mail_send", { ...inBox, to: ["ada@dock.test"], text: "As the bot" });
 			expect(toolCode(tool)).toBe("forbidden");
 		}
