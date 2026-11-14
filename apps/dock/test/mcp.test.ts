@@ -191,6 +191,8 @@ describe("the MCP endpoint", () => {
 			});
 		expect((await post([{ jsonrpc: "2.0", id: 1, method: "ping" }])).status).toBe(400);
 		expect((await post({ jsonrpc: "2.0", method: "notifications/initialized" })).status).toBe(202);
+		// A response from the client needs no answer, also with a long id.
+		expect((await post({ jsonrpc: "2.0", id: "x".repeat(300), result: {} })).status).toBe(202);
 		expect(
 			(await post({ jsonrpc: "2.0", id: 1, method: "ping" }, { "mcp-protocol-version": "1999-01-01" })).status,
 		).toBe(400);

@@ -128,14 +128,16 @@ export function mountMcp(
 			return rpcError(null, RPC_ERRORS.invalidRequest, "Invalid Request", 400);
 		}
 		const { id, method, params } = message;
-		if (typeof id === "string" && id.length > MAX_ID_CHARS) {
-			return rpcError(null, RPC_ERRORS.invalidRequest, `The id can have at most ${MAX_ID_CHARS} characters.`, 400);
-		}
-		const validId = typeof id === "string" || typeof id === "number" ? id : null;
+		// An error never echoes a long id: its id is null.
+		const longId = typeof id === "string" && id.length > MAX_ID_CHARS;
+		const validId = !longId && (typeof id === "string" || typeof id === "number") ? id : null;
 		const unsupported = unsupportedVersion(c.req.raw.headers, validId);
 		if (unsupported) return unsupported;
 		// Notifications and responses from the client need no answer.
 		if (typeof method !== "string" || id === undefined || id === null) return c.body(null, 202);
+		if (longId) {
+			return rpcError(null, RPC_ERRORS.invalidRequest, `The id can have at most ${MAX_ID_CHARS} characters.`, 400);
+		}
 		if (validId === null) return rpcError(null, RPC_ERRORS.invalidRequest, "Invalid Request", 400);
 		if (params !== undefined && !isObject(params)) {
 			return rpcError(validId, RPC_ERRORS.invalidRequest, "params must be an object.", 400);
