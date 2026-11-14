@@ -1,7 +1,8 @@
 import type { Scope } from "@soldock/contracts";
 import { audit, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
-import { getPrincipal, type PrincipalRecord, scopeCeiling } from "./store.ts";
+import { getGrant } from "./oauth-store.ts";
+import { getApiKey, getPrincipal, type PrincipalRecord, scopeCeiling } from "./store.ts";
 
 // The access rules that the API key and the OAuth handlers share.
 
@@ -85,4 +86,48 @@ export async function credentialOwner(call: CallContext, principalId: string | u
 		);
 	}
 	return target;
+}
+
+/** The credential that made a lasting effect, such as a webhook. The effect stops when the credential stops. */
+export interface CredentialBinding {
+	principalId: string;
+	kind: AuthContext["credential"];
+	/** The API key or the OAuth grant. Null for a session: the effect then stops only with its principal. */
+	id: string | null;
+}
+
+export function credentialBinding(caller: AuthContext): CredentialBinding {
+	const id = caller.credential === "api_key" ? caller.keyId : caller.credential === "oauth" ? caller.grantId : null;
+	return { principalId: caller.principal.id, kind: caller.credential, id };
+}
+
+/**
+ * The state of a credential binding now. `live`: the principal and its credential work. `archived`: the
+ * principal is archived, and a restore makes the credential work again. `ended`: the principal was
+ * deleted, or the key or the OAuth grant was revoked or expired. A session binding ends only with its
+ * principal: a sign-out does not end it.
+ */
+export async function credentialState(
+	db: D1Database,
+	binding: CredentialBinding,
+): Promise<{ state: "live"; principal: PrincipalRecord } | { state: "archived" } | { state: "ended" }> {
+	// A deleted principal has no address, so getPrincipal does not find it.
+	const principal = await getPrincipal(db, binding.principalId);
+	if (!principal) return { state: "ended" };
+	if (binding.kind === "api_key") {
+		const key = binding.id ? await getApiKey(db, binding.id) : null;
+		if (!key || key.revoked_at !== null || key.principal_id !== principal.id) return { state: "ended" };
+	} else if (binding.kind === "oauth") {
+		const grant = binding.id ? await getGrant(db, binding.id) : null;
+		if (
+			!grant ||
+			grant.revoked_at !== null ||
+			grant.principal_id !== principal.id ||
+			Date.parse(grant.refresh_expires_at) <= Date.now()
+		) {
+			return { state: "ended" };
+		}
+	}
+	if (principal.archived_at !== null) return { state: "archived" };
+	return { state: "live", principal };
 }

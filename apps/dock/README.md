@@ -50,16 +50,18 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound` and acknowledges batches of other queues. `scheduled` logs.
+  `soldock-mail-inbound` and `soldock-webhooks`, and acknowledges batches of other queues.
+  `scheduled` logs.
 
 ## Bindings
 
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, and the room index of Chat |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, and the webhooks of Mail |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
+| `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of the mailboxes, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal |
@@ -98,9 +100,11 @@ with injected inbound mail.
 | State | Module | Where |
 | --- | --- | --- |
 | Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains, team mailboxes and their members, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
-| Mailboxes (messages, threads, labels, search index, delivery, outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
+| Mailboxes (messages, threads, labels, search index, delivery, outbox, event outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<mailbox id>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
+| Webhooks (URL, signing secret, creator, credential, delivery state) | [`mail`](src/mail/README.md#webhooks) | D1 `DIRECTORY`, table `webhooks` |
+| Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>` |
 | The content of each doc and each sheet, with its revision | [`collab`](src/collab/README.md) | `DocumentDO` SQLite |

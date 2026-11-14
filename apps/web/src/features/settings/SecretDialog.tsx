@@ -1,4 +1,4 @@
-import type { CreatedApiKey } from "@soldock/contracts";
+import type { CreatedApiKey, CreatedWebhook } from "@soldock/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
@@ -16,6 +16,51 @@ export function SecretDialog({
 	/** More text under the key, for example what to do next. */
 	children?: ReactNode;
 }) {
+	return (
+		<OneTimeSecretDialog
+			title={title ?? "Copy the new API key"}
+			label={`API key “${apiKey.label}”`}
+			secret={apiKey.secret}
+			warning="This key is shown only once. Copy it now and keep it in a safe place. Anyone with the key can act as its owner."
+			onClose={onClose}
+		>
+			<p className="field-hint">Scopes: {apiKey.scopes.join(", ")}</p>
+			{children}
+		</OneTimeSecretDialog>
+	);
+}
+
+/** Shows the signing secret of a new webhook. The server returns it once and never again. */
+export function WebhookSecretDialog({ webhook, onClose }: { webhook: CreatedWebhook; onClose: () => void }) {
+	return (
+		<OneTimeSecretDialog
+			title="Copy the signing secret"
+			label={`Signing secret of “${webhook.label}”`}
+			secret={webhook.secret}
+			warning="This secret is shown only once. Copy it now and give it to the receiver of the webhook, which uses it to verify each POST (Standard Webhooks)."
+			onClose={onClose}
+		>
+			<p className="field-hint">URL: {webhook.url}</p>
+		</OneTimeSecretDialog>
+	);
+}
+
+/** A secret that the server returns once, with a copy button. */
+function OneTimeSecretDialog({
+	title,
+	label,
+	secret,
+	warning,
+	onClose,
+	children,
+}: {
+	title: string;
+	label: string;
+	secret: string;
+	warning: string;
+	onClose: () => void;
+	children?: ReactNode;
+}) {
 	const [copied, setCopied] = useState<"no" | "yes" | "failed">("no");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const inputId = useId();
@@ -23,7 +68,7 @@ export function SecretDialog({
 
 	async function copy() {
 		try {
-			await navigator.clipboard.writeText(apiKey.secret);
+			await navigator.clipboard.writeText(secret);
 			setCopied("yes");
 		} catch {
 			inputRef.current?.select();
@@ -32,17 +77,14 @@ export function SecretDialog({
 	}
 
 	return (
-		<Dialog title={title ?? "Copy the new API key"} onClose={onClose} className="dialog-small">
+		<Dialog title={title} onClose={onClose} className="dialog-small">
 			<div className="dialog-body">
 				<p id={warningId} className="warning-box">
 					<Icon name="warning" size={18} />
-					<span>
-						This key is shown only once. Copy it now and keep it in a safe place. Anyone with the key can act as its
-						owner.
-					</span>
+					<span>{warning}</span>
 				</p>
 				<label htmlFor={inputId} className="field-label">
-					API key “{apiKey.label}”
+					{label}
 				</label>
 				<div className="secret-row">
 					<input
@@ -50,7 +92,7 @@ export function SecretDialog({
 						id={inputId}
 						className="input input-mono"
 						readOnly
-						value={apiKey.secret}
+						value={secret}
 						aria-describedby={warningId}
 						onFocus={(event) => event.currentTarget.select()}
 					/>
@@ -61,9 +103,8 @@ export function SecretDialog({
 				</div>
 				<p className="field-hint" aria-live="polite">
 					{copied === "yes" && "Copied to the clipboard."}
-					{copied === "failed" && "Copy did not work. The key is selected: press Ctrl+C or Cmd+C."}
+					{copied === "failed" && "Copy did not work. The secret is selected: press Ctrl+C or Cmd+C."}
 				</p>
-				<p className="field-hint">Scopes: {apiKey.scopes.join(", ")}</p>
 				{children}
 			</div>
 			<div className="dialog-actions">

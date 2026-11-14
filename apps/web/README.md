@@ -187,8 +187,11 @@ MCP clients. The app has no UI-only path.
       tells the admin to give them a different sponsor first.
   - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
-    For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
-    OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
+    For each agent, the page sets the outbound policy (mail recipients and webhook hosts), lists the
+    apps that connected as it with OAuth (with a Revoke button, `oauth.list_grants`,
+    `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
+    button), and manages the API keys. Only the sponsor sees the form that creates a webhook for the
+    agent (`mail.create_webhook` with the id of the agent).
     For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
     The **New person or agent** dialog also shows the banner when Agent is selected.
@@ -200,6 +203,10 @@ MCP clients. The app has no UI-only path.
     - **Edit** (a pencil icon) in a row opens a dialog that changes the name
       (`directory.update_team_mailbox`). The address cannot change, so the dialog shows it under
       the title.
+    - **Webhooks** (a link icon) in a row opens a dialog with each webhook of the shared mailbox and a
+      Delete button (`mail.list_webhooks`, `mail.delete_webhook`). Members create webhooks in Settings.
+      An owner or an admin can delete one, for example when the mailbox reaches its limit of active
+      webhooks.
     - **Members** (a people icon) in a row opens a dialog with the members, a control to add a member
       and a button to remove each member, with a confirmation (`directory.add_team_mailbox_member`,
       `directory.remove_team_mailbox_member`).
@@ -221,8 +228,12 @@ MCP clients. The app has no UI-only path.
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
-  (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
-  on other browsers. A new key can hold only the scopes of the session.
+  (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
+  (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
+  of the session. A new key does not get `account.keys`, `directory.write` or `mail.webhooks`
+  unless the person selects them.
+  - A new webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
+    once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
@@ -431,7 +442,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, the message list rules and the room sync of Chat, and the first values of the OAuth approval page |

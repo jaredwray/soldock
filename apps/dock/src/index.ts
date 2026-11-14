@@ -2,7 +2,13 @@
 // exported from here. The operation handlers of each domain are joined in handlers.ts.
 import { createApp } from "./app.ts";
 import { handlers, watchers } from "./handlers.ts";
-import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
+import {
+	handleEmail,
+	handleInboundBatch,
+	handleWebhookBatch,
+	MAIL_INBOUND_QUEUE,
+	WEBHOOK_QUEUE,
+} from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
 
@@ -31,6 +37,10 @@ export default {
 	async queue(batch, env) {
 		if (batch.queue === MAIL_INBOUND_QUEUE) {
 			await handleInboundBatch(batch, env);
+			return;
+		}
+		if (batch.queue === WEBHOOK_QUEUE) {
+			await handleWebhookBatch(batch, env);
 			return;
 		}
 		// A queue without a consumer here. Acknowledge so nothing redelivers forever.

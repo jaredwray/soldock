@@ -13,6 +13,8 @@ export const SCOPES = {
 		"Read your mail and labels, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
 	"mail.modify": "Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes",
 	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
+	"mail.webhooks":
+		"Create, list and delete webhooks that tell a URL outside Soldock when new mail arrives in your mailbox, your team mailboxes and the mailboxes of the agents that you sponsor",
 	"drive.read": "Read your drive and the items that others shared with you: folders, files, docs and sheets",
 	"drive.write":
 		"Create, change, move and delete the items of your drive, and change the items that others let you edit",
@@ -36,6 +38,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"mail.read",
 	"mail.modify",
 	"mail.send",
+	"mail.webhooks",
 	"drive.read",
 	"drive.write",
 	"drive.share",

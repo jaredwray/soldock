@@ -2192,6 +2192,13 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
+/* The URL of a webhook, under its label. A long URL wraps instead of widening the table. */
+.cell-url {
+	font-family: var(--mono);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
 .cell-address {
 	overflow-wrap: anywhere;
 }

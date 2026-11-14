@@ -72,7 +72,13 @@ export function mountRestApi(app: Hono<ApiEnv>, handlers: HandlerMap<CallContext
 				throw new OperationError("forbidden", "A change made with the session cookie must come from this origin.");
 			}
 			const input = await readInput(c, operation);
-			const call: CallContext = { caller, env: c.env, requestId: c.var.requestId, waitUntil };
+			const call: CallContext = {
+				caller,
+				env: c.env,
+				requestId: c.var.requestId,
+				origin: new URL(c.req.url).origin,
+				waitUntil,
+			};
 			const output = await invokeOperation(operation, handler, call, input);
 			return c.json(output as object, 200, { "cache-control": "no-store" });
 		});

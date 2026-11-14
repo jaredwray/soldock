@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { WebhookManager } from "../settings/Webhooks.tsx";
 import { EditSharedMailboxDialog } from "./EditSharedMailboxDialog.tsx";
 import { RowButton } from "./RowButton.tsx";
 
@@ -24,12 +25,12 @@ function memberNames(members: readonly Principal[]): string {
 	return members.length > 3 ? `${names.join(", ")} and ${members.length - 3} more` : names.join(", ");
 }
 
-type Action = { kind: "create" } | { kind: "edit" | "members"; mailboxId: string };
+type Action = { kind: "create" } | { kind: "edit" | "members" | "webhooks"; mailboxId: string };
 
 /**
  * Owners and admins create shared mailboxes, change them and decide who can use each one. A shared
  * mailbox has its own address: each member, a person or an agent, reads it and sends from its address.
- * The section is a list. "New shared mailbox", and Edit and Members in each row, open dialogs.
+ * The section is a list. "New shared mailbox", and Edit, Members and Webhooks in each row, open dialogs.
  */
 export function SharedMailboxesSection({ principals }: { principals: readonly Principal[] }) {
 	const toast = useToast();
@@ -131,6 +132,11 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 													label={`Members of ${mailbox.display_name}`}
 													onClick={() => setAction({ kind: "members", mailboxId: mailbox.id })}
 												/>
+												<RowButton
+													icon="link"
+													label={`Webhooks of ${mailbox.display_name}`}
+													onClick={() => setAction({ kind: "webhooks", mailboxId: mailbox.id })}
+												/>
 											</div>
 										</td>
 									</tr>
@@ -163,6 +169,27 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 			)}
 			{open && action?.kind === "members" && (
 				<MembersDialog mailbox={open} principals={principals} onChanged={save} onClose={() => setAction(null)} />
+			)}
+			{open && action?.kind === "webhooks" && (
+				<Dialog
+					title={`Webhooks of ${open.display_name}`}
+					description={`${open.address}. Members create webhooks. You can delete one, for example when the mailbox reaches its limit.`}
+					onClose={() => setAction(null)}
+				>
+					<div className="dialog-body">
+						<WebhookManager
+							heading={`Webhooks of ${open.display_name}`}
+							mailboxId={open.id}
+							canCreate={false}
+							framed={false}
+						/>
+					</div>
+					<div className="dialog-actions">
+						<button type="button" className="button" onClick={() => setAction(null)}>
+							Done
+						</button>
+					</div>
+				</Dialog>
 			)}
 		</div>
 	);

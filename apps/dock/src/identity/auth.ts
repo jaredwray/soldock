@@ -13,6 +13,8 @@ export interface AuthContext extends Caller {
 	/** `oauth`: an access token that an MCP client got through OAuth. */
 	credential: "session" | "api_key" | "oauth";
 	keyId: string | null;
+	/** The OAuth grant of an `oauth` credential. A lasting effect, such as a webhook, stops with the grant. */
+	grantId: string | null;
 	/** The SHA-256 of the session cookie, for a session. A change can end the other sessions and keep this one. */
 	sessionHash: string | null;
 	scopes: ReadonlySet<Scope>;
@@ -23,6 +25,8 @@ export interface CallContext {
 	caller: AuthContext;
 	env: Env;
 	requestId: string;
+	/** The origin of the request, such as `https://work.soldock.org`. A webhook cannot use its host. */
+	origin: string;
 	waitUntil(promise: Promise<unknown>): void;
 }
 
@@ -64,6 +68,7 @@ export async function authenticate(
 				kind: granted.principal.kind,
 				credential: "oauth",
 				keyId: null,
+				grantId: granted.grant.id,
 				sessionHash: null,
 				scopes: new Set(granted.grant.scopes.filter((scope) => ceiling.has(scope))),
 			};
@@ -79,6 +84,7 @@ export async function authenticate(
 			kind: found.principal.kind,
 			credential: "api_key",
 			keyId: found.key.id,
+			grantId: null,
 			sessionHash: null,
 			scopes: new Set(found.key.scopes.filter((scope) => ceiling.has(scope))),
 		};
@@ -95,6 +101,7 @@ export async function authenticate(
 		kind: "human",
 		credential: "session",
 		keyId: null,
+		grantId: null,
 		sessionHash: session.tokenHash,
 		scopes: new Set<Scope>(ALL_SCOPES),
 	};
