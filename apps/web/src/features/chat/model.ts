@@ -42,13 +42,41 @@ export function withChanges(
 const GROUP_MS = 5 * 60 * 1000;
 
 /**
- * True when a message shows its author and its time. A message from the same author, less than five
- * minutes after the message before it, continues the group of that message.
+ * True when a message is the first message of its day in the list. The day is the day of the device.
+ * The list then shows the date above the message.
+ */
+export function startsDay(previous: ChatMessage | undefined, message: ChatMessage): boolean {
+	if (!previous) return true;
+	return new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
+}
+
+/**
+ * True when a message shows its avatar, its author and its time. A message from the same author, on
+ * the same day and less than five minutes after the message before it, continues the group of that
+ * message.
  */
 export function startsGroup(previous: ChatMessage | undefined, message: ChatMessage): boolean {
-	if (!previous) return true;
+	if (!previous || startsDay(previous, message)) return true;
 	if (previous.author.principal_id !== message.author.principal_id) return true;
 	return Date.parse(message.created_at) - Date.parse(previous.created_at) > GROUP_MS;
+}
+
+const dayFormat = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+
+/** The date between the messages of two days, for example "October 31, 2026". */
+export function dayLabel(iso: string): string {
+	return dayFormat.format(new Date(iso));
+}
+
+/** The time next to the author of a message. The date is above the first message of the day. */
+export function timeLabel(iso: string): string {
+	return timeFormat.format(new Date(iso));
+}
+
+/** The text in the empty box for a new message: "Message #room", or "Message" and the name of the other member. */
+export function draftPlaceholder(room: Pick<ChatRoom, "kind" | "name" | "peer">): string {
+	return `Message ${room.kind === "dm" ? "" : "#"}${roomTitle(room)}`;
 }
 
 /** The rooms of the sidebar: the rooms with a name, then the direct messages. Each keeps the order of the list. */

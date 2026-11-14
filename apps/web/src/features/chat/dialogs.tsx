@@ -223,7 +223,9 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 				<ul className="chat-rows">
 					{state.rooms.map((room) => (
 						<li key={room.id} className="chat-row">
-							<Icon name="hash" />
+							<span className="chat-row-tile" aria-hidden="true">
+								<Icon name="hash" size={18} />
+							</span>
 							<span className="chat-row-text">
 								<strong>{room.name}</strong>
 								<span className="muted">
@@ -342,10 +344,10 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 									{initials(principal.display_name)}
 								</span>
 								<span className="chat-row-text">
-									<strong>
-										{principal.display_name}
-										{principal.kind === "agent" && " (agent)"}
-									</strong>
+									<span className="chat-row-name">
+										<strong>{principal.display_name}</strong>
+										{principal.kind === "agent" && <span className="kind kind-agent">agent</span>}
+									</span>
 									<span className="muted">{principal.address}</span>
 								</span>
 							</button>
@@ -480,11 +482,13 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 								{initials(member.display_name)}
 							</span>
 							<span className="chat-row-text">
-								<strong>
-									{member.display_name}
-									{member.principal_id === ownId && " (you)"}
-									{member.kind === "agent" && " (agent)"}
-								</strong>
+								<span className="chat-row-name">
+									<strong>
+										{member.display_name}
+										{member.principal_id === ownId && " (you)"}
+									</strong>
+									{member.kind === "agent" && <span className="kind kind-agent">agent</span>}
+								</span>
 								{member.role === "owner" && <span className="muted">Owner of the room</span>}
 							</span>
 							{!fixed && room.role === "owner" && member.principal_id !== ownId && (

@@ -378,8 +378,10 @@ MCP clients. The app has no UI-only path.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
-    bold with a dot. The magnifier opens the list of the public rooms, where the person joins a
-    room. The plus opens a list of people and agents for a new direct message.
+    bold with a dot at the right. A direct message row shows a round avatar with the initials of
+    the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
+    rooms, where the person joins a room. The plus opens a list of people and agents for a new
+    direct message.
   - The room list comes from `chat.list_rooms` each 4 seconds while the tab is visible, and on
     window focus. When the `version` of the open room is higher than the version of the page, the
     page calls `chat.list_messages` with `changed_after`. It then shows each new, changed and
@@ -388,15 +390,29 @@ MCP clients. The app has no UI-only path.
   - An open room is read: the page calls `chat.mark_read` with the `seq` of the last message that
     it shows, one time for each new message, only while the tab is visible. The open room has no
     dot in the sidebar, because its marker reaches the room list a few seconds later.
+  - The box for a new message has a border with round corners. Its empty text is "Message #room",
+    or "Message" and the name of the other member. The round send button is at its bottom right.
   - Enter sends the message. Shift+Enter makes a new line. A send has an `idempotency_key`, so a
     retry after a lost answer does not post the text two times.
-  - The text of a message shows as plain text, with its line breaks. An agent has an "agent" mark
-    next to its name. A message from the same author within 5 minutes shows without the name.
+  - A message shows an avatar with the initials of its author, then the name in bold and the time
+    on one line, and the text below. The avatar of a person is a square with round corners. The
+    avatar of an agent is a circle, and an agent has an "agent" mark next to its name.
+  - A message from the same author, on the same day and within 5 minutes, shows without the avatar
+    and the name. A screen reader still gets the author and the time.
+  - The first message of each day has the date above it, in a pill at the center of a line. The
+    day is the day of the device.
+  - The text of a message shows as plain text, with its line breaks.
+  - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
+    bar at its top right shows the buttons to change and to delete the message. On a touch screen,
+    the buttons are always in the row.
   - The person changes their own message in place, and deletes it after a confirmation. The owner
     of a room can delete each message. A deleted message shows "This message was deleted."
   - **Show older messages** gets the page before the first message, and the list stays at the same
     message. A new message moves the list to its end only when the list was at its end.
-  - The header shows the name, the topic and the number of members. The members dialog lists the
+  - The header shows the icon of the room, the name and the topic on one line. A private room has
+    a lock. A direct message has the avatar of the other member. A button at the right shows the
+    number of members.
+  - The members dialog lists the
     members, adds a person or an agent, lets the owner remove a member, and has **Leave the room**.
     The owner changes the name and the topic in a second dialog.
   - A public room that the person did not join shows **Join the room**, not its messages.
@@ -442,7 +458,9 @@ dark values are on `:root.dark`.
 - `--control`, `--control-hover`, `--control-border` and `--field` are the fills of buttons and text
   fields. They have dark values, so a component needs no rule for dark mode.
 - Radii: `--radius` 10px (cards, dialogs, rail items), `--radius-md` 8px (buttons, fields, rows,
-  menus) and `--radius-sm` 6px (menu items, chips). Only badges, the switch and avatars are round.
+  menus) and `--radius-sm` 6px (menu items, chips). Only badges, the switch and avatars are round,
+  and in Chat the date pill and the send button. The avatar of a person next to a chat message is
+  a square with a radius of 6px.
 - Shadows: `--shadow-xs` (buttons, fields), `--shadow-menu` (menus, toasts) and `--shadow-dialog`.
   The rail, the sidebar, the drawer, cards and rows have no shadow.
 - Sizes: `--rail-width` 80px, `--sidebar-width` 280px (230px from 901px to 1100px) and

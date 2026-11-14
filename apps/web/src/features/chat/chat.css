@@ -23,6 +23,48 @@
 	flex: 1;
 }
 
+/* An empty page, an empty room, and a public room that the person did not join. */
+
+.chat-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 48px 16px;
+	color: var(--muted-foreground);
+	text-align: center;
+}
+
+.chat-empty-page {
+	flex: 1;
+}
+
+.chat-empty-tile {
+	display: grid;
+	place-items: center;
+	width: 56px;
+	height: 56px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.chat-empty-title {
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	color: var(--foreground);
+	font-size: 17px;
+	font-weight: 650;
+	letter-spacing: -0.025em;
+	line-height: 1.4;
+}
+
+.chat-empty .button {
+	margin-top: 12px;
+}
+
 .chat-start {
 	display: flex;
 	flex-wrap: wrap;
@@ -30,7 +72,7 @@
 	gap: 8px;
 }
 
-/* The room list */
+/* The room list. An unread room is bold and has a dot at the right. */
 
 .chat-nav-unread .nav-name {
 	font-weight: 650;
@@ -40,29 +82,45 @@
 	flex: none;
 	width: 7px;
 	height: 7px;
+	margin-right: 4px;
 	border-radius: 50%;
 	background: var(--foreground);
 }
 
 .chat-nav-avatar {
-	width: 20px;
-	height: 20px;
+	width: 24px;
+	height: 24px;
+	margin: -1px -3px;
 	font-size: 10px;
 }
 
-/* The header of a room. The box rules are with the page header in styles.css. */
+.sidebar .kind-agent {
+	flex: none;
+	color: var(--muted-foreground);
+	font-weight: 500;
+}
+
+/* The header of a room: the icon, the name and the topic on one line, and the buttons at the right.
+   The box rules are with the page header in styles.css. */
+
+.chat-header {
+	gap: 10px;
+}
 
 .chat-header > .icon {
 	flex: none;
 	color: var(--muted-foreground);
 }
 
-.chat-header-text {
-	flex: 1;
-	min-width: 0;
+.chat-header-avatar {
+	width: 24px;
+	height: 24px;
+	font-size: 10px;
 }
 
 .chat-title {
+	flex: 0 1 auto;
+	min-width: 0;
 	overflow: hidden;
 	font-size: 17px;
 	font-weight: 650;
@@ -71,24 +129,68 @@
 	white-space: nowrap;
 }
 
+.chat-header > .kind {
+	flex: none;
+}
+
 .chat-topic {
+	flex: 1 1 0;
+	min-width: 0;
 	overflow: hidden;
+	color: var(--muted-foreground);
 	font-size: 13px;
+	line-height: 18px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.chat-header-actions {
+	display: flex;
+	align-items: center;
+	flex: none;
+	gap: 6px;
+	margin-left: auto;
+}
+
+.chat-header-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 36px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: var(--radius-md);
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+
+.chat-header-button:hover {
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 /* The messages */
 
 .chat-scroll {
+	display: flex;
 	flex: 1;
+	flex-direction: column;
 	min-height: 0;
 	padding: 8px 0 12px;
 	overflow-y: auto;
 }
 
-.chat-scroll .list-state {
-	padding: 48px 16px;
+.chat-scroll > * {
+	flex: none;
+}
+
+.chat-scroll > .chat-empty {
+	flex: 1 0 auto;
 }
 
 .chat-more {
@@ -104,86 +206,200 @@
 	list-style: none;
 }
 
+/* The date between the messages of two days: a pill at the center of a line. */
+
+.chat-day {
+	padding: 0 20px;
+}
+
+.chat-day-heading {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 13px 0 12px;
+	font-size: 14px;
+	font-weight: 700;
+	letter-spacing: 0;
+	line-height: 20px;
+}
+
+.chat-day-heading::before,
+.chat-day-heading::after {
+	flex: 1;
+	border-top: 1px solid var(--border);
+	content: "";
+}
+
+.chat-day-heading time {
+	padding: 3px 16px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	background: var(--background);
+}
+
+/* One message: a column for the avatar, then the author, the time and the text. A message that
+   starts a group has 4px more above it, so a new author starts 12px below the message before. */
+
 .chat-message {
 	position: relative;
-	display: flex;
-	gap: 12px;
-	padding: 2px 24px;
+	display: grid;
+	grid-template-columns: 36px minmax(0, 1fr);
+	column-gap: 8px;
+	padding: 0 20px;
 }
 
 .chat-message:hover,
 .chat-message:focus-within {
-	background: var(--surface);
+	background: var(--row-hover);
 }
 
 .chat-message-head {
-	margin-top: 10px;
+	padding-top: 4px;
 }
 
 .chat-avatar {
-	flex: none;
-	width: 32px;
+	display: grid;
+	place-items: center;
+	grid-column: 1;
+	width: 36px;
+	height: 36px;
+	margin-top: 8px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--hover);
+	color: var(--foreground);
+	font-size: 13px;
+	font-weight: 600;
+	user-select: none;
+}
+
+.chat-avatar-agent {
+	border-radius: 50%;
 }
 
 .chat-message-body {
-	flex: 1;
+	grid-column: 2;
 	min-width: 0;
+	padding: 4px 0;
 }
 
 .chat-message-meta {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: baseline;
 	gap: 8px;
-	margin: 0;
+	min-height: 22px;
+	font-size: 15px;
+	line-height: 22px;
 }
 
-.chat-message-meta time {
+.chat-author {
+	overflow: hidden;
+	font-weight: 700;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-message-meta .kind {
+	flex: none;
+	align-self: center;
+}
+
+.chat-time {
+	flex: none;
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
 /* The text of a message is plain text. Line breaks stay, and a long word wraps. */
 .chat-text {
-	margin: 0;
+	font-size: 15px;
+	line-height: 22px;
 	overflow-wrap: anywhere;
 	white-space: pre-wrap;
+}
+
+.chat-text-deleted,
+.chat-edited {
+	color: var(--muted-foreground);
 }
 
 .chat-edited {
 	font-size: 12px;
 }
 
+/* The actions of a message: a small bar at the top right of the row. It shows while the pointer is
+   on the row, and while the focus is in the row. */
+
 .chat-message-actions {
 	position: absolute;
-	top: -12px;
+	top: -16px;
 	right: 20px;
+	z-index: 1;
 	display: flex;
+	gap: 2px;
+	padding: 3px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--background);
+	border-radius: var(--radius);
+	background: var(--popover);
+	box-shadow: var(--shadow-xs);
 	opacity: 0;
+	pointer-events: none;
+}
+
+.chat-message-head .chat-message-actions {
+	top: -12px;
 }
 
 .chat-message:hover .chat-message-actions,
 .chat-message:focus-within .chat-message-actions {
 	opacity: 1;
+	pointer-events: auto;
 }
 
+.chat-message-actions .icon-button {
+	border-radius: 7px;
+}
+
+/* A touch screen has no hover, so the actions stay in the row, at half strength. */
 @media (hover: none) {
+	.chat-message {
+		grid-template-columns: 36px minmax(0, 1fr) auto;
+	}
+
 	.chat-message-actions {
 		position: static;
-		align-self: flex-start;
+		grid-column: 3;
+		align-self: start;
+		padding: 0;
 		border: 0;
 		background: none;
+		box-shadow: none;
 		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.chat-message-actions .icon-button {
+		width: 44px;
+		height: 44px;
 	}
 }
 
 .chat-edit {
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
+	gap: 8px;
 	padding: 4px 0;
+}
+
+.chat-edit-draft {
+	min-height: 44px;
+	max-height: 40dvh;
+	padding: 10px 12px;
+	border-radius: 12px;
+	font-size: 15px;
+	line-height: 22px;
+	resize: none;
+	field-sizing: content;
 }
 
 .chat-edit-actions {
@@ -192,33 +408,81 @@
 	gap: 8px;
 }
 
-/* The box for a new message */
+/* The box for a new message: a border with round corners. The text field fills it, and the round
+   send button is at its bottom right. */
 
 .chat-composer {
+	flex: none;
+	padding: 10px 22px 12px;
+	background: var(--background);
+}
+
+.chat-composer-box {
 	display: flex;
-	align-items: flex-end;
-	gap: 8px;
-	padding: 8px 16px 16px 24px;
+	flex-direction: column;
+	min-height: 108px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+}
+
+/* The box shows the focus of its text field. */
+.chat-composer-box:has(.chat-draft:focus-visible) {
+	border-color: var(--ring);
 }
 
 .chat-draft {
 	flex: 1;
 	min-height: 44px;
 	max-height: 40dvh;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--foreground);
+	font: inherit;
+	font-size: 15px;
+	line-height: 22px;
 	resize: none;
 	field-sizing: content;
 }
 
+.chat-draft:focus-visible {
+	outline: none;
+}
+
+.chat-draft::placeholder {
+	color: var(--muted-foreground);
+}
+
+.chat-composer-bar {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex: none;
+}
+
 .chat-send {
-	width: 44px;
-	height: 44px;
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
 	background: var(--primary);
 	color: var(--primary-foreground);
+	cursor: pointer;
 }
 
 .chat-send:hover:not(:disabled) {
 	background: var(--primary-hover);
-	color: var(--primary-foreground);
+}
+
+.chat-send:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 /* Dialogs */
@@ -249,6 +513,9 @@
 }
 
 .chat-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
@@ -262,13 +529,24 @@
 	padding: 6px 0;
 }
 
-.chat-row > .icon {
+/* The mark of a room in a list: a tile of the same size as an avatar. */
+.chat-row-tile {
+	display: grid;
+	place-items: center;
 	flex: none;
+	width: 32px;
+	height: 32px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface);
 	color: var(--muted-foreground);
 }
 
+/* A row that is one button: a person or an agent in the list for a new direct message. Its fill
+   goes 8px past the text at each side, so the avatars are in line with the text field above. */
 .chat-row-button {
-	width: 100%;
+	width: calc(100% + 16px);
+	margin: 0 -8px;
 	padding: 6px 8px;
 	border: 0;
 	border-radius: var(--radius-md);
@@ -283,6 +561,10 @@
 	background: var(--hover);
 }
 
+.chat-row-button:focus-visible {
+	outline-offset: -2px;
+}
+
 .chat-row-text {
 	display: flex;
 	flex: 1;
@@ -290,10 +572,25 @@
 	min-width: 0;
 }
 
-.chat-row-text > * {
+.chat-row-text > *,
+.chat-row-name > strong {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.chat-row-text strong {
+	font-weight: 600;
+}
+
+.chat-row-name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.chat-row-name .kind {
+	flex: none;
 }
 
 .chat-row-text .muted {
@@ -309,11 +606,74 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.chat-header {
+		gap: 7px;
+	}
+
+	.chat-title {
+		font-size: 16px;
+	}
+
+	.chat-header-actions {
+		gap: 0;
+	}
+
 	.chat-message {
-		padding: 2px 16px;
+		grid-template-columns: 30px minmax(0, 1fr);
+		column-gap: 10px;
+		padding: 0 12px;
+	}
+
+	.chat-avatar {
+		width: 30px;
+		height: 30px;
+		font-size: 11px;
+	}
+
+	.chat-day {
+		padding: 0 12px;
+	}
+
+	.chat-day-heading {
+		gap: 8px;
+	}
+
+	.chat-message-actions {
+		right: 12px;
 	}
 
 	.chat-composer {
-		padding: 8px 8px 12px 16px;
+		padding: 8px 10px 10px;
+	}
+
+	.chat-composer-box {
+		min-height: 100px;
+		padding: 10px;
+	}
+}
+
+@media (max-width: 900px) and (hover: none) {
+	.chat-message {
+		grid-template-columns: 30px minmax(0, 1fr) auto;
+	}
+}
+
+/* Touch: the send button is 44px, and the text fields have 16px text, so that iOS does not zoom in. */
+@media (max-width: 900px), (pointer: coarse) {
+	.chat-draft,
+	.chat-edit-draft {
+		font-size: 16px;
+	}
+
+	.chat-send,
+	.chat-header-button {
+		width: 44px;
+		height: 44px;
+	}
+
+	.chat-header-button {
+		width: auto;
+		min-width: 44px;
+		justify-content: center;
 	}
 }

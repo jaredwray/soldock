@@ -56,8 +56,11 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 				{roomId === null ? (
 					<>
 						<PageHeader title="Chat" icon="chat" />
-						<div className="list-state">
-							<Icon name="chat" size={40} />
+						<div className="chat-empty chat-empty-page">
+							<span className="chat-empty-tile" aria-hidden="true">
+								<Icon name="chat" size={24} />
+							</span>
+							<h2 className="chat-empty-title">Your rooms and direct messages</h2>
 							<p>Select a room or a direct message, or start a new one.</p>
 							<p className="chat-start">
 								<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
@@ -193,10 +196,8 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 				) : (
 					<Icon name={room.kind === "private" ? "lock" : "hash"} />
 				)}
-				<span className="nav-name">
-					{title}
-					{room.kind === "dm" && room.peer?.kind === "agent" && " (agent)"}
-				</span>
+				<span className="nav-name">{title}</span>
+				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{unread && (
 					<span className="chat-nav-dot">
 						<span className="visually-hidden">Unread messages</span>

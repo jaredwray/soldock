@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { startsGroup, withChanges, withOlder } from "../src/features/chat/model.ts";
+import { startsDay, startsGroup, withChanges, withOlder } from "../src/features/chat/model.ts";
 
 const ADA = { principal_id: "prn_01JD0000000000000000000ADA", kind: "human", display_name: "Ada Lovelace" } as const;
 const BOT = { principal_id: "prn_01JD0000000000000000000B0T", kind: "agent", display_name: "Deploy Bot" } as const;
@@ -71,5 +71,18 @@ describe("the look of a room", () => {
 		expect(startsGroup(message(1), message(2))).toBe(false);
 		expect(startsGroup(message(1), message(2, { author: BOT }))).toBe(true);
 		expect(startsGroup(message(1), message(7))).toBe(true);
+	});
+
+	// The times are times of the device, as the page shows them: two minutes apart, across midnight.
+	it("shows the date and the author again on the first message of a day", () => {
+		const evening = message(1, { created_at: new Date(2026, 0, 1, 23, 59).toISOString() });
+		const night = message(2, { created_at: new Date(2026, 0, 2, 0, 1).toISOString() });
+		const later = message(3, { created_at: new Date(2026, 0, 2, 0, 3).toISOString() });
+		expect([startsDay(undefined, evening), startsDay(evening, night), startsDay(night, later)]).toEqual([
+			true,
+			true,
+			false,
+		]);
+		expect([startsGroup(evening, night), startsGroup(night, later)]).toEqual([true, false]);
 	});
 });

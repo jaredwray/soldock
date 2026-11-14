@@ -75,6 +75,7 @@ const FILES: Record<IconName, string> = {
 	sun: "sun-light",
 	moon: "half-moon",
 	system: "computer",
+	arrowUp: "arrow-up",
 };
 
 const sources = import.meta.glob<string>("../src/lib/iconoir/**/*.svg", {

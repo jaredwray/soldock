@@ -453,6 +453,7 @@ const PATHS = {
 			join: false,
 		},
 	],
+	arrowUp: [{ d: "M12 21L12 3M12 3L20.5 11.5M12 3L3.5 11.5" }],
 } as const satisfies Record<string, readonly IconPath[]>;
 
 /** The solid star of Iconoir (`iconoir/solid/star.svg`). A set star shows it. */
