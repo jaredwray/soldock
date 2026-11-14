@@ -38,6 +38,9 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 	);
 	const canEdit = (p: Principal) => p.org_role !== "owner" || p.id === me.id;
 	const canRemove = (p: Principal) => p.org_role !== "owner" && p.id !== me.id;
+	// The server refuses to archive a person who sponsors an agent that is not archived, and to delete a
+	// person who sponsors any agent: the person could still act through the keys of the agent.
+	const activeAgentsOf = (p: Principal) => principals.filter((a) => a.sponsor_id === p.id && a.archived_at === null);
 
 	async function restore(principal: Principal) {
 		try {
@@ -178,7 +181,15 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 				/>
 			)}
 			{action?.kind === "sign-in" && <ResetSignInDialog person={action.principal} onClose={() => setAction(null)} />}
-			{action?.kind === "archive" && (
+			{action?.kind === "archive" && activeAgentsOf(action.principal).length > 0 && (
+				<SponsorNotice
+					principal={action.principal}
+					agents={activeAgentsOf(action.principal)}
+					action="archive"
+					onClose={() => setAction(null)}
+				/>
+			)}
+			{action?.kind === "archive" && activeAgentsOf(action.principal).length === 0 && (
 				<ConfirmDialog
 					title={`Archive ${action.principal.display_name}?`}
 					confirmLabel="Archive"
@@ -239,23 +250,35 @@ interface DeleteDialogProps {
 	onDeleted: () => void;
 }
 
+interface SponsorNoticeProps {
+	principal: Principal;
+	agents: readonly Principal[];
+	action: "archive" | "delete";
+	onClose: () => void;
+}
+
+/** Tells why a person who sponsors agents cannot be archived or deleted yet, and what to do first. */
+function SponsorNotice({ principal, agents, action, onClose }: SponsorNoticeProps) {
+	return (
+		<Dialog title={`${principal.display_name} sponsors agents`} onClose={onClose} className="dialog-small">
+			<div className="dialog-body">
+				<p>
+					{principal.display_name} sponsors {agents.map((agent) => agent.display_name).join(", ")}. Give each agent a
+					different sponsor with Edit, or {action} it. Then {action} {principal.display_name}.
+				</p>
+			</div>
+			<div className="dialog-actions">
+				<button type="button" className="button button-primary" onClick={onClose} data-autofocus>
+					OK
+				</button>
+			</div>
+		</Dialog>
+	);
+}
+
 function DeleteDialog({ principal, sponsored, onClose, onDeleted }: DeleteDialogProps) {
 	if (sponsored.length > 0) {
-		return (
-			<Dialog title={`${principal.display_name} sponsors agents`} onClose={onClose} className="dialog-small">
-				<div className="dialog-body">
-					<p>
-						{principal.display_name} sponsors {sponsored.map((agent) => agent.display_name).join(", ")}. Give each agent
-						a different sponsor with Edit, or delete it. Then delete {principal.display_name}.
-					</p>
-				</div>
-				<div className="dialog-actions">
-					<button type="button" className="button button-primary" onClick={onClose} data-autofocus>
-						OK
-					</button>
-				</div>
-			</Dialog>
-		);
+		return <SponsorNotice principal={principal} agents={sponsored} action="delete" onClose={onClose} />;
 	}
 	return (
 		<ConfirmDialog

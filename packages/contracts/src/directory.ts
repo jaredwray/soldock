@@ -173,7 +173,8 @@ export const updateAgentPolicy = defineOperation({
 });
 
 /** The rules of the operations that archive or delete a principal. */
-const REMOVE_RULES = "Owners and admins only. Nobody can archive or delete the owner or themselves.";
+const REMOVE_RULES =
+	"Owners and admins only, with a credential that holds every human scope. Nobody can archive or delete the owner or themselves.";
 
 export const updatePrincipal = defineOperation({
 	name: "directory.update_principal",
@@ -199,7 +200,7 @@ export const updatePrincipal = defineOperation({
 			"send display_name, org_role or sponsor_id",
 		),
 	output: z.object({ principal: Principal }),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 export const archivePrincipal = defineOperation({
@@ -209,6 +210,7 @@ export const archivePrincipal = defineOperation({
 		REMOVE_RULES,
 		"An archived principal cannot sign in, and its API keys and OAuth connections stop working. Its sessions end.",
 		"Its mail, drive and chat stay, and mail to its address still arrives. directory.restore_principal undoes it.",
+		"A person who sponsors an agent that is not archived cannot be archived: give the agent a different sponsor, or archive it, first.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}/archive" },
 	scopes: ["directory.write"],
@@ -216,15 +218,16 @@ export const archivePrincipal = defineOperation({
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({ principal_id: PrincipalId }),
 	output: z.object({ principal: Principal }),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 export const restorePrincipal = defineOperation({
 	name: "directory.restore_principal",
 	summary: "Restore an archived person or agent",
 	description: [
-		"Owners and admins only.",
+		"Owners and admins only, with a credential that holds every human scope.",
 		"The principal can sign in again, and its API keys and OAuth connections work again. Its old sessions do not come back.",
+		"An agent whose sponsor is archived cannot be restored: give it a different sponsor first.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}/restore" },
 	scopes: ["directory.write"],
@@ -232,7 +235,7 @@ export const restorePrincipal = defineOperation({
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({ principal_id: PrincipalId }),
 	output: z.object({ principal: Principal }),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 export const deletePrincipal = defineOperation({

@@ -88,10 +88,14 @@ async function principalToManage(call: CallContext, principalId: string, action:
 	return target;
 }
 
-/** Nobody archives or deletes the owner or themselves, so the organization always keeps its owner and the caller. */
+/**
+ * Nobody archives or deletes the owner or themselves, so the organization always keeps its owner and the
+ * caller. Only a credential with every human scope can do it, so a narrow key cannot lock people out.
+ */
 function assertRemovable(call: CallContext, target: PrincipalRecord, action: "archive" | "delete"): void {
 	if (target.org_role === "owner") throw new OperationError("forbidden", `Nobody can ${action} the owner.`);
 	if (target.id === call.caller.principal.id) throw new OperationError("forbidden", `You cannot ${action} yourself.`);
+	assertFullCredential(call.caller);
 }
 
 const DIRECTORY_CHANGED = "The directory changed during the request. Load it again and try again.";
@@ -216,9 +220,22 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
+			// A sponsor archived or deleted during the request must not get a new agent.
+			sponsorId
+				? {
+						condition: {
+							sql: "EXISTS (SELECT 1 FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL)",
+							params: [sponsorId],
+						},
+					}
+				: {},
 		);
-		if (!created)
-			throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
+		if (!created) {
+			throw new OperationError(
+				"conflict",
+				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
+			);
+		}
 		auditOk(call, "directory.create_principal", created.principal.id);
 		return {
 			principal: toPrincipalOutput(created.principal),
@@ -270,16 +287,38 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "directory.archive_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "archive");
 		assertRemovable(call, target, "archive");
+		// An archived person could still act through the keys of an agent that they sponsor.
+		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id, { activeOnly: true });
+		if (agents > 0) {
+			throw new OperationError(
+				"conflict",
+				`${target.display_name} sponsors ${agents === 1 ? "an agent" : `${agents} agents`}. Give each agent a different sponsor, or archive it, first.`,
+			);
+		}
 		await archivePrincipal(call.env.DIRECTORY, target.id);
+		const archived = await principalAfterChange(call, target.id);
+		if (archived.archived_at === null) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		auditOk(call, "directory.archive_principal", target.id);
-		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
+		return { principal: toPrincipalOutput(archived) };
 	},
 
 	async "directory.restore_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "restore");
+		assertFullCredential(call.caller);
+		if (target.kind === "agent" && target.archived_at !== null) {
+			const sponsor = target.sponsor_id ? await getPrincipal(call.env.DIRECTORY, target.sponsor_id) : null;
+			if (!sponsor || sponsor.archived_at !== null) {
+				throw new OperationError(
+					"invalid",
+					"The sponsor of this agent is archived. Give it a different sponsor first.",
+				);
+			}
+		}
 		await restorePrincipal(call.env.DIRECTORY, target.id);
+		const restored = await principalAfterChange(call, target.id);
+		if (restored.archived_at !== null) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		auditOk(call, "directory.restore_principal", target.id);
-		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
+		return { principal: toPrincipalOutput(restored) };
 	},
 
 	async "directory.delete_principal"(call, input) {
@@ -334,6 +373,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const member = await getPrincipal(call.env.DIRECTORY, input.principal_id);
 		if (!member) throw new OperationError("not_found", "No principal has that id.");
 		if (!(await addTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, member.id, call.caller.principal.id))) {
+			if (!(await getPrincipal(call.env.DIRECTORY, member.id))) {
+				throw new OperationError("not_found", "No principal has that id.");
+			}
 			throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
 		}
 		auditOk(call, "directory.add_team_mailbox_member", `${input.mailbox_id}:${member.id}`);

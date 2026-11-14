@@ -33,19 +33,26 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 ## Change, archive and delete
 
 Owners and admins manage the people and agents of the directory. Each operation needs
-`directory.write` and accepts humans only, so an agent can never change itself or others.
+`directory.write` and accepts humans only, so an agent can never change itself or others. An admin
+can act on another admin. Only the owner is out of reach, as for credentials.
 
 - `directory.update_principal` changes the name, the role of a person (`admin` or `member`), or the
   sponsor of an agent. Only the owner changes the owner, and only the name. Nobody changes their own
   role. A role change needs a credential with every human scope, because an admin can create people
   with a session. A new sponsor must be a person who is not archived.
-- `directory.archive_principal` sets `archived_at` and deletes the sessions of the principal.
+- `directory.archive_principal` sets `archived_at` and deletes the sessions of the principal. A
+  person who sponsors an agent that is not archived cannot be archived, because the person can hold
+  the keys of the agent and act through it. Give the agent a different sponsor, or archive it, first.
   `authenticate` refuses each credential of an archived principal: a session, an API key and an
   OAuth access token. Sign-in refuses an archived person with the same `401` as a wrong password.
   An OAuth refresh and an OAuth approval for an archived agent fail. The keys and the grants stay,
   and the mail, the drive and the chat stay. Mail to the address still arrives.
 - `directory.restore_principal` clears `archived_at`. The keys and the grants work again. The old
-  sessions do not come back.
+  sessions do not come back: the restore deletes the sessions again, and the sign-in transaction
+  also checks `archived_at`, so a sign-in that races the archive leaves no session. An agent whose
+  sponsor is archived cannot be restored.
+- Archive, restore and delete need a credential with every human scope, so a narrow key with
+  `directory.write` cannot lock people out or let them back in.
 - `directory.delete_principal` cannot be undone. The `principals` row stays with `deleted_at`, because
   `api_keys.created_by`, `team_mailboxes.created_by`, `team_mailbox_members.added_by` and the OAuth
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
@@ -54,11 +61,17 @@ Owners and admins manage the people and agents of the directory. Each operation 
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id.
   - The mailbox and the drive objects of the deleted principal stay in storage, and nobody can open
-    them: a new principal with the same address gets a new id, and so new objects. The chat
-    messages of the principal stay in their rooms. A later layer erases this data.
+    them: a new principal with the same address gets a new id, and so new objects. A later layer
+    erases this data.
+  - Known limit: the delete does not remove the principal from its chat rooms. Its messages stay,
+    and it stays in the member list of each room. A room that it owned keeps no owner who can act:
+    the owner role moves only when the owner leaves. The chat index writes no new row for a deleted
+    principal. A later change removes the principal from its rooms through the outbox.
 - Nobody archives or deletes the owner or themselves. A person who sponsors an agent cannot be
-  deleted: give the agent a different sponsor first, or delete the agent. The checks are also in the
-  SQL of each write, so a parallel change cannot break them.
+  deleted: give the agent a different sponsor first, or delete the agent.
+- The checks of the owner, of the sponsor and of a deleted principal are also in the SQL of each
+  write: the change, the archive, the restore, the delete, a new agent and a new team mailbox
+  member. So a parallel change cannot break them.
 
 ## Team mailboxes
 

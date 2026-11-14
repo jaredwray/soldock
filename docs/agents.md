@@ -84,6 +84,10 @@ policy.
 `<domain>_<verb>`: `mail_list_threads`, `mail_get_thread`, `mail_send`, `mail_modify_threads` and
 others. A REST client calls the same operations under `/api/v1`.
 
+An owner or an admin can archive or delete an agent under **Admin › Members**. Each credential of
+an archived or deleted agent then gets `401`, also an OAuth refresh. A restore makes the keys and the
+OAuth connection work again.
+
 ## Team mailboxes
 
 A team mailbox is a shared mailbox with its own address, for example `support@example.com`. An

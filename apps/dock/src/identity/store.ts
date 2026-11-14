@@ -380,26 +380,38 @@ export async function updatePrincipal(db: D1Database, id: string, changes: Princ
 	return result.meta.changes === 1;
 }
 
-/** The agents that a human sponsors, without the deleted ones. */
-export async function countSponsoredAgents(db: D1Database, sponsorId: string): Promise<number> {
+/**
+ * The agents that a human sponsors, without the deleted ones. With `activeOnly`, also without the
+ * archived ones: an archived agent cannot act, so its sponsor can be archived.
+ */
+export async function countSponsoredAgents(
+	db: D1Database,
+	sponsorId: string,
+	options: { activeOnly?: boolean } = {},
+): Promise<number> {
+	const active = options.activeOnly ? " AND archived_at IS NULL" : "";
 	return (
 		(await db
-			.prepare("SELECT COUNT(*) AS count FROM principals WHERE sponsor_id = ? AND deleted_at IS NULL")
+			.prepare(`SELECT COUNT(*) AS count FROM principals WHERE sponsor_id = ? AND deleted_at IS NULL${active}`)
 			.bind(sponsorId)
 			.first<number>("count")) ?? 0
 	);
 }
 
 /**
- * Archives a principal and ends its sessions. The owner cannot be archived. A second archive changes
- * nothing. The API keys and OAuth grants stay: `authenticate` refuses them while the principal is archived.
+ * Archives a principal and ends its sessions. The owner, and a human who sponsors an agent that is not
+ * archived, cannot be archived: the person could still act through the keys of the agent. A second
+ * archive changes nothing. The API keys and OAuth grants stay: `authenticate` refuses them while the
+ * principal is archived.
  */
 export async function archivePrincipal(db: D1Database, id: string): Promise<void> {
 	await db.batch([
 		db
 			.prepare(
 				`UPDATE principals SET archived_at = ?1
-				WHERE id = ?2 AND archived_at IS NULL AND deleted_at IS NULL AND org_role IS NOT 'owner'`,
+				WHERE id = ?2 AND archived_at IS NULL AND deleted_at IS NULL AND org_role IS NOT 'owner'
+				AND NOT EXISTS (SELECT 1 FROM principals agent WHERE agent.sponsor_id = ?2 AND agent.archived_at IS NULL
+					AND agent.deleted_at IS NULL)`,
 			)
 			.bind(new Date().toISOString(), id),
 		db
@@ -410,9 +422,22 @@ export async function archivePrincipal(db: D1Database, id: string): Promise<void
 	]);
 }
 
-/** Restores an archived principal. Its keys and grants work again. Its old sessions are gone. */
+/**
+ * Restores an archived principal. Its keys and grants work again. An agent comes back only while its
+ * sponsor is not archived. The sessions of the principal are deleted again, so a sign-in that raced
+ * the archive cannot leave a session that returns now.
+ */
 export async function restorePrincipal(db: D1Database, id: string): Promise<void> {
-	await db.prepare("UPDATE principals SET archived_at = NULL WHERE id = ? AND deleted_at IS NULL").bind(id).run();
+	await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET archived_at = NULL WHERE id = ?1 AND deleted_at IS NULL
+				AND (kind = 'human' OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = principals.sponsor_id
+					AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))`,
+			)
+			.bind(id),
+		db.prepare("DELETE FROM sessions WHERE principal_id = ?").bind(id),
+	]);
 }
 
 /**

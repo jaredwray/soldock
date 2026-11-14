@@ -60,7 +60,7 @@ export async function confirmPassword(db: D1Database, principalId: string, passw
 
 /**
  * Clears the failure count and creates the session in one transaction, only while the password hash and
- * the TOTP secret are still the ones that the attempt checked. A password change, or two-step
+ * the TOTP secret are still the ones that the attempt checked, and the person is not archived or deleted. A password change, or two-step
  * verification that turns on, during the check makes the sign-in fail, so no session outlives the
  * change. With a TOTP step, only a step after the last used one counts, so a parallel request with the
  * same code fails. Returns the session cookie value, or null.
@@ -70,7 +70,7 @@ function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, ste
 		.prepare(
 			`UPDATE principals SET sign_in_failures = 0, sign_in_locked_until = NULL,
 				totp_last_step = COALESCE(?1, totp_last_step)
-			WHERE id = ?2 AND password_hash = ?3 AND totp_secret IS ?4
+			WHERE id = ?2 AND password_hash = ?3 AND totp_secret IS ?4 AND archived_at IS NULL AND deleted_at IS NULL
 			AND (?1 IS NULL OR totp_last_step IS NULL OR totp_last_step < ?1)`,
 		)
 		.bind(step, principalId, attempt.password_hash, attempt.totp_secret);
