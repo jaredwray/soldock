@@ -16,6 +16,11 @@ export const RECHECK_MS = 60_000;
 export const MAX_STREAM_MS = 60 * 60_000;
 /** The most resource URIs in one `subscriptions/listen` request. */
 export const MAX_SUBSCRIPTIONS = 100;
+/**
+ * The most events that wait in a stream for a client that does not read. Then the stream ends, so a
+ * slow or stuck client cannot fill the memory of the Worker.
+ */
+export const MAX_QUEUED_EVENTS = 64;
 
 const SSE_HEADERS = {
 	"content-type": "text/event-stream",
@@ -84,7 +89,9 @@ export async function listen(input: ListenInput): Promise<Response> {
 	let timer: ReturnType<typeof setInterval> | undefined;
 
 	const write = (text: string) => {
-		if (open) controller?.enqueue(encoder.encode(text));
+		if (!open || !controller) return;
+		if ((controller.desiredSize ?? 1) <= 0) return stop("the client does not read the stream");
+		controller.enqueue(encoder.encode(text));
 	};
 	const send = (message: Record<string, unknown>) =>
 		write(`data: ${JSON.stringify({ jsonrpc: "2.0", ...message })}\n\n`);
@@ -102,12 +109,15 @@ export async function listen(input: ListenInput): Promise<Response> {
 		}
 	};
 
-	const stream = new ReadableStream<Uint8Array>({
-		start(c) {
-			controller = c;
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			start(c) {
+				controller = c;
+			},
+			cancel: () => stop("the client closed the stream"),
 		},
-		cancel: () => stop("the client closed the stream"),
-	});
+		new CountQueuingStrategy({ highWaterMark: MAX_QUEUED_EVENTS }),
+	);
 	// The client closed the connection: that cancels the subscription (flag enable_request_signal).
 	const disconnected = () => stop("the client disconnected");
 	if (input.signal.aborted) disconnected();

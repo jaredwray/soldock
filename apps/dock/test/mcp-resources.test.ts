@@ -2,7 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.ts";
+import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.ts";
 import { callTool, inject, mcp, modern, modernRequest, rawMessage, readSse, seedOrg } from "./helpers.ts";
 
 const inbox = (mailboxId: string) => `soldock://mail/${mailboxId}/inbox`;
@@ -196,6 +196,22 @@ describe("MCP subscriptions/listen", () => {
 			expect(await watchSockets(bot.id)).toBe(0);
 			expect(await watchSockets(support.id)).toBe(0);
 		});
+	});
+
+	// A client that holds the connection and reads nothing must not fill the memory of the Worker.
+	it("ends when the client does not read its events", async () => {
+		const { bot } = await seedOrg();
+		const stream = await listen(bot.key, [inbox(bot.id)]);
+		expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		const delivered = MAX_QUEUED_EVENTS + 16;
+		for (let i = 0; i < delivered; i++) {
+			await inject(rawMessage({ from: "x@internet.example", to: "bot@dock.test", subject: `M${i}` }), "bot@dock.test");
+		}
+		let received = 0;
+		while ((await stream.next()) !== "closed") received++;
+		expect(received).toBeGreaterThan(0);
+		expect(received).toBeLessThan(delivered);
+		await vi.waitFor(async () => expect(await watchSockets(bot.id)).toBe(0));
 	});
 
 	it("ends in the graceful way at once when it has nothing to watch", async () => {

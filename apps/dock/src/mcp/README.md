@@ -119,6 +119,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   - The credential stops working. The new request gets `401`.
   - The caller loses access to a watched resource. The new acknowledgment leaves it out.
   - A change feed stops, for example when its object restarts.
+  - The client does not read: 64 events wait in the stream. So a stuck client cannot fill the memory
+    of the Worker.
   - The stream is one hour old. This limits the subrequests of one request.
 
   The specification says that a server SHOULD send the result when it ends a subscription. This
