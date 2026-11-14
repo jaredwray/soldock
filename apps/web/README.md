@@ -85,6 +85,13 @@ MCP clients. The app has no UI-only path.
     conversations are selected.
   - The thread list shows the participants, the subject, the snippet, a short date, a star and a
     checkbox. Unread threads are bold. "Older" loads the next page.
+  - A thread row shows the user labels of the thread as quiet chips before the date: two labels at
+    most, then the number of the other labels. At 900px and below, a row shows one label. A
+    paperclip shows that the thread has attachments.
+  - A selected row has a fill. The row at the keyboard cursor has a bar at its left. When the link
+    of a row has the keyboard focus, the focus ring is around the full row.
+  - The loading, empty and error states of the list and of the thread view are in the center of the
+    page. The empty state and the error state have an icon on a tile.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
     read or unread, star, apply a label and remove a label. The spam and trash views show "Not
     spam" and "Restore". An action that moves threads shows a toast with "Undo".
@@ -92,6 +99,13 @@ MCP clients. The app has no UI-only path.
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
     "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
     gets a "This message is in Spam" notice, because it can be in a thread with other messages.
+  - The last message and each unread message are open. Each other message is collapsed: one line
+    with the initials of the sender, the name, the snippet, a paperclip when it has attachments,
+    and a short date. A click on the line opens or closes the message.
+  - An open message shows the initials of the sender in an avatar, the name in bold, the address
+    and the full date in muted text, and the recipients under the name.
+  - An attachment is a file card: an icon, the name, the size and the type, and a Download button.
+    The delivery status of a recipient is a chip with a dot, the address and the status.
   - In a very large thread, `mail.get_thread` leaves out the bodies of older messages
     (`body.omitted`). When such a message is expanded, the app gets its body with
     `mail.get_message`. The message shows a loading state, or an error with "Try again". A
@@ -101,8 +115,11 @@ MCP clients. The app has no UI-only path.
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
     attachments. One idempotency key for each composed message makes a retry safe.
-  - The message body is a rich-text editor on [ProseMirror](https://prosemirror.net). The
-    formatting toolbar under the editor has bold, italic, underline, strikethrough, link, numbered
+  - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
+    Discard and Send are at the right. An attached file is a file card with a Remove button.
+  - The message body is a rich-text editor on [ProseMirror](https://prosemirror.net). The editor
+    and its formatting toolbar are in one rounded box. The
+    formatting toolbar at the bottom of the box has bold, italic, underline, strikethrough, link, numbered
     list, bulleted list, quote and remove formatting. Each button has a shortcut, which its tooltip
     shows: `Ctrl` (`⌘` on a Mac) with `B`, `I`, `U`, `K` or `\`, and `Ctrl+Shift` with `X`, `7`, `8`
     or `9`. `Ctrl+[` and `Ctrl+]` change the level of a list item. `Shift+Enter` starts a new line in
@@ -135,7 +152,8 @@ MCP clients. The app has no UI-only path.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
-    to see the list. Shortcuts do not work while the focus is in a text field.
+    to see the list, in four groups (`SHORTCUT_GROUPS` in
+    [`ShortcutHelp.tsx`](src/features/mail/ShortcutHelp.tsx)). Shortcuts do not work while the focus is in a text field.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
