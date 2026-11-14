@@ -494,6 +494,141 @@ export const updateSettings = defineOperation({
 	errors: [],
 });
 
+export const WEBHOOK_LIMITS = {
+	urlChars: 2000,
+	labelChars: 100,
+	/** The webhooks that one principal created, active or disabled. */
+	perCreator: 10,
+	/** The webhooks of one mailbox, from all creators. This limits the POST requests of one event. */
+	perMailbox: 20,
+	/** The POST attempts of one event to one webhook. */
+	attempts: 5,
+	/** The events in a row whose last attempt failed. Then the webhook is disabled. */
+	failedEventsBeforeDisable: 5,
+	/** The time that the receiver has to answer one POST. */
+	timeoutMs: 15_000,
+	/** One mailbox sends at most one event in this time. Mail in that time gives one event. */
+	eventGapMs: 5_000,
+} as const;
+
+/** The event type of the only webhook event: new mail in the inbox of the mailbox. */
+export const WEBHOOK_EVENT_TYPE = "mail.inbox.updated";
+
+/**
+ * An absolute https URL. The server also refuses an IP address, a user name, a port, a fragment, a host
+ * name that cannot be public, and the host of the deployment.
+ */
+const WebhookUrl = z
+	.url({ protocol: /^https$/, error: "must be an absolute https URL, such as https://hooks.example.com/soldock" })
+	.max(WEBHOOK_LIMITS.urlChars);
+
+/**
+ * A webhook: a URL outside Soldock that gets a signed POST when new mail arrives in the inbox of a
+ * mailbox. The POST holds no mail content: the receiver reads the inbox with its own credential.
+ */
+export const Webhook = z.object({
+	id: z.string(),
+	/** The mailbox that the webhook watches. */
+	mailbox_id: z.string(),
+	url: z.string(),
+	label: z.string(),
+	/** The person or agent that created the webhook. Its access is checked again before each POST. */
+	created_by: z.string(),
+	/** `disabled`: Soldock sends nothing more. Delete the webhook and create a new one. */
+	status: z.enum(["active", "disabled"]),
+	/**
+	 * Why the webhook stopped. `failures`: too many events failed in a row. `gone`: the receiver answered
+	 * 410. `credential_revoked`: the key or the OAuth connection that created it stopped, or its creator
+	 * was deleted. `access_lost`: its creator lost access to the mailbox. `policy_denied`: the outbound
+	 * policy of the agent that created it no longer allows the host.
+	 */
+	disabled_reason: z.enum(["failures", "gone", "credential_revoked", "access_lost", "policy_denied"]).nullable(),
+	/** The events in a row whose last attempt failed. A success sets it to 0. */
+	consecutive_failures: z.number().int(),
+	last_delivery_at: Timestamp.nullable(),
+	last_failure_at: Timestamp.nullable(),
+	/**
+	 * Why the last attempt failed: `http_<status>`, `redirect`, `timeout` or `network`. The response body
+	 * of the receiver is never stored.
+	 */
+	last_error: z.string().nullable(),
+	created_at: Timestamp,
+});
+export type Webhook = z.infer<typeof Webhook>;
+
+/** A new webhook. The signing secret is returned once. */
+export const CreatedWebhook = Webhook.extend({ secret: z.string() });
+export type CreatedWebhook = z.infer<typeof CreatedWebhook>;
+
+const WEBHOOK_MAILBOXES =
+	"Use your own mailbox (the default), a team mailbox that you are a member of, or, for a person, the mailbox of an agent that you sponsor.";
+
+export const createWebhook = defineOperation({
+	name: "mail.create_webhook",
+	summary: "Get a POST at a URL when new mail arrives",
+	description: [
+		"Creates a webhook: Soldock sends a POST to the URL when new mail arrives in the inbox of the mailbox.",
+		WEBHOOK_MAILBOXES,
+		`The body is JSON: {"type": "${WEBHOOK_EVENT_TYPE}", "timestamp", "data": {"webhook_id", "mailbox_id", "uri"}}. It holds no mail content: read the inbox with mail.list_threads, or read the resource at data.uri on MCP.`,
+		"Mail in the same few seconds gives one POST. Spam, a read, a label and an archive send nothing.",
+		"Each POST is signed as Standard Webhooks specifies: the headers webhook-id, webhook-timestamp and webhook-signature.",
+		"The result holds the signing secret (whsec_...). It is shown only once. Use it to verify each POST.",
+		"The URL must use https and a public host name. A POST that fails is retried up to 5 times. After 5 events in a row fail, the webhook is disabled.",
+		"An agent can use only a host that its outbound policy allows: mode any, or a host in its allowlist. Otherwise the call fails with policy_denied. Its sponsor can create the webhook for it.",
+		"The webhook stops when the credential that created it is revoked, or when its creator loses access to the mailbox.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/mail/webhooks" },
+	scopes: ["mail.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
+	input: z.strictObject({
+		mailbox_id: MailboxId.optional().describe(
+			"The mailbox to watch: an id from mail.list_mailboxes, or the id of an agent that you sponsor. The default is your own mailbox.",
+		),
+		url: WebhookUrl,
+		label: z
+			.string()
+			.trim()
+			.max(WEBHOOK_LIMITS.labelChars)
+			.refine((label) => !/[\p{Cc}]/u.test(label), "must not contain control characters")
+			.optional(),
+	}),
+	output: z.object({ webhook: CreatedWebhook }),
+	errors: ["not_found", "policy_denied", "conflict"],
+});
+
+export const listWebhooks = defineOperation({
+	name: "mail.list_webhooks",
+	summary: "List webhooks",
+	description: [
+		"Without mailbox_id: the webhooks that you created, and the webhooks of your own mailbox.",
+		"With mailbox_id: the webhooks of that mailbox that you can see. In a team mailbox, you see only your own webhooks.",
+		"In the mailbox of an agent, its sponsor, an owner and an admin see each webhook.",
+		"The secrets are never returned again.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/mail/webhooks" },
+	scopes: ["mail.webhooks"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({ mailbox_id: MailboxId.optional() }),
+	output: z.object({ webhooks: z.array(Webhook) }),
+	errors: ["not_found"],
+});
+
+export const deleteWebhook = defineOperation({
+	name: "mail.delete_webhook",
+	summary: "Delete a webhook",
+	description:
+		"Deletes a webhook. No POST goes to its URL after this. You can delete a webhook that you created, each webhook of your own mailbox and, as the sponsor of an agent, an owner or an admin, each webhook of the mailbox of an agent.",
+	http: { method: "DELETE", path: "/api/v1/mail/webhooks/{webhook_id}" },
+	scopes: ["mail.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ webhook_id: prefixedId("whk") }),
+	output: z.object({ deleted: z.boolean() }),
+	errors: ["not_found"],
+});
+
 export const mailOperations = {
 	"mail.list_mailboxes": listMailboxes,
 	"mail.get_settings": getSettings,
@@ -508,4 +643,7 @@ export const mailOperations = {
 	"mail.modify_threads": modifyThreads,
 	"mail.send": send,
 	"mail.get_attachment": getAttachment,
+	"mail.create_webhook": createWebhook,
+	"mail.list_webhooks": listWebhooks,
+	"mail.delete_webhook": deleteWebhook,
 } as const;

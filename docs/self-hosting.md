@@ -270,3 +270,9 @@ Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 An inbound job that fails 5 times, or that cannot be read, goes to the queue
 `soldock-mail-inbound-dlq`. The raw message stays in R2. Look at the queue in the dashboard
 (**Storage & Databases › Queues**). The Worker logs each dead letter with the principal id.
+
+A webhook job that cannot be read, or that fails 10 times in Soldock itself (for example while D1 is
+down), goes to the queue `soldock-webhooks-dlq`. A job holds ids only, never mail content or
+secrets. A failed POST to the receiver does not go there: the webhook records the failure, and it
+stops after 5 failed events in a row. The log line `webhook disabled` gives the webhook, the mailbox,
+the host of the URL and the reason. The first deploy creates both webhook queues by name.

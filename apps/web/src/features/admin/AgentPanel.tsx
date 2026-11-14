@@ -5,7 +5,9 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { viewPath } from "../../routes.ts";
+import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
+import { WebhookManager } from "../settings/Webhooks.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist, policySummary } from "./policy.ts";
 
@@ -18,10 +20,12 @@ interface AgentPanelProps {
 }
 
 /**
- * One agent: its outbound mail policy, the apps that connected as it with OAuth, and its API keys. For
- * an owner or an admin, also a link to the mailbox of the agent, which they can read.
+ * One agent: its outbound policy, the apps that connected as it with OAuth, its webhooks and its API keys.
+ * For an owner or an admin, also a link to the mailbox of the agent, which they can read. Only the sponsor
+ * can create a webhook for the agent. An owner or an admin can delete one.
  */
 export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPanelProps) {
+	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
 	return (
 		<details className="agent">
@@ -45,6 +49,11 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 				)}
 				<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
 				<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
+				<WebhookManager
+					heading={`Webhooks of ${agent.display_name}`}
+					agentId={agent.id}
+					canCreate={agent.sponsor_id === whoami.principal.id}
+				/>
 				<ApiKeyManager
 					principalId={agent.id}
 					allowedScopes={AGENT_SCOPES}
@@ -89,7 +98,7 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 	return (
 		<form className="policy-form" onSubmit={submit} noValidate>
 			<fieldset>
-				<legend className="card-subtitle">Outbound mail policy</legend>
+				<legend className="card-subtitle">Outbound policy</legend>
 				{POLICY_MODES.map((option) => (
 					<label key={option.mode} className="check-row">
 						<input
@@ -123,7 +132,8 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 						placeholder={"example.com\nada@partner.org"}
 					/>
 					<p id={hintId} className="field-hint">
-						One domain or address on each line. A domain allows each address in it. At most 100 entries.
+						One domain or address on each line. A domain allows each address in it, and webhooks of the agent to that
+						host. At most 100 entries.
 					</p>
 				</div>
 			)}

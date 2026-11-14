@@ -3,14 +3,15 @@
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
 > read and send, in the own mailbox of a principal and in team mailboxes. Owners and admins can read
 > the mailbox of each agent. An MCP client can subscribe to an inbox and get a notification for new
-> mail. Keep this README current as the module grows. It is the module's contract.
+> mail. A [webhook](#webhooks) sends a signed POST to a URL outside Soldock for new mail. Keep this
+> README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
-| **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement. |
-| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, idempotency keys); raw MIME in R2 `blobs`. |
+| **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
+| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys); raw MIME in R2 `blobs`; the D1 table `webhooks` in the directory database. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.delete_webhook` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -24,6 +25,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
+| `webhooks.ts` | The webhook operations, the D1 rows of the webhooks, and the access check before each POST |
+| `webhook-url.ts` | The rules of a webhook URL, and the outbound policy of an agent for a host |
+| `webhook-delivery.ts` | The `soldock-webhooks` queue consumer: one job for each webhook, the signed POST, the retries |
 | `search.ts` | Gmail-style query parser, and the compiler to SQL with bound values |
 | `sanitize.ts` | The HTML allowlist sanitizer on `HTMLRewriter` |
 | `threading.ts` | Subject normalization, snippets, and HTML to text for previews and the index |
@@ -274,6 +278,92 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 - `resources/list` gives the inbox of each mailbox of `mail.list_mailboxes`, so an owner or an admin
   also sees the inbox of each agent. The acknowledgment of `subscriptions/listen` leaves those out. A
   subscription would tell when an agent gets mail, and its reads have an audit line, so it is not built.
+- A client that cannot keep a stream open uses a [webhook](#webhooks) instead.
+
+## Webhooks
+
+A webhook sends a signed POST to a URL outside Soldock when new mail arrives in the inbox of a
+mailbox. It is for a client that cannot keep a `subscriptions/listen` stream open, for example a bot
+on a server, a REST client or an MCP client of an older protocol.
+
+### Create
+
+- `mail.create_webhook` needs the scope `mail.webhooks`. In the web app, a new key does not get this
+  scope unless the person selects it.
+- A person can watch their own mailbox, a team mailbox that they are a member of, and the mailbox of
+  an agent that they sponsor. An agent can watch its own mailbox and its team mailboxes.
+- An owner or an admin who is not the sponsor cannot watch the mailbox of an agent: a webhook tells
+  when the agent gets mail, without the audit line of a read. The sponsor can create a webhook for
+  the agent, and the audit line of the create names the mailbox of the agent.
+- The URL must use `https`, the default port and a public host name. The server refuses an IP
+  address, a user name or password, a fragment, `localhost`, the suffixes `.localhost`, `.local`,
+  `.internal`, `.home.arpa` and `.invalid`, and the host of the deployment.
+- An agent can use only a host that its outbound policy allows: mode `any`, or mode `allowlist` with
+  the host as a domain entry. An address entry never matches a host. Mode `internal-only` allows no
+  webhook. A URL can carry data in its path, so a host is an outbound target, as a recipient is.
+- The result holds the signing secret, `whsec_` and the base64 of 32 random bytes, one time only.
+  D1 keeps the secret in clear text, because the HMAC needs it.
+- The webhook records the credential of the create: the API key, the OAuth grant or a session.
+- The limits are part of the insert: 10 webhooks for each creator and 20 for each mailbox.
+
+### Delivery
+
+1. In the transaction of a message that is not spam, `deliver()` adds a row to `event_outbox` when
+   webhook events are on for the mailbox. Mail that the mailbox sends to itself also adds a row.
+   New mail joins a row that waits. One mailbox sends at most one event in each 5 seconds.
+2. The alarm puts the event on the queue `soldock-webhooks` and then deletes the row. The event keeps
+   its id on each attempt.
+3. The consumer reads the active webhooks of the mailbox and puts one delivery job for each on the
+   same queue.
+4. A delivery job checks the access of the creator again (see the table below) and sends one POST.
+5. A `2xx` answer is a success. A `410` disables the webhook at once. Each other answer, a
+   redirect, a timeout of 15 seconds and a network failure is a failed attempt. The consumer tries
+   again after 10 seconds, 1 minute, 5 minutes and 30 minutes. After the fifth attempt the event
+   failed. After 5 failed events in a row, the webhook is disabled (`failures`).
+
+The body holds no mail content. The receiver reads the inbox with its own credential, with the scope
+and mailbox checks of REST:
+
+```json
+{
+  "type": "mail.inbox.updated",
+  "timestamp": "2026-11-14T17:40:18.000Z",
+  "data": { "webhook_id": "whk_…", "mailbox_id": "prn_…", "uri": "soldock://mail/prn_…/inbox" }
+}
+```
+
+The headers follow Standard Webhooks, so its libraries can verify a POST:
+
+- `webhook-id`: `<event id>_<webhook id>`. It stays the same on each attempt, so a receiver can drop
+  a repeat.
+- `webhook-timestamp`: the time of the attempt, in Unix seconds.
+- `webhook-signature`: `v1,` and the base64 of the HMAC-SHA256 of
+  `<webhook-id>.<webhook-timestamp>.<body>`. The key is the bytes of the base64 after `whsec_`.
+
+The POST never follows a redirect, and the Worker never reads the response body. `last_error` holds a
+code that the Worker makes: `http_<status>`, `redirect`, `timeout` or `network`.
+
+### Access check before each POST
+
+| Condition | Result |
+| --- | --- |
+| The creator was deleted, or its API key or OAuth grant was revoked or expired | Disabled, `credential_revoked` |
+| The creator, or the agent of the mailbox, is archived | No POST. The webhook stays active, and a restore makes it send again |
+| The creator is not a member of the team mailbox, or not the sponsor of the agent | Disabled, `access_lost` |
+| The outbound policy of the agent that created it does not allow the host | Disabled, `policy_denied` |
+
+A session has no id. So a sign-out does not stop a webhook that a session created: it stops only
+with its creator. A disabled webhook stays disabled. Delete it and create a new one.
+
+### List and delete
+
+- `mail.list_webhooks` without `mailbox_id` gives your webhooks and the webhooks of your own mailbox.
+  With `mailbox_id`, a member of a team mailbox sees only their own webhooks there. In the mailbox of
+  an agent, its sponsor, an owner and an admin see each webhook.
+- `mail.delete_webhook`: the creator, the owner of the mailbox and, in the mailbox of an agent, its
+  sponsor, an owner or an admin. Another caller gets `not_found`.
+- The events of a mailbox stay on after its last webhook goes. An event with no webhook costs one
+  queue message. So a create and a delete at the same time cannot turn off the events of a new webhook.
 
 ## Safety
 
@@ -310,6 +400,9 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
+| Webhooks | D1 `directory`, table `webhooks` (migration `0009`) | The mailbox, the creator, the credential kind and id, the URL, the label, the signing secret in clear text, the status and the delivery state. A fresh start drops the table |
+| Webhook events | `MailboxDO` table `event_outbox`, and table `meta` keys `webhook_mailbox_id`, `webhook_last_event_at` | At most one row. It holds the event id and the time, never message content. The meta key turns events on. A directory reset deletes them |
+| Webhook jobs | Queue `soldock-webhooks`, dead letters in `soldock-webhooks-dlq` | Jobs hold ids and times, never message content or secrets |
 
 Blob reference counts: each raw object has exactly one owner (the mailbox in its key), so no shared
 references exist yet. No operation deletes a message permanently yet, so no object is deleted.
@@ -333,6 +426,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 | Message-ID | 250 characters | A longer ID is not kept, so a reply header stays under 998 characters |
 | User labels | 500 | |
 | Bound values in one search | 90 | Durable Object SQLite allows 100 |
+| Webhooks | 10 for each creator, 20 for each mailbox | The fan-out of one event |
+| Webhook POST | 15 seconds, 5 attempts | Standard Webhooks recommends a timeout of 15 to 30 seconds |
+| Webhook events | 1 for each mailbox in each 5 seconds | Mail in that time joins one event |
 
 ## Not built yet
 
@@ -344,7 +440,11 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - Email Service lifecycle events (bounces, complaints) and inbound DSN parsing
 - Permanent delete, retention and blob GC
 - Live updates through `/ws/events`. The web app polls `mail.get_profile` and compares `version`.
-- A push stream for REST clients. A REST client polls `mail.get_profile` and compares `version`.
+- A push stream for REST clients. A REST client uses a webhook, or polls `mail.get_profile` and
+  compares `version`.
+- For webhooks: a test POST, a new secret without a new webhook, a restart of a disabled webhook, a
+  delivery log, a notice to the owner when a webhook stops, a check that the receiver owns the URL,
+  encryption of the secrets at rest, a limit for each organization, and more event types.
 - Notifications for other mail changes (labels, reads, sends), and for a single label
 - A remote image proxy, `cid:` image display, and a spam classifier
 - Counters for label counts. They are counted on each call now.

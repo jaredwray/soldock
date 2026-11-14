@@ -29,6 +29,7 @@ import { parseMail, readAttachment } from "./mime/parse.ts";
 import { sanitizeHtml } from "./sanitize.ts";
 import { compileQuery, parseQuery, QueryError } from "./search.ts";
 import { htmlToText, replySubject } from "./threading.ts";
+import { webhookHandlers } from "./webhooks.ts";
 
 type MailOperation =
 	| "mail.list_mailboxes"
@@ -43,7 +44,10 @@ type MailOperation =
 	| "mail.get_message"
 	| "mail.modify_threads"
 	| "mail.send"
-	| "mail.get_attachment";
+	| "mail.get_attachment"
+	| "mail.create_webhook"
+	| "mail.list_webhooks"
+	| "mail.delete_webhook";
 
 const DEFAULT_QUERY = "in:inbox";
 const DEFAULT_PAGE = 25;
@@ -235,6 +239,8 @@ function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 }
 
 export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
+	...webhookHandlers,
+
 	async "mail.list_mailboxes"(call) {
 		const [teams, agents] = await Promise.all([
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),

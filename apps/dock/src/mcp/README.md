@@ -53,7 +53,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `resources/read` have `ttlMs` and `cacheScope`. Each `cacheScope` is `private`, because each result
   depends on the credential. `resources/read` has `ttlMs: 0`.
 - Capabilities: `tools` and `resources`. `resources.subscribe` is true for a modern request only. A
-  legacy client has no session, so no stream can carry its notifications.
+  legacy client has no session, so no stream can carry its notifications. Such a client can get a
+  POST for new mail from a [webhook](../mail/README.md#webhooks): `mail_create_webhook` is a tool of
+  each protocol era.
 - Authentication: a bearer OAuth access token (`sdo_`) or API key (`sdk_`) only. The session cookie
   is never accepted, so a web page cannot drive MCP with a person's session. A request with a
   different `Origin` gets `403`.

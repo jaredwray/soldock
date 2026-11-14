@@ -34,6 +34,8 @@ export const OutboundPolicy = z.object({
 	/**
 	 * `internal-only`: only recipients in this deployment (the default for a new agent).
 	 * `allowlist`: those recipients, plus the listed domains and addresses. `any`: every recipient.
+	 * The policy also limits the webhooks that the agent creates: `any` allows each host, `allowlist`
+	 * allows a host that is a domain in the list, and `internal-only` allows no webhook.
 	 */
 	mode: z.enum(["internal-only", "allowlist", "any"]),
 	allowlist: z.array(z.string()),
@@ -49,7 +51,7 @@ export const Principal = z.object({
 	org_role: z.enum(["owner", "admin", "member"]).nullable(),
 	/** The human who is accountable for an agent. */
 	sponsor_id: z.string().nullable(),
-	/** Who an agent can send mail to. Null for humans. */
+	/** Who an agent can send mail to, and which hosts its webhooks can use. Null for humans. */
 	outbound_policy: OutboundPolicy.nullable(),
 	created_at: Timestamp,
 	/** When an owner or an admin archived the principal. An archived principal cannot sign in or use a credential. */
@@ -154,9 +156,9 @@ export const createPrincipal = defineOperation({
 
 export const updateAgentPolicy = defineOperation({
 	name: "directory.update_agent_policy",
-	summary: "Change who an agent can send mail to",
+	summary: "Change who an agent can send mail to and which hosts its webhooks can use",
 	description:
-		"The sponsor of the agent, an owner or an admin only. An agent can never change its own policy. Mode allowlist needs at least one domain or address.",
+		"The sponsor of the agent, an owner or an admin only. An agent can never change its own policy. Mode allowlist needs at least one domain or address. The policy also limits the webhooks that the agent creates: mode any allows each host, mode allowlist allows a host that is a domain in the list, and mode internal-only allows no webhook. A change does not stop a webhook at once: the next POST checks the policy again.",
 	http: { method: "POST", path: "/api/v1/directory/agents/{principal_id}/policy" },
 	scopes: ["directory.write"],
 	callers: ["human"],

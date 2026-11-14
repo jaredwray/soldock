@@ -7,6 +7,12 @@ export async function sha256Hex(data: string | ArrayBuffer | Uint8Array): Promis
 	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** The HMAC-SHA256 of a string with a key of raw bytes. */
+export async function hmacSha256(key: Uint8Array, data: string): Promise<Uint8Array> {
+	const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(data)));
+}
+
 /** `length` random bytes as unpadded base64url. */
 export function randomToken(length = 32): string {
 	const bytes = new Uint8Array(length);

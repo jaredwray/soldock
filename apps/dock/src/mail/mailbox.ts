@@ -1,12 +1,13 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
-import { MAIL_LIMITS, type MailSettings } from "@soldock/contracts";
+import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@soldock/contracts";
 import { addressTag, getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
+import type { WebhookEventJob } from "./webhook-delivery.ts";
 
 class SenderUnavailable extends Error {}
 
@@ -220,6 +221,18 @@ const MIGRATIONS: string[][] = [
 	],
 	// Who sent a message from this mailbox. In a team mailbox, it tells which member sent it.
 	["ALTER TABLE messages ADD COLUMN sent_by_json TEXT"],
+	// Webhook events: new mail in the inbox, for the queue soldock-webhooks. Mail that arrives while a
+	// row waits joins that row, so the table has at most one row.
+	[
+		`CREATE TABLE event_outbox (
+			id INTEGER PRIMARY KEY,
+			event_id TEXT NOT NULL,
+			occurred_at INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT
+		)`,
+	],
 ];
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -232,6 +245,12 @@ const MAX_HTML_BYTES = 1024 * 1024;
 const MAX_INDEXED_BODY_CHARS = 100_000;
 const SUBJECT_THREAD_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const OUTBOX_MAX_ATTEMPTS = 8;
+/** The attempts to put one webhook event on the queue. */
+const EVENT_MAX_ATTEMPTS = 8;
+/** The meta key that holds the id of this mailbox once a webhook watches it. Its presence turns events on. */
+const EVENTS_MAILBOX_KEY = "webhook_mailbox_id";
+/** The meta key of the time when the last webhook event went to the queue. */
+const EVENTS_LAST_KEY = "webhook_last_event_at";
 const OUTBOX_BATCH = 25;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -333,10 +352,9 @@ export class MailboxDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
-			// send() sets the alarm after its transaction commits. If the object stopped between the
-			// two, the outbox has rows and no alarm: set one now.
-			const pending = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0;
-			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+			// send() and deliver() set the alarm after their transaction commits. If the object stopped between
+			// the two, the outbox or the event outbox has rows and no alarm: set one now.
+			if (this.hasPendingWork() && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
 	}
 
@@ -377,6 +395,20 @@ export class MailboxDO extends DurableObject<Env> {
 		return this.sql.exec<T>(query, ...params).toArray();
 	}
 
+	/** True when the outbox or the event outbox has a row. */
+	private hasPendingWork(): boolean {
+		return (
+			(this.one<{ n: number }>("SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM event_outbox) AS n")?.n ??
+				0) > 0
+		);
+	}
+
+	/** Sets the alarm to `at`, unless it is set to an earlier time already. */
+	private async alarmBy(at: number): Promise<void> {
+		const current = await this.ctx.storage.getAlarm();
+		if (current === null || current > at) await this.ctx.storage.setAlarm(at);
+	}
+
 	// --- Delivery -------------------------------------------------------------------------------
 
 	/**
@@ -395,7 +427,9 @@ export class MailboxDO extends DurableObject<Env> {
 	 * Stores a message that arrived for this mailbox. A second copy of the same content is dropped.
 	 * The second copy can come to a different `+tag` of this mailbox, so the copy adds its tag label.
 	 */
-	deliver(input: DeliverInput): { status: "delivered" | "duplicate"; messageId: string; threadId: string } {
+	async deliver(
+		input: DeliverInput,
+	): Promise<{ status: "delivered" | "duplicate"; messageId: string; threadId: string }> {
 		const tagLabel = this.tagLabel(input.tag);
 		const existing = this.one<{ seq: number; id: string; thread_id: string }>(
 			"SELECT seq, id, thread_id FROM messages WHERE content_hash = ?",
@@ -415,6 +449,7 @@ export class MailboxDO extends DurableObject<Env> {
 			return { status: "duplicate", messageId: existing.id, threadId: existing.thread_id };
 		}
 		const labels = [...(input.spam ? ["SPAM", "UNREAD"] : ["INBOX", "UNREAD"]), ...(tagLabel ? [tagLabel] : [])];
+		let eventAt: number | null = null;
 		const stored = this.ctx.storage.transactionSync(() => {
 			const inserted = this.insertMessage({
 				id: newId("msg"),
@@ -431,10 +466,88 @@ export class MailboxDO extends DurableObject<Env> {
 				sentBy: null,
 			});
 			this.bump();
+			if (!input.spam) eventAt = this.queueInboxEvent();
 			return inserted;
 		});
 		if (!input.spam) this.signalInbox();
+		if (eventAt !== null) await this.alarmBy(eventAt);
 		return { status: "delivered", messageId: stored.id, threadId: stored.threadId };
+	}
+
+	// --- Webhook events -------------------------------------------------------------------------
+
+	/**
+	 * Turns on webhook events for this mailbox: from now on, new mail in the inbox puts an event on the
+	 * queue soldock-webhooks. The Worker calls it when it creates a webhook. The object does not know its
+	 * own id, so the call gives it. The events stay on: an event with no webhook costs one queue message.
+	 */
+	enableWebhookEvents(mailboxId: string): void {
+		if (this.meta(EVENTS_MAILBOX_KEY) !== mailboxId) this.setMeta(EVENTS_MAILBOX_KEY, mailboxId);
+	}
+
+	/**
+	 * Records new mail in the inbox as a webhook event, inside the transaction of the message. Mail that
+	 * arrives while an event waits joins that event, and one mailbox sends at most one event in each
+	 * `eventGapMs`. Returns the time of the alarm that sends the new event, or null.
+	 */
+	private queueInboxEvent(): number | null {
+		if (this.meta(EVENTS_MAILBOX_KEY) === null) return null;
+		if (this.one<{ id: number }>("SELECT id FROM event_outbox LIMIT 1")) return null;
+		const now = Date.now();
+		const at = Math.max(now, Number(this.meta(EVENTS_LAST_KEY) ?? 0) + WEBHOOK_LIMITS.eventGapMs);
+		this.sql.exec(
+			"INSERT INTO event_outbox (event_id, occurred_at, next_attempt_at) VALUES (?, ?, ?)",
+			newId("evt"),
+			now,
+			at,
+		);
+		return at;
+	}
+
+	/**
+	 * Puts the due webhook events on the queue. A failure is retried with backoff, up to `EVENT_MAX_ATTEMPTS`.
+	 * The event keeps its id on each attempt, so a crash after a send and before the delete sends an event
+	 * whose POST requests have the same `webhook-id`, and a receiver can drop them.
+	 */
+	private async drainEvents(): Promise<void> {
+		const now = Date.now();
+		const due = this.all<{ id: number; event_id: string; occurred_at: number; attempts: number }>(
+			"SELECT id, event_id, occurred_at, attempts FROM event_outbox WHERE next_attempt_at <= ? ORDER BY id",
+			now,
+		);
+		const mailboxId = this.meta(EVENTS_MAILBOX_KEY);
+		for (const row of due) {
+			try {
+				if (mailboxId === null) throw new Error("webhook events are off");
+				const job: WebhookEventJob = {
+					v: 1,
+					kind: "event",
+					mailboxId,
+					eventId: row.event_id,
+					occurredAt: row.occurred_at,
+				};
+				await this.env.WEBHOOKS.send(job);
+				this.ctx.storage.transactionSync(() => {
+					this.sql.exec("DELETE FROM event_outbox WHERE id = ?", row.id);
+					this.setMeta(EVENTS_LAST_KEY, String(Date.now()));
+				});
+			} catch (error) {
+				const attempts = mailboxId === null ? EVENT_MAX_ATTEMPTS : row.attempts + 1;
+				const message = error instanceof Error ? error.message : String(error);
+				log("warn", "webhook event could not be queued", { attempts, error: message });
+				if (attempts >= EVENT_MAX_ATTEMPTS) {
+					this.sql.exec("DELETE FROM event_outbox WHERE id = ?", row.id);
+				} else {
+					this.sql.exec(
+						"UPDATE event_outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
+						attempts,
+						Date.now() + backoff(attempts),
+						message.slice(0, 500),
+						row.id,
+					);
+				}
+			}
+		}
 	}
 
 	// --- Watch sockets ---------------------------------------------------------------------------
@@ -1069,6 +1182,7 @@ export class MailboxDO extends DurableObject<Env> {
 			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
 		const selfDelivery = input.recipients.some((r) => r.self);
+		let eventAt: number | null = null;
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
@@ -1114,6 +1228,7 @@ export class MailboxDO extends DurableObject<Env> {
 					now,
 				);
 			}
+			if (selfDelivery) eventAt = this.queueInboxEvent();
 			const sendResult: SendResult = { message_id: stored.id, thread_id: stored.threadId, recipients };
 			if (input.idempotencyKey) {
 				this.sql.exec(
@@ -1131,14 +1246,15 @@ export class MailboxDO extends DurableObject<Env> {
 		// Mail to the mailbox itself is in its inbox now.
 		if (selfDelivery) this.signalInbox();
 		if (input.recipients.some((r) => !r.self)) await this.ctx.storage.setAlarm(now);
+		else if (eventAt !== null) await this.alarmBy(eventAt);
 		return result;
 	}
 
 	/**
-	 * Drains the outbox: local deliveries go straight to the recipient's mailbox, external ones to
-	 * Email Service. A failure is retried with backoff, up to `OUTBOX_MAX_ATTEMPTS`, then the
-	 * recipient is marked failed. Delivery is at least once: a crash after a send and before the
-	 * outbox row is deleted sends again.
+	 * Puts the due webhook events on the queue, then drains the outbox: local deliveries go straight to
+	 * the recipient's mailbox, external ones to Email Service. A failure is retried with backoff, up to
+	 * `OUTBOX_MAX_ATTEMPTS`, then the recipient is marked failed. Delivery is at least once: a crash after
+	 * a send and before the outbox row is deleted sends again.
 	 */
 	override async alarm(): Promise<void> {
 		// One drain at a time. A drain that is running schedules the next one when it ends.
@@ -1153,9 +1269,15 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	private async runAlarm(): Promise<void> {
+		// Events first: each one is one quick queue send, and a slow outbox must not delay them.
+		await this.drainEvents();
 		await this.drainOutbox();
 		if (this.meta("delivery_pause")) return;
-		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox")?.at ?? null;
+		const next =
+			this.one<{ at: number | null }>(
+				`SELECT MIN(at) AS at FROM (SELECT MIN(next_attempt_at) AS at FROM outbox
+				UNION ALL SELECT MIN(next_attempt_at) FROM event_outbox)`,
+			)?.at ?? null;
 		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
 
@@ -1174,10 +1296,13 @@ export class MailboxDO extends DurableObject<Env> {
 	async resumeDeliveries(token: string): Promise<void> {
 		if (this.meta("delivery_pause") !== token) return;
 		this.sql.exec("DELETE FROM meta WHERE key = 'delivery_pause'");
-		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n) await this.ctx.storage.setAlarm(Date.now());
+		if (this.hasPendingWork()) await this.ctx.storage.setAlarm(Date.now());
 	}
 
-	/** Cancels the old outbox after the directory reset. The mailbox stays paused. */
+	/**
+	 * Cancels the old outbox after the directory reset. The mailbox stays paused. The reset also deleted
+	 * the webhooks, so the webhook events stop.
+	 */
 	cancelDeliveries(token: string): void {
 		if (this.meta("delivery_pause") !== token) return;
 		this.ctx.storage.transactionSync(() => {
@@ -1187,6 +1312,8 @@ export class MailboxDO extends DurableObject<Env> {
 				Date.now(),
 			);
 			this.sql.exec("DELETE FROM outbox");
+			this.sql.exec("DELETE FROM event_outbox");
+			this.sql.exec("DELETE FROM meta WHERE key IN (?, ?)", EVENTS_MAILBOX_KEY, EVENTS_LAST_KEY);
 			this.bump();
 		});
 	}

@@ -35,6 +35,7 @@ export {
 } from "./drive.ts";
 export { ERRORS, type ErrorCode, isErrorCode } from "./errors.ts";
 export {
+	CreatedWebhook,
 	DeliveryStatus,
 	Label,
 	LabelId,
@@ -48,6 +49,9 @@ export {
 	type SystemLabel,
 	Thread,
 	ThreadSummary,
+	WEBHOOK_EVENT_TYPE,
+	WEBHOOK_LIMITS,
+	Webhook,
 } from "./mail.ts";
 export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {

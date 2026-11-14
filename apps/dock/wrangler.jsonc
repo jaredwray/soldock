@@ -50,10 +50,14 @@
 	// each Drive file (key drive/<space id>/<item id>/<version id>).
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
 	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
+	// A MailboxDO puts each webhook event on soldock-webhooks. The consumer makes one job for each webhook
+	// and sends its POST. The consumer retries a POST by itself, so max_retries counts failures of Soldock.
 	"queues": {
 		"producers": [
 			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
-			{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" }
+			{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
+			{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
+			{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" }
 		],
 		"consumers": [
 			{
@@ -62,6 +66,13 @@
 				"max_batch_timeout": 2,
 				"max_retries": 5,
 				"dead_letter_queue": "soldock-mail-inbound-dlq"
+			},
+			{
+				"queue": "soldock-webhooks",
+				"max_batch_size": 10,
+				"max_batch_timeout": 2,
+				"max_retries": 10,
+				"dead_letter_queue": "soldock-webhooks-dlq"
 			}
 		]
 	},
@@ -108,7 +119,9 @@
 			"queues": {
 				"producers": [
 					{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
-					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" }
+					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
+					{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
+					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" }
 				],
 				"consumers": [
 					{
@@ -117,6 +130,13 @@
 						"max_batch_timeout": 2,
 						"max_retries": 5,
 						"dead_letter_queue": "soldock-mail-inbound-dlq"
+					},
+					{
+						"queue": "soldock-webhooks",
+						"max_batch_size": 10,
+						"max_batch_timeout": 2,
+						"max_retries": 10,
+						"dead_letter_queue": "soldock-webhooks-dlq"
 					}
 				]
 			},

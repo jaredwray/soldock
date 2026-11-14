@@ -7,8 +7,11 @@ import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 
-/** Scopes that a new key does not get unless the person selects them. */
-const PRIVILEGED: readonly Scope[] = ["account.keys", "directory.write"];
+/**
+ * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
+ * outside Soldock, so `mail.webhooks` is one of them.
+ */
+const PRIVILEGED: readonly Scope[] = ["account.keys", "directory.write", "mail.webhooks"];
 
 interface ApiKeyManagerProps {
 	/** The key owner. Leave it out for your own keys. */

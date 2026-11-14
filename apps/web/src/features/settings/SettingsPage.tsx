@@ -8,6 +8,7 @@ import { SIGN_OUT_FAILED } from "../auth/auth.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "./ApiKeys.tsx";
 import { PasswordCard, TwoStepCard } from "./SignInSettings.tsx";
+import { WebhookManager } from "./Webhooks.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -53,6 +54,7 @@ export function SettingsPage() {
 			<PasswordCard />
 			<TwoStepCard />
 			<ApiKeyManager heading="Your API keys" allowedScopes={ALL_SCOPES} />
+			<WebhookManager heading="Your webhooks" canCreate />
 			<section className="card">
 				<h2 className="card-title">Sign out</h2>
 				<p className="muted">Sign out of Soldock in this browser.</p>
