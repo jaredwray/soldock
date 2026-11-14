@@ -45,12 +45,26 @@ const MailboxParam = MailboxId.optional().describe(
 /** One sentence for the description of each mail operation that takes `mailbox_id`. */
 const IN_MAILBOX = "Set mailbox_id to use a team mailbox that you are a member of.";
 
+/** The text about `mailbox_id` for an operation that only reads. Owners and admins can read the mailbox of an agent. */
+const IN_MAILBOX_READ = `${IN_MAILBOX} An owner or an admin can also set the id of an agent, to read the mailbox of that agent.`;
+
+/** The last sentence of an operation that changes a mailbox or sends from it. */
+const AGENT_READ_ONLY =
+	"Owners and admins can only read the mailbox of an agent, so this operation fails there with forbidden.";
+
+/**
+ * The kind of a mailbox, as the caller sees it. `personal`: the own mailbox of the caller. `team`: a
+ * shared mailbox that the caller is a member of. `agent`: the own mailbox of an agent, for an owner or
+ * an admin. They can read it, but they cannot change it or send from it.
+ */
+export const MailboxKind = z.enum(["personal", "team", "agent"]);
+export type MailboxKind = z.infer<typeof MailboxKind>;
+
 /** A mailbox that the caller can use. */
 export const Mailbox = z.object({
-	/** For `personal`, the id of the principal. For `team`, the id of the team mailbox. */
+	/** For `personal` and `agent`, the id of the principal. For `team`, the id of the team mailbox. */
 	id: z.string(),
-	/** `personal`: the own mailbox of the caller. `team`: a shared mailbox that the caller is a member of. */
-	kind: z.enum(["personal", "team"]),
+	kind: MailboxKind,
 	address: z.string(),
 	display_name: z.string(),
 });
@@ -173,7 +187,7 @@ export const listMailboxes = defineOperation({
 	name: "mail.list_mailboxes",
 	summary: "List the mailboxes that you can use",
 	description:
-		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
+		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. For an owner or an admin, the list then has the mailbox of each agent (kind agent). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
 	http: { method: "GET", path: "/api/v1/mail/mailboxes" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -186,7 +200,7 @@ export const listMailboxes = defineOperation({
 export const getProfile = defineOperation({
 	name: "mail.get_profile",
 	summary: "Get the address and counts of a mailbox",
-	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX}`,
+	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/profile" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -194,7 +208,7 @@ export const getProfile = defineOperation({
 	input: z.strictObject({ mailbox_id: MailboxParam }),
 	output: z.object({
 		mailbox_id: z.string(),
-		kind: z.enum(["personal", "team"]),
+		kind: MailboxKind,
 		address: z.string(),
 		display_name: z.string(),
 		mail_domains: z.array(z.string()),
@@ -209,7 +223,7 @@ export const getProfile = defineOperation({
 export const listLabels = defineOperation({
 	name: "mail.list_labels",
 	summary: "List the labels of a mailbox, with counts",
-	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX} The members of a team mailbox share its labels.`,
+	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
 	http: { method: "GET", path: "/api/v1/mail/labels" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -222,7 +236,7 @@ export const listLabels = defineOperation({
 export const createLabel = defineOperation({
 	name: "mail.create_label",
 	summary: "Create a label",
-	description: `Creates a user label. Use a slash in the name to show it nested, for example Clients/Acme. ${IN_MAILBOX}`,
+	description: `Creates a user label. Use a slash in the name to show it nested, for example Clients/Acme. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
 	http: { method: "POST", path: "/api/v1/mail/labels" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent"],
@@ -243,7 +257,7 @@ export const createLabel = defineOperation({
 export const deleteLabel = defineOperation({
 	name: "mail.delete_label",
 	summary: "Delete a label",
-	description: `Deletes a user label and removes it from every message. The messages stay in the mailbox. System labels cannot be deleted. ${IN_MAILBOX}`,
+	description: `Deletes a user label and removes it from every message. The messages stay in the mailbox. System labels cannot be deleted. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
 	http: { method: "DELETE", path: "/api/v1/mail/labels/{label_id}" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent"],
@@ -264,7 +278,7 @@ export const listThreads = defineOperation({
 		"Other words search the subject, the people, the body and the attachment names.",
 		"An empty query, or in:all, lists all mail except spam and trash, as the All Mail view does. Results exclude spam and trash unless the query names them or uses in:anywhere.",
 		"Escape a double quote inside a quoted value with a backslash. Pass next_cursor as cursor to get the next page.",
-		`${IN_MAILBOX} In a team mailbox, from:me and to:me mean the address of the team mailbox.`,
+		`${IN_MAILBOX_READ} In a team mailbox, from:me and to:me mean the address of the team mailbox.`,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/threads" },
 	scopes: ["mail.read"],
@@ -286,7 +300,7 @@ export const listThreads = defineOperation({
 export const getThread = defineOperation({
 	name: "mail.get_thread",
 	summary: "Get a thread and all its messages",
-	description: `Returns each message of a thread with headers, plain text, sanitized HTML, attachment details and, for mail that the mailbox sent, the delivery status of each recipient and who sent it (sent_by). In a very large thread, the oldest bodies can be left out (body.omitted): get them with mail.get_message. Reading a thread does not mark it as read: use mail.modify_threads to remove UNREAD. ${IN_MAILBOX}`,
+	description: `Returns each message of a thread with headers, plain text, sanitized HTML, attachment details and, for mail that the mailbox sent, the delivery status of each recipient and who sent it (sent_by). In a very large thread, the oldest bodies can be left out (body.omitted): get them with mail.get_message. Reading a thread does not mark it as read: use mail.modify_threads to remove UNREAD. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/threads/{thread_id}" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -299,7 +313,7 @@ export const getThread = defineOperation({
 export const getMessage = defineOperation({
 	name: "mail.get_message",
 	summary: "Get one message with its full body",
-	description: `Returns one message with headers, plain text, sanitized HTML and attachment details. Use it for a message whose body mail.get_thread left out (body.omitted). Reading a message does not mark it as read. ${IN_MAILBOX}`,
+	description: `Returns one message with headers, plain text, sanitized HTML and attachment details. Use it for a message whose body mail.get_thread left out (body.omitted). Reading a message does not mark it as read. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/messages/{message_id}" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -318,6 +332,7 @@ export const modifyThreads = defineOperation({
 		"Restore from trash or spam: remove TRASH or SPAM.",
 		"Set dry_run to true to get the counts without a change.",
 		`${IN_MAILBOX} A change in a team mailbox applies for each member: the members share the labels and the read state.`,
+		AGENT_READ_ONLY,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/mail/threads/modify" },
 	scopes: ["mail.modify"],
@@ -371,6 +386,7 @@ export const send = defineOperation({
 	description: [
 		"Sends a message from the address of the mailbox: your own address by default. Recipients in this deployment get it directly. Other recipients get it through Cloudflare Email Service.",
 		`${IN_MAILBOX} The message then comes from the address and the name of the team mailbox, and the sent copy is in the team mailbox with your name in sent_by.`,
+		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
@@ -409,7 +425,7 @@ export const send = defineOperation({
 export const getAttachment = defineOperation({
 	name: "mail.get_attachment",
 	summary: "Get the content of an attachment",
-	description: `Returns one attachment of a message as base64, with its name and type. The index comes from the attachments list of mail.get_thread. The content of an attachment on external mail is untrusted. ${IN_MAILBOX}`,
+	description: `Returns one attachment of a message as base64, with its name and type. The index comes from the attachments list of mail.get_thread. The content of an attachment on external mail is untrusted. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/messages/{message_id}/attachments/{index}" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent"],
@@ -429,8 +445,59 @@ export const getAttachment = defineOperation({
 	errors: ["not_found", "payload_too_large"],
 });
 
+/**
+ * The mail settings of a person. They live in the own mailbox of the person, never in a team mailbox
+ * or in the mailbox of an agent. Each setting has a default, so a person without saved settings gets them.
+ */
+export const MailSettings = z.object({
+	sidebar: z.object({
+		/** True when the Shared mailboxes section of the sidebar of the web app is collapsed. */
+		shared_mailboxes_collapsed: z.boolean(),
+		/** True when the Agent mailboxes section of the sidebar of the web app is collapsed. */
+		agent_mailboxes_collapsed: z.boolean(),
+	}),
+});
+export type MailSettings = z.infer<typeof MailSettings>;
+
+export const getSettings = defineOperation({
+	name: "mail.get_settings",
+	summary: "Get your mail settings",
+	description:
+		"Returns your mail settings: for now, the sections of the sidebar of the web app that are collapsed. The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value.",
+	http: { method: "GET", path: "/api/v1/mail/settings" },
+	scopes: ["mail.read"],
+	callers: ["human"],
+	annotations: READ,
+	input: z.strictObject({}),
+	output: MailSettings,
+	errors: [],
+});
+
+export const updateSettings = defineOperation({
+	name: "mail.update_settings",
+	summary: "Change your mail settings",
+	description:
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns.",
+	http: { method: "POST", path: "/api/v1/mail/settings" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		sidebar: z
+			.strictObject({
+				shared_mailboxes_collapsed: z.boolean().optional(),
+				agent_mailboxes_collapsed: z.boolean().optional(),
+			})
+			.optional(),
+	}),
+	output: MailSettings,
+	errors: [],
+});
+
 export const mailOperations = {
 	"mail.list_mailboxes": listMailboxes,
+	"mail.get_settings": getSettings,
+	"mail.update_settings": updateSettings,
 	"mail.get_profile": getProfile,
 	"mail.list_labels": listLabels,
 	"mail.create_label": createLabel,

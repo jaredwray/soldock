@@ -1,6 +1,6 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
-import { MAIL_LIMITS } from "@soldock/contracts";
+import { MAIL_LIMITS, type MailSettings } from "@soldock/contracts";
 import { getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
@@ -288,6 +288,30 @@ interface MessageMetaRow extends Row {
  * stay in R2. Side effects on other objects (local delivery, Email Service) go through the outbox
  * and its alarm, with retries.
  */
+/** A change to the mail settings: only the named settings change. */
+export interface SettingsPatch {
+	sidebar?:
+		| { shared_mailboxes_collapsed?: boolean | undefined; agent_mailboxes_collapsed?: boolean | undefined }
+		| undefined;
+}
+
+/** The saved settings with the default for each setting that was never saved. A bad value gets the default. */
+function readSettings(raw: string | null): MailSettings {
+	let saved: { sidebar?: Record<string, unknown> } = {};
+	try {
+		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
+	} catch {
+		// A value that does not parse gets the defaults. The next change writes a good value.
+	}
+	const flag = (value: unknown) => value === true;
+	return {
+		sidebar: {
+			shared_mailboxes_collapsed: flag(saved.sidebar?.shared_mailboxes_collapsed),
+			agent_mailboxes_collapsed: flag(saved.sidebar?.agent_mailboxes_collapsed),
+		},
+	};
+}
+
 export class MailboxDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private drainTask: Promise<void> | null = null;
@@ -554,6 +578,27 @@ export class MailboxDO extends DurableObject<Env> {
 			inbox_unread: unread?.n ?? 0,
 			version: Number(this.meta("version") ?? 0),
 		};
+	}
+
+	/** The mail settings of the person who owns this mailbox. Only the own mailbox of a person has them. */
+	settings(): MailSettings {
+		return readSettings(this.meta("settings"));
+	}
+
+	/**
+	 * Changes the named settings, keeps the others, and returns all of them. A setting is not mail, so the
+	 * change counter stays: a change does not make the web app get the list and the labels again.
+	 */
+	updateSettings(patch: SettingsPatch): MailSettings {
+		const current = readSettings(this.meta("settings"));
+		const sidebar = { ...current.sidebar };
+		for (const key of ["shared_mailboxes_collapsed", "agent_mailboxes_collapsed"] as const) {
+			const value = patch.sidebar?.[key];
+			if (typeof value === "boolean") sidebar[key] = value;
+		}
+		const next = { sidebar };
+		this.setMeta("settings", JSON.stringify(next));
+		return next;
 	}
 
 	listLabels(): LabelRecord[] {

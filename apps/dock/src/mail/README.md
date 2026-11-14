@@ -1,7 +1,8 @@
 # `mail` module
 
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
-> read and send, in the own mailbox of a principal and in team mailboxes. Keep this README current
+> read and send, in the own mailbox of a principal and in team mailboxes. Owners and admins can read
+> the mailbox of each agent. Keep this README current
 > as the module grows. It is the module's contract.
 
 | | |
@@ -9,7 +10,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, idempotency keys); raw MIME in R2 `blobs`. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -36,9 +37,12 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 | --- | --- | --- |
 | `personal` | The id of the principal (`prn_…`) | That principal only |
 | `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox |
+| `agent` | The id of an agent (`prn_…`) | The agent, as its `personal` mailbox. Each owner and admin can read it, and nothing more |
 
 - Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
-  mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use.
+  mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use. The
+  kind is relative to the caller: the own mailbox of an agent is `personal` for the agent and
+  `agent` for an owner or an admin.
 - The handler checks the mailbox on each call (`openMailbox`), so removed access ends at once.
   `mail.send` has slow steps, so it checks the membership again just before the mailbox stores the
   message. Known limit: this check and the store are not one transaction, so a removal between
@@ -47,6 +51,9 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
   different principal, get `forbidden`. The `MailboxDO` does not know its callers.
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
   mailbox and cannot send from it.
+- The id of a different principal gets `forbidden`, except in the case of
+  [Agent mailboxes](#agent-mailboxes). A credential of an owner or an admin with `mail.read` reads
+  each agent mailbox, also a narrow API key. The `mail.read` scope text says so.
 - The [`identity`](../identity/README.md#team-mailboxes) module owns the team mailboxes, their
   addresses and their members.
 
@@ -66,6 +73,48 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
   the principal id in front). The key of one member cannot return or stop the send of a different member.
 - `from:me` and `to:me` in a search mean the address of the mailbox: in a team mailbox, the team address.
 - The audit line of a change in a team mailbox has the field `mailbox` with the team mailbox id.
+
+### Agent mailboxes
+
+An owner or an admin can read the own mailbox of each agent. This gives oversight of what an agent
+receives and sends. `canReadAgentMailboxes` in [`identity`](../identity/README.md#principals) decides
+who can.
+
+- `mail.list_mailboxes` gives an owner or an admin the mailbox of each agent after the team
+  mailboxes, with the kind `agent`, by name.
+- With the id of an agent as `mailbox_id`, the read operations work: `mail.get_profile`,
+  `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
+  `mail.get_attachment`.
+- The operations that change the mailbox or send from it get `forbidden`: `mail.create_label`,
+  `mail.delete_label`, `mail.modify_threads` (also with `dry_run`) and `mail.send`. A change would
+  change what the agent sees, for example the read state. A send would come from the address of the agent.
+- The mailbox of a person stays private: the id of a person gets `forbidden`, also for the owner.
+  An unknown principal id gets `not_found`.
+- A member, also the sponsor of the agent, gets `forbidden`. An agent never gets the mailbox of a
+  different agent.
+- An archived agent cannot act, but owners and admins can still read its mailbox. A deleted agent is
+  not in the list, and its id gets `not_found`: its mailbox stays in storage, and nobody opens it.
+- Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
+  `mail.get_attachment` in the mailbox of an agent writes an audit line with the field `mailbox`.
+  The line of `mail.list_threads` names the mailbox, not the query, because a query can hold private
+  words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
+  return no mail content.
+- The access check reads the directory on each call, so a role change applies to the next call.
+
+## Settings
+
+`mail.get_settings` and `mail.update_settings` read and change the mail settings of a person. For now,
+the settings are the collapsed sections of the sidebar of the web app
+(`sidebar.shared_mailboxes_collapsed`, `sidebar.agent_mailboxes_collapsed`).
+
+- The settings live in the own mailbox of the caller, in the `meta` table. The operations take no
+  `mailbox_id`, so a team mailbox and the mailbox of an agent never get settings.
+- Each setting has a default (`false`). A stored value that does not parse gets the defaults.
+- `mail.update_settings` changes only the settings that the request names, and returns all of them.
+  A second call with the same values changes nothing.
+- A change does not change the mailbox `version`, so the web app does not get the list again.
+- Only people can call them. An agent has no web app. A change writes no audit line, as for
+  `chat.mark_read`: it changes the view of the person, not their data.
 
 ## Inbound
 
@@ -207,6 +256,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
+| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
 
