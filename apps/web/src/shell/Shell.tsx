@@ -50,6 +50,14 @@ export function Shell() {
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [navOpen]);
 
+	// Above 900px the page has no drawer. A phone that turns on its side can go above 900px: the drawer then closes.
+	useEffect(() => {
+		const drawerLayout = matchMedia("(max-width: 900px)");
+		const close = () => setNavOpen(false);
+		drawerLayout.addEventListener("change", close);
+		return () => drawerLayout.removeEventListener("change", close);
+	}, []);
+
 	// The own id of the person in an agent mailbox path is the own mailbox: go to its normal path.
 	const ownPath = ownMailboxPath(route, whoami.principal.id);
 

@@ -164,13 +164,16 @@ function ThreadRow({
 				</span>
 			) : (
 				<>
-					<input
-						type="checkbox"
-						className="checkbox thread-check"
-						checked={selected}
-						onChange={() => onToggleSelect(thread.id)}
-						aria-label={`Select: ${subject}`}
-					/>
+					{/* The label is the touch target of the box: 44px on a touch screen. */}
+					<label className="thread-check">
+						<input
+							type="checkbox"
+							className="checkbox"
+							checked={selected}
+							onChange={() => onToggleSelect(thread.id)}
+							aria-label={`Select: ${subject}`}
+						/>
+					</label>
 					<button
 						type="button"
 						className={

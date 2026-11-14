@@ -71,9 +71,9 @@
 	min-width: 0;
 }
 
+/* The path stays on one line. The folders above get shorter before the folder on screen does. */
 .drive-crumbs ol {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
 	margin: 0;
@@ -83,10 +83,19 @@
 
 .drive-crumbs li {
 	display: inline-flex;
+	flex: 0 100 auto;
 	align-items: center;
 	gap: 2px;
 	min-width: 0;
 	color: var(--muted-foreground);
+}
+
+.drive-crumbs li:last-child {
+	flex-shrink: 1;
+}
+
+.drive-crumbs .icon {
+	flex: none;
 }
 
 /* A folder above is quiet text. The folder on screen has the size of a page title. */
@@ -986,19 +995,6 @@ button.drive-name-link:hover .drive-name-text {
 		font-size: 16px;
 	}
 
-	/* The path stays on one line. Each entry gets shorter. */
-	.drive-crumbs ol {
-		flex-wrap: nowrap;
-	}
-
-	.drive-crumbs li {
-		flex: 0 1 auto;
-	}
-
-	.drive-crumbs li .icon {
-		flex: none;
-	}
-
 	.drive-crumb {
 		max-width: 140px;
 	}
@@ -1046,5 +1042,260 @@ button.drive-name-link:hover .drive-name-text {
 
 	.document-header .button-primary {
 		padding: 0 12px;
+	}
+}
+
+/* From 901px to 1100px, the Last change column has room for the name of the person. */
+@media (min-width: 901px) and (max-width: 1100px) {
+	.drive-col-modified {
+		width: 32%;
+	}
+}
+
+/* The link to the folder above. It shows only on a phone, where the header row has only the folder on screen. */
+.drive-up {
+	display: none;
+}
+
+/* Touch targets. */
+@media (max-width: 900px), (pointer: coarse) {
+	.drive-check {
+		place-items: center;
+		width: 44px;
+		height: 44px;
+	}
+
+	.drive-table td {
+		height: 52px;
+	}
+
+	.drive-table .drive-col-check {
+		width: 44px;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-star,
+	.drive-table .drive-col-more {
+		width: 44px;
+		padding: 0;
+	}
+
+	.drive-sort,
+	.drive-name-link,
+	.drive-menu-item,
+	.drive-picker-item,
+	.drive-share-role,
+	.drive-share-add .button,
+	.document-header-rename,
+	.document-header-input {
+		min-height: 44px;
+	}
+
+	a.drive-crumb {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+	}
+
+	.drive-preview .dialog-header .icon-button {
+		width: 44px;
+		height: 44px;
+	}
+
+	.document-header-input,
+	.drive-share-role {
+		font-size: 16px;
+	}
+}
+
+/* A phone. */
+@media (max-width: 600px) {
+	.drive-up {
+		display: inline-flex;
+		margin-right: -2px;
+	}
+
+	/* Only the folder on screen shows. The link before it goes to the folder above. */
+	.drive-crumbs li:not(:last-child),
+	.drive-crumbs .icon {
+		display: none;
+	}
+
+	.drive-crumb,
+	.drive-header > .drive-title {
+		max-width: none;
+	}
+
+	.drive-header > .drive-title {
+		flex: 0 1 auto;
+	}
+
+	.drive-crumb-current {
+		margin-left: 0;
+	}
+
+	/* The save state is under the name, so that the name has room. The button of the name is 44px
+	   high: the save state shows on its bottom part. */
+	.document-header:has(.document-header-state) {
+		display: grid;
+		grid-auto-flow: column;
+		grid-template-columns: 44px minmax(0, 1fr);
+		grid-template-rows: 28px 16px;
+		align-content: center;
+	}
+
+	.document-header:has(.document-header-state) > * {
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-name,
+	.document-header:has(.document-header-state) > .document-header-form {
+		grid-column: 2;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-state {
+		grid-area: 2 / 2;
+		margin-left: 6px;
+		font-size: 12px;
+		line-height: 16px;
+		pointer-events: none;
+	}
+
+	.document-header:has(.document-header-state) .document-header-rename {
+		padding: 3px 6px 19px;
+		line-height: 22px;
+	}
+
+	.document-header:has(.document-header-state) .document-header-name {
+		line-height: 22px;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-form {
+		align-self: start;
+	}
+
+	.document-header:has(.document-header-state) .document-header-input {
+		min-height: 28px;
+		padding-top: 0;
+		padding-bottom: 0;
+	}
+
+	.document-header-spacer {
+		display: none;
+	}
+
+	/* The list: each row has two lines. The name is above the date of the last change. The link of
+	   the name is 52px high, and the date shows on its bottom part. */
+	.drive-table,
+	.drive-table thead,
+	.drive-table tbody,
+	.drive-table tbody::before {
+		display: block;
+	}
+
+	.drive-table tr {
+		display: grid;
+		grid-template-columns: 44px 44px minmax(0, 1fr) 44px;
+		grid-template-rows: 30px 22px;
+	}
+
+	/* The trash has no star. */
+	.drive-table tr:not(:has(.drive-col-star)) {
+		grid-template-columns: 44px 0 minmax(0, 1fr) 44px;
+	}
+
+	.drive-table tbody tr {
+		margin-bottom: 1px;
+	}
+
+	.drive-table th,
+	.drive-table td {
+		width: auto;
+		height: auto;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-check,
+	.drive-table .drive-col-star,
+	.drive-table .drive-col-more {
+		display: grid;
+		place-items: center;
+		grid-row: 1 / span 2;
+		width: auto;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-check {
+		grid-column: 1;
+	}
+
+	.drive-table .drive-col-star {
+		grid-column: 2;
+	}
+
+	.drive-table .drive-col-more {
+		grid-column: 4;
+	}
+
+	.drive-table .drive-col-name {
+		grid-area: 1 / 3 / span 2;
+		padding-left: 4px;
+	}
+
+	.drive-name-link {
+		min-height: 52px;
+	}
+
+	.drive-name-text {
+		align-self: flex-start;
+		padding-top: 7px;
+		line-height: 21px;
+	}
+
+	.drive-shared-mark {
+		align-self: flex-start;
+		padding-top: 11px;
+	}
+
+	.drive-table .drive-col-modified {
+		grid-area: 2 / 3;
+		padding: 0 8px 0 46px;
+		font-size: 12px;
+		line-height: 16px;
+		pointer-events: none;
+	}
+
+	/* The header row: the two sort buttons are next to each other. */
+	.drive-table thead tr {
+		grid-template-columns: 44px 44px minmax(0, 1fr) auto;
+		grid-template-rows: 44px;
+	}
+
+	.drive-table thead {
+		position: sticky;
+		top: 0;
+		z-index: 2;
+	}
+
+	.drive-table thead th {
+		position: static;
+		display: flex;
+		align-items: center;
+		grid-row: 1;
+		height: 44px;
+		padding: 0 8px 0 4px;
+	}
+
+	.drive-table thead .drive-col-modified {
+		grid-area: 1 / 4;
+		padding: 0 8px;
+		pointer-events: auto;
+	}
+
+	.drive-table thead .drive-col-more,
+	.drive-table .drive-col-owner,
+	.drive-table .drive-col-size {
+		display: none;
 	}
 }

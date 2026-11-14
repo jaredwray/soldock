@@ -430,6 +430,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 
 	const selection = selectedItems.length === 0 ? "none" : selectedItems.length === list.items.length ? "all" : "some";
 	const allStarred = selectedItems.length > 0 && selectedItems.every((item) => item.starred);
+	const crumbs = view.kind === "folder" ? breadcrumbs(view, folder, ownId) : [];
+	// The folder above the folder on screen. While the folder loads, this is the root of the drive.
+	const upCrumb = crumbs.findLast((crumb) => crumb.to !== null);
 
 	return (
 		<div className="drive-layout">
@@ -450,10 +453,21 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			>
 				<div className="drive-header">
 					<Icon name={viewIcon(view, foreign)} size={22} className="drive-header-icon" />
+					{/* A phone shows only the folder on screen. This link goes to the folder above. */}
+					{upCrumb?.to && (
+						<Link
+							to={upCrumb.to}
+							className="icon-button drive-up"
+							aria-label={`Up to ${upCrumb.label}`}
+							title={`Up to ${upCrumb.label}`}
+						>
+							<Icon name="back" />
+						</Link>
+					)}
 					{view.kind === "folder" ? (
 						<nav aria-label="Folder path" className="drive-crumbs">
 							<ol>
-								{breadcrumbs(view, folder, ownId).map((crumb, index) => (
+								{crumbs.map((crumb, index) => (
 									// biome-ignore lint/suspicious/noArrayIndexKey: two folders of a path can have the same name.
 									<li key={index}>
 										{index > 0 && <Icon name="chevronRight" size={14} />}

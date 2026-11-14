@@ -258,3 +258,21 @@
 		width: 56px;
 	}
 }
+
+/* Touch: the fields of the formula bar are 44px high and have 16px text, so that iOS does not zoom in. */
+@media (max-width: 900px), (pointer: coarse) {
+	.sheet-name-box,
+	.sheet-formula,
+	.sheet-cell-editor {
+		font-size: 16px;
+	}
+
+	.sheet-name-box,
+	.sheet-formula {
+		height: 44px;
+	}
+
+	.sheet-name-box {
+		width: 64px;
+	}
+}

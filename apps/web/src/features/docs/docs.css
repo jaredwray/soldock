@@ -305,3 +305,24 @@
 		display: none;
 	}
 }
+
+/* Touch: the toolbar is one row that scrolls, with 44px buttons. */
+@media (max-width: 900px), (pointer: coarse) {
+	.doc-toolbar {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+	}
+
+	.doc-toolbar .format-button {
+		flex: none;
+		width: 44px;
+		height: 44px;
+	}
+
+	.doc-block-type {
+		height: 44px;
+		font-size: 16px;
+	}
+}

@@ -404,7 +404,11 @@ function MessageItem({
 	const editId = useId();
 	const author = message.author.display_name;
 	return (
-		<li className={head ? "chat-message chat-message-head" : "chat-message"}>
+		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
+		<li
+			className={head ? "chat-message chat-message-head" : "chat-message"}
+			tabIndex={!message.deleted && editing === null && (own || canDelete) ? -1 : undefined}
+		>
 			{/* The avatar of a person is a square with round corners. The avatar of an agent is a circle. */}
 			{head && (
 				<span
