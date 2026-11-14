@@ -58,7 +58,7 @@ For client developers:
 
 Use an API key for a client that cannot use OAuth.
 
-1. An owner or an admin opens **Admin › New person or agent** in the web app and creates an
+1. An owner or an admin opens **Admin › Members**, selects **New person or agent**, and creates an
    agent. The agent gets a display name, an address on a mail domain and a sponsor. The REST and
    MCP operation is `directory.create_principal`.
 2. The result shows the agent's first API key once. Store it in the agent's secret store.
@@ -87,8 +87,9 @@ others. A REST client calls the same operations under `/api/v1`.
 ## Team mailboxes
 
 A team mailbox is a shared mailbox with its own address, for example `support@example.com`. An
-owner or an admin creates it under **Admin › Team mailboxes** and adds people and agents as members
-(`directory.create_team_mailbox`, `directory.add_team_mailbox_member`). An agent cannot add itself.
+owner or an admin creates it under **Admin › Shared mailboxes** and adds people and agents as members
+(`directory.create_team_mailbox`, `directory.add_team_mailbox_member`). The web app calls it a shared
+mailbox. An agent cannot add itself.
 
 1. Call `mail_list_mailboxes`. The result has your own mailbox first, then each team mailbox that
    you are a member of.

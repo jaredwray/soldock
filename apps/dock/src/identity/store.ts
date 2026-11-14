@@ -20,6 +20,8 @@ export interface PrincipalRecord {
 	/** True when sign-in also needs a TOTP code. The secret never leaves the sign-in code. */
 	totp_enabled: boolean;
 	created_at: string;
+	/** Set while the principal is archived: it cannot sign in or use a credential. */
+	archived_at: string | null;
 }
 
 export interface ApiKeyRecord {
@@ -42,9 +44,12 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
 	scopes: string;
 }
 
-/** The principal columns of a PrincipalRecord. Only flags come from the credential columns, never their values. */
+/**
+ * The principal columns of a PrincipalRecord. Only flags come from the credential columns, never their values.
+ * A deleted principal has no address, so each query with the primary address leaves it out.
+ */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
-	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at`;
+	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
@@ -143,12 +148,12 @@ export async function getPrincipals(db: D1Database, ids: readonly string[]): Pro
 	return results.map(toPrincipal);
 }
 
-/** The ids from the list that no principal has. */
+/** The ids from the list that no principal has. A deleted principal counts as unknown. */
 export async function unknownPrincipalIds(db: D1Database, ids: readonly string[]): Promise<string[]> {
 	const unique = [...new Set(ids)];
 	if (unique.length === 0) return [];
 	const { results } = await db
-		.prepare("SELECT p.id FROM principals p JOIN json_each(?) wanted ON wanted.value = p.id")
+		.prepare("SELECT p.id FROM principals p JOIN json_each(?) wanted ON wanted.value = p.id WHERE p.deleted_at IS NULL")
 		.bind(JSON.stringify(unique))
 		.all<{ id: string }>();
 	const known = new Set(results.map((row) => row.id));
@@ -345,6 +350,102 @@ export async function updateOutboundPolicy(
 		.prepare("UPDATE principals SET outbound_mode = ?, outbound_allowlist = ? WHERE id = ? AND kind = 'agent'")
 		.bind(mode, JSON.stringify(mode === "allowlist" ? allowlist : []), id)
 		.run();
+}
+
+/** The changes of `updatePrincipal`. A field that is undefined does not change. */
+export interface PrincipalChanges {
+	display_name?: string | undefined;
+	org_role?: "admin" | "member" | undefined;
+	sponsor_id?: string | undefined;
+}
+
+/**
+ * Changes the name, the role of a human or the sponsor of an agent. The update matches only while the
+ * principal exists, a role change does not touch the owner, and a new sponsor is a human who is not
+ * archived or deleted. So a parallel change cannot leave an agent with a sponsor who left. Returns false
+ * when it matched no row.
+ */
+export async function updatePrincipal(db: D1Database, id: string, changes: PrincipalChanges): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE principals SET display_name = COALESCE(?1, display_name),
+				org_role = CASE WHEN kind = 'human' THEN COALESCE(?2, org_role) ELSE org_role END,
+				sponsor_id = CASE WHEN kind = 'agent' THEN COALESCE(?3, sponsor_id) ELSE sponsor_id END
+			WHERE id = ?4 AND deleted_at IS NULL AND (?2 IS NULL OR org_role IS NOT 'owner')
+			AND (?3 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?3 AND sponsor.kind = 'human'
+				AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))`,
+		)
+		.bind(changes.display_name ?? null, changes.org_role ?? null, changes.sponsor_id ?? null, id)
+		.run();
+	return result.meta.changes === 1;
+}
+
+/** The agents that a human sponsors, without the deleted ones. */
+export async function countSponsoredAgents(db: D1Database, sponsorId: string): Promise<number> {
+	return (
+		(await db
+			.prepare("SELECT COUNT(*) AS count FROM principals WHERE sponsor_id = ? AND deleted_at IS NULL")
+			.bind(sponsorId)
+			.first<number>("count")) ?? 0
+	);
+}
+
+/**
+ * Archives a principal and ends its sessions. The owner cannot be archived. A second archive changes
+ * nothing. The API keys and OAuth grants stay: `authenticate` refuses them while the principal is archived.
+ */
+export async function archivePrincipal(db: D1Database, id: string): Promise<void> {
+	await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET archived_at = ?1
+				WHERE id = ?2 AND archived_at IS NULL AND deleted_at IS NULL AND org_role IS NOT 'owner'`,
+			)
+			.bind(new Date().toISOString(), id),
+		db
+			.prepare(
+				"DELETE FROM sessions WHERE principal_id = ?1 AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND archived_at IS NOT NULL)",
+			)
+			.bind(id),
+	]);
+}
+
+/** Restores an archived principal. Its keys and grants work again. Its old sessions are gone. */
+export async function restorePrincipal(db: D1Database, id: string): Promise<void> {
+	await db.prepare("UPDATE principals SET archived_at = NULL WHERE id = ? AND deleted_at IS NULL").bind(id).run();
+}
+
+/**
+ * Deletes a principal in one transaction. The row stays, because keys, team mailboxes and OAuth rows of
+ * other principals refer to it. The credential columns are cleared, the addresses (so the address becomes
+ * free and inbound mail to it is refused), the sessions and the team mailbox memberships are removed, and
+ * the keys and grants are revoked. The owner and a human who sponsors an agent cannot be deleted. Returns
+ * false, and changes nothing, when the first update matched no row.
+ */
+export async function deletePrincipal(db: D1Database, id: string): Promise<boolean> {
+	const now = new Date().toISOString();
+	// Each later statement runs only for the row that this request deleted.
+	const deleted = "EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at = ?1)";
+	const [first] = await db.batch([
+		db
+			.prepare(
+				`UPDATE principals SET deleted_at = ?1, archived_at = COALESCE(archived_at, ?1), password_hash = NULL,
+					totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL
+				WHERE id = ?2 AND deleted_at IS NULL AND org_role IS NOT 'owner'
+				AND NOT EXISTS (SELECT 1 FROM principals agent WHERE agent.sponsor_id = ?2 AND agent.deleted_at IS NULL)`,
+			)
+			.bind(now, id),
+		db.prepare(`DELETE FROM addresses WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
+		db.prepare(`DELETE FROM sessions WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
+		db.prepare(`DELETE FROM team_mailbox_members WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
+		db
+			.prepare(`UPDATE api_keys SET revoked_at = ?1 WHERE principal_id = ?2 AND revoked_at IS NULL AND ${deleted}`)
+			.bind(now, id),
+		db
+			.prepare(`UPDATE oauth_grants SET revoked_at = ?1 WHERE principal_id = ?2 AND revoked_at IS NULL AND ${deleted}`)
+			.bind(now, id),
+	]);
+	return first?.meta.changes === 1;
 }
 
 /**

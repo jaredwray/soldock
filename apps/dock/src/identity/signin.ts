@@ -80,8 +80,8 @@ function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, ste
 /**
  * Checks an address, a password and, when the person turned it on, a TOTP code.
  *
- * - An unknown address, an agent, a person without a password, a wrong password, a wrong or used
- *   code and a lock all give `refused`. Each of them runs one password derivation.
+ * - An unknown address, an agent, an archived person, a person without a password, a wrong password,
+ *   a wrong or used code and a lock all give `refused`. Each of them runs one password derivation.
  * - A correct password without a code, for a person with two-step verification, gives
  *   `totp_required` and no session.
  * - A success clears the failure count. A TOTP code works one time.
@@ -95,6 +95,10 @@ export async function signInWithPassword(
 	if (principal?.kind !== "human") {
 		await verifyPassword(input.password, null);
 		return { result: "refused", principalId: null, reason: "unknown address" };
+	}
+	if (principal.archived_at !== null) {
+		await verifyPassword(input.password, null);
+		return { result: "refused", principalId: principal.id, reason: "archived" };
 	}
 	const attempt = await reserveAttempt(db, principal.id, nowMs);
 	if (!attempt) {

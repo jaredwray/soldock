@@ -8,9 +8,12 @@ import { hashPassword } from "./password.ts";
 import { confirmPassword } from "./signin.ts";
 import {
 	addMailDomain,
+	archivePrincipal,
 	assertPrimaryAddress,
+	countSponsoredAgents,
 	createApiKey,
 	createPrincipal,
+	deletePrincipal,
 	disableTotp,
 	domainOf,
 	enableTotp,
@@ -22,11 +25,13 @@ import {
 	type PrincipalRecord,
 	pendingTotpSecret,
 	removeMailDomain,
+	restorePrincipal,
 	revokeApiKey,
 	setPassword,
 	setPendingTotpSecret,
 	unknownPrincipalIds,
 	updateOutboundPolicy,
+	updatePrincipal,
 } from "./store.ts";
 import {
 	addTeamMailboxMember,
@@ -53,6 +58,10 @@ type IdentityOperation =
 	| "directory.add_mail_domain"
 	| "directory.remove_mail_domain"
 	| "directory.update_agent_policy"
+	| "directory.update_principal"
+	| "directory.archive_principal"
+	| "directory.restore_principal"
+	| "directory.delete_principal"
 	| "directory.list_team_mailboxes"
 	| "directory.create_team_mailbox"
 	| "directory.add_team_mailbox_member"
@@ -63,6 +72,29 @@ function canChangePolicyOf(caller: AuthContext, target: PrincipalRecord): boolea
 	if (caller.kind !== "human" || target.kind !== "agent") return false;
 	return target.sponsor_id === caller.principal.id || isAdmin(caller);
 }
+
+/**
+ * The principal that an owner or an admin changes, archives, restores or deletes. Only the owner manages
+ * the owner, so an admin can never act on the owner. A deleted principal has no record.
+ */
+async function principalToManage(call: CallContext, principalId: string, action: string): Promise<PrincipalRecord> {
+	if (!isAdmin(call.caller))
+		throw new OperationError("forbidden", `Only owners and admins can ${action} people and agents.`);
+	const target = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (!target) throw new OperationError("not_found", "No principal has that id.");
+	if (target.org_role === "owner" && call.caller.principal.id !== target.id) {
+		throw new OperationError("forbidden", "Only the owner can change the owner.");
+	}
+	return target;
+}
+
+/** Nobody archives or deletes the owner or themselves, so the organization always keeps its owner and the caller. */
+function assertRemovable(call: CallContext, target: PrincipalRecord, action: "archive" | "delete"): void {
+	if (target.org_role === "owner") throw new OperationError("forbidden", `Nobody can ${action} the owner.`);
+	if (target.id === call.caller.principal.id) throw new OperationError("forbidden", `You cannot ${action} yourself.`);
+}
+
+const DIRECTORY_CHANGED = "The directory changed during the request. Load it again and try again.";
 
 /**
  * A sign-in gives a session with every human scope. So only a credential that holds every human scope
@@ -161,6 +193,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			const sponsor = await getPrincipal(call.env.DIRECTORY, sponsorId);
 			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
 			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
+			if (sponsor.archived_at !== null) throw new OperationError("invalid", "The sponsor is archived.");
 		} else {
 			if (input.sponsor_id) throw new OperationError("invalid", "Only an agent has a sponsor.");
 			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
@@ -207,6 +240,62 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const updated = await getPrincipal(call.env.DIRECTORY, target.id);
 		if (!updated) throw new Error(`agent ${target.id} missing after update`);
 		return { principal: toPrincipalOutput(updated) };
+	},
+
+	async "directory.update_principal"(call, input) {
+		const target = await principalToManage(call, input.principal_id, "change");
+		if (input.org_role !== undefined) {
+			if (target.kind !== "human") throw new OperationError("invalid", "An agent has no organization role.");
+			if (target.org_role === "owner") throw new OperationError("invalid", "The role of the owner cannot change.");
+			if (target.id === call.caller.principal.id) {
+				throw new OperationError("forbidden", "You cannot change your own role.");
+			}
+			assertFullCredential(call.caller);
+		}
+		if (input.sponsor_id !== undefined) {
+			if (target.kind !== "agent") throw new OperationError("invalid", "Only an agent has a sponsor.");
+			const sponsor = await getPrincipal(call.env.DIRECTORY, input.sponsor_id);
+			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
+			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
+			if (sponsor.archived_at !== null) throw new OperationError("invalid", "The sponsor is archived.");
+		}
+		const changes = { display_name: input.display_name, org_role: input.org_role, sponsor_id: input.sponsor_id };
+		if (!(await updatePrincipal(call.env.DIRECTORY, target.id, changes))) {
+			throw new OperationError("conflict", DIRECTORY_CHANGED);
+		}
+		auditOk(call, "directory.update_principal", target.id);
+		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
+	},
+
+	async "directory.archive_principal"(call, input) {
+		const target = await principalToManage(call, input.principal_id, "archive");
+		assertRemovable(call, target, "archive");
+		await archivePrincipal(call.env.DIRECTORY, target.id);
+		auditOk(call, "directory.archive_principal", target.id);
+		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
+	},
+
+	async "directory.restore_principal"(call, input) {
+		const target = await principalToManage(call, input.principal_id, "restore");
+		await restorePrincipal(call.env.DIRECTORY, target.id);
+		auditOk(call, "directory.restore_principal", target.id);
+		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
+	},
+
+	async "directory.delete_principal"(call, input) {
+		const target = await principalToManage(call, input.principal_id, "delete");
+		assertRemovable(call, target, "delete");
+		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id);
+		if (agents > 0) {
+			throw new OperationError(
+				"conflict",
+				`${target.display_name} sponsors ${agents === 1 ? "an agent" : `${agents} agents`}. Give each agent a different sponsor, or delete it, first.`,
+			);
+		}
+		if (!(await deletePrincipal(call.env.DIRECTORY, target.id)))
+			throw new OperationError("conflict", DIRECTORY_CHANGED);
+		auditOk(call, "directory.delete_principal", target.id);
+		return { principal_id: target.id };
 	},
 
 	async "directory.list_team_mailboxes"(call) {
@@ -353,6 +442,12 @@ async function teamMailboxToManage(call: CallContext, mailboxId: string): Promis
 	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
 	if (!mailbox) throw new OperationError("not_found", "No team mailbox has that id.");
 	return mailbox;
+}
+
+async function principalAfterChange(call: CallContext, principalId: string): Promise<PrincipalRecord> {
+	const principal = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (!principal) throw new OperationError("conflict", DIRECTORY_CHANGED);
+	return principal;
 }
 
 async function teamMailboxAfterChange(call: CallContext, mailboxId: string): Promise<TeamMailboxRecord> {

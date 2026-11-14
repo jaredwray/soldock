@@ -127,6 +127,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		}
 		const agent = input.agent_id ? await getPrincipal(call.env.DIRECTORY, input.agent_id) : null;
 		if (agent?.kind !== "agent") throw new OperationError("not_found", "No agent has that id.");
+		if (agent.archived_at !== null) throw new OperationError("invalid", "This agent is archived. Restore it first.");
 		if (!canManageCredentialsOf(call.caller, agent)) {
 			throw new OperationError(
 				"forbidden",

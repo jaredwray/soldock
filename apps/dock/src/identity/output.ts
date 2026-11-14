@@ -14,6 +14,7 @@ export function toPrincipalOutput(record: PrincipalRecord): Principal {
 				? { mode: record.outbound_mode, allowlist: record.outbound_allowlist }
 				: null,
 		created_at: record.created_at,
+		archived_at: record.archived_at,
 	};
 }
 

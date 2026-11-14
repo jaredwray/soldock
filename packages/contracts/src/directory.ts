@@ -52,6 +52,8 @@ export const Principal = z.object({
 	/** Who an agent can send mail to. Null for humans. */
 	outbound_policy: OutboundPolicy.nullable(),
 	created_at: Timestamp,
+	/** When an owner or an admin archived the principal. An archived principal cannot sign in or use a credential. */
+	archived_at: Timestamp.nullable(),
 });
 export type Principal = z.infer<typeof Principal>;
 
@@ -168,6 +170,87 @@ export const updateAgentPolicy = defineOperation({
 		.refine((input) => input.mode !== "allowlist" || input.allowlist.length > 0, "mode allowlist needs an allowlist"),
 	output: z.object({ principal: Principal }),
 	errors: ["not_found"],
+});
+
+/** The rules of the operations that archive or delete a principal. */
+const REMOVE_RULES = "Owners and admins only. Nobody can archive or delete the owner or themselves.";
+
+export const updatePrincipal = defineOperation({
+	name: "directory.update_principal",
+	summary: "Change the name, the role or the sponsor of a person or an agent",
+	description: [
+		"Owners and admins only. Only the owner can change the owner, and only the name. Nobody can change their own role.",
+		"Send only the fields to change. org_role is for a person: admin or member. sponsor_id is for an agent: a person who is not archived.",
+		"A change of role needs a credential that holds every human scope, because an admin can create people.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z
+		.strictObject({
+			principal_id: PrincipalId,
+			display_name: DisplayName.optional(),
+			org_role: z.enum(["admin", "member"]).optional(),
+			sponsor_id: PrincipalId.optional(),
+		})
+		.refine(
+			(input) => input.display_name !== undefined || input.org_role !== undefined || input.sponsor_id !== undefined,
+			"send display_name, org_role or sponsor_id",
+		),
+	output: z.object({ principal: Principal }),
+	errors: ["not_found"],
+});
+
+export const archivePrincipal = defineOperation({
+	name: "directory.archive_principal",
+	summary: "Archive a person or an agent",
+	description: [
+		REMOVE_RULES,
+		"An archived principal cannot sign in, and its API keys and OAuth connections stop working. Its sessions end.",
+		"Its mail, drive and chat stay, and mail to its address still arrives. directory.restore_principal undoes it.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}/archive" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: z.object({ principal: Principal }),
+	errors: ["not_found"],
+});
+
+export const restorePrincipal = defineOperation({
+	name: "directory.restore_principal",
+	summary: "Restore an archived person or agent",
+	description: [
+		"Owners and admins only.",
+		"The principal can sign in again, and its API keys and OAuth connections work again. Its old sessions do not come back.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}/restore" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: z.object({ principal: Principal }),
+	errors: ["not_found"],
+});
+
+export const deletePrincipal = defineOperation({
+	name: "directory.delete_principal",
+	summary: "Delete a person or an agent",
+	description: [
+		REMOVE_RULES,
+		"You cannot undo it. The principal leaves the directory and each team mailbox, and its credentials stop.",
+		"Its address becomes free, and mail to it is refused. Its mailbox and drive stay in storage, and nobody can open them again. Its chat messages stay in their rooms.",
+		"A person who sponsors an agent cannot be deleted: give the agent a different sponsor first, or delete the agent.",
+	].join(" "),
+	http: { method: "DELETE", path: "/api/v1/directory/principals/{principal_id}" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: z.object({ principal_id: z.string() }),
+	errors: ["not_found", "conflict"],
 });
 
 export const listApiKeys = defineOperation({
@@ -321,4 +404,8 @@ export const directoryOperations = {
 	"directory.list_principals": listPrincipals,
 	"directory.create_principal": createPrincipal,
 	"directory.update_agent_policy": updateAgentPolicy,
+	"directory.update_principal": updatePrincipal,
+	"directory.archive_principal": archivePrincipal,
+	"directory.restore_principal": restorePrincipal,
+	"directory.delete_principal": deletePrincipal,
 } as const;

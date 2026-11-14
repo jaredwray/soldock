@@ -13,17 +13,38 @@ import {
 } from "@soldock/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
+import { Dialog } from "../../lib/Dialog.tsx";
 import { useSession } from "../auth/session.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
+
+interface CreatePrincipalDialogProps {
+	me: Principal;
+	/** The people who can sponsor a new agent. An archived person cannot. */
+	humans: readonly Principal[];
+	onClose: () => void;
+	onCreated: (principal: Principal, key: CreatedApiKey) => void;
+}
+
+/** Creates a person or an agent in a modal dialog, from the button in the Members section. */
+export function CreatePrincipalDialog({ me, humans, onClose, onCreated }: CreatePrincipalDialogProps) {
+	const [busy, setBusy] = useState(false);
+	return (
+		<Dialog title="New person or agent" onClose={() => !busy && onClose()}>
+			<CreatePrincipalForm me={me} humans={humans} onBusy={setBusy} onCancel={onClose} onCreated={onCreated} />
+		</Dialog>
+	);
+}
 
 interface CreatePrincipalFormProps {
 	me: Principal;
 	humans: readonly Principal[];
+	onBusy: (busy: boolean) => void;
+	onCancel: () => void;
 	onCreated: (principal: Principal, key: CreatedApiKey) => void;
 }
 
 /** Creates a person or an agent. The result holds a first API key, which shows once. */
-export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFormProps) {
+function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const { whoami } = useSession();
 	// A credential cannot grant a scope that it does not hold. The form offers only the scopes of this session.
 	const humanScopes = ALL_SCOPES.filter((scope) => whoami.scopes.includes(scope));
@@ -33,6 +54,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	const [address, setAddress] = useState("");
 	const [password, setPassword] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
+	const sponsors = humans.filter((human) => human.archived_at === null);
 	const [sponsorId, setSponsorId] = useState(me.id);
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(agentScopes));
 	const [busy, setBusy] = useState(false);
@@ -55,6 +77,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 		}
 		if (kind === "agent" && scopes.size === 0) return setError("Select at least one scope for the first key.");
 		setBusy(true);
+		onBusy(true);
 		setError(null);
 		const input: InputOf<"directory.create_principal"> =
 			kind === "human"
@@ -75,14 +98,11 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 					};
 		try {
 			const result = await api.call("directory.create_principal", input);
-			setName("");
-			setAddress("");
-			setPassword("");
 			onCreated(result.principal, result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
-		} finally {
 			setBusy(false);
+			onBusy(false);
 		}
 	}
 
@@ -96,8 +116,8 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 	}
 
 	return (
-		<div className="card">
-			<form className="form-grid" onSubmit={submit} noValidate>
+		<form onSubmit={submit} noValidate>
+			<div className="dialog-body form-grid">
 				<fieldset className="segmented">
 					<legend className="field-label">Kind</legend>
 					{(["human", "agent"] as const).map((value) => (
@@ -200,7 +220,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 								onChange={(event) => setSponsorId(event.target.value)}
 								disabled={busy}
 							>
-								{humans.map((human) => (
+								{sponsors.map((human) => (
 									<option key={human.id} value={human.id}>
 										{human.display_name} ({human.address})
 									</option>
@@ -226,7 +246,7 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 							))}
 						</fieldset>
 						<p className="field-hint form-grid-wide">
-							A new agent can send mail only inside this organization. Change its policy below after you create it.
+							A new agent can send mail only inside this organization. Change its policy in Agents after you create it.
 						</p>
 					</>
 				)}
@@ -235,12 +255,15 @@ export function CreatePrincipalForm({ me, humans, onCreated }: CreatePrincipalFo
 						{error}
 					</p>
 				)}
-				<div className="form-grid-wide">
-					<button type="submit" className="button button-primary" disabled={busy}>
-						{busy ? "Creating…" : kind === "agent" ? "Create agent" : "Create person"}
-					</button>
-				</div>
-			</form>
-		</div>
+			</div>
+			<div className="dialog-actions">
+				<button type="button" className="button" onClick={onCancel} disabled={busy}>
+					Cancel
+				</button>
+				<button type="submit" className="button button-primary" disabled={busy}>
+					{busy ? "Creating…" : kind === "agent" ? "Create agent" : "Create person"}
+				</button>
+			</div>
+		</form>
 	);
 }
