@@ -161,7 +161,9 @@ protocol version and on REST.
 
    Set `mailbox_id` to watch a team mailbox that you are a member of.
 3. Keep the `secret` of the result (`whsec_…`) on your server. Soldock shows it only once.
-4. On each POST, verify the signature, then read the inbox with `mail_list_threads`.
+4. Read the inbox one time with `mail_list_threads`. Mail that arrived before the webhook existed
+   sends no POST.
+5. On each POST, verify the signature, then read the inbox with `mail_list_threads`.
 
 The body holds no mail content:
 

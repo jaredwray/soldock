@@ -305,6 +305,8 @@ on a server, a REST client or an MCP client of an older protocol.
   D1 keeps the secret in clear text, because the HMAC needs it.
 - The webhook records the credential of the create: the API key, the OAuth grant or a session.
 - The limits are part of the insert: 10 webhooks for each creator and 20 for each mailbox.
+- Mail that arrives before `mail.create_webhook` returns can send no POST, as for the
+  acknowledgment of `subscriptions/listen`. Read the inbox one time after the create.
 
 ### Delivery
 
