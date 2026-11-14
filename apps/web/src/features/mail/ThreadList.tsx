@@ -217,7 +217,8 @@ function ThreadRow({
 										.map((label) => label.name)
 										.join(", ")}
 								>
-									+{userLabels.length - 2}
+									<span className="visually-hidden">and </span>+{userLabels.length - 2}
+									<span className="visually-hidden"> more</span>
 								</span>
 							)}
 						</span>

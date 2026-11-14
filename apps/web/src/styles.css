@@ -1545,8 +1545,11 @@ fieldset {
 	text-decoration: none;
 }
 
-.thread-link:focus-visible {
-	outline: none;
+/* The row shows the focus ring (see above). A browser without :has() keeps the ring of the link. */
+@supports selector(:has(a)) {
+	.thread-link:focus-visible {
+		outline: none;
+	}
 }
 
 .thread-from {
