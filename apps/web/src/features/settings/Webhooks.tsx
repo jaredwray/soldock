@@ -93,7 +93,11 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 							<thead>
 								<tr>
 									<th scope="col">Webhook</th>
-									{!mailboxId && <th scope="col">Mailbox</th>}
+									{!mailboxId && (
+										<th scope="col" className="col-optional">
+											Mailbox
+										</th>
+									)}
 									<th scope="col">Last delivery</th>
 									<th scope="col" className="cell-actions">
 										<span className="visually-hidden">Actions</span>
@@ -109,6 +113,8 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 												{webhook.status === "disabled" && <span className="status status-failed">Disabled</span>}
 											</div>
 											<div className="row-note cell-url">{webhook.url}</div>
+											{/* At 900px and below, the Mailbox column hides, and the mailbox shows here. */}
+											{!mailboxId && <div className="row-note row-note-inline">{mailboxName(webhook.mailbox_id)}</div>}
 											{webhook.disabled_reason && (
 												<div className="row-note">Stopped: {DISABLED_REASONS[webhook.disabled_reason]}.</div>
 											)}
@@ -116,7 +122,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 												<div className="row-note">Last attempt failed: {webhook.last_error}.</div>
 											)}
 										</td>
-										{!mailboxId && <td>{mailboxName(webhook.mailbox_id)}</td>}
+										{!mailboxId && <td className="col-optional">{mailboxName(webhook.mailbox_id)}</td>}
 										<td
 											className="cell-date"
 											title={webhook.last_delivery_at ? fullDate(webhook.last_delivery_at) : undefined}

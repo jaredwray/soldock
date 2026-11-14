@@ -3197,6 +3197,11 @@ fieldset {
 	display: none;
 }
 
+/* The mailbox of a webhook under its URL. It shows only at 900px and below, where the Mailbox column hides. */
+.row-note.row-note-inline {
+	display: none;
+}
+
 .row-muted .member-name {
 	color: var(--muted-foreground);
 }
@@ -3859,6 +3864,10 @@ fieldset {
 
 	.kind.kind-inline {
 		display: inline-block;
+	}
+
+	.row-note.row-note-inline {
+		display: block;
 	}
 }
 

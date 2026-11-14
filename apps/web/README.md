@@ -302,7 +302,8 @@ MCP clients. The app has no UI-only path.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
     at the right. A key shows its label above its scopes. A webhook shows its label above its URL.
-    At 900px and below, the table of keys has no Created and Last used columns.
+    At 900px and below, the table of keys has no Created and Last used columns, and the table of
+    webhooks shows the mailbox under the URL in place of its Mailbox column.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
