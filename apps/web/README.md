@@ -111,16 +111,23 @@ MCP clients. The app has no UI-only path.
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list. Shortcuts do not work while the focus is in a text field.
-- **Mailbox switcher.** When the person can use more than the own mailbox, the sidebar shows
-  "My mailbox" first, without a heading (`mail.list_mailboxes`, `mailboxNav.ts`).
-  - Under it, **Shared mailboxes** lists the team mailboxes of the person, and **Agent mailboxes**
-    lists the agents, for owners and admins. A section without mailboxes does not show.
-  - Each section heading is a button that collapses the section (`aria-expanded`). A collapsed
-    section still shows the open mailbox.
-  - The collapsed state is saved in the mail settings of the person (`mail.get_settings`,
-    `mail.update_settings`), so it is the same in each browser. The shell loads the settings one
-    time. A change shows at once. When the save fails, the section goes back and a toast shows the error.
-- **Shared mailboxes.** The UI name of a team mailbox, in the sidebar and on the Admin page.
+- **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
+  each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
+  (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
+  - Under an expanded mailbox row, the sidebar shows the folders and the labels of that mailbox.
+    The chevron on the right of the row expands or collapses it (`aria-expanded`).
+  - Until the person uses a chevron, only the open mailbox is expanded. The shell keeps the state,
+    so it stays when the mailbox changes. The state is not saved: a reload resets it.
+  - The name of a mailbox opens its inbox and expands the mailbox.
+  - An expanded mailbox that is not open gets its labels when it expands, and again after each
+    mailbox switch. Its counts do not change with the poll. Labels can be added and deleted only in
+    the open mailbox.
+  - A deep link to a mailbox that is not in the list gives that mailbox a row, so its folders show.
+  - A person with only the own mailbox sees the folders and the labels with no mailbox rows.
+  - The Compose button of Mail fills the width of the sidebar.
+  - The web app does not use `mail.get_settings` and `mail.update_settings` now. Their sidebar
+    settings are for the mailbox sections that the sidebar no longer has.
+- **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -134,7 +141,7 @@ MCP clients. The app has no UI-only path.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
 - **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
-  shows an **Agent mailboxes** section with each agent (`mail.list_mailboxes`, kind `agent`).
+  shows a row for each agent (`mail.list_mailboxes`, kind `agent`).
   - An agent mailbox path with the own id of the person goes to the same view under `/mail/…`
     (`ownMailboxPath`), because the server treats that id as the own mailbox.
   - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
