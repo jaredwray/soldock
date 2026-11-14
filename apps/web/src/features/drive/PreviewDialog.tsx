@@ -19,7 +19,7 @@ type Content =
 	| { status: "text"; text: string; cut: boolean; bytes: Uint8Array<ArrayBuffer> };
 
 /**
- * Shows a file. A raster image shows from a `blob:` URL, and text shows as plain text. The content
+ * Shows a file over the page, as a lightbox. A raster image shows from a `blob:` URL, and text shows as plain text. The content
  * of a file never goes into the page as HTML. Each other type shows its details and a download.
  */
 export function PreviewDialog({ item, onClose }: { item: DriveItem; onClose: () => void }) {
@@ -84,7 +84,7 @@ export function PreviewDialog({ item, onClose }: { item: DriveItem; onClose: () 
 
 	return (
 		<Dialog title={item.name} onClose={onClose} className="drive-preview">
-			<div className="dialog-body drive-preview-body">
+			<div className="drive-preview-body">
 				{content.status === "loading" && (
 					<p className="drive-picker-state" role="status">
 						<span className="spinner spinner-small" aria-hidden="true" /> Loading the file…
@@ -97,7 +97,7 @@ export function PreviewDialog({ item, onClose }: { item: DriveItem; onClose: () 
 				)}
 				{content.status === "image" && <img className="drive-preview-image" src={content.url} alt={item.name} />}
 				{content.status === "text" && (
-					<>
+					<div className="drive-preview-sheet">
 						{/* biome-ignore lint/a11y/noNoninteractiveTabindex: a keyboard must be able to scroll the text. */}
 						<pre className="drive-preview-text" tabIndex={0}>
 							{content.text}
@@ -105,35 +105,40 @@ export function PreviewDialog({ item, onClose }: { item: DriveItem; onClose: () 
 						{content.cut && (
 							<p className="field-hint">The preview shows the start of the file. Download it to see all.</p>
 						)}
-					</>
+					</div>
 				)}
 				{content.status === "none" && (
 					<div className="drive-preview-none">
-						<Icon name={itemIcon(item)} size={48} />
+						<span className="drive-kind drive-kind-large">
+							<Icon name={itemIcon(item)} size={18} />
+						</span>
 						<p>This type of file has no preview.</p>
 					</div>
 				)}
+			</div>
+			<div className="drive-preview-footer">
 				<dl className="drive-details">
-					<dt>Type</dt>
-					<dd>{item.mime_type ?? "Unknown"}</dd>
-					<dt>Size</dt>
-					<dd>{formatBytes(item.size)}</dd>
-					<dt>Last change</dt>
-					<dd>
-						{fullDate(item.modified_at)}
-						{item.modified_by ? `, by ${item.modified_by.display_name}` : ""}
-					</dd>
+					<div>
+						<dt>Type</dt>
+						<dd>{item.mime_type ?? "Unknown"}</dd>
+					</div>
+					<div>
+						<dt>Size</dt>
+						<dd>{formatBytes(item.size)}</dd>
+					</div>
+					<div>
+						<dt>Last change</dt>
+						<dd>
+							{fullDate(item.modified_at)}
+							{item.modified_by ? `, by ${item.modified_by.display_name}` : ""}
+						</dd>
+					</div>
 				</dl>
 				{downloadError && (
 					<p className="form-error" role="alert">
 						{downloadError}
 					</p>
 				)}
-			</div>
-			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose}>
-					Close
-				</button>
 				<button
 					type="button"
 					className="button button-primary"

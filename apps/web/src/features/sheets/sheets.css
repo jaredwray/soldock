@@ -17,9 +17,11 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px 12px;
-	padding: 8px 16px;
+	min-height: 44px;
+	padding: 6px 22px;
 	border-bottom: 1px solid var(--border);
 	background: var(--negative-soft);
+	font-size: 13px;
 	color: var(--negative);
 }
 
@@ -40,8 +42,8 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 6px 12px;
-	border-top: 1px solid var(--border);
+	min-height: 44px;
+	padding: 6px 16px 6px 8px;
 	border-bottom: 1px solid var(--border);
 	background: var(--background);
 }
@@ -51,7 +53,7 @@
 	height: 30px;
 	padding: 0 8px;
 	border: 1px solid transparent;
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	background: transparent;
 	color: var(--foreground);
 	font: 13px / 1 var(--mono);
@@ -60,7 +62,8 @@
 .sheet-name-box {
 	flex: none;
 	width: 72px;
-	border-color: var(--border);
+	border-color: var(--input);
+	background: var(--field);
 	text-align: center;
 }
 
@@ -69,8 +72,8 @@
 	min-width: 0;
 }
 
-.sheet-formula:hover:not(:read-only) {
-	border-color: var(--border);
+.sheet-formula:hover:not(:read-only):not(:focus) {
+	background: var(--row-hover);
 }
 
 .sheet-name-box:focus,
@@ -82,16 +85,19 @@
 .sheet-fx {
 	flex: none;
 	color: var(--muted-foreground);
-	font: italic 600 13px / 1 var(--mono);
+	font: italic 500 13px / 1 var(--mono);
 }
 
 .sheet-view-only {
 	flex: none;
-	padding: 2px 8px;
+	padding: 1px 7px;
 	border: 1px solid var(--border);
-	border-radius: 999px;
+	border-radius: var(--radius-sm);
+	background: var(--surface);
 	color: var(--muted-foreground);
 	font-size: 12px;
+	font-weight: 500;
+	line-height: 18px;
 	white-space: nowrap;
 }
 
@@ -182,7 +188,7 @@
 .sheet-row-head.sheet-head-selected {
 	background: var(--hover);
 	color: var(--foreground);
-	font-weight: 600;
+	font-weight: 500;
 }
 
 .sheet-cell {
@@ -230,8 +236,7 @@
 	padding: 0 5px;
 	border: 2px solid var(--focus);
 	border-radius: 0;
-	background: var(--popover);
-	box-shadow: var(--shadow-menu);
+	background: var(--background);
 	color: var(--foreground);
 	font: 13px / 1 var(--font);
 }
@@ -243,6 +248,10 @@
 @media (max-width: 900px) {
 	.sheet-bar {
 		padding: 6px 8px;
+	}
+
+	.sheet-save-error {
+		padding: 8px 16px;
 	}
 
 	.sheet-name-box {

@@ -4,7 +4,7 @@ import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
-import { plural } from "../../lib/format.ts";
+import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -71,6 +71,24 @@ const ACTION_MENU: Record<ItemAction, { label: string; icon: IconName; danger?: 
 	delete: { label: "Delete forever", icon: "trash", danger: true },
 };
 
+/** The icon before the title of a view. The root of the own drive has the icon of its sidebar entry. */
+function viewIcon(view: DriveView, foreign: boolean): IconName {
+	switch (view.kind) {
+		case "folder":
+			return view.folderId === null && !foreign ? "drive" : "folder";
+		case "shared":
+			return "team";
+		case "recent":
+			return "clock";
+		case "starred":
+			return "star";
+		case "trash":
+			return "trash";
+		case "search":
+			return "search";
+	}
+}
+
 function navEntry(view: DriveView, foreign: boolean): NavEntry {
 	if (view.kind === "folder") return foreign ? "shared" : "my-drive";
 	return view.kind === "search" ? null : view.kind;
@@ -94,7 +112,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const [order, setOrder] = useState<ItemOrder>("name");
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [dialog, setDialog] = useState<DriveDialog>(null);
-	const [upload, setUpload] = useState<{ done: number; total: number } | null>(null);
+	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const creatingRef = useRef(false);
@@ -334,8 +352,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	async function uploadFiles(files: readonly File[]) {
 		if (target === null || files.length === 0 || upload !== null) return;
 		let uploaded = 0;
-		setUpload({ done: 0, total: files.length });
 		for (const [index, file] of files.entries()) {
+			setUpload({ done: index, total: files.length, name: file.name, size: file.size });
 			const refusal = uploadRefusal(file);
 			if (refusal) {
 				toast({ message: refusal, tone: "error" });
@@ -354,7 +372,6 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					toast({ message: `“${file.name}” did not upload. ${errorMessage(caught)}`, tone: "error" });
 				}
 			}
-			setUpload({ done: index + 1, total: files.length });
 		}
 		setUpload(null);
 		if (uploaded > 0) {
@@ -432,13 +449,14 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 				onDrop={onDrop}
 			>
 				<div className="drive-header">
+					<Icon name={viewIcon(view, foreign)} size={22} className="drive-header-icon" />
 					{view.kind === "folder" ? (
 						<nav aria-label="Folder path" className="drive-crumbs">
 							<ol>
 								{breadcrumbs(view, folder, ownId).map((crumb, index) => (
 									// biome-ignore lint/suspicious/noArrayIndexKey: two folders of a path can have the same name.
 									<li key={index}>
-										{index > 0 && <Icon name="chevronRight" size={16} />}
+										{index > 0 && <Icon name="chevronRight" size={14} />}
 										{crumb.to !== null ? (
 											<Link to={crumb.to} className="drive-crumb">
 												{crumb.label}
@@ -452,7 +470,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 								))}
 								{view.folderId !== null && folderState.status === "loading" && (
 									<li>
-										<Icon name="chevronRight" size={16} />
+										<Icon name="chevronRight" size={14} />
 										<h1 className="drive-crumb drive-crumb-current muted">…</h1>
 									</li>
 								)}
@@ -462,7 +480,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						<h1 className="drive-title">{title}</h1>
 					)}
 					{foreign && folder && (
-						<span className="chip chip-small">{folder.item.role === "viewer" ? "View only" : "You can edit"}</span>
+						<span className="chip drive-chip">{folder.item.role === "viewer" ? "View only" : "You can edit"}</span>
 					)}
 					<span className="toolbar-spacer" />
 					<SearchBox product="drive" query={view.kind === "search" ? view.query : ""} />
@@ -473,6 +491,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						disabled={list.status !== "ready" || list.items.length === 0}
 						onToggle={toggleAll}
 					/>
+					<span className={selectedItems.length > 0 ? "drive-selected-count" : "visually-hidden"} role="status">
+						{selectedItems.length > 0 ? `${selectedItems.length} selected` : ""}
+					</span>
 					{selectedItems.length === 0 ? (
 						<>
 							<button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={changed}>
@@ -514,12 +535,6 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 							)}
 						</div>
 					)}
-					<span className="toolbar-spacer" />
-					{selectedItems.length > 0 && (
-						<span className="toolbar-title" role="status">
-							{selectedItems.length} selected
-						</span>
-					)}
 				</div>
 				{inTrash && <p className="drive-note">An item stays in the trash until you delete it forever.</p>}
 				<div className="drive-scroll">
@@ -546,14 +561,20 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						Drop the files to upload them to {title}
 					</div>
 				)}
-				<p className={upload ? "drive-upload" : "visually-hidden"} role="status">
+				<div className={upload ? "drive-upload" : "visually-hidden"} role="status">
 					{upload && (
 						<>
-							<span className="spinner spinner-small" aria-hidden="true" />
-							{`Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…`}
+							<span className="drive-upload-head">
+								<strong className="drive-upload-name">{upload.name}</strong>
+								<span className="drive-upload-size">{formatBytes(upload.size)}</span>
+							</span>
+							<progress className="drive-upload-bar" max={upload.total} value={upload.done} aria-hidden="true" />
+							<span className="drive-upload-text">
+								{`Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…`}
+							</span>
 						</>
 					)}
-				</p>
+				</div>
 				<input
 					ref={fileInputRef}
 					type="file"

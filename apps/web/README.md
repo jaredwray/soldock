@@ -284,22 +284,31 @@ MCP clients. The app has no UI-only path.
   - The list shows the name with an icon for the kind, the owner (in Shared with me and Starred),
     the last change and the size. A folder view sorts by the name or by the last change. "More" loads
     the next page. The list has loading, empty and error states. The error state has "Try again".
-  - A folder view shows the path of the folder (`drive.get_item`). The first entry is "My Drive" in
-    the own drive, and "Shared with me" in the drive of somebody else.
+  - The rows of the list have no lines between them. A row has a fill under the pointer and when it
+    is selected. The icon of the kind is on a tile. With a mouse, a star that is not set shows only
+    for the row under the pointer, the row with the focus and a selected row. On a touch screen,
+    each star shows.
+  - The header row starts with the icon of the view. A folder view shows the path of the folder
+    (`drive.get_item`): the folders above are quiet links, and the folder on screen is the title.
+    The first entry is "My Drive" in the own drive, and "Shared with me" in the drive of somebody
+    else. In a folder of somebody else, a chip shows "View only" or "You can edit".
   - **New** creates a folder, uploads files, and creates a doc or a sheet, which opens in its editor.
     In a folder of somebody else, New works only with the editor role. From each view that is not a
     folder, the new item goes to the root of the own drive.
   - An upload refuses a file larger than `DRIVE_LIMITS.fileBytes` before it reads the file. Files
     upload one at a time, each with an idempotency key. A drop of files on a folder view uploads them
-    to that folder.
-  - A folder, a doc and a sheet open as links. A file opens a preview dialog. A PNG, JPEG, GIF or
-    WebP image shows from a `blob:` URL, and text shows as plain text. Each other type shows its
-    details and a Download button. The content of a file never goes into the page as HTML.
+    to that folder. During an upload, a card at the bottom right shows the name and the size of the
+    file, a bar and the count of files.
+  - A folder, a doc and a sheet open as links. A file opens a preview. The preview is a dialog that
+    fills the window, with a blur of the page behind it: the name and **Close** at the top, the file
+    in the center, and the details and **Download** at the bottom. A PNG, JPEG, GIF or WebP image
+    shows from a `blob:` URL, and text shows as plain text. Each other type shows a card with no
+    preview. The content of a file never goes into the page as HTML.
   - The More menu of an item follows the role. The owner can rename, move, copy, share, see the
     versions and move the item to the trash. An editor can rename, copy and upload a version. A
     viewer can open, download and copy. Each person can put a star on an item: the star is their own.
-  - The toolbar acts on the selection: star, move and trash, or Restore and Delete forever in the
-    trash view. "Move to trash" shows a toast with "Undo". Delete forever and "Empty trash" ask for
+  - The toolbar is above the list. It shows the count of the selected items and acts on the
+    selection: star, move and trash, or Restore and Delete forever in the trash view. "Move to trash" shows a toast with "Undo". Delete forever and "Empty trash" ask for
     a confirmation, with the first focus on Cancel.
   - The move dialog shows the folders of the own drive, one level at a time. The server refuses a
     move of a folder into itself, and the dialog shows that error.
@@ -318,10 +327,14 @@ MCP clients. The app has no UI-only path.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
     and the size.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
-  name (an owner or an editor changes it in place), the star, the save state, and a Share button
-  for the owner. A viewer sees "View only".
+  icon of the kind, the name (an owner or an editor changes it in place), the star, the save state,
+  and a Share button for the owner. A viewer sees "View only". The header is one row with the
+  height of the header row of the shell. A save state that is too long for the row gets shorter,
+  and its tooltip shows all of it.
 - **Docs** (`/docs/<prn_id>/<itm_id>`). The editor for one doc: the document header, a formatting
-  toolbar and the text on a sheet of paper. The path has the drive of the doc, so one link works
+  toolbar and the text on a sheet of paper. The toolbar is a row below the header, and its buttons
+  show only an icon. The paper is on the `--surface` fill. A notice (view only, a failed save or a
+  conflict) is a band between the header and the toolbar. The path has the drive of the doc, so one link works
   for the owner and for each person with access.
   - The editor is on [ProseMirror](https://prosemirror.net). The JSON form of its schema is
     `DocContent` of the contracts: `docs.get` gives the content, and `docs.update` gets it back.
@@ -362,6 +375,8 @@ MCP clients. The app has no UI-only path.
   - A number is on the right, with at most 10 significant digits. Text is on the left. TRUE and
     FALSE are in the center. An error such as `#DIV/0!` has the danger color, and its tooltip
     shows the input.
+  - The selection has no color: the selected cells have the `--selected` fill, and the active cell
+    has a 2px ring in `--focus`. The letters and the numbers of the selection have the `--hover` fill.
   - A click selects a cell. Shift-click and a drag select a range. A click on a column letter, a
     row number or the corner selects the column, the row or all cells. On a touch screen, a tap
     selects, so a scroll does not move the selection.
