@@ -75,7 +75,15 @@ MCP clients. The app has no UI-only path.
     header row opens the drawer (`aria-expanded`, `aria-controls`). When the drawer opens, the focus
     goes to the first item of the sidebar, or of the rail on a page with no sidebar. Escape, a click
     outside the drawer and a new page close the drawer. When the drawer closes, the focus goes back
-    to the menu button.
+    to the menu button. The drawer also closes when the page gets wider than 900px, for example
+    when a phone turns on its side. The drawer scrolls by itself, and at least 16px of the page shows
+    next to it.
+  - On a phone, the page uses the full screen (`viewport-fit=cover`). The shell, the drawer, the
+    dialogs that fill the screen, the toasts and the account panel stay clear of the notch and of the
+    home indicator (`env(safe-area-inset-*)`). On Android, the page gets smaller above the on-screen
+    keyboard (`interactive-widget=resizes-content`).
+  - At 600px and below, the search box is an icon button in the header row. With the focus, the box
+    opens across the row. While the box has a query, it shows next to the title.
   - "Skip to content" is the first link of each page.
 - **Mail.** A header row with the title of the view, the search box and Refresh, a sidebar with the
   system views and the user labels, a thread list and a thread view.
@@ -84,8 +92,12 @@ MCP clients. The app has no UI-only path.
     that is text, not a link. The link of a nested label has the full path as its accessible name,
     so a screen reader reads "Clients/Northwind".
   - The New label dialog tells the user that mail to `user+name@` gets the label with that name.
-  - At 900px and below, the sidebar is part of the drawer of the shell. The search box hides while
-    conversations are selected.
+  - At 900px and below, the sidebar is part of the drawer of the shell.
+  - The header row is always one row. While the actions show, for a selection or for an open thread,
+    a header row of 800px or less has no search box.
+  - At 600px and below, the actions are a bar at the bottom of the screen, and toasts show above
+    the bar. The header row then has only the menu button and the count of the selection, or the
+    Back button.
   - The thread list shows the participants, the subject, the snippet, a short date, a star and a
     checkbox. Unread threads are bold. "Older" loads the next page.
   - A thread row shows the user labels of the thread as quiet chips before the date: two labels at
@@ -214,8 +226,10 @@ MCP clients. The app has no UI-only path.
   - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
     role, the sponsor and the agent policy of each person and agent. Each row starts with an avatar:
     the initials of a person, or the agent icon. The kind and the role are chips. An archived account
-    has an **Archived** chip. At 900px and below, the table shows only the name, the role and the
-    actions, and an agent gets its chip next to its name. At 500px and below, the rows have no avatar.
+    has an **Archived** chip. At 1100px and below, the table shows only the name, the role and the
+    actions, and an agent gets its chip next to its name. At 600px and below, a row has two lines:
+    the name and the address, then the role and the buttons. At 500px and below, the rows have no
+    avatar.
     - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
       shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
       form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`. For a
@@ -244,7 +258,7 @@ MCP clients. The app has no UI-only path.
     The **New person or agent** dialog also shows the banner when Agent is selected.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see a
     table of the shared mailboxes: the name and the address, and the number and the first names of
-    the members.
+    the members. At 600px and below, a row has two lines, as in Members.
     - **New shared mailbox**, above the table, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - **Edit** (a pencil icon) in a row opens a dialog that changes the name
@@ -301,7 +315,9 @@ MCP clients. The app has no UI-only path.
   - The header row starts with the icon of the view. A folder view shows the path of the folder
     (`drive.get_item`): the folders above are quiet links, and the folder on screen is the title.
     The first entry is "My Drive" in the own drive, and "Shared with me" in the drive of somebody
-    else. In a folder of somebody else, a chip shows "View only" or "You can edit".
+    else. In a folder of somebody else, a chip shows "View only" or "You can edit". The path is
+    always one line: the folders above get shorter first. At 600px and below, the header row shows
+    only the folder on screen, after an **Up** link to the folder above.
   - **New** creates a folder, uploads files, and creates a doc or a sheet, which opens in its editor.
     In a folder of somebody else, New works only with the editor role. From each view that is not a
     folder, the new item goes to the root of the own drive.
@@ -335,16 +351,17 @@ MCP clients. The app has no UI-only path.
     When the version changes, the list loads again without a loading state. A view that can show
     items of other drives loads again on the same timer.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
-    and the size.
+    and the size. From 901px to 1100px, the Last change column is wider, for the name of the person.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
   icon of the kind, the name (an owner or an editor changes it in place), the star, the save state,
   and a Share button for the owner. A viewer sees "View only". The header is one row with the
   height of the header row of the shell. A save state that is too long for the row gets shorter,
-  and its tooltip shows all of it.
+  and its tooltip shows all of it. At 600px and below, the save state is under the name.
 - **Docs** (`/docs/<prn_id>/<itm_id>`). The editor for one doc: the document header, a formatting
   toolbar and the text on a sheet of paper. The toolbar is a row below the header, and its buttons
   show only an icon. The paper is on the `--surface` fill. A notice (view only, a failed save or a
-  conflict) is a band between the header and the toolbar. The path has the drive of the doc, so one link works
+  conflict) is a band between the header and the toolbar. At 900px and below, and on a touch screen,
+  the toolbar is one row that scrolls sideways. The path has the drive of the doc, so one link works
   for the owner and for each person with access.
   - The editor is on [ProseMirror](https://prosemirror.net). The JSON form of its schema is
     `DocContent` of the contracts: `docs.get` gives the content, and `docs.update` gets it back.
@@ -447,12 +464,15 @@ MCP clients. The app has no UI-only path.
   - The text of a message shows as plain text, with its line breaks.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
-    the buttons are always in the row.
+    a tap on a message gives the focus to its row, and the bar shows above the row with buttons of
+    44px. The bar takes no width from the text. A keyboard and a screen reader get the buttons in
+    each row, as on a desktop.
   - The person changes their own message in place, and deletes it after a confirmation. The owner
     of a room can delete each message. A deleted message shows "This message was deleted."
   - **Show older messages** gets the page before the first message, and the list stays at the same
     message. A new message moves the list to its end only when the list was at its end.
-  - The header shows the icon of the room, the name and the topic on one line. A private room has
+  - The header shows the icon of the room, the name and the topic on one line. At 600px and below,
+    the topic is under the name. A private room has
     a lock. A direct message has the avatar of the other member. A button at the right shows the
     number of members.
   - The members dialog lists the
@@ -558,8 +578,13 @@ The icons are from [Iconoir](https://iconoir.com) 7.12.1 (MIT): a 24px grid and 
 - In the mailbox tree, the folders and the labels of a mailbox are to the right of a 1px line under
   the icon of the mailbox. Only the open view has a fill.
 - The main action of a sidebar (Compose, New, New room) is one `--primary` button with the full width.
-- The app has one breakpoint for the drawer: 900px. At 900px and below, and for a touch screen,
-  rows are 44px high and text fields have 16px text.
+- The app has one breakpoint for the drawer: 900px. At 900px and below, and for a touch screen
+  (`pointer: coarse`), each control is 44px or more and text fields have 16px text. A checkbox keeps
+  its size: the label around it is the 44px target.
+- A second breakpoint, 600px, is for a phone: the header row then has room for one title and for
+  icon buttons. No page scrolls sideways at 320px.
+- `index.html` sets `viewport-fit=cover`. A part that touches an edge of the screen adds
+  `env(safe-area-inset-*)` to its padding.
 - Toasts are at the bottom right, because the account button is at the bottom left.
 - Settings and Admin use panels: a heading (`.panel-title`), a muted line (`.panel-note`), and a
   card on the surface (`.panel-card`) only for a list or a form. Sign-in, setup and Connect use one

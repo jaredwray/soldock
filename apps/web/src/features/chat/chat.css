@@ -360,27 +360,32 @@
 	border-radius: 7px;
 }
 
-/* A touch screen has no hover, so the actions stay in the row, at half strength. */
-@media (hover: none) {
-	.chat-message {
-		grid-template-columns: 36px minmax(0, 1fr) auto;
-	}
+/* A touch screen has no hover. A tap on a message gives the focus to its row, and the bar shows above
+   the row, so the buttons take no width from the text. */
+.chat-message:focus {
+	outline: none;
+}
 
-	.chat-message-actions {
-		position: static;
-		grid-column: 3;
-		align-self: start;
-		padding: 0;
-		border: 0;
-		background: none;
-		box-shadow: none;
-		opacity: 1;
-		pointer-events: auto;
+@media (hover: none) {
+	.chat-message-actions,
+	.chat-message-head .chat-message-actions {
+		top: -34px;
+		right: 12px;
 	}
 
 	.chat-message-actions .icon-button {
 		width: 44px;
 		height: 44px;
+	}
+
+	/* A touch screen keeps the hover state on the place of the last tap. Only the focus shows the bar. */
+	.chat-message:hover:not(:focus-within) {
+		background: none;
+	}
+
+	.chat-message:hover:not(:focus-within) .chat-message-actions {
+		opacity: 0;
+		pointer-events: none;
 	}
 }
 
@@ -652,12 +657,6 @@
 	}
 }
 
-@media (max-width: 900px) and (hover: none) {
-	.chat-message {
-		grid-template-columns: 30px minmax(0, 1fr) auto;
-	}
-}
-
 /* Touch: the send button is 44px, and the text fields have 16px text, so that iOS does not zoom in. */
 @media (max-width: 900px), (pointer: coarse) {
 	.chat-draft,
@@ -675,5 +674,57 @@
 		width: auto;
 		min-width: 44px;
 		justify-content: center;
+	}
+}
+
+/* A phone: the topic is under the name of the room, so the two have the full width. */
+@media (max-width: 600px) {
+	.chat-header:has(.chat-topic) {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		grid-template-rows: auto auto;
+		align-content: center;
+		column-gap: 8px;
+		row-gap: 0;
+	}
+
+	.chat-header:has(.chat-topic) > .icon,
+	.chat-header:has(.chat-topic) > .chat-header-actions {
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+
+	.chat-header:has(.chat-topic) > .chat-title {
+		grid-area: 1 / 2;
+		line-height: 22px;
+	}
+
+	.chat-header:has(.chat-topic) > .chat-topic {
+		grid-area: 2 / 2;
+		font-size: 12px;
+		line-height: 16px;
+	}
+
+	.chat-header:has(.chat-topic) > .chat-header-actions {
+		grid-column: 3;
+	}
+}
+
+/* The composer is the last part of the page. On a phone it is inside the safe area of the shell. */
+@media (max-width: 900px), (pointer: coarse) {
+	.chat-start .button,
+	.chat-more .button {
+		min-height: 44px;
+	}
+}
+
+/* A phone on its side has little height: the composer is one line high until the text needs more. */
+@media (max-height: 500px) {
+	.chat-composer-box {
+		flex-direction: row;
+		align-items: flex-end;
+		gap: 8px;
+		min-height: 0;
+		padding: 6px 6px 6px 12px;
 	}
 }
