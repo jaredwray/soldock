@@ -100,6 +100,35 @@ export async function createTeamMailbox(
 }
 
 /**
+ * Changes the name or the address of a team mailbox. The triggers of migration 0005 check inserts only,
+ * so this statement repeats their address checks in its transaction. Returns false, and changes
+ * nothing, when the mailbox is gone, a principal has the address, or its mail domain is not saved.
+ */
+export async function updateTeamMailbox(
+	db: D1Database,
+	id: string,
+	changes: { display_name?: string | undefined; address?: string | undefined },
+): Promise<boolean> {
+	const address = changes.address === undefined ? null : normalizeAddress(changes.address);
+	try {
+		const result = await db
+			.prepare(
+				`UPDATE team_mailboxes SET display_name = COALESCE(?1, display_name), address = COALESCE(?2, address)
+				WHERE id = ?3 AND (?2 IS NULL OR (
+					NOT EXISTS (SELECT 1 FROM addresses WHERE address = ?2)
+					AND EXISTS (SELECT 1 FROM mail_domains WHERE domain = substr(?2, instr(?2, '@') + 1))
+				))`,
+			)
+			.bind(changes.display_name ?? null, address, id)
+			.run();
+		return result.meta.changes === 1;
+	} catch (error) {
+		// A different team mailbox has the address: the UNIQUE constraint of the column.
+		throw conflictOf(error) ?? error;
+	}
+}
+
+/**
  * Adds a member. A second call for the same member changes nothing. Returns false when the mailbox
  * has the most members that it can have, or when the principal was deleted during the request.
  */

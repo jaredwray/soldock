@@ -162,6 +162,8 @@ mailbox. An agent cannot add itself.
   names the member in `sent_by`.
 - The outbound policy of an agent also applies to mail that it sends from a team mailbox.
 - A call for a team mailbox without membership fails with `forbidden`.
+- An owner or an admin can change the name and the address of a team mailbox. The `id` does not
+  change. Read the address from `mail_list_mailboxes` or `mail_get_profile`. Do not keep a copy of it.
 
 ## Who can read the mail of an agent
 

@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { EditSharedMailboxDialog } from "./EditSharedMailboxDialog.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -22,14 +23,15 @@ function memberNames(members: readonly Principal[]): string {
 	return members.length > 3 ? `${names.join(", ")} and ${members.length - 3} more` : names.join(", ");
 }
 
-type Action = { kind: "create" } | { kind: "members"; mailboxId: string };
+type Action = { kind: "create" } | { kind: "edit" | "members"; mailboxId: string };
 
 /**
- * Owners and admins create shared mailboxes and decide who can use each one. A shared mailbox has its
- * own address: each member, a person or an agent, reads it and sends from its address. The section is a
- * list. "New shared mailbox" and "Members" open dialogs.
+ * Owners and admins create shared mailboxes, change them and decide who can use each one. A shared
+ * mailbox has its own address: each member, a person or an agent, reads it and sends from its address.
+ * The section is a list. "New shared mailbox", and Edit and Members in each row, open dialogs.
  */
 export function SharedMailboxesSection({ principals }: { principals: readonly Principal[] }) {
+	const toast = useToast();
 	const [mailboxes, setMailboxes] = useState<TeamMailbox[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [action, setAction] = useState<Action | null>(null);
@@ -58,7 +60,8 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 		);
 	}
 
-	const open = action?.kind === "members" ? mailboxes?.find((mailbox) => mailbox.id === action.mailboxId) : undefined;
+	const open =
+		action && action.kind !== "create" ? mailboxes?.find((mailbox) => mailbox.id === action.mailboxId) : undefined;
 
 	return (
 		<div className="card">
@@ -116,15 +119,18 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 											{members.length > 0 && <div className="muted">{memberNames(members)}</div>}
 										</td>
 										<td className="cell-actions">
-											<button
-												type="button"
-												className="button button-small"
-												aria-label={`Members of ${mailbox.display_name}`}
-												onClick={() => setAction({ kind: "members", mailboxId: mailbox.id })}
-											>
-												<Icon name="team" size={16} />
-												Members
-											</button>
+											<div className="row-actions">
+												<RowButton
+													icon="pencil"
+													label={`Edit ${mailbox.display_name}`}
+													onClick={() => setAction({ kind: "edit", mailboxId: mailbox.id })}
+												/>
+												<RowButton
+													icon="team"
+													label={`Members of ${mailbox.display_name}`}
+													onClick={() => setAction({ kind: "members", mailboxId: mailbox.id })}
+												/>
+											</div>
 										</td>
 									</tr>
 								);
@@ -143,10 +149,29 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 					}}
 				/>
 			)}
-			{open && (
+			{open && action?.kind === "edit" && (
+				<EditSharedMailboxDialog
+					mailbox={open}
+					onClose={() => setAction(null)}
+					onSaved={(mailbox) => {
+						save(mailbox);
+						setAction(null);
+						toast({ message: `${mailbox.display_name} saved.` });
+					}}
+				/>
+			)}
+			{open && action?.kind === "members" && (
 				<MembersDialog mailbox={open} principals={principals} onChanged={save} onClose={() => setAction(null)} />
 			)}
 		</div>
+	);
+}
+
+function RowButton({ icon, label, onClick }: { icon: "pencil" | "team"; label: string; onClick: () => void }) {
+	return (
+		<button type="button" className="icon-button" aria-label={label} title={label} onClick={onClick}>
+			<Icon name={icon} size={18} />
+		</button>
 	);
 }
 

@@ -40,7 +40,9 @@ import {
 	getTeamMailbox,
 	listTeamMailboxes,
 	removeTeamMailboxMember,
+	resolveMailboxAddress,
 	type TeamMailboxRecord,
+	updateTeamMailbox,
 } from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
@@ -65,6 +67,7 @@ type IdentityOperation =
 	| "directory.delete_principal"
 	| "directory.list_team_mailboxes"
 	| "directory.create_team_mailbox"
+	| "directory.update_team_mailbox"
 	| "directory.add_team_mailbox_member"
 	| "directory.remove_team_mailbox_member";
 
@@ -362,8 +365,29 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		return { team_mailbox: created };
 	},
 
+	async "directory.update_team_mailbox"(call, input) {
+		const mailbox = await teamMailboxToManage(call, input.mailbox_id, "change");
+		if (input.address !== undefined) {
+			const domains = await mailDomains(call.env.DIRECTORY);
+			if (!domains.has(domainOf(input.address))) {
+				throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
+			}
+			assertPrimaryAddress(input.address);
+			const holder = await resolveMailboxAddress(call.env.DIRECTORY, input.address);
+			if (holder && holder.id !== mailbox.id) {
+				throw new OperationError("conflict", "That address belongs to another principal or team mailbox.");
+			}
+		}
+		const changes = { display_name: input.display_name, address: input.address };
+		if (!(await updateTeamMailbox(call.env.DIRECTORY, mailbox.id, changes))) {
+			throw new OperationError("conflict", DIRECTORY_CHANGED);
+		}
+		auditOk(call, "directory.update_team_mailbox", mailbox.id);
+		return { team_mailbox: await teamMailboxAfterChange(call, mailbox.id) };
+	},
+
 	async "directory.add_team_mailbox_member"(call, input) {
-		await teamMailboxToManage(call, input.mailbox_id);
+		await teamMailboxToManage(call, input.mailbox_id, "change the members of");
 		const member = await getPrincipal(call.env.DIRECTORY, input.principal_id);
 		if (!member) throw new OperationError("not_found", "No principal has that id.");
 		if (!(await addTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, member.id, call.caller.principal.id))) {
@@ -377,7 +401,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	},
 
 	async "directory.remove_team_mailbox_member"(call, input) {
-		await teamMailboxToManage(call, input.mailbox_id);
+		await teamMailboxToManage(call, input.mailbox_id, "change the members of");
 		await removeTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, input.principal_id);
 		auditOk(call, "directory.remove_team_mailbox_member", `${input.mailbox_id}:${input.principal_id}`);
 		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
@@ -467,13 +491,17 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 };
 
 /**
- * The team mailbox whose members the call changes. Only owners and admins change them. A member, also
- * an agent, can never add itself or others: an agent holds no `directory.write` scope, and the member
- * operations accept humans only.
+ * The team mailbox that the call changes: its name, its address or its members. Only owners and admins
+ * change them. A member, also an agent, can never add itself or others: an agent holds no
+ * `directory.write` scope, and these operations accept humans only.
  */
-async function teamMailboxToManage(call: CallContext, mailboxId: string): Promise<TeamMailboxRecord> {
+async function teamMailboxToManage(
+	call: CallContext,
+	mailboxId: string,
+	action: "change" | "change the members of",
+): Promise<TeamMailboxRecord> {
 	if (!isAdmin(call.caller)) {
-		throw new OperationError("forbidden", "Only owners and admins can change the members of a team mailbox.");
+		throw new OperationError("forbidden", `Only owners and admins can ${action} a team mailbox.`);
 	}
 	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
 	if (!mailbox) throw new OperationError("not_found", "No team mailbox has that id.");
@@ -488,6 +516,6 @@ async function principalAfterChange(call: CallContext, principalId: string): Pro
 
 async function teamMailboxAfterChange(call: CallContext, mailboxId: string): Promise<TeamMailboxRecord> {
 	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
-	if (!mailbox) throw new Error(`team mailbox ${mailboxId} missing after a member change`);
+	if (!mailbox) throw new Error(`team mailbox ${mailboxId} missing after a change`);
 	return mailbox;
 }

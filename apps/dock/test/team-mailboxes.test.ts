@@ -100,6 +100,108 @@ describe("team mailboxes in the directory", () => {
 			"team@second.test",
 			"support@dock.test",
 		]);
+
+		// A change of address keeps the same rules.
+		const [second] = (await owner.call("directory.list_team_mailboxes")).team_mailboxes;
+		const move = (address: string) =>
+			owner.call("directory.update_team_mailbox", { mailbox_id: second?.id as string, address });
+		expect(await code(move("support@dock.test"))).toBe("conflict");
+		expect(await code(move("Ada@dock.test"))).toBe("conflict");
+		expect(await code(move("team@elsewhere.example"))).toBe("invalid");
+		expect(await code(move("team+tag@second.test"))).toBe("invalid");
+		expect((await move("Team@second.test")).team_mailbox.address).toBe("team@second.test");
+		await move("team@dock.test");
+		// The new address is taken, and the old domain is free.
+		expect(
+			await code(
+				owner.call("directory.create_principal", {
+					kind: "agent",
+					display_name: "Team Bot",
+					address: "team@dock.test",
+				}),
+			),
+		).toBe("conflict");
+		await owner.call("directory.remove_mail_domain", { domain: "second.test" });
+	});
+
+	it("lets only owners and admins change the name and the address, through REST and MCP", async () => {
+		const support = await createSupport();
+		const rename = { mailbox_id: support.id, display_name: "Customer support" };
+		expect(await code(ada.call("directory.update_team_mailbox", rename))).toBe("forbidden");
+		expect(await code(bot.call("directory.update_team_mailbox", rename))).toBe("forbidden");
+		const readOnly = await narrowKey(owner, ["directory.read"]);
+		expect(await code(readOnly("directory.update_team_mailbox", rename))).toBe("forbidden");
+
+		const renamed = await callTool(owner.key, "directory_update_team_mailbox", rename);
+		expect(renamed.structuredContent).toEqual({ team_mailbox: { ...support, display_name: "Customer support" } });
+		await owner.call("directory.update_principal", { principal_id: ada.id, org_role: "admin" });
+		const moved = await ada.call("directory.update_team_mailbox", {
+			mailbox_id: support.id,
+			address: "help@dock.test",
+		});
+		expect(moved.team_mailbox).toEqual({ ...support, display_name: "Customer support", address: "help@dock.test" });
+		expect((await bot.call("mail.list_mailboxes")).mailboxes[1]).toEqual({
+			id: support.id,
+			kind: "team",
+			address: "help@dock.test",
+			display_name: "Customer support",
+		});
+
+		expect(await code(owner.call("directory.update_team_mailbox", { mailbox_id: support.id }))).toBe("invalid");
+		const unknown = { ...rename, mailbox_id: "tmb_00000000000000000000000000" };
+		expect(await code(owner.call("directory.update_team_mailbox", unknown))).toBe("not_found");
+	});
+
+	// The handler checks the address first. A new principal address or a domain removal can come between that
+	// check and the write. The write must then change nothing, or one address could reach two mailboxes.
+	it.each([
+		{
+			race: "a principal takes the address",
+			address: "help@dock.test",
+			sql: "INSERT INTO addresses (address, principal_id, is_primary, created_at) VALUES ('help@dock.test', ?1, 0, ?2)",
+		},
+		{
+			race: "the domain is removed",
+			address: "help@second.test",
+			sql: "DELETE FROM mail_domains WHERE domain = 'second.test' AND ?1 IS NOT NULL AND ?2 IS NOT NULL",
+		},
+	])("changes no address when $race during the request", async ({ address, sql }) => {
+		const support = await createSupport([]);
+		await owner.call("directory.add_mail_domain", { domain: "second.test" });
+		let raced = false;
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (query: string) => {
+						const statement = target.prepare(query);
+						if (!query.trimStart().startsWith("UPDATE team_mailboxes")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								run: async () => {
+									raced = true;
+									await target.prepare(sql).bind(ada.id, new Date().toISOString()).run();
+									return statement.bind(...values).run();
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+			new Request(`${ORIGIN}/api/v1/directory/team-mailboxes/${support.id}`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ address }),
+			}),
+			{ ...env, DIRECTORY: directory } as unknown as Env,
+			createExecutionContext(),
+		);
+		expect(raced).toBe(true);
+		expect(res.status).toBe(409);
+		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes[0]?.address).toBe("support@dock.test");
 	});
 
 	it("creates nothing when a member id is unknown", async () => {
@@ -295,6 +397,43 @@ describe("mail in a team mailbox", () => {
 			["Your order", "sent"],
 			["Re: Your order", "internal"],
 		]);
+	});
+
+	it("keeps the mail after an address change, refuses the old address, and sends nothing more from it", async () => {
+		const support = await createSupport();
+		await inject(
+			rawMessage({ from: "cy@customer.example", to: "support@dock.test", subject: "Order 42" }),
+			"support@dock.test",
+		);
+		const label = await ada.call("mail.create_label", { mailbox_id: support.id, name: "Orders" });
+		const email = await fakeEmailService(support.id);
+		// This send waits in the outbox during the change.
+		const queued = await ada.call("mail.send", { mailbox_id: support.id, to: ["cy@customer.example"], text: "Soon" });
+
+		await owner.call("directory.update_team_mailbox", { mailbox_id: support.id, address: "help@dock.test" });
+		const late = await inject(
+			rawMessage({ from: "cy@customer.example", to: "support@dock.test", subject: "Old address" }),
+			"support@dock.test",
+		);
+		expect(late.rejected).not.toBeNull();
+		await inject(
+			rawMessage({ from: "cy@customer.example", to: "help@dock.test", subject: "New address" }),
+			"help@dock.test",
+		);
+		expect(await subjects(bot, support.id)).toEqual(["New address", "Order 42"]);
+		expect((await bot.call("mail.list_labels", { mailbox_id: support.id })).labels.map((l) => l.id)).toContain(
+			label.id,
+		);
+
+		await drainOutbox(support.id);
+		const sent = await ada.call("mail.send", { mailbox_id: support.id, to: ["cy@customer.example"], text: "Now" });
+		await drainOutbox(support.id);
+		expect(email.sent).toEqual([{ from: "help@dock.test", to: "cy@customer.example" }]);
+		const status = async (threadId: string) =>
+			(await ada.call("mail.get_thread", { mailbox_id: support.id, thread_id: threadId })).messages[0]?.delivery?.[0]
+				?.status;
+		expect(await status(queued.thread_id)).toBe("failed");
+		expect(await status(sent.thread_id)).toBe("sent");
 	});
 
 	// A team mailbox must never widen what an agent can reach.
