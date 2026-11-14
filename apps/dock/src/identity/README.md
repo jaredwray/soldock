@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -29,6 +29,52 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
   `allowlist` (domains and addresses) or `any`.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
+
+## Change, archive and delete
+
+Owners and admins manage the people and agents of the directory. Each operation needs
+`directory.write` and accepts humans only, so an agent can never change itself or others. An admin
+can act on another admin. Only the owner is out of reach, as for credentials.
+
+- `directory.update_principal` changes the name, the role of a person (`admin` or `member`), or the
+  sponsor of an agent. Only the owner changes the owner, and only the name. Nobody changes their own
+  role. A role change needs a credential with every human scope, because an admin can create people
+  with a session. A new sponsor must be a person who is not archived.
+- `directory.archive_principal` sets `archived_at` and deletes the sessions of the principal. A
+  person who sponsors an agent that is not archived cannot be archived, because the person can hold
+  the keys of the agent and act through it. Give the agent a different sponsor, or archive it, first.
+  `authenticate` refuses each credential of an archived principal: a session, an API key and an
+  OAuth access token. Sign-in refuses an archived person with the same `401` as a wrong password.
+  An OAuth refresh and an OAuth approval for an archived agent fail. The keys and the grants stay,
+  and the mail, the drive and the chat stay. Mail to the address still arrives.
+- `directory.restore_principal` clears `archived_at`. The keys and the grants work again. The old
+  sessions do not come back: the restore deletes the sessions again, and the sign-in transaction
+  also checks `archived_at`, so a sign-in that races the archive leaves no session. A restore of a
+  principal that is not archived changes nothing and keeps its sessions. An agent whose sponsor is
+  archived cannot be restored.
+- Archive, restore and delete need a credential with every human scope, so a narrow key with
+  `directory.write` cannot lock people out or let them back in.
+- `directory.delete_principal` cannot be undone. The `principals` row stays with `deleted_at`, because
+  `api_keys.created_by`, `team_mailboxes.created_by`, `team_mailbox_members.added_by` and the OAuth
+  rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
+  deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
+  grants. So the address is free for a new principal, and inbound and local mail to it is refused.
+  - Each query that returns a principal joins its primary address, so a deleted principal is not in
+    the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
+    items out of Shared with me and Starred.
+  - The mailbox and the drive objects of the deleted principal stay in storage, and nobody can open
+    them: a new principal with the same address gets a new id, and so new objects. A later layer
+    erases this data.
+  - Known limit: the delete does not remove the principal from its chat rooms. Its messages stay,
+    and it stays in the member list of each room. A room that it owned keeps no owner who can act:
+    the owner role moves only when the owner leaves. The chat index writes no new row for a deleted
+    principal. A later change removes the principal from its rooms through the outbox.
+- Nobody archives or deletes the owner or themselves. A person who sponsors an agent cannot be
+  deleted: give the agent a different sponsor first, or delete the agent.
+- The checks of the owner, of the sponsor and of a deleted principal are also in the SQL of each
+  write: the change, the archive, the restore, the delete, a new agent (also through OAuth), and a
+  new team mailbox member (also a first member of a new team mailbox). So a parallel change cannot
+  break them.
 
 ## Team mailboxes
 
@@ -109,8 +155,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
-  (`0001`, then `0003` to `0007`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0007` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  (`0001`, then `0003` to `0008`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0008` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
@@ -295,7 +341,9 @@ Each call passes three checks:
    `account.read`, `directory.read`, `mail.read`, `mail.modify` and `mail.send`. A session holds
    every human scope, because only a credential with every human scope can set a password.
 2. **Role and resource** (the handler):
-   - Only owners and admins create principals.
+   - Only owners and admins create, change, archive, restore and delete principals. Only the owner
+     changes the owner, and nobody archives or deletes the owner or themselves.
+   - An archived principal is not authenticated, with any credential.
    - Only owners and admins create team mailboxes and change their members. A principal uses a team
      mailbox only as a member. The mail handlers check the membership on each call.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never

@@ -618,6 +618,28 @@ describe("OAuth tokens", () => {
 		]);
 	});
 
+	// An archived agent must not act through a connection, and a restore must not need a new approval.
+	it("stops the tokens of an archived agent until a restore, and ends them when the agent is deleted", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens } = await connectNewAgent(owner);
+		await owner.call("directory.archive_principal", { principal_id: agent.id });
+		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
+		expect(await (await refresh(clientId, tokens.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+		const { requestId } = await startAuthorization(clientId);
+		const approval = owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			agent_id: agent.id,
+			scopes: ["mail.read"],
+		});
+		expect(await codeOf(approval)).toBe("invalid");
+		await owner.call("directory.restore_principal", { principal_id: agent.id });
+		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(200);
+		const renewed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
+		await owner.call("directory.delete_principal", { principal_id: agent.id });
+		expect((await mcp(renewed.access_token, "tools/list")).status).toBe(401);
+		expect(await (await refresh(clientId, renewed.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
+	});
+
 	// The OAuth tables refer to the principals, so a fresh start must drop them first.
 	it("ends each OAuth connection when the operator starts fresh", async () => {
 		const owner = await setupOwner();

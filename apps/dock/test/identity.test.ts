@@ -6,6 +6,7 @@ import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
+import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
@@ -14,6 +15,7 @@ import {
 	callTool,
 	cookieOf,
 	createActor,
+	drainDrive,
 	mcp,
 	ORIGIN,
 	PASSWORD,
@@ -865,6 +867,7 @@ describe("directory upgrade", () => {
 		]);
 		await run(passwordMigration.split("--> statement-breakpoint"));
 		await run(teamMailboxMigration.split("--> statement-breakpoint"));
+		await run(lifecycleMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -1034,5 +1037,206 @@ describe("directory authorization", () => {
 		expect(await denied(bot.call("account.list_api_keys"))).toBe("forbidden");
 		const tool = await callTool(owner.key, "account_list_api_keys", { principal_id: bot.id });
 		expect((tool.structuredContent?.api_keys ?? []) as unknown[]).toHaveLength(2);
+	});
+});
+
+describe("changes to people and agents", () => {
+	it("lets owners and admins change a name, a role and a sponsor, and keeps the owner and each own role", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const bob = await createActor(owner, {
+			kind: "human",
+			display_name: "Bob",
+			address: "bob@dock.test",
+			password: PASSWORD,
+		});
+		const change = (
+			id: string,
+			fields: { display_name?: string; org_role?: "admin" | "member"; sponsor_id?: string },
+		) => ({ principal_id: id, ...fields }) as const;
+		// A member and an agent cannot change anybody.
+		expect(await denied(ada.call("directory.update_principal", change(bob.id, { display_name: "B" })))).toBe(
+			"forbidden",
+		);
+		expect(await denied(bot.call("directory.update_principal", change(bot.id, { display_name: "B" })))).toBe(
+			"forbidden",
+		);
+		const renamed = await owner.call("directory.update_principal", change(ada.id, { display_name: "Ada King" }));
+		expect(renamed.principal).toMatchObject({ display_name: "Ada King", org_role: "member" });
+		// A new admin can create people at once. An admin cannot change the owner or their own role.
+		await owner.call("directory.update_principal", change(ada.id, { org_role: "admin" }));
+		await ada.call("directory.create_principal", {
+			kind: "human",
+			display_name: "Eve",
+			address: "eve@dock.test",
+			password: PASSWORD,
+		});
+		expect(await denied(ada.call("directory.update_principal", change(owner.id, { display_name: "X" })))).toBe(
+			"forbidden",
+		);
+		expect(await denied(ada.call("directory.update_principal", change(ada.id, { org_role: "member" })))).toBe(
+			"forbidden",
+		);
+		expect(await denied(owner.call("directory.update_principal", change(owner.id, { org_role: "admin" })))).toBe(
+			"invalid",
+		);
+		await owner.call("directory.update_principal", change(owner.id, { display_name: "Olive O." }));
+		// A role makes a person an admin, so a narrow key cannot give it. It can still change a name.
+		const { api_key } = await owner.call("account.create_api_key", { label: "Narrow", scopes: ["directory.write"] });
+		const narrow = api(api_key.secret);
+		expect(await denied(narrow("directory.update_principal", change(bob.id, { org_role: "admin" })))).toBe("forbidden");
+		await narrow("directory.update_principal", change(bob.id, { display_name: "Bob B." }));
+		// A role is for a person, a sponsor is for an agent, and a sponsor must be a person who is not archived.
+		expect(await denied(owner.call("directory.update_principal", change(bot.id, { org_role: "admin" })))).toBe(
+			"invalid",
+		);
+		expect(await denied(owner.call("directory.update_principal", change(bob.id, { sponsor_id: ada.id })))).toBe(
+			"invalid",
+		);
+		expect(await denied(owner.call("directory.update_principal", change(bot.id, { sponsor_id: bot.id })))).toBe(
+			"invalid",
+		);
+		await owner.call("directory.archive_principal", { principal_id: bob.id });
+		expect(await denied(owner.call("directory.update_principal", change(bot.id, { sponsor_id: bob.id })))).toBe(
+			"invalid",
+		);
+		const moved = await owner.call("directory.update_principal", change(bot.id, { sponsor_id: owner.id }));
+		expect(moved.principal.sponsor_id).toBe(owner.id);
+	});
+
+	// An archived account must not get in with any credential, and must get everything back on a restore.
+	it("archives a person: no sign-in, session or key works, mail still arrives, and a restore brings the keys back", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		// A sponsor of an active agent cannot be archived, so the agent gets the owner as its sponsor.
+		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: owner.id });
+		const cookie = await signIn(ada.address);
+		// A restore of a person who is not archived changes nothing, and does not end a session.
+		await owner.call("directory.restore_principal", { principal_id: ada.id });
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
+		const { principal } = await owner.call("directory.archive_principal", { principal_id: ada.id });
+		expect(principal.archived_at).not.toBeNull();
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
+		expect((await request("/api/v1/account", { headers: { authorization: `Bearer ${ada.key}` } })).status).toBe(401);
+		expect((await mcp(ada.key, "tools/list")).status).toBe(401);
+		// The refusal is the one of a wrong password, so it does not tell that the account exists.
+		expect(await refusal(await submitSignIn(ada.address, PASSWORD))).toBe(
+			await refusal(await submitSignIn(ada.address, "not the password")),
+		);
+		await owner.call("mail.send", { to: [ada.address], subject: "While you were away", text: "Hello." });
+		// A second archive changes nothing.
+		await owner.call("directory.archive_principal", { principal_id: ada.id });
+		await owner.call("directory.restore_principal", { principal_id: ada.id });
+		expect(await ada.call("account.whoami")).toMatchObject({ principal: { id: ada.id, archived_at: null } });
+		const { threads } = await ada.call("mail.list_threads", { query: "in:inbox" });
+		expect(threads.map((thread) => thread.subject)).toContain("While you were away");
+		// The old session does not come back. A new sign-in works.
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
+		await signIn(ada.address);
+		// A sign-in that raced an archive can leave a session row. A restore ends it too.
+		await owner.call("directory.archive_principal", { principal_id: ada.id });
+		const token = "raced-session-token";
+		const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))]
+			.map((byte) => byte.toString(16).padStart(2, "0"))
+			.join("");
+		await env.DIRECTORY.prepare("INSERT INTO sessions VALUES (?, ?, ?, '2999-01-01T00:00:00.000Z')")
+			.bind(hash, ada.id, new Date().toISOString())
+			.run();
+		await owner.call("directory.restore_principal", { principal_id: ada.id });
+		const raced = `__Host-soldock_session=${token}`;
+		expect((await request("/api/v1/account", { headers: { cookie: raced } })).status).toBe(401);
+	});
+
+	it("refuses to archive or delete the owner or yourself, and lets only owners and admins do it", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann Admin",
+			address: "ann@dock.test",
+			org_role: "admin",
+			password: PASSWORD,
+		});
+		for (const op of ["directory.archive_principal", "directory.delete_principal"] as const) {
+			expect(await denied(admin.call(op, { principal_id: owner.id }))).toBe("forbidden");
+			expect(await denied(owner.call(op, { principal_id: owner.id }))).toBe("forbidden");
+			expect(await denied(admin.call(op, { principal_id: admin.id }))).toBe("forbidden");
+			expect(await denied(ada.call(op, { principal_id: bot.id }))).toBe("forbidden");
+			expect(await denied(bot.call(op, { principal_id: bot.id }))).toBe("forbidden");
+		}
+		expect(await denied(ada.call("directory.restore_principal", { principal_id: bot.id }))).toBe("forbidden");
+		// A key with only directory.write cannot lock people out or let them back in.
+		const { api_key } = await owner.call("account.create_api_key", { label: "Narrow", scopes: ["directory.write"] });
+		const narrow = api(api_key.secret);
+		for (const op of ["directory.archive_principal", "directory.delete_principal"] as const) {
+			expect(await denied(narrow(op, { principal_id: ada.id }))).toBe("forbidden");
+		}
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		expect(await denied(narrow("directory.restore_principal", { principal_id: bot.id }))).toBe("forbidden");
+		// An admin can act on another admin.
+		const other = await createActor(owner, {
+			kind: "human",
+			display_name: "Al Admin",
+			address: "al@dock.test",
+			org_role: "admin",
+			password: PASSWORD,
+		});
+		await admin.call("directory.archive_principal", { principal_id: other.id });
+	});
+
+	it("deletes an agent: its credentials and memberships end, and a new holder of the address gets an empty mailbox", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const { team_mailbox } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+			member_ids: [bot.id],
+		});
+		await owner.call("mail.send", { to: [bot.address], subject: "Old mail", text: "Hello." });
+		const folder = (await ada.call("drive.create_folder", { name: "Plans" })).item;
+		const shared = (await bot.call("drive.create_folder", { name: "Bot notes" })).item;
+		await bot.call("drive.share_item", { item_id: shared.id, principal_id: ada.id, role: "viewer" });
+		await drainDrive(bot.id);
+		expect((await ada.call("drive.list_items", { view: "shared" })).items.map((item) => item.name)).toEqual([
+			"Bot notes",
+		]);
+		await owner.call("directory.delete_principal", { principal_id: bot.id });
+		// The drive of the agent stays in storage, but nobody can open it, so it leaves the shared list.
+		expect((await ada.call("drive.list_items", { view: "shared" })).items).toEqual([]);
+		expect((await mcp(bot.key, "tools/list")).status).toBe(401);
+		expect((await owner.call("directory.list_principals")).principals.map((p) => p.id)).not.toContain(bot.id);
+		const mailboxes = (await owner.call("directory.list_team_mailboxes")).team_mailboxes;
+		expect(mailboxes.find((mailbox) => mailbox.id === team_mailbox.id)?.member_ids).toEqual([]);
+		expect(await denied(owner.call("mail.send", { to: [bot.address], text: "Hello?" }))).toBe("not_found");
+		expect(
+			await denied(ada.call("drive.share_item", { item_id: folder.id, principal_id: bot.id, role: "viewer" })),
+		).toBe("not_found");
+		expect(await denied(owner.call("directory.delete_principal", { principal_id: bot.id }))).toBe("not_found");
+		expect(await denied(owner.call("directory.restore_principal", { principal_id: bot.id }))).toBe("not_found");
+		// The address is free again. The mailbox belongs to the id, so the old mail stays out of reach.
+		const next = await createActor(owner, {
+			kind: "agent",
+			display_name: "New Bot",
+			address: bot.address,
+			sponsor_id: ada.id,
+		});
+		expect(next.id).not.toBe(bot.id);
+		expect((await next.call("mail.list_threads", { query: "in:inbox" })).threads).toEqual([]);
+	});
+
+	// A sponsor can hold the keys of the agent, so an archived or deleted sponsor could still act through it.
+	it("refuses to archive or delete a person who sponsors an agent, and ends the sign-in of a deleted person", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const cookie = await signIn(ada.address);
+		expect(await denied(owner.call("directory.archive_principal", { principal_id: ada.id }))).toBe("conflict");
+		expect(await denied(owner.call("directory.delete_principal", { principal_id: ada.id }))).toBe("conflict");
+		// An archived agent cannot act, so its sponsor can be archived. The agent comes back only with a live sponsor.
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		await owner.call("directory.archive_principal", { principal_id: ada.id });
+		expect(await denied(owner.call("directory.restore_principal", { principal_id: bot.id }))).toBe("invalid");
+		expect(await denied(owner.call("directory.delete_principal", { principal_id: ada.id }))).toBe("conflict");
+		await owner.call("directory.restore_principal", { principal_id: ada.id });
+		await owner.call("directory.restore_principal", { principal_id: bot.id });
+		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: owner.id });
+		expect(await owner.call("directory.delete_principal", { principal_id: ada.id })).toEqual({ principal_id: ada.id });
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
+		expect((await request("/api/v1/account", { headers: { authorization: `Bearer ${ada.key}` } })).status).toBe(401);
+		await refusal(await submitSignIn(ada.address, PASSWORD));
 	});
 });

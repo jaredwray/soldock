@@ -2097,6 +2097,55 @@ fieldset {
 	text-align: right;
 }
 
+/* The text and the main button above a list in the admin page, for example "New person or agent". */
+.section-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px 24px;
+	margin-bottom: 12px;
+}
+
+.section-toolbar > .muted {
+	flex: 1 1 320px;
+	margin: 0;
+}
+
+.member-name {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	font-weight: 500;
+}
+
+.kind-inline {
+	display: none;
+}
+
+.row-muted .member-name {
+	color: var(--text-muted);
+}
+
+/* The icon buttons of a table row: edit, archive or restore, and delete. */
+.row-actions {
+	display: inline-flex;
+	gap: 2px;
+}
+
+.row-actions .icon-button {
+	width: 32px;
+	height: 32px;
+}
+
+/* Fields one under the other, in a small dialog. */
+.form-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
 .kind {
 	display: inline-block;
 	padding: 1px 8px;
@@ -2130,11 +2179,6 @@ fieldset {
 
 .create-key .scope-list {
 	width: 100%;
-}
-
-/* The form to add a team mailbox, under the list of team mailboxes. */
-.team-mailbox-form {
-	margin-top: 20px;
 }
 
 /* The full URL of the MCP endpoint, at the top of the Agents section and in the agent form. */
@@ -2482,6 +2526,24 @@ fieldset {
 	.page > h1,
 	.admin-content > h1 {
 		font-size: 22px;
+	}
+
+	/* The Members table keeps the name, the kind, the role and the actions on a phone. */
+	.col-optional {
+		display: none;
+	}
+
+	.member-cell {
+		min-width: 140px;
+	}
+
+	.kind-inline {
+		display: inline-block;
+	}
+
+	.row-actions {
+		display: inline-grid;
+		grid-template-columns: repeat(2, 32px);
 	}
 }
 

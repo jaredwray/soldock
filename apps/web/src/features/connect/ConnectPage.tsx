@@ -22,7 +22,7 @@ type PageState =
 	| {
 			status: "ready";
 			authorization: OAuthAuthorization;
-			/** The agents that this person can connect: the ones that they sponsor, or each agent for an admin. */
+			/** The agents that this person can connect: the ones that they sponsor, or each agent for an admin. Not archived ones. */
 			agents: Principal[];
 			domains: string[];
 	  }
@@ -49,7 +49,9 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 				api.call("directory.list_principals"),
 				canCreate ? api.call("directory.list_mail_domains").then((result) => result.mail_domains) : [],
 			]);
-			const agents = principals.filter((p) => p.kind === "agent" && (elevated || p.sponsor_id === me.id));
+			const agents = principals.filter(
+				(p) => p.kind === "agent" && p.archived_at === null && (elevated || p.sponsor_id === me.id),
+			);
 			setState({ status: "ready", authorization, agents, domains });
 		} catch (error) {
 			if (error instanceof ApiError && error.code === "not_found") setState({ status: "gone" });

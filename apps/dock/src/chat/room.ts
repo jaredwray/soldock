@@ -768,9 +768,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * The statement that brings one row of the index to the current state. A row is written only while
-	 * its principal is in the directory: the creator for the room, the member for a member. After a
-	 * fresh start of the directory, the rooms from before have no such principal, so they stay out of
-	 * the new index.
+	 * its principal is in the directory and not deleted: the creator for the room, the member for a
+	 * member. After a fresh start of the directory, the rooms from before have no such principal, so
+	 * they stay out of the new index.
 	 */
 	private indexStatement(room: RoomRow, target: string): D1PreparedStatement {
 		const db = this.env.DIRECTORY;
@@ -781,7 +781,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					`INSERT INTO chat_rooms (id, kind, name, name_key, topic, created_at, created_by_json, member_count,
 						last_seq, last_message_at, activity_at, version)
 					SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
-					WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?13)
+					WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?13 AND deleted_at IS NULL)
 					ON CONFLICT (id) DO UPDATE SET name = excluded.name, name_key = excluded.name_key,
 						topic = excluded.topic, member_count = excluded.member_count, last_seq = excluded.last_seq,
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
@@ -820,7 +820,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return db
 			.prepare(
 				`INSERT INTO chat_members (principal_id, room_id, role, last_read_seq, peer_json)
-				SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?1)
+				SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND deleted_at IS NULL)
 				ON CONFLICT (principal_id, room_id) DO UPDATE SET role = excluded.role,
 					last_read_seq = excluded.last_read_seq, peer_json = excluded.peer_json`,
 			)

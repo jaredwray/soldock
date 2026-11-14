@@ -15,8 +15,8 @@ The first flows to cover, because they are tested by hand only:
   dialog, the optional two-step verification step (QR code, a wrong code, a correct code, Skip),
   and `409` into the sign-in page.
 - Sign-in with a password: a wrong password, the TOTP step, a used code, "Use a different account",
-  the password change in Settings, which ends the session of a second browser, and the admin card
-  **Help a person sign in**.
+  the password change in Settings, which ends the session of a second browser, and **Reset sign-in**
+  in **Admin › Members**.
 - The rich-text composer: each toolbar button and its shortcut, the link dialog (a refused
   `javascript:` link, and Enter applies the link and does not send), hostile pasted HTML, the reply
   quote, and the HTML and text bodies that `mail.get_thread` returns after the send.
@@ -28,7 +28,9 @@ The first flows to cover, because they are tested by hand only:
 
 - Admin: each section of the side navigation, a deep link to a section, `/admin` as an owner and
   as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
-  under 768px (open, Escape, a link).
+  under 768px (open, Escape, a link). In Members: the New person or agent dialog, Edit (a name, a
+  role, a sponsor), Archive and Restore, Delete, and the sponsor notice. In Shared mailboxes: the New
+  shared mailbox dialog and the Members dialog.
 
 - OAuth for agents: the MCP endpoint banner and its copy button, a client that registers and opens
   `/oauth/authorize`, sign-in on the `/connect` page, a new agent with an address and scopes, an

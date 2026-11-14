@@ -126,33 +126,50 @@ MCP clients. The app has no UI-only path.
     admin removed the access.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
-  - Owners and admins see all six sections. A member who sponsors an agent sees only **Your agents**.
+  - Owners and admins see all four sections. A member who sponsors an agent sees only **Your agents**.
     A member who opens a section for owners and admins sees a notice and not the section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
   - The page loads the directory one time. The directory stays when the section changes. Each
-    section starts at its top.
+    section starts at its top. The page has no link back to Mail: the top bar links to each product.
   - Under 768px, the navigation is a drawer behind the menu button in the top bar, as in Mail and Drive.
-  - **Team** (`team`) shows the directory: the kind, the name, the address, the role, the sponsor
-    and the agent policy of each person and agent.
-  - **New person or agent** (`new`). The first API key of a new principal shows once, with a copy button.
-    A credential cannot grant a scope that it does not hold.
-    The form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`.
-    For a person, the app sends these scopes as `key_scopes`. A person also needs a first password,
-    which the admin gives to the person.
+  - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
+    role, the sponsor and the agent policy of each person and agent. An archived account has an
+    **Archived** chip. Under 768px, the table shows only the name, the role and the actions, and an
+    agent gets its chip next to its name.
+    - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
+      shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
+      form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`. For a
+      person, the app sends these scopes as `key_scopes`. A person also needs a first password, which
+      the admin gives to the person. An archived person cannot be a sponsor.
+    - Each row has icon buttons, with the name in the accessible name: **Edit**, **Reset sign-in**
+      (people only), **Archive** or **Restore**, and **Delete**. The buttons follow the rules of the
+      server: the owner and you have no Reset sign-in, Archive or Delete, and only the owner edits the owner.
+    - **Edit** opens a dialog for the name, the role of a person (Member or Admin) or the sponsor of an
+      agent (`directory.update_principal`). It sends only the fields that changed. The role control is
+      off for you and for the owner.
+    - **Reset sign-in** opens a dialog that sets a new password (`account.set_password`) or turns off
+      two-step verification (`account.disable_totp`), after a confirmation.
+    - **Archive** asks for a confirmation, then calls `directory.archive_principal`. **Restore**
+      (`directory.restore_principal`) needs no confirmation.
+    - **Delete** asks for a confirmation that says that it cannot be undone, then calls
+      `directory.delete_principal`. For a person who sponsors agents, the dialog names the agents and
+      tells the admin to give them a different sponsor first.
   - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
     For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
     OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
-    A member who sponsors an agent sees only those agents. **New person or agent** also shows the
-    banner when Agent is selected.
-  - **Help a person sign in** (`sign-in`). An owner or an admin selects a person, then sets a new password
-    (`account.set_password`) or turns off two-step verification (`account.disable_totp`). An admin
-    does not see the owner in the list, because only the owner manages the owner's sign-in.
-  - **Team mailboxes** (`team-mailboxes`). Owners and admins see each team mailbox with its members. A form creates one
-    with a name, an address and its first members (`directory.create_team_mailbox`). Each mailbox
-    has a control to add a member and a button to remove each member, with a confirmation
-    (`directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`).
+    A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
+    The **New person or agent** dialog also shows the banner when Agent is selected.
+  - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see a
+    table of the shared mailboxes: the name and the address, and the number and the first names of
+    the members.
+    - **New shared mailbox**, above the table, opens a dialog with a name, an address and the first
+      members (`directory.create_team_mailbox`).
+    - **Members** in a row opens a dialog with the members, a control to add a member and a button to
+      remove each member, with a confirmation (`directory.add_team_mailbox_member`,
+      `directory.remove_team_mailbox_member`).
+    - The lists of new members do not offer an archived account.
   - **Email domains** (`domains`) lists the saved domains and provides Add and Remove controls.
     Changes take effect without a new deployment. A confirmation precedes removal.
     The server refuses removal of a domain with mailboxes.
@@ -163,7 +180,7 @@ MCP clients. The app has no UI-only path.
   host that gets the access, and a warning that Soldock does not check the name.
   - An owner or an admin can create a new agent: the name and the address come from the client name
     and the first mail domain, and the person can change them. A person can also select an agent
-    that they sponsor (each agent, for an admin).
+    that they sponsor (each agent, for an admin). The list does not offer an archived agent.
   - The scopes are the agent scopes that the session holds. The page selects the requested scopes
     and `account.read` first, or each scope when the client asked for none.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
@@ -346,7 +363,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `team`, `new`, `agents`, `sign-in`, `team-mailboxes` or `domains` |
+| `/admin/<section>` | One section of Admin: `members`, `agents`, `shared-mailboxes` or `domains` |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |

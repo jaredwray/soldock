@@ -43,6 +43,8 @@ function decode(content: string): Uint8Array {
 async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]> {
 	const bySpace = new Map<string, string[]>();
 	for (const ref of refs) bySpace.set(ref.spaceId, [...(bySpace.get(ref.spaceId) ?? []), ref.itemId]);
+	// The drive of a deleted principal stays in storage, but openSpace refuses it. Its items leave the lists too.
+	for (const spaceId of await unknownPrincipalIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
 	const actor = (await openSpace(call, undefined)).ctx.actor;
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
