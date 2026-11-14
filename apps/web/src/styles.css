@@ -624,77 +624,167 @@ fieldset {
 	font-size: 20px;
 }
 
-.sign-in {
+/* The pages with one card on the surface: sign-in and setup. The Connect page uses the same card. */
+
+.auth {
 	display: grid;
-	place-items: center;
+	justify-items: center;
+	align-content: start;
 	min-height: 100%;
-	padding: 16px;
+	padding: clamp(24px, 7vh, 88px) 16px 32px;
+	background: var(--surface);
 }
 
-.sign-in-card {
+.auth-card {
 	width: 100%;
-	max-width: 420px;
+	max-width: 440px;
 	padding: 32px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: 16px;
 	background: var(--background);
 }
 
-.sign-in-title {
-	margin: 24px 0 8px;
-	font-size: 20px;
-	font-weight: 650;
+.auth-card-wide {
+	max-width: 600px;
 }
 
-.sign-in form {
-	margin-top: 16px;
+.auth-heading {
+	margin-bottom: 28px;
+	text-align: center;
 }
 
-.sign-in .field-hint {
-	margin-bottom: 16px;
-}
-
-.sign-in-sent {
-	margin: 0 0 16px;
-	overflow-wrap: anywhere;
-}
-
-.sign-in-fields {
+/* The mark of Soldock, 48px wide, above the title. */
+.auth-logo {
 	display: grid;
-	gap: 16px;
-	margin-bottom: 16px;
+	place-items: center;
+	margin-bottom: 20px;
 }
 
-.sign-in-help {
-	margin: 16px 0 0;
+.auth-title {
+	font-size: 24px;
+	font-weight: 650;
+	line-height: 1.25;
+	text-wrap: balance;
+}
+
+.auth-subtitle {
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+	text-wrap: balance;
+}
+
+.auth-subtitle strong {
+	color: var(--foreground);
+	font-weight: 550;
+}
+
+/* The parts of a card are 20px apart. */
+.auth-form {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	min-width: 0;
+}
+
+.auth-form > .notice,
+.auth-form > .warning-box,
+.auth-form .form-error,
+.auth-form .field-hint {
+	margin: 0;
+}
+
+/* The live region of an error takes no room while it is empty. */
+.auth-form > [aria-live]:empty {
+	display: none;
+}
+
+.auth-card .field {
+	gap: 7px;
+}
+
+.auth-card .field-label {
+	font-weight: 550;
+}
+
+/* The fields and the buttons of a card are 42px high, and the fields have 16px text. */
+.auth-card .input {
+	min-height: 42px;
+	padding: 8px 11px;
+	border-color: var(--border);
+	border-radius: 9px;
+	background: var(--background);
+	font-size: 16px;
+	box-shadow: none;
+}
+
+.auth-card .input-mono {
+	font-size: 15px;
+}
+
+.auth-card .input[aria-invalid="true"] {
+	border-color: var(--negative);
+}
+
+.auth-card .button {
+	min-height: 42px;
+	border-radius: 9px;
+	font-weight: 550;
+}
+
+/* The error of a card: red text in a box with a red tint. */
+.auth-card .form-error {
+	padding: 12px 14px;
+	border-radius: var(--radius-md);
+	background: color-mix(in srgb, var(--negative) 8%, var(--background));
+	line-height: 1.5;
+}
+
+.auth-help {
 	color: var(--muted-foreground);
 	font-size: 13px;
+	text-align: center;
+	text-wrap: balance;
 }
 
-.sign-in-links {
+.auth-links {
 	display: flex;
 	flex-wrap: wrap;
-	justify-content: space-between;
+	justify-content: center;
 	gap: 8px 16px;
-	margin-top: 16px;
-	font-size: 14px;
 }
 
-.brand {
-	display: inline-flex;
-	align-items: center;
-	gap: 10px;
-	color: var(--foreground);
-	font-size: 20px;
-	font-weight: 600;
-	text-decoration: none;
-	white-space: nowrap;
+/* Buttons one under the other, 12px apart. */
+.auth-actions {
+	display: grid;
+	gap: 12px;
 }
 
-.brand-large {
-	font-size: 22px;
+@media (max-width: 900px) {
+	.auth {
+		padding: 18px 12px 24px;
+	}
+
+	.auth-card {
+		padding: 24px 20px;
+		border-radius: 12px;
+	}
 }
 
+/* Touch: the fields and the buttons of a card are 44px high. */
+@media (max-width: 900px), (pointer: coarse) {
+	.auth-card .input,
+	.auth-card .button,
+	.mcp-banner-row .button,
+	.link-field {
+		min-height: 44px;
+	}
+
+	.row-button {
+		width: 44px;
+		height: 44px;
+	}
+}
 .brand-mark {
 	display: inline-grid;
 	place-items: center;
@@ -704,6 +794,12 @@ fieldset {
 	border-radius: var(--radius);
 	background: var(--primary);
 	color: var(--primary-foreground);
+}
+
+.auth-logo .brand-mark {
+	width: 48px;
+	height: 48px;
+	border-radius: 12px;
 }
 
 /* App frame: the rail at the left, and the page of the route. */
@@ -2691,9 +2787,12 @@ fieldset {
 }
 
 .admin-content {
-	max-width: 1084px;
+	display: flex;
+	flex-direction: column;
+	gap: 28px;
+	max-width: 960px;
 	margin: 0 auto;
-	padding: 24px 22px 48px;
+	padding: 32px 32px 64px;
 }
 
 .card {
@@ -2748,7 +2847,6 @@ fieldset {
 }
 
 .table-scroll {
-	margin: 0 -8px 16px;
 	overflow-x: auto;
 }
 
@@ -2791,19 +2889,295 @@ fieldset {
 	text-align: right;
 }
 
-/* The text and the main button above a list in the admin page, for example "New person or agent". */
-.section-toolbar {
+/* Panels: the sections of Settings and Admin. A panel has a heading, a short muted line, and its
+   content. The content is in a card on the surface, only where it is a list or a form. */
+
+/* Settings: one column of 720px, with the panels 36px apart. */
+.settings-column {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px 24px;
-	margin-bottom: 12px;
+	flex-direction: column;
+	gap: 36px;
+	width: 100%;
+	max-width: 784px;
+	margin: 0 auto;
+	padding: 36px 32px 64px;
 }
 
-.section-toolbar > .muted {
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
+}
+
+/* The heading of a panel, and a button at its right. */
+.panel-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px 24px;
+}
+
+.panel-heading {
+	min-width: 0;
+	margin-bottom: 4px;
+}
+
+.panel-head > .panel-heading {
 	flex: 1 1 320px;
+	margin-bottom: 0;
+}
+
+.panel-title {
+	margin-bottom: 6px;
+	font-size: 17px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+.panel-note {
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.panel-note + .panel-note {
+	margin-top: 6px;
+}
+
+/* The first text of an Admin section, which has its title in the header row. */
+.panel-intro {
+	color: var(--muted-foreground);
+}
+
+.panel-intro + .panel-note {
+	margin-top: 6px;
+}
+
+.panel > .notice,
+.panel > .form-error {
 	margin: 0;
+}
+
+.panel-card {
+	min-width: 0;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.panel-card > p + p {
+	margin-top: 8px;
+}
+
+/* A card with a list: each row has its own space above and below. */
+.panel-card-list {
+	padding: 4px 20px;
+}
+
+.panel-empty {
+	padding: 28px 20px;
+	color: var(--muted-foreground);
+	text-align: center;
+}
+
+.panel-card-list > .panel-empty {
+	padding: 24px 0;
+}
+
+/* A field in a card is on the canvas color. */
+.panel-card .input {
+	background: var(--background);
+}
+
+/* A form in a card: the fields one under the other, and the button at the left. */
+.panel-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 16px;
+	min-width: 0;
+}
+
+.panel-form .field {
+	width: 100%;
+	max-width: 400px;
+}
+
+.panel-form .scope-list {
+	width: 100%;
+}
+
+.panel-form .field-hint,
+.panel-form .form-error,
+.panel-form > .notice {
+	margin: 0;
+}
+
+/* A check box keeps its size next to long text, and a legend starts at the left edge of its fields. */
+.panel-form .check-row input,
+.connect-form .check-row input,
+.policy-form .check-row input {
+	flex: none;
+}
+
+.panel-form legend,
+.connect-form legend,
+.policy-form legend {
+	padding: 0;
+}
+
+/* A form under a list, in the same card or in a dialog. */
+.panel-form-divided {
+	margin-top: 4px;
+	padding: 20px 0 16px;
+	border-top: 1px solid var(--border);
+}
+
+.dialog-body .panel-form-divided {
+	padding-bottom: 0;
+}
+
+/* A field and its button in one row. */
+.panel-inline-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 12px;
+}
+
+.panel-inline-form .field {
+	flex: 1 1 240px;
+	max-width: 400px;
+}
+
+/* The rows of a card with a name at the left and a value at the right, for example the account. */
+.setting-rows {
+	margin: 0;
+	padding: 4px 20px;
+}
+
+.setting-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 4px 24px;
+	padding: 12px 0;
+}
+
+.setting-row + .setting-row {
+	border-top: 1px solid var(--border);
+}
+
+.setting-row dt {
+	font-weight: 500;
+}
+
+.setting-row dd {
+	min-width: 0;
+	margin: 0;
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+	text-align: right;
+}
+
+/* A long value is below its name. */
+.setting-row-stack {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.setting-row-stack dd {
+	text-align: left;
+}
+
+/* A card with text at the left and one control at the right. */
+.setting-action {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px 24px;
+}
+
+.setting-action-text {
+	flex: 1 1 280px;
+	min-width: 0;
+}
+
+.setting-action-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+/* Tables in a card or a dialog: each row is a list row, with a line between the rows. */
+.table-rows th,
+.table-rows td {
+	padding: 12px 16px 12px 0;
+	vertical-align: middle;
+}
+
+.table-rows th {
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
+
+.table-rows th:last-child,
+.table-rows td:last-child {
+	padding-right: 0;
+}
+
+.table-rows tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.table-rows .cell-actions {
+	text-align: right;
+}
+
+/* The second line of a row: an address, the scopes of a key or the names of the members. */
+.row-note {
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.row-note.cell-scopes {
+	font-size: 12px;
+}
+
+.row-title {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.row-title .status {
+	font-weight: 500;
+}
+
+.cell-date {
+	white-space: nowrap;
+}
+
+/* The person, the agent or the mailbox of a row: an avatar, the name and the address. */
+.member {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.member-avatar {
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--foreground);
+}
+
+.member-text {
+	min-width: 0;
 }
 
 .member-name {
@@ -2811,7 +3185,16 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 4px 8px;
-	font-weight: 500;
+	font-weight: 600;
+}
+
+.member-name .chip-small {
+	margin-right: 0;
+}
+
+.member-you {
+	color: var(--muted-foreground);
+	font-weight: 400;
 }
 
 .kind-inline {
@@ -2822,15 +3205,39 @@ fieldset {
 	color: var(--muted-foreground);
 }
 
-/* The icon buttons of a table row: edit, archive or restore, and delete. */
-.row-actions {
-	display: inline-flex;
-	gap: 2px;
+.row-muted .member-avatar {
+	opacity: 0.6;
 }
 
-.row-actions .icon-button {
-	width: 32px;
-	height: 32px;
+/* The role of a person: a quiet chip. Owner and Admin have ink text. */
+.role-chip {
+	display: inline-block;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+.role-chip-strong {
+	color: var(--foreground);
+}
+
+/* The icon buttons of a table row: edit, archive or restore, and delete. Each is a round button with a border. */
+.row-actions {
+	display: inline-flex;
+	gap: 6px;
+}
+
+.row-button {
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--background);
+	color: var(--foreground);
 }
 
 /* Fields one under the other, in a small dialog. */
@@ -2858,65 +3265,68 @@ fieldset {
 	border-color: var(--border);
 }
 
-.create-key {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 12px;
-	padding-top: 16px;
-	border-top: 1px solid var(--border);
-}
-
-.create-key .field {
-	width: 100%;
-	max-width: 360px;
-}
-
-.create-key .scope-list {
-	width: 100%;
-}
-
 /* The full URL of the MCP endpoint, at the top of the Agents section and in the agent form. */
 .mcp-banner {
-	margin: 0 0 16px;
-	padding: 12px 16px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--surface);
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 }
 
 .mcp-banner-title {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin-bottom: 8px;
+	display: block;
+	margin-bottom: 2px;
+	font-size: 16px;
 	font-weight: 600;
 }
 
-.mcp-banner-url {
-	flex: 1;
-	min-width: 0;
+.mcp-banner .field-hint {
+	margin: 0;
 }
 
-.mcp-banner .field-hint:empty {
-	display: none;
-}
-
-/* The OAuth approval page (/connect). */
-.connect-host {
-	overflow-wrap: anywhere;
-}
-
-.connect-requested {
-	margin-left: 8px;
-}
-
-.connect-actions {
+.mcp-banner-row {
 	display: flex;
-	flex-wrap: wrap;
 	gap: 8px;
 }
 
+/* The URL in a box with an icon. The box shows the focus of the field. */
+.link-field {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	min-height: 42px;
+	padding: 0 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--background);
+}
+
+.link-field:focus-within {
+	border-color: var(--ring);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+}
+
+.link-field-input {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--foreground);
+	font: 14px / 1.5 var(--mono);
+}
+
+.link-field-input:focus {
+	outline: none;
+}
+
+.mcp-banner-row .button {
+	min-height: 42px;
+	border-radius: 9px;
+}
+
+/* The Agents section: one card for each agent. The card opens and shows the settings of the agent. */
 .agent-list {
 	display: flex;
 	flex-direction: column;
@@ -2925,28 +3335,67 @@ fieldset {
 
 .agent {
 	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .agent-summary {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
-	gap: 4px 12px;
-	padding: 12px 16px;
+	gap: 12px;
+	padding: 14px 20px;
+	border-radius: var(--radius);
 	cursor: pointer;
+	list-style: none;
 }
 
 .agent-summary:hover {
 	background: var(--hover);
 }
 
+.agent[open] > .agent-summary {
+	border-radius: var(--radius) var(--radius) 0 0;
+}
+
 .agent-summary::-webkit-details-marker {
 	display: none;
 }
 
+.agent-summary:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.agent-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.agent-name {
+	display: block;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.agent-address {
+	display: block;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.agent-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.agent-chips .chip {
+	background: var(--background);
+}
+
 .agent-chevron {
-	margin-left: auto;
 	color: var(--muted-foreground);
 	transition: transform 0.15s ease;
 }
@@ -2955,35 +3404,47 @@ fieldset {
 	transform: rotate(180deg);
 }
 
-.agent-name {
-	font-weight: 600;
-}
-
-.agent-address {
-	color: var(--muted-foreground);
-	overflow-wrap: anywhere;
-}
-
+/* The parts of an open agent, with a line above each part. */
 .agent-body {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
-	padding: 4px 16px 16px;
+	padding: 0 20px;
 }
 
-.agent-body .card {
-	margin-bottom: 0;
+.agent-body > * {
+	padding: 20px 0;
+	border-top: 1px solid var(--border);
 }
 
-.agent-mail-link {
+/* In an agent, a panel has no card of its own: the agent is the card. */
+.agent-body .panel-card {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+}
+
+.agent-body .panel-title,
+.subpanel-title {
+	margin-bottom: 4px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.agent-body .panel-form-divided {
+	padding-bottom: 0;
+}
+
+.agent-meta {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 12px;
+	justify-content: space-between;
+	gap: 12px 24px;
 }
 
-.agent-mail-link .field-hint {
-	margin-top: 0;
+.agent-meta .field-hint {
+	margin: 2px 0 0;
 }
 
 .policy-form {
@@ -2993,9 +3454,62 @@ fieldset {
 	gap: 12px;
 }
 
+.policy-form legend {
+	margin-bottom: 8px;
+}
+
 .policy-form .field {
 	width: 100%;
 	max-width: 480px;
+}
+
+.policy-form .field-hint,
+.policy-form .form-error {
+	margin: 0;
+}
+
+/* The OAuth approval page (/connect): one card in the center, on the surface. */
+.connect-main {
+	background: var(--surface);
+}
+
+.connect-page {
+	display: grid;
+	justify-items: center;
+	padding: clamp(24px, 6vh, 64px) 16px 48px;
+}
+
+.connect-host {
+	overflow-wrap: anywhere;
+}
+
+.connect-requested {
+	margin-left: 8px;
+}
+
+.connect-form {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 20px 16px;
+	align-items: start;
+}
+
+.connect-form .field-hint,
+.connect-form .form-error {
+	margin: 0;
+}
+
+.connect-actions {
+	display: grid;
+	gap: 12px;
+}
+
+.connect-state {
+	text-align: center;
+}
+
+.connect-state > * + * {
+	margin-top: 12px;
 }
 
 /* At 900px and below, the rail and the sidebar of the page are a drawer behind the menu button. */
@@ -3304,14 +3818,54 @@ fieldset {
 	}
 
 	.admin-content {
-		padding: 16px 16px 32px;
+		gap: 24px;
+		padding: 20px 16px 40px;
+	}
+
+	.settings-column {
+		gap: 28px;
+		padding: 24px 16px 40px;
 	}
 
 	.card {
 		padding: 16px;
 	}
 
-	/* The Members table keeps the name, the kind, the role and the actions on a phone. */
+	.panel-card {
+		padding: 14px;
+	}
+
+	.panel-card-list,
+	.setting-rows {
+		padding: 2px 14px;
+	}
+
+	.agent-summary {
+		flex-wrap: wrap;
+		padding: 12px 14px;
+	}
+
+	.agent-body {
+		padding: 0 14px;
+	}
+
+	.agent-body .panel-card {
+		padding: 0;
+	}
+
+	.connect-page {
+		padding: 18px 12px 32px;
+	}
+
+	.mcp-banner-row {
+		flex-wrap: wrap;
+	}
+
+	.mcp-banner-row .link-field {
+		flex-basis: 100%;
+	}
+
+	/* The Members table keeps the name, the role and the actions on a phone. */
 	.col-optional {
 		display: none;
 	}
@@ -3326,7 +3880,19 @@ fieldset {
 
 	.row-actions {
 		display: inline-grid;
-		grid-template-columns: repeat(2, 32px);
+		grid-template-columns: repeat(2, 44px);
+	}
+}
+
+/* A narrow phone has no room for the avatar of a row. */
+@media (max-width: 500px) {
+	.table-rows .member-avatar {
+		display: none;
+	}
+
+	.table-rows th,
+	.table-rows td {
+		padding-right: 10px;
 	}
 }
 
@@ -3335,84 +3901,19 @@ fieldset {
 .setup-steps {
 	display: grid;
 	gap: 8px;
-	margin: 16px 0 20px;
+	margin: 0;
 	padding-left: 20px;
 }
 
-.setup-form {
-	display: grid;
-	gap: 16px;
-}
-
-.setup-choices {
-	display: grid;
-	gap: 16px;
-	margin-top: 16px;
-}
-
-.setup-choices .field-hint {
-	margin: 0;
-}
-
-.setup-actions {
-	display: grid;
-	gap: 12px;
+.setup-steps li::marker {
+	color: var(--muted-foreground);
 }
 
 .setup-intro {
 	margin: 0;
 }
 
-.setup-form .form-error {
-	margin: 0;
-}
-
-/* Two-step verification setup */
-
-.totp-setup {
-	display: grid;
-	gap: 12px;
-}
-
-.totp-setup .setup-steps {
-	margin: 0;
-}
-
-.totp-setup .field-label,
-.totp-setup .field-hint {
-	margin: 0;
-}
-
-.totp-qr {
-	justify-self: start;
-	padding: 8px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: #ffffff;
-	line-height: 0;
-}
-
-.qr-code {
-	display: block;
-	max-width: 100%;
-	height: auto;
-}
-
-.totp-secret {
-	margin: 0;
-	font-family: var(--mono);
-	font-size: 15px;
-	letter-spacing: 0.04em;
-	overflow-wrap: anywhere;
-	user-select: all;
-}
-
-.totp-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-
+/* The owner address: the mailbox name in a field, and the domain as text after it. */
 .address-row {
 	display: flex;
 	align-items: center;
@@ -3432,6 +3933,100 @@ fieldset {
 	flex: 0 1 auto;
 	width: auto;
 	overflow-wrap: anywhere;
+}
+
+/* Two-step verification setup */
+
+.totp-setup {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+
+.totp-setup .field-hint,
+.totp-setup .form-error {
+	margin: 0;
+}
+
+.totp-setup .field {
+	max-width: 400px;
+}
+
+.totp-setup > [aria-live]:empty {
+	display: none;
+}
+
+/* The QR code at the left, and the key at its right. On a narrow card, the key is below the code. */
+.totp-scan {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 16px 20px;
+}
+
+/* The QR code stays black on white in the two modes: some scanners cannot read an inverted code. */
+.totp-qr {
+	flex: none;
+	padding: 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: #ffffff;
+	line-height: 0;
+}
+
+.qr-code {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+
+.totp-key {
+	flex: 1 1 180px;
+	min-width: 0;
+}
+
+.totp-key .field-label {
+	margin-bottom: 6px;
+}
+
+.totp-secret {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--background);
+	font-family: var(--mono);
+	font-size: 14px;
+	letter-spacing: 0.04em;
+	overflow-wrap: anywhere;
+	user-select: all;
+}
+
+.totp-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* The setup of two-step verification opens below the text, with the full width. */
+.setting-action > .totp-setup,
+.setting-action > [role="alert"] {
+	flex: 1 0 100%;
+}
+
+.setting-action > .totp-setup {
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+
+/* The hint above a list of scopes has a space below it. An empty hint takes no room. */
+.panel-form .scope-list .field-hint,
+.connect-form .scope-list .field-hint {
+	margin-bottom: 8px;
+}
+
+.mcp-banner .field-hint:empty {
+	display: none;
 }
 
 /* Touch: at 900px and below, and for a finger on a wider screen, the rows are 44px high. The text

@@ -77,9 +77,9 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 			<main id="main" ref={mainRef} className="admin-main" tabIndex={-1}>
 				<PageHeader title={title} icon={sectionIcon(section)} />
 				<div className="admin-content">
-					{state.status === "loading" && <p className="muted">Loading the directory…</p>}
+					{state.status === "loading" && <p className="panel-card panel-empty">Loading the directory…</p>}
 					{state.status === "error" && (
-						<div className="card" role="alert">
+						<div className="panel-card panel-form" role="alert">
 							<p>The directory did not load. {state.error}</p>
 							<button type="button" className="button" onClick={() => void load()}>
 								Try again
@@ -87,7 +87,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 						</div>
 					)}
 					{state.status === "ready" && !allowed && (
-						<div className="card">
+						<div className="panel-card">
 							<p>Only owners, admins and the sponsors of agents can use this page.</p>
 						</div>
 					)}
@@ -107,7 +107,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	function content() {
 		if (!elevated && isAdminOnly(section)) {
 			return (
-				<div className="card">
+				<div className="panel-card">
 					<p>Only owners and admins can use this section.</p>
 				</div>
 			);
@@ -127,25 +127,27 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 				);
 			case "agents":
 				return (
-					<div className="card">
+					<>
 						<McpEndpointBanner />
-						<p className="muted">
-							Set who each agent can send mail to, and manage its connected apps and its API keys. An agent can never
-							change its own policy.
-						</p>
-						{agents.length === 0 && <p className="muted">There are no agents yet.</p>}
-						<div className="agent-list">
-							{agents.map((agent) => (
-								<AgentPanel
-									key={agent.id}
-									agent={agent}
-									sponsor={principals.find((p) => p.id === agent.sponsor_id) ?? null}
-									canReadMail={elevated}
-									onChanged={() => void load()}
-								/>
-							))}
-						</div>
-					</div>
+						<section className="panel">
+							<p className="panel-intro">
+								Set who each agent can send mail to, and manage its connected apps and its API keys. An agent can never
+								change its own policy.
+							</p>
+							{agents.length === 0 && <p className="panel-card panel-empty">There are no agents yet.</p>}
+							<div className="agent-list">
+								{agents.map((agent) => (
+									<AgentPanel
+										key={agent.id}
+										agent={agent}
+										sponsor={principals.find((p) => p.id === agent.sponsor_id) ?? null}
+										canReadMail={elevated}
+										onChanged={() => void load()}
+									/>
+								))}
+							</div>
+						</section>
+					</>
 				);
 			case "shared-mailboxes":
 				return <SharedMailboxesSection principals={principals} />;

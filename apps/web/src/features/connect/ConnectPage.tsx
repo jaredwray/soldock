@@ -12,6 +12,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { INBOX_PATH } from "../../routes.ts";
+import { BrandMark } from "../../shell/BrandMark.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { agentNameFromClient, defaultScopes, suggestedAddress } from "./connect.ts";
@@ -66,9 +67,9 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 	}, [load]);
 
 	return (
-		<main id="main" className="page-main" tabIndex={-1}>
+		<main id="main" className="page-main connect-main" tabIndex={-1}>
 			<PageHeader title="Connect an agent" icon="shield" />
-			<div className="page">
+			<div className="connect-page">
 				{state.status === "loading" && (
 					<p className="list-state" role="status">
 						<span className="spinner" aria-hidden="true" />
@@ -76,7 +77,7 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 					</p>
 				)}
 				{state.status === "gone" && (
-					<div className="card" role="alert">
+					<div className="auth-card connect-state" role="alert">
 						<p>This request expired, or somebody approved or denied it. Start the connection again in the app.</p>
 						<p>
 							<Link to={INBOX_PATH}>Go to the inbox</Link>
@@ -84,7 +85,7 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 					</div>
 				)}
 				{state.status === "error" && (
-					<div className="card" role="alert">
+					<div className="auth-card connect-state" role="alert">
 						<p>The request did not load. {state.error}</p>
 						<button type="button" className="button" onClick={() => void load()}>
 							Try again
@@ -92,7 +93,7 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 					</div>
 				)}
 				{state.status === "leaving" && (
-					<div className="card" role="status">
+					<div className="auth-card connect-state" role="status">
 						<p>
 							{state.approved ? "Approved." : "Denied."} Your browser goes back to <strong>{state.host}</strong> now. If
 							nothing happens, you can close this tab.
@@ -148,7 +149,14 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { name: useId(), address: useId(), addressHint: useId(), agent: useId(), warning: useId() };
+	const ids = {
+		title: useId(),
+		name: useId(),
+		address: useId(),
+		addressHint: useId(),
+		agent: useId(),
+		warning: useId(),
+	};
 	const requested = new Set(authorization.requested_scopes);
 	const canApprove = canCreate || agents.length > 0;
 
@@ -206,144 +214,153 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">{client.name} wants to connect as an agent</h2>
-			<p id={ids.warning} className="warning-box">
-				<Icon name="warning" size={18} />
-				<span>
-					Approve only if you started this connection. The app gives its own name, and Soldock does not check it. The
-					app gets access at <strong className="connect-host">{authorization.redirect_host}</strong>.
-				</span>
-			</p>
-			{client.uri && (
-				<p className="muted">
-					The app gives this web page: <span className="connect-host">{client.uri}</span>
+		<section className="auth-card auth-card-wide" aria-labelledby={ids.title}>
+			<header className="auth-heading">
+				<div className="auth-logo">
+					<BrandMark />
+				</div>
+				<h2 id={ids.title} className="auth-title connect-host">
+					{client.name} wants to connect as an agent
+				</h2>
+				{client.uri && (
+					<p className="auth-subtitle">
+						The app gives this web page: <span className="connect-host">{client.uri}</span>
+					</p>
+				)}
+			</header>
+			<div className="auth-form">
+				<p id={ids.warning} className="warning-box">
+					<Icon name="warning" size={18} />
+					<span>
+						Approve only if you started this connection. The app gives its own name, and Soldock does not check it. The
+						app gets access at <strong className="connect-host">{authorization.redirect_host}</strong>.
+					</span>
 				</p>
-			)}
-			{!canApprove && (
-				<p>
-					Only an owner or an admin can create an agent, and you sponsor no agent. Ask an owner or an admin to open this
-					page, or deny the request.
-				</p>
-			)}
-			<form className="form-grid" onSubmit={approve} noValidate aria-describedby={ids.warning}>
-				{canApprove && (
-					<>
-						{canCreate && agents.length > 0 && (
-							<fieldset className="segmented">
-								<legend className="field-label">Connect as</legend>
-								{(["new", "existing"] as const).map((value) => (
-									<label key={value} className={mode === value ? "segment segment-active" : "segment"}>
+				{!canApprove && (
+					<p>
+						Only an owner or an admin can create an agent, and you sponsor no agent. Ask an owner or an admin to open
+						this page, or deny the request.
+					</p>
+				)}
+				<form className="connect-form" onSubmit={approve} noValidate aria-describedby={ids.warning}>
+					{canApprove && (
+						<>
+							{canCreate && agents.length > 0 && (
+								<fieldset className="segmented">
+									<legend className="field-label">Connect as</legend>
+									{(["new", "existing"] as const).map((value) => (
+										<label key={value} className={mode === value ? "segment segment-active" : "segment"}>
+											<input
+												type="radio"
+												name="connect-mode"
+												value={value}
+												checked={mode === value}
+												onChange={() => setMode(value)}
+												disabled={busy}
+											/>
+											{value === "new" ? "A new agent" : "An agent that exists"}
+										</label>
+									))}
+								</fieldset>
+							)}
+							{mode === "new" ? (
+								<>
+									<div className="field">
+										<label htmlFor={ids.name} className="field-label">
+											Agent name
+										</label>
 										<input
-											type="radio"
-											name="connect-mode"
-											value={value}
-											checked={mode === value}
-											onChange={() => setMode(value)}
+											id={ids.name}
+											className="input"
+											value={name}
+											maxLength={100}
+											onChange={(event) => setName(event.target.value)}
 											disabled={busy}
 										/>
-										{value === "new" ? "A new agent" : "An agent that exists"}
+									</div>
+									<div className="field">
+										<label htmlFor={ids.address} className="field-label">
+											Agent address
+										</label>
+										<input
+											id={ids.address}
+											className="input"
+											type="email"
+											value={address}
+											onChange={(event) => setAddress(event.target.value)}
+											aria-describedby={ids.addressHint}
+											disabled={busy}
+											placeholder={`agent@${domains[0] ?? "example.com"}`}
+										/>
+										<p id={ids.addressHint} className="field-hint">
+											The agent gets its own mailbox at this address. You are its sponsor.
+										</p>
+									</div>
+								</>
+							) : (
+								<div className="field form-grid-wide">
+									<label htmlFor={ids.agent} className="field-label">
+										Agent
+									</label>
+									<select
+										id={ids.agent}
+										className="input"
+										value={agentId}
+										onChange={(event) => setAgentId(event.target.value)}
+										disabled={busy}
+									>
+										{agents.map((agent) => (
+											<option key={agent.id} value={agent.id}>
+												{agent.display_name} ({agent.address})
+											</option>
+										))}
+									</select>
+								</div>
+							)}
+							<fieldset className="scope-list form-grid-wide">
+								<legend className="field-label">Access</legend>
+								{authorization.requested_scopes.length === 0 && (
+									<p className="field-hint">The app did not ask for scopes. Select what the agent can do.</p>
+								)}
+								{offered.map((scope) => (
+									<label key={scope} className="check-row">
+										<input
+											type="checkbox"
+											className="checkbox"
+											checked={scopes.has(scope)}
+											onChange={() => toggle(scope)}
+											disabled={busy}
+										/>
+										<span>
+											<code>{scope}</code>
+											{requested.has(scope) && <span className="chip chip-small connect-requested">Requested</span>}
+											<span className="check-hint">{SCOPES[scope]}</span>
+										</span>
 									</label>
 								))}
 							</fieldset>
-						)}
-						{mode === "new" ? (
-							<>
-								<div className="field">
-									<label htmlFor={ids.name} className="field-label">
-										Agent name
-									</label>
-									<input
-										id={ids.name}
-										className="input"
-										value={name}
-										maxLength={100}
-										onChange={(event) => setName(event.target.value)}
-										disabled={busy}
-									/>
-								</div>
-								<div className="field">
-									<label htmlFor={ids.address} className="field-label">
-										Agent address
-									</label>
-									<input
-										id={ids.address}
-										className="input"
-										type="email"
-										value={address}
-										onChange={(event) => setAddress(event.target.value)}
-										aria-describedby={ids.addressHint}
-										disabled={busy}
-										placeholder={`agent@${domains[0] ?? "example.com"}`}
-									/>
-									<p id={ids.addressHint} className="field-hint">
-										The agent gets its own mailbox at this address. You are its sponsor.
-									</p>
-								</div>
-							</>
-						) : (
-							<div className="field form-grid-wide">
-								<label htmlFor={ids.agent} className="field-label">
-									Agent
-								</label>
-								<select
-									id={ids.agent}
-									className="input"
-									value={agentId}
-									onChange={(event) => setAgentId(event.target.value)}
-									disabled={busy}
-								>
-									{agents.map((agent) => (
-										<option key={agent.id} value={agent.id}>
-											{agent.display_name} ({agent.address})
-										</option>
-									))}
-								</select>
-							</div>
-						)}
-						<fieldset className="scope-list form-grid-wide">
-							<legend className="field-label">Access</legend>
-							{authorization.requested_scopes.length === 0 && (
-								<p className="field-hint">The app did not ask for scopes. Select what the agent can do.</p>
-							)}
-							{offered.map((scope) => (
-								<label key={scope} className="check-row">
-									<input
-										type="checkbox"
-										className="checkbox"
-										checked={scopes.has(scope)}
-										onChange={() => toggle(scope)}
-										disabled={busy}
-									/>
-									<span>
-										<code>{scope}</code>
-										{requested.has(scope) && <span className="chip chip-small connect-requested">Requested</span>}
-										<span className="check-hint">{SCOPES[scope]}</span>
-									</span>
-								</label>
-							))}
-						</fieldset>
-						<p className="field-hint form-grid-wide">
-							A new agent can send mail only inside this organization. Change its policy under Admin › Agents.
-						</p>
-					</>
-				)}
-				{error && (
-					<p className="form-error form-grid-wide" role="alert">
-						{error}
-					</p>
-				)}
-				<div className="form-grid-wide connect-actions">
-					{canApprove && (
-						<button type="submit" className="button button-primary" disabled={busy}>
-							{busy ? "Working…" : "Approve and connect"}
-						</button>
+							<p className="field-hint form-grid-wide">
+								A new agent can send mail only inside this organization. Change its policy under Admin › Agents.
+							</p>
+						</>
 					)}
-					<button type="button" className="button" onClick={() => void deny()} disabled={busy}>
-						Deny
-					</button>
-				</div>
-			</form>
+					{error && (
+						<p className="form-error form-grid-wide" role="alert">
+							{error}
+						</p>
+					)}
+					<div className="form-grid-wide connect-actions">
+						{canApprove && (
+							<button type="submit" className="button button-primary button-block" disabled={busy}>
+								{busy ? "Working…" : "Approve and connect"}
+							</button>
+						)}
+						<button type="button" className="button button-block" onClick={() => void deny()} disabled={busy}>
+							Deny
+						</button>
+					</div>
+				</form>
+			</div>
 		</section>
 	);
 }
