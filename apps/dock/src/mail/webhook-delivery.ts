@@ -8,6 +8,7 @@ import {
 	recordDelivery,
 	recordFailedAttempt,
 	recordFailedEvent,
+	retryWaits,
 	type WebhookRow,
 } from "./webhooks.ts";
 
@@ -32,6 +33,11 @@ export interface WebhookDeliveryJob {
 	mailboxId: string;
 	eventId: string;
 	occurredAt: number;
+	/**
+	 * The POST attempt, from 1. A retry is a new job with the next attempt, so a failure of Soldock
+	 * itself, which retries the same job, never uses up an attempt of the receiver.
+	 */
+	attempt?: number;
 }
 
 export type WebhookJob = WebhookEventJob | WebhookDeliveryJob;
@@ -40,6 +46,8 @@ export type WebhookJob = WebhookEventJob | WebhookDeliveryJob;
 const RETRY_DELAYS_S = [10, 60, 300, 1800] as const;
 /** The delay before a job runs again after a failure of Soldock itself, such as D1. */
 const INTERNAL_RETRY_S = 30;
+/** The time after the planned retry while a new event still joins it, in case the retry job runs late. */
+const RETRY_GRACE_MS = 2 * WEBHOOK_LIMITS.timeoutMs + 60_000;
 const SECRET_PREFIX = "whsec_";
 
 function isWebhookJob(body: unknown): body is WebhookJob {
@@ -48,15 +56,19 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 	const common =
 		typeof job.mailboxId === "string" && typeof job.eventId === "string" && typeof job.occurredAt === "number";
 	if (job.kind === "event") return common;
-	return job.kind === "delivery" && common && typeof job.webhookId === "string";
+	const attempt = job.attempt;
+	const validAttempt =
+		attempt === undefined || (typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 1);
+	return job.kind === "delivery" && common && typeof job.webhookId === "string" && validAttempt;
 }
 
 /**
  * The consumer of `soldock-webhooks`. An event job becomes one delivery job for each active webhook of the
  * mailbox. A delivery job checks the access of the creator of the webhook again and sends one signed POST.
- * Jobs run in parallel, so one slow receiver does not hold the others. A job that cannot be read goes to
- * the dead-letter queue. A job that fails in Soldock itself runs again, and after the `max_retries` of the
- * consumer the queue moves it to the dead-letter queue.
+ * A failed POST puts a new job with the next attempt on the queue, with a delay. Jobs run in parallel, so
+ * one slow receiver does not hold the others. A job that cannot be read goes to the dead-letter queue. A
+ * job that fails in Soldock itself runs again, and after the `max_retries` of the consumer the queue moves
+ * it to the dead-letter queue.
  */
 export async function handleWebhookBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
 	await Promise.all(batch.messages.map((message) => handleJob(message, env)));
@@ -64,25 +76,19 @@ export async function handleWebhookBatch(batch: MessageBatch<unknown>, env: Env)
 
 async function handleJob(message: Message<unknown>, env: Env): Promise<void> {
 	const job = message.body;
-	if (!isWebhookJob(job)) {
-		log("error", "webhook job is not valid; sent to the dead-letter queue", { id: message.id });
-		await env.WEBHOOKS_DLQ.send(job);
-		message.ack();
-		return;
-	}
 	try {
-		if (job.kind === "event") {
+		if (!isWebhookJob(job)) {
+			log("error", "webhook job is not valid; sent to the dead-letter queue", { id: message.id });
+			await env.WEBHOOKS_DLQ.send(job);
+		} else if (job.kind === "event") {
 			await fanOut(env, job);
-			message.ack();
-			return;
+		} else {
+			await deliver(env, job);
 		}
-		const retryAfter = await deliver(env, job, message.attempts);
-		if (retryAfter === null) message.ack();
-		else message.retry({ delaySeconds: retryAfter });
+		message.ack();
 	} catch (error) {
 		log("warn", "webhook job failed; retrying", {
-			kind: job.kind,
-			mailboxId: job.mailboxId,
+			id: message.id,
 			attempts: message.attempts,
 			error: error instanceof Error ? error.message : String(error),
 		});
@@ -109,36 +115,40 @@ async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
 }
 
 /**
- * Sends one event to one webhook. Returns null when the job is done, or the delay before the next attempt.
- * A webhook that was deleted or disabled after the event gets nothing.
+ * Sends one event to one webhook. A webhook that was deleted or disabled after the event gets nothing.
+ * While a failed POST of the webhook waits for its retry, a new event joins that retry: a POST holds no
+ * content, so the retry tells the receiver to read the inbox, and a receiver that is down gets one chain
+ * of attempts, not one for each event.
  */
-async function deliver(env: Env, job: WebhookDeliveryJob, attempt: number): Promise<number | null> {
+async function deliver(env: Env, job: WebhookDeliveryJob): Promise<void> {
 	const db = env.DIRECTORY;
+	const attempt = job.attempt ?? 1;
 	const row = await getWebhook(db, job.webhookId);
-	if (row?.status !== "active" || row.mailbox_id !== job.mailboxId) return null;
+	if (row?.status !== "active" || row.mailbox_id !== job.mailboxId) return;
+	if (attempt === 1 && retryWaits(row, Date.now())) return;
 	const check = await checkWebhook(db, row);
-	if (check.action === "skip") return null;
+	if (check.action === "skip") return;
 	if (check.action === "disable") {
 		await disableWebhook(db, row, check.reason);
-		return null;
+		return;
 	}
 	const result = await post(row, job);
 	if (result === "ok") {
 		await recordDelivery(db, row.id);
-		return null;
+		return;
 	}
 	// Standard Webhooks: a 410 Gone asks the sender to stop.
 	if (result === "gone") {
 		await disableWebhook(db, row, "gone");
-		return null;
+		return;
 	}
 	const delay = RETRY_DELAYS_S[attempt - 1];
 	if (attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
-		await recordFailedAttempt(db, row.id, result);
-		return delay;
+		await recordFailedAttempt(db, row.id, result, new Date(Date.now() + delay * 1000 + RETRY_GRACE_MS));
+		await env.WEBHOOKS.send({ ...job, attempt: attempt + 1 } satisfies WebhookDeliveryJob, { delaySeconds: delay });
+		return;
 	}
-	await recordFailedEvent(db, row, result);
-	return null;
+	await recordFailedEvent(db, row, job.eventId, result);
 }
 
 /** The body of a POST, as Standard Webhooks recommends: type, timestamp and data. It holds no mail content. */

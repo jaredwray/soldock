@@ -3,6 +3,7 @@ import {
 	type CallContext,
 	type CredentialBinding,
 	canManageCredentialsOf,
+	canReadAgentMailboxes,
 	credentialBinding,
 	credentialState,
 	getPrincipal,
@@ -32,6 +33,8 @@ export interface WebhookRow {
 	status: "active" | "disabled";
 	disabled_reason: DisabledReason | null;
 	consecutive_failures: number;
+	last_failed_event_id: string | null;
+	retry_until: string | null;
 	last_delivery_at: string | null;
 	last_failure_at: string | null;
 	last_error: string | null;
@@ -39,7 +42,8 @@ export interface WebhookRow {
 }
 
 const WEBHOOK_COLUMNS = `id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, status,
-	disabled_reason, consecutive_failures, last_delivery_at, last_failure_at, last_error, created_at`;
+	disabled_reason, consecutive_failures, last_failed_event_id, retry_until, last_delivery_at, last_failure_at,
+	last_error, created_at`;
 
 function toWebhook(row: WebhookRow): Webhook {
 	return {
@@ -85,14 +89,17 @@ async function creatableMailbox(call: CallContext, mailboxId: string | undefined
 }
 
 /**
- * Which webhooks of a mailbox the caller can see: `all` in the own mailbox and, for the sponsor of an
- * agent, an owner or an admin, in the mailbox of the agent. `own` in a team mailbox: the members do not
- * see the webhooks of the other members.
+ * Which webhooks of a mailbox the caller can see. `all`: an owner or an admin in a team mailbox, and the
+ * sponsor of an agent, an owner or an admin in the mailbox of the agent. They manage these mailboxes, so
+ * they can remove a webhook that blocks the limit. `own`: the own mailbox and a team mailbox of a
+ * member. The members of a team mailbox do not see the webhooks of the other members, and an agent does
+ * not see the webhooks that its sponsor created for it.
  */
 async function visibleWebhooks(call: CallContext, mailboxId: string): Promise<"all" | "own"> {
 	const { caller } = call;
-	if (mailboxId === caller.id) return "all";
+	if (mailboxId === caller.id) return "own";
 	if (isTeamMailboxId(mailboxId)) {
+		if (canReadAgentMailboxes(caller)) return "all";
 		await teamMailboxFor(call.env.DIRECTORY, mailboxId, caller.id);
 		return "own";
 	}
@@ -101,8 +108,17 @@ async function visibleWebhooks(call: CallContext, mailboxId: string): Promise<"a
 	if (!exists) throw new OperationError("not_found", "No mailbox has that id.");
 	throw new OperationError(
 		"forbidden",
-		"You can see the webhooks of your own mailbox, your own webhooks in a team mailbox, and the webhooks of the agents that you manage.",
+		"You can see your own webhooks, the webhooks of the agents that you manage and, as an owner or an admin, the webhooks of team mailboxes.",
 	);
+}
+
+/**
+ * True when the caller can delete each webhook of the mailbox: an owner or an admin in a team mailbox,
+ * and the sponsor of an agent, an owner or an admin in the mailbox of the agent.
+ */
+async function managesWebhooksOf(call: CallContext, mailboxId: string): Promise<boolean> {
+	if (isTeamMailboxId(mailboxId)) return canReadAgentMailboxes(call.caller);
+	return managesAgentMailbox(call, mailboxId);
 }
 
 /** True when the mailbox is the mailbox of an agent whose credentials the caller manages: its sponsor, an owner or an admin. */
@@ -155,17 +171,20 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 			status: "active",
 			disabled_reason: null,
 			consecutive_failures: 0,
+			last_failed_event_id: null,
+			retry_until: null,
 			last_delivery_at: null,
 			last_failure_at: null,
 			last_error: null,
 			created_at: new Date().toISOString(),
 		};
-		// The limits are part of the insert, so two parallel creates cannot both pass them.
+		// The limits are part of the insert, so two parallel creates cannot both pass them. The limit of a
+		// mailbox counts only active webhooks, so a disabled webhook of another member cannot block it.
 		const result = await call.env.DIRECTORY.prepare(
 			`INSERT INTO webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at)
 			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
 			WHERE (SELECT COUNT(*) FROM webhooks WHERE created_by = ?3) < ?10
-			AND (SELECT COUNT(*) FROM webhooks WHERE mailbox_id = ?2) < ?11`,
+			AND (SELECT COUNT(*) FROM webhooks WHERE mailbox_id = ?2 AND status = 'active') < ?11`,
 		)
 			.bind(
 				row.id,
@@ -184,7 +203,7 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 		if (result.meta.changes !== 1) {
 			throw new OperationError(
 				"conflict",
-				`You can have at most ${WEBHOOK_LIMITS.perCreator} webhooks, and a mailbox at most ${WEBHOOK_LIMITS.perMailbox}. Delete a webhook first.`,
+				`You can have at most ${WEBHOOK_LIMITS.perCreator} webhooks, and a mailbox at most ${WEBHOOK_LIMITS.perMailbox} active webhooks. Delete a webhook first.`,
 			);
 		}
 		auditWebhook(call, "mail.create_webhook", row);
@@ -198,9 +217,7 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 		let statement: D1PreparedStatement;
 		if (input.mailbox_id === undefined) {
 			statement = db
-				.prepare(
-					`SELECT ${WEBHOOK_COLUMNS} FROM webhooks WHERE created_by = ?1 OR mailbox_id = ?1 ORDER BY created_at DESC`,
-				)
+				.prepare(`SELECT ${WEBHOOK_COLUMNS} FROM webhooks WHERE created_by = ? ORDER BY created_at DESC`)
 				.bind(callerId);
 		} else if ((await visibleWebhooks(call, input.mailbox_id)) === "all") {
 			statement = db
@@ -220,9 +237,7 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 	async "mail.delete_webhook"(call, input) {
 		const row = await getWebhook(call.env.DIRECTORY, input.webhook_id);
 		const callerId = call.caller.id;
-		const allowed =
-			row !== null &&
-			(row.created_by === callerId || row.mailbox_id === callerId || (await managesAgentMailbox(call, row.mailbox_id)));
+		const allowed = row !== null && (row.created_by === callerId || (await managesWebhooksOf(call, row.mailbox_id)));
 		// A webhook that the caller cannot delete is not found, so its id tells nothing.
 		if (!row || !allowed) throw new OperationError("not_found", "No webhook has that id.");
 		await call.env.DIRECTORY.prepare("DELETE FROM webhooks WHERE id = ?").bind(row.id).run();
@@ -313,37 +328,54 @@ function recordDisable(row: WebhookRow, reason: DisabledReason): void {
 	});
 }
 
-/** Records a POST that the receiver accepted. A success ends a series of failed events. */
+/** Records a POST that the receiver accepted. A success ends a series of failed events and a retry. */
 export async function recordDelivery(db: D1Database, id: string): Promise<void> {
 	await db
-		.prepare("UPDATE webhooks SET last_delivery_at = ?, consecutive_failures = 0, last_error = NULL WHERE id = ?")
+		.prepare(
+			"UPDATE webhooks SET last_delivery_at = ?, consecutive_failures = 0, last_error = NULL, retry_until = NULL WHERE id = ?",
+		)
 		.bind(new Date().toISOString(), id)
 		.run();
 }
 
-/** Records one failed attempt. A retry follows. */
-export async function recordFailedAttempt(db: D1Database, id: string, error: string): Promise<void> {
+/**
+ * Records one failed attempt that gets a retry. Until `retryUntil`, a new event joins this retry and
+ * sends no POST of its own.
+ */
+export async function recordFailedAttempt(db: D1Database, id: string, error: string, retryUntil: Date): Promise<void> {
 	await db
-		.prepare("UPDATE webhooks SET last_failure_at = ?, last_error = ? WHERE id = ?")
-		.bind(new Date().toISOString(), error, id)
+		.prepare("UPDATE webhooks SET last_failure_at = ?, last_error = ?, retry_until = ? WHERE id = ?")
+		.bind(new Date().toISOString(), error, retryUntil.toISOString(), id)
 		.run();
 }
 
+/** True while a failed POST of the webhook waits for its next attempt. */
+export function retryWaits(row: Pick<WebhookRow, "retry_until">, now: number): boolean {
+	return row.retry_until !== null && Date.parse(row.retry_until) > now;
+}
+
 /**
- * Records an event whose last attempt failed. After `failedEventsBeforeDisable` such events in a row, the
- * webhook is disabled. Returns true when this event disabled it.
+ * Records an event whose last attempt failed, and ends its retry. An event counts one time, also when a
+ * redelivery repeats its jobs. After `failedEventsBeforeDisable` such events in a row, the webhook is
+ * disabled. Returns true when this event disabled it.
  */
-export async function recordFailedEvent(db: D1Database, row: WebhookRow, error: string): Promise<boolean> {
+export async function recordFailedEvent(
+	db: D1Database,
+	row: WebhookRow,
+	eventId: string,
+	error: string,
+): Promise<boolean> {
 	const limit = WEBHOOK_LIMITS.failedEventsBeforeDisable;
 	const updated = await db
 		.prepare(
-			`UPDATE webhooks SET consecutive_failures = consecutive_failures + 1, last_failure_at = ?1, last_error = ?2,
+			`UPDATE webhooks SET consecutive_failures = consecutive_failures + 1, last_failed_event_id = ?5,
+				last_failure_at = ?1, last_error = ?2, retry_until = NULL,
 				status = CASE WHEN consecutive_failures + 1 >= ?3 THEN 'disabled' ELSE status END,
 				disabled_reason = CASE WHEN consecutive_failures + 1 >= ?3 AND status = 'active' THEN 'failures'
 					ELSE disabled_reason END
-			WHERE id = ?4 AND status = 'active' RETURNING status`,
+			WHERE id = ?4 AND status = 'active' AND last_failed_event_id IS NOT ?5 RETURNING status`,
 		)
-		.bind(new Date().toISOString(), error, limit, row.id)
+		.bind(new Date().toISOString(), error, limit, row.id, eventId)
 		.first<{ status: string }>();
 	const disabled = updated?.status === "disabled";
 	if (disabled) recordDisable(row, "failures");

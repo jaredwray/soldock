@@ -2193,6 +2193,11 @@ fieldset {
 	gap: 2px;
 }
 
+/* Buttons with text in one row of a table. */
+.row-actions-text {
+	gap: 8px;
+}
+
 .row-actions .icon-button {
 	width: 32px;
 	height: 32px;

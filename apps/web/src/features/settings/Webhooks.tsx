@@ -18,16 +18,18 @@ const DISABLED_REASONS: Record<NonNullable<Webhook["disabled_reason"]>, string> 
 interface WebhookManagerProps {
 	heading: string;
 	/**
-	 * The mailbox of an agent: list each webhook of that mailbox. Leave it out for your own webhooks and
-	 * the webhooks of your own mailbox.
+	 * A mailbox that the person manages: the mailbox of an agent, or a team mailbox for an owner or an
+	 * admin. The list then has each webhook of that mailbox. Leave it out for your own webhooks.
 	 */
-	agentId?: string;
+	mailboxId?: string;
 	/** True when the form to create a webhook shows. In the mailbox of an agent, only its sponsor can create one. */
 	canCreate: boolean;
+	/** False inside a dialog, whose title is the heading: no card and no visible heading. */
+	framed?: boolean;
 }
 
 /** Lists, creates and deletes webhooks: a POST to a URL outside Soldock when new mail arrives. */
-export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerProps) {
+export function WebhookManager({ heading, mailboxId, canCreate, framed = true }: WebhookManagerProps) {
 	const toast = useToast();
 	const [webhooks, setWebhooks] = useState<Webhook[] | null>(null);
 	const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
@@ -37,21 +39,21 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 
 	const load = useCallback(async () => {
 		try {
-			const result = await api.call("mail.list_webhooks", agentId ? { mailbox_id: agentId } : {});
+			const result = await api.call("mail.list_webhooks", mailboxId ? { mailbox_id: mailboxId } : {});
 			setWebhooks(result.webhooks);
 			setError(null);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		}
-	}, [agentId]);
+	}, [mailboxId]);
 
 	useEffect(() => {
 		void load();
 	}, [load]);
 
-	// Your own webhooks can watch your mailbox or a team mailbox. The mailbox of an agent is fixed.
+	// Your own webhooks can watch your mailbox or a team mailbox. A managed mailbox is fixed.
 	useEffect(() => {
-		if (agentId) return;
+		if (mailboxId) return;
 		let active = true;
 		api.call("mail.list_mailboxes").then(
 			(result) => {
@@ -64,16 +66,17 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 		return () => {
 			active = false;
 		};
-	}, [agentId]);
+	}, [mailboxId]);
 
 	const mailboxName = (id: string) => {
 		const mailbox = mailboxes.find((candidate) => candidate.id === id);
 		return mailbox ? mailbox.address : id;
 	};
 
+	const Frame = framed ? "section" : "div";
 	return (
-		<section className="card">
-			<h2 className="card-title">{heading}</h2>
+		<Frame className={framed ? "card" : undefined}>
+			{framed && <h2 className="card-title">{heading}</h2>}
 			<p className="muted">
 				A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the
 				receiver reads the inbox with its own key.
@@ -91,7 +94,7 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 						<thead>
 							<tr>
 								<th scope="col">Webhook</th>
-								{!agentId && <th scope="col">Mailbox</th>}
+								{!mailboxId && <th scope="col">Mailbox</th>}
 								<th scope="col">Last delivery</th>
 								<th scope="col">
 									<span className="visually-hidden">Actions</span>
@@ -112,7 +115,7 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 											<span className="check-hint">Last attempt failed: {webhook.last_error}.</span>
 										)}
 									</td>
-									{!agentId && <td>{mailboxName(webhook.mailbox_id)}</td>}
+									{!mailboxId && <td>{mailboxName(webhook.mailbox_id)}</td>}
 									<td title={webhook.last_delivery_at ? fullDate(webhook.last_delivery_at) : undefined}>
 										{webhook.last_delivery_at ? shortDate(webhook.last_delivery_at) : "Never"}
 									</td>
@@ -130,7 +133,7 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 							))}
 							{webhooks.length === 0 && (
 								<tr>
-									<td colSpan={agentId ? 3 : 4} className="muted">
+									<td colSpan={mailboxId ? 3 : 4} className="muted">
 										No webhooks yet.
 									</td>
 								</tr>
@@ -141,7 +144,7 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 			)}
 			{canCreate && (
 				<CreateWebhookForm
-					agentId={agentId}
+					mailboxId={mailboxId}
 					mailboxes={mailboxes}
 					onCreated={(webhook) => {
 						setCreated(webhook);
@@ -167,16 +170,16 @@ export function WebhookManager({ heading, agentId, canCreate }: WebhookManagerPr
 					</p>
 				</ConfirmDialog>
 			)}
-		</section>
+		</Frame>
 	);
 }
 
 function CreateWebhookForm({
-	agentId,
+	mailboxId: fixedMailboxId,
 	mailboxes,
 	onCreated,
 }: {
-	agentId: string | undefined;
+	mailboxId: string | undefined;
 	mailboxes: readonly Mailbox[];
 	onCreated: (webhook: CreatedWebhook) => void;
 }) {
@@ -193,7 +196,7 @@ function CreateWebhookForm({
 			setError("Enter the URL of the receiver.");
 			return;
 		}
-		const target = agentId ?? mailboxId;
+		const target = fixedMailboxId ?? mailboxId;
 		setBusy(true);
 		setError(null);
 		try {
@@ -246,7 +249,7 @@ function CreateWebhookForm({
 					disabled={busy}
 				/>
 			</div>
-			{!agentId && mailboxes.length > 1 && (
+			{!fixedMailboxId && mailboxes.length > 1 && (
 				<div className="field">
 					<label htmlFor={ids.mailbox} className="field-label">
 						Mailbox

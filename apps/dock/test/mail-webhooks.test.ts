@@ -55,8 +55,12 @@ async function allowAnyHost(): Promise<void> {
 	await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 }
 
-/** A delivery job, as the consumer makes one from an event. */
-function deliveryJob(webhook: { id: string; mailbox_id: string }, eventId = "evt_01JC0000000000000000000000") {
+/** A delivery job, as the consumer makes one from an event. A retry has a later `attempt`. */
+function deliveryJob(
+	webhook: { id: string; mailbox_id: string },
+	eventId = "evt_01JC0000000000000000000000",
+	attempt = 1,
+) {
 	return {
 		v: 1,
 		kind: "delivery",
@@ -64,8 +68,12 @@ function deliveryJob(webhook: { id: string; mailbox_id: string }, eventId = "evt
 		mailboxId: webhook.mailbox_id,
 		eventId,
 		occurredAt: Date.now(),
+		attempt,
 	};
 }
+
+/** An event id that differs for each `n`. */
+const eventId = (n: number) => `evt_01JC00000000000000000000${String(n).padStart(2, "0")}`;
 
 /** The webhook with this id, as the caller lists it. */
 async function webhookOf(caller: Actor, id: string, mailboxId?: string) {
@@ -164,6 +172,27 @@ describe("creating webhooks", () => {
 		expect(await codeOf(ada.call("mail.create_webhook", { url: HOOK }))).toBe("conflict");
 	});
 
+	// The other members cannot delete a webhook of a member, so a disabled one must not fill the mailbox.
+	it("limits the active webhooks of each mailbox", async () => {
+		const dee = await createActor(owner, {
+			kind: "human",
+			display_name: "Dee",
+			address: "dee@dock.test",
+			password: PASSWORD,
+		});
+		const team = await teamMailbox([ada.id, cy.id, dee.id]);
+		const created = [];
+		for (const member of [ada, cy]) {
+			for (let i = 0; i < WEBHOOK_LIMITS.perMailbox / 2; i++) {
+				created.push((await member.call("mail.create_webhook", { mailbox_id: team, url: `${HOOK}/${i}` })).webhook);
+			}
+		}
+		expect(await codeOf(dee.call("mail.create_webhook", { mailbox_id: team, url: HOOK }))).toBe("conflict");
+		receiveWebhooks(() => new Response(null, { status: 410 }));
+		await consumeWebhooks([deliveryJob(created[0] as (typeof created)[number])]);
+		expect((await dee.call("mail.create_webhook", { mailbox_id: team, url: HOOK })).webhook.mailbox_id).toBe(team);
+	});
+
 	// Parity: the MCP endpoint gives the handler the origin of the request, as REST does.
 	it("lets an agent create a webhook with an MCP tool call", async () => {
 		await allowAnyHost();
@@ -176,7 +205,7 @@ describe("creating webhooks", () => {
 });
 
 describe("listing and deleting webhooks", () => {
-	it("shows the own webhooks and the webhooks of the own mailbox, and each webhook of an agent to its managers", async () => {
+	it("shows each caller their own webhooks, and each webhook of a managed mailbox to its managers", async () => {
 		const team = await teamMailbox([ada.id, cy.id]);
 		const forBot = (await ada.call("mail.create_webhook", { mailbox_id: bot.id, url: HOOK })).webhook;
 		const inTeam = (await ada.call("mail.create_webhook", { mailbox_id: team, url: HOOK })).webhook;
@@ -187,27 +216,47 @@ describe("listing and deleting webhooks", () => {
 				.map((webhook) => webhook.id)
 				.sort();
 
-		expect(await ids(bot)).toEqual([forBot.id, byBot.id].sort());
+		// An agent does not see the webhook that its sponsor created for it: its URL can hold a token.
+		expect(await ids(bot)).toEqual([byBot.id]);
+		expect(await ids(bot, bot.id)).toEqual([byBot.id]);
 		expect(await ids(ada)).toEqual([forBot.id, inTeam.id].sort());
 		expect(await ids(ada, bot.id)).toEqual([forBot.id, byBot.id].sort());
 		expect(await ids(owner, bot.id)).toEqual([forBot.id, byBot.id].sort());
-		// The members of a team mailbox do not see the webhooks of the other members.
+		// The members of a team mailbox do not see the webhooks of the other members. An admin sees each one.
 		expect(await ids(cy, team)).toEqual([]);
+		expect(await ids(owner, team)).toEqual([inTeam.id]);
 		expect(await codeOf(cy.call("mail.list_webhooks", { mailbox_id: bot.id }))).toBe("forbidden");
 	});
 
-	it("lets the creator, the owner of the mailbox and the managers of an agent delete a webhook", async () => {
+	it("lets the creator and the managers of the mailbox delete a webhook", async () => {
+		const team = await teamMailbox([ada.id, cy.id]);
 		const forBot = (await ada.call("mail.create_webhook", { mailbox_id: bot.id, url: HOOK })).webhook;
 		const own = (await ada.call("mail.create_webhook", { url: HOOK })).webhook;
+		const inTeam = (await ada.call("mail.create_webhook", { mailbox_id: team, url: HOOK })).webhook;
 		await allowAnyHost();
 		const byBot = (await bot.call("mail.create_webhook", { url: HOOK })).webhook;
 
 		expect(await codeOf(cy.call("mail.delete_webhook", { webhook_id: forBot.id }))).toBe("not_found");
-		expect(await codeOf(bot.call("mail.delete_webhook", { webhook_id: own.id }))).toBe("not_found");
-		expect(await bot.call("mail.delete_webhook", { webhook_id: forBot.id })).toEqual({ deleted: true });
+		expect(await codeOf(cy.call("mail.delete_webhook", { webhook_id: inTeam.id }))).toBe("not_found");
+		// The webhook that the sponsor created for the agent belongs to the sponsor.
+		expect(await codeOf(bot.call("mail.delete_webhook", { webhook_id: forBot.id }))).toBe("not_found");
+		expect(await ada.call("mail.delete_webhook", { webhook_id: forBot.id })).toEqual({ deleted: true });
 		expect(await owner.call("mail.delete_webhook", { webhook_id: byBot.id })).toEqual({ deleted: true });
+		expect(await owner.call("mail.delete_webhook", { webhook_id: inTeam.id })).toEqual({ deleted: true });
 		expect(await ada.call("mail.delete_webhook", { webhook_id: own.id })).toEqual({ deleted: true });
 		expect(await codeOf(ada.call("mail.delete_webhook", { webhook_id: own.id }))).toBe("not_found");
+	});
+
+	// A deleted principal can see nothing, and each webhook holds a signing secret.
+	it("deletes the webhooks of a principal with the principal", async () => {
+		await cy.call("mail.create_webhook", { url: HOOK });
+		await owner.call("directory.delete_principal", { principal_id: cy.id });
+		const left = await env.DIRECTORY.prepare(
+			"SELECT COUNT(*) AS n FROM webhooks WHERE created_by = ? OR mailbox_id = ?",
+		)
+			.bind(cy.id, cy.id)
+			.first("n");
+		expect(left).toBe(0);
 	});
 });
 
@@ -267,15 +316,35 @@ describe("delivery", () => {
 		expect(events).toHaveLength(1);
 	});
 
+	it("sends an event for mail that a mailbox sends to itself", async () => {
+		await ada.call("mail.create_webhook", { url: HOOK });
+		const events = await captureWebhookEvents(ada.id);
+		await ada.call("mail.send", { to: ["ada@dock.test"], text: "A note to self" });
+		await drainWebhookEvents(ada.id);
+		expect(events).toEqual([expect.objectContaining({ kind: "event", mailboxId: ada.id })]);
+	});
+
+	// A failure of Soldock itself must run the job again, and not lose the event.
+	it("runs an event job again when the queue refuses its jobs", async () => {
+		await ada.call("mail.create_webhook", { url: HOOK });
+		const event = { v: 1, kind: "event", mailboxId: ada.id, eventId: eventId(1), occurredAt: Date.now() };
+		const refused = await consumeWebhooks([event], 1, { failQueue: true });
+		expect(refused.result.retryMessages).toHaveLength(1);
+		const accepted = await consumeWebhooks([event], 2);
+		expect(accepted.result.retryMessages).toEqual([]);
+		expect(accepted.sent).toHaveLength(1);
+	});
+
 	// Standard Webhooks: the id stays the same on each attempt, so a receiver can drop a repeat.
-	it("retries a failed POST with the same webhook-id", async () => {
+	it("retries a failed POST with a new job that keeps the webhook-id", async () => {
 		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK });
 		const posts = receiveWebhooks(() => new Response("down", { status: 500 }));
 		const job = deliveryJob(webhook);
-		const first = await consumeWebhooks([job], 1);
-		expect(first.result.retryMessages).toHaveLength(1);
-		const second = await consumeWebhooks([job], 2);
-		expect(second.result.retryMessages).toHaveLength(1);
+		const first = await consumeWebhooks([job]);
+		expect(first.result.retryMessages).toEqual([]);
+		expect(first.sent).toEqual([{ ...job, attempt: 2 }]);
+		const second = await consumeWebhooks(first.sent);
+		expect(second.sent).toEqual([{ ...job, attempt: 3 }]);
 		expect(posts.map((post) => post.headers.get("webhook-id"))).toEqual([
 			`${job.eventId}_${webhook.id}`,
 			`${job.eventId}_${webhook.id}`,
@@ -287,14 +356,34 @@ describe("delivery", () => {
 		});
 	});
 
+	// A receiver that is down gets one chain of attempts, not one chain for each mail.
+	it("joins a new event to a retry that waits", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK });
+		let status = 503;
+		const posts = receiveWebhooks(() => new Response(null, { status }));
+		const first = await consumeWebhooks([deliveryJob(webhook, eventId(1))]);
+		const joined = await consumeWebhooks([deliveryJob(webhook, eventId(2))]);
+		expect(joined.sent).toEqual([]);
+		expect(posts).toHaveLength(1);
+		status = 204;
+		await consumeWebhooks(first.sent);
+		expect(posts).toHaveLength(2);
+		await consumeWebhooks([deliveryJob(webhook, eventId(3))]);
+		expect(posts).toHaveLength(3);
+	});
+
 	it("disables a webhook after its events fail in a row, and at once after 410 Gone", async () => {
 		const failing = (await ada.call("mail.create_webhook", { url: HOOK })).webhook;
 		const gone = (await ada.call("mail.create_webhook", { url: "https://gone.example.com/soldock" })).webhook;
 		const posts = receiveWebhooks((post) => new Response(null, { status: post.url.includes("gone") ? 410 : 502 }));
-		for (let event = 1; event <= WEBHOOK_LIMITS.failedEventsBeforeDisable; event++) {
-			const eventId = `evt_01JC00000000000000000000${String(event).padStart(2, "0")}`;
-			const last = await consumeWebhooks([deliveryJob(failing, eventId)], WEBHOOK_LIMITS.attempts);
-			expect(last.result.retryMessages).toEqual([]);
+		const lastAttempt = (n: number) => deliveryJob(failing, eventId(n), WEBHOOK_LIMITS.attempts);
+		// A redelivery of the last attempt of one event counts that event one time.
+		await consumeWebhooks([lastAttempt(1)]);
+		await consumeWebhooks([lastAttempt(1)]);
+		expect(await webhookOf(ada, failing.id)).toMatchObject({ status: "active", consecutive_failures: 1 });
+		for (let n = 2; n <= WEBHOOK_LIMITS.failedEventsBeforeDisable; n++) {
+			const last = await consumeWebhooks([lastAttempt(n)]);
+			expect(last.sent).toEqual([]);
 		}
 		expect(await webhookOf(ada, failing.id)).toMatchObject({
 			status: "disabled",

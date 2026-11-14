@@ -499,7 +499,7 @@ export const WEBHOOK_LIMITS = {
 	labelChars: 100,
 	/** The webhooks that one principal created, active or disabled. */
 	perCreator: 10,
-	/** The webhooks of one mailbox, from all creators. This limits the POST requests of one event. */
+	/** The active webhooks of one mailbox, from all creators. This limits the POST requests of one event. */
 	perMailbox: 20,
 	/** The POST attempts of one event to one webhook. */
 	attempts: 5,
@@ -573,7 +573,7 @@ export const createWebhook = defineOperation({
 		"Mail in the same few seconds gives one POST. Spam, a read, a label and an archive send nothing.",
 		"Each POST is signed as Standard Webhooks specifies: the headers webhook-id, webhook-timestamp and webhook-signature.",
 		"The result holds the signing secret (whsec_...). It is shown only once. Use it to verify each POST.",
-		"The URL must use https and a public host name. A POST that fails is retried up to 5 times. After 5 events in a row fail, the webhook is disabled.",
+		"The URL must use https and a public host name. A POST that fails is retried up to 5 times, and mail while a retry waits sends no POST of its own. After 5 events in a row fail, the webhook is disabled.",
 		"An agent can use only a host that its outbound policy allows: mode any, or a host in its allowlist. Otherwise the call fails with policy_denied. Its sponsor can create the webhook for it.",
 		"The webhook stops when the credential that created it is revoked, or when its creator loses access to the mailbox.",
 	].join(" "),
@@ -601,9 +601,9 @@ export const listWebhooks = defineOperation({
 	name: "mail.list_webhooks",
 	summary: "List webhooks",
 	description: [
-		"Without mailbox_id: the webhooks that you created, and the webhooks of your own mailbox.",
-		"With mailbox_id: the webhooks of that mailbox that you can see. In a team mailbox, you see only your own webhooks.",
-		"In the mailbox of an agent, its sponsor, an owner and an admin see each webhook.",
+		"Without mailbox_id: the webhooks that you created.",
+		"With mailbox_id: the webhooks of that mailbox that you can see. In your own mailbox and in a team mailbox, you see only your own webhooks.",
+		"An owner and an admin see each webhook of a team mailbox. The sponsor of an agent, an owner and an admin see each webhook of the mailbox of the agent.",
 		"The secrets are never returned again.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/webhooks" },
@@ -619,7 +619,7 @@ export const deleteWebhook = defineOperation({
 	name: "mail.delete_webhook",
 	summary: "Delete a webhook",
 	description:
-		"Deletes a webhook. No POST goes to its URL after this. You can delete a webhook that you created, each webhook of your own mailbox and, as the sponsor of an agent, an owner or an admin, each webhook of the mailbox of an agent.",
+		"Deletes a webhook. No POST goes to its URL after this. You can delete a webhook that you created. An owner or an admin can delete each webhook of a team mailbox. The sponsor of an agent, an owner and an admin can delete each webhook of the mailbox of the agent.",
 	http: { method: "DELETE", path: "/api/v1/mail/webhooks/{webhook_id}" },
 	scopes: ["mail.webhooks"],
 	callers: ["human", "agent"],

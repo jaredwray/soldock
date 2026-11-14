@@ -534,10 +534,11 @@ export class MailboxDO extends DurableObject<Env> {
 			} catch (error) {
 				const attempts = mailboxId === null ? EVENT_MAX_ATTEMPTS : row.attempts + 1;
 				const message = error instanceof Error ? error.message : String(error);
-				log("warn", "webhook event could not be queued", { attempts, error: message });
 				if (attempts >= EVENT_MAX_ATTEMPTS) {
+					log("error", "webhook event dropped after its last attempt", { attempts, error: message });
 					this.sql.exec("DELETE FROM event_outbox WHERE id = ?", row.id);
 				} else {
+					log("warn", "webhook event could not be queued; retrying", { attempts, error: message });
 					this.sql.exec(
 						"UPDATE event_outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
 						attempts,

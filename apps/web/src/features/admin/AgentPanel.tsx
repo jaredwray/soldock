@@ -51,7 +51,7 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 				<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
 				<WebhookManager
 					heading={`Webhooks of ${agent.display_name}`}
-					agentId={agent.id}
+					mailboxId={agent.id}
 					canCreate={agent.sponsor_id === whoami.principal.id}
 				/>
 				<ApiKeyManager

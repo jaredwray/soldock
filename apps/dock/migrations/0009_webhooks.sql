@@ -1,7 +1,8 @@
 -- Webhooks of the mail module. A webhook sends a signed POST to a URL outside Soldock when new mail
 -- arrives in the inbox of a mailbox. The POST holds no mail content.
 -- The table is new, so the Worker from before this migration does not read it. The deploy applies
--- the migration after the new Worker starts: until then, only the webhook operations fail.
+-- the migrations before the new Worker starts, so the old Worker runs on the new schema for a short
+-- time. A full key that it creates in that time does not get mail.webhooks (see the last statement).
 -- The statement markers let a fresh reset replay this file without a SQL parser.
 
 CREATE TABLE IF NOT EXISTS webhooks (
@@ -20,8 +21,12 @@ CREATE TABLE IF NOT EXISTS webhooks (
 	secret TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
 	disabled_reason TEXT,
-	-- The events in a row whose last attempt failed.
+	-- The events in a row whose last attempt failed. An event counts one time, also when its jobs repeat.
 	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	last_failed_event_id TEXT,
+	-- Set while a failed POST waits for its next attempt. A new event in that time joins the retry,
+	-- because a POST holds no content: one success tells the receiver to read the inbox.
+	retry_until TEXT,
 	last_delivery_at TEXT,
 	last_failure_at TEXT,
 	-- A code that the Worker makes, such as http_500 or timeout. Never the response body.

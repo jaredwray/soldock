@@ -510,13 +510,23 @@ export async function drainWebhookEvents(mailboxId: string): Promise<void> {
 
 /**
  * Runs the webhook queue consumer on the given job bodies, as delivery number `attempts`. The queue
- * producer is a fake: `sent` holds the jobs that the consumer puts on the queue.
+ * producer is a fake: `sent` holds the jobs that the consumer puts on the queue. With `failQueue`, each
+ * send to the queue fails.
  */
-export async function consumeWebhooks(jobs: unknown[], attempts = 1) {
+export async function consumeWebhooks(jobs: unknown[], attempts = 1, options: { failQueue?: boolean } = {}) {
 	const sent: unknown[] = [];
+	const refuse = () => {
+		if (options.failQueue) throw new Error("the queue is unavailable");
+	};
 	const queue = {
-		send: async (body: unknown) => void sent.push(body),
-		sendBatch: async (messages: { body: unknown }[]) => void sent.push(...messages.map((message) => message.body)),
+		send: async (body: unknown) => {
+			refuse();
+			sent.push(body);
+		},
+		sendBatch: async (messages: { body: unknown }[]) => {
+			refuse();
+			sent.push(...messages.map((message) => message.body));
+		},
 	} as unknown as Queue;
 	const batch = createMessageBatch(
 		"soldock-webhooks",

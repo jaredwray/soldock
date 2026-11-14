@@ -66,6 +66,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
   deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
+  The same transaction deletes the webhooks that the principal created and the webhooks of its
+  mailbox (table `webhooks` of [`mail`](../mail/README.md#webhooks)), because each one holds a
+  signing secret and nobody can see it after the delete.
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
     items out of Shared with me and Starred.

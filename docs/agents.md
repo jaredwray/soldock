@@ -152,7 +152,8 @@ protocol version and on REST.
 
 1. Make sure that your outbound policy allows the host of your server: ask your sponsor to set mode
    `any`, or to add the host (for example `hooks.example.com`) to the allowlist. Your sponsor can
-   also create the webhook for you under **Admin › Agents**.
+   also create the webhook for you under **Admin › Agents**. That webhook belongs to your sponsor:
+   it does not show in your `mail_list_webhooks`.
 2. Call `mail_create_webhook` with a key or a connection that holds `mail.webhooks`:
 
    ```json
@@ -185,8 +186,9 @@ Standard Webhooks does these steps:
 4. Compare `v1,` and the base64 of the result with `webhook-signature`, in constant time.
 5. Drop a `webhook-id` that you processed before: a retry has the same id.
 
-- Answer with a `2xx` status within 15 seconds. Soldock tries a failed POST 5 times. After 5 events
-  in a row fail, the webhook is disabled. An answer of `410 Gone` disables it at once.
+- Answer with a `2xx` status within 15 seconds. Soldock tries a failed POST 5 times. While a retry
+  waits, new mail sends no new POST: the retry tells you to read the inbox. After 5 events in a row
+  fail, the webhook is disabled. An answer of `410 Gone` disables it at once.
 - Mail in the same 5 seconds gives one POST. Spam, a read, a label and an archive send nothing.
 - The webhook stops when the key or the OAuth connection that created it is revoked, when you lose
   access to the mailbox, or when your policy no longer allows the host. `mail_list_webhooks` shows

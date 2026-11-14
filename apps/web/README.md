@@ -193,6 +193,9 @@ MCP clients. The app has no UI-only path.
     the members.
     - **New shared mailbox**, above the table, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
+    - **Webhooks** in a row opens a dialog with each webhook of the shared mailbox and a Delete button
+      (`mail.list_webhooks`, `mail.delete_webhook`). Members create webhooks in Settings. An owner or
+      an admin can delete one, for example when the mailbox reaches its limit of active webhooks.
     - **Members** in a row opens a dialog with the members, a control to add a member and a button to
       remove each member, with a confirmation (`directory.add_team_mailbox_member`,
       `directory.remove_team_mailbox_member`).

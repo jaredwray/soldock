@@ -304,7 +304,8 @@ on a server, a REST client or an MCP client of an older protocol.
 - The result holds the signing secret, `whsec_` and the base64 of 32 random bytes, one time only.
   D1 keeps the secret in clear text, because the HMAC needs it.
 - The webhook records the credential of the create: the API key, the OAuth grant or a session.
-- The limits are part of the insert: 10 webhooks for each creator and 20 for each mailbox.
+- The limits are part of the insert: 10 webhooks for each creator, active or disabled, and 20
+  active webhooks for each mailbox. A disabled webhook of another member cannot fill a mailbox.
 - Mail that arrives before `mail.create_webhook` returns can send no POST, as for the
   acknowledgment of `subscriptions/listen`. Read the inbox one time after the create.
 
@@ -319,9 +320,18 @@ on a server, a REST client or an MCP client of an older protocol.
    same queue.
 4. A delivery job checks the access of the creator again (see the table below) and sends one POST.
 5. A `2xx` answer is a success. A `410` disables the webhook at once. Each other answer, a
-   redirect, a timeout of 15 seconds and a network failure is a failed attempt. The consumer tries
-   again after 10 seconds, 1 minute, 5 minutes and 30 minutes. After the fifth attempt the event
-   failed. After 5 failed events in a row, the webhook is disabled (`failures`).
+   redirect, a timeout of 15 seconds and a network failure is a failed attempt. The consumer puts a
+   new job with the next attempt on the queue, with a delay of 10 seconds, 1 minute, 5 minutes and
+   30 minutes. After the fifth attempt the event failed. After 5 failed events in a row, the webhook
+   is disabled (`failures`).
+
+- The attempt is in the job, not in the queue delivery count. So a failure of Soldock itself, such
+  as D1, runs the same job again and uses no attempt of the receiver. After 10 such failures the
+  queue moves the job to `soldock-webhooks-dlq`.
+- While a failed POST waits for its retry (`retry_until`), a new event of the webhook sends no POST.
+  The POST holds no content, so the retry tells the receiver to read the inbox. A receiver that is
+  down gets one chain of attempts, not one chain for each mail.
+- A failed event counts one time (`last_failed_event_id`), also when a redelivery repeats its jobs.
 
 The body holds no mail content. The receiver reads the inbox with its own credential, with the scope
 and mailbox checks of REST:
@@ -352,6 +362,7 @@ code that the Worker makes: `http_<status>`, `redirect`, `timeout` or `network`.
 | The creator was deleted, or its API key or OAuth grant was revoked or expired | Disabled, `credential_revoked` |
 | The creator, or the agent of the mailbox, is archived | No POST. The webhook stays active, and a restore makes it send again |
 | The creator is not a member of the team mailbox, or not the sponsor of the agent | Disabled, `access_lost` |
+| The creator, or the principal of the mailbox, was deleted | `directory.delete_principal` deleted the webhook in its transaction |
 | The outbound policy of the agent that created it does not allow the host | Disabled, `policy_denied` |
 
 A session has no id. So a sign-out does not stop a webhook that a session created: it stops only
@@ -359,11 +370,14 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
 
 ### List and delete
 
-- `mail.list_webhooks` without `mailbox_id` gives your webhooks and the webhooks of your own mailbox.
-  With `mailbox_id`, a member of a team mailbox sees only their own webhooks there. In the mailbox of
-  an agent, its sponsor, an owner and an admin see each webhook.
-- `mail.delete_webhook`: the creator, the owner of the mailbox and, in the mailbox of an agent, its
-  sponsor, an owner or an admin. Another caller gets `not_found`.
+- `mail.list_webhooks` without `mailbox_id` gives the webhooks that you created. With `mailbox_id`:
+  - In your own mailbox and in a team mailbox of a member: only your own webhooks. An agent does not
+    see the webhooks that its sponsor created for it, because a URL can hold a token.
+  - In a team mailbox, an owner and an admin see each webhook.
+  - In the mailbox of an agent, its sponsor, an owner and an admin see each webhook.
+- `mail.delete_webhook`: the creator; an owner or an admin in a team mailbox; and the sponsor, an
+  owner or an admin in the mailbox of an agent. Another caller gets `not_found`. So an owner or an
+  admin can remove the webhook of a member who blocks the limit of a team mailbox.
 - The events of a mailbox stay on after its last webhook goes. An event with no webhook costs one
   queue message. So a create and a delete at the same time cannot turn off the events of a new webhook.
 
@@ -402,7 +416,7 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
-| Webhooks | D1 `directory`, table `webhooks` (migration `0009`) | The mailbox, the creator, the credential kind and id, the URL, the label, the signing secret in clear text, the status and the delivery state. A fresh start drops the table |
+| Webhooks | D1 `directory`, table `webhooks` (migration `0009`) | The mailbox, the creator, the credential kind and id, the URL, the label, the signing secret in clear text, the status and the delivery state (failures, the last failed event, the end of a waiting retry). `directory.delete_principal` deletes the rows of the principal. A fresh start drops the table |
 | Webhook events | `MailboxDO` table `event_outbox`, and table `meta` keys `webhook_mailbox_id`, `webhook_last_event_at` | At most one row. It holds the event id and the time, never message content. The meta key turns events on. A directory reset deletes them |
 | Webhook jobs | Queue `soldock-webhooks`, dead letters in `soldock-webhooks-dlq` | Jobs hold ids and times, never message content or secrets |
 
