@@ -49,8 +49,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   and the mail, the drive and the chat stay. Mail to the address still arrives.
 - `directory.restore_principal` clears `archived_at`. The keys and the grants work again. The old
   sessions do not come back: the restore deletes the sessions again, and the sign-in transaction
-  also checks `archived_at`, so a sign-in that races the archive leaves no session. An agent whose
-  sponsor is archived cannot be restored.
+  also checks `archived_at`, so a sign-in that races the archive leaves no session. A restore of a
+  principal that is not archived changes nothing and keeps its sessions. An agent whose sponsor is
+  archived cannot be restored.
 - Archive, restore and delete need a credential with every human scope, so a narrow key with
   `directory.write` cannot lock people out or let them back in.
 - `directory.delete_principal` cannot be undone. The `principals` row stays with `deleted_at`, because

@@ -1109,6 +1109,9 @@ describe("changes to people and agents", () => {
 		// A sponsor of an active agent cannot be archived, so the agent gets the owner as its sponsor.
 		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: owner.id });
 		const cookie = await signIn(ada.address);
+		// A restore of a person who is not archived changes nothing, and does not end a session.
+		await owner.call("directory.restore_principal", { principal_id: ada.id });
+		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
 		const { principal } = await owner.call("directory.archive_principal", { principal_id: ada.id });
 		expect(principal.archived_at).not.toBeNull();
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);

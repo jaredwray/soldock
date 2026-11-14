@@ -435,19 +435,21 @@ export async function archivePrincipal(db: D1Database, id: string): Promise<void
 
 /**
  * Restores an archived principal. Its keys and grants work again. An agent comes back only while its
- * sponsor is not archived. The sessions of the principal are deleted again, so a sign-in that raced
- * the archive cannot leave a session that returns now.
+ * sponsor is not archived. The restore deletes the sessions of the principal again, so a sign-in that
+ * raced the archive cannot leave a session that returns now. A principal that is not archived does not
+ * change, and keeps its sessions.
  */
 export async function restorePrincipal(db: D1Database, id: string): Promise<void> {
+	// changes() in the delete reads the count of the update, so only a real restore ends sessions.
 	await db.batch([
 		db
 			.prepare(
-				`UPDATE principals SET archived_at = NULL WHERE id = ?1 AND deleted_at IS NULL
+				`UPDATE principals SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL AND deleted_at IS NULL
 				AND (kind = 'human' OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = principals.sponsor_id
 					AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))`,
 			)
 			.bind(id),
-		db.prepare("DELETE FROM sessions WHERE principal_id = ?").bind(id),
+		db.prepare("DELETE FROM sessions WHERE principal_id = ? AND changes() = 1").bind(id),
 	]);
 }
 
