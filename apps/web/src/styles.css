@@ -1466,6 +1466,7 @@ fieldset {
 	background: var(--selected);
 }
 
+/* The keyboard cursor: a bar at the left of the row. A touch screen has no cursor. */
 @media (hover: none) {
 	.thread-cursor::before {
 		display: none;
@@ -1481,6 +1482,16 @@ fieldset {
 	width: 3px;
 	border-radius: 2px;
 	background: var(--foreground);
+}
+
+/* The focus ring is around the full row, not only around the link. The ring then replaces the bar. */
+.thread-row:has(.thread-link:focus-visible) {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.thread-row:has(.thread-link:focus-visible)::before {
+	display: none;
 }
 
 .thread-check {
@@ -1524,7 +1535,7 @@ fieldset {
 
 .thread-link {
 	display: grid;
-	grid-template-columns: 184px minmax(0, 1fr) auto;
+	grid-template-columns: 200px minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 16px;
 	min-height: 44px;
@@ -1535,7 +1546,7 @@ fieldset {
 }
 
 .thread-link:focus-visible {
-	outline-offset: -2px;
+	outline: none;
 }
 
 .thread-from {
@@ -1546,8 +1557,7 @@ fieldset {
 }
 
 .thread-from-names,
-.thread-main,
-.thread-subject-line {
+.thread-main {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1576,15 +1586,71 @@ fieldset {
 	white-space: nowrap;
 }
 
+/* The labels of a thread: quiet chips with a border and no fill, so they also show on a selected row. */
+.thread-labels {
+	display: inline-flex;
+	gap: 4px;
+}
+
+.thread-label {
+	max-width: 128px;
+	padding: 0 6px;
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 18px;
+	text-overflow: ellipsis;
+}
+
 .thread-attachment {
 	display: inline-flex;
 }
 
+/* The dates have one width, so the labels and the attachment marks line up. */
+.thread-date {
+	min-width: 60px;
+	text-align: right;
+}
+
 .thread-unread .thread-from-names,
 .thread-unread .thread-subject,
-.thread-unread .thread-meta time {
+.thread-unread .thread-date {
 	color: var(--foreground);
 	font-weight: 650;
+}
+
+/* The loading, empty and error states of the thread list and of the thread view. */
+.mail-state {
+	gap: 8px;
+}
+
+.mail-state-icon {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	margin-bottom: 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--muted-foreground);
+}
+
+.mail-state-title {
+	color: var(--foreground);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.mail-state-text {
+	max-width: 440px;
+	overflow-wrap: anywhere;
+}
+
+.mail-state .button {
+	margin-top: 8px;
 }
 
 .chips {
@@ -1630,15 +1696,17 @@ fieldset {
 /* Thread view */
 
 .thread-view {
-	padding: 20px 24px 32px;
+	max-width: 1000px;
+	padding: 20px 22px 32px;
 }
 
+/* The subject starts where the text of the messages starts: after the avatar. */
 .thread-header {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 12px;
-	margin: 0 0 16px 44px;
+	gap: 8px 12px;
+	margin: 0 0 12px 48px;
 }
 
 .thread-subject-heading {
@@ -1655,28 +1723,39 @@ fieldset {
 	outline: 2px solid var(--focus);
 }
 
+/* A label chip in the thread view is quiet: muted text and no fill. */
+.mail-chip {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+
+/* The messages go 10px past the text column on each side, so the hover fill of a collapsed message has room. */
 .messages {
 	display: flex;
 	flex-direction: column;
-	border-top: 1px solid var(--border);
+	margin: 0 -10px;
 }
 
-.message {
-	border-bottom: 1px solid var(--border);
+.message + .message {
+	border-top: 1px solid var(--border);
 }
 
 .message-heading {
 	font-size: inherit;
 	font-weight: inherit;
+	letter-spacing: normal;
 }
 
+/* A collapsed message is one calm line: a small avatar, the sender, the snippet and a short date. */
 .message-toggle {
 	display: flex;
 	align-items: center;
 	gap: 12px;
 	width: 100%;
-	padding: 12px 0;
+	margin: 4px 0;
+	padding: 6px 10px;
 	border: 0;
+	border-radius: var(--radius-md);
 	background: none;
 	color: var(--foreground);
 	font: inherit;
@@ -1684,25 +1763,81 @@ fieldset {
 	cursor: pointer;
 }
 
+.message-toggle:hover {
+	background: var(--row-hover);
+}
+
+.message-toggle:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.message-expanded .message-toggle {
+	align-items: flex-start;
+	margin: 0;
+	padding: 14px 10px 0;
+}
+
+.message-expanded .message-toggle:hover {
+	background: none;
+}
+
+.message-avatar {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 36px;
+}
+
+.message-avatar-mark {
+	width: 28px;
+	height: 28px;
+	background: var(--hover);
+	color: var(--foreground);
+	font-size: 11px;
+}
+
+.message-expanded .message-avatar-mark {
+	width: 36px;
+	height: 36px;
+	font-size: 13px;
+}
+
+.message-summary {
+	display: flex;
+	flex: 1;
+	align-items: baseline;
+	gap: 10px;
+	min-width: 0;
+	line-height: 22px;
+}
+
 .message-sender {
 	display: flex;
-	flex-wrap: wrap;
+	flex: none;
 	align-items: baseline;
 	gap: 0 6px;
+	max-width: 60%;
 	min-width: 0;
 }
 
+.message-expanded .message-sender {
+	flex: 1;
+	flex-wrap: wrap;
+	max-width: none;
+}
+
 .message-sender-name {
-	font-weight: 700;
+	overflow: hidden;
+	font-weight: 650;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .message-sender-address {
 	color: var(--muted-foreground);
-	font-size: 12px;
-}
-
-.message:not(.message-expanded) .message-sender-address {
-	display: none;
+	font-size: 13px;
+	overflow-wrap: anywhere;
 }
 
 .message-snippet {
@@ -1714,26 +1849,42 @@ fieldset {
 	white-space: nowrap;
 }
 
+.message-mark {
+	display: inline-flex;
+	flex: none;
+	color: var(--muted-foreground);
+}
+
 .message-date {
 	flex: none;
 	margin-left: auto;
 	color: var(--muted-foreground);
 	font-size: 12px;
+	line-height: 22px;
+	white-space: nowrap;
 }
 
 .message-content {
-	padding: 0 0 16px 44px;
+	padding: 0 10px 20px 58px;
 }
 
+/* The recipients are under the name of the sender, next to the avatar. The header is 50px high, and
+   the name is 22px high, so the list moves up 14px. */
 .message-recipients {
-	margin: -6px 0 10px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 14px;
+	min-height: 14px;
+	margin: -14px 0 12px;
 	color: var(--muted-foreground);
 	font-size: 13px;
+	line-height: 20px;
 }
 
 .recipient-line {
 	display: flex;
-	gap: 6px;
+	gap: 5px;
+	min-width: 0;
 }
 
 .recipient-line dt {
@@ -1763,42 +1914,44 @@ fieldset {
 }
 
 .external-notice .icon {
+	flex: none;
 	margin-top: 1px;
 }
 
 .spam-notice {
 	border-color: var(--negative-border);
 	background: var(--negative-soft);
-	color: var(--negative);
 }
 
 .spam-notice > .icon {
-	color: inherit;
+	color: var(--negative);
 }
 
+/* The SPF, DKIM and DMARC results: quiet chips. The color of the text shows pass or fail, and the text tells it. */
 .auth-results {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
-	margin: 6px 0 0;
+	margin: 8px 0 0;
 	padding: 0;
 	list-style: none;
 }
 
 .auth-results li {
-	padding: 1px 8px;
-	border-radius: 4px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
 	font-family: var(--mono);
-	font-size: 12px;
+	font-size: 11px;
+	line-height: 18px;
 }
 
 .auth-pass {
-	background: var(--positive-soft);
 	color: var(--positive);
 }
 
 .auth-fail {
-	background: var(--negative-soft);
 	color: var(--negative);
 }
 
@@ -1821,8 +1974,9 @@ fieldset {
 	align-items: center;
 	min-height: 64px;
 	padding: 12px;
-	border: 1px dashed var(--border);
+	border: 1px solid var(--border);
 	border-radius: var(--radius-md);
+	background: var(--surface);
 	color: var(--muted-foreground);
 	font-size: 14px;
 }
@@ -1831,79 +1985,167 @@ fieldset {
 	margin: 0;
 }
 
+/* Reading text: 15px on a 22px line. */
 .message-text {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	font-size: 14px;
-	line-height: 1.55;
+	font-size: 15px;
+	line-height: 22px;
 }
 
 .attachments,
 .delivery {
-	margin-top: 16px;
+	margin-top: 20px;
 }
 
-.attachments-title {
-	display: flex;
-	align-items: center;
-	gap: 6px;
+.attachments .field-hint {
+	margin-top: 8px;
+}
+
+.message-section-title {
 	margin-bottom: 8px;
-	font-size: 13px;
-	font-weight: 600;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: normal;
 }
 
-.attachment-list,
-.delivery-list,
-.compose-attachments {
+/* A file card: the icon of the file on a tile, the name, the size, and one action. The thread view
+   and the composer use it. */
+.file-cards {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
+	flex-wrap: wrap;
+	gap: 8px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
-.attachment {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
+.file-card {
+	display: flex;
 	align-items: center;
-	gap: 12px;
-	max-width: 640px;
-	padding: 8px 8px 8px 12px;
+	gap: 10px;
+	width: 280px;
+	max-width: 100%;
+	padding: 8px 8px 8px 10px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
+	border-radius: var(--radius);
+	background: var(--background);
 }
 
-.attachment-name {
+.file-card-icon {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 36px;
+	height: 36px;
+	border-radius: var(--radius-sm);
+	background: var(--hover);
+	color: var(--muted-foreground);
+}
+
+.file-card-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 18px;
+}
+
+.file-card-name {
 	overflow: hidden;
 	font-weight: 500;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.attachment-meta {
+.file-card-meta {
+	overflow: hidden;
 	color: var(--muted-foreground);
 	font-size: 12px;
+	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.file-card-action {
+	border-radius: 50%;
+}
+
+/* The delivery status of each recipient of a sent message: a quiet chip with a dot. */
+.delivery-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
 .delivery-item {
 	display: flex;
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: 4px;
+	max-width: 100%;
+}
+
+.delivery-chip {
+	display: inline-flex;
 	align-items: center;
-	gap: 4px 12px;
-	font-size: 13px;
+	gap: 6px;
+	max-width: 100%;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	font-size: 12px;
+	line-height: 18px;
+}
+
+.delivery-dot {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--muted-foreground);
 }
 
 .delivery-address {
+	overflow: hidden;
 	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
+.delivery-kind,
+.delivery-status {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.delivery-delivered .delivery-dot,
+.delivery-sent .delivery-dot {
+	background: var(--positive);
+}
+
+.delivery-delivered .delivery-status,
+.delivery-sent .delivery-status {
+	color: var(--positive);
+}
+
+.delivery-failed .delivery-dot {
+	background: var(--negative);
+}
+
+.delivery-failed .delivery-status,
 .delivery-error {
-	flex-basis: 100%;
 	color: var(--negative);
 }
 
+.delivery-error {
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
+/* A status badge. The admin page uses it. */
 .status {
 	display: inline-block;
 	margin-left: 8px;
@@ -1915,16 +2157,6 @@ fieldset {
 	line-height: 16px;
 }
 
-.delivery-item .status {
-	margin-left: 0;
-}
-
-.status-delivered,
-.status-sent {
-	background: var(--positive-soft);
-	color: var(--positive);
-}
-
 .status-failed {
 	background: var(--negative-soft);
 	color: var(--negative);
@@ -1934,7 +2166,7 @@ fieldset {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
-	margin-top: 16px;
+	margin-top: 20px;
 }
 
 /* Dialogs */
@@ -2018,24 +2250,66 @@ fieldset {
 	gap: 8px;
 }
 
-.shortcut-table {
-	width: calc(100% - 48px);
-	margin: 8px 24px 0;
-	border-collapse: collapse;
+/* The keyboard shortcuts dialog: groups of rows, with the action at the left and the keys at the right. */
+
+.shortcut-groups {
+	padding: 4px 24px 0;
 }
 
-.shortcut-table th,
-.shortcut-table td {
-	padding: 6px 8px;
-	border-bottom: 1px solid var(--border);
-	text-align: left;
+.shortcut-group + .shortcut-group {
+	margin-top: 16px;
 }
 
-.shortcut-table th {
+.shortcut-group-title {
+	margin-bottom: 2px;
 	color: var(--muted-foreground);
 	font-size: 12px;
-	font-weight: 600;
-	text-transform: uppercase;
+	font-weight: 500;
+	letter-spacing: normal;
+}
+
+.shortcut-list {
+	margin: 0;
+}
+
+.shortcut-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.shortcut-row:last-child {
+	border-bottom: 0;
+}
+
+.shortcut-keys,
+.shortcut-key {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+}
+
+.shortcut-or {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.shortcut-dialog kbd {
+	display: grid;
+	place-items: center;
+	min-width: 24px;
+	height: 24px;
+	padding: 0 6px;
+	background: var(--surface);
+	color: var(--muted-foreground);
+	font-family: var(--font);
+	font-size: 12px;
+	line-height: 1;
 }
 
 /* Composer */
@@ -2060,8 +2334,13 @@ fieldset {
 	border-bottom: 1px solid var(--border);
 }
 
+/* The To row, with the "Add Cc and Bcc" button at its end. */
+.compose-row-extra {
+	grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
 .compose-row .field-error {
-	grid-column: 2;
+	grid-column: 2 / -1;
 	margin: 0 0 6px;
 }
 
@@ -2093,7 +2372,7 @@ fieldset {
 	outline: none;
 }
 
-.compose-row:focus-within {
+.compose-row:has(.compose-input:focus) {
 	border-bottom-color: var(--foreground);
 	box-shadow: 0 1px 0 var(--foreground);
 }
@@ -2103,16 +2382,31 @@ fieldset {
 }
 
 .compose-copies {
-	margin: 8px 0;
+	padding: 4px 8px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: none;
+	color: var(--muted-foreground);
+	font: inherit;
 	font-size: 13px;
+	white-space: nowrap;
+	cursor: pointer;
 }
 
-/* The rich-text editor: a ProseMirror view, and the formatting toolbar under it. */
+.compose-copies:hover {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+/* The rich-text editor: a rounded box with a ProseMirror view, and the formatting toolbar at its bottom. */
 
 .rich-editor {
 	display: flex;
 	flex-direction: column;
-	margin: 12px 24px 0;
+	margin: 16px 24px 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .rich-editor-mount {
@@ -2121,12 +2415,13 @@ fieldset {
 }
 
 .compose-body {
-	min-height: 260px;
-	height: 40vh;
-	padding: 8px 0;
+	min-height: 220px;
+	height: 36vh;
+	padding: 12px 14px 8px;
 	overflow-y: auto;
 	color: var(--foreground);
-	line-height: 1.55;
+	font-size: 15px;
+	line-height: 22px;
 	resize: vertical;
 }
 
@@ -2145,7 +2440,7 @@ fieldset {
 .compose-body blockquote {
 	margin-left: 0.8ex;
 	padding-left: 1ex;
-	border-left: 1px solid var(--border);
+	border-left: 2px solid var(--border);
 	color: var(--muted-foreground);
 }
 
@@ -2171,16 +2466,22 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
-	padding-top: 4px;
-	border-top: 1px solid var(--border);
+	padding: 4px 8px 8px;
+}
+
+.format-button {
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-sm);
 }
 
 .format-group-start:not(:first-child) {
 	margin-left: 10px;
 }
 
+/* The box has the color of the surface, so a button that is on has a darker fill than a hover. */
 .format-button[aria-pressed="true"] {
-	background: var(--hover);
+	background: var(--border);
 	color: var(--foreground);
 }
 
@@ -2207,21 +2508,12 @@ fieldset {
 }
 
 .compose-attachments {
-	margin: 8px 24px 0;
-}
-
-.compose-attachment {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto;
-	align-items: center;
-	gap: 8px;
-	padding: 2px 4px 2px 10px;
-	border-radius: var(--radius-md);
-	background: var(--surface);
+	margin: 12px 24px 0;
 }
 
 .compose-size {
-	margin: 8px 24px 0;
+	margin: 10px 24px 0;
+	font-size: 12px;
 }
 
 .compose-form .form-error {
@@ -2233,7 +2525,7 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
-	padding: 16px 16px 16px 24px;
+	padding: 16px 24px 20px;
 }
 
 .compose-actions input[type="file"]:focus-visible + label {
@@ -2899,22 +3191,68 @@ fieldset {
 		display: none;
 	}
 
+	/* Only the first label shows next to the date. */
+	.thread-label {
+		max-width: 96px;
+	}
+
+	.thread-label:nth-child(n + 3) {
+		display: none;
+	}
+
+	.thread-date {
+		min-width: 0;
+	}
+
 	.thread-view {
-		padding: 12px 12px 24px;
+		padding: 12px 16px 24px;
 	}
 
-	.thread-header,
-	.message-content {
+	.thread-header {
 		margin-left: 0;
-		padding-left: 0;
 	}
 
-	.attachment {
-		grid-template-columns: minmax(0, 1fr) auto;
+	/* The body of a message uses the full width, under the avatar. */
+	.message-content {
+		padding-left: 10px;
 	}
 
-	.attachment-meta {
-		grid-row: 2;
+	.message-recipients {
+		margin: 10px 0 12px;
+	}
+
+	.message-expanded .message-date {
+		white-space: normal;
+		text-align: right;
+	}
+
+	.file-card {
+		width: 100%;
+	}
+
+	.message-toggle {
+		min-height: 44px;
+	}
+
+	.compose-fields {
+		padding: 0 16px;
+	}
+
+	/* Text of 16px, so that iOS does not zoom in on the fields. */
+	.compose-input,
+	.compose-body {
+		font-size: 16px;
+	}
+
+	.rich-editor,
+	.compose-attachments,
+	.compose-size {
+		margin-right: 16px;
+		margin-left: 16px;
+	}
+
+	.compose-actions {
+		padding: 12px 16px 16px;
 	}
 
 	.dialog,
