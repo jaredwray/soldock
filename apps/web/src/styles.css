@@ -2192,6 +2192,30 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
+/* The Edit and Delete buttons of a webhook have text, so they need more room than icon buttons. */
+.webhook-actions {
+	gap: 8px;
+}
+
+/* The name and the value of the custom header of a webhook, side by side when there is room. */
+.webhook-header {
+	border: 0;
+	margin: 0;
+	padding: 0;
+	min-width: 0;
+}
+
+.webhook-header-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.webhook-header-row .input {
+	flex: 1 1 160px;
+	min-width: 0;
+}
+
 /* The URL of a webhook, under its label. A long URL wraps instead of widening the table. */
 .cell-url {
 	font-family: var(--mono);

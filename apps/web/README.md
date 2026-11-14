@@ -234,6 +234,11 @@ MCP clients. The app has no UI-only path.
   unless the person selects them.
   - A new webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
     once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
+  - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
+    custom header (a name and a value). Both are password fields, and the list shows only that a key
+    is set and the name of the header.
+  - **Edit** shows on the webhooks that you created (`mail.update_webhook`). It changes the label, and
+    keeps, replaces or removes the auth key and the header.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.

@@ -51,7 +51,10 @@ export {
 	ThreadSummary,
 	WEBHOOK_EVENT_TYPE,
 	WEBHOOK_LIMITS,
+	WEBHOOK_RESERVED_HEADER_PREFIXES,
+	WEBHOOK_RESERVED_HEADERS,
 	Webhook,
+	webhookHeaderNameProblem,
 } from "./mail.ts";
 export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {

@@ -1,9 +1,18 @@
-import type { CreatedWebhook, Mailbox, Webhook } from "@soldock/contracts";
+import {
+	type CreatedWebhook,
+	type InputOf,
+	type Mailbox,
+	WEBHOOK_LIMITS,
+	type Webhook,
+	webhookHeaderNameProblem,
+} from "@soldock/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { Dialog } from "../../lib/Dialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { useToast } from "../../lib/toast.tsx";
+import { useSession } from "../auth/session.tsx";
 import { WebhookSecretDialog } from "./SecretDialog.tsx";
 
 /** Why a webhook stopped, as a person reads it. */
@@ -28,10 +37,15 @@ interface WebhookManagerProps {
 	framed?: boolean;
 }
 
-/** Lists, creates and deletes webhooks: a POST to a URL outside Soldock when new mail arrives. */
+/**
+ * Lists, creates, changes and deletes webhooks: a POST to a URL outside Soldock when new mail arrives.
+ * Only the creator of a webhook can change its label, its auth key and its custom header.
+ */
 export function WebhookManager({ heading, mailboxId, canCreate, framed = true }: WebhookManagerProps) {
 	const toast = useToast();
+	const { whoami } = useSession();
 	const [webhooks, setWebhooks] = useState<Webhook[] | null>(null);
+	const [editing, setEditing] = useState<Webhook | null>(null);
 	const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedWebhook | null>(null);
@@ -111,6 +125,9 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 										{webhook.disabled_reason && (
 											<span className="check-hint">Stopped: {DISABLED_REASONS[webhook.disabled_reason]}.</span>
 										)}
+										{(webhook.has_auth_key || webhook.header_name) && (
+											<span className="check-hint">Sends {authSummary(webhook)}.</span>
+										)}
 										{webhook.status === "active" && webhook.last_error && (
 											<span className="check-hint">Last attempt failed: {webhook.last_error}.</span>
 										)}
@@ -120,14 +137,26 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 										{webhook.last_delivery_at ? shortDate(webhook.last_delivery_at) : "Never"}
 									</td>
 									<td className="cell-actions">
-										<button
-											type="button"
-											className="button button-small button-danger-outline"
-											onClick={() => setDeleting(webhook)}
-											aria-label={`Delete webhook ${webhook.label}`}
-										>
-											Delete
-										</button>
+										<div className="row-actions webhook-actions">
+											{webhook.created_by === whoami.principal.id && (
+												<button
+													type="button"
+													className="button button-small"
+													onClick={() => setEditing(webhook)}
+													aria-label={`Edit webhook ${webhook.label}`}
+												>
+													Edit
+												</button>
+											)}
+											<button
+												type="button"
+												className="button button-small button-danger-outline"
+												onClick={() => setDeleting(webhook)}
+												aria-label={`Delete webhook ${webhook.label}`}
+											>
+												Delete
+											</button>
+										</div>
 									</td>
 								</tr>
 							))}
@@ -153,6 +182,17 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 				/>
 			)}
 			{created && <WebhookSecretDialog webhook={created} onClose={() => setCreated(null)} />}
+			{editing && (
+				<EditWebhookDialog
+					webhook={editing}
+					onClose={() => setEditing(null)}
+					onSaved={(webhook) => {
+						setEditing(null);
+						toast({ message: `Webhook “${webhook.label}” saved.` });
+						void load();
+					}}
+				/>
+			)}
 			{deleting && (
 				<ConfirmDialog
 					title="Delete this webhook?"
@@ -186,6 +226,7 @@ function CreateWebhookForm({
 	const [url, setUrl] = useState("");
 	const [label, setLabel] = useState("");
 	const [mailboxId, setMailboxId] = useState("");
+	const [auth, setAuth] = useState<AuthDraft>(EMPTY_AUTH);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = { url: useId(), label: useId(), mailbox: useId(), hint: useId() };
@@ -196,7 +237,13 @@ function CreateWebhookForm({
 			setError("Enter the URL of the receiver.");
 			return;
 		}
+		const problem = authProblem(auth, Boolean(auth.key.trim()));
+		if (problem) {
+			setError(problem);
+			return;
+		}
 		const target = fixedMailboxId ?? mailboxId;
+		const header = draftHeader(auth);
 		setBusy(true);
 		setError(null);
 		try {
@@ -204,9 +251,12 @@ function CreateWebhookForm({
 				url: url.trim(),
 				...(label.trim() ? { label: label.trim() } : {}),
 				...(target ? { mailbox_id: target } : {}),
+				...(auth.key.trim() ? { auth_key: auth.key.trim() } : {}),
+				...(header ? { header } : {}),
 			});
 			setUrl("");
 			setLabel("");
+			setAuth(EMPTY_AUTH);
 			onCreated(result.webhook);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -269,6 +319,8 @@ function CreateWebhookForm({
 					</select>
 				</div>
 			)}
+			<KeyField value={auth.key} onChange={(key) => setAuth({ ...auth, key })} disabled={busy} />
+			<HeaderFields draft={auth} onChange={setAuth} disabled={busy} />
 			{error && (
 				<p className="form-error" role="alert">
 					{error}
@@ -278,5 +330,278 @@ function CreateWebhookForm({
 				{busy ? "Creating…" : "Create webhook"}
 			</button>
 		</form>
+	);
+}
+
+/** What a webhook sends besides the signature, as a person reads it. Never a secret value. */
+function authSummary(webhook: Webhook): string {
+	const parts = [
+		...(webhook.has_auth_key ? ["an auth key"] : []),
+		...(webhook.header_name ? [`the header ${webhook.header_name}`] : []),
+	];
+	return parts.join(" and ");
+}
+
+/** The auth key and the custom header that a form holds. */
+interface AuthDraft {
+	key: string;
+	headerName: string;
+	headerValue: string;
+}
+
+const EMPTY_AUTH: AuthDraft = { key: "", headerName: "", headerValue: "" };
+
+/** The custom header of a draft, or null when both fields are empty. */
+function draftHeader(draft: AuthDraft): { name: string; value: string } | null {
+	const name = draft.headerName.trim();
+	const value = draft.headerValue.trim();
+	return name || value ? { name, value } : null;
+}
+
+/**
+ * The problem with the header of a draft, or null. The server checks the same rules. `withAuthKey`: the
+ * webhook will have an auth key, which uses the Authorization header.
+ */
+function authProblem(draft: AuthDraft, withAuthKey: boolean): string | null {
+	const header = draftHeader(draft);
+	if (!header) return null;
+	if (!header.name || !header.value) return "Enter the name and the value of the custom header, or leave both empty.";
+	return webhookHeaderNameProblem(header.name, withAuthKey);
+}
+
+function KeyField({
+	value,
+	onChange,
+	disabled,
+	label = "Auth key (optional)",
+}: {
+	value: string;
+	onChange: (value: string) => void;
+	disabled: boolean;
+	label?: string;
+}) {
+	const id = useId();
+	const hintId = useId();
+	return (
+		<div className="field">
+			<label htmlFor={id} className="field-label">
+				{label}
+			</label>
+			<input
+				id={id}
+				className="input input-mono"
+				type="password"
+				autoComplete="off"
+				value={value}
+				maxLength={WEBHOOK_LIMITS.authKeyChars}
+				onChange={(event) => onChange(event.target.value)}
+				aria-describedby={hintId}
+				disabled={disabled}
+			/>
+			<p id={hintId} className="field-hint">
+				Sent as Authorization: Bearer &lt;key&gt; on each POST. Soldock never shows it again.
+			</p>
+		</div>
+	);
+}
+
+function HeaderFields({
+	draft,
+	onChange,
+	disabled,
+	legend = "Custom header (optional)",
+}: {
+	draft: AuthDraft;
+	onChange: (draft: AuthDraft) => void;
+	disabled: boolean;
+	legend?: string;
+}) {
+	const nameId = useId();
+	const valueId = useId();
+	const hintId = useId();
+	return (
+		<fieldset className="field webhook-header">
+			<legend className="field-label">{legend}</legend>
+			<div className="webhook-header-row">
+				<label htmlFor={nameId} className="visually-hidden">
+					Header name
+				</label>
+				<input
+					id={nameId}
+					className="input input-mono"
+					value={draft.headerName}
+					maxLength={WEBHOOK_LIMITS.headerNameChars}
+					placeholder="X-Api-Key"
+					onChange={(event) => onChange({ ...draft, headerName: event.target.value })}
+					aria-describedby={hintId}
+					disabled={disabled}
+				/>
+				<label htmlFor={valueId} className="visually-hidden">
+					Header value
+				</label>
+				<input
+					id={valueId}
+					className="input input-mono"
+					type="password"
+					autoComplete="off"
+					value={draft.headerValue}
+					maxLength={WEBHOOK_LIMITS.headerValueChars}
+					placeholder="Value"
+					onChange={(event) => onChange({ ...draft, headerValue: event.target.value })}
+					aria-describedby={hintId}
+					disabled={disabled}
+				/>
+			</div>
+			<p id={hintId} className="field-hint">
+				Sent as it is on each POST. Soldock never shows the value again.
+			</p>
+		</fieldset>
+	);
+}
+
+type Change = "keep" | "replace" | "remove";
+
+/**
+ * Changes the label, the auth key and the custom header of a webhook that you created. The key and the
+ * header value are write-only, so the dialog offers to keep, replace or remove each one.
+ */
+function EditWebhookDialog({
+	webhook,
+	onClose,
+	onSaved,
+}: {
+	webhook: Webhook;
+	onClose: () => void;
+	onSaved: (webhook: Webhook) => void;
+}) {
+	const [label, setLabel] = useState(webhook.label);
+	const [keyChange, setKeyChange] = useState<Change>(webhook.has_auth_key ? "keep" : "replace");
+	const [headerChange, setHeaderChange] = useState<Change>(webhook.header_name ? "keep" : "replace");
+	const [draft, setDraft] = useState<AuthDraft>(EMPTY_AUTH);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const labelId = useId();
+
+	async function submit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const update: InputOf<"mail.update_webhook"> = { webhook_id: webhook.id };
+		if (label.trim() !== webhook.label) update.label = label.trim();
+		const key = draft.key.trim();
+		if (keyChange === "remove" && webhook.has_auth_key) update.auth_key = null;
+		if (keyChange === "replace" && key) update.auth_key = key;
+		if (keyChange === "replace" && !key && webhook.has_auth_key) return setError("Enter the new auth key.");
+		const header = draftHeader(draft);
+		if (headerChange === "remove" && webhook.header_name) update.header = null;
+		if (headerChange === "replace" && header) update.header = header;
+		if (headerChange === "replace" && !header && webhook.header_name) {
+			return setError("Enter the name and the value of the new header.");
+		}
+		const withKey = update.auth_key === undefined ? webhook.has_auth_key : update.auth_key !== null;
+		const problem = update.header ? authProblem(draft, withKey) : null;
+		if (problem) return setError(problem);
+		if (Object.keys(update).length === 1) return onClose();
+		setBusy(true);
+		setError(null);
+		try {
+			onSaved((await api.call("mail.update_webhook", update)).webhook);
+		} catch (caught) {
+			setError(errorMessage(caught));
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog title={`Edit ${webhook.label}`} description={webhook.url} onClose={() => !busy && onClose()}>
+			<form onSubmit={submit} noValidate>
+				<div className="dialog-body form-stack">
+					<div className="field">
+						<label htmlFor={labelId} className="field-label">
+							Label
+						</label>
+						<input
+							id={labelId}
+							className="input"
+							value={label}
+							maxLength={WEBHOOK_LIMITS.labelChars}
+							onChange={(event) => setLabel(event.target.value)}
+							disabled={busy}
+						/>
+					</div>
+					{webhook.has_auth_key && (
+						<ChangeChoice label="Auth key" value={keyChange} onChange={setKeyChange} disabled={busy} />
+					)}
+					{keyChange === "replace" && (
+						<KeyField
+							value={draft.key}
+							onChange={(key) => setDraft({ ...draft, key })}
+							disabled={busy}
+							label={webhook.has_auth_key ? "New auth key" : "Auth key (optional)"}
+						/>
+					)}
+					{webhook.header_name && (
+						<ChangeChoice
+							label={`Header ${webhook.header_name}`}
+							value={headerChange}
+							onChange={setHeaderChange}
+							disabled={busy}
+						/>
+					)}
+					{headerChange === "replace" && (
+						<HeaderFields
+							draft={draft}
+							onChange={setDraft}
+							disabled={busy}
+							legend={webhook.header_name ? "New custom header" : "Custom header (optional)"}
+						/>
+					)}
+					{error && (
+						<p className="form-error" role="alert">
+							{error}
+						</p>
+					)}
+				</div>
+				<div className="dialog-actions">
+					<button type="button" className="button" onClick={onClose} disabled={busy}>
+						Cancel
+					</button>
+					<button type="submit" className="button button-primary" disabled={busy}>
+						{busy ? "Saving…" : "Save"}
+					</button>
+				</div>
+			</form>
+		</Dialog>
+	);
+}
+
+/** Keep, replace or remove one write-only value. */
+function ChangeChoice({
+	label,
+	value,
+	onChange,
+	disabled,
+}: {
+	label: string;
+	value: Change;
+	onChange: (value: Change) => void;
+	disabled: boolean;
+}) {
+	const id = useId();
+	return (
+		<div className="field">
+			<label htmlFor={id} className="field-label">
+				{label}
+			</label>
+			<select
+				id={id}
+				className="input"
+				value={value}
+				onChange={(event) => onChange(event.target.value as Change)}
+				disabled={disabled}
+			>
+				<option value="keep">Keep the current value</option>
+				<option value="replace">Replace it</option>
+				<option value="remove">Remove it</option>
+			</select>
+		</div>
 	);
 }
