@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AdminPage } from "../features/admin/AdminPage.tsx";
 import { useSession } from "../features/auth/session.tsx";
-import { useMailboxes, useMailSettings } from "../features/mail/data.ts";
+import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { SettingsPage } from "../features/settings/SettingsPage.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
@@ -25,8 +25,8 @@ export function Shell() {
 	const [navOpen, setNavOpen] = useState(false);
 	// The shell keeps the list of mailboxes, so the switcher does not empty when the mailbox changes.
 	const mailboxes = useMailboxes(route.page);
-	// The mail settings (the collapsed sections of the sidebar) load one time and stay when the mailbox changes.
-	const mailSettings = useMailSettings();
+	// The mailboxes that the person expanded or collapsed in the mail sidebar. The state stays when the mailbox changes.
+	const [expandedMailboxes, setExpandedMailboxes] = useState<Readonly<Record<string, boolean>>>({});
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
 	// sign in again after the session ends. Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
@@ -69,8 +69,12 @@ export function Shell() {
 						key={route.mailboxId ?? "own"}
 						route={route}
 						mailboxes={mailboxes}
-						sidebarSettings={mailSettings.settings?.sidebar ?? null}
-						onSetSidebar={mailSettings.setSidebar}
+						expandedMailboxes={expandedMailboxes}
+						onSetExpanded={(key, expanded) =>
+							setExpandedMailboxes(({ [key]: _previous, ...others }) =>
+								expanded === null ? others : { ...others, [key]: expanded },
+							)
+						}
 						navOpen={navOpen}
 						onCloseNav={() => setNavOpen(false)}
 					/>

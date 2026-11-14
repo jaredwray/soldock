@@ -1,6 +1,5 @@
-import type { Label, Mailbox, MailSettings } from "@soldock/contracts";
+import type { Label, Mailbox } from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { errorMessage } from "../../lib/api.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
@@ -23,10 +22,10 @@ interface MailAppProps {
 	route: { mailboxId: string | null; view: MailView; threadId: string | null };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
-	/** The saved sidebar settings of the person, from the shell. Null while they load. */
-	sidebarSettings: MailSettings["sidebar"] | null;
-	/** Saves one sidebar setting. The promise rejects when the save fails. */
-	onSetSidebar: (setting: keyof MailSettings["sidebar"], value: boolean) => Promise<void>;
+	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
+	expandedMailboxes: Readonly<Record<string, boolean>>;
+	/** Expands or collapses a mailbox in the sidebar. Null goes back to the default. */
+	onSetExpanded: (key: string, expanded: boolean | null) => void;
 	navOpen: boolean;
 	onCloseNav: () => void;
 }
@@ -38,7 +37,7 @@ interface MailAppProps {
  * for the current view has a key, so a new view starts clean. The shell gives this component a key
  * for each mailbox, so no data of one mailbox shows in a different one.
  */
-export function MailApp({ route, mailboxes, sidebarSettings, onSetSidebar, navOpen, onCloseNav }: MailAppProps) {
+export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, navOpen, onCloseNav }: MailAppProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
 	const [refreshKey, setRefreshKey] = useState(0);
@@ -118,13 +117,10 @@ export function MailApp({ route, mailboxes, sidebarSettings, onSetSidebar, navOp
 			<div className="mail-layout">
 				<Sidebar
 					mailboxId={mailboxId}
+					mailboxName={mailboxName}
 					mailboxes={mailboxes}
-					sidebarSettings={sidebarSettings}
-					onToggleSection={(setting, collapsed) =>
-						void onSetSidebar(setting, collapsed).catch((error: unknown) =>
-							toast({ message: `The sidebar change was not saved. ${errorMessage(error)}`, tone: "error" }),
-						)
-					}
+					expanded={expandedMailboxes}
+					onSetExpanded={onSetExpanded}
 					readOnly={readOnly}
 					view={route.view}
 					labels={labels}

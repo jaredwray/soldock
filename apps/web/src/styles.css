@@ -191,7 +191,8 @@ kbd {
 	}
 
 	.sidebar,
-	.sidebar-open {
+	.sidebar-open,
+	.nav-chevron {
 		transition: none;
 	}
 }
@@ -917,37 +918,56 @@ fieldset {
 	font-weight: 600;
 }
 
-/* The heading of a mailbox section is a button that collapses it. The chevron sits in the gutter, so the text lines up with the other headings. */
-.nav-section-toggle {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	min-height: 32px;
-	margin-left: -20px;
-	padding: 0;
-	border: 0;
+/* The mail Compose button: the full width of the sidebar, with a small gap on each side. */
+.compose-button-block {
+	align-self: stretch;
+	justify-content: center;
+	margin: 0 4px 12px 12px;
+	padding: 10px 16px;
 	border-radius: var(--radius);
-	background: none;
-	color: inherit;
-	font: inherit;
-	cursor: pointer;
 }
 
-.nav-chevron {
-	color: var(--text-muted);
+/* A mailbox row in the mail sidebar. The chevron on the right expands or collapses the folders and labels of the mailbox. */
+.nav-tree-node + .nav-tree-node {
+	margin-top: 2px;
 }
 
-.nav-section-toggle:hover .nav-chevron {
+.nav-mailbox-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.nav-mailbox-row .nav-mailbox {
+	flex: 1;
+	min-width: 0;
+	padding-right: 44px;
+}
+
+.nav-mailbox-current {
+	font-weight: 700;
+}
+
+.nav-mailbox-current .icon {
 	color: var(--text);
 }
 
-.nav-chevron-collapsed {
-	transform: rotate(-90deg);
+.nav-mailbox-toggle {
+	position: absolute;
+	right: 4px;
+	color: var(--text-muted);
 }
 
-/* The first section follows the Compose button, which has its own margin. */
-.nav-section-first {
-	margin-top: 0;
+.nav-mailbox-toggle:hover {
+	color: var(--text);
+}
+
+.nav-chevron {
+	transition: transform 0.15s ease;
+}
+
+.nav-chevron-open {
+	transform: rotate(180deg);
 }
 
 .nav-label-row {
@@ -991,6 +1011,37 @@ fieldset {
 	padding: 4px 24px;
 	color: var(--text-muted);
 	font-size: 13px;
+}
+
+/* The folders and labels under a mailbox row are indented. The labels get their indent from Sidebar.tsx. */
+.nav-tree-children {
+	padding-bottom: 8px;
+}
+
+.nav-tree-children > .nav-list > li > .nav-item {
+	padding-inline-start: 40px;
+}
+
+/* The same height with or without the New label button. */
+.nav-section-nested {
+	min-height: 32px;
+	margin: 8px 0 0;
+	padding-left: 40px;
+}
+
+.nav-section-nested .nav-heading {
+	color: var(--text-muted);
+	font-size: 13px;
+}
+
+.nav-tree-children .nav-empty,
+.nav-tree-children .nav-error {
+	padding-left: 40px;
+}
+
+/* The first section follows the Compose button, which has its own margin. */
+.nav-section-first {
+	margin-top: 0;
 }
 
 .nav-hint {
