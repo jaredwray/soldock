@@ -137,6 +137,12 @@ importers:
 
   tools/licenses: {}
 
+  tools/seed:
+    dependencies:
+      '@soldock/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+
 packages:
 
   '@biomejs/biome@2.5.15':

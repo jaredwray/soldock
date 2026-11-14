@@ -1,0 +1,11 @@
+{
+	"name": "@soldock/tool-seed",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Sample data for a local Soldock: a made-up organization with mail, chat and drive content.",
+	"type": "module",
+	"license": "MIT",
+	"dependencies": {
+		"@soldock/contracts": "workspace:*"
+	}
+}
