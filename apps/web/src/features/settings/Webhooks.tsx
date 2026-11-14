@@ -416,7 +416,7 @@ function KeyField({
 				id={id}
 				className="input input-mono"
 				type="password"
-				autoComplete="off"
+				autoComplete="new-password"
 				value={value}
 				maxLength={WEBHOOK_LIMITS.authKeyChars}
 				onChange={(event) => onChange(event.target.value)}
@@ -468,7 +468,7 @@ function HeaderFields({
 					id={valueId}
 					className="input input-mono"
 					type="password"
-					autoComplete="off"
+					autoComplete="new-password"
 					value={draft.headerValue}
 					maxLength={WEBHOOK_LIMITS.headerValueChars}
 					placeholder="Value"

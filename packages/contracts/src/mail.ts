@@ -526,11 +526,14 @@ const WebhookUrl = z
 	.max(WEBHOOK_LIMITS.urlChars);
 
 /**
- * Header names that a webhook cannot set: Soldock sets them itself, the HTTP layer owns them, or
- * Cloudflare uses them. A name that starts with one of `WEBHOOK_RESERVED_HEADER_PREFIXES` is refused too.
+ * Header names that a webhook cannot set: Soldock sets them itself, the HTTP layer owns them, they
+ * claim a client address or a different method, or Cloudflare uses them. A name that starts with one of `WEBHOOK_RESERVED_HEADER_PREFIXES` is refused too.
  */
 export const WEBHOOK_RESERVED_HEADERS = [
+	"accept-encoding",
+	"cdn-loop",
 	"connection",
+	"content-encoding",
 	"content-length",
 	"content-type",
 	"expect",
@@ -540,8 +543,14 @@ export const WEBHOOK_RESERVED_HEADERS = [
 	"te",
 	"trailer",
 	"transfer-encoding",
+	"true-client-ip",
 	"upgrade",
 	"user-agent",
+	"via",
+	"x-client-ip",
+	"x-cluster-client-ip",
+	"x-http-method-override",
+	"x-method-override",
 	"x-real-ip",
 ] as const;
 export const WEBHOOK_RESERVED_HEADER_PREFIXES = ["cf-", "proxy-", "sec-", "webhook-", "x-forwarded-"] as const;

@@ -319,9 +319,11 @@ Some receivers accept a POST only with a token, for example n8n, Zapier or the e
   without spaces, at most 1,024 characters.
 - `header`: one more header, `{ "name", "value" }`, for example `X-Api-Key`. The value is printable
   ASCII, at most 2,048 characters, so it cannot add a line break or a second header.
-- The header cannot use a name that Soldock or the HTTP layer sets: `content-type`, `host`,
-  `user-agent`, the hop-by-hop headers, and the prefixes `webhook-`, `cf-`, `proxy-`, `sec-` and
-  `x-forwarded-` (`WEBHOOK_RESERVED_HEADERS` in the contracts). With an auth key, the header cannot
+- The header cannot use a name that Soldock or the HTTP layer sets (`content-type`, `host`,
+  `user-agent`, the encodings and the hop-by-hop headers), a name that claims a client address
+  (`x-real-ip`, `true-client-ip`, `via` and others) or another method (`x-http-method-override`),
+  or the prefixes `webhook-`, `cf-`, `proxy-`, `sec-` and `x-forwarded-` (`WEBHOOK_RESERVED_HEADERS`
+  in the contracts). With an auth key, the header cannot
   be `Authorization`. Without one, a receiver with another scheme, such as `Basic`, can get its own
   `Authorization` header.
 - The key and the header value are write-only. A result shows `has_auth_key` and `header_name` only.
@@ -404,7 +406,10 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
   admin can remove the webhook of a member who blocks the limit of a team mailbox.
 - `mail.update_webhook`: only the creator. It changes the label, and replaces or removes the auth key
   (`null` removes it) and the custom header (`null` removes it). It does not restart a disabled
-  webhook. Another caller gets `not_found`. Each change writes an audit line, without the values.
+  webhook. Another caller gets `not_found`. Each change writes an audit line with the names of the
+  changed fields in `code`, never the values. Each field changes only when the request names it, in
+  one statement that also checks the Authorization rule, so two updates at the same time keep both
+  changes.
 - The events of a mailbox stay on after its last webhook goes. An event with no webhook costs one
   queue message. So a create and a delete at the same time cannot turn off the events of a new webhook.
 

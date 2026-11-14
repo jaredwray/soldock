@@ -137,7 +137,13 @@ async function managesAgentMailbox(call: CallContext, mailboxId: string): Promis
 	return target?.kind === "agent" && canManageCredentialsOf(call.caller, target);
 }
 
-function auditWebhook(call: CallContext, op: string, row: Pick<WebhookRow, "id" | "mailbox_id">): void {
+function auditWebhook(
+	call: CallContext,
+	op: string,
+	row: Pick<WebhookRow, "id" | "mailbox_id">,
+	/** The names of the changed fields, never their values. */
+	code?: string,
+): void {
 	audit({
 		op,
 		actor: call.caller.id,
@@ -147,6 +153,7 @@ function auditWebhook(call: CallContext, op: string, row: Pick<WebhookRow, "id" 
 		...(row.mailbox_id === call.caller.id ? {} : { mailbox: row.mailbox_id }),
 		result: "ok",
 		requestId: call.requestId,
+		...(code ? { code } : {}),
 	});
 }
 
@@ -275,7 +282,7 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 				header_value = CASE WHEN ?4 THEN ?6 ELSE header_value END
 			WHERE id = ?7 AND created_by = ?8
 			AND NOT ((CASE WHEN ?2 THEN ?3 ELSE auth_key END) IS NOT NULL
-				AND lower(CASE WHEN ?4 THEN ?5 ELSE header_name END) = 'authorization')
+				AND lower(COALESCE(CASE WHEN ?4 THEN ?5 ELSE header_name END, '')) = 'authorization')
 			RETURNING ${WEBHOOK_COLUMNS}`,
 		)
 			.bind(
@@ -295,7 +302,12 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 			if (current?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
 			throw new OperationError("invalid", authorizationConflict);
 		}
-		auditWebhook(call, "mail.update_webhook", row);
+		const changed = [
+			...(input.label !== undefined ? ["label"] : []),
+			...(setKey ? [input.auth_key === null ? "auth_key_removed" : "auth_key"] : []),
+			...(setHeader ? [input.header === null ? "header_removed" : "header"] : []),
+		];
+		auditWebhook(call, "mail.update_webhook", row, changed.join(","));
 		return { webhook: toWebhook(updated) };
 	},
 

@@ -504,6 +504,47 @@ describe("the auth key and the custom header", () => {
 		expect(posts[1]?.headers.get("x-api-key")).toBeNull();
 	});
 
+	// Each update changes only its own fields, so two updates at the same time keep both changes.
+	it("keeps both changes of two updates at the same time", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK, auth_key: KEY });
+		await Promise.all([
+			ada.call("mail.update_webhook", { webhook_id: webhook.id, label: "Renamed" }),
+			ada.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: "tok_rotated" }),
+		]);
+		expect(await webhookOf(ada, webhook.id)).toMatchObject({ label: "Renamed", has_auth_key: true });
+		const posts = receiveWebhooks();
+		await consumeWebhooks([deliveryJob(webhook)]);
+		expect(posts[0]?.headers.get("authorization")).toBe("Bearer tok_rotated");
+	});
+
+	// The Authorization rule holds against the stored half of the pair, and a key alone needs no header.
+	it("adds and keeps an auth key without a header, and refuses a key next to a stored Authorization header", async () => {
+		const plain = (await ada.call("mail.create_webhook", { url: HOOK })).webhook;
+		const added = await ada.call("mail.update_webhook", { webhook_id: plain.id, auth_key: KEY });
+		expect(added.webhook).toMatchObject({ has_auth_key: true, header_name: null });
+		const renamed = await ada.call("mail.update_webhook", { webhook_id: plain.id, label: "Only the label" });
+		expect(renamed.webhook).toMatchObject({ label: "Only the label", has_auth_key: true });
+
+		const basic = (
+			await ada.call("mail.create_webhook", { url: HOOK, header: { name: "Authorization", value: "Basic YTpi" } })
+		).webhook;
+		expect(await codeOf(ada.call("mail.update_webhook", { webhook_id: basic.id, auth_key: KEY }))).toBe("invalid");
+	});
+
+	it("refuses an update from each caller except the creator, and from a credential without the scope", async () => {
+		const team = await teamMailbox([ada.id, cy.id]);
+		const { webhook } = await ada.call("mail.create_webhook", { mailbox_id: team, url: HOOK });
+		// The owner and the other member can see or delete it, but not change it.
+		for (const caller of [owner, cy]) {
+			expect(await codeOf(caller.call("mail.update_webhook", { webhook_id: webhook.id, label: "x" }))).toBe(
+				"not_found",
+			);
+		}
+		const { api_key } = await ada.call("account.create_api_key", { label: "read only", scopes: ["mail.read"] });
+		const narrow = api(api_key.secret)("mail.update_webhook", { webhook_id: webhook.id, label: "x" });
+		expect(await codeOf(narrow)).toBe("forbidden");
+	});
+
 	// A sponsor manages the webhooks of its agent, but the secrets of a webhook belong to its creator.
 	it("does not let the sponsor change a webhook that the agent created", async () => {
 		await allowAnyHost();
