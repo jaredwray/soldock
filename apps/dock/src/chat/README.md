@@ -73,6 +73,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   owner. A public room without members stays in the public list, and the first principal that
   joins it becomes its owner.
 - The last member of a private room cannot leave: nobody could then reach the room.
+- Known limit: a deleted principal (`directory.delete_principal`) stays a member of its rooms, and a
+  room that it owned keeps it as the owner. The index writes no new row for a deleted principal. A
+  later change removes the principal from its rooms through the outbox.
 - A direct message keeps its two members. `chat.add_members`, `chat.remove_member` and
   `chat.update_room` refuse it with `invalid`.
 - The scopes of the credential apply first: `chat.read` and `chat.write`. An agent key can hold

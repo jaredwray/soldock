@@ -85,7 +85,8 @@ export async function createTeamMailbox(
 				db
 					.prepare(
 						`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
-						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)`,
+						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)
+						AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)`,
 					)
 					.bind(id, principalId, input.created_by, now),
 			),
@@ -99,7 +100,7 @@ export async function createTeamMailbox(
 
 /**
  * Adds a member. A second call for the same member changes nothing. Returns false when the mailbox
- * has the most members that it can have.
+ * has the most members that it can have, or when the principal was deleted during the request.
  */
 export async function addTeamMailboxMember(
 	db: D1Database,
@@ -114,6 +115,7 @@ export async function addTeamMailboxMember(
 			`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
 			SELECT ?1, ?2, ?3, ?4
 			WHERE (SELECT COUNT(*) FROM team_mailbox_members WHERE mailbox_id = ?1) < ?5
+			AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)
 			ON CONFLICT DO NOTHING`,
 		)
 		.bind(mailboxId, principalId, addedBy, new Date().toISOString(), TEAM_MAILBOX_LIMITS.members)

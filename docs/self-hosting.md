@@ -166,8 +166,8 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
       the code. You can also do this later in **Settings**, or select **Skip for now**.
    6. Delete the `SETUP_TOKEN` secret.
-   7. Create people and agents under **Admin › New person or agent**. Each person needs a first password. Give it to
-      the person, who can change it in **Settings**.
+   7. Create people and agents under **Admin › Members** with **New person or agent**. Each person needs a first
+      password. Give it to the person, who can change it in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
    and gives no session:
@@ -251,13 +251,14 @@ migration. Do one of these steps:
     -d '{"password":"<a password of at least 12 characters>"}'
   ```
 
-Then sign in, and set passwords for the other people on the **Admin** page (**Help a person sign in**).
+Then sign in, and set passwords for the other people under **Admin › Members** (**Reset sign-in** in each row).
 Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an
-  admin. The **Admin** page sets a new password or turns off two-step verification.
+  admin. **Reset sign-in** in the row of the person under **Admin › Members** sets a new password or turns
+  off two-step verification.
 - The owner uses the API key from setup: `account.set_password`, or `account.disable_totp`.
 - After 10 failed attempts, sign-in to that account stops for 15 minutes. API keys and existing
   sessions still work.

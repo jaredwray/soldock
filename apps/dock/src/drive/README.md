@@ -114,6 +114,8 @@ keys.
   a pointer in `shared_with_me`. A removed grant and a deleted item remove the pointer.
 - The pointers are a hint. For the `shared` and the `starred` views, the handler asks the drive of
   each item again, and that drive checks the access. A stale pointer gives no item.
+- The handler does not ask the drive of a deleted principal (`directory.delete_principal`). That
+  drive stays in storage, but nobody can open it, so its items leave the lists.
 - A star is in the own drive of the principal that set it (`stars`), also for an item of somebody
   else. Nobody else sees it. A star can go away after the access ended.
 - A page of the `shared` or `starred` view can have fewer items than `limit`, because a pointer

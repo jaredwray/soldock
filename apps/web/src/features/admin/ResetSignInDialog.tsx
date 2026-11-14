@@ -2,85 +2,54 @@ import type { Principal } from "@soldock/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { Dialog } from "../../lib/Dialog.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
 
 /**
- * Owners and admins help a person who cannot sign in: a new password (`account.set_password`), or two-step
- * verification off after a lost phone (`account.disable_totp`). Only the owner can change the owner's
- * sign-in, so an admin does not see the owner here. People change their own sign-in in Settings.
+ * An owner or an admin helps a person who cannot sign in: a new password (`account.set_password`), or
+ * two-step verification off after a lost phone (`account.disable_totp`). The Members section offers it
+ * for each person except you and the owner. People change their own sign-in in Settings.
  */
-export function PersonSignInCard({ me, people }: { me: Principal; people: readonly Principal[] }) {
+export function ResetSignInDialog({ person, onClose }: { person: Principal; onClose: () => void }) {
 	const toast = useToast();
-	const choices = people.filter(
-		(person) =>
-			person.kind === "human" && person.id !== me.id && (person.org_role !== "owner" || me.org_role === "owner"),
-	);
-	const [personId, setPersonId] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirmation, setConfirmation] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmOff, setConfirmOff] = useState(false);
-	const ids = { person: useId(), password: useId(), passwordHint: useId(), confirmation: useId() };
-	const person = choices.find((choice) => choice.id === personId) ?? null;
+	const ids = { password: useId(), passwordHint: useId(), confirmation: useId() };
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!person) return setError("Select a person.");
 		const problem = newPasswordError(password, confirmation);
 		if (problem) return setError(problem);
 		setBusy(true);
 		setError(null);
 		try {
 			await api.call("account.set_password", { principal_id: person.id, password });
-			setPassword("");
-			setConfirmation("");
 			toast({ message: `New password set for ${person.display_name}. Their sessions ended.` });
+			onClose();
 		} catch (caught) {
 			setError(errorMessage(caught));
-		} finally {
 			setBusy(false);
 		}
 	}
 
 	async function turnOff() {
-		if (!person) return;
 		await api.call("account.disable_totp", { principal_id: person.id });
 		toast({ message: `Two-step verification is off for ${person.display_name}.` });
 	}
 
 	return (
-		<div className="card">
-			<p className="muted">
-				Set a new password for a person who forgot it, or turn off two-step verification after they lose their phone.
-			</p>
-			{choices.length === 0 ? (
-				<p className="muted">There is nobody else to help yet.</p>
-			) : (
-				<form className="form-grid" onSubmit={submit} noValidate>
-					<div className="field form-grid-wide">
-						<label htmlFor={ids.person} className="field-label">
-							Person
-						</label>
-						<select
-							id={ids.person}
-							className="input"
-							value={personId}
-							onChange={(event) => {
-								setPersonId(event.target.value);
-								setError(null);
-							}}
-							disabled={busy}
-						>
-							<option value="">Select a person</option>
-							{choices.map((choice) => (
-								<option key={choice.id} value={choice.id}>
-									{choice.display_name} ({choice.address})
-								</option>
-							))}
-						</select>
-					</div>
+		<Dialog
+			title={`Reset the sign-in of ${person.display_name}`}
+			description="Set a new password after they forget it, or turn off two-step verification after they lose their phone."
+			onClose={() => !busy && onClose()}
+			className="dialog-small"
+		>
+			<form onSubmit={submit} noValidate>
+				<div className="dialog-body form-stack">
 					<div className="field">
 						<label htmlFor={ids.password} className="field-label">
 							New password
@@ -94,9 +63,10 @@ export function PersonSignInCard({ me, people }: { me: Principal; people: readon
 							onChange={(event) => setPassword(event.target.value)}
 							aria-describedby={ids.passwordHint}
 							disabled={busy}
+							data-autofocus
 						/>
 						<p id={ids.passwordHint} className="field-hint">
-							The change ends each session of the person.
+							The change ends each session of the person. Give the password to them.
 						</p>
 					</div>
 					<div className="field">
@@ -114,21 +84,21 @@ export function PersonSignInCard({ me, people }: { me: Principal; people: readon
 						/>
 					</div>
 					{error && (
-						<p className="form-error form-grid-wide" role="alert">
+						<p className="form-error" role="alert">
 							{error}
 						</p>
 					)}
-					<div className="form-grid-wide totp-actions">
-						<button type="submit" className="button button-primary" disabled={busy || !person}>
-							{busy ? "Saving…" : "Set password"}
-						</button>
-						<button type="button" className="button" onClick={() => setConfirmOff(true)} disabled={busy || !person}>
-							Turn off two-step verification
-						</button>
-					</div>
-				</form>
-			)}
-			{confirmOff && person && (
+				</div>
+				<div className="dialog-actions">
+					<button type="button" className="button" onClick={() => setConfirmOff(true)} disabled={busy}>
+						Turn off two-step verification
+					</button>
+					<button type="submit" className="button button-primary" disabled={busy}>
+						{busy ? "Saving…" : "Set password"}
+					</button>
+				</div>
+			</form>
+			{confirmOff && (
 				<ConfirmDialog
 					title={`Turn off two-step verification for ${person.display_name}?`}
 					confirmLabel="Turn off"
@@ -139,6 +109,6 @@ export function PersonSignInCard({ me, people }: { me: Principal; people: readon
 					<p>After this, the password alone signs in to {person.address}. They can turn it on again in Settings.</p>
 				</ConfirmDialog>
 			)}
-		</div>
+		</Dialog>
 	);
 }
