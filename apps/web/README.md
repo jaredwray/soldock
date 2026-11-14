@@ -49,15 +49,40 @@ MCP clients. The app has no UI-only path.
   - Done goes to an optional step for two-step verification: the same panel as in Settings, and
     **Skip for now**. If the setup session failed, the panel shows the error, and the owner can skip.
   - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
-- **Mail.** A top bar with search and the account menu, a sidebar with the system views and the user
-  labels, a thread list and a thread view.
+- **Shell.** Each signed-in page has a rail at the left. The page of the route fills the other space.
+  - The rail has the mark of Soldock, which goes to the inbox, and a link to each product: Mail,
+    Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
+    Sheets are part of Drive.
+  - Below a rule, the rail has **Admin** for owners, admins and the sponsors of agents. At the
+    bottom, the rail has **Settings** and the account button.
+  - The account button opens a panel with the name, the address and the role of the person, the
+    **Appearance** choice, and **Sign out**. Escape closes the panel, and the focus goes back to
+    the button.
+  - **Appearance** is Light, Dark or System. A choice applies at once. System follows the device,
+    also when the device changes while the page is open. The choice is saved in this browser only
+    (see [Data inventory](#data-inventory)), and each open tab follows a change.
+  - Mail, Drive, Chat and Admin have a sidebar next to the rail. Each sidebar starts with the name
+    of the product and one line of text: the address of the open mailbox in Mail, the own address
+    in Drive, and the mail domain in Chat and Admin.
+  - Each page starts with a header row: the title of the page at the left, and the search box and
+    the controls of the page at the right.
+  - The search box is in the header row of Mail and of Drive. In Drive, the search box finds items
+    (`/drive/search?q=<query>`). Chat has no search yet.
+  - At 900px and below, the rail and the sidebar are a drawer. The menu button at the left of the
+    header row opens the drawer (`aria-expanded`, `aria-controls`). When the drawer opens, the focus
+    goes to the first item of the sidebar, or of the rail on a page with no sidebar. Escape, a click
+    outside the drawer and a new page close the drawer. When the drawer closes, the focus goes back
+    to the menu button.
+  - "Skip to content" is the first link of each page.
+- **Mail.** A header row with the title of the view, the search box and Refresh, a sidebar with the
+  system views and the user labels, a thread list and a thread view.
   - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as
     "Northwind" under "Clients". When no label has the parent name, the parent shows as a group row
     that is text, not a link. The link of a nested label has the full path as its accessible name,
     so a screen reader reads "Clients/Northwind".
   - The New label dialog tells the user that mail to `user+name@` gets the label with that name.
-  - Under 768px, the sidebar is a drawer. When the drawer opens, the focus goes to its first item.
-    When it closes, the focus goes back to the menu button.
+  - At 900px and below, the sidebar is part of the drawer of the shell. The search box hides while
+    conversations are selected.
   - The thread list shows the participants, the subject, the snippet, a short date, a star and a
     checkbox. Unread threads are bold. "Older" loads the next page.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
@@ -161,11 +186,11 @@ MCP clients. The app has no UI-only path.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
   - The page loads the directory one time. The directory stays when the section changes. Each
-    section starts at its top. The page has no link back to Mail: the top bar links to each product.
-  - Under 768px, the navigation is a drawer behind the menu button in the top bar, as in Mail and Drive.
+    section starts at its top. The page has no link back to Mail: the rail links to each product.
+  - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
   - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
     role, the sponsor and the agent policy of each person and agent. An archived account has an
-    **Archived** chip. Under 768px, the table shows only the name, the role and the actions, and an
+    **Archived** chip. At 900px and below, the table shows only the name, the role and the actions, and an
     agent gets its chip next to its name.
     - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
       shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
@@ -227,15 +252,12 @@ MCP clients. The app has no UI-only path.
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
   - A person without a password (after the upgrade to passwords) sees **Set a password**, and a
-    notice under the top bar of each other page until they set one.
+    notice at the top of each other page until they set one.
   - **Two-step verification.** A click on **Set up two-step verification** calls
     `account.create_totp_secret` and shows the secret as a QR code (black on white in both themes)
     and as text. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
     (`account.disable_totp`) asks for a confirmation first. The secret comes from a click, not from
     an effect, because each request replaces the waiting secret on the server.
-- **Products.** The top bar has links to Mail and Drive. The brand link and the search box follow
-  the product on screen: in Drive, the search box finds items (`/drive/search?q=<query>`). The
-  editors of Docs and Sheets are part of Drive.
 - **Drive** (`/drive`). A sidebar with the **New** menu, the views and the storage in use, an item
   list, and dialogs. Drive is a separate chunk, which loads when a Drive page first shows.
   - The views are My Drive, Shared with me, Recent, Starred, Trash and the search results
@@ -275,7 +297,8 @@ MCP clients. The app has no UI-only path.
   - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
     When the version changes, the list loads again without a loading state. A view that can show
     items of other drives loads again on the same timer.
-  - Under 768px, the sidebar is a drawer, and the list hides the owner and the size.
+  - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
+    and the size.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
   name (an owner or an editor changes it in place), the star, the save state, and a Share button
   for the owner. A viewer sees "View only".
@@ -352,8 +375,7 @@ MCP clients. The app has no UI-only path.
     and on window focus.
 - **Chat** (`/chat`, `/chat/<room_id>`). A sidebar with the rooms and the direct messages of the
   person, and one room with its messages and a box for a new message.
-  - The top bar has a third product link, **Chat**. Chat has no search yet, so the top bar shows no
-    search box on its pages.
+  - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
     bold with a dot. The magnifier opens the list of the public rooms, where the person joins a
@@ -382,6 +404,102 @@ MCP clients. The app has no UI-only path.
   - Chat is a separate chunk, as Drive is.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.
+
+## Design
+
+The look follows [Ember](https://github.com/NYLLON-SOFTWARE/ember-cloudflare) (MIT): neutral grays,
+ink for the main action, thin borders and almost no shadows. The app does not use the name, the logo
+or the app icons of Ember. The CSS is plain CSS with custom properties. The app has no CSS framework
+and no component library.
+
+### Tokens
+
+The tokens are at the top of [`src/styles.css`](src/styles.css). The light values are on `:root`. The
+dark values are on `:root.dark`.
+
+| Token | Light | Dark | Use |
+| --- | --- | --- | --- |
+| `--background` | `#ffffff` | `#171717` | The canvas: the content of a page, the header row, dialogs |
+| `--foreground` | `#171717` | `#f5f5f5` | Text, the current row, the set star |
+| `--surface` | `#fafafa` | `#1c1c1c` | The body, the rail, the sidebar, nested cards, chips |
+| `--hover` | `#f2f2f2` | `#282828` | The hover and the current fill of a row, a menu item or a button |
+| `--row-hover` | `#f8f8f8` | `#202020` | The hover of a row on the canvas |
+| `--card`, `--popover` | `#ffffff` | `#1c1c1c` | Cards, menus and the account panel |
+| `--border` | `#e5e5e5` | `#343434` | Each divider line |
+| `--input` | `#d4d4d4` | `#404040` | The border of a text field |
+| `--muted-foreground` | `#6b6b6b` | `#a3a3a3` | Secondary text and icons that are not current |
+| `--primary`, `--primary-hover`, `--primary-foreground` | `#171717`, `#2e2e2e`, `#fafafa` | `#f5f5f5`, `#dedede`, `#171717` | The main button, the brand tile, the account avatar |
+| `--ring` | `#737373` | `#a3a3a3` | The border and the ring of a text field with the focus |
+| `--focus` | `#171717` | `#f5f5f5` | The 2px focus outline of each other control |
+| `--link` | `#0066ef` | `#43abff` | Text links |
+| `--positive` | `#166534` | `#4ade80` | Success text |
+| `--negative` | `#b91c1c` | `#fca5a5` | Error text |
+| `--destructive` | `#b91c1c` | `#b91c1c` | A destructive button and an error toast, with white text |
+| `--warning` | `#daa038` | `#efb146` | The icon of a warning. The text of a warning is `--foreground` |
+
+- `--positive-soft`, `--negative-soft` and `--warning-soft` are fills. `color-mix()` makes them from
+  the color and `--background`.
+- `--control`, `--control-hover`, `--control-border` and `--field` are the fills of buttons and text
+  fields. They have dark values, so a component needs no rule for dark mode.
+- Radii: `--radius` 10px (cards, dialogs, rail items), `--radius-md` 8px (buttons, fields, rows,
+  menus) and `--radius-sm` 6px (menu items, chips). Only badges, the switch and avatars are round.
+- Shadows: `--shadow-xs` (buttons, fields), `--shadow-menu` (menus, toasts) and `--shadow-dialog`.
+  The rail, the sidebar, the drawer, cards and rows have no shadow.
+- Sizes: `--rail-width` 80px, `--sidebar-width` 280px (230px from 901px to 1100px) and
+  `--header-height` 60px (56px at 900px and below).
+- Text: 14px for the interface, 17px with weight 650 for the title of a page and of a sidebar, 12px
+  for headings in a sidebar and for counts.
+- Use a token for each color. The two fixed colors are the white behind a QR code and behind the
+  HTML of a message.
+
+### Contrast
+
+Each text color has a contrast ratio of 4.5:1 or more on each fill behind it, in the two modes. The
+lowest ratio is `--muted-foreground` on `--hover`: 4.76:1 in light mode and 5.84:1 in dark mode.
+
+Known limit: the border of a text field (`--input`) has a ratio of 1.48:1 on the canvas in light mode
+and 1.73:1 in dark mode. This is less than the 3:1 of WCAG 1.4.11. Each field has a visible label.
+With the focus, the border changes to `--ring`, which has 4.74:1 in light mode and 7.11:1 in dark mode.
+
+### Appearance
+
+[`src/lib/appearance.ts`](src/lib/appearance.ts) keeps the Light, Dark or System choice.
+
+- The choice is in `localStorage`, with the key `soldock:appearance`. A missing value or an unknown
+  value gives System. If the browser refuses the storage, the app follows the device.
+- The module sets the `dark` class, `data-appearance` and `color-scheme` on `<html>`.
+- `main.tsx` applies the choice before the first render. The CSP has `script-src 'self'`, so
+  `index.html` has no inline script.
+- Before the script runs, `<html>` has no `data-appearance`. A media query in `styles.css` then gives
+  the dark colors to a dark device. Keep its list the same as the list of `:root.dark`.
+- The choice is a display setting of one browser. Thus it has no operation in `packages/contracts`.
+
+### Icons
+
+The icons are from [Iconoir](https://iconoir.com) 7.12.1 (MIT): a 24px grid and a 1.5 stroke.
+
+- [`src/lib/iconoir/`](src/lib/iconoir/) has the SVG file of each icon, byte for byte, and the
+  license of Iconoir. Biome does not examine these files.
+- [`src/lib/icons.tsx`](src/lib/icons.tsx) has the paths of each file. `Icon` draws them in the
+  current color. A set star shows `iconoir/solid/star.svg`.
+- `test/icons.test.ts` compares the output of `Icon` with each file. It also fails when a file has
+  no icon.
+- To add an icon: copy its file from the `iconoir` package of the same version, add its paths to
+  `icons.tsx`, and add its name to the table in the test.
+- Iconoir has no icon for some actions. Reply all uses `reply-to-message`, Move uses `drag`, and
+  Inbox uses `mail-in`.
+
+### Layout
+
+- The canvas (`--background`) has the content. The rail and the sidebar are on `--surface`, with a
+  1px line between the parts. The content is not a card.
+- A sidebar row is 36px high with a radius of 8px. The current row has the `--hover` fill.
+- In the mailbox tree, the folders and the labels of a mailbox are to the right of a 1px line under
+  the icon of the mailbox. Only the open view has a fill.
+- The main action of a sidebar (Compose, New, New room) is one `--primary` button with the full width.
+- The app has one breakpoint for the drawer: 900px. At 900px and below, and for a touch screen,
+  rows are 44px high and text fields have 16px text.
+- Toasts are at the bottom right, because the account button is at the bottom left.
 
 ## Routes
 
@@ -422,7 +540,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/main.tsx`](src/main.tsx) | The entry point |
 | [`src/App.tsx`](src/App.tsx) | Boot and the session state |
 | [`src/routes.ts`](src/routes.ts) | Route parse and path functions |
-| [`src/shell/`](src/shell/) | The signed-in frame: the top bar, the search box and the account menu |
+| [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, and the header of a sidebar |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
@@ -432,9 +550,9 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the save queue, the grid, the formula bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons, format helpers, and the hook for the people and agents of the organization |
-| [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. Dark mode follows `prefers-color-scheme` |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, the message list rules and the room sync of Chat, and the first values of the OAuth approval page |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
+| [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, the message list rules and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 
@@ -496,5 +614,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 
 ## Data inventory
 
-None. The app keeps no data in `localStorage`, `sessionStorage` or IndexedDB. All state comes from
-the operations.
+| Where | Key | What |
+| --- | --- | --- |
+| `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
+
+The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
+from the operations.
