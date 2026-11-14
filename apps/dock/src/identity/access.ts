@@ -11,7 +11,9 @@ export function isAdmin(caller: AuthContext): boolean {
 
 /**
  * True when the caller can read the own mailbox of each agent: an owner or an admin. Never an agent,
- * so an agent can never read the mail of a different agent. The read access does not include a change.
+ * so an agent can never read the mail of a different agent. A D1 CHECK already keeps a role off an
+ * agent; the kind check is a second guard. The read access does not include a change. Any credential
+ * of the person with `mail.read` has this access, also a narrow API key.
  */
 export function canReadAgentMailboxes(caller: AuthContext): boolean {
 	return caller.kind === "human" && isAdmin(caller);

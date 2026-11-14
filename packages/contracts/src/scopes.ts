@@ -9,7 +9,8 @@ export const SCOPES = {
 	"directory.read": "Read the directory; owners and admins can also read mail domain settings",
 	"directory.write":
 		"Create accounts and change agent policies; owners and admins can also manage mail domains and team mailboxes",
-	"mail.read": "Read your mail and labels, and those of your team mailboxes",
+	"mail.read":
+		"Read your mail and labels, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
 	"mail.modify": "Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes",
 	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
 	"drive.read": "Read your drive and the items that others shared with you: folders, files, docs and sheets",

@@ -128,7 +128,8 @@ MCP clients. The app has no UI-only path.
   shows an **Agent mailboxes** section with each agent (`mail.list_mailboxes`, kind `agent`).
   - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
     the app that the mailbox is read only (`isAgentMailbox` in `routes.ts`, `useReadOnlyMailbox`).
-  - A notice above the list says that the mailbox is read only and that the audit log records the reads.
+  - A notice above the list says that the mailbox is read only and that the audit log records the lists
+    and the conversations that the person opens.
   - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
     changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new

@@ -39,7 +39,7 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 							<Icon name="mail" size={16} />
 							Read the mail of {agent.display_name}
 						</Link>
-						<span className="field-hint">Read only. The audit log records your reads.</span>
+						<span className="field-hint">Read only. The audit log records the conversations that you open.</span>
 					</p>
 				)}
 				<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />

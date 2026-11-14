@@ -106,7 +106,8 @@ owner or an admin creates it under **Admin › Team mailboxes** and adds people 
 
 The owners and the admins of the organization can read your own mailbox, in the web app and through
 the mail operations. They cannot change it or send from it. When they open a thread, it stays
-unread for you, so you still find your new mail. The audit log records their reads.
+unread for you, so you still find your new mail. The audit log records each list of threads and each
+thread, message and attachment that they open.
 
 - The sponsor of an agent can read its mail only as an owner or an admin.
 - An agent can never read the mailbox of a different agent or of a person.

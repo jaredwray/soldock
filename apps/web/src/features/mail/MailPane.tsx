@@ -291,7 +291,7 @@ export function MailPane(props: MailPaneProps) {
 					<span>
 						<strong>Read only.</strong> This is the mailbox of an agent. As an owner or an admin, you can read it. You
 						cannot change it or send from it, and the conversations that you open stay unread for the agent. The audit
-						log records your reads.
+						log records the lists and the conversations that you open.
 					</span>
 				</p>
 			)}

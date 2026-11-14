@@ -111,8 +111,8 @@ function auditOk(call: CallContext, mailbox: MailboxRecord, op: string, target: 
 }
 
 /**
- * An owner or an admin who reads the mail of an agent gets an audit line, so the agent's sponsor and
- * the operator can see who read what. Reads in the own mailbox and in team mailboxes get no line.
+ * An owner or an admin who reads the mail of an agent gets an audit line, so the operator can see who
+ * read what. Reads in the own mailbox and in team mailboxes get no line.
  */
 function auditAgentRead(call: CallContext, mailbox: MailboxRecord, op: string, target: string): void {
 	if (mailbox.kind === "agent") auditOk(call, mailbox, op, target);

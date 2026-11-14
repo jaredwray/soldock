@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, callTool, codeOf, createActor, inject, PASSWORD, rawMessage, seedOrg } from "./helpers.ts";
+import { type Actor, api, callTool, codeOf, createActor, inject, PASSWORD, rawMessage, seedOrg } from "./helpers.ts";
 
 // Owners and admins can read the own mailbox of an agent. They cannot change it or send from it, and
 // nobody else can open it. The mailbox of a person stays private, also for the owner.
@@ -33,6 +33,12 @@ async function mailForBot(): Promise<string> {
 	);
 	const [thread] = (await bot.call("mail.list_threads")).threads;
 	return thread?.id as string;
+}
+
+/** The error code in the result of an MCP tool call that failed. */
+function toolCode(result: Awaited<ReturnType<typeof callTool>>): string | undefined {
+	expect(result.isError).toBe(true);
+	return (JSON.parse(result.content[0]?.text ?? "{}") as { code?: string }).code;
 }
 
 /** The audit lines that the Worker wrote while `run` ran. */
@@ -95,12 +101,26 @@ describe("the mailbox of an agent", () => {
 			expect(tool.structuredContent).toEqual({ threads, next_cursor: null });
 		}
 
-		const lines = await auditLines(() => admin.call("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId }));
-		expect(lines).toEqual([
-			expect.objectContaining({ op: "mail.get_thread", actor: admin.id, mailbox: bot.id, target: threadId }),
+		// Each read of mail content writes one line. The profile and the labels, which the web app polls, write none.
+		const [message] = (await admin.call("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId })).messages;
+		const messageId = message?.id as string;
+		const readAll = (reader: Actor, inBox: { mailbox_id?: string }) => async () => {
+			await reader.call("mail.get_profile", inBox);
+			await reader.call("mail.list_labels", inBox);
+			await reader.call("mail.list_threads", { ...inBox, query: "invoice" });
+			await reader.call("mail.get_thread", { ...inBox, thread_id: threadId });
+			await reader.call("mail.get_message", { ...inBox, message_id: messageId });
+			await reader.call("mail.get_attachment", { ...inBox, message_id: messageId, index: 0 });
+		};
+		const lines = await auditLines(readAll(admin, { mailbox_id: bot.id }));
+		expect(lines.map(({ op, actor, mailbox, target }) => ({ op, actor, mailbox, target }))).toEqual([
+			{ op: "mail.list_threads", actor: admin.id, mailbox: bot.id, target: bot.id },
+			{ op: "mail.get_thread", actor: admin.id, mailbox: bot.id, target: threadId },
+			{ op: "mail.get_message", actor: admin.id, mailbox: bot.id, target: messageId },
+			{ op: "mail.get_attachment", actor: admin.id, mailbox: bot.id, target: `${messageId}/0` },
 		]);
 		// The agent reads its own mail without an audit line.
-		expect(await auditLines(() => bot.call("mail.get_thread", { thread_id: threadId }))).toEqual([]);
+		expect(await auditLines(readAll(bot, {}))).toEqual([]);
 	});
 
 	// A change by a reader would change what the agent sees, and a send would come from the agent.
@@ -124,7 +144,7 @@ describe("the mailbox of an agent", () => {
 			];
 			for (const attempt of attempts) expect(await codeOf(attempt)).toBe("forbidden");
 			const tool = await callTool(reader.key, "mail_send", { ...inBox, to: ["ada@dock.test"], text: "As the bot" });
-			expect(tool.isError).toBe(true);
+			expect(toolCode(tool)).toBe("forbidden");
 		}
 		const thread = await bot.call("mail.get_thread", { thread_id: threadId });
 		expect(thread.label_ids.sort()).toEqual(["INBOX", "UNREAD"]);
@@ -147,7 +167,20 @@ describe("the mailbox of an agent", () => {
 		expect(await codeOf(ada.call("mail.get_profile", { mailbox_id: bot.id }))).toBe("forbidden");
 		expect(await codeOf(otherBot.call("mail.list_threads", { mailbox_id: bot.id }))).toBe("forbidden");
 		const tool = await callTool(otherBot.key, "mail_list_threads", { mailbox_id: bot.id });
-		expect(tool.isError).toBe(true);
+		expect(toolCode(tool)).toBe("forbidden");
+	});
+
+	// The access comes from the role of the person, so each of their credentials with mail.read has it.
+	// The mail.read scope text says so. A key without mail.read gets nothing.
+	it("follows the role of the person on a narrow key, within the scopes of the key", async () => {
+		const threadId = await mailForBot();
+		const keyWith = async (scopes: ("mail.read" | "directory.read")[]) =>
+			api((await admin.call("account.create_api_key", { label: "Narrow", scopes })).api_key.secret);
+		const reader = await keyWith(["mail.read"]);
+		expect((await reader("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal", "agent"]);
+		expect((await reader("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId })).subject).toBe("Invoice 7");
+		const noMail = await keyWith(["directory.read"]);
+		expect(await codeOf(noMail("mail.list_threads", { mailbox_id: bot.id }))).toBe("forbidden");
 	});
 });
 

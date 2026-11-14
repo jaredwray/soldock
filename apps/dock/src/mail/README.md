@@ -52,7 +52,8 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
   mailbox and cannot send from it.
 - The id of a different principal gets `forbidden`, except in the case of
-  [Agent mailboxes](#agent-mailboxes).
+  [Agent mailboxes](#agent-mailboxes). A credential of an owner or an admin with `mail.read` reads
+  each agent mailbox, also a narrow API key. The `mail.read` scope text says so.
 - The [`identity`](../identity/README.md#team-mailboxes) module owns the team mailboxes, their
   addresses and their members.
 
