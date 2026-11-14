@@ -6,7 +6,8 @@ import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { type MailView, threadPath, viewPath } from "../../routes.ts";
-import { SEARCH_INPUT_ID } from "../../shell/TopBar.tsx";
+import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
+import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
 	actionChange,
 	actionNotice,
@@ -25,7 +26,7 @@ import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
-import type { ViewQuery } from "./views.ts";
+import { type ViewQuery, viewIcon } from "./views.ts";
 
 /** Actions that send the open thread back to the list. */
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
@@ -269,6 +270,8 @@ export function MailPane(props: MailPaneProps) {
 			<Toolbar
 				view={view}
 				title={props.mailboxName ? `${props.mailboxName}: ${title}` : title}
+				icon={viewIcon(view)}
+				search={<SearchBox product="mail" query={view.kind === "search" ? view.query : ""} mailboxId={mailboxId} />}
 				mode={listMode ? "list" : "thread"}
 				targetCount={targets.length}
 				selection={selection}

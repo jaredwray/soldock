@@ -4,9 +4,10 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { type AdminSection, adminPath } from "../../routes.ts";
+import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
-import { AdminSidebar, defaultSection, isAdminOnly, sectionTitle } from "./AdminSidebar.tsx";
+import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
 import { AgentPanel } from "./AgentPanel.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
@@ -21,7 +22,7 @@ type DirectoryState =
 interface AdminPageProps {
 	/** The section of the route, or null for `/admin`. */
 	section: AdminSection | null;
-	/** True while the navigation drawer is open, under 768px. */
+	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
 }
@@ -74,8 +75,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 		<div className="admin-layout">
 			<AdminSidebar active={section} elevated={elevated} open={navOpen} onClose={onCloseNav} />
 			<main id="main" ref={mainRef} className="admin-main" tabIndex={-1}>
+				<PageHeader title={title} icon={sectionIcon(section)} />
 				<div className="admin-content">
-					<h1>{title}</h1>
 					{state.status === "loading" && <p className="muted">Loading the directory…</p>}
 					{state.status === "error" && (
 						<div className="card" role="alert">

@@ -3,7 +3,8 @@ import { type ReactNode, useEffect, useId, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, viewPath } from "../../routes.ts";
-import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/nav.ts";
+import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useLabels } from "./data.ts";
 import { isExpanded, type MailboxEntry, mailboxNav } from "./mailboxNav.ts";
 import { labelRows, SYSTEM_NAV } from "./views.ts";
@@ -13,6 +14,8 @@ interface SidebarProps {
 	mailboxId: string | null;
 	/** The name of the open mailbox, for a row before the list of mailboxes loads. Null for the own mailbox. */
 	mailboxName: string | null;
+	/** The address of the open mailbox, for the line under the name of the sidebar. */
+	address: string;
 	/**
 	 * The mailboxes that the person can use. The sidebar shows a row for each mailbox when a team mailbox
 	 * or an agent mailbox is in the list. Only owners and admins get agent mailboxes.
@@ -34,10 +37,11 @@ interface SidebarProps {
 	onClose: () => void;
 }
 
-/** The left navigation. Under 768px it is a drawer that the menu button in the top bar opens. */
+/** The sidebar of Mail. At 900px and below it is part of the drawer that the menu button opens. */
 export function Sidebar({
 	mailboxId,
 	mailboxName,
+	address,
 	mailboxes,
 	expanded,
 	onSetExpanded,
@@ -55,7 +59,7 @@ export function Sidebar({
 	const wasOpen = useRef(open);
 	const entries = mailboxNav(mailboxes, mailboxId, mailboxName);
 
-	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
+	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
 	useEffect(() => {
 		const nav = navRef.current;
@@ -93,9 +97,10 @@ export function Sidebar({
 				className={open ? "sidebar sidebar-open" : "sidebar"}
 				aria-label="Mailboxes, folders and labels"
 			>
+				<SidebarHeader title="Mail" subtitle={address} />
 				{!readOnly && (
-					<button type="button" className="compose-button compose-button-block" onClick={onCompose}>
-						<Icon name="pencil" />
+					<button type="button" className="compose-button" onClick={onCompose}>
+						<Icon name="pencil" size={16} />
 						Compose
 					</button>
 				)}
@@ -177,7 +182,7 @@ function MailboxNode({
 					aria-controls={groupId}
 					onClick={onToggle}
 				>
-					<Icon name="chevronDown" size={18} className={expanded ? "nav-chevron nav-chevron-open" : "nav-chevron"} />
+					<Icon name="chevronDown" size={16} className={expanded ? "nav-chevron nav-chevron-open" : "nav-chevron"} />
 				</button>
 			</div>
 			<div id={groupId} className="nav-tree-children" hidden={!expanded}>
@@ -214,7 +219,7 @@ function MailboxContents({
 	view: MailView | null;
 	labels: Label[] | null;
 	labelsError: string | null;
-	/** True under a mailbox row: the rows are indented. */
+	/** True under a mailbox row: the heading of the labels is one level lower. */
 	nested: boolean;
 	/** True when the person can add and delete labels here. */
 	editable: boolean;
@@ -223,7 +228,6 @@ function MailboxContents({
 }) {
 	const byId = new Map((labels ?? []).map((label) => [label.id, label]));
 	const rows = labelRows(labels ?? []);
-	const indentBase = nested ? 40 : 16;
 	const Heading = nested ? "h3" : "h2";
 	return (
 		<>
@@ -261,14 +265,15 @@ function MailboxContents({
 						title="New label"
 						onClick={onNewLabel}
 					>
-						<Icon name="plus" size={18} />
+						<Icon name="plus" size={15} />
 					</button>
 				)}
 			</div>
 			{labelsError && labels === null && <p className="nav-error">Labels are not available.</p>}
 			<ul className="nav-list">
 				{rows.map((row) => {
-					const indent = { paddingInlineStart: `${indentBase + row.depth * 16}px` };
+					// A nested label is 16px more to the right for each level. The 9px is the padding of a row.
+					const indent = row.depth > 0 ? { paddingInlineStart: `${9 + row.depth * 16}px` } : undefined;
 					const label = row.label;
 					if (!label) {
 						// A group row: a parent path that is not a label. It is text, not a link.

@@ -118,6 +118,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 				<Sidebar
 					mailboxId={mailboxId}
 					mailboxName={mailboxName}
+					address={myAddress}
 					mailboxes={mailboxes}
 					expanded={expandedMailboxes}
 					onSetExpanded={onSetExpanded}

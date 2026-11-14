@@ -3,7 +3,9 @@ import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type DriveView, drivePath } from "../../routes.ts";
-import { DRIVE_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { DRIVE_NAV_ID, MENU_BUTTON_ID } from "../../shell/nav.ts";
+import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
+import { useSession } from "../auth/session.tsx";
 import type { About } from "./data.ts";
 import { Menu, type MenuItem } from "./Menu.tsx";
 import { MY_DRIVE } from "./model.ts";
@@ -28,12 +30,13 @@ interface DriveSidebarProps {
 	onClose: () => void;
 }
 
-/** The left navigation of Drive. Under 768px it is a drawer that the menu button in the top bar opens. */
+/** The sidebar of Drive. At 900px and below it is part of the drawer that the menu button opens. */
 export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSidebarProps) {
+	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
 
-	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
+	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
 	useEffect(() => {
 		const nav = navRef.current;
@@ -57,6 +60,7 @@ export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSi
 				className={open ? "sidebar sidebar-open" : "sidebar"}
 				aria-label="Drive views"
 			>
+				<SidebarHeader title="Drive" subtitle={whoami.principal.address} />
 				<Menu
 					className="compose-button"
 					menuLabel="New"
@@ -65,7 +69,7 @@ export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSi
 					align="start"
 					disabled={newItems.length === 0}
 				>
-					<Icon name="plus" />
+					<Icon name="plus" size={16} />
 					New
 				</Menu>
 				<ul className="nav-list">

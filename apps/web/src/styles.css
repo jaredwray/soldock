@@ -1,66 +1,119 @@
-/* Soldock web app. Plain CSS with custom properties. Dark mode follows prefers-color-scheme. */
+/* Soldock web app. Plain CSS with custom properties. The names and the values of the colors follow
+   Ember (https://github.com/NYLLON-SOFTWARE/ember-cloudflare, MIT). The `dark` class on <html> selects
+   the dark colors. src/lib/appearance.ts sets it from the Light, Dark or System choice. */
 
 :root {
 	color-scheme: light;
-	--bg: #f4f6fb;
-	--surface: #ffffff;
-	--surface-2: #f2f4f8;
-	--surface-3: #e8ebf1;
-	--text: #1f1f1f;
-	--text-muted: #5b6168;
-	--border: #d9dde3;
-	--accent: #1a56db;
-	--accent-hover: #1647b8;
-	--accent-text: #ffffff;
-	--accent-soft: #dbe7fd;
-	--selected: #c9dcfb;
-	--unread-bg: #ffffff;
-	--read-bg: #f6f8fb;
-	--danger: #b3261e;
-	--danger-soft: #fbe9e7;
-	--success: #146c2e;
-	--success-soft: #e3f4e6;
-	--warning-text: #6b4500;
-	--warning-bg: #fff4d6;
-	--warning-border: #f0c75e;
-	--star: #e2a400;
-	--focus: #1a56db;
-	--shadow: 0 1px 2px rgb(15 23 42 / 0.08), 0 4px 16px rgb(15 23 42 / 0.12);
-	--radius: 8px;
-	--radius-large: 16px;
-	--topbar-height: 64px;
-	--sidebar-width: 248px;
+	--background: #ffffff;
+	--foreground: #171717;
+	--surface: #fafafa;
+	--hover: #f2f2f2;
+	--row-hover: #f8f8f8;
+	--card: #ffffff;
+	--popover: #ffffff;
+	--border: #e5e5e5;
+	--input: #d4d4d4;
+	--muted-foreground: #6b6b6b;
+	--primary: #171717;
+	--primary-hover: #2e2e2e;
+	--primary-foreground: #fafafa;
+	--ring: #737373;
+	--focus: #171717;
+	--link: #0066ef;
+	--positive: #166534;
+	--negative: #b91c1c;
+	--destructive: #b91c1c;
+	--destructive-hover: #a01818;
+	--destructive-foreground: #ffffff;
+	--warning: #daa038;
+	--control: var(--background);
+	--control-hover: var(--hover);
+	--control-border: var(--border);
+	--field: transparent;
+	--star: var(--foreground);
+	--selected: var(--hover);
+	--positive-soft: color-mix(in srgb, var(--positive) 12%, var(--background));
+	--negative-soft: color-mix(in srgb, var(--negative) 10%, var(--background));
+	--negative-border: color-mix(in srgb, var(--negative) 25%, var(--border));
+	--warning-soft: color-mix(in srgb, var(--warning) 10%, var(--background));
+	--warning-border: color-mix(in srgb, var(--warning) 55%, var(--border));
+	--backdrop: rgb(0 0 0 / 0.5);
+	--drawer-backdrop: rgb(0 0 0 / 0.4);
+	--shadow-xs: 0 1px 2px rgb(0 0 0 / 0.05);
+	--shadow-menu: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+	--shadow-dialog: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+	--radius: 10px;
+	--radius-md: 8px;
+	--radius-sm: 6px;
+	--rail-width: 80px;
+	--sidebar-width: 280px;
+	--header-height: 60px;
 	--font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 	--mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
+/* The dark colors. Keep this list the same as the list in the media query below. */
+:root.dark {
+	color-scheme: dark;
+	--background: #171717;
+	--foreground: #f5f5f5;
+	--surface: #1c1c1c;
+	--hover: #282828;
+	--row-hover: #202020;
+	--card: #1c1c1c;
+	--popover: #1c1c1c;
+	--border: #343434;
+	--input: #404040;
+	--muted-foreground: #a3a3a3;
+	--primary: #f5f5f5;
+	--primary-hover: #dedede;
+	--primary-foreground: #171717;
+	--ring: #a3a3a3;
+	--focus: #f5f5f5;
+	--link: #43abff;
+	--positive: #4ade80;
+	--negative: #fca5a5;
+	--warning: #efb146;
+	--control: rgb(64 64 64 / 0.3);
+	--control-hover: rgb(64 64 64 / 0.5);
+	--control-border: var(--input);
+	--field: rgb(64 64 64 / 0.3);
+}
+
+/* Before main.tsx runs, <html> has no data-appearance attribute. The page then follows the device. */
 @media (prefers-color-scheme: dark) {
-	:root {
+	:root:not([data-appearance]) {
 		color-scheme: dark;
-		--bg: #111317;
-		--surface: #1a1d23;
-		--surface-2: #20242b;
-		--surface-3: #2a2f37;
-		--text: #e7e9ec;
-		--text-muted: #a3aab4;
-		--border: #353b44;
-		--accent: #8ab4f8;
-		--accent-hover: #a8c7fa;
-		--accent-text: #0b1d3a;
-		--accent-soft: #233a5e;
-		--selected: #27426b;
-		--unread-bg: #1f232a;
-		--read-bg: #1a1d23;
-		--danger: #f2b8b5;
-		--danger-soft: #3c1f1d;
-		--success: #8fd19e;
-		--success-soft: #1d3324;
-		--warning-text: #fdd663;
-		--warning-bg: #3a2f0b;
-		--warning-border: #7a6216;
-		--star: #fdd663;
-		--focus: #8ab4f8;
-		--shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px rgb(0 0 0 / 0.5);
+		--background: #171717;
+		--foreground: #f5f5f5;
+		--surface: #1c1c1c;
+		--hover: #282828;
+		--row-hover: #202020;
+		--card: #1c1c1c;
+		--popover: #1c1c1c;
+		--border: #343434;
+		--input: #404040;
+		--muted-foreground: #a3a3a3;
+		--primary: #f5f5f5;
+		--primary-hover: #dedede;
+		--primary-foreground: #171717;
+		--ring: #a3a3a3;
+		--focus: #f5f5f5;
+		--link: #43abff;
+		--positive: #4ade80;
+		--negative: #fca5a5;
+		--warning: #efb146;
+		--control: rgb(64 64 64 / 0.3);
+		--control-hover: rgb(64 64 64 / 0.5);
+		--control-border: var(--input);
+		--field: rgb(64 64 64 / 0.3);
+	}
+}
+
+/* From 901px to 1100px, the sidebar is narrower. */
+@media (min-width: 901px) and (max-width: 1100px) {
+	:root {
+		--sidebar-width: 230px;
 	}
 }
 
@@ -77,9 +130,9 @@ body {
 }
 
 body {
-	background: var(--bg);
-	color: var(--text);
-	font: 14px / 1.45 var(--font);
+	background: var(--surface);
+	color: var(--foreground);
+	font: 14px / 1.5 var(--font);
 	-webkit-font-smoothing: antialiased;
 }
 
@@ -95,12 +148,18 @@ h4 {
 	line-height: 1.25;
 }
 
+h1,
+h2,
+h3 {
+	letter-spacing: -0.025em;
+}
+
 p {
 	margin: 0;
 }
 
 a {
-	color: var(--accent);
+	color: var(--link);
 }
 
 code,
@@ -114,9 +173,8 @@ kbd {
 	min-width: 1.6em;
 	padding: 0 0.4em;
 	border: 1px solid var(--border);
-	border-bottom-width: 2px;
 	border-radius: 4px;
-	background: var(--surface-2);
+	background: var(--background);
 	text-align: center;
 	line-height: 1.5;
 }
@@ -144,9 +202,9 @@ kbd {
 	left: 8px;
 	z-index: 100;
 	padding: 8px 16px;
-	border-radius: var(--radius);
-	background: var(--accent);
-	color: var(--accent-text);
+	border-radius: var(--radius-md);
+	background: var(--primary);
+	color: var(--primary-foreground);
 	font-weight: 600;
 }
 
@@ -155,7 +213,7 @@ kbd {
 }
 
 .muted {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .icon {
@@ -169,7 +227,7 @@ kbd {
 	width: 20px;
 	height: 20px;
 	border: 2px solid var(--border);
-	border-top-color: var(--accent);
+	border-top-color: var(--foreground);
 	border-radius: 50%;
 	animation: spin 0.8s linear infinite;
 }
@@ -190,9 +248,12 @@ kbd {
 		animation-duration: 2.4s;
 	}
 
+	.rail,
+	.rail-open,
 	.sidebar,
 	.sidebar-open,
-	.nav-chevron {
+	.nav-chevron,
+	.switch::after {
 		transition: none;
 	}
 }
@@ -203,61 +264,77 @@ kbd {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	gap: 6px;
+	gap: 8px;
 	min-height: 36px;
 	padding: 0 16px;
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	background: var(--surface);
-	color: var(--text);
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius-md);
+	background: var(--control);
+	color: var(--foreground);
 	font: inherit;
 	font-weight: 500;
 	cursor: pointer;
 	white-space: nowrap;
 	text-decoration: none;
+	box-shadow: var(--shadow-xs);
 }
 
 .button:hover:not(:disabled) {
-	background: var(--surface-2);
+	background: var(--control-hover);
 }
 
 .button:disabled,
 .button-disabled {
-	opacity: 0.6;
+	opacity: 0.5;
 	cursor: not-allowed;
 }
 
 .button-primary {
-	border-color: var(--accent);
-	background: var(--accent);
-	color: var(--accent-text);
+	border-color: transparent;
+	background: var(--primary);
+	color: var(--primary-foreground);
+	box-shadow: none;
 }
 
 .button-primary:hover:not(:disabled) {
-	border-color: var(--accent-hover);
-	background: var(--accent-hover);
+	background: var(--primary-hover);
 }
 
 .button-danger {
-	border-color: var(--danger);
-	background: var(--danger);
-	color: var(--surface);
+	border-color: transparent;
+	background: var(--destructive);
+	color: var(--destructive-foreground);
+	box-shadow: none;
 }
 
 .button-danger:hover:not(:disabled) {
-	background: var(--danger);
-	filter: brightness(1.1);
+	background: var(--destructive-hover);
 }
 
 .button-danger-outline {
-	border-color: var(--danger);
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .button-small {
-	min-height: 30px;
+	min-height: 32px;
 	padding: 0 12px;
+	gap: 6px;
 	font-size: 13px;
+}
+
+.button-large {
+	min-height: 40px;
+	padding: 0 24px;
+}
+
+.button-ghost {
+	border-color: transparent;
+	background: none;
+	box-shadow: none;
+}
+
+.button-ghost:hover:not(:disabled) {
+	background: var(--hover);
 }
 
 .button-block {
@@ -269,19 +346,19 @@ kbd {
 	align-items: center;
 	justify-content: center;
 	flex: none;
-	width: 40px;
-	height: 40px;
+	width: 36px;
+	height: 36px;
 	padding: 0;
 	border: 0;
-	border-radius: 50%;
+	border-radius: var(--radius-md);
 	background: transparent;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	cursor: pointer;
 }
 
 .icon-button:hover:not(:disabled) {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .icon-button:disabled {
@@ -302,7 +379,7 @@ kbd {
 	padding: 0;
 	border: 0;
 	background: none;
-	color: var(--accent);
+	color: var(--link);
 	font: inherit;
 	cursor: pointer;
 	text-decoration: underline;
@@ -319,7 +396,7 @@ kbd {
 .field-label {
 	display: block;
 	margin-bottom: 6px;
-	font-weight: 600;
+	font-weight: 500;
 	font-size: 13px;
 }
 
@@ -329,41 +406,52 @@ kbd {
 
 .field-hint {
 	margin-top: 6px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
 .field-error {
 	margin-top: 4px;
-	color: var(--danger);
+	color: var(--negative);
 	font-size: 13px;
 }
 
 .form-error {
 	margin: 12px 0;
 	padding: 10px 12px;
-	border-radius: var(--radius);
-	background: var(--danger-soft);
-	color: var(--danger);
+	border: 1px solid var(--negative-border);
+	border-radius: var(--radius-md);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 .input {
 	width: 100%;
-	min-height: 40px;
-	padding: 8px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	color: var(--text);
+	min-height: 36px;
+	padding: 6px 12px;
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
 	font: inherit;
+	box-shadow: var(--shadow-xs);
 }
 
-.input:focus {
-	border-color: var(--accent);
+.input::placeholder {
+	color: var(--muted-foreground);
+}
+
+/* A text field with the focus: a darker border and a soft ring. */
+.input:focus-visible,
+.search-input:focus-visible,
+.label-select:focus-visible {
+	border-color: var(--ring);
+	outline: none;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
 }
 
 .input[aria-invalid="true"] {
-	border-color: var(--danger);
+	border-color: var(--negative);
 }
 
 .input-mono {
@@ -376,11 +464,44 @@ kbd {
 }
 
 .checkbox {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--primary);
+	cursor: pointer;
+}
+
+/* A switch: a button with role="switch" and aria-checked. */
+.switch {
+	position: relative;
+	flex: none;
+	width: 42px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: var(--muted-foreground);
+	cursor: pointer;
+}
+
+.switch::after {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 3px;
 	width: 18px;
 	height: 18px;
-	margin: 0;
-	accent-color: var(--accent);
-	cursor: pointer;
+	border-radius: 50%;
+	background: var(--background);
+	transition: transform 0.15s ease;
+}
+
+.switch[aria-checked="true"] {
+	background: var(--foreground);
+}
+
+.switch[aria-checked="true"]::after {
+	transform: translateX(18px);
 }
 
 fieldset {
@@ -400,12 +521,12 @@ fieldset {
 
 .check-row input {
 	margin-top: 2px;
-	accent-color: var(--accent);
+	accent-color: var(--primary);
 }
 
 .check-hint {
 	display: block;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -427,9 +548,10 @@ fieldset {
 .notice {
 	margin: 12px 0;
 	padding: 10px 12px;
-	border-radius: var(--radius);
-	background: var(--accent-soft);
-	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	color: var(--foreground);
 }
 
 .notice-small {
@@ -445,9 +567,15 @@ fieldset {
 	margin-bottom: 16px;
 	padding: 12px;
 	border: 1px solid var(--warning-border);
-	border-radius: var(--radius);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	border-radius: var(--radius-md);
+	background: var(--warning-soft);
+	color: var(--foreground);
+}
+
+/* The text of a warning is ink. Only the icon has the warning color. */
+.warning-box > .icon,
+.external-notice > .icon {
+	color: var(--warning);
 }
 
 .form-grid {
@@ -477,20 +605,20 @@ fieldset {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 16px;
+	padding: 6px 12px;
 	border: 1px solid var(--border);
-	border-radius: 999px;
+	border-radius: var(--radius-md);
 	cursor: pointer;
 }
 
 .segment input {
 	margin: 0;
-	accent-color: var(--accent);
+	accent-color: var(--primary);
 }
 
 .segment-active {
-	border-color: var(--accent);
-	background: var(--accent-soft);
+	border-color: var(--foreground);
+	background: var(--hover);
 }
 
 .segment:focus-within {
@@ -508,12 +636,12 @@ fieldset {
 	gap: 12px;
 	height: 100%;
 	padding: 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
 .boot-title {
-	color: var(--text);
+	color: var(--foreground);
 	font-size: 20px;
 }
 
@@ -529,15 +657,14 @@ fieldset {
 	max-width: 420px;
 	padding: 32px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: var(--radius);
+	background: var(--background);
 }
 
 .sign-in-title {
 	margin: 24px 0 8px;
-	font-size: 24px;
-	font-weight: 600;
+	font-size: 20px;
+	font-weight: 650;
 }
 
 .sign-in form {
@@ -561,7 +688,7 @@ fieldset {
 
 .sign-in-help {
 	margin: 16px 0 0;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -578,7 +705,7 @@ fieldset {
 	display: inline-flex;
 	align-items: center;
 	gap: 10px;
-	color: var(--text);
+	color: var(--foreground);
 	font-size: 20px;
 	font-weight: 600;
 	text-decoration: none;
@@ -592,31 +719,35 @@ fieldset {
 .brand-mark {
 	display: inline-grid;
 	place-items: center;
+	flex: none;
 	width: 34px;
 	height: 34px;
-	border-radius: 10px;
-	background: var(--accent);
-	color: var(--accent-text);
+	border-radius: var(--radius);
+	background: var(--primary);
+	color: var(--primary-foreground);
 }
 
-/* App frame */
+/* App frame: the rail at the left, and the page of the route. */
 
 .app {
+	position: relative;
 	display: grid;
-	grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+	grid-template-columns: var(--rail-width) minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
 	height: 100%;
 }
 
 .app-with-banner {
-	grid-template-rows: var(--topbar-height) auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr);
 }
 
 .app-banner {
+	grid-column: 2;
 	margin: 0;
-	padding: 10px 16px;
+	padding: 10px 22px;
 	border-bottom: 1px solid var(--warning-border);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	background: var(--warning-soft);
+	color: var(--foreground);
 	font-size: 14px;
 }
 
@@ -625,108 +756,91 @@ fieldset {
 	font-weight: 600;
 }
 
-.topbar {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	padding: 0 16px;
-	background: var(--bg);
-}
-
-.topbar .brand {
-	width: calc(var(--sidebar-width) - 28px);
-}
-
+/* The menu button shows only in the drawer layout, at 900px and below. */
 .menu-button {
 	display: none;
 }
 
-.search {
-	flex: 1;
-	max-width: 720px;
-	min-width: 0;
-}
+/* The rail */
 
-.search form {
-	position: relative;
-}
-
-.search-icon {
-	position: absolute;
-	top: 50%;
-	left: 16px;
-	transform: translateY(-50%);
-	color: var(--text-muted);
-	pointer-events: none;
-}
-
-.search-input {
-	width: 100%;
-	height: 46px;
-	padding: 0 16px 0 52px;
-	border: 1px solid transparent;
-	border-radius: 999px;
-	background: var(--surface-3);
-	color: var(--text);
-	font: inherit;
-	font-size: 15px;
-}
-
-.search-input::placeholder {
-	color: var(--text-muted);
-}
-
-.search-input:focus {
-	border-color: var(--border);
-	background: var(--surface);
-	box-shadow: var(--shadow);
-	outline: none;
-}
-
-/* The links to the products: Mail and Drive. */
-
-.product-nav {
+.rail {
+	grid-row: 1 / -1;
 	display: flex;
-	gap: 4px;
-	margin-left: auto;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	min-height: 0;
+	padding: 16px 12px;
+	border-right: 1px solid var(--border);
+	background: var(--surface);
+	overflow-y: auto;
+	scrollbar-width: none;
 }
 
-.product-link {
-	display: inline-flex;
+.rail-brand {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 56px;
+	height: 56px;
+	margin-bottom: 4px;
+	border-radius: var(--radius);
+}
+
+.rail-brand .brand-mark {
+	width: 44px;
+	height: 44px;
+}
+
+.rail-link {
+	position: relative;
+	display: flex;
+	flex-direction: column;
 	align-items: center;
-	gap: 8px;
-	height: 40px;
-	padding: 0 14px;
-	border-radius: 999px;
-	color: var(--text-muted);
-	font-weight: 500;
+	justify-content: center;
+	gap: 5px;
+	flex: none;
+	width: 56px;
+	height: 56px;
+	padding: 6px 3px;
+	border-radius: var(--radius);
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.2;
 	text-decoration: none;
 }
 
-.product-link:hover {
-	background: var(--surface-3);
-	color: var(--text);
+.rail-link:hover,
+.rail-link[aria-current] {
+	background: var(--hover);
+	color: var(--foreground);
 }
 
-.product-link-active {
-	background: var(--accent-soft);
-	color: var(--text);
+.rail-rule {
+	flex: none;
+	width: 32px;
+	height: 0;
+	margin: 4px 0;
+	border: 0;
+	border-top: 1px solid var(--border);
 }
+
+.rail-spacer {
+	flex: 1;
+}
+
+/* The account button and its panel */
 
 .account {
 	position: relative;
-	margin-left: auto;
-}
-
-.product-nav + .account {
-	margin-left: 0;
+	flex: none;
 }
 
 .avatar-button {
 	display: inline-grid;
 	place-items: center;
-	width: 40px;
-	height: 40px;
+	width: 44px;
+	height: 44px;
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
@@ -738,84 +852,248 @@ fieldset {
 	display: inline-grid;
 	place-items: center;
 	flex: none;
-	width: 34px;
-	height: 34px;
+	width: 36px;
+	height: 36px;
 	border-radius: 50%;
-	background: #6d4fc2;
-	color: #ffffff;
-	font-size: 14px;
+	background: var(--primary);
+	color: var(--primary-foreground);
+	font-size: 13px;
 	font-weight: 600;
 }
 
 .avatar-large {
-	width: 48px;
-	height: 48px;
-	font-size: 18px;
+	width: 40px;
+	height: 40px;
+	font-size: 14px;
 }
 
 .avatar-small {
 	width: 32px;
 	height: 32px;
+	border: 1px solid var(--border);
+	background: var(--hover);
+	color: var(--foreground);
 	font-size: 13px;
-	background: #0b7a75;
 }
 
+/* Fixed, because the rail scrolls and cuts off an absolute panel. */
 .account-panel {
-	position: absolute;
-	top: calc(100% + 8px);
-	right: 0;
+	position: fixed;
+	bottom: 12px;
+	left: calc(var(--rail-width) + 8px);
 	z-index: 40;
-	width: min(320px, calc(100vw - 32px));
-	padding: 16px 8px 8px;
+	width: min(280px, calc(100vw - var(--rail-width) - 16px));
+	padding: 8px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: 12px;
+	background: var(--popover);
+	color: var(--foreground);
+	box-shadow: var(--shadow-menu);
 }
 
 .account-identity {
 	display: flex;
-	gap: 12px;
+	gap: 10px;
 	align-items: center;
-	padding: 0 8px 12px;
-	border-bottom: 1px solid var(--border);
+	padding: 6px 8px 10px;
 }
 
 .account-text {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	line-height: 1.35;
 }
 
 .account-text span {
 	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
 	text-overflow: ellipsis;
 }
 
-.account-links {
-	margin: 8px 0 0;
-	padding: 0;
-	list-style: none;
+/* Menus: the parts that the account panel and the menus of Drive share. */
+
+.menu-separator {
+	height: 1px;
+	margin: 4px -8px;
+	background: var(--border);
 }
 
-.account-link {
+.menu-item {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	width: 100%;
-	padding: 10px 12px;
+	min-height: 32px;
+	padding: 6px 8px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-sm);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	text-decoration: none;
 	cursor: pointer;
 }
 
-.account-link:hover {
-	background: var(--surface-2);
+.menu-item .icon {
+	color: var(--muted-foreground);
+}
+
+.menu-item:hover {
+	background: var(--hover);
+}
+
+/* The Appearance choice: Light, Dark or System. The radio buttons are in the page, but they do not show. */
+
+.appearance legend {
+	padding: 6px 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.appearance-options {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 2px;
+	margin: 0 4px 4px;
+	padding: 3px;
+	border-radius: var(--radius-md);
+	background: var(--hover);
+}
+
+.appearance-option {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 30px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.appearance-option input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: 0;
+	opacity: 0;
+}
+
+.appearance-option:has(input:checked) {
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: var(--shadow-xs);
+}
+
+.appearance-option:has(input:focus-visible) {
+	outline: 2px solid var(--focus);
+	outline-offset: 1px;
+}
+
+/* The header row of a page: the title at the left, the search box and the controls at the right. */
+
+.page-header,
+.toolbar,
+.drive-header,
+.chat-header,
+.document-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex: none;
+	min-height: var(--header-height);
+	padding: 10px 22px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
+}
+
+.page-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.page-title .icon {
+	color: var(--muted-foreground);
+}
+
+.page-heading,
+.toolbar-title {
+	overflow: hidden;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.toolbar-spacer {
+	flex: 1;
+}
+
+.search {
+	flex: 0 1 320px;
+	min-width: 96px;
+}
+
+.search form {
+	position: relative;
+}
+
+.search-icon {
+	position: absolute;
+	top: 50%;
+	left: 10px;
+	transform: translateY(-50%);
+	color: var(--muted-foreground);
+	pointer-events: none;
+}
+
+.search-input {
+	width: 100%;
+	height: 36px;
+	padding: 0 36px 0 34px;
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
+	font: inherit;
+	box-shadow: var(--shadow-xs);
+}
+
+.search-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+/* The `/` key moves the focus to the search box. The hint hides while the box is in use. */
+.search-key {
+	position: absolute;
+	top: 50%;
+	right: 8px;
+	display: inline-grid;
+	place-items: center;
+	min-width: 20px;
+	height: 20px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 11px;
+	transform: translateY(-50%);
+	pointer-events: none;
+}
+
+.search-input:focus ~ .search-key,
+.search-input:not(:placeholder-shown) ~ .search-key {
+	display: none;
 }
 
 /* Mail layout */
@@ -826,70 +1104,113 @@ fieldset {
 	min-height: 0;
 }
 
+/* The sidebar of a product: Mail, Drive, Chat and Admin. */
+
 .sidebar {
 	display: flex;
 	flex-direction: column;
+	gap: 14px;
 	min-height: 0;
-	padding: 8px 8px 16px 0;
+	padding: 20px 12px;
+	border-right: 1px solid var(--border);
+	background: var(--surface);
 	overflow-y: auto;
-	background: var(--bg);
 }
 
+.sidebar-header {
+	margin: 0;
+	padding: 0 9px;
+}
+
+.sidebar-title {
+	display: flex;
+	align-items: center;
+	min-height: 28px;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 24px;
+}
+
+.sidebar-subtitle {
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The main action of a sidebar: Compose, New and New room. It fills the width of the sidebar. */
 .compose-button {
 	display: inline-flex;
 	align-items: center;
-	gap: 12px;
-	align-self: flex-start;
-	margin: 0 0 16px 8px;
-	padding: 18px 24px 18px 20px;
+	justify-content: center;
+	gap: 8px;
+	align-self: stretch;
+	flex: none;
+	height: 36px;
+	padding: 0 16px;
 	border: 0;
-	border-radius: var(--radius-large);
-	background: var(--accent-soft);
-	color: var(--text);
+	border-radius: var(--radius-md);
+	background: var(--primary);
+	color: var(--primary-foreground);
 	font: inherit;
-	font-weight: 600;
-	font-size: 15px;
+	font-weight: 500;
 	cursor: pointer;
-	box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
 }
 
 .compose-button:hover {
-	box-shadow: var(--shadow);
+	background: var(--primary-hover);
 }
 
 .nav-list {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
+/* A list with no rows takes no room in the sidebar. */
+.nav-list:empty {
+	display: none;
+}
+
 .nav-item {
 	display: flex;
 	align-items: center;
-	gap: 16px;
-	min-height: 34px;
-	padding: 0 12px 0 24px;
-	border-radius: 0 999px 999px 0;
-	color: var(--text);
+	gap: 10px;
+	min-height: 36px;
+	padding: 7px 9px;
+	border-radius: var(--radius-md);
+	color: var(--foreground);
+	line-height: 22px;
 	text-decoration: none;
 }
 
+.nav-item:focus-visible {
+	outline-offset: -2px;
+}
+
 .nav-item:hover {
-	background: var(--surface-3);
+	background: var(--hover);
 }
 
 .nav-item-active,
 .nav-item-active:hover {
-	background: var(--selected);
-	font-weight: 700;
+	background: var(--hover);
+	font-weight: 600;
 }
 
 .nav-item .icon {
-	color: var(--text-muted);
+	width: 18px;
+	height: 18px;
+	color: var(--muted-foreground);
 }
 
 .nav-item-active .icon {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .nav-name {
@@ -901,37 +1222,36 @@ fieldset {
 }
 
 .nav-count {
+	color: var(--foreground);
 	font-size: 12px;
-	font-weight: 700;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
 }
 
+/* The sidebar has a gap between its parts, so a section adds only a small margin. */
 .nav-section {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin: 16px 0 4px;
-	padding: 0 4px 0 24px;
+	min-height: 28px;
+	margin: 0 0 -9px;
+	padding: 0 0 0 9px;
 }
 
 .nav-heading {
-	font-size: 15px;
-	font-weight: 600;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0;
 }
 
-/* The mail Compose button: the full width of the sidebar, with a small gap on each side. */
-.compose-button-block {
-	align-self: stretch;
-	justify-content: center;
-	margin: 0 4px 12px 12px;
-	padding: 10px 16px;
-	border-radius: var(--radius);
+.nav-section .icon-button-small {
+	width: 28px;
+	height: 28px;
+	color: var(--foreground);
 }
 
 /* A mailbox row in the mail sidebar. The chevron on the right expands or collapses the folders and labels of the mailbox. */
-.nav-tree-node + .nav-tree-node {
-	margin-top: 2px;
-}
-
 .nav-mailbox-row {
 	position: relative;
 	display: flex;
@@ -941,25 +1261,24 @@ fieldset {
 .nav-mailbox-row .nav-mailbox {
 	flex: 1;
 	min-width: 0;
-	padding-right: 44px;
+	padding-right: 40px;
 }
 
+/* Only the open view has a fill. The open mailbox shows with its weight. */
 .nav-mailbox-current {
-	font-weight: 700;
+	font-weight: 600;
 }
 
 .nav-mailbox-current .icon {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .nav-mailbox-toggle {
 	position: absolute;
 	right: 4px;
-	color: var(--text-muted);
-}
-
-.nav-mailbox-toggle:hover {
-	color: var(--text);
+	width: 28px;
+	height: 28px;
+	color: var(--muted-foreground);
 }
 
 .nav-chevron {
@@ -979,19 +1298,25 @@ fieldset {
 .nav-label-row .nav-item {
 	flex: 1;
 	min-width: 0;
-	padding-right: 40px;
+}
+
+/* Room for the delete button of a label. */
+.nav-label-row:has(.nav-label-delete) .nav-item {
+	padding-right: 36px;
 }
 
 /* A parent path that is not a label. It is text, not a link. */
 .nav-group,
 .nav-group:hover {
 	background: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .nav-label-delete {
 	position: absolute;
 	right: 4px;
+	width: 28px;
+	height: 28px;
 	opacity: 0;
 }
 
@@ -1008,46 +1333,34 @@ fieldset {
 
 .nav-empty,
 .nav-error {
-	padding: 4px 24px;
-	color: var(--text-muted);
+	padding: 4px 9px;
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
-/* The folders and labels under a mailbox row are indented. The labels get their indent from Sidebar.tsx. */
+/* The folders and labels under a mailbox row. A line under the icon of the mailbox shows the level. */
 .nav-tree-children {
-	padding-bottom: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin: 3px 0 8px 17px;
+	padding-left: 8px;
+	border-left: 1px solid var(--border);
 }
 
-.nav-tree-children > .nav-list > li > .nav-item {
-	padding-inline-start: 40px;
+.nav-tree-children[hidden] {
+	display: none;
 }
 
 /* The same height with or without the New label button. */
 .nav-section-nested {
-	min-height: 32px;
-	margin: 8px 0 0;
-	padding-left: 40px;
-}
-
-.nav-section-nested .nav-heading {
-	color: var(--text-muted);
-	font-size: 13px;
-}
-
-.nav-tree-children .nav-empty,
-.nav-tree-children .nav-error {
-	padding-left: 40px;
-}
-
-/* The first section follows the Compose button, which has its own margin. */
-.nav-section-first {
-	margin-top: 0;
+	margin: 5px 0 0;
 }
 
 .nav-hint {
 	margin-top: auto;
-	padding: 24px 24px 0;
-	color: var(--text-muted);
+	padding: 12px 9px 0;
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1055,15 +1368,13 @@ fieldset {
 	display: none;
 }
 
+/* The content of a product is on the canvas, with no card. */
 .mail-main {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	margin: 0 16px 16px 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	overflow: hidden;
+	background: var(--background);
 }
 
 .mail-main:focus {
@@ -1076,15 +1387,11 @@ fieldset {
 	overflow-y: auto;
 }
 
-/* Toolbar */
+/* Toolbar: the header row of Mail, and the row of actions above the list of Drive. The box rules
+   are with the page header above. */
 
 .toolbar {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	min-height: 52px;
-	padding: 4px 12px;
-	border-bottom: 1px solid var(--border);
+	gap: 8px;
 }
 
 .toolbar-actions {
@@ -1101,37 +1408,21 @@ fieldset {
 	background: var(--border);
 }
 
-.toolbar-spacer {
-	flex: 1;
-}
-
-.toolbar-title {
-	overflow: hidden;
-	color: var(--text-muted);
-	font-size: 14px;
-	font-weight: 500;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
+/* The box lines up with the boxes of the rows. */
 .select-all {
 	display: inline-grid;
-	place-items: center;
-	width: 40px;
-	height: 40px;
-	border-radius: 50%;
+	place-items: center start;
+	flex: none;
+	width: 28px;
+	height: 36px;
 	cursor: pointer;
-}
-
-.select-all:hover {
-	background: var(--surface-3);
 }
 
 .label-picker {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .label-picker .icon {
@@ -1141,12 +1432,12 @@ fieldset {
 }
 
 .label-select {
-	height: 34px;
+	height: 32px;
 	padding: 0 12px 0 34px;
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	background: var(--surface);
-	color: var(--text);
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
 	font: inherit;
 	font-size: 13px;
 	cursor: pointer;
@@ -1161,7 +1452,7 @@ fieldset {
 	justify-content: center;
 	gap: 12px;
 	padding: 64px 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
@@ -1170,31 +1461,25 @@ fieldset {
 }
 
 .thread-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
 	margin: 0;
-	padding: 0;
+	padding: 8px 10px 0;
 	list-style: none;
 }
 
 .thread-row {
 	position: relative;
 	display: grid;
-	grid-template-columns: 40px 36px minmax(0, 1fr);
+	grid-template-columns: 28px 32px minmax(0, 1fr);
 	align-items: center;
-	padding-left: 8px;
-	border-bottom: 1px solid var(--border);
-	background: var(--read-bg);
+	padding: 0 12px;
+	border-radius: var(--radius-md);
 }
 
 .thread-row:hover {
-	z-index: 1;
-	box-shadow:
-		inset 1px 0 0 var(--border),
-		inset -1px 0 0 var(--border),
-		0 1px 3px rgb(15 23 42 / 0.16);
-}
-
-.thread-unread {
-	background: var(--unread-bg);
+	background: var(--row-hover);
 }
 
 .thread-selected,
@@ -1211,19 +1496,23 @@ fieldset {
 .thread-cursor::before {
 	content: "";
 	position: absolute;
-	top: 0;
-	bottom: 0;
-	left: 0;
+	top: 10px;
+	bottom: 10px;
+	left: 2px;
 	width: 3px;
-	background: var(--accent);
+	border-radius: 2px;
+	background: var(--foreground);
 }
 
 .thread-check {
-	justify-self: center;
+	justify-self: start;
 }
 
 .star {
-	color: var(--text-muted);
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
 }
 
 .star-on {
@@ -1232,7 +1521,7 @@ fieldset {
 
 /* The mailbox of an agent, which an owner or an admin can only read: no checkbox, and a star that only shows the state. */
 .thread-row-read-only {
-	grid-template-columns: 36px minmax(0, 1fr);
+	grid-template-columns: 32px minmax(0, 1fr);
 }
 
 .star-static {
@@ -1256,12 +1545,13 @@ fieldset {
 
 .thread-link {
 	display: grid;
-	grid-template-columns: 200px minmax(0, 1fr) auto;
+	grid-template-columns: 184px minmax(0, 1fr) auto;
 	align-items: center;
 	gap: 16px;
 	min-height: 44px;
-	padding: 0 16px 0 4px;
-	color: var(--text);
+	padding: 0 0 0 6px;
+	border-radius: var(--radius-sm);
+	color: var(--foreground);
 	text-decoration: none;
 }
 
@@ -1285,7 +1575,7 @@ fieldset {
 }
 
 .thread-count {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1295,14 +1585,14 @@ fieldset {
 
 .thread-snippet,
 .thread-dash {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .thread-meta {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 	white-space: nowrap;
 }
@@ -1314,8 +1604,8 @@ fieldset {
 .thread-unread .thread-from-names,
 .thread-unread .thread-subject,
 .thread-unread .thread-meta time {
-	color: var(--text);
-	font-weight: 700;
+	color: var(--foreground);
+	font-weight: 650;
 }
 
 .chips {
@@ -1330,18 +1620,22 @@ fieldset {
 .chip {
 	display: inline-flex;
 	align-items: center;
-	padding: 1px 8px;
-	border-radius: 4px;
-	background: var(--surface-3);
-	color: var(--text);
+	padding: 1px 7px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	color: var(--foreground);
 	font-size: 12px;
 	font-weight: 500;
+	line-height: 18px;
 	white-space: nowrap;
 }
 
 .chip-small {
 	margin-right: 6px;
+	padding: 0 6px;
 	font-size: 11px;
+	line-height: 16px;
 	vertical-align: 1px;
 }
 
@@ -1349,7 +1643,8 @@ fieldset {
 	display: flex;
 	align-items: center;
 	gap: 16px;
-	padding: 16px;
+	padding: 12px 22px;
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -1368,8 +1663,8 @@ fieldset {
 }
 
 .thread-subject-heading {
-	font-size: 22px;
-	font-weight: 400;
+	font-size: 20px;
+	font-weight: 650;
 	overflow-wrap: anywhere;
 }
 
@@ -1404,7 +1699,7 @@ fieldset {
 	padding: 12px 0;
 	border: 0;
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
@@ -1423,7 +1718,7 @@ fieldset {
 }
 
 .message-sender-address {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1435,7 +1730,7 @@ fieldset {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -1443,7 +1738,7 @@ fieldset {
 .message-date {
 	flex: none;
 	margin-left: auto;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1453,7 +1748,7 @@ fieldset {
 
 .message-recipients {
 	margin: -6px 0 10px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -1482,9 +1777,9 @@ fieldset {
 	margin-bottom: 12px;
 	padding: 10px 12px;
 	border: 1px solid var(--warning-border);
-	border-radius: var(--radius);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	border-radius: var(--radius-md);
+	background: var(--warning-soft);
+	color: var(--foreground);
 	font-size: 13px;
 }
 
@@ -1493,9 +1788,13 @@ fieldset {
 }
 
 .spam-notice {
-	border-color: var(--danger);
-	background: var(--danger-soft);
-	color: var(--danger);
+	border-color: var(--negative-border);
+	background: var(--negative-soft);
+	color: var(--negative);
+}
+
+.spam-notice > .icon {
+	color: inherit;
 }
 
 .auth-results {
@@ -1515,13 +1814,13 @@ fieldset {
 }
 
 .auth-pass {
-	background: var(--success-soft);
-	color: var(--success);
+	background: var(--positive-soft);
+	color: var(--positive);
 }
 
 .auth-fail {
-	background: var(--danger-soft);
-	color: var(--danger);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 .message-frame {
@@ -1530,7 +1829,7 @@ fieldset {
 	height: 60vh;
 	min-height: 140px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: #ffffff;
 	color-scheme: light;
 }
@@ -1544,8 +1843,8 @@ fieldset {
 	min-height: 64px;
 	padding: 12px;
 	border: 1px dashed var(--border);
-	border-radius: var(--radius);
-	color: var(--text-muted);
+	border-radius: var(--radius-md);
+	color: var(--muted-foreground);
 	font-size: 14px;
 }
 
@@ -1593,7 +1892,7 @@ fieldset {
 	max-width: 640px;
 	padding: 8px 8px 8px 12px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 }
 
 .attachment-name {
@@ -1604,7 +1903,7 @@ fieldset {
 }
 
 .attachment-meta {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 	white-space: nowrap;
 }
@@ -1623,17 +1922,18 @@ fieldset {
 
 .delivery-error {
 	flex-basis: 100%;
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .status {
 	display: inline-block;
 	margin-left: 8px;
-	padding: 1px 8px;
+	padding: 2px 8px;
 	border-radius: 999px;
-	background: var(--surface-3);
+	background: var(--hover);
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
+	line-height: 16px;
 }
 
 .delivery-item .status {
@@ -1642,13 +1942,13 @@ fieldset {
 
 .status-delivered,
 .status-sent {
-	background: var(--success-soft);
-	color: var(--success);
+	background: var(--positive-soft);
+	color: var(--positive);
 }
 
 .status-failed {
-	background: var(--danger-soft);
-	color: var(--danger);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 .message-actions {
@@ -1664,15 +1964,15 @@ fieldset {
 	width: min(560px, calc(100vw - 32px));
 	max-height: calc(100dvh - 32px);
 	padding: 0;
-	border: 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	color: var(--text);
-	box-shadow: var(--shadow);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: var(--shadow-dialog);
 }
 
 .dialog::backdrop {
-	background: rgb(15 23 42 / 0.45);
+	background: var(--backdrop);
 }
 
 .dialog-small {
@@ -1681,20 +1981,32 @@ fieldset {
 
 .dialog-header {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 12px 12px 8px 24px;
+	padding: 20px 16px 8px 24px;
+}
+
+.dialog-header .icon-button {
+	width: 32px;
+	height: 32px;
+	margin-top: -4px;
+}
+
+.dialog-header .icon-button .icon {
+	width: 16px;
+	height: 16px;
 }
 
 .dialog-title {
 	font-size: 18px;
 	font-weight: 600;
+	line-height: 1.3;
 }
 
 .dialog-description {
 	padding: 0 24px 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .dialog-body {
@@ -1741,7 +2053,7 @@ fieldset {
 }
 
 .shortcut-table th {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 	font-weight: 600;
 	text-transform: uppercase;
@@ -1775,7 +2087,7 @@ fieldset {
 }
 
 .compose-label {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -1794,7 +2106,7 @@ fieldset {
 	padding: 6px 0;
 	border: 0;
 	background: transparent;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 }
 
@@ -1803,12 +2115,12 @@ fieldset {
 }
 
 .compose-row:focus-within {
-	border-bottom-color: var(--accent);
-	box-shadow: 0 1px 0 var(--accent);
+	border-bottom-color: var(--foreground);
+	box-shadow: 0 1px 0 var(--foreground);
 }
 
 .compose-input[aria-invalid="true"] {
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .compose-copies {
@@ -1834,7 +2146,7 @@ fieldset {
 	height: 40vh;
 	padding: 8px 0;
 	overflow-y: auto;
-	color: var(--text);
+	color: var(--foreground);
 	line-height: 1.55;
 	resize: vertical;
 }
@@ -1855,11 +2167,11 @@ fieldset {
 	margin-left: 0.8ex;
 	padding-left: 1ex;
 	border-left: 1px solid var(--border);
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .compose-body a {
-	color: var(--accent);
+	color: var(--link);
 	text-decoration: underline;
 }
 
@@ -1871,7 +2183,7 @@ fieldset {
 	content: attr(data-placeholder);
 	float: left;
 	height: 0;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	pointer-events: none;
 }
 
@@ -1889,8 +2201,8 @@ fieldset {
 }
 
 .format-button[aria-pressed="true"] {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .format-button:focus-visible {
@@ -1903,7 +2215,7 @@ fieldset {
 	align-items: center;
 	gap: 8px;
 	padding-bottom: 24px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .link-fields {
@@ -1925,8 +2237,8 @@ fieldset {
 	align-items: center;
 	gap: 8px;
 	padding: 2px 4px 2px 10px;
-	border-radius: var(--radius);
-	background: var(--surface-2);
+	border-radius: var(--radius-md);
+	background: var(--surface);
 }
 
 .compose-size {
@@ -1958,19 +2270,21 @@ fieldset {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
-/* Toasts */
+/* Toasts. They are at the bottom right: the account button is at the bottom left. A toast has the
+   colors of the page the other way round: ink in light mode, and near white in dark mode. */
 
 .toasts {
 	position: fixed;
+	right: 24px;
 	bottom: 24px;
-	left: 24px;
 	z-index: 60;
 	display: flex;
 	flex-direction: column;
+	align-items: flex-end;
 	gap: 8px;
 	max-width: min(480px, calc(100vw - 32px));
 	pointer-events: none;
@@ -1979,6 +2293,7 @@ fieldset {
 .toast-region {
 	display: flex;
 	flex-direction: column;
+	align-items: flex-end;
 	gap: 8px;
 }
 
@@ -1986,17 +2301,17 @@ fieldset {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px 8px 10px 16px;
-	border-radius: var(--radius);
-	background: #2b2f36;
-	color: #f1f3f4;
-	box-shadow: var(--shadow);
+	padding: 8px 8px 8px 16px;
+	border-radius: var(--radius-md);
+	background: var(--foreground);
+	color: var(--background);
+	box-shadow: var(--shadow-menu);
 	pointer-events: auto;
 }
 
 .toast-error {
-	background: #8c1d18;
-	color: #ffffff;
+	background: var(--destructive);
+	color: var(--destructive-foreground);
 }
 
 .toast-message {
@@ -2004,19 +2319,16 @@ fieldset {
 }
 
 .toast-action {
-	padding: 6px 10px;
+	padding: 4px 10px;
 	border: 0;
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	background: none;
-	color: #a8c7fa;
+	color: inherit;
 	font: inherit;
 	font-weight: 600;
-	cursor: pointer;
-}
-
-.toast-error .toast-action {
-	color: #ffffff;
 	text-decoration: underline;
+	text-underline-offset: 3px;
+	cursor: pointer;
 }
 
 .toast-close {
@@ -2024,7 +2336,7 @@ fieldset {
 	height: 28px;
 	padding: 0;
 	border: 0;
-	border-radius: 50%;
+	border-radius: var(--radius-sm);
 	background: none;
 	color: inherit;
 	font-size: 18px;
@@ -2034,32 +2346,56 @@ fieldset {
 
 .toast-close:hover,
 .toast-action:hover {
-	background: rgb(255 255 255 / 0.12);
+	background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .toast :focus-visible {
-	outline-color: #ffffff;
+	outline-color: currentColor;
 }
 
 /* Settings and the other pages with one column. Admin also uses the cards and the forms. */
 
-.page {
-	width: 100%;
-	max-width: 880px;
-	margin: 0 auto;
-	padding: 8px 16px 48px;
+/* A page with a header row: the page scrolls under the header. */
+.page-main {
+	min-width: 0;
+	min-height: 0;
 	overflow-y: auto;
+	background: var(--background);
 }
 
+.page-main:focus {
+	outline: none;
+}
+
+.page-main > .page-header,
+.admin-main > .page-header {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+}
+
+/* The content has a width of 880px at most, in the center. */
+.page {
+	width: 100%;
+	padding: 24px max(22px, calc((100% - 880px) / 2)) 48px;
+}
+
+.page > p + p {
+	margin-top: 8px;
+}
+
+/* A page with no header row, for example while a doc loads. */
 .app > .page {
 	min-height: 0;
+	overflow-y: auto;
+	background: var(--background);
 }
 
 .page:focus {
 	outline: none;
 }
 
-/* Admin: the side navigation and one section at a time */
+/* Admin: the sidebar and one section at a time */
 
 .admin-layout {
 	display: grid;
@@ -2072,8 +2408,8 @@ fieldset {
 	position: relative;
 	min-width: 0;
 	min-height: 0;
-	padding: 8px 16px 48px;
 	overflow-y: auto;
+	background: var(--background);
 }
 
 .admin-main:focus {
@@ -2081,42 +2417,23 @@ fieldset {
 }
 
 .admin-content {
-	max-width: 1040px;
+	max-width: 1084px;
 	margin: 0 auto;
-}
-
-.page > h1,
-.admin-content > h1 {
-	margin: 12px 0 20px;
-	font-size: 26px;
-	font-weight: 500;
-}
-
-.back-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	margin-top: 8px;
-	font-size: 13px;
-	text-decoration: none;
-}
-
-.back-link:hover {
-	text-decoration: underline;
+	padding: 24px 22px 48px;
 }
 
 .card {
 	margin-bottom: 20px;
 	padding: 20px 24px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
+	border-radius: var(--radius);
+	background: var(--card);
 }
 
 .card .card {
 	padding: 16px;
-	border-radius: var(--radius);
-	background: var(--surface-2);
+	border-radius: var(--radius-md);
+	background: var(--surface);
 }
 
 .card-title {
@@ -2147,7 +2464,7 @@ fieldset {
 }
 
 .details dt {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -2164,26 +2481,26 @@ fieldset {
 .table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 13px;
+	font-size: 14px;
 }
 
 .table th,
 .table td {
-	padding: 8px;
+	padding: 10px 8px;
 	border-bottom: 1px solid var(--border);
 	text-align: left;
 	vertical-align: top;
 }
 
 .table th {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
 	white-space: nowrap;
 }
 
 .row-muted td {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .cell-scopes {
@@ -2228,7 +2545,7 @@ fieldset {
 }
 
 .row-muted .member-name {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 /* The icon buttons of a table row: edit, archive or restore, and delete. */
@@ -2251,19 +2568,20 @@ fieldset {
 
 .kind {
 	display: inline-block;
-	padding: 1px 8px;
+	padding: 2px 8px;
+	border: 1px solid transparent;
 	border-radius: 999px;
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
+	line-height: 16px;
 }
 
 .kind-human {
-	background: var(--accent-soft);
+	background: var(--hover);
 }
 
 .kind-agent {
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	border-color: var(--border);
 }
 
 .create-key {
@@ -2288,9 +2606,9 @@ fieldset {
 .mcp-banner {
 	margin: 0 0 16px;
 	padding: 12px 16px;
-	border: 1px solid var(--accent);
-	border-radius: var(--radius);
-	background: var(--accent-soft);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
 }
 
 .mcp-banner-title {
@@ -2333,7 +2651,7 @@ fieldset {
 
 .agent {
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 }
 
 .agent-summary {
@@ -2346,7 +2664,7 @@ fieldset {
 }
 
 .agent-summary:hover {
-	background: var(--surface-2);
+	background: var(--hover);
 }
 
 .agent-summary::-webkit-details-marker {
@@ -2355,7 +2673,7 @@ fieldset {
 
 .agent-chevron {
 	margin-left: auto;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	transition: transform 0.15s ease;
 }
 
@@ -2368,7 +2686,7 @@ fieldset {
 }
 
 .agent-address {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	overflow-wrap: anywhere;
 }
 
@@ -2406,54 +2724,58 @@ fieldset {
 	max-width: 480px;
 }
 
-/* Under 768px: the sidebar is a drawer behind the menu button. */
+/* At 900px and below, the rail and the sidebar of the page are a drawer behind the menu button. */
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
 	:root {
-		--topbar-height: 56px;
+		--header-height: 56px;
 	}
 
-	.topbar {
-		gap: 4px;
-		padding: 0 8px;
+	.app {
+		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.app-banner {
+		grid-column: 1;
+		padding: 10px 16px;
+	}
+
+	/* The button is in the page cell of the grid, at the left of the header row of the page. */
 	.menu-button {
+		position: absolute;
+		grid-column: 1;
+		grid-row: -2 / -1;
+		top: 6px;
+		left: 8px;
+		z-index: 5;
 		display: inline-flex;
+		width: 44px;
+		height: 44px;
 	}
 
-	.topbar .brand {
-		width: auto;
+	/* The header row keeps room for the menu button. */
+	.page-header,
+	.toolbar,
+	.drive-header,
+	.chat-header,
+	.document-header {
+		gap: 6px;
+		padding: 6px 8px 6px 60px;
 	}
 
-	.brand-name {
+	.page-heading,
+	.toolbar-title {
+		font-size: 16px;
+	}
+
+	/* The title keeps its width. The search box takes the room that stays. */
+	.toolbar .page-title {
+		flex: none;
+		max-width: 50%;
+	}
+
+	.toolbar .page-title .icon {
 		display: none;
-	}
-
-	.product-name {
-		display: none;
-	}
-
-	.product-link {
-		padding: 0 10px;
-	}
-
-	.brand-mark {
-		width: 30px;
-		height: 30px;
-	}
-
-	.search {
-		margin-left: 4px;
-	}
-
-	.search-input {
-		height: 42px;
-		padding-left: 44px;
-	}
-
-	.search-icon {
-		left: 14px;
 	}
 
 	.mail-layout,
@@ -2461,23 +2783,34 @@ fieldset {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.rail,
 	.sidebar {
 		position: fixed;
-		top: var(--topbar-height);
+		top: 0;
 		bottom: 0;
-		left: 0;
-		z-index: 30;
-		width: min(300px, 85vw);
-		padding-top: 12px;
-		background: var(--surface);
-		box-shadow: var(--shadow);
-		transform: translateX(-105%);
+		transform: translateX(-380px);
 		visibility: hidden;
 		transition:
 			transform 0.2s ease,
 			visibility 0s linear 0.2s;
 	}
 
+	.rail {
+		left: 0;
+		z-index: 31;
+		width: calc(var(--rail-width) + env(safe-area-inset-left));
+		padding-bottom: max(16px, env(safe-area-inset-bottom));
+		padding-left: calc(12px + env(safe-area-inset-left));
+	}
+
+	.sidebar {
+		left: calc(var(--rail-width) + env(safe-area-inset-left));
+		z-index: 30;
+		width: min(280px, calc(100vw - var(--rail-width) - 16px));
+		padding-bottom: max(20px, env(safe-area-inset-bottom));
+	}
+
+	.rail-open,
 	.sidebar-open {
 		transform: none;
 		visibility: visible;
@@ -2486,22 +2819,21 @@ fieldset {
 
 	.nav-backdrop {
 		position: fixed;
-		inset: var(--topbar-height) 0 0 0;
+		inset: 0;
 		z-index: 20;
 		display: block;
 		padding: 0;
 		border: 0;
-		background: rgb(15 23 42 / 0.4);
+		background: var(--drawer-backdrop);
 		cursor: default;
 	}
 
-	.mail-main {
-		margin: 0;
-		border-radius: 0;
+	/* The search box of Mail hides while conversations are selected, so the actions have room. */
+	.toolbar-has-targets .search {
+		display: none;
 	}
 
 	.toolbar {
-		padding: 4px;
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
@@ -2524,13 +2856,13 @@ fieldset {
 		padding-right: 4px;
 	}
 
-	.toolbar-title {
-		max-width: 50%;
+	.thread-list {
+		padding: 4px 4px 0;
 	}
 
 	.thread-row {
-		grid-template-columns: 36px minmax(0, 1fr) 36px;
-		padding: 4px 0 4px 4px;
+		grid-template-columns: 28px minmax(0, 1fr) 32px;
+		padding: 4px 4px 4px 8px;
 	}
 
 	.thread-link {
@@ -2553,7 +2885,7 @@ fieldset {
 	}
 
 	.thread-row-read-only {
-		grid-template-columns: minmax(0, 1fr) 36px;
+		grid-template-columns: minmax(0, 1fr) 32px;
 		padding-left: 12px;
 	}
 
@@ -2622,7 +2954,7 @@ fieldset {
 		height: fit-content;
 		max-height: calc(100dvh - 32px);
 		margin: auto;
-		border-radius: var(--radius-large);
+		border-radius: var(--radius);
 	}
 
 	.rich-editor,
@@ -2644,15 +2976,19 @@ fieldset {
 		right: 16px;
 		bottom: 16px;
 		left: 16px;
+		align-items: stretch;
+	}
+
+	.page {
+		padding: 16px 16px 32px;
+	}
+
+	.admin-content {
+		padding: 16px 16px 32px;
 	}
 
 	.card {
 		padding: 16px;
-	}
-
-	.page > h1,
-	.admin-content > h1 {
-		font-size: 22px;
 	}
 
 	/* The Members table keeps the name, the kind, the role and the actions on a phone. */
@@ -2731,7 +3067,7 @@ fieldset {
 	justify-self: start;
 	padding: 8px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: #ffffff;
 	line-height: 0;
 }
@@ -2769,11 +3105,37 @@ fieldset {
 }
 
 .address-at {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .address-row .address-domain {
 	flex: 0 1 auto;
 	width: auto;
 	overflow-wrap: anywhere;
+}
+
+/* Touch: at 900px and below, and for a finger on a wider screen, the rows are 44px high. The text
+   fields have 16px text, so that iOS does not zoom in on them. */
+
+@media (max-width: 900px), (pointer: coarse) {
+	.nav-item,
+	.menu-item,
+	.drive-menu-item,
+	.appearance-option {
+		min-height: 44px;
+	}
+
+	.input,
+	.search-input {
+		min-height: 44px;
+		font-size: 16px;
+	}
+
+	.search-input {
+		height: 44px;
+	}
+
+	.search-key {
+		display: none;
+	}
 }

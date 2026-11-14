@@ -13,10 +13,7 @@
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	margin: 0 16px 16px 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	overflow: hidden;
+	background: var(--background);
 }
 
 .drive-main:focus {
@@ -24,7 +21,7 @@
 }
 
 .drive-main-drop {
-	outline: 2px dashed var(--accent);
+	outline: 2px dashed var(--foreground);
 	outline-offset: -4px;
 }
 
@@ -39,32 +36,35 @@
 	flex-direction: column;
 	gap: 2px;
 	margin-top: auto;
-	padding: 24px 24px 0;
+	padding: 12px 9px 0;
 	font-size: 13px;
 }
 
 /* Header: the title of a view, or the path of a folder */
 
-.drive-header {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-height: 56px;
-	padding: 8px 20px 0;
+/* The box rules of the header are with the page header in styles.css. */
+
+/* The row of actions above the list. */
+.drive-main .toolbar {
+	min-height: 44px;
+	padding: 4px 22px;
 }
 
 .drive-title,
 .drive-crumb {
-	font-size: 20px;
-	font-weight: 500;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
 }
 
 .drive-title {
-	padding: 4px 8px;
+	padding: 4px 0;
 }
 
+/* The text of the first entry lines up with the title of the other views. */
 .drive-crumbs {
 	min-width: 0;
+	margin-left: -8px;
 }
 
 .drive-crumbs ol {
@@ -82,34 +82,34 @@
 	align-items: center;
 	gap: 2px;
 	min-width: 0;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-crumb {
 	max-width: 280px;
 	padding: 4px 8px;
 	overflow: hidden;
-	border-radius: var(--radius);
-	color: var(--text-muted);
+	border-radius: var(--radius-md);
+	color: var(--muted-foreground);
 	text-decoration: none;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 a.drive-crumb:hover {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .drive-crumb-current {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .drive-note {
-	padding: 8px 20px;
+	padding: 8px 22px;
 	border-bottom: 1px solid var(--border);
-	background: var(--surface-2);
-	color: var(--text-muted);
+	background: var(--surface);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -138,15 +138,15 @@ a.drive-crumb:hover {
 	top: 0;
 	z-index: 2;
 	height: 40px;
-	background: var(--surface);
-	color: var(--text-muted);
-	font-size: 13px;
-	font-weight: 600;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
 }
 
 .drive-col-check {
-	width: 48px;
-	padding-left: 12px;
+	width: 58px;
+	padding-left: 22px;
 }
 
 .drive-table .drive-col-star {
@@ -160,12 +160,12 @@ a.drive-crumb:hover {
 
 .drive-col-modified {
 	width: 24%;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-col-size {
 	width: 96px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-table .drive-col-more {
@@ -175,12 +175,12 @@ a.drive-crumb:hover {
 }
 
 .drive-row:hover {
-	background: var(--surface-2);
+	background: var(--row-hover);
 }
 
 .drive-row-selected,
 .drive-row-selected:hover {
-	background: var(--accent-soft);
+	background: var(--selected);
 }
 
 .drive-check {
@@ -198,7 +198,7 @@ a.drive-crumb:hover {
 	margin-left: -8px;
 	padding: 4px 8px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: none;
 	color: inherit;
 	font: inherit;
@@ -206,12 +206,12 @@ a.drive-crumb:hover {
 }
 
 .drive-sort:hover {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .drive-sort-active {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .drive-name {
@@ -229,9 +229,9 @@ a.drive-crumb:hover {
 	max-width: 100%;
 	padding: 6px 4px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	font-weight: 500;
 	text-align: left;
@@ -256,25 +256,17 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-kind {
-	color: var(--text-muted);
-}
-
-.drive-kind-doc {
-	color: var(--accent);
-}
-
-.drive-kind-sheet {
-	color: var(--success);
+	color: var(--muted-foreground);
 }
 
 .drive-shared-mark {
 	display: inline-flex;
 	flex: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-modified-by {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 /* Menu of actions */
@@ -284,24 +276,24 @@ button.drive-name-link:hover .drive-name-text {
 	z-index: 60;
 	min-width: 200px;
 	max-width: calc(100vw - 16px);
-	padding: 6px;
+	padding: 4px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	box-shadow: var(--shadow-menu);
 }
 
 .drive-menu-item {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	width: 100%;
-	min-height: 36px;
-	padding: 0 12px;
+	min-height: 32px;
+	padding: 0 8px;
 	border: 0;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	white-space: nowrap;
@@ -309,12 +301,12 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-menu-item .icon {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-menu-item:hover,
 .drive-menu-item:focus {
-	background: var(--surface-3);
+	background: var(--hover);
 	outline: none;
 }
 
@@ -325,15 +317,14 @@ button.drive-name-link:hover .drive-name-text {
 
 .drive-menu-item-danger,
 .drive-menu-item-danger .icon {
-	color: var(--danger);
+	color: var(--negative);
 }
 
 /* The New button is a menu button. A disabled one stays visible. */
 
 .compose-button:disabled {
-	opacity: 0.6;
+	opacity: 0.5;
 	cursor: not-allowed;
-	box-shadow: none;
 }
 
 /* Upload state and drop target */
@@ -348,8 +339,8 @@ button.drive-name-link:hover .drive-name-text {
 	justify-content: center;
 	gap: 12px;
 	padding: 16px;
-	background: color-mix(in srgb, var(--surface) 88%, transparent);
-	color: var(--accent);
+	background: color-mix(in srgb, var(--background) 88%, transparent);
+	color: var(--foreground);
 	font-size: 16px;
 	font-weight: 600;
 	text-align: center;
@@ -366,9 +357,9 @@ button.drive-name-link:hover .drive-name-text {
 	gap: 10px;
 	padding: 10px 16px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	box-shadow: var(--shadow-menu);
 }
 
 /* Dialogs */
@@ -382,7 +373,7 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-picker-path .link-button:disabled {
-	color: var(--text);
+	color: var(--foreground);
 	font-weight: 600;
 	text-decoration: none;
 	cursor: default;
@@ -392,14 +383,14 @@ button.drive-name-link:hover .drive-name-text {
 	display: inline-flex;
 	align-items: center;
 	gap: 2px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-picker {
 	min-height: 180px;
 	max-height: 320px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	overflow-y: auto;
 }
 
@@ -409,7 +400,7 @@ button.drive-name-link:hover .drive-name-text {
 	justify-content: center;
 	gap: 8px;
 	padding: 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
@@ -430,18 +421,18 @@ button.drive-name-link:hover .drive-name-text {
 	padding: 0 12px;
 	border: 0;
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
 }
 
 .drive-picker-item .icon {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-picker-item:hover:not(:disabled) {
-	background: var(--surface-2);
+	background: var(--hover);
 }
 
 .drive-picker-item:focus-visible {
@@ -547,14 +538,14 @@ button.drive-name-link:hover .drive-name-text {
 
 .drive-version-current {
 	margin: 0 0 0 8px;
-	background: var(--success-soft);
-	color: var(--success);
+	background: var(--positive-soft);
+	color: var(--positive);
 }
 
 .drive-version-status {
 	min-height: 20px;
 	margin-top: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -578,9 +569,9 @@ button.drive-name-link:hover .drive-name-text {
 	max-width: 100%;
 	max-height: 60dvh;
 	margin: 0 auto;
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	/* A light pattern, so a transparent image shows in the two themes. */
-	background: repeating-conic-gradient(var(--surface-3) 0% 25%, var(--surface) 0% 50%) 50% / 16px 16px;
+	background: repeating-conic-gradient(var(--hover) 0% 25%, var(--background) 0% 50%) 50% / 16px 16px;
 	object-fit: contain;
 }
 
@@ -589,8 +580,8 @@ button.drive-name-link:hover .drive-name-text {
 	margin: 0;
 	padding: 12px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface-2);
+	border-radius: var(--radius-md);
+	background: var(--surface);
 	font: 13px / 1.5 var(--mono);
 	overflow: auto;
 	white-space: pre-wrap;
@@ -603,7 +594,7 @@ button.drive-name-link:hover .drive-name-text {
 	align-items: center;
 	gap: 12px;
 	padding: 32px 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-details {
@@ -615,7 +606,7 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-details dt {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-details dd {
@@ -625,13 +616,10 @@ button.drive-name-link:hover .drive-name-text {
 
 /* The header of the Docs and Sheets editors */
 
+/* The box rules are with the page header in styles.css. */
 .document-header {
-	display: flex;
-	align-items: center;
 	gap: 8px;
-	min-height: 56px;
-	padding: 4px 16px 4px 8px;
-	background: var(--bg);
+	padding-left: 12px;
 }
 
 .document-header-title {
@@ -643,8 +631,8 @@ button.drive-name-link:hover .drive-name-text {
 .document-header-name {
 	min-width: 0;
 	overflow: hidden;
-	font-size: 18px;
-	font-weight: 500;
+	font-size: 17px;
+	font-weight: 650;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -674,41 +662,35 @@ button.drive-name-link:hover .drive-name-text {
 	width: min(420px, 50vw);
 	min-height: 32px;
 	padding: 2px 6px;
-	font-size: 18px;
-	font-weight: 500;
+	font-size: 17px;
+	font-weight: 650;
 }
 
 .document-header-state {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
 .document-header-state-error {
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .document-header-spacer {
 	flex: 1;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
 	.drive-layout {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.drive-main {
-		margin: 0;
-		border-radius: 0;
-	}
-
-	.drive-header {
-		min-height: 48px;
-		padding: 4px 12px 0;
+	.drive-main .toolbar {
+		padding: 4px 8px;
 	}
 
 	.drive-title,
 	.drive-crumb {
-		font-size: 18px;
+		font-size: 16px;
 	}
 
 	.drive-crumb {
@@ -726,8 +708,13 @@ button.drive-name-link:hover .drive-name-text {
 	}
 
 	.drive-col-check {
-		width: 40px;
-		padding-left: 4px;
+		width: 48px;
+		padding-left: 8px;
+	}
+
+	/* The title keeps its width. The search box takes the room that stays. */
+	.drive-header > .drive-title {
+		flex: none;
 	}
 
 	.drive-share-add {
@@ -739,7 +726,7 @@ button.drive-name-link:hover .drive-name-text {
 	}
 
 	.document-header {
-		padding-right: 8px;
+		padding-left: 60px;
 	}
 
 	.document-header-share {

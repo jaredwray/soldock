@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { ADMIN_SECTIONS, type AdminSection, adminPath } from "../../routes.ts";
-import { ADMIN_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { ADMIN_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
+import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
+import { useSession } from "../auth/session.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
 const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly: boolean }> = {
@@ -15,6 +17,10 @@ const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly:
 /** A member who sponsors an agent sees only the agents that the member sponsors. */
 export function sectionTitle(section: AdminSection, elevated: boolean): string {
 	return section === "agents" && !elevated ? "Your agents" : SECTIONS[section].title;
+}
+
+export function sectionIcon(section: AdminSection): IconName {
+	return SECTIONS[section].icon;
 }
 
 export function isAdminOnly(section: AdminSection): boolean {
@@ -34,8 +40,9 @@ interface AdminSidebarProps {
 	onClose: () => void;
 }
 
-/** The left navigation of the admin page. Under 768px it is a drawer that the menu button in the top bar opens. */
+/** The sidebar of the admin page. At 900px and below it is part of the drawer that the menu button opens. */
 export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarProps) {
+	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
 	const closeRef = useRef(onClose);
@@ -45,7 +52,7 @@ export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarPr
 		closeRef.current = onClose;
 	});
 
-	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
+	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
 	useEffect(() => {
 		const nav = navRef.current;
@@ -78,9 +85,7 @@ export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarPr
 				className={open ? "sidebar sidebar-open" : "sidebar"}
 				aria-label="Admin sections"
 			>
-				<div className="nav-section nav-section-first">
-					<h2 className="nav-heading">Admin</h2>
-				</div>
+				<SidebarHeader title="Admin" subtitle={domainOf(whoami.principal.address)} />
 				<ul className="nav-list">
 					{sections.map((section) => (
 						<li key={section}>

@@ -10,6 +10,7 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { type DriveView, drivePath, itemPath } from "../../routes.ts";
+import { SearchBox } from "../../shell/SearchBox.tsx";
 import { useSession } from "../auth/session.tsx";
 import { DriveSidebar, type NavEntry } from "./DriveSidebar.tsx";
 import { downloadFile, useAboutPoll, useFolder, useItemList, usePrincipals } from "./data.ts";
@@ -38,7 +39,7 @@ import { VersionsDialog } from "./VersionsDialog.tsx";
 
 export interface DriveAppProps {
 	view: DriveView;
-	/** True while the navigation drawer is open, under 768px. */
+	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
 }
@@ -472,6 +473,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					{foreign && folder && (
 						<span className="chip chip-small">{folder.item.role === "viewer" ? "View only" : "You can edit"}</span>
 					)}
+					<span className="toolbar-spacer" />
+					<SearchBox product="drive" query={view.kind === "search" ? view.query : ""} />
 				</div>
 				<div className="toolbar">
 					<SelectAll

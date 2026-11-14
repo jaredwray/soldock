@@ -1,6 +1,6 @@
 import { EmailAddress, TOTP_DIGITS } from "@soldock/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { Icon } from "../../lib/icons.tsx";
+import { BrandMark } from "../../shell/BrandMark.tsx";
 import { createSession, signInErrorMessage } from "./auth.ts";
 
 interface SignInPageProps {
@@ -112,9 +112,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 		<main className="sign-in">
 			<div className="sign-in-card">
 				<div className="brand brand-large">
-					<span className="brand-mark" aria-hidden="true">
-						<Icon name="mail" size={22} />
-					</span>
+					<BrandMark />
 					<span>Soldock</span>
 				</div>
 				<h1 className="sign-in-title">Sign in</h1>

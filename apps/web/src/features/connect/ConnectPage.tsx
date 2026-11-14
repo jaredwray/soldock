@@ -12,6 +12,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { INBOX_PATH } from "../../routes.ts";
+import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { agentNameFromClient, defaultScopes, suggestedAddress } from "./connect.ts";
 
@@ -65,52 +66,54 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 	}, [load]);
 
 	return (
-		<main id="main" className="page" tabIndex={-1}>
-			<h1>Connect an agent</h1>
-			{state.status === "loading" && (
-				<p className="list-state" role="status">
-					<span className="spinner" aria-hidden="true" />
-					Loading the request…
-				</p>
-			)}
-			{state.status === "gone" && (
-				<div className="card" role="alert">
-					<p>This request expired, or somebody approved or denied it. Start the connection again in the app.</p>
-					<p>
-						<Link to={INBOX_PATH}>Go to the inbox</Link>
+		<main id="main" className="page-main" tabIndex={-1}>
+			<PageHeader title="Connect an agent" icon="shield" />
+			<div className="page">
+				{state.status === "loading" && (
+					<p className="list-state" role="status">
+						<span className="spinner" aria-hidden="true" />
+						Loading the request…
 					</p>
-				</div>
-			)}
-			{state.status === "error" && (
-				<div className="card" role="alert">
-					<p>The request did not load. {state.error}</p>
-					<button type="button" className="button" onClick={() => void load()}>
-						Try again
-					</button>
-				</div>
-			)}
-			{state.status === "leaving" && (
-				<div className="card" role="status">
-					<p>
-						{state.approved ? "Approved." : "Denied."} Your browser goes back to <strong>{state.host}</strong> now. If
-						nothing happens, you can close this tab.
-					</p>
-				</div>
-			)}
-			{state.status === "ready" && (
-				<ApprovalForm
-					authorization={state.authorization}
-					agents={state.agents}
-					domains={state.domains}
-					canCreate={canCreate}
-					offered={AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope))}
-					onDone={(redirectTo, approved) => {
-						setState({ status: "leaving", host: state.authorization.redirect_host, approved });
-						window.location.assign(redirectTo);
-					}}
-					onGone={() => setState({ status: "gone" })}
-				/>
-			)}
+				)}
+				{state.status === "gone" && (
+					<div className="card" role="alert">
+						<p>This request expired, or somebody approved or denied it. Start the connection again in the app.</p>
+						<p>
+							<Link to={INBOX_PATH}>Go to the inbox</Link>
+						</p>
+					</div>
+				)}
+				{state.status === "error" && (
+					<div className="card" role="alert">
+						<p>The request did not load. {state.error}</p>
+						<button type="button" className="button" onClick={() => void load()}>
+							Try again
+						</button>
+					</div>
+				)}
+				{state.status === "leaving" && (
+					<div className="card" role="status">
+						<p>
+							{state.approved ? "Approved." : "Denied."} Your browser goes back to <strong>{state.host}</strong> now. If
+							nothing happens, you can close this tab.
+						</p>
+					</div>
+				)}
+				{state.status === "ready" && (
+					<ApprovalForm
+						authorization={state.authorization}
+						agents={state.agents}
+						domains={state.domains}
+						canCreate={canCreate}
+						offered={AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope))}
+						onDone={(redirectTo, approved) => {
+							setState({ status: "leaving", host: state.authorization.redirect_host, approved });
+							window.location.assign(redirectTo);
+						}}
+						onGone={() => setState({ status: "gone" })}
+					/>
+				)}
+			</div>
 		</main>
 	);
 }

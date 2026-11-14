@@ -10,7 +10,7 @@ import {
 } from "@soldock/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
-import { Icon } from "../../lib/icons.tsx";
+import { BrandMark } from "../../shell/BrandMark.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
 import { TotpSetup } from "../settings/TotpSetup.tsx";
@@ -58,9 +58,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 		<main className="sign-in">
 			<div className="sign-in-card">
 				<div className="brand brand-large">
-					<span className="brand-mark" aria-hidden="true">
-						<Icon name="mail" size={22} />
-					</span>
+					<BrandMark />
 					<span>Soldock</span>
 				</div>
 				<h1 className="sign-in-title">Set up Soldock</h1>

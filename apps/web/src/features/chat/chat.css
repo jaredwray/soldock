@@ -12,10 +12,7 @@
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	margin: 0 16px 16px 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	overflow: hidden;
+	background: var(--background);
 }
 
 .chat-main:focus {
@@ -36,15 +33,15 @@
 /* The room list */
 
 .chat-nav-unread .nav-name {
-	font-weight: 700;
+	font-weight: 650;
 }
 
 .chat-nav-dot {
 	flex: none;
-	width: 8px;
-	height: 8px;
+	width: 7px;
+	height: 7px;
 	border-radius: 50%;
-	background: var(--accent);
+	background: var(--foreground);
 }
 
 .chat-nav-avatar {
@@ -53,20 +50,11 @@
 	font-size: 10px;
 }
 
-/* The header of a room */
-
-.chat-header {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-height: 60px;
-	padding: 8px 16px 8px 24px;
-	border-bottom: 1px solid var(--border);
-}
+/* The header of a room. The box rules are with the page header in styles.css. */
 
 .chat-header > .icon {
 	flex: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .chat-header-text {
@@ -76,8 +64,9 @@
 
 .chat-title {
 	overflow: hidden;
-	font-size: 18px;
-	font-weight: 600;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
@@ -124,7 +113,7 @@
 
 .chat-message:hover,
 .chat-message:focus-within {
-	background: var(--surface-2);
+	background: var(--surface);
 }
 
 .chat-message-head {
@@ -170,8 +159,8 @@
 	right: 20px;
 	display: flex;
 	border: 1px solid var(--border);
-	border-radius: 999px;
-	background: var(--surface);
+	border-radius: var(--radius-md);
+	background: var(--background);
 	opacity: 0;
 }
 
@@ -223,13 +212,13 @@
 .chat-send {
 	width: 44px;
 	height: 44px;
-	background: var(--accent);
-	color: var(--accent-text);
+	background: var(--primary);
+	color: var(--primary-foreground);
 }
 
 .chat-send:hover:not(:disabled) {
-	background: var(--accent-hover);
-	color: var(--accent-text);
+	background: var(--primary-hover);
+	color: var(--primary-foreground);
 }
 
 /* Dialogs */
@@ -275,14 +264,14 @@
 
 .chat-row > .icon {
 	flex: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .chat-row-button {
 	width: 100%;
 	padding: 6px 8px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: none;
 	color: inherit;
 	font: inherit;
@@ -291,7 +280,7 @@
 }
 
 .chat-row-button:hover:not(:disabled) {
-	background: var(--surface-2);
+	background: var(--hover);
 }
 
 .chat-row-text {
@@ -315,19 +304,9 @@
 	margin-right: auto;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
 	.chat-layout {
 		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.chat-main {
-		margin: 0;
-		border-radius: 0;
-	}
-
-	.chat-header {
-		min-height: 52px;
-		padding: 4px 8px 4px 16px;
 	}
 
 	.chat-message {

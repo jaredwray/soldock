@@ -4,11 +4,14 @@ import { useSession } from "../features/auth/session.tsx";
 import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { SettingsPage } from "../features/settings/SettingsPage.tsx";
+import { Icon } from "../lib/icons.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
 import { useOnChange } from "../lib/useOnChange.ts";
 import { INBOX_PATH, ownMailboxPath, parseRoute } from "../routes.ts";
-import { TopBar } from "./TopBar.tsx";
+import { MENU_BUTTON_ID, RAIL_ID, sidebarId } from "./nav.ts";
+import { PageHeader } from "./PageHeader.tsx";
+import { Rail } from "./Rail.tsx";
 
 // Drive, its editors, Chat and the OAuth approval page are separate chunks. A person who uses only Mail does
 // not load them.
@@ -18,7 +21,7 @@ const ConnectPage = lazyPage(() => import("../features/connect/ConnectPage.tsx")
 const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((module) => module.DocPage));
 const SheetPage = lazyPage(() => import("../features/sheets/SheetPage.tsx").then((module) => module.SheetPage));
 
-/** The signed-in app: the top bar and the page for the current route. */
+/** The signed-in app: the rail and the page for the current route. */
 export function Shell() {
 	const location = useLocation();
 	const route = useMemo(() => parseRoute(location), [location]);
@@ -32,7 +35,20 @@ export function Shell() {
 	const { whoami } = useSession();
 	const needsPassword = whoami.sign_in?.password_set === false && route.page !== "settings";
 
+	// The sidebar of the page, or null. At 900px and below, the menu button opens it with the rail.
+	const navId = sidebarId(route);
+
 	useOnChange(location, () => setNavOpen(false));
+
+	// Escape closes the navigation drawer on each page.
+	useEffect(() => {
+		if (!navOpen) return;
+		function onKeyDown(event: KeyboardEvent) {
+			if (event.key === "Escape") setNavOpen(false);
+		}
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [navOpen]);
 
 	// The own id of the person in an agent mailbox path is the own mailbox: go to its normal path.
 	const ownPath = ownMailboxPath(route, whoami.principal.id);
@@ -47,7 +63,19 @@ export function Shell() {
 			<a className="skip-link" href="#main">
 				Skip to content
 			</a>
-			<TopBar route={route} navOpen={navOpen} onToggleNav={() => setNavOpen((open) => !open)} />
+			{/* The menu button shows at 900px and below. It opens the rail and the sidebar of the page as a drawer. */}
+			<button
+				id={MENU_BUTTON_ID}
+				type="button"
+				className="icon-button menu-button"
+				aria-label="Main menu"
+				aria-expanded={navOpen}
+				aria-controls={navId ?? RAIL_ID}
+				onClick={() => setNavOpen((open) => !open)}
+			>
+				<Icon name="menu" />
+			</button>
+			<Rail route={route} open={navOpen} hasSidebar={navId !== null} />
 			{needsPassword && (
 				<p className="app-banner" role="status">
 					You have no password yet. Set one now: after this session ends, you sign in with your address and a password.{" "}
@@ -55,6 +83,16 @@ export function Shell() {
 				</p>
 			)}
 			{page()}
+			{/* A page with a sidebar has the backdrop of its sidebar. */}
+			{navOpen && navId === null && (
+				<button
+					type="button"
+					className="nav-backdrop"
+					aria-label="Close the menu"
+					tabIndex={-1}
+					onClick={() => setNavOpen(false)}
+				/>
+			)}
 		</div>
 	);
 
@@ -107,12 +145,14 @@ function NotFound() {
 		document.title = "Not found – Soldock";
 	}, []);
 	return (
-		<main id="main" className="page" tabIndex={-1}>
-			<h1>Page not found</h1>
-			<p>This address does not match a page in Soldock.</p>
-			<p>
-				<Link to={INBOX_PATH}>Go to the inbox</Link>
-			</p>
+		<main id="main" className="page-main" tabIndex={-1}>
+			<PageHeader title="Page not found" />
+			<div className="page">
+				<p>This address does not match a page in Soldock.</p>
+				<p>
+					<Link to={INBOX_PATH}>Go to the inbox</Link>
+				</p>
+			</div>
 		</main>
 	);
 }
