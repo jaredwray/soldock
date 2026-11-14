@@ -1,7 +1,7 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
 import { MAIL_LIMITS, type MailSettings } from "@soldock/contracts";
-import { getMailbox } from "../identity/index.ts";
+import { addressTag, getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
@@ -21,6 +21,12 @@ export interface DeliverInput {
 	internalDate: number;
 	parsed: ParsedMail;
 	spam: boolean;
+	/**
+	 * The `+tag` of the recipient address. The message gets the user label with the same name, if one
+	 * exists. A tag never creates a label and never selects a system label. The field is optional,
+	 * because earlier callers do not send it.
+	 */
+	tag?: string | null;
 }
 
 export interface SendInput {
@@ -373,14 +379,42 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// --- Delivery -------------------------------------------------------------------------------
 
-	/** Stores a message that arrived for this mailbox. A second copy of the same content is dropped. */
+	/**
+	 * The id of the user label whose name is the `+tag` of a recipient address, or null. Only an existing
+	 * user label matches: a sender cannot create labels, and `ada+spam@` does not select `SPAM`.
+	 */
+	private tagLabel(tag: string | null | undefined): string | null {
+		if (!tag) return null;
+		return (
+			this.one<{ id: string }>("SELECT id FROM labels WHERE name_folded = ? AND type = 'user'", foldLabelName(tag))
+				?.id ?? null
+		);
+	}
+
+	/**
+	 * Stores a message that arrived for this mailbox. A second copy of the same content is dropped.
+	 * The second copy can come to a different `+tag` of this mailbox, so the copy adds its tag label.
+	 */
 	deliver(input: DeliverInput): { status: "delivered" | "duplicate"; messageId: string; threadId: string } {
-		const existing = this.one<{ id: string; thread_id: string }>(
-			"SELECT id, thread_id FROM messages WHERE content_hash = ?",
+		const tagLabel = this.tagLabel(input.tag);
+		const existing = this.one<{ seq: number; id: string; thread_id: string }>(
+			"SELECT seq, id, thread_id FROM messages WHERE content_hash = ?",
 			input.contentHash,
 		);
-		if (existing) return { status: "duplicate", messageId: existing.id, threadId: existing.thread_id };
-		const labels = input.spam ? ["SPAM", "UNREAD"] : ["INBOX", "UNREAD"];
+		if (existing) {
+			if (tagLabel) {
+				this.ctx.storage.transactionSync(() => {
+					const added = this.sql.exec(
+						"INSERT OR IGNORE INTO message_labels (message_seq, label_id) VALUES (?, ?)",
+						existing.seq,
+						tagLabel,
+					).rowsWritten;
+					if (added > 0) this.bump();
+				});
+			}
+			return { status: "duplicate", messageId: existing.id, threadId: existing.thread_id };
+		}
+		const labels = [...(input.spam ? ["SPAM", "UNREAD"] : ["INBOX", "UNREAD"]), ...(tagLabel ? [tagLabel] : [])];
 		const stored = this.ctx.storage.transactionSync(() => {
 			const inserted = this.insertMessage({
 				id: newId("msg"),
@@ -1042,6 +1076,8 @@ export class MailboxDO extends DurableObject<Env> {
 				if (earlier && "error" in earlier) return earlier;
 				if (earlier) return { duplicate: true, result: earlier };
 			}
+			const selfAddress = input.recipients.find((r) => r.self)?.address;
+			const selfTagLabel = selfAddress ? this.tagLabel(addressTag(selfAddress)) : null;
 			const stored = this.insertMessage({
 				id: input.messageId,
 				threadHint: input.replyThreadId,
@@ -1052,7 +1088,7 @@ export class MailboxDO extends DurableObject<Env> {
 				size: input.size,
 				internalDate: input.internalDate,
 				bcc: input.bcc,
-				labels: selfDelivery ? ["SENT", "INBOX"] : ["SENT"],
+				labels: selfDelivery ? ["SENT", "INBOX", ...(selfTagLabel ? [selfTagLabel] : [])] : ["SENT"],
 				subjectFallback: true,
 				sentBy: input.sentBy,
 			});
@@ -1198,7 +1234,7 @@ export class MailboxDO extends DurableObject<Env> {
 					throw new SenderUnavailable("The sender account no longer owns this address.");
 				}
 				if (row.kind === "deliver") {
-					await deliverInternal(this.env, row.target, raw);
+					await deliverInternal(this.env, row.target, row.address, raw);
 					status = "delivered";
 				} else {
 					if (!row.from_addr) throw new Error("the message has no sender address");

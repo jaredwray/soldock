@@ -6,6 +6,7 @@ export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.t
 export { toPrincipalOutput } from "./output.ts";
 export { mountAuthRoutes } from "./routes.ts";
 export {
+	addressTag,
 	domainOf,
 	getPrincipals,
 	mailDomains,

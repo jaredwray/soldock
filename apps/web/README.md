@@ -55,6 +55,7 @@ MCP clients. The app has no UI-only path.
     "Northwind" under "Clients". When no label has the parent name, the parent shows as a group row
     that is text, not a link. The link of a nested label has the full path as its accessible name,
     so a screen reader reads "Clients/Northwind".
+  - The New label dialog tells the user that mail to `user+name@` gets the label with that name.
   - Under 768px, the sidebar is a drawer. When the drawer opens, the focus goes to its first item.
     When it closes, the focus goes back to the menu button.
   - The thread list shows the participants, the subject, the snippet, a short date, a star and a

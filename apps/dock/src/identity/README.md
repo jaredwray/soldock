@@ -32,7 +32,8 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
   `agentMailboxes` lists the mailboxes of the agents, and `agentMailboxFor` finds one by the agent id.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
-  lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
+  lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`. The
+  [`mail`](../mail/README.md#tags) module uses the tag to apply a label.
 
 ## Change, archive and delete
 
