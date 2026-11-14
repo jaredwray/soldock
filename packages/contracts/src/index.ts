@@ -41,6 +41,8 @@ export {
 	MAIL_LIMITS,
 	Mailbox,
 	MailboxId,
+	MailboxKind,
+	MailSettings,
 	Message,
 	SYSTEM_LABELS,
 	type SystemLabel,
@@ -67,6 +69,16 @@ export {
 	operationList,
 	operations,
 } from "./registry.ts";
+export {
+	defineResource,
+	expandTemplate,
+	matchTemplate,
+	type ResourceDefinition,
+	type ResourceName,
+	resourceList,
+	resources,
+	templateVars,
+} from "./resources.ts";
 export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope } from "./scopes.ts";
 export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
 export { Cell, SHEET_ERRORS, SHEET_LIMITS, type SheetError } from "./sheets.ts";

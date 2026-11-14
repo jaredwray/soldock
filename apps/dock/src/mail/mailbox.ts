@@ -1,6 +1,6 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
-import { MAIL_LIMITS } from "@soldock/contracts";
+import { MAIL_LIMITS, type MailSettings } from "@soldock/contracts";
 import { addressTag, getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
@@ -112,6 +112,12 @@ export interface LabelRecord {
 }
 
 const SYSTEM_LABEL_ORDER = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
+
+/** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */
+const WATCH_TAG = "watch";
+
+/** The message that each watch socket gets when a new message arrives in the inbox. */
+export const INBOX_SIGNAL = "inbox";
 
 /** Ordered migrations. Each inner list runs in one transaction. Append only. */
 const MIGRATIONS: string[][] = [
@@ -294,6 +300,30 @@ interface MessageMetaRow extends Row {
  * stay in R2. Side effects on other objects (local delivery, Email Service) go through the outbox
  * and its alarm, with retries.
  */
+/** A change to the mail settings: only the named settings change. */
+export interface SettingsPatch {
+	sidebar?:
+		| { shared_mailboxes_collapsed?: boolean | undefined; agent_mailboxes_collapsed?: boolean | undefined }
+		| undefined;
+}
+
+/** The saved settings with the default for each setting that was never saved. A bad value gets the default. */
+function readSettings(raw: string | null): MailSettings {
+	let saved: { sidebar?: Record<string, unknown> } = {};
+	try {
+		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
+	} catch {
+		// A value that does not parse gets the defaults. The next change writes a good value.
+	}
+	const flag = (value: unknown) => value === true;
+	return {
+		sidebar: {
+			shared_mailboxes_collapsed: flag(saved.sidebar?.shared_mailboxes_collapsed),
+			agent_mailboxes_collapsed: flag(saved.sidebar?.agent_mailboxes_collapsed),
+		},
+	};
+}
+
 export class MailboxDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private drainTask: Promise<void> | null = null;
@@ -403,7 +433,50 @@ export class MailboxDO extends DurableObject<Env> {
 			this.bump();
 			return inserted;
 		});
+		if (!input.spam) this.signalInbox();
 		return { status: "delivered", messageId: stored.id, threadId: stored.threadId };
+	}
+
+	// --- Watch sockets ---------------------------------------------------------------------------
+
+	/**
+	 * Accepts a watch socket: a hibernatable WebSocket that gets `INBOX_SIGNAL` for each new message in
+	 * the inbox. The Worker opens it for a `subscriptions/listen` stream after it checks the access of
+	 * the caller. The object can sleep while its sockets wait, and wakes when mail arrives.
+	 */
+	override async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			return new Response("This object accepts watch sockets only.", {
+				status: 426,
+				headers: { upgrade: "websocket" },
+			});
+		}
+		const { 0: client, 1: server } = new WebSocketPair();
+		this.ctx.acceptWebSocket(server, [WATCH_TAG]);
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/** Tells each watch socket that a new message is in the inbox. A socket that closed is skipped. */
+	private signalInbox(): void {
+		for (const socket of this.ctx.getWebSockets(WATCH_TAG)) {
+			try {
+				socket.send(INBOX_SIGNAL);
+			} catch {
+				// The socket closed between the list and the send.
+			}
+		}
+	}
+
+	/** A watcher sends nothing. A message from one has no effect. */
+	override webSocketMessage(): void {}
+
+	override webSocketClose(socket: WebSocket, code: number, reason: string): void {
+		try {
+			// Completes the close handshake. The runtime can reply by itself, and a closed socket throws.
+			socket.close(code, reason);
+		} catch {
+			// Closed already.
+		}
 	}
 
 	private insertMessage(m: {
@@ -588,6 +661,27 @@ export class MailboxDO extends DurableObject<Env> {
 			inbox_unread: unread?.n ?? 0,
 			version: Number(this.meta("version") ?? 0),
 		};
+	}
+
+	/** The mail settings of the person who owns this mailbox. Only the own mailbox of a person has them. */
+	settings(): MailSettings {
+		return readSettings(this.meta("settings"));
+	}
+
+	/**
+	 * Changes the named settings, keeps the others, and returns all of them. A setting is not mail, so the
+	 * change counter stays: a change does not make the web app get the list and the labels again.
+	 */
+	updateSettings(patch: SettingsPatch): MailSettings {
+		const current = readSettings(this.meta("settings"));
+		const sidebar = { ...current.sidebar };
+		for (const key of ["shared_mailboxes_collapsed", "agent_mailboxes_collapsed"] as const) {
+			const value = patch.sidebar?.[key];
+			if (typeof value === "boolean") sidebar[key] = value;
+		}
+		const next = { sidebar };
+		this.setMeta("settings", JSON.stringify(next));
+		return next;
 	}
 
 	listLabels(): LabelRecord[] {
@@ -974,6 +1068,7 @@ export class MailboxDO extends DurableObject<Env> {
 		if (this.meta("delivery_pause"))
 			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
+		const selfDelivery = input.recipients.some((r) => r.self);
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
@@ -981,8 +1076,8 @@ export class MailboxDO extends DurableObject<Env> {
 				if (earlier && "error" in earlier) return earlier;
 				if (earlier) return { duplicate: true, result: earlier };
 			}
-			const self = input.recipients.find((r) => r.self);
-			const selfTagLabel = self ? this.tagLabel(addressTag(self.address)) : null;
+			const selfAddress = input.recipients.find((r) => r.self)?.address;
+			const selfTagLabel = selfAddress ? this.tagLabel(addressTag(selfAddress)) : null;
 			const stored = this.insertMessage({
 				id: input.messageId,
 				threadHint: input.replyThreadId,
@@ -993,7 +1088,7 @@ export class MailboxDO extends DurableObject<Env> {
 				size: input.size,
 				internalDate: input.internalDate,
 				bcc: input.bcc,
-				labels: self ? ["SENT", "INBOX", ...(selfTagLabel ? [selfTagLabel] : [])] : ["SENT"],
+				labels: selfDelivery ? ["SENT", "INBOX", ...(selfTagLabel ? [selfTagLabel] : [])] : ["SENT"],
 				subjectFallback: true,
 				sentBy: input.sentBy,
 			});
@@ -1032,9 +1127,10 @@ export class MailboxDO extends DurableObject<Env> {
 			this.bump();
 			return { duplicate: false, result: sendResult };
 		});
-		if (!("error" in result) && !result.duplicate && input.recipients.some((r) => !r.self)) {
-			await this.ctx.storage.setAlarm(now);
-		}
+		if ("error" in result || result.duplicate) return result;
+		// Mail to the mailbox itself is in its inbox now.
+		if (selfDelivery) this.signalInbox();
+		if (input.recipients.some((r) => !r.self)) await this.ctx.storage.setAlarm(now);
 		return result;
 	}
 

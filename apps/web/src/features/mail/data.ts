@@ -2,6 +2,7 @@ import {
 	type Label,
 	MAIL_LIMITS,
 	type Mailbox,
+	type MailSettings,
 	type OutputOf,
 	type Thread,
 	type ThreadSummary,
@@ -11,6 +12,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import type { MailView } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
+import { DEFAULT_SIDEBAR } from "./mailboxNav.ts";
 
 export type Profile = OutputOf<"mail.get_profile">;
 
@@ -63,6 +65,50 @@ export function useProfilePoll(mailboxId: string | null, onVersionChange: () => 
 
 	const sync = useCallback(() => poll(false), [poll]);
 	return { profile, sync };
+}
+
+type SidebarSetting = keyof MailSettings["sidebar"];
+
+/**
+ * The mail settings of the person, from their own mailbox (`mail.get_settings`). Null while they load,
+ * and when they do not load: the sidebar then uses the defaults. The shell keeps them, so they load one
+ * time and stay when the mailbox changes.
+ *
+ * `setSidebar` shows a change at once and saves it with `mail.update_settings`. When the save fails, the
+ * setting goes back and the promise rejects. Each save names one setting only, so two quick changes to
+ * different settings cannot undo each other.
+ */
+export function useMailSettings() {
+	const [settings, setSettings] = useState<MailSettings | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		api.call("mail.get_settings").then(
+			(result) => {
+				if (active) setSettings(result);
+			},
+			() => {
+				// The defaults stay. A 401 shows the sign-in page through lib/api.ts.
+			},
+		);
+		return () => {
+			active = false;
+		};
+	}, []);
+
+	const setSidebar = useCallback(async (setting: SidebarSetting, value: boolean) => {
+		const apply = (next: boolean) =>
+			setSettings((current) => ({ sidebar: { ...(current?.sidebar ?? DEFAULT_SIDEBAR), [setting]: next } }));
+		apply(value);
+		try {
+			await api.call("mail.update_settings", { sidebar: { [setting]: value } as Partial<MailSettings["sidebar"]> });
+		} catch (error) {
+			apply(!value);
+			throw error;
+		}
+	}, []);
+
+	return { settings, setSidebar };
 }
 
 export interface LabelsState {

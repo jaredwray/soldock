@@ -14,3 +14,4 @@ export { newId } from "./ids/ids.ts";
 export { audit, log } from "./log/log.ts";
 export { OperationError } from "./operations/errors.ts";
 export { type AnyHandler, type Caller, type HandlerMap, invokeOperation } from "./operations/invoke.ts";
+export type { ResourceWatcher, Watch, WatcherMap, WatchListener } from "./resources/watch.ts";
