@@ -255,29 +255,46 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 		const row = await getWebhook(call.env.DIRECTORY, input.webhook_id);
 		// Only the creator changes a webhook. Another caller learns nothing about the id.
 		if (row?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
-		const authKey = input.auth_key === undefined ? row.auth_key : input.auth_key;
-		const header =
-			input.header === undefined
-				? row.header_name === null
-					? null
-					: { name: row.header_name, value: row.header_value ?? "" }
-				: input.header;
-		if (header) {
-			const problem = webhookHeaderNameProblem(header.name, authKey !== null);
+		const authorizationConflict =
+			"The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.";
+		// A first check gives a clear error. The update checks the rule again, against the row as it is then.
+		const keyAfter = input.auth_key === undefined ? row.auth_key : input.auth_key;
+		const headerAfter = input.header === undefined ? row.header_name : (input.header?.name ?? null);
+		if (headerAfter !== null) {
+			const problem = webhookHeaderNameProblem(headerAfter, keyAfter !== null);
 			if (problem) throw new OperationError("invalid", problem);
 		}
-		const updated: WebhookRow = {
-			...row,
-			label: input.label === undefined ? row.label : input.label || new URL(row.url).hostname,
-			auth_key: authKey,
-			header_name: header?.name ?? null,
-			header_value: header?.value ?? null,
-		};
-		await call.env.DIRECTORY.prepare(
-			"UPDATE webhooks SET label = ?, auth_key = ?, header_name = ?, header_value = ? WHERE id = ? AND created_by = ?",
+		const label = input.label === undefined ? null : input.label || new URL(row.url).hostname;
+		const setKey = input.auth_key !== undefined;
+		const setHeader = input.header !== undefined;
+		// Only the fields of the request change, so two updates at the same time do not undo each other.
+		const updated = await call.env.DIRECTORY.prepare(
+			`UPDATE webhooks SET label = COALESCE(?1, label),
+				auth_key = CASE WHEN ?2 THEN ?3 ELSE auth_key END,
+				header_name = CASE WHEN ?4 THEN ?5 ELSE header_name END,
+				header_value = CASE WHEN ?4 THEN ?6 ELSE header_value END
+			WHERE id = ?7 AND created_by = ?8
+			AND NOT ((CASE WHEN ?2 THEN ?3 ELSE auth_key END) IS NOT NULL
+				AND lower(CASE WHEN ?4 THEN ?5 ELSE header_name END) = 'authorization')
+			RETURNING ${WEBHOOK_COLUMNS}`,
 		)
-			.bind(updated.label, updated.auth_key, updated.header_name, updated.header_value, row.id, call.caller.id)
-			.run();
+			.bind(
+				label,
+				setKey ? 1 : 0,
+				input.auth_key ?? null,
+				setHeader ? 1 : 0,
+				input.header?.name ?? null,
+				input.header?.value ?? null,
+				row.id,
+				call.caller.id,
+			)
+			.first<WebhookRow>();
+		if (!updated) {
+			// The webhook went away, or a parallel update gave it the other half of the Authorization pair.
+			const current = await getWebhook(call.env.DIRECTORY, input.webhook_id);
+			if (current?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
+			throw new OperationError("invalid", authorizationConflict);
+		}
 		auditWebhook(call, "mail.update_webhook", row);
 		return { webhook: toWebhook(updated) };
 	},
