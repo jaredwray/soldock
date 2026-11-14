@@ -83,7 +83,7 @@ MCP clients. The app has no UI-only path.
     home indicator (`env(safe-area-inset-*)`). On Android, the page gets smaller above the on-screen
     keyboard (`interactive-widget=resizes-content`).
   - At 600px and below, the search box is an icon button in the header row. With the focus, the box
-    opens across the row. While the box has a query, it shows next to the title.
+    opens across the row. While the box has a query, the box shows in place of the title.
   - "Skip to content" is the first link of each page.
 - **Mail.** A header row with the title of the view, the search box and Refresh, a sidebar with the
   system views and the user labels, a thread list and a thread view.
