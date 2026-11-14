@@ -1,9 +1,10 @@
-import type { Label, Mailbox } from "@soldock/contracts";
+import type { Label, Mailbox, MailSettings } from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { errorMessage } from "../../lib/api.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type MailView, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
@@ -22,17 +23,22 @@ interface MailAppProps {
 	route: { mailboxId: string | null; view: MailView; threadId: string | null };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
+	/** The saved sidebar settings of the person, from the shell. Null while they load. */
+	sidebarSettings: MailSettings["sidebar"] | null;
+	/** Saves one sidebar setting. The promise rejects when the save fails. */
+	onSetSidebar: (setting: keyof MailSettings["sidebar"], value: boolean) => Promise<void>;
 	navOpen: boolean;
 	onCloseNav: () => void;
 }
 
 /**
- * The Mail product, for one mailbox: the own mailbox of the person, or a team mailbox. It owns the
+ * The Mail product, for one mailbox: the own mailbox of the person, a team mailbox, or the mailbox of
+ * an agent, which an owner or an admin can only read. It owns the
  * data that each view shares: the profile poll, the labels, the composer and the dialogs. The pane
  * for the current view has a key, so a new view starts clean. The shell gives this component a key
  * for each mailbox, so no data of one mailbox shows in a different one.
  */
-export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps) {
+export function MailApp({ route, mailboxes, sidebarSettings, onSetSidebar, navOpen, onCloseNav }: MailAppProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
 	const [refreshKey, setRefreshKey] = useState(0);
@@ -40,7 +46,8 @@ export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps)
 	const { mailboxId } = route;
 	const { profile, sync } = useProfilePoll(mailboxId, bump);
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
-	const teamMailbox = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
+	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
+	const readOnly = isAgentMailbox(mailboxId);
 	const [draft, setDraft] = useState<Draft | null>(null);
 	const [dialog, setDialog] = useState<MailDialog>(null);
 	const closeNavRef = useRef(onCloseNav);
@@ -60,8 +67,10 @@ export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps)
 
 	const labelsById = useMemo(() => new Map((labels ?? []).map((label) => [label.id, label])), [labels]);
 	// The address of the mailbox. A reply from a team mailbox leaves out the team address, not the person's.
-	const myAddress = profile?.address ?? (mailboxId ? (teamMailbox?.address ?? "") : whoami.principal.address);
-	const mailboxName = mailboxId ? (profile?.display_name ?? teamMailbox?.display_name ?? "Team mailbox") : null;
+	const myAddress = profile?.address ?? (mailboxId ? (listed?.address ?? "") : whoami.principal.address);
+	const mailboxName = mailboxId
+		? (profile?.display_name ?? listed?.display_name ?? (readOnly ? "Agent mailbox" : "Team mailbox"))
+		: null;
 	const query = viewQuery(route.view, labels);
 	const title = viewTitle(route.view, labels);
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
@@ -80,10 +89,15 @@ export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps)
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [navOpen]);
 
-	const compose = useCallback((next?: Draft) => {
-		closeNavRef.current();
-		setDraft(next ?? newDraft());
-	}, []);
+	const compose = useCallback(
+		(next?: Draft) => {
+			// Nobody sends from the mailbox of an agent except the agent.
+			if (readOnly) return;
+			closeNavRef.current();
+			setDraft(next ?? newDraft());
+		},
+		[readOnly],
+	);
 
 	function sent(result: SendResult) {
 		setDraft(null);
@@ -105,6 +119,13 @@ export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps)
 				<Sidebar
 					mailboxId={mailboxId}
 					mailboxes={mailboxes}
+					sidebarSettings={sidebarSettings}
+					onToggleSection={(setting, collapsed) =>
+						void onSetSidebar(setting, collapsed).catch((error: unknown) =>
+							toast({ message: `The sidebar change was not saved. ${errorMessage(error)}`, tone: "error" }),
+						)
+					}
+					readOnly={readOnly}
 					view={route.view}
 					labels={labels}
 					labelsError={labelsError}
@@ -129,7 +150,7 @@ export function MailApp({ route, mailboxes, navOpen, onCloseNav }: MailAppProps)
 					onCompose={compose}
 					onShowHelp={() => setDialog({ type: "help" })}
 				/>
-				{draft && (
+				{draft && !readOnly && (
 					<Composer
 						key={draft.key}
 						draft={draft}

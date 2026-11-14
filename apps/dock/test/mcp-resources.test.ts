@@ -228,6 +228,21 @@ describe("MCP subscriptions/listen", () => {
 		expect(await stream.next()).toBe("closed");
 	});
 
+	// An owner reads the mail of an agent with an audit line. A watch would tell when the agent gets mail, without one.
+	it("lets an owner read the inbox of an agent, but not subscribe to it", async () => {
+		const { owner, bot } = await seedTeams();
+		const listed = (await modern(owner.key, "resources/list")).body?.result as { resources: { uri: string }[] };
+		expect(listed.resources.map((resource) => resource.uri)).toContain(inbox(bot.id));
+		expect((await modern(owner.key, "resources/read", { uri: inbox(bot.id) })).body?.result).toMatchObject({
+			resultType: "complete",
+		});
+		const stream = await listen(owner.key, [inbox(owner.id), inbox(bot.id)]);
+		expect(await stream.next()).toMatchObject({
+			params: { notifications: { resourceSubscriptions: [inbox(owner.id)] } },
+		});
+		await stream.cancel();
+	});
+
 	// A long-lived stream must not outlive the access that opened it.
 	it("ends when the caller loses a mailbox or its credential, and after its longest life", async () => {
 		const { owner, bot, support } = await seedTeams();

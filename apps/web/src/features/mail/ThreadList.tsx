@@ -5,7 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, threadPath } from "../../routes.ts";
 import type { ListState } from "./data.ts";
-import { useMailboxId } from "./mailbox.tsx";
+import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { isUserLabelId } from "./views.ts";
 
 interface ThreadListProps {
@@ -28,7 +28,9 @@ interface ThreadListProps {
 
 export function ThreadList(props: ThreadListProps) {
 	const { list, view } = props;
-	const inTeamMailbox = useMailboxId() !== null;
+	const mailboxId = useMailboxId();
+	const readOnly = useReadOnlyMailbox();
+	const owner = mailboxId === null ? "own" : readOnly ? "agent" : "team";
 
 	if (list.status === "loading") {
 		return (
@@ -52,7 +54,7 @@ export function ThreadList(props: ThreadListProps) {
 		return (
 			<div className="list-state list-empty">
 				<Icon name={view.kind === "search" ? "search" : "inbox"} size={40} />
-				<p>{emptyText(view, props.title, inTeamMailbox)}</p>
+				<p>{emptyText(view, props.title, owner)}</p>
 			</div>
 		);
 	}
@@ -91,10 +93,11 @@ export function ThreadList(props: ThreadListProps) {
 	);
 }
 
-function emptyText(view: MailView, title: string, inTeamMailbox: boolean): string {
+function emptyText(view: MailView, title: string, owner: "own" | "team" | "agent"): string {
 	if (view.kind === "search") return `No conversations match “${view.query}”.`;
 	if (view.kind === "system" && view.view === "inbox") {
-		return inTeamMailbox ? "The inbox of this team mailbox is empty." : "Your inbox is empty.";
+		if (owner === "team") return "The inbox of this team mailbox is empty.";
+		return owner === "agent" ? "The inbox of this agent is empty." : "Your inbox is empty.";
 	}
 	return `No conversations in ${title}.`;
 }
@@ -126,6 +129,7 @@ function ThreadRow({
 }: ThreadRowProps) {
 	const linkRef = useRef<HTMLAnchorElement>(null);
 	const mailboxId = useMailboxId();
+	const readOnly = useReadOnlyMailbox();
 	const subject = thread.subject.trim() || "(no subject)";
 	const userLabels = thread.label_ids.filter(isUserLabelId).flatMap((id) => {
 		const label = labelsById.get(id);
@@ -142,24 +146,39 @@ function ThreadRow({
 	if (isCursor) classes.push("thread-cursor");
 
 	return (
-		<li className={classes.join(" ")}>
-			<input
-				type="checkbox"
-				className="checkbox thread-check"
-				checked={selected}
-				onChange={() => onToggleSelect(thread.id)}
-				aria-label={`Select: ${subject}`}
-			/>
-			<button
-				type="button"
-				className={thread.starred ? "icon-button icon-button-small star star-on" : "icon-button icon-button-small star"}
-				aria-label="Star"
-				aria-pressed={thread.starred}
-				title={thread.starred ? "Starred" : "Not starred"}
-				onClick={() => onToggleStar(thread)}
-			>
-				<Icon name="star" size={18} filled={thread.starred} />
-			</button>
+		<li className={readOnly ? `${classes.join(" ")} thread-row-read-only` : classes.join(" ")}>
+			{readOnly ? (
+				// The star shows the state of the agent's mail. A reader cannot change it.
+				<span
+					className={thread.starred ? "star star-static star-on" : "star star-static"}
+					title={thread.starred ? "Starred" : "Not starred"}
+				>
+					<Icon name="star" size={18} filled={thread.starred} />
+					{thread.starred && <span className="visually-hidden">Starred, </span>}
+				</span>
+			) : (
+				<>
+					<input
+						type="checkbox"
+						className="checkbox thread-check"
+						checked={selected}
+						onChange={() => onToggleSelect(thread.id)}
+						aria-label={`Select: ${subject}`}
+					/>
+					<button
+						type="button"
+						className={
+							thread.starred ? "icon-button icon-button-small star star-on" : "icon-button icon-button-small star"
+						}
+						aria-label="Star"
+						aria-pressed={thread.starred}
+						title={thread.starred ? "Starred" : "Not starred"}
+						onClick={() => onToggleStar(thread)}
+					>
+						<Icon name="star" size={18} filled={thread.starred} />
+					</button>
+				</>
+			)}
 			<Link ref={linkRef} to={threadPath(view, thread.id, mailboxId)} className="thread-link" onFocus={onFocus}>
 				<span className="thread-from">
 					{thread.unread && <span className="visually-hidden">Unread, </span>}

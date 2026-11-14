@@ -110,8 +110,16 @@ MCP clients. The app has no UI-only path.
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list. Shortcuts do not work while the focus is in a text field.
-- **Team mailboxes.** When the person is a member of a team mailbox, the sidebar shows a
-  **Mailboxes** section: "My mailbox" and each team mailbox (`mail.list_mailboxes`).
+- **Mailbox switcher.** When the person can use more than the own mailbox, the sidebar shows
+  "My mailbox" first, without a heading (`mail.list_mailboxes`, `mailboxNav.ts`).
+  - Under it, **Shared mailboxes** lists the team mailboxes of the person, and **Agent mailboxes**
+    lists the agents, for owners and admins. A section without mailboxes does not show.
+  - Each section heading is a button that collapses the section (`aria-expanded`). A collapsed
+    section still shows the open mailbox.
+  - The collapsed state is saved in the mail settings of the person (`mail.get_settings`,
+    `mail.update_settings`), so it is the same in each browser. The shell loads the settings one
+    time. A change shows at once. When the save fails, the section goes back and a toast shows the error.
+- **Shared mailboxes.** The UI name of a team mailbox, in the sidebar and on the Admin page.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -124,6 +132,20 @@ MCP clients. The app has no UI-only path.
     more than one person sends from the address.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
+- **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
+  shows an **Agent mailboxes** section with each agent (`mail.list_mailboxes`, kind `agent`).
+  - An agent mailbox path with the own id of the person goes to the same view under `/mail/…`
+    (`ownMailboxPath`), because the server treats that id as the own mailbox.
+  - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
+    the app that the mailbox is read only (`isAgentMailbox` in `routes.ts`, `useReadOnlyMailbox`).
+  - A notice above the list says that the mailbox is read only and that the audit log records the lists
+    and the conversations that the person opens.
+  - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
+    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
+  - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
+    mail. The server refuses each change and each send in the mailbox of an agent.
+  - **Admin › Agents** has a **Read the mail of …** link on each agent, for owners and admins only. A
+    sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
   - Owners and admins see all four sections. A member who sponsors an agent sees only **Your agents**.
@@ -159,6 +181,7 @@ MCP clients. The app has no UI-only path.
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
     For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
     OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
+    For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
     The **New person or agent** dialog also shows the banner when Agent is selected.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see a
@@ -362,6 +385,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/agent/<prn_id>/…` | The same views and threads, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `members`, `agents`, `shared-mailboxes` or `domains` |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |

@@ -12,8 +12,9 @@ export function log(level: Level, msg: string, fields: Record<string, unknown> =
 }
 
 /**
- * The audit record of a mutating operation. Until the audit log in R2 exists, it goes to Workers
- * Logs with `audit: true`, so it can be found and exported.
+ * The audit record of a mutating operation, and of a read of mail in the mailbox of an agent by an
+ * owner or an admin. Until the audit log in R2 exists, it goes to Workers Logs with `audit: true`, so
+ * it can be found and exported.
  */
 export function audit(fields: {
 	op: string;

@@ -91,8 +91,9 @@ gives the same data as REST.
 
 - A credential sees a resource kind only when it can call the read operation and the list
   operation. A key without `mail.read` sees no inbox.
-- `resources/list` gives one resource for each mailbox that the caller can use: the own mailbox and
-  each team mailbox that the caller is a member of.
+- `resources/list` gives one resource for each mailbox of `mail.list_mailboxes`: the own mailbox, each
+  team mailbox that the caller is a member of and, for an owner or an admin, the mailbox of each agent.
+  An owner or an admin can read the inbox of an agent, but cannot subscribe to it.
 - `resources/read` runs the read operation with the scope checks and the validation of REST. The
   content is the JSON of the operation result (`application/json`). When the JSON holds untrusted
   content, a `text/plain` notice comes first, with the same URI.

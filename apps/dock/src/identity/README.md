@@ -27,6 +27,10 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
   stops an agent from having a password or a TOTP secret. Agents never sign in to the web app.
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
   `allowlist` (domains and addresses) or `any`.
+- Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
+  change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
+  get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
+  `agentMailboxes` lists the mailboxes of the agents, and `agentMailboxFor` finds one by the agent id.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
 
