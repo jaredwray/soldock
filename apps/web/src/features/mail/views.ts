@@ -19,6 +19,13 @@ export const SYSTEM_NAV: readonly SystemNavItem[] = [
 	{ view: "trash", title: "Trash", icon: "trash", countLabel: null },
 ];
 
+/** The icon of a view, for the header row of Mail. */
+export function viewIcon(view: MailView): IconName {
+	if (view.kind === "label") return "tag";
+	if (view.kind === "search") return "search";
+	return SYSTEM_NAV.find((item) => item.view === view.view)?.icon ?? "mail";
+}
+
 const SYSTEM_QUERIES: Record<SystemView, string> = {
 	inbox: "in:inbox",
 	starred: "is:starred",

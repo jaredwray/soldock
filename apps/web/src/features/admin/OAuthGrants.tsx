@@ -1,5 +1,5 @@
 import type { OAuthGrant } from "@soldock/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
@@ -12,6 +12,7 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 	const [error, setError] = useState<string | null>(null);
 	const [revoking, setRevoking] = useState<OAuthGrant | null>(null);
 	const heading = `Apps connected as ${agentName}`;
+	const headingId = useId();
 
 	const load = useCallback(async () => {
 		try {
@@ -32,28 +33,33 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 	const sorted = [...(grants ?? [])].sort((a, b) => Number(status(a) !== null) - Number(status(b) !== null));
 
 	return (
-		<section className="card">
-			<h3 className="card-title">{heading}</h3>
+		<section className="panel" aria-labelledby={headingId}>
+			<h2 id={headingId} className="panel-title">
+				{heading}
+			</h2>
 			{error && (
 				<p className="form-error" role="alert">
 					The connections did not load. {error}
 				</p>
 			)}
-			{grants === null && !error && <p className="muted">Loading connections…</p>}
+			{grants === null && !error && <p className="panel-note">Loading connections…</p>}
 			{grants !== null && grants.length === 0 && (
-				<p className="muted">No app connected with OAuth yet. Give the app the MCP endpoint URL above.</p>
+				<p className="panel-note">No app connected with OAuth yet. Give the app the MCP endpoint URL above.</p>
 			)}
 			{grants !== null && grants.length > 0 && (
 				<div className="table-scroll">
-					<table className="table">
+					<table className="table table-rows">
 						<caption className="visually-hidden">{heading}</caption>
 						<thead>
 							<tr>
-								<th scope="col">App</th>
-								<th scope="col">Scopes</th>
-								<th scope="col">Connected</th>
-								<th scope="col">Last used</th>
-								<th scope="col">
+								<th scope="col">App and scopes</th>
+								<th scope="col" className="col-optional">
+									Connected
+								</th>
+								<th scope="col" className="col-optional">
+									Last used
+								</th>
+								<th scope="col" className="cell-actions">
 									<span className="visually-hidden">Actions</span>
 								</th>
 							</tr>
@@ -64,12 +70,18 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 								return (
 									<tr key={grant.id} className={ended ? "row-muted" : undefined}>
 										<td>
-											{grant.client_name}
-											{ended && <span className="status status-failed">{ended}</span>}
+											<div className="row-title">
+												{grant.client_name}
+												{ended && <span className="status status-failed">{ended}</span>}
+											</div>
+											<div className="row-note cell-scopes">{grant.scopes.join(", ")}</div>
 										</td>
-										<td className="cell-scopes">{grant.scopes.join(", ")}</td>
-										<td title={fullDate(grant.created_at)}>{shortDate(grant.created_at)}</td>
-										<td>{grant.last_used_at ? shortDate(grant.last_used_at) : "Never"}</td>
+										<td className="cell-date col-optional" title={fullDate(grant.created_at)}>
+											{shortDate(grant.created_at)}
+										</td>
+										<td className="cell-date col-optional">
+											{grant.last_used_at ? shortDate(grant.last_used_at) : "Never"}
+										</td>
 										<td className="cell-actions">
 											{!grant.revoked && (
 												<button

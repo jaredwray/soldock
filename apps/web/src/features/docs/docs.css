@@ -6,6 +6,7 @@
 	min-width: 0;
 	min-height: 0;
 	overflow: hidden;
+	background: var(--surface);
 }
 
 .doc-page:focus {
@@ -13,7 +14,7 @@
 }
 
 .doc-state-title {
-	color: var(--text);
+	color: var(--foreground);
 	font-size: 20px;
 }
 
@@ -24,19 +25,20 @@
 	gap: 8px;
 }
 
-/* A notice between the header and the text: read only, a failed save, or a conflict. */
+/* A notice between the header and the text: read only, a failed save, or a conflict. It is a band
+   with the width of the page. */
 
 .doc-notice {
 	display: flex;
 	flex: none;
 	align-items: center;
 	gap: 10px;
-	margin: 0 16px 8px;
-	padding: 8px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	color: var(--text-muted);
+	min-height: 44px;
+	padding: 6px 22px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 13px;
 }
 
 .doc-notice .icon {
@@ -49,15 +51,13 @@
 }
 
 .doc-notice-warning {
-	border-color: var(--warning-border);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	background: var(--warning-soft);
+	color: var(--foreground);
 }
 
 .doc-notice-error {
-	border-color: var(--danger);
-	background: var(--danger-soft);
-	color: var(--danger);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 /* The editor: the toolbar stays in view, and only the paper scrolls. */
@@ -69,22 +69,22 @@
 	min-height: 0;
 }
 
+/* The toolbar is a row below the header. Its buttons are quiet: an icon with no box. */
 .doc-toolbar {
 	display: flex;
 	flex: none;
 	align-items: center;
 	gap: 2px;
-	margin: 0 16px;
-	padding: 4px 12px;
-	border-radius: 999px;
-	background: var(--surface);
-	box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+	min-height: 44px;
+	padding: 5px 16px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
 	overflow-x: auto;
 	scrollbar-width: thin;
 }
 
 .doc-toolbar .format-button {
-	border-radius: var(--radius);
+	border-radius: 7px;
 }
 
 .doc-toolbar .format-button[aria-disabled="true"] {
@@ -94,30 +94,49 @@
 
 .doc-toolbar .format-button[aria-disabled="true"]:hover {
 	background: transparent;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
+}
+
+/* A line before each group of buttons. */
+.doc-toolbar .format-group-start:not(:first-child) {
+	position: relative;
+	margin-left: 13px;
+	overflow: visible;
+}
+
+.doc-toolbar .format-group-start:not(:first-child)::before {
+	position: absolute;
+	top: 7px;
+	bottom: 7px;
+	left: -7px;
+	width: 1px;
+	background: var(--border);
+	content: "";
 }
 
 .doc-block-type {
 	flex: none;
+	width: 132px;
 	height: 32px;
-	margin-right: 8px;
-	padding: 0 8px;
+	margin-right: 4px;
+	padding: 0 6px;
 	border: 1px solid transparent;
-	border-radius: var(--radius);
+	border-radius: 7px;
 	background: transparent;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
+	font-weight: 500;
 	cursor: pointer;
 }
 
 .doc-block-type:hover {
-	background: var(--surface-3);
+	background: var(--hover);
 }
 
 .doc-scroll {
 	flex: 1;
 	min-height: 0;
-	padding: 16px 16px 48px;
+	padding: 24px 22px 48px;
 	overflow-y: auto;
 }
 
@@ -127,11 +146,10 @@
 	max-width: 816px;
 	min-height: 100%;
 	margin: 0 auto;
-	padding: 72px 80px;
+	padding: 64px 80px;
 	border: 1px solid var(--border);
-	border-radius: 4px;
-	background: var(--surface);
-	box-shadow: 0 1px 3px rgb(15 23 42 / 0.1);
+	border-radius: var(--radius);
+	background: var(--background);
 	cursor: text;
 }
 
@@ -146,7 +164,7 @@
 .doc-body {
 	flex: 1;
 	min-height: 320px;
-	color: var(--text);
+	color: var(--foreground);
 	font-size: 16px;
 	line-height: 1.6;
 	overflow-wrap: anywhere;
@@ -204,7 +222,7 @@
 	margin: 0 0 0.75em;
 	padding: 2px 0 2px 16px;
 	border-left: 3px solid var(--border);
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .doc-body blockquote > :last-child,
@@ -215,7 +233,7 @@
 .doc-body code {
 	padding: 1px 5px;
 	border-radius: 4px;
-	background: var(--surface-3);
+	background: var(--hover);
 	font-family: var(--mono);
 	font-size: 0.9em;
 }
@@ -223,8 +241,8 @@
 .doc-body pre {
 	margin: 0 0 0.75em;
 	padding: 12px 16px;
-	border-radius: var(--radius);
-	background: var(--surface-2);
+	border-radius: var(--radius-md);
+	background: var(--surface);
 	border: 1px solid var(--border);
 	font-family: var(--mono);
 	font-size: 14px;
@@ -252,7 +270,7 @@
 }
 
 .doc-body a {
-	color: var(--accent);
+	color: var(--link);
 	text-decoration: underline;
 }
 
@@ -260,25 +278,23 @@
 	cursor: pointer;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
 	.doc-notice {
 		flex-wrap: wrap;
-		margin: 0 8px 8px;
+		padding: 8px 16px;
 	}
 
 	.doc-toolbar {
-		margin: 0 8px;
-		border-radius: var(--radius);
+		padding: 5px 8px;
 	}
 
 	.doc-scroll {
-		padding: 8px 0 32px;
+		padding: 0 0 32px;
 	}
 
 	.doc-paper {
 		padding: 24px 20px;
-		border-right: 0;
-		border-left: 0;
+		border: 0;
 		border-radius: 0;
 	}
 }
@@ -287,5 +303,26 @@
 	.doc-toolbar,
 	.doc-notice {
 		display: none;
+	}
+}
+
+/* Touch: the toolbar is one row that scrolls, with 44px buttons. */
+@media (max-width: 900px), (pointer: coarse) {
+	.doc-toolbar {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+	}
+
+	.doc-toolbar .format-button {
+		flex: none;
+		width: 44px;
+		height: 44px;
+	}
+
+	.doc-block-type {
+		height: 44px;
+		font-size: 16px;
 	}
 }

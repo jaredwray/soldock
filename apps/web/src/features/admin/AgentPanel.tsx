@@ -30,23 +30,34 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 	return (
 		<details className="agent">
 			<summary className="agent-summary">
-				<span className="agent-name">{agent.display_name}</span>
-				<span className="agent-address">{agent.address}</span>
-				{agent.archived_at !== null && <span className="chip">Archived</span>}
-				<span className="chip">{policySummary(policy)}</span>
+				<span className="avatar member-avatar" aria-hidden="true">
+					<Icon name="bot" size={18} />
+				</span>
+				<span className="agent-text">
+					<span className="agent-name">{agent.display_name}</span>
+					<span className="agent-address">{agent.address}</span>
+				</span>
+				<span className="agent-chips">
+					{agent.archived_at !== null && <span className="chip">Archived</span>}
+					<span className="chip">{policySummary(policy)}</span>
+				</span>
 				<Icon name="chevronDown" className="agent-chevron" />
 			</summary>
 			<div className="agent-body">
-				<p className="muted">Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
-				{canReadMail && (
-					<p className="agent-mail-link">
+				<div className="agent-meta">
+					<div>
+						<p>Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
+						{canReadMail && (
+							<p className="field-hint">Read only. The audit log records the conversations that you open.</p>
+						)}
+					</div>
+					{canReadMail && (
 						<Link to={viewPath({ kind: "system", view: "inbox" }, agent.id)} className="button button-small">
 							<Icon name="mail" size={16} />
 							Read the mail of {agent.display_name}
 						</Link>
-						<span className="field-hint">Read only. The audit log records the conversations that you open.</span>
-					</p>
-				)}
+					)}
+				</div>
 				<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
 				<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
 				<WebhookManager
@@ -98,7 +109,7 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 	return (
 		<form className="policy-form" onSubmit={submit} noValidate>
 			<fieldset>
-				<legend className="card-subtitle">Outbound policy</legend>
+				<legend className="subpanel-title">Outbound policy</legend>
 				{POLICY_MODES.map((option) => (
 					<label key={option.mode} className="check-row">
 						<input

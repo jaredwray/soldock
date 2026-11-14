@@ -1,5 +1,5 @@
 import type { Label } from "@soldock/contracts";
-import { useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import type { MailView } from "../../routes.ts";
 import type { MailAction } from "./actions.ts";
@@ -7,6 +7,10 @@ import type { MailAction } from "./actions.ts";
 interface ToolbarProps {
 	view: MailView;
 	title: string;
+	/** The icon of the view, before the title. */
+	icon: IconName;
+	/** The search box of Mail, at the right of the row. */
+	search: ReactNode;
 	/** "list" shows the select-all box. "thread" shows the back button. */
 	mode: "list" | "thread";
 	/** The number of threads that the actions change: the selection, or 1 for an open thread. */
@@ -24,7 +28,10 @@ interface ToolbarProps {
 	onRefresh: () => void;
 }
 
-/** The actions above the list or the open thread. They change the selection or the open thread. */
+/**
+ * The header row of Mail: the title of the view, the actions on the selection or on the open thread,
+ * the search box and Refresh.
+ */
 export function Toolbar(props: ToolbarProps) {
 	const { view, mode, targetCount, anyUnread, allStarred, userLabels, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
@@ -32,7 +39,7 @@ export function Toolbar(props: ToolbarProps) {
 	const hasTargets = !props.readOnly && targetCount > 0;
 
 	return (
-		<div className="toolbar">
+		<div className={hasTargets ? "toolbar toolbar-has-targets" : "toolbar"}>
 			{mode === "thread" ? (
 				<ToolButton icon="back" label="Back to the list" onClick={props.onBack} />
 			) : (
@@ -40,7 +47,12 @@ export function Toolbar(props: ToolbarProps) {
 					<SelectAll selection={props.selection} disabled={props.listEmpty} onToggle={props.onToggleAll} />
 				)
 			)}
-			{!hasTargets && <ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />}
+			{mode === "list" && (
+				<div className="page-title">
+					<Icon name={props.icon} />
+					<h1 className="toolbar-title">{hasTargets ? `${targetCount} selected` : props.title}</h1>
+				</div>
+			)}
 			{hasTargets && (
 				<div className="toolbar-actions">
 					{inSpam && <TextButton icon="restore" label="Not spam" onClick={() => onAction("notSpam")} />}
@@ -76,7 +88,8 @@ export function Toolbar(props: ToolbarProps) {
 				</div>
 			)}
 			<span className="toolbar-spacer" />
-			{mode === "list" && <h1 className="toolbar-title">{hasTargets ? `${targetCount} selected` : props.title}</h1>}
+			{props.search}
+			{!hasTargets && <ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />}
 		</div>
 	);
 }

@@ -33,7 +33,7 @@ interface WebhookManagerProps {
 	mailboxId?: string;
 	/** True when the form to create a webhook shows. In the mailbox of an agent, only its sponsor can create one. */
 	canCreate: boolean;
-	/** False inside a dialog, whose title is the heading: no card and no visible heading. */
+	/** False inside a dialog, whose title is the heading: the section has no visible heading. */
 	framed?: boolean;
 }
 
@@ -50,6 +50,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedWebhook | null>(null);
 	const [deleting, setDeleting] = useState<Webhook | null>(null);
+	const headingId = useId();
 
 	const load = useCallback(async () => {
 		try {
@@ -87,100 +88,103 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 		return mailbox ? mailbox.address : id;
 	};
 
-	const Frame = framed ? "section" : "div";
-	return (
-		<Frame className={framed ? "card" : undefined}>
-			{framed && <h2 className="card-title">{heading}</h2>}
-			<p className="muted">
-				A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the
-				receiver reads the inbox with its own key.
-			</p>
+	const note =
+		"A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the receiver reads the inbox with its own key.";
+	const content = (
+		<>
 			{error && (
 				<p className="form-error" role="alert">
 					The webhooks did not load. {error}
 				</p>
 			)}
-			{webhooks === null && !error && <p className="muted">Loading webhooks…</p>}
-			{webhooks !== null && (
-				<div className="table-scroll">
-					<table className="table">
-						<caption className="visually-hidden">{heading}</caption>
-						<thead>
-							<tr>
-								<th scope="col">Webhook</th>
-								{!mailboxId && <th scope="col">Mailbox</th>}
-								<th scope="col">Last delivery</th>
-								<th scope="col">
-									<span className="visually-hidden">Actions</span>
-								</th>
-							</tr>
-						</thead>
-						<tbody>
-							{webhooks.map((webhook) => (
-								<tr key={webhook.id} className={webhook.status === "disabled" ? "row-muted" : undefined}>
-									<td>
-										{webhook.label}
-										{webhook.status === "disabled" && <span className="status status-failed">Disabled</span>}
-										<span className="check-hint cell-url">{webhook.url}</span>
-										{webhook.disabled_reason && (
-											<span className="check-hint">Stopped: {DISABLED_REASONS[webhook.disabled_reason]}.</span>
-										)}
-										{(webhook.has_auth_key || webhook.header_name) && (
-											<span className="check-hint">Sends {authSummary(webhook)}.</span>
-										)}
-										{webhook.status === "active" && webhook.last_error && (
-											<span className="check-hint">Last attempt failed: {webhook.last_error}.</span>
-										)}
-									</td>
-									{!mailboxId && <td>{mailboxName(webhook.mailbox_id)}</td>}
-									<td title={webhook.last_delivery_at ? fullDate(webhook.last_delivery_at) : undefined}>
-										{webhook.last_delivery_at ? shortDate(webhook.last_delivery_at) : "Never"}
-									</td>
-									<td className="cell-actions">
-										<div className="row-actions webhook-actions">
-											{webhook.created_by === whoami.principal.id && (
+			<div className="panel-card panel-card-list">
+				{webhooks === null && !error && <p className="panel-empty">Loading webhooks…</p>}
+				{webhooks !== null && webhooks.length === 0 && <p className="panel-empty">No webhooks yet.</p>}
+				{webhooks !== null && webhooks.length > 0 && (
+					<div className="table-scroll">
+						<table className="table table-rows">
+							<caption className="visually-hidden">{heading}</caption>
+							<thead>
+								<tr>
+									<th scope="col">Webhook</th>
+									{!mailboxId && (
+										<th scope="col" className="col-optional">
+											Mailbox
+										</th>
+									)}
+									<th scope="col">Last delivery</th>
+									<th scope="col" className="cell-actions">
+										<span className="visually-hidden">Actions</span>
+									</th>
+								</tr>
+							</thead>
+							<tbody>
+								{webhooks.map((webhook) => (
+									<tr key={webhook.id} className={webhook.status === "disabled" ? "row-muted" : undefined}>
+										<td>
+											<div className="row-title">
+												{webhook.label}
+												{webhook.status === "disabled" && <span className="status status-failed">Disabled</span>}
+											</div>
+											<div className="row-note cell-url">{webhook.url}</div>
+											{/* At 900px and below, the Mailbox column hides, and the mailbox shows here. */}
+											{!mailboxId && <div className="row-note row-note-inline">{mailboxName(webhook.mailbox_id)}</div>}
+											{webhook.disabled_reason && (
+												<div className="row-note">Stopped: {DISABLED_REASONS[webhook.disabled_reason]}.</div>
+											)}
+											{(webhook.has_auth_key || webhook.header_name) && (
+												<div className="row-note">Sends {authSummary(webhook)}.</div>
+											)}
+											{webhook.status === "active" && webhook.last_error && (
+												<div className="row-note">Last attempt failed: {webhook.last_error}.</div>
+											)}
+										</td>
+										{!mailboxId && <td className="col-optional">{mailboxName(webhook.mailbox_id)}</td>}
+										<td
+											className="cell-date"
+											title={webhook.last_delivery_at ? fullDate(webhook.last_delivery_at) : undefined}
+										>
+											{webhook.last_delivery_at ? shortDate(webhook.last_delivery_at) : "Never"}
+										</td>
+										<td className="cell-actions">
+											<div className="row-actions webhook-actions">
+												{webhook.created_by === whoami.principal.id && (
+													<button
+														type="button"
+														className="button button-small"
+														onClick={() => setEditing(webhook)}
+														aria-label={`Edit webhook ${webhook.label}`}
+													>
+														Edit
+													</button>
+												)}
 												<button
 													type="button"
-													className="button button-small"
-													onClick={() => setEditing(webhook)}
-													aria-label={`Edit webhook ${webhook.label}`}
+													className="button button-small button-danger-outline"
+													onClick={() => setDeleting(webhook)}
+													aria-label={`Delete webhook ${webhook.label}`}
 												>
-													Edit
+													Delete
 												</button>
-											)}
-											<button
-												type="button"
-												className="button button-small button-danger-outline"
-												onClick={() => setDeleting(webhook)}
-												aria-label={`Delete webhook ${webhook.label}`}
-											>
-												Delete
-											</button>
-										</div>
-									</td>
-								</tr>
-							))}
-							{webhooks.length === 0 && (
-								<tr>
-									<td colSpan={mailboxId ? 3 : 4} className="muted">
-										No webhooks yet.
-									</td>
-								</tr>
-							)}
-						</tbody>
-					</table>
-				</div>
-			)}
-			{canCreate && (
-				<CreateWebhookForm
-					mailboxId={mailboxId}
-					mailboxes={mailboxes}
-					onCreated={(webhook) => {
-						setCreated(webhook);
-						void load();
-					}}
-				/>
-			)}
+											</div>
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				)}
+				{canCreate && (
+					<CreateWebhookForm
+						mailboxId={mailboxId}
+						mailboxes={mailboxes}
+						onCreated={(webhook) => {
+							setCreated(webhook);
+							void load();
+						}}
+					/>
+				)}
+			</div>
 			{created && <WebhookSecretDialog webhook={created} onClose={() => setCreated(null)} />}
 			{editing && (
 				<EditWebhookDialog
@@ -210,7 +214,28 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 					</p>
 				</ConfirmDialog>
 			)}
-		</Frame>
+		</>
+	);
+
+	// Inside a dialog, the title of the dialog is the heading.
+	if (!framed) {
+		return (
+			<div className="webhooks">
+				<p className="panel-note">{note}</p>
+				{content}
+			</div>
+		);
+	}
+	return (
+		<section className="panel" aria-labelledby={headingId}>
+			<header className="panel-heading">
+				<h2 id={headingId} className="panel-title">
+					{heading}
+				</h2>
+				<p className="panel-note">{note}</p>
+			</header>
+			{content}
+		</section>
 	);
 }
 
@@ -266,7 +291,7 @@ function CreateWebhookForm({
 	}
 
 	return (
-		<form className="create-key" onSubmit={submit} noValidate>
+		<form className="panel-form panel-form-divided" onSubmit={submit} noValidate>
 			<div className="field">
 				<label htmlFor={ids.url} className="field-label">
 					Receiver URL

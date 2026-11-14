@@ -1,6 +1,6 @@
 import { MAIL_LIMITS, type OutputOf } from "@soldock/contracts";
 import type { Node } from "prosemirror-model";
-import { type ChangeEvent, type FormEvent, useId, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -223,8 +223,8 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 		}
 	}
 
-	const addressInput = (field: AddressField, label: string, autofocus: boolean) => (
-		<div className="compose-row">
+	const addressInput = (field: AddressField, label: string, autofocus: boolean, extra?: ReactNode) => (
+		<div className={extra ? "compose-row compose-row-extra" : "compose-row"}>
 			<label htmlFor={ids[field]} className="compose-label">
 				{label}
 			</label>
@@ -246,6 +246,7 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 				disabled={sending}
 				data-autofocus={autofocus ? true : undefined}
 			/>
+			{extra}
 			{fieldErrors[field] && (
 				<p id={`${ids[field]}-error`} className="field-error">
 					{fieldErrors[field]}
@@ -266,16 +267,21 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 							</span>
 						</div>
 					)}
-					{addressInput("to", "To", draft.to === "")}
-					{showCopies ? (
+					{addressInput(
+						"to",
+						"To",
+						draft.to === "",
+						showCopies ? undefined : (
+							<button type="button" className="compose-copies" onClick={() => setShowCopies(true)}>
+								Add Cc and Bcc
+							</button>
+						),
+					)}
+					{showCopies && (
 						<>
 							{addressInput("cc", "Cc", false)}
 							{addressInput("bcc", "Bcc", false)}
 						</>
-					) : (
-						<button type="button" className="link-button compose-copies" onClick={() => setShowCopies(true)}>
-							Add Cc and Bcc
-						</button>
 					)}
 					<div className="compose-row">
 						<label htmlFor={ids.subject} className="compose-label">
@@ -301,17 +307,21 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					autofocus={draft.to !== ""}
 				/>
 				{attachments.length > 0 && (
-					<ul className="compose-attachments" aria-label="Attachments">
+					<ul className="file-cards compose-attachments" aria-label="Attachments">
 						{attachments.map((file) => (
-							<li key={file.id} className="compose-attachment">
-								<Icon name="paperclip" size={16} />
-								<span className="attachment-name" title={file.filename}>
-									{file.filename}
+							<li key={file.id} className="file-card">
+								<span className="file-card-icon">
+									<Icon name={file.mime_type.startsWith("image/") ? "image" : "file"} size={20} />
 								</span>
-								<span className="attachment-meta">{formatBytes(file.size)}</span>
+								<span className="file-card-text">
+									<span className="file-card-name" title={file.filename}>
+										{file.filename}
+									</span>
+									<span className="file-card-meta">{formatBytes(file.size)}</span>
+								</span>
 								<button
 									type="button"
-									className="icon-button icon-button-small"
+									className="icon-button icon-button-small file-card-action"
 									aria-label={`Remove ${file.filename}`}
 									title="Remove"
 									onClick={() => {
@@ -343,10 +353,6 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					)}
 				</div>
 				<div className="compose-actions">
-					<button type="submit" className="button button-primary" disabled={sending || reading}>
-						<Icon name="send" size={16} />
-						{sending ? "Sending…" : "Send"}
-					</button>
 					<input
 						id={ids.files}
 						type="file"
@@ -371,6 +377,10 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					<span className="toolbar-spacer" />
 					<button type="button" className="icon-button" aria-label="Discard" title="Discard" onClick={requestClose}>
 						<Icon name="trash" />
+					</button>
+					<button type="submit" className="button button-primary" disabled={sending || reading}>
+						<Icon name="send" size={16} />
+						{sending ? "Sending…" : "Send"}
 					</button>
 				</div>
 			</form>

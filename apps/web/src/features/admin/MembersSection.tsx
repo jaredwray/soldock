@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { CreatePrincipalDialog } from "./CreatePrincipalForm.tsx";
@@ -54,9 +55,9 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 	}
 
 	return (
-		<div className="card">
-			<div className="section-toolbar">
-				<p className="muted">
+		<section className="panel">
+			<div className="panel-head">
+				<p className="panel-heading panel-intro">
 					The people and agents of the organization. An archived account cannot sign in, and keeps its mail and files.
 				</p>
 				<button type="button" className="button button-primary" onClick={() => setAction({ kind: "create" })}>
@@ -64,8 +65,8 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 					New person or agent
 				</button>
 			</div>
-			<div className="table-scroll">
-				<table className="table">
+			<div className="panel-card panel-card-list table-scroll">
+				<table className="table table-rows">
 					<caption className="visually-hidden">People and agents of the organization</caption>
 					<thead>
 						<tr>
@@ -91,21 +92,36 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 							return (
 								<tr key={principal.id} className={archived ? "row-muted" : undefined}>
 									<td className="member-cell">
-										<div className="member-name">
-											{principal.display_name}
-											{principal.id === me.id && <span className="muted"> (you)</span>}
-											{/* A phone has no Kind column, so an agent gets its chip here. */}
-											{principal.kind === "agent" && <span className="kind kind-agent kind-inline">Agent</span>}
-											{archived && <span className="chip chip-small">Archived</span>}
+										<div className="member">
+											<span className="avatar member-avatar" aria-hidden="true">
+												{principal.kind === "agent" ? <Icon name="bot" size={18} /> : initials(principal.display_name)}
+											</span>
+											<div className="member-text">
+												<div className="member-name">
+													{principal.display_name}
+													{principal.id === me.id && <span className="member-you">(you)</span>}
+													{/* A phone has no Kind column, so an agent gets its chip here. */}
+													{principal.kind === "agent" && <span className="kind kind-agent kind-inline">Agent</span>}
+													{archived && <span className="chip chip-small">Archived</span>}
+												</div>
+												<div className="row-note">{principal.address}</div>
+											</div>
 										</div>
-										<div className="cell-address muted">{principal.address}</div>
 									</td>
 									<td className="col-optional">
 										<span className={`kind kind-${principal.kind}`}>
 											{principal.kind === "agent" ? "Agent" : "Person"}
 										</span>
 									</td>
-									<td>{principal.org_role ? ROLE_NAMES[principal.org_role] : "—"}</td>
+									<td>
+										{principal.org_role ? (
+											<span className={principal.org_role === "member" ? "role-chip" : "role-chip role-chip-strong"}>
+												{ROLE_NAMES[principal.org_role]}
+											</span>
+										) : (
+											"—"
+										)}
+									</td>
 									<td className="col-optional">
 										{principal.sponsor_id ? (byId.get(principal.sponsor_id)?.display_name ?? "Unknown") : "—"}
 									</td>
@@ -223,7 +239,7 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 					}}
 				/>
 			)}
-		</div>
+		</section>
 	);
 }
 

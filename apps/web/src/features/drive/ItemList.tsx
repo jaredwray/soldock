@@ -55,7 +55,9 @@ export function ItemList(props: ItemListProps) {
 		// to each item of that page. The list can still have more pages.
 		return (
 			<div className="list-state list-empty">
-				<Icon name={view.kind === "search" ? "search" : view.kind === "trash" ? "trash" : "folder"} size={40} />
+				<span className="drive-empty-tile">
+					<Icon name={view.kind === "search" ? "search" : view.kind === "trash" ? "trash" : "folder"} size={24} />
+				</span>
 				<p>{list.nextCursor !== null ? "This page has no items that you can open." : emptyText(view)}</p>
 				{list.nextCursor !== null && (
 					<button type="button" className="button" onClick={props.onLoadMore} disabled={list.loadingMore}>
@@ -189,7 +191,9 @@ function ItemRow({
 	const date = inTrash && item.trashed_at ? item.trashed_at : item.modified_at;
 	const name = (
 		<>
-			<Icon name={itemIcon(item)} className={`drive-kind drive-kind-${item.kind}`} />
+			<span className={`drive-kind drive-kind-${item.kind}`}>
+				<Icon name={itemIcon(item)} size={18} />
+			</span>
 			<span className="drive-name-text">{item.name}</span>
 			<span className="visually-hidden">{`, ${kindName(item).toLowerCase()}`}</span>
 		</>
@@ -207,7 +211,9 @@ function ItemRow({
 					<button
 						type="button"
 						className={
-							item.starred ? "icon-button icon-button-small icon-button-star" : "icon-button icon-button-small"
+							item.starred
+								? "icon-button icon-button-small icon-button-star"
+								: "icon-button icon-button-small drive-star-off"
 						}
 						aria-label={item.starred ? `Remove the star from ${item.name}` : `Put a star on ${item.name}`}
 						aria-pressed={item.starred}
@@ -233,7 +239,7 @@ function ItemRow({
 					)}
 					{item.shared && (
 						<span className="drive-shared-mark" title="Shared">
-							<Icon name="team" size={16} />
+							<Icon name="team" size={14} />
 							<span className="visually-hidden">Shared</span>
 						</span>
 					)}

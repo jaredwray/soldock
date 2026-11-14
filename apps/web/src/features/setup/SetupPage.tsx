@@ -10,7 +10,7 @@ import {
 } from "@soldock/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
-import { Icon } from "../../lib/icons.tsx";
+import { BrandMark } from "../../shell/BrandMark.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
 import { TotpSetup } from "../settings/TotpSetup.tsx";
@@ -55,15 +55,14 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 	}, []);
 
 	return (
-		<main className="sign-in">
-			<div className="sign-in-card">
-				<div className="brand brand-large">
-					<span className="brand-mark" aria-hidden="true">
-						<Icon name="mail" size={22} />
-					</span>
-					<span>Soldock</span>
-				</div>
-				<h1 className="sign-in-title">Set up Soldock</h1>
+		<main className="auth">
+			<div className="auth-card">
+				<header className="auth-heading">
+					<div className="auth-logo">
+						<BrandMark />
+					</div>
+					<h1 className="auth-title">Set up Soldock</h1>
+				</header>
 				{created ? (
 					keyCopied ? (
 						<TwoStepStep
@@ -85,7 +84,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 							}}
 						/>
 					) : choice === null && directory === "has_accounts" ? (
-						<div className="setup-choices">
+						<div className="auth-form">
 							<p className="setup-intro">The token is correct. This directory already has accounts.</p>
 							<p className="field-hint">
 								Continue to use the existing accounts. A fresh start deletes all accounts, API keys, sessions, and
@@ -94,7 +93,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 							<p className="notice">
 								This page shows until you delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard.
 							</p>
-							<div className="setup-actions">
+							<div className="auth-actions">
 								<button
 									ref={choiceRef}
 									type="button"
@@ -109,13 +108,13 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 							</div>
 						</div>
 					) : choice === null ? (
-						<div className="setup-choices">
+						<div className="auth-form">
 							<p className="setup-intro">The token is correct. Do you want to start fresh?</p>
 							<p className="field-hint">
 								A fresh start deletes all accounts, API keys, sessions, and passwords. Stored mail stays in storage, but
 								new accounts cannot access it.
 							</p>
-							<div className="setup-actions">
+							<div className="auth-actions">
 								<button
 									ref={choiceRef}
 									type="button"
@@ -182,7 +181,7 @@ function TokenForm({ onVerified }: { onVerified: (token: string, directory: Setu
 	}
 
 	return (
-		<form className="setup-form" onSubmit={submit}>
+		<form className="auth-form" onSubmit={submit}>
 			<p className="setup-intro">Enter the setup token to continue.</p>
 			<div className="field">
 				<label htmlFor={tokenId} className="field-label">
@@ -226,7 +225,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 	}
 
 	return (
-		<>
+		<div className="auth-form">
 			<p>Soldock has no owner yet. A setup token proves that you operate this deployment.</p>
 			<div aria-live="polite">
 				{tooShort && (
@@ -251,7 +250,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 			<button type="button" className="button button-primary button-block" onClick={() => void check()} disabled={busy}>
 				{busy ? "Checking…" : "Check again"}
 			</button>
-		</>
+		</div>
 	);
 }
 
@@ -333,7 +332,7 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 	}
 
 	return (
-		<form className="setup-form" onSubmit={submit} noValidate>
+		<form className="auth-form" onSubmit={submit} noValidate>
 			<p className="setup-intro">
 				{startFresh ? "Enter the details of the new owner." : "Enter the details of the first owner."}
 			</p>
@@ -438,12 +437,14 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 					</div>
 				)}
 			</div>
-			<button type="submit" className="button button-primary button-block" disabled={busy}>
-				{busy ? "Please wait…" : startFresh ? "Review fresh start" : "Create the owner"}
-			</button>
-			<button type="button" className="button button-block" onClick={onBack} disabled={busy}>
-				Back
-			</button>
+			<div className="auth-actions">
+				<button type="submit" className="button button-primary button-block" disabled={busy}>
+					{busy ? "Please wait…" : startFresh ? "Review fresh start" : "Create the owner"}
+				</button>
+				<button type="button" className="button button-block" onClick={onBack} disabled={busy}>
+					Back
+				</button>
+			</div>
 			{pending && (
 				<ConfirmDialog
 					title="Start fresh?"
@@ -470,7 +471,7 @@ function TwoStepStep({ password, onDone }: { password: string; onDone: () => voi
 	}, [enabled]);
 
 	return (
-		<div className="setup-form">
+		<div className="auth-form">
 			<p className="setup-intro">Two-step verification (optional)</p>
 			{enabled ? (
 				<p className="notice">Two-step verification is on. Each sign-in needs your password and a code.</p>

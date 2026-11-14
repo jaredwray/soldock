@@ -22,10 +22,13 @@ interface ApiKeyManagerProps {
 	 */
 	allowedScopes: readonly Scope[];
 	heading: string;
+	/** A short line under the heading. */
+	note?: string;
 }
 
 /** Lists, creates and revokes the API keys of one principal. */
-export function ApiKeyManager({ principalId, allowedScopes, heading }: ApiKeyManagerProps) {
+export function ApiKeyManager({ principalId, allowedScopes, heading, note }: ApiKeyManagerProps) {
+	const headingId = useId();
 	const toast = useToast();
 	const { whoami } = useSession();
 	const offeredScopes = allowedScopes.filter((scope) => whoami.scopes.includes(scope));
@@ -52,73 +55,83 @@ export function ApiKeyManager({ principalId, allowedScopes, heading }: ApiKeyMan
 	const revoked = (keys ?? []).filter((key) => key.revoked);
 
 	return (
-		<section className="card">
-			<h2 className="card-title">{heading}</h2>
+		<section className="panel" aria-labelledby={headingId}>
+			<header className="panel-heading">
+				<h2 id={headingId} className="panel-title">
+					{heading}
+				</h2>
+				{note && <p className="panel-note">{note}</p>}
+			</header>
 			{error && (
 				<p className="form-error" role="alert">
 					The keys did not load. {error}
 				</p>
 			)}
-			{keys === null && !error && <p className="muted">Loading keys…</p>}
-			{keys !== null && (
-				<div className="table-scroll">
-					<table className="table">
-						<caption className="visually-hidden">{heading}</caption>
-						<thead>
-							<tr>
-								<th scope="col">Label</th>
-								<th scope="col">Scopes</th>
-								<th scope="col">Created</th>
-								<th scope="col">Last used</th>
-								<th scope="col">
-									<span className="visually-hidden">Actions</span>
-								</th>
-							</tr>
-						</thead>
-						<tbody>
-							{[...active, ...revoked].map((key) => (
-								<tr key={key.id} className={key.revoked ? "row-muted" : undefined}>
-									<td>
-										{key.label}
-										{key.revoked && <span className="status status-failed">Revoked</span>}
-									</td>
-									<td className="cell-scopes">{key.scopes.join(", ")}</td>
-									<td title={fullDate(key.created_at)}>{shortDate(key.created_at)}</td>
-									<td>{key.last_used_at ? shortDate(key.last_used_at) : "Never"}</td>
-									<td className="cell-actions">
-										{!key.revoked && (
-											<button
-												type="button"
-												className="button button-small button-danger-outline"
-												onClick={() => setRevoking(key)}
-												aria-label={`Revoke key ${key.label}`}
-											>
-												Revoke
-											</button>
-										)}
-									</td>
-								</tr>
-							))}
-							{keys.length === 0 && (
+			<div className="panel-card panel-card-list">
+				{keys === null && !error && <p className="panel-empty">Loading keys…</p>}
+				{keys !== null && keys.length === 0 && <p className="panel-empty">No API keys yet.</p>}
+				{keys !== null && keys.length > 0 && (
+					<div className="table-scroll">
+						<table className="table table-rows">
+							<caption className="visually-hidden">{heading}</caption>
+							<thead>
 								<tr>
-									<td colSpan={5} className="muted">
-										No API keys yet.
-									</td>
+									<th scope="col">Label and scopes</th>
+									<th scope="col" className="col-optional">
+										Created
+									</th>
+									<th scope="col" className="col-optional">
+										Last used
+									</th>
+									<th scope="col" className="cell-actions">
+										<span className="visually-hidden">Actions</span>
+									</th>
 								</tr>
-							)}
-						</tbody>
-					</table>
-				</div>
-			)}
-			<CreateKeyForm
-				principalId={principalId}
-				allowedScopes={offeredScopes}
-				narrowed={offeredScopes.length < allowedScopes.length}
-				onCreated={(key) => {
-					setCreated(key);
-					void load();
-				}}
-			/>
+							</thead>
+							<tbody>
+								{[...active, ...revoked].map((key) => (
+									<tr key={key.id} className={key.revoked ? "row-muted" : undefined}>
+										<td>
+											<div className="row-title">
+												{key.label}
+												{key.revoked && <span className="status status-failed">Revoked</span>}
+											</div>
+											<div className="row-note cell-scopes">{key.scopes.join(", ")}</div>
+										</td>
+										<td className="cell-date col-optional" title={fullDate(key.created_at)}>
+											{shortDate(key.created_at)}
+										</td>
+										<td className="cell-date col-optional">
+											{key.last_used_at ? shortDate(key.last_used_at) : "Never"}
+										</td>
+										<td className="cell-actions">
+											{!key.revoked && (
+												<button
+													type="button"
+													className="button button-small button-danger-outline"
+													onClick={() => setRevoking(key)}
+													aria-label={`Revoke key ${key.label}`}
+												>
+													Revoke
+												</button>
+											)}
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				)}
+				<CreateKeyForm
+					principalId={principalId}
+					allowedScopes={offeredScopes}
+					narrowed={offeredScopes.length < allowedScopes.length}
+					onCreated={(key) => {
+						setCreated(key);
+						void load();
+					}}
+				/>
+			</div>
 			{created && <SecretDialog apiKey={created} onClose={() => setCreated(null)} />}
 			{revoking && (
 				<ConfirmDialog
@@ -198,7 +211,7 @@ function CreateKeyForm({
 	}
 
 	return (
-		<form className="create-key" onSubmit={submit} noValidate>
+		<form className="panel-form panel-form-divided" onSubmit={submit} noValidate>
 			<div className="field">
 				<label htmlFor={labelId} className="field-label">
 					New key label

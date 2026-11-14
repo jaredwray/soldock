@@ -1,18 +1,42 @@
 import { Dialog } from "../../lib/Dialog.tsx";
 
-export const SHORTCUTS: readonly { keys: readonly string[]; action: string }[] = [
-	{ keys: ["j"], action: "Next (older) conversation" },
-	{ keys: ["k"], action: "Previous (newer) conversation" },
-	{ keys: ["o", "Enter"], action: "Open the conversation" },
-	{ keys: ["u"], action: "Back to the list" },
-	{ keys: ["e"], action: "Archive" },
-	{ keys: ["#"], action: "Move to Trash" },
-	{ keys: ["s"], action: "Star or remove the star" },
-	{ keys: ["x"], action: "Select the conversation" },
-	{ keys: ["c"], action: "Compose" },
-	{ keys: ["r"], action: "Reply" },
-	{ keys: ["/"], action: "Search" },
-	{ keys: ["?"], action: "Show this help" },
+interface Shortcut {
+	keys: readonly string[];
+	action: string;
+}
+
+/** The shortcuts, in the groups that the help dialog shows. */
+export const SHORTCUT_GROUPS: readonly { name: string; shortcuts: readonly Shortcut[] }[] = [
+	{
+		name: "Move",
+		shortcuts: [
+			{ keys: ["j"], action: "Next (older) conversation" },
+			{ keys: ["k"], action: "Previous (newer) conversation" },
+			{ keys: ["o", "Enter"], action: "Open the conversation" },
+			{ keys: ["u"], action: "Back to the list" },
+			{ keys: ["/"], action: "Search" },
+		],
+	},
+	{
+		name: "Conversations",
+		shortcuts: [
+			{ keys: ["x"], action: "Select the conversation" },
+			{ keys: ["e"], action: "Archive" },
+			{ keys: ["#"], action: "Move to Trash" },
+			{ keys: ["s"], action: "Star or remove the star" },
+		],
+	},
+	{
+		name: "Messages",
+		shortcuts: [
+			{ keys: ["c"], action: "Compose" },
+			{ keys: ["r"], action: "Reply" },
+		],
+	},
+	{
+		name: "Help",
+		shortcuts: [{ keys: ["?"], action: "Show this help" }],
+	},
 ];
 
 export function ShortcutHelp({ onClose }: { onClose: () => void }) {
@@ -21,33 +45,32 @@ export function ShortcutHelp({ onClose }: { onClose: () => void }) {
 			title="Keyboard shortcuts"
 			description="Shortcuts work when the focus is not in a text field."
 			onClose={onClose}
-			className="dialog-small"
+			className="dialog-small shortcut-dialog"
 		>
-			<table className="shortcut-table">
-				<thead>
-					<tr>
-						<th scope="col">Key</th>
-						<th scope="col">Action</th>
-					</tr>
-				</thead>
-				<tbody>
-					{SHORTCUTS.map((shortcut) => (
-						<tr key={shortcut.action}>
-							<td>
-								{shortcut.keys.map((key, index) => (
-									<span key={key}>
-										{index > 0 && " or "}
-										<kbd>{key}</kbd>
-									</span>
-								))}
-							</td>
-							<td>{shortcut.action}</td>
-						</tr>
-					))}
-				</tbody>
-			</table>
+			<div className="shortcut-groups">
+				{SHORTCUT_GROUPS.map((group) => (
+					<section key={group.name} aria-label={group.name} className="shortcut-group">
+						<h3 className="shortcut-group-title">{group.name}</h3>
+						<dl className="shortcut-list">
+							{group.shortcuts.map((shortcut) => (
+								<div key={shortcut.action} className="shortcut-row">
+									<dt>{shortcut.action}</dt>
+									<dd className="shortcut-keys">
+										{shortcut.keys.map((key, index) => (
+											<span key={key} className="shortcut-key">
+												{index > 0 && <span className="shortcut-or">or</span>}
+												<kbd>{key}</kbd>
+											</span>
+										))}
+									</dd>
+								</div>
+							))}
+						</dl>
+					</section>
+				))}
+			</div>
 			<div className="dialog-actions">
-				<button type="button" className="button button-primary" onClick={onClose} data-autofocus>
+				<button type="button" className="button" onClick={onClose} data-autofocus>
 					Close
 				</button>
 			</div>

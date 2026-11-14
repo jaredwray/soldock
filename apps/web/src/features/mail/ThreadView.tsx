@@ -1,5 +1,6 @@
 import type { Label, Message } from "@soldock/contracts";
 import { useEffect, useRef } from "react";
+import { Icon } from "../../lib/icons.tsx";
 import type { ThreadState } from "./data.ts";
 import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
 import { labelChipName } from "./views.ts";
@@ -23,7 +24,7 @@ export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: T
 
 	if (state.status === "loading" || state.status === "idle") {
 		return (
-			<div className="list-state" aria-live="polite">
+			<div className="list-state mail-state" aria-live="polite">
 				<span className="spinner" aria-hidden="true" />
 				Loading the conversation…
 			</div>
@@ -31,8 +32,12 @@ export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: T
 	}
 	if (state.status === "error" || !state.thread) {
 		return (
-			<div className="list-state" role="alert">
-				<p>The conversation did not load. {state.error}</p>
+			<div className="list-state mail-state" role="alert">
+				<span className="mail-state-icon">
+					<Icon name="warning" size={22} />
+				</span>
+				<p className="mail-state-title">The conversation did not load.</p>
+				<p className="mail-state-text">{state.error}</p>
 				<button type="button" className="button" onClick={onRetry}>
 					Try again
 				</button>
@@ -56,7 +61,7 @@ export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: T
 				{chips.length > 0 && (
 					<ul className="chips" aria-label="Labels">
 						{chips.map((chip) => (
-							<li key={chip.id} className="chip">
+							<li key={chip.id} className="chip mail-chip">
 								{chip.name}
 							</li>
 						))}

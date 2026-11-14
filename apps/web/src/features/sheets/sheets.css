@@ -5,7 +5,7 @@
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	background: var(--surface);
+	background: var(--background);
 }
 
 .sheet-page:focus {
@@ -17,10 +17,12 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px 12px;
-	padding: 8px 16px;
+	min-height: 44px;
+	padding: 6px 22px;
 	border-bottom: 1px solid var(--border);
-	background: var(--danger-soft);
-	color: var(--danger);
+	background: var(--negative-soft);
+	font-size: 13px;
+	color: var(--negative);
 }
 
 .sheet-save-error p {
@@ -40,10 +42,10 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 6px 12px;
-	border-top: 1px solid var(--border);
+	min-height: 44px;
+	padding: 6px 16px 6px 8px;
 	border-bottom: 1px solid var(--border);
-	background: var(--surface);
+	background: var(--background);
 }
 
 .sheet-name-box,
@@ -51,16 +53,17 @@
 	height: 30px;
 	padding: 0 8px;
 	border: 1px solid transparent;
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	background: transparent;
-	color: var(--text);
+	color: var(--foreground);
 	font: 13px / 1 var(--mono);
 }
 
 .sheet-name-box {
 	flex: none;
 	width: 72px;
-	border-color: var(--border);
+	border-color: var(--input);
+	background: var(--field);
 	text-align: center;
 }
 
@@ -69,29 +72,32 @@
 	min-width: 0;
 }
 
-.sheet-formula:hover:not(:read-only) {
-	border-color: var(--border);
+.sheet-formula:hover:not(:read-only):not(:focus) {
+	background: var(--row-hover);
 }
 
 .sheet-name-box:focus,
 .sheet-formula:focus {
-	border-color: var(--accent);
+	border-color: var(--ring);
 	outline: none;
 }
 
 .sheet-fx {
 	flex: none;
-	color: var(--text-muted);
-	font: italic 600 13px / 1 var(--mono);
+	color: var(--muted-foreground);
+	font: italic 500 13px / 1 var(--mono);
 }
 
 .sheet-view-only {
 	flex: none;
-	padding: 2px 10px;
-	border-radius: 999px;
-	background: var(--surface-3);
-	color: var(--text-muted);
+	padding: 1px 7px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	color: var(--muted-foreground);
 	font-size: 12px;
+	font-weight: 500;
+	line-height: 18px;
 	white-space: nowrap;
 }
 
@@ -102,12 +108,12 @@
 	min-height: 0;
 	overflow: auto;
 	overscroll-behavior: contain;
-	background: var(--surface-2);
+	background: var(--surface);
 }
 
 .sheet-canvas {
 	position: relative;
-	background: var(--surface);
+	background: var(--background);
 }
 
 .sheet-grid {
@@ -154,8 +160,8 @@
 .sheet-col-head,
 .sheet-row-head {
 	position: sticky;
-	background: var(--surface-2);
-	color: var(--text-muted);
+	background: var(--surface);
+	color: var(--muted-foreground);
 	font-size: 12px;
 	font-weight: 400;
 	text-align: center;
@@ -180,13 +186,13 @@
 
 .sheet-col-head.sheet-head-selected,
 .sheet-row-head.sheet-head-selected {
-	background: var(--accent-soft);
-	color: var(--text);
-	font-weight: 600;
+	background: var(--hover);
+	color: var(--foreground);
+	font-weight: 500;
 }
 
 .sheet-cell {
-	background: var(--surface);
+	background: var(--background);
 	text-overflow: ellipsis;
 	white-space: pre;
 }
@@ -201,22 +207,22 @@
 }
 
 .sheet-cell-error {
-	color: var(--danger);
+	color: var(--negative);
 	text-align: center;
 }
 
 /* The server did not send the result of this input yet. */
 .sheet-cell-pending {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .sheet-cell-selected {
-	background: var(--accent-soft);
+	background: var(--selected);
 }
 
 .sheet-cell-active {
-	background: var(--surface);
-	box-shadow: inset 0 0 0 2px var(--text-muted);
+	background: var(--background);
+	box-shadow: inset 0 0 0 2px var(--muted-foreground);
 }
 
 .sheet-grid:focus .sheet-cell-active {
@@ -230,9 +236,8 @@
 	padding: 0 5px;
 	border: 2px solid var(--focus);
 	border-radius: 0;
-	background: var(--surface);
-	box-shadow: var(--shadow);
-	color: var(--text);
+	background: var(--background);
+	color: var(--foreground);
 	font: 13px / 1 var(--font);
 }
 
@@ -240,12 +245,34 @@
 	outline: none;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
 	.sheet-bar {
 		padding: 6px 8px;
 	}
 
+	.sheet-save-error {
+		padding: 8px 16px;
+	}
+
 	.sheet-name-box {
 		width: 56px;
+	}
+}
+
+/* Touch: the fields of the formula bar are 44px high and have 16px text, so that iOS does not zoom in. */
+@media (max-width: 900px), (pointer: coarse) {
+	.sheet-name-box,
+	.sheet-formula,
+	.sheet-cell-editor {
+		font-size: 16px;
+	}
+
+	.sheet-name-box,
+	.sheet-formula {
+		height: 44px;
+	}
+
+	.sheet-name-box {
+		width: 64px;
 	}
 }

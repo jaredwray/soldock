@@ -2,7 +2,7 @@ import type { Address, Label, Message } from "@soldock/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
-import { addressName, formatBytes, fullDate, sameAddress, shortDate } from "../../lib/format.ts";
+import { addressName, formatBytes, fullDate, initials, sameAddress, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { MessageBody } from "./MessageBody.tsx";
@@ -87,14 +87,22 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 					aria-controls={bodyId}
 					onClick={() => setExpanded((value) => !value)}
 				>
-					<span className="avatar avatar-small" aria-hidden="true">
-						{senderName.slice(0, 1).toUpperCase()}
+					<span className="message-avatar" aria-hidden="true">
+						<span className="avatar message-avatar-mark">{sender ? initials(addressName(sender)) : "?"}</span>
 					</span>
-					<span className="message-sender">
-						<span className="message-sender-name">{senderName}</span>
-						{sender?.name && <span className="message-sender-address">&lt;{sender.address}&gt;</span>}
+					<span className="message-summary">
+						<span className="message-sender">
+							<span className="message-sender-name">{senderName}</span>
+							{expanded && sender?.name && <span className="message-sender-address">&lt;{sender.address}&gt;</span>}
+						</span>
+						{!expanded && <span className="message-snippet">{message.snippet}</span>}
 					</span>
-					{!expanded && <span className="message-snippet">{message.snippet}</span>}
+					{!expanded && message.attachments.length > 0 && (
+						<span className="message-mark">
+							<Icon name="paperclip" size={16} />
+							<span className="visually-hidden">Has attachments, </span>
+						</span>
+					)}
 					<time className="message-date" dateTime={message.date} title={fullDate(message.date)}>
 						{expanded ? fullDate(message.date) : shortDate(message.date)}
 					</time>
@@ -121,7 +129,7 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 						{chips.length > 0 && (
 							<ul className="chips" aria-label="Labels">
 								{chips.map((chip) => (
-									<li key={chip.id} className="chip">
+									<li key={chip.id} className="chip mail-chip">
 										{chip.name}
 									</li>
 								))}
@@ -279,29 +287,41 @@ function Attachments({ message }: { message: Message }) {
 
 	return (
 		<section className="attachments" aria-label="Attachments">
-			<h3 className="attachments-title">
-				<Icon name="paperclip" size={16} />
+			<h3 className="message-section-title">
 				{message.attachments.length === 1 ? "1 attachment" : `${message.attachments.length} attachments`}
 			</h3>
-			<ul className="attachment-list">
+			<ul className="file-cards">
 				{message.attachments.map((attachment) => (
-					<li key={attachment.index} className="attachment">
-						<span className="attachment-name" title={attachment.filename}>
-							{attachment.filename || "(no name)"}
+					<li key={attachment.index} className="file-card">
+						<span className="file-card-icon">
+							<Icon name={attachment.mime_type.startsWith("image/") ? "image" : "file"} size={20} />
 						</span>
-						<span className="attachment-meta">
-							{attachment.mime_type} · {formatBytes(attachment.size)}
-							{attachment.inline ? " · inline" : ""}
+						<span className="file-card-text">
+							<span className="file-card-name" title={attachment.filename}>
+								{attachment.filename || "(no name)"}
+							</span>
+							<span className="file-card-meta">
+								{formatBytes(attachment.size)} · {attachment.mime_type}
+								{attachment.inline ? " · inline" : ""}
+							</span>
 						</span>
 						<button
 							type="button"
-							className="button button-small"
+							className="icon-button icon-button-small file-card-action"
 							onClick={() => void download(attachment.index)}
 							disabled={busy === attachment.index}
-							aria-label={`Download ${attachment.filename || "attachment"}`}
+							aria-label={
+								busy === attachment.index
+									? `Downloading ${attachment.filename || "attachment"}…`
+									: `Download ${attachment.filename || "attachment"}`
+							}
+							title={busy === attachment.index ? "Downloading…" : "Download"}
 						>
-							<Icon name="download" size={16} />
-							{busy === attachment.index ? "Downloading…" : "Download"}
+							{busy === attachment.index ? (
+								<span className="spinner spinner-small" aria-hidden="true" />
+							) : (
+								<Icon name="download" size={18} />
+							)}
 						</button>
 					</li>
 				))}
@@ -320,13 +340,16 @@ const STATUS_NAMES = { queued: "Queued", delivered: "Delivered", sent: "Sent", f
 function Delivery({ delivery }: { delivery: NonNullable<Message["delivery"]> }) {
 	return (
 		<section className="delivery" aria-label="Delivery status">
-			<h3 className="attachments-title">Delivery</h3>
+			<h3 className="message-section-title">Delivery</h3>
 			<ul className="delivery-list">
 				{delivery.map((item) => (
 					<li key={item.address} className="delivery-item">
-						<span className="delivery-address">{item.address}</span>
-						<span className="muted">{item.kind === "local" ? "this organization" : "external"}</span>
-						<span className={`status status-${item.status}`}>{STATUS_NAMES[item.status]}</span>
+						<span className={`delivery-chip delivery-${item.status}`}>
+							<span className="delivery-dot" aria-hidden="true" />
+							<span className="delivery-address">{item.address}</span>
+							<span className="delivery-kind">{item.kind === "local" ? "this organization" : "external"}</span>
+							<span className="delivery-status">{STATUS_NAMES[item.status]}</span>
+						</span>
 						{item.error && <span className="delivery-error">{item.error}</span>}
 					</li>
 				))}
