@@ -2795,57 +2795,6 @@ fieldset {
 	padding: 32px 32px 64px;
 }
 
-.card {
-	margin-bottom: 20px;
-	padding: 20px 24px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--card);
-}
-
-.card .card {
-	padding: 16px;
-	border-radius: var(--radius-md);
-	background: var(--surface);
-}
-
-.card-title {
-	margin-bottom: 12px;
-	font-size: 18px;
-	font-weight: 600;
-}
-
-.card .card .card-title {
-	font-size: 15px;
-}
-
-.card-subtitle {
-	margin-bottom: 4px;
-	font-size: 15px;
-	font-weight: 600;
-}
-
-.card > .muted {
-	margin-bottom: 12px;
-}
-
-.details {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-	gap: 12px 24px;
-	margin: 0;
-}
-
-.details dt {
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
-
-.details dd {
-	margin: 2px 0 0;
-	overflow-wrap: anywhere;
-}
-
 .table-scroll {
 	overflow-x: auto;
 }
@@ -3825,10 +3774,6 @@ fieldset {
 	.settings-column {
 		gap: 28px;
 		padding: 24px 16px 40px;
-	}
-
-	.card {
-		padding: 16px;
 	}
 
 	.panel-card {
