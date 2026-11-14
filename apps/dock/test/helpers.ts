@@ -358,3 +358,114 @@ export async function callTool(key: string, name: string, args: Record<string, u
 		structuredContent?: Record<string, unknown>;
 	};
 }
+
+/** The protocol version of the stateless MCP revision. */
+export const MODERN_MCP = "2026-07-28";
+
+export interface ModernOptions {
+	id?: string | number;
+	/** Header changes. `null` removes a header. */
+	headers?: Record<string, string | null>;
+	/** Replaces the `_meta` of the request. `null` sends no `_meta`. */
+	meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Sends one JSON-RPC request of protocol 2026-07-28 to /mcp: the version and the client capabilities
+ * are in `_meta`, and the headers mirror the body as the transport requires.
+ */
+export function modernRequest(
+	key: string,
+	method: string,
+	params: Record<string, unknown> = {},
+	options: ModernOptions = {},
+): Promise<Response> {
+	const headers = new Headers({
+		"content-type": "application/json",
+		accept: "application/json, text/event-stream",
+		authorization: `Bearer ${key}`,
+		"mcp-protocol-version": MODERN_MCP,
+		"mcp-method": method,
+	});
+	const name = method === "tools/call" ? params.name : method === "resources/read" ? params.uri : undefined;
+	if (typeof name === "string") headers.set("mcp-name", name);
+	for (const [header, value] of Object.entries(options.headers ?? {})) {
+		if (value === null) headers.delete(header);
+		else headers.set(header, value);
+	}
+	const meta =
+		options.meta === undefined
+			? {
+					"io.modelcontextprotocol/protocolVersion": MODERN_MCP,
+					"io.modelcontextprotocol/clientCapabilities": {},
+					"io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+				}
+			: options.meta;
+	const body = {
+		jsonrpc: "2.0",
+		id: options.id ?? 1,
+		method,
+		params: meta === null ? params : { ...params, _meta: meta },
+	};
+	return request("/mcp", { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+/** Sends one request of protocol 2026-07-28 and reads its JSON answer. */
+export async function modern(key: string, method: string, params?: Record<string, unknown>, options?: ModernOptions) {
+	const res = await modernRequest(key, method, params, options);
+	return { status: res.status, body: (await res.json().catch(() => null)) as Record<string, unknown> | null };
+}
+
+/** A real-time limit for one read, so a missing event fails the test instead of stopping it. */
+const SSE_READ_MS = 5000;
+
+export interface SseReader {
+	/** The next JSON-RPC message, or `"closed"` at the end. Keep-alive comments are skipped. */
+	next(): Promise<Record<string, unknown> | "closed">;
+	/** Closes the stream from the client side. */
+	cancel(): Promise<void>;
+}
+
+/** Reads the events of an SSE response. */
+export function readSse(response: Response): SseReader {
+	if (!response.body) throw new Error("the response has no body");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	const block = async (): Promise<string | null> => {
+		for (;;) {
+			const end = buffer.indexOf("\n\n");
+			if (end >= 0) {
+				const text = buffer.slice(0, end);
+				buffer = buffer.slice(end + 2);
+				return text;
+			}
+			const { done, value } = await reader.read();
+			if (done) return null;
+			buffer += decoder.decode(value, { stream: true });
+		}
+	};
+	const timed = <T>(promise: Promise<T>): Promise<T> => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const limit = new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => reject(new Error(`no SSE event in ${SSE_READ_MS} ms`)), SSE_READ_MS);
+		});
+		return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+	};
+	return {
+		async next() {
+			for (;;) {
+				const text = await timed(block());
+				if (text === null) return "closed";
+				if (text.startsWith(":")) continue;
+				const data = text
+					.split("\n")
+					.filter((line) => line.startsWith("data:"))
+					.map((line) => line.slice(5).trimStart())
+					.join("\n");
+				return JSON.parse(data) as Record<string, unknown>;
+			}
+		},
+		cancel: () => reader.cancel(),
+	};
+}

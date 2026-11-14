@@ -1,8 +1,9 @@
 # `mail` module
 
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
-> read and send, in the own mailbox of a principal and in team mailboxes. Keep this README current
-> as the module grows. It is the module's contract.
+> read and send, in the own mailbox of a principal and in team mailboxes. An MCP client can subscribe
+> to an inbox and get a notification for new mail. Keep this README current as the module grows. It
+> is the module's contract.
 
 | | |
 | --- | --- |
@@ -20,8 +21,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `inbound.ts` | The `email()` handler and the `soldock-mail-inbound` queue consumer |
 | `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
-| `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends and the outbox alarm |
+| `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
+| `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
 | `search.ts` | Gmail-style query parser, and the compiler to SQL with bound values |
 | `sanitize.ts` | The HTML allowlist sanitizer on `HTMLRewriter` |
 | `threading.ts` | Subject normalization, snippets, and HTML to text for previews and the index |
@@ -176,6 +178,26 @@ After the reset, setup cancels the old outboxes. A failed directory transaction 
 Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, with `SENT` and
 `INBOX`.
 
+## Notifications of new mail
+
+The inbox of each mailbox is the MCP resource `mail.inbox`, with the URI
+`soldock://mail/<mailbox id>/inbox`. A read of it runs `mail.list_threads` with `in:inbox`. An MCP
+client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
+([`mcp`](../mcp/README.md#subscriptions)).
+
+1. The Worker checks the mailboxes with the rule of each mail operation: the own mailbox, or a team
+   mailbox that the caller is a member of. One query reads all team mailboxes of the caller.
+2. The Worker opens a watch socket to the `MailboxDO`: a WebSocket that the object accepts with
+   `acceptWebSocket` and the tag `watch`. The object can sleep while its sockets wait.
+3. `deliver()` sends the message `inbox` to each watch socket after it stores a message that is not
+   spam. A message that the mailbox sends to itself also sends `inbox`, because its copy gets `INBOX`.
+4. The Worker sends `notifications/resources/updated` with the inbox URI to the client.
+
+- Spam, a duplicate delivery, a label change, a read and an archive send nothing.
+- In a team mailbox, each member with a stream gets the notification. A removed member stops getting
+  notifications within about one minute, when the stream checks the membership again.
+- The signal holds no content. The client reads the inbox with the scope and mailbox checks of REST.
+
 ## Safety
 
 - `origin` comes from the delivery path, never from headers: `external` (from the internet),
@@ -207,6 +229,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
+| Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
 
@@ -243,7 +266,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - Email Service lifecycle events (bounces, complaints) and inbound DSN parsing
 - Permanent delete, retention and blob GC
 - Live updates through `/ws/events`. The web app polls `mail.get_profile` and compares `version`.
-- Mail events for agents (`mail.message.received`, `mail_wait_for_message`)
+- A push stream for REST clients. A REST client polls `mail.get_profile` and compares `version`.
+- Notifications for other mail changes (labels, reads, sends), and for a single label
 - A remote image proxy, `cid:` image display, and a spam classifier
 - Counters for label counts. They are counted on each call now.
 - `postmaster@` and `abuse@` as reserved addresses

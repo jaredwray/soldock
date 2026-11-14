@@ -10,9 +10,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers, and the Durable Object classes `MailboxDO`, `DriveSpaceDO`, `DocumentDO` and `ChatRoomDO` |
-| [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters |
+| [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters, and the change feed of each resource kind for MCP subscriptions |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, `/oauth/*` and `/.well-known/*`, the REST routes and `/mcp` |
 | [`src/platform/`](src/platform/) | Cross-cutting runtime services: HTTP plumbing, ids, crypto, logs, the operation invoker |
@@ -36,8 +36,10 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
-- `/mcp`: the MCP endpoint, with one tool for each operation ([`src/mcp/`](src/mcp/)). Its `401` names
-  the OAuth metadata.
+- `/mcp`: the MCP endpoint, with one tool for each operation and the inbox of each mailbox as a
+  resource ([`src/mcp/`](src/mcp/)). It speaks protocol 2026-07-28 and the older protocols. A
+  `subscriptions/listen` request gets a long-lived SSE response with a notification for new mail.
+  Its `401` names the OAuth metadata.
 - `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server`,
   `/oauth/register`, `/oauth/authorize` and `/oauth/token`: the OAuth server for MCP clients. A
   person approves a client on the `/connect/<id>` page of the SPA
@@ -59,7 +61,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
-| `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox |
+| `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal |
 | `DOCUMENT` | Durable Object `DocumentDO` (SQLite) | The content of each doc and each sheet |
 | `CHAT_ROOM` | Durable Object `ChatRoomDO` (SQLite) | One room or one direct message of Chat |
