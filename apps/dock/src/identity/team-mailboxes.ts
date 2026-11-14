@@ -16,11 +16,12 @@ export interface TeamMailboxRecord {
 
 /**
  * A mailbox that receives mail: the own mailbox of a principal, or a team mailbox. Its id names its
- * `MailboxDO` and the owner part of its R2 keys.
+ * `MailboxDO` and the owner part of its R2 keys. `agent` is the own mailbox of an agent, as an owner or
+ * an admin opens it: they can read it, and nothing more.
  */
 export interface MailboxRecord {
 	id: string;
-	kind: "personal" | "team";
+	kind: "personal" | "team" | "agent";
 	address: string;
 	display_name: string;
 }
@@ -171,6 +172,31 @@ export async function teamMailboxFor(db: D1Database, mailboxId: string, principa
 		);
 	}
 	return { id: row.id, kind: "team", address: row.address, display_name: row.display_name };
+}
+
+const AGENT_MAILBOX_SELECT = `SELECT p.id AS id, 'agent' AS kind, a.address AS address, p.display_name AS display_name
+	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
+	WHERE p.kind = 'agent'`;
+
+/** The own mailbox of each agent, by name. Only owners and admins get this list (`canReadAgentMailboxes`). */
+export async function agentMailboxes(db: D1Database): Promise<MailboxRecord[]> {
+	const { results } = await db.prepare(`${AGENT_MAILBOX_SELECT} ORDER BY p.display_name, p.id`).all<MailboxRecord>();
+	return results;
+}
+
+/**
+ * The own mailbox of an agent, for an owner or an admin. Throws `not_found` for an unknown id, and
+ * `forbidden` for a person: the mailbox of a person is private. Each call reads the directory.
+ */
+export async function agentMailboxFor(db: D1Database, principalId: string): Promise<MailboxRecord> {
+	const agent = await db.prepare(`${AGENT_MAILBOX_SELECT} AND p.id = ?`).bind(principalId).first<MailboxRecord>();
+	if (agent) return { id: agent.id, kind: "agent", address: agent.address, display_name: agent.display_name };
+	const exists = await db.prepare("SELECT 1 AS found FROM principals WHERE id = ?").bind(principalId).first();
+	if (!exists) throw new OperationError("not_found", "No principal has that id.");
+	throw new OperationError(
+		"forbidden",
+		"The mailbox of a person is private. Owners and admins can read the mailbox of an agent only.",
+	);
 }
 
 const MAILBOX_BY_ADDRESS = `SELECT p.id AS id, 'personal' AS kind, primary_address.address AS address, p.display_name AS display_name

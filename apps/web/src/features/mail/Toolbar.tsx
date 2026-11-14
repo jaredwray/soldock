@@ -16,6 +16,8 @@ interface ToolbarProps {
 	allStarred: boolean;
 	userLabels: readonly Label[];
 	listEmpty: boolean;
+	/** True in the mailbox of an agent: no selection and no actions. */
+	readOnly: boolean;
 	onToggleAll: () => void;
 	onAction: (action: MailAction) => void;
 	onBack: () => void;
@@ -27,14 +29,16 @@ export function Toolbar(props: ToolbarProps) {
 	const { view, mode, targetCount, anyUnread, allStarred, userLabels, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
 	const inTrash = view.kind === "system" && view.view === "trash";
-	const hasTargets = targetCount > 0;
+	const hasTargets = !props.readOnly && targetCount > 0;
 
 	return (
 		<div className="toolbar">
-			{mode === "list" ? (
-				<SelectAll selection={props.selection} disabled={props.listEmpty} onToggle={props.onToggleAll} />
-			) : (
+			{mode === "thread" ? (
 				<ToolButton icon="back" label="Back to the list" onClick={props.onBack} />
+			) : (
+				!props.readOnly && (
+					<SelectAll selection={props.selection} disabled={props.listEmpty} onToggle={props.onToggleAll} />
+				)
 			)}
 			{!hasTargets && <ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />}
 			{hasTargets && (

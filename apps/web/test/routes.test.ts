@@ -5,6 +5,7 @@ import {
 	chatPath,
 	type DriveView,
 	drivePath,
+	isAgentMailbox,
 	itemPath,
 	type MailView,
 	parseRoute,
@@ -40,6 +41,7 @@ const DRIVE_VIEWS: readonly DriveView[] = [
 
 const THREAD = "thr_01JD0000000000000000000000";
 const TEAM = "tmb_01JD0000000000000000000000";
+const AGENT = "prn_01JD0000000000000000000000";
 
 describe("routes", () => {
 	it("parses the path of each view back to that view", () => {
@@ -62,6 +64,23 @@ describe("routes", () => {
 		expect(viewPath({ kind: "system", view: "inbox" }, TEAM)).toBe(`/mail/team/${TEAM}/inbox`);
 		expect(threadPath({ kind: "search", query: "a b" }, "thr_1", TEAM)).toBe(`/mail/team/${TEAM}/search/thr_1?q=a%20b`);
 		expect(parseRoute(`/mail/team/${TEAM}`)).toEqual({ page: "redirect", to: `/mail/team/${TEAM}/inbox` });
+	});
+
+	// An owner or an admin reads the mailbox of an agent on its own paths. The prefix tells the web app
+	// that the mailbox is read only.
+	it("parses the paths of an agent mailbox back to the mailbox, the view and the thread", () => {
+		for (const view of VIEWS) {
+			expect(parseRoute(viewPath(view, AGENT))).toEqual({ page: "mail", mailboxId: AGENT, view, threadId: null });
+			expect(parseRoute(threadPath(view, THREAD, AGENT))).toEqual({
+				page: "mail",
+				mailboxId: AGENT,
+				view,
+				threadId: THREAD,
+			});
+		}
+		expect(viewPath({ kind: "system", view: "inbox" }, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
+		expect(parseRoute(`/mail/agent/${AGENT}`)).toEqual({ page: "redirect", to: `/mail/agent/${AGENT}/inbox` });
+		expect([AGENT, TEAM, null].map(isAgentMailbox)).toEqual([true, false, false]);
 	});
 
 	it("parses the path of a thread back to its view and thread id", () => {
@@ -144,6 +163,9 @@ describe("routes", () => {
 			"/mail/search/thr_1/extra",
 			"/mail/team",
 			"/mail/team/prn_1/inbox",
+			"/mail/agent",
+			`/mail/agent/${TEAM}/inbox`,
+			`/mail/agent/${AGENT}/outbox`,
 			`/mail/team/${TEAM}/outbox`,
 			`/mail/team/${TEAM}/inbox/thr_1/extra`,
 			"/mail/%E0%A4%A",

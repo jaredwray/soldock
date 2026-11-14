@@ -23,7 +23,10 @@ export const ADMIN_SECTIONS = ["team", "new", "agents", "sign-in", "team-mailbox
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
-	/** `mailboxId` is the id of a team mailbox, or null for the own mailbox of the person. */
+	/**
+	 * `mailboxId` is the id of a team mailbox (`tmb_`), the id of an agent (`prn_`) whose mailbox an owner
+	 * or an admin reads, or null for the own mailbox of the person.
+	 */
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
 	| { page: "drive"; view: DriveView }
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
@@ -44,9 +47,21 @@ export const DRIVE_PATH = "/drive";
 export const CHAT_PATH = "/chat";
 export const ADMIN_PATH = "/admin";
 
-/** The path part before the view. A team mailbox has its own paths: `/mail/team/<id>/inbox`. */
+/**
+ * True for the mailbox of an agent, which an owner or an admin can only read. In the routes, a mailbox
+ * id is the id of a team mailbox (`tmb_`) or the id of an agent (`prn_`). The own mailbox has no id.
+ */
+export function isAgentMailbox(mailboxId: string | null): boolean {
+	return mailboxId?.startsWith("prn_") === true;
+}
+
+/**
+ * The path part before the view. A team mailbox has its own paths (`/mail/team/<id>/inbox`), and so
+ * does the mailbox of an agent (`/mail/agent/<id>/inbox`).
+ */
 function mailBase(mailboxId: string | null): string {
-	return mailboxId ? `/mail/team/${encodeURIComponent(mailboxId)}` : "/mail";
+	if (!mailboxId) return "/mail";
+	return `/mail/${isAgentMailbox(mailboxId) ? "agent" : "team"}/${encodeURIComponent(mailboxId)}`;
 }
 
 function isSystemView(value: string | undefined): value is SystemView {
@@ -82,8 +97,8 @@ export function parseRoute(location: string): Route {
 	}
 	if (first !== "mail") return { page: "not-found" };
 	if (second === undefined) return { page: "redirect", to: INBOX_PATH };
-	if (second !== "team") return parseMailView(null, parts.slice(1), url);
-	if (third === undefined || !third.startsWith("tmb_")) return { page: "not-found" };
+	if (second !== "team" && second !== "agent") return parseMailView(null, parts.slice(1), url);
+	if (third === undefined || !third.startsWith(second === "team" ? "tmb_" : "prn_")) return { page: "not-found" };
 	if (fourth === undefined) return { page: "redirect", to: viewPath({ kind: "system", view: "inbox" }, third) };
 	return parseMailView(third, parts.slice(3), url);
 }
@@ -186,7 +201,7 @@ export function chatPath(roomId: string | null = null): string {
 	return roomId ? `${CHAT_PATH}/${encodeURIComponent(roomId)}` : CHAT_PATH;
 }
 
-/** The path of the thread list of a view, in the own mailbox or in a team mailbox. */
+/** The path of the thread list of a view, in the own mailbox, in a team mailbox or in the mailbox of an agent. */
 export function viewPath(view: MailView, mailboxId: string | null = null): string {
 	const base = mailBase(mailboxId);
 	switch (view.kind) {

@@ -124,6 +124,17 @@ MCP clients. The app has no UI-only path.
     more than one person sends from the address.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
+- **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
+  shows an **Agent mailboxes** section with each agent (`mail.list_mailboxes`, kind `agent`).
+  - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
+    the app that the mailbox is read only (`isAgentMailbox` in `routes.ts`, `useReadOnlyMailbox`).
+  - A notice above the list says that the mailbox is read only and that the audit log records the reads.
+  - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
+    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
+  - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
+    mail. The server refuses each change and each send in the mailbox of an agent.
+  - **Admin › Agents** has a **Read the mail of …** link on each agent, for owners and admins only. A
+    sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
   - Owners and admins see all six sections. A member who sponsors an agent sees only **Your agents**.
@@ -144,6 +155,7 @@ MCP clients. The app has no UI-only path.
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
     For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
     OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
+    For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. **New person or agent** also shows the
     banner when Agent is selected.
   - **Help a person sign in** (`sign-in`). An owner or an admin selects a person, then sets a new password
@@ -345,6 +357,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/agent/<prn_id>/…` | The same views and threads, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `team`, `new`, `agents`, `sign-in`, `team-mailboxes` or `domains` |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |

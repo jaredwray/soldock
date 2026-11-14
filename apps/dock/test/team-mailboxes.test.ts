@@ -203,8 +203,9 @@ describe("mail in a team mailbox", () => {
 		const tool = await callTool(bot.key, "mail_list_threads", { mailbox_id: support.id });
 		expect(tool.structuredContent).toEqual(await bot.call("mail.list_threads", { mailbox_id: support.id }));
 
-		// The owner is an admin, but not a member: an admin gets access only as a member.
-		expect((await owner.call("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal"]);
+		// The owner is an admin, but not a member: an admin gets access only as a member. The owner can
+		// read the mailbox of the agent, but the list has no team mailbox.
+		expect((await owner.call("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal", "agent"]);
 		expect(await code(owner.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
 		expect(await code(owner.call("mail.send", { mailbox_id: support.id, to: ["ada@dock.test"], text: "Hi" }))).toBe(
 			"forbidden",

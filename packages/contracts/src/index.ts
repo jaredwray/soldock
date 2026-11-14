@@ -41,6 +41,7 @@ export {
 	MAIL_LIMITS,
 	Mailbox,
 	MailboxId,
+	MailboxKind,
 	Message,
 	SYSTEM_LABELS,
 	type SystemLabel,

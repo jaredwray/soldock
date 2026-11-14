@@ -6,7 +6,7 @@ import { addressName, formatBytes, fullDate, sameAddress, shortDate } from "../.
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { MessageBody } from "./MessageBody.tsx";
-import { mailboxInput, useMailboxId } from "./mailbox.tsx";
+import { mailboxInput, useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { labelChipName } from "./views.ts";
 
 export type ReplyMode = "reply" | "replyAll" | "forward";
@@ -57,9 +57,12 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 	const [expanded, setExpanded] = useState(defaultExpanded);
 	const { body, full, retry } = useFullBody(message, expanded);
 	const bodyId = useId();
-	// In a team mailbox, more than one person sends from the address, so the sender is not "me".
-	const inTeamMailbox = useMailboxId() !== null;
-	const selfAddress = inTeamMailbox ? "" : myAddress;
+	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
+	// mailbox of an agent, the sender is the agent, not the person who reads.
+	const mailboxId = useMailboxId();
+	const readOnly = useReadOnlyMailbox();
+	const inTeamMailbox = mailboxId !== null && !readOnly;
+	const selfAddress = mailboxId === null ? myAddress : "";
 	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
 	const withBody = body ? { ...message, body } : null;
 	const spam = message.label_ids.includes("SPAM");
@@ -145,35 +148,37 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 						{message.origin === "sent" && message.delivery && message.delivery.length > 0 && (
 							<Delivery delivery={message.delivery} />
 						)}
-						<div className="message-actions">
-							<button
-								type="button"
-								className="button button-small"
-								onClick={() => withBody && onReply(withBody, "reply")}
-								disabled={!withBody}
-							>
-								<Icon name="reply" size={16} />
-								Reply
-							</button>
-							<button
-								type="button"
-								className="button button-small"
-								onClick={() => withBody && onReply(withBody, "replyAll")}
-								disabled={!withBody}
-							>
-								<Icon name="replyAll" size={16} />
-								Reply all
-							</button>
-							<button
-								type="button"
-								className="button button-small"
-								onClick={() => withBody && onReply(withBody, "forward")}
-								disabled={!withBody}
-							>
-								<Icon name="forward" size={16} />
-								Forward
-							</button>
-						</div>
+						{!readOnly && (
+							<div className="message-actions">
+								<button
+									type="button"
+									className="button button-small"
+									onClick={() => withBody && onReply(withBody, "reply")}
+									disabled={!withBody}
+								>
+									<Icon name="reply" size={16} />
+									Reply
+								</button>
+								<button
+									type="button"
+									className="button button-small"
+									onClick={() => withBody && onReply(withBody, "replyAll")}
+									disabled={!withBody}
+								>
+									<Icon name="replyAll" size={16} />
+									Reply all
+								</button>
+								<button
+									type="button"
+									className="button button-small"
+									onClick={() => withBody && onReply(withBody, "forward")}
+									disabled={!withBody}
+								>
+									<Icon name="forward" size={16} />
+									Forward
+								</button>
+							</div>
+						)}
 					</>
 				)}
 			</div>

@@ -10,6 +10,14 @@ export function isAdmin(caller: AuthContext): boolean {
 }
 
 /**
+ * True when the caller can read the own mailbox of each agent: an owner or an admin. Never an agent,
+ * so an agent can never read the mail of a different agent. The read access does not include a change.
+ */
+export function canReadAgentMailboxes(caller: AuthContext): boolean {
+	return caller.kind === "human" && isAdmin(caller);
+}
+
+/**
  * A human manages their own credentials (keys, password and two-step verification), the keys of the
  * agents that they sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
  * credentials, so an admin can never act as the owner.

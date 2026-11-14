@@ -1151,6 +1151,30 @@ fieldset {
 	color: var(--star);
 }
 
+/* The mailbox of an agent, which an owner or an admin can only read: no checkbox, and a star that only shows the state. */
+.thread-row-read-only {
+	grid-template-columns: 36px minmax(0, 1fr);
+}
+
+.star-static {
+	display: inline-flex;
+	justify-content: center;
+}
+
+.read-only-notice {
+	display: flex;
+	flex: none;
+	gap: 10px;
+	align-items: flex-start;
+	margin: 12px 16px 0;
+	font-size: 13px;
+}
+
+.read-only-notice .icon {
+	flex: none;
+	margin-top: 1px;
+}
+
 .thread-link {
 	display: grid;
 	grid-template-columns: 200px minmax(0, 1fr) auto;
@@ -2236,6 +2260,17 @@ fieldset {
 	margin-bottom: 0;
 }
 
+.agent-mail-link {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+}
+
+.agent-mail-link .field-hint {
+	margin-top: 0;
+}
+
 .policy-form {
 	display: flex;
 	flex-direction: column;
@@ -2392,6 +2427,19 @@ fieldset {
 	.thread-row .thread-link {
 		grid-column: 2;
 		grid-row: 1;
+	}
+
+	.thread-row-read-only {
+		grid-template-columns: minmax(0, 1fr) 36px;
+		padding-left: 12px;
+	}
+
+	.thread-row-read-only .star {
+		grid-column: 2;
+	}
+
+	.thread-row-read-only .thread-link {
+		grid-column: 1;
 	}
 
 	.thread-from {

@@ -1,7 +1,8 @@
 # `mail` module
 
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
-> read and send, in the own mailbox of a principal and in team mailboxes. Keep this README current
+> read and send, in the own mailbox of a principal and in team mailboxes. Owners and admins can read
+> the mailbox of each agent. Keep this README current
 > as the module grows. It is the module's contract.
 
 | | |
@@ -36,9 +37,12 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 | --- | --- | --- |
 | `personal` | The id of the principal (`prn_…`) | That principal only |
 | `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox |
+| `agent` | The id of an agent (`prn_…`) | The agent, as its `personal` mailbox. Each owner and admin can read it, and nothing more |
 
 - Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
-  mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use.
+  mailbox of the caller. `mail.list_mailboxes` returns the mailboxes that the caller can use. The
+  kind is relative to the caller: the own mailbox of an agent is `personal` for the agent and
+  `agent` for an owner or an admin.
 - The handler checks the mailbox on each call (`openMailbox`), so removed access ends at once.
   `mail.send` has slow steps, so it checks the membership again just before the mailbox stores the
   message. Known limit: this check and the store are not one transaction, so a removal between
@@ -47,6 +51,8 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
   different principal, get `forbidden`. The `MailboxDO` does not know its callers.
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
   mailbox and cannot send from it.
+- The id of a different principal gets `forbidden`, except in the case of
+  [Agent mailboxes](#agent-mailboxes).
 - The [`identity`](../identity/README.md#team-mailboxes) module owns the team mailboxes, their
   addresses and their members.
 
@@ -66,6 +72,31 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
   the principal id in front). The key of one member cannot return or stop the send of a different member.
 - `from:me` and `to:me` in a search mean the address of the mailbox: in a team mailbox, the team address.
 - The audit line of a change in a team mailbox has the field `mailbox` with the team mailbox id.
+
+### Agent mailboxes
+
+An owner or an admin can read the own mailbox of each agent. This gives oversight of what an agent
+receives and sends. `canReadAgentMailboxes` in [`identity`](../identity/README.md#principals) decides
+who can.
+
+- `mail.list_mailboxes` gives an owner or an admin the mailbox of each agent after the team
+  mailboxes, with the kind `agent`, by name.
+- With the id of an agent as `mailbox_id`, the read operations work: `mail.get_profile`,
+  `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
+  `mail.get_attachment`.
+- The operations that change the mailbox or send from it get `forbidden`: `mail.create_label`,
+  `mail.delete_label`, `mail.modify_threads` (also with `dry_run`) and `mail.send`. A change would
+  change what the agent sees, for example the read state. A send would come from the address of the agent.
+- The mailbox of a person stays private: the id of a person gets `forbidden`, also for the owner.
+  An unknown principal id gets `not_found`.
+- A member, also the sponsor of the agent, gets `forbidden`. An agent never gets the mailbox of a
+  different agent.
+- Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
+  `mail.get_attachment` in the mailbox of an agent writes an audit line with the field `mailbox`.
+  The line of `mail.list_threads` names the mailbox, not the query, because a query can hold private
+  words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
+  return no mail content.
+- The access check reads the directory on each call, so a role change applies to the next call.
 
 ## Inbound
 
