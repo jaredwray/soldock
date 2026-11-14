@@ -9,7 +9,7 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` (`mail`). Later: `PrincipalDO` (settings, event feed, notifications, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -93,10 +93,11 @@ not a principal: it has no credential, no scopes and no role, and nobody signs i
 resource with a list of members. Each member, a person or an agent, uses it with their own
 credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
 
-- Only owners and admins create a team mailbox and change its members
-  (`directory.create_team_mailbox`, `directory.add_team_mailbox_member`,
-  `directory.remove_team_mailbox_member`). These operations need `directory.write` and accept
-  humans only. So an agent can never add itself, and a member cannot add others.
+- Only owners and admins create a team mailbox, rename it, and change its members
+  (`directory.create_team_mailbox`, `directory.update_team_mailbox`,
+  `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`). These operations
+  need `directory.write` and accept humans only. So an agent can never add itself, and a member
+  cannot add others.
 - An owner or an admin gets access to the mail only as a member. The creator is not a member
   unless `member_ids` names them.
 - Each principal with `directory.read` sees each team mailbox and its members
@@ -105,12 +106,17 @@ credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
   `addresses` and `team_mailboxes` at the same time, in the transaction of the write. A team
   address is lowercase, uses a saved mail domain, and cannot contain `+`. A domain with a team
   mailbox address cannot be removed.
+- A rename changes only `display_name`. The mail handlers read the name from D1 on each call, so
+  the members see the new name at once, and the next send has it in `From`.
+- The address of a team mailbox cannot change. Stored mail names the old address in `To` and `Cc`,
+  so Reply all would send to an address that the mailbox no longer owns, and a new holder of the
+  old address would get those replies. A change of address needs aliases first.
 - A team mailbox can have 100 members (`TEAM_MAILBOX_LIMITS.members`). A second add of the same
   member, and a remove of a principal that is not a member, change nothing.
 - `resolveMailboxAddress` gives the mailbox of an address (the own mailbox of a principal, or a
   team mailbox) for inbound and local delivery. `teamMailboxFor` is the membership check of each
   mail operation. It reads D1 on each call, so removed access ends at once.
-- No operation renames or removes a team mailbox yet.
+- No operation changes the address of a team mailbox or removes it yet.
 
 ## Mail domain settings
 
@@ -354,7 +360,7 @@ Each call passes three checks:
    - Only owners and admins create, change, archive, restore and delete principals. Only the owner
      changes the owner, and nobody archives or deletes the owner or themselves.
    - An archived principal is not authenticated, with any credential.
-   - Only owners and admins create team mailboxes and change their members. A principal uses a team
+   - Only owners and admins create and rename team mailboxes and change their members. A principal uses a team
      mailbox only as a member. The mail handlers check the membership on each call.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never
      can: it has no `directory.write` scope, and the operation accepts humans only.

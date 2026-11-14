@@ -1,6 +1,6 @@
 import type { Mailbox } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SIDEBAR, mailboxNav } from "../src/features/mail/mailboxNav.ts";
+import { isExpanded, mailboxNav } from "../src/features/mail/mailboxNav.ts";
 
 const own: Mailbox = {
 	id: "prn_01JD000000000000000000OWN0",
@@ -22,38 +22,39 @@ const sales: Mailbox = {
 };
 const bot: Mailbox = { id: "prn_01JD000000000000000000BOT0", kind: "agent", address: "b@x.test", display_name: "Bot" };
 
-const titles = (nav: ReturnType<typeof mailboxNav>) =>
-	nav?.sections.map((section) => [section.title, section.shown.map((mailbox) => mailbox.display_name)]);
+const rows = (nav: ReturnType<typeof mailboxNav>) => nav?.map((entry) => [entry.id, entry.name, entry.kind]);
 
-describe("the mailbox part of the sidebar", () => {
-	it("shows a section only when the person has mailboxes of its kind", () => {
-		expect(titles(mailboxNav([own, support, sales, bot], null, DEFAULT_SIDEBAR))).toEqual([
-			["Shared mailboxes", ["Support", "Sales"]],
-			["Agent mailboxes", ["Bot"]],
+describe("the mailbox rows of the sidebar", () => {
+	it("lists My mailbox, then the shared mailboxes, then the agent mailboxes", () => {
+		// The agent comes first in the list, but the sidebar shows the shared mailboxes before the agents.
+		expect(rows(mailboxNav([bot, own, support, sales], null, null))).toEqual([
+			[null, "My mailbox", "personal"],
+			[support.id, "Support", "team"],
+			[sales.id, "Sales", "team"],
+			[bot.id, "Bot", "agent"],
 		]);
-		expect(titles(mailboxNav([own, bot], null, DEFAULT_SIDEBAR))).toEqual([["Agent mailboxes", ["Bot"]]]);
-		// Only the own mailbox: nothing to switch to, so no mailbox part.
-		expect(mailboxNav([own], null, DEFAULT_SIDEBAR)).toBeNull();
-		expect(mailboxNav(null, null, DEFAULT_SIDEBAR)).toBeNull();
-		// A deep link into a mailbox before the list loads keeps "My mailbox" as the way back.
-		expect(mailboxNav(null, support.id, DEFAULT_SIDEBAR)).toEqual({ sections: [] });
+		// Only the own mailbox: nothing to switch to, so no mailbox rows.
+		expect(mailboxNav([own], null, null)).toBeNull();
+		expect(mailboxNav(null, null, null)).toBeNull();
 	});
 
-	// A collapsed section still shows where the person is.
-	it("hides the mailboxes of a collapsed section, except the open one", () => {
-		const collapsed = { shared_mailboxes_collapsed: true, agent_mailboxes_collapsed: true };
-		expect(titles(mailboxNav([own, support, sales, bot], null, collapsed))).toEqual([
-			["Shared mailboxes", []],
-			["Agent mailboxes", []],
+	// A deep link opens a mailbox before the list loads, or after the access ended: its folders still show.
+	it("adds a row for an open mailbox that is not in the list", () => {
+		expect(rows(mailboxNav(null, support.id, "Support"))).toEqual([
+			[null, "My mailbox", "personal"],
+			[support.id, "Support", "team"],
 		]);
-		expect(titles(mailboxNav([own, support, sales, bot], sales.id, collapsed))).toEqual([
-			["Shared mailboxes", ["Sales"]],
-			["Agent mailboxes", []],
+		expect(rows(mailboxNav([own], bot.id, null))).toEqual([
+			[null, "My mailbox", "personal"],
+			[bot.id, "Agent mailbox", "agent"],
 		]);
-		const sections = mailboxNav([own, support, bot], null, { ...DEFAULT_SIDEBAR, agent_mailboxes_collapsed: true });
-		expect(sections?.sections.map((s) => [s.setting, s.collapsed])).toEqual([
-			["shared_mailboxes_collapsed", false],
-			["agent_mailboxes_collapsed", true],
-		]);
+	});
+
+	it("expands only the open mailbox until the person expands or collapses one", () => {
+		const nav = mailboxNav([own, support, bot], support.id, null) ?? [];
+		const shown = (expanded: Record<string, boolean>) =>
+			nav.filter((entry) => isExpanded(entry, support.id, expanded)).map((entry) => entry.name);
+		expect(shown({})).toEqual(["Support"]);
+		expect(shown({ own: true, [support.id]: false })).toEqual(["My mailbox"]);
 	});
 });

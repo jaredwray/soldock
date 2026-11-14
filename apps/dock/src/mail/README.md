@@ -77,6 +77,8 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 - In a team mailbox, each idempotency key of `mail.send` belongs to its caller (the stored key has
   the principal id in front). The key of one member cannot return or stop the send of a different member.
 - `from:me` and `to:me` in a search mean the address of the mailbox: in a team mailbox, the team address.
+- An owner or an admin can rename a team mailbox. Each send reads the name from the directory, so
+  the next send has the new name in `From`. The address cannot change.
 - The audit line of a change in a team mailbox has the field `mailbox` with the team mailbox id.
 
 ### Agent mailboxes
@@ -452,7 +454,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - Filters, vacation responder and forwarding
 - Aliases, groups, delegation and send-as
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread
-  counts for each mailbox in `mail.list_mailboxes`, and rename or removal of a team mailbox
+  counts for each mailbox in `mail.list_mailboxes`, and a change of address (with an alias for the
+  old address) or removal of a team mailbox
 - Email Service lifecycle events (bounces, complaints) and inbound DSN parsing
 - Permanent delete, retention and blob GC
 - Live updates through `/ws/events`. The web app polls `mail.get_profile` and compares `version`.

@@ -102,6 +102,35 @@ describe("team mailboxes in the directory", () => {
 		]);
 	});
 
+	it("lets only owners and admins rename one, through REST and MCP", async () => {
+		const support = await createSupport();
+		const rename = { mailbox_id: support.id, display_name: "Customer support" };
+		expect(await code(ada.call("directory.update_team_mailbox", rename))).toBe("forbidden");
+		expect(await code(bot.call("directory.update_team_mailbox", rename))).toBe("forbidden");
+		const readOnly = await narrowKey(owner, ["directory.read"]);
+		expect(await code(readOnly("directory.update_team_mailbox", rename))).toBe("forbidden");
+		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
+
+		const renamed = await callTool(owner.key, "directory_update_team_mailbox", rename);
+		expect(renamed.structuredContent).toEqual({ team_mailbox: { ...support, display_name: "Customer support" } });
+		await owner.call("directory.update_principal", { principal_id: ada.id, org_role: "admin" });
+		const again = await ada.call("directory.update_team_mailbox", { ...rename, display_name: "Help desk" });
+		expect(again.team_mailbox).toEqual({ ...support, display_name: "Help desk" });
+		// The members see the new name, and mail from the mailbox has it in From.
+		expect((await bot.call("mail.list_mailboxes")).mailboxes[1]).toEqual({
+			id: support.id,
+			kind: "team",
+			address: "support@dock.test",
+			display_name: "Help desk",
+		});
+		const sent = await bot.call("mail.send", { mailbox_id: support.id, to: ["owner@dock.test"], text: "Hi" });
+		const [copy] = (await bot.call("mail.get_thread", { mailbox_id: support.id, thread_id: sent.thread_id })).messages;
+		expect(copy?.from).toEqual({ name: "Help desk", address: "support@dock.test" });
+
+		const unknown = { ...rename, mailbox_id: "tmb_00000000000000000000000000" };
+		expect(await code(owner.call("directory.update_team_mailbox", unknown))).toBe("not_found");
+	});
+
 	it("creates nothing when a member id is unknown", async () => {
 		const input = {
 			display_name: "Support",
