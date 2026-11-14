@@ -1,3 +1,4 @@
+import { addressTag } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
 import { parseMail } from "./mime/parse.ts";
 
@@ -35,6 +36,7 @@ export async function storeRaw(env: Pick<Env, "BLOBS">, mailboxId: string, bytes
 /**
  * Parses a raw message that R2 already holds under `rawKey`, and delivers it to the mailbox with
  * the id `mailboxId`. The mailbox drops a second copy of the same content, so a retry is safe.
+ * `tag` is the `+tag` of the recipient address. The mailbox applies the user label with that name.
  */
 export async function deliverStoredRaw(
 	env: Env,
@@ -45,6 +47,7 @@ export async function deliverStoredRaw(
 		contentHash: string;
 		origin: "external" | "internal";
 		receivedAt: number;
+		tag: string | null;
 	},
 ) {
 	const parsed = await parseMail(input.bytes, { authservId: authservId(env) });
@@ -58,11 +61,15 @@ export async function deliverStoredRaw(
 		internalDate: input.receivedAt,
 		parsed,
 		spam,
+		tag: input.tag,
 	});
 }
 
-/** Stores a copy of a raw message for another mailbox of this deployment, and delivers it there. */
-export async function deliverInternal(env: Env, mailboxId: string, bytes: Uint8Array) {
+/**
+ * Stores a copy of a raw message for another mailbox of this deployment, and delivers it there.
+ * `address` is the recipient address. Its `+tag` selects a user label in that mailbox.
+ */
+export async function deliverInternal(env: Env, mailboxId: string, address: string, bytes: Uint8Array) {
 	const { contentHash, rawKey } = await storeRaw(env, mailboxId, bytes);
 	return deliverStoredRaw(env, {
 		mailboxId,
@@ -71,5 +78,6 @@ export async function deliverInternal(env: Env, mailboxId: string, bytes: Uint8A
 		contentHash,
 		origin: "internal",
 		receivedAt: Date.now(),
+		tag: addressTag(address),
 	});
 }

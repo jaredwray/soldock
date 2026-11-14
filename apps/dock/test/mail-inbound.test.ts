@@ -55,6 +55,43 @@ describe("the email() handler", () => {
 	});
 });
 
+describe("+tag labels", () => {
+	// Mail to ada+netflix@ goes to ada@ and gets the label that ada made for the tag. The sender
+	// chooses the tag, so a tag must never create a label or move mail into a system label.
+	it("applies the user label named by the +tag in any case, and never creates a label or selects a system label", async () => {
+		const { ada } = await seedOrg();
+		const netflix = await ada.call("mail.create_label", { name: "Netflix" });
+		const labelCount = (await ada.call("mail.list_labels")).labels.length;
+		await inject(
+			rawMessage({ from: "a@s.example", to: "ada+NETFLIX@dock.test", subject: "Bill" }),
+			"ada+NETFLIX@dock.test",
+		);
+		await inject(rawMessage({ from: "a@s.example", to: "ada+news@dock.test", subject: "News" }), "ada+news@dock.test");
+		await inject(rawMessage({ from: "a@s.example", to: "ada+spam@dock.test", subject: "Spam?" }), "ada+spam@dock.test");
+		const labels = Object.fromEntries((await inbox(ada.call)).map((t) => [t.subject, t.label_ids.sort()]));
+		expect(labels).toEqual({
+			Bill: ["INBOX", netflix.id, "UNREAD"].sort(),
+			News: ["INBOX", "UNREAD"],
+			"Spam?": ["INBOX", "UNREAD"],
+		});
+		expect((await ada.call("mail.list_labels")).labels).toHaveLength(labelCount);
+	});
+
+	// Email Routing calls email() once for each recipient. The second copy is a duplicate, but its tag counts.
+	it("adds the tag label when the same message comes again to a different +tag", async () => {
+		const { ada } = await seedOrg();
+		const bank = await ada.call("mail.create_label", { name: "bank" });
+		const tax = await ada.call("mail.create_label", { name: "tax" });
+		const to = "ada+bank@dock.test, ada+tax@dock.test";
+		const raw = rawMessage({ from: "a@s.example", to, subject: "Statement" });
+		await inject(raw, "ada+bank@dock.test");
+		await inject(raw, "ada+tax@dock.test");
+		const threads = await inbox(ada.call);
+		expect(threads).toHaveLength(1);
+		expect(threads[0]?.label_ids.sort()).toEqual(["INBOX", "UNREAD", bank.id, tax.id].sort());
+	});
+});
+
 describe("the inbound queue consumer", () => {
 	// Queues deliver at least once, and Email Routing retries a failed handler. Neither may duplicate mail.
 	it("delivers a message once when the queue redelivers it or the sender retries", async () => {

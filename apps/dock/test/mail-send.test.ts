@@ -94,6 +94,21 @@ describe("mail.send to mailboxes of this deployment", () => {
 	});
 });
 
+describe("+tag labels on mail inside the deployment", () => {
+	// The recipient address keeps its +tag in the outbox, so local mail gets the same label as mail from the internet.
+	it("applies the +tag label of a local recipient, also in mail to yourself", async () => {
+		const receipts = await ada.call("mail.create_label", { name: "receipts" });
+		await owner.call("mail.send", { to: ["ada+receipts@dock.test"], subject: "Invoice", text: "Paid." });
+		await drainOutbox(owner.id);
+		await ada.call("mail.send", { to: ["ada+receipts@dock.test"], subject: "Lunch", text: "12 EUR" });
+		const { threads } = await ada.call("mail.list_threads", { query: "in:anywhere" });
+		expect(Object.fromEntries(threads.map((t) => [t.subject, t.label_ids.sort()]))).toEqual({
+			Invoice: ["INBOX", "UNREAD", receipts.id].sort(),
+			Lunch: ["INBOX", "SENT", receipts.id].sort(),
+		});
+	});
+});
+
 describe("mail.send to the internet", () => {
 	it("hands the message to Email Service and records each recipient as sent", async () => {
 		const sent = await ada.call("mail.send", { to: ["bob@example.org"], cc: ["carol@example.net"], text: "Hello" });

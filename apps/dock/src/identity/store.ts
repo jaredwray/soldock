@@ -88,6 +88,17 @@ export function normalizeAddress(address: string): string {
 	return `${plus > 0 ? local.slice(0, plus) : local}${lower.slice(at)}`;
 }
 
+/**
+ * The `+tag` in the local part of an address, or null. Mail to `ada+news@example.com` has the tag
+ * `news`. It uses the same rule as `normalizeAddress`, so a tag exists only where that function removes one.
+ */
+export function addressTag(address: string): string | null {
+	const trimmed = address.trim();
+	const local = trimmed.slice(0, Math.max(trimmed.lastIndexOf("@"), 0));
+	const plus = local.indexOf("+");
+	return plus > 0 && plus < local.length - 1 ? local.slice(plus + 1) : null;
+}
+
 /** A primary address cannot hold a `+tag`, because mail to `user+tag@` reaches `user@`. */
 export function assertPrimaryAddress(address: string): void {
 	const local = address.slice(0, address.lastIndexOf("@"));

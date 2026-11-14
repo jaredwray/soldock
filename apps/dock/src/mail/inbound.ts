@@ -1,5 +1,5 @@
 import { MAIL_LIMITS } from "@soldock/contracts";
-import { resolveMailboxAddress } from "../identity/index.ts";
+import { addressTag, resolveMailboxAddress } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { deliverStoredRaw, storeRaw } from "./delivery.ts";
 
@@ -17,6 +17,11 @@ export interface InboundJob {
 	rawKey: string;
 	contentHash: string;
 	receivedAt: number;
+	/**
+	 * The `+tag` of the recipient address, if it has one. The field is optional, so jobs from before
+	 * it stay valid. The mailbox applies the user label with the same name, if one exists.
+	 */
+	tag?: string;
 }
 
 const MAX_ATTEMPTS = 5;
@@ -30,7 +35,8 @@ function isInboundJob(body: unknown): body is InboundJob {
 		typeof job.principalId === "string" &&
 		typeof job.rawKey === "string" &&
 		typeof job.contentHash === "string" &&
-		typeof job.receivedAt === "number"
+		typeof job.receivedAt === "number" &&
+		(job.tag === undefined || typeof job.tag === "string")
 	);
 }
 
@@ -59,6 +65,8 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env): P
 	}
 	const { contentHash, rawKey } = await storeRaw(env, recipient.id, bytes);
 	const job: InboundJob = { v: 1, principalId: recipient.id, rawKey, contentHash, receivedAt: Date.now() };
+	const tag = addressTag(message.to);
+	if (tag) job.tag = tag;
 	await env.MAIL_INBOUND.send(job);
 	log("info", "inbound mail accepted", { mailboxId: recipient.id, size: bytes.byteLength });
 }
@@ -88,6 +96,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 				contentHash: job.contentHash,
 				origin: "external",
 				receivedAt: job.receivedAt,
+				tag: job.tag ?? null,
 			});
 			log("info", "inbound mail delivered", {
 				mailboxId: job.principalId,

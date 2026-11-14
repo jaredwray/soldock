@@ -72,7 +72,8 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 1. Email Routing calls `email()` once for each recipient.
 2. `email()` resolves the recipient in the directory: lowercase, without a `+tag`. The recipient is
    the own mailbox of a principal or a team mailbox. An unknown
-   address gets `setReject("5.1.1 …")`, so the sender gets a bounce during the SMTP session.
+   address gets `setReject("5.1.1 …")`, so the sender gets a bounce during the SMTP session. The
+   job keeps the tag (see [Tags](#tags)).
 3. A message over 25 MiB gets `setReject("5.3.4 …")` before the body is read.
 4. `email()` writes the raw bytes to R2 at `mail/raw/<mailbox id>/<sha256>` and sends an
    `InboundJob` to `soldock-mail-inbound`.
@@ -84,6 +85,23 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
 
 Inbound mail gets `INBOX` and `UNREAD`. A DMARC failure that the receiving server recorded puts the
 message in `SPAM` instead.
+
+### Tags
+
+Mail to `user+tag@` goes to the mailbox of `user@`. The tag applies a user label to the message:
+
+- The tag is the text after the first `+` of the local part, up to the `@`. `jw+netflix@` has the tag `netflix`.
+- The message gets the user label whose name is the tag. The comparison is the same as for label
+  names: `jw+NETFLIX@` matches the label `Netflix`.
+- A tag never creates a label. The sender chooses the tag, so a stranger cannot add labels to a
+  mailbox. When no user label matches, the message gets only its usual labels.
+- A tag never selects a system label. `jw+spam@` and `jw+trash@` go to the inbox.
+- The message keeps `INBOX`. A tag label does not archive the message.
+- The same message can come to two tags of one mailbox. The mailbox stores one message, and the
+  second copy adds its tag label.
+- Local mail and mail to yourself use the tag of the recipient address too. When one send names two
+  addresses of one mailbox, the mailbox gets one copy, with the tag of the first address.
+- Team mailboxes use the same rules, with the labels of the team mailbox.
 
 ## Threads
 
@@ -174,7 +192,7 @@ The pause marker survives object eviction. A paused mailbox refuses new sends an
 After the reset, setup cancels the old outboxes. A failed directory transaction resumes the mailboxes.
 
 Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, with `SENT` and
-`INBOX`.
+`INBOX`, and the label of its [tag](#tags).
 
 ## Safety
 
@@ -208,7 +226,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
-| Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
+| Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
 
 Blob reference counts: each raw object has exactly one owner (the mailbox in its key), so no shared
 references exist yet. No operation deletes a message permanently yet, so no object is deleted.

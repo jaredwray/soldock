@@ -28,7 +28,8 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
   `allowlist` (domains and addresses) or `any`.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
-  lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`.
+  lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`. The
+  [`mail`](../mail/README.md#tags) module uses the tag to apply a label.
 
 ## Change, archive and delete
 

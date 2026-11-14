@@ -222,7 +222,7 @@ export const listLabels = defineOperation({
 export const createLabel = defineOperation({
 	name: "mail.create_label",
 	summary: "Create a label",
-	description: `Creates a user label. Use a slash in the name to show it nested, for example Clients/Acme. ${IN_MAILBOX}`,
+	description: `Creates a user label. Use a slash in the name to show it nested, for example Clients/Acme. Mail to the mailbox address with a +tag that is the label name (user+acme@ for the label Acme) gets the label. ${IN_MAILBOX}`,
 	http: { method: "POST", path: "/api/v1/mail/labels" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent"],

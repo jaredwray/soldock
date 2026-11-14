@@ -49,7 +49,8 @@ export function NewLabelDialog({ onClose, onCreated }: { onClose: () => void; on
 						data-autofocus
 					/>
 					<p id={hintId} className="field-hint">
-						Use a slash to nest a label, for example Clients/Acme.
+						Use a slash to nest a label, for example Clients/Acme. Mail to the address of this mailbox with +acme before
+						the @ gets the label Acme.
 					</p>
 					{error && (
 						<p className="form-error" role="alert">
