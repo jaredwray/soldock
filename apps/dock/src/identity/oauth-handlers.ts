@@ -16,7 +16,14 @@ import {
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
-import { assertPrimaryAddress, createPrincipal, domainOf, getPrincipal, mailDomains } from "./store.ts";
+import {
+	assertPrimaryAddress,
+	createPrincipal,
+	domainOf,
+	getPrincipal,
+	liveSponsorCondition,
+	mailDomains,
+} from "./store.ts";
 
 type OAuthOperation =
 	| "oauth.get_authorization"
@@ -104,6 +111,9 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			assertPrimaryAddress(input.new_agent.address);
 			const scopes = grantableScopes(call.caller, { kind: "agent" }, input.scopes);
 			const { code, approval } = await approvalAt();
+			// The request must still wait, and the approver, who becomes the sponsor, must still be active.
+			const pending = pendingRequestCondition(request.id, approval.now);
+			const sponsor = liveSponsorCondition(call.caller.principal.id);
 			const created = await createPrincipal(
 				call.env.DIRECTORY,
 				{
@@ -116,7 +126,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				},
 				null,
 				{
-					condition: pendingRequestCondition(request.id, approval.now),
+					condition: { sql: `${pending.sql} AND ${sponsor.sql}`, params: [...pending.params, ...sponsor.params] },
 					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes })],
 				},
 			);
@@ -127,6 +137,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		}
 		const agent = input.agent_id ? await getPrincipal(call.env.DIRECTORY, input.agent_id) : null;
 		if (agent?.kind !== "agent") throw new OperationError("not_found", "No agent has that id.");
+		if (agent.archived_at !== null) throw new OperationError("invalid", "This agent is archived. Restore it first.");
 		if (!canManageCredentialsOf(call.caller, agent)) {
 			throw new OperationError(
 				"forbidden",

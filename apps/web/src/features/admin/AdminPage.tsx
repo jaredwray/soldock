@@ -1,20 +1,17 @@
 import type { CreatedApiKey, Principal } from "@soldock/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { Icon } from "../../lib/icons.tsx";
-import { Link, navigate } from "../../lib/router.tsx";
+import { navigate } from "../../lib/router.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type AdminSection, adminPath, INBOX_PATH } from "../../routes.ts";
+import { type AdminSection, adminPath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionTitle } from "./AdminSidebar.tsx";
 import { AgentPanel } from "./AgentPanel.tsx";
-import { CreatePrincipalForm } from "./CreatePrincipalForm.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
-import { PersonSignInCard } from "./PersonSignInCard.tsx";
-import { PrincipalTable } from "./PrincipalTable.tsx";
-import { TeamMailboxesCard } from "./TeamMailboxesCard.tsx";
+import { MembersSection } from "./MembersSection.tsx";
+import { SharedMailboxesSection } from "./SharedMailboxesSection.tsx";
 
 type DirectoryState =
 	| { status: "loading" }
@@ -30,7 +27,7 @@ interface AdminPageProps {
 }
 
 /**
- * Owners and admins see the directory, create people and agents, and manage each agent. A member who
+ * Owners and admins see the directory, create, change, archive and delete people and agents, and manage each agent. A member who
  * sponsors an agent sees only the agents that the member sponsors. The side navigation selects one
  * section. The page loads the directory once and keeps it while the section changes.
  */
@@ -71,7 +68,6 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 
 	const principals = state.status === "ready" ? state.principals : [];
 	const agents = principals.filter((p) => p.kind === "agent" && (elevated || p.sponsor_id === me.id));
-	const humans = principals.filter((p) => p.kind === "human");
 	const allowed = elevated || agents.length > 0;
 
 	return (
@@ -79,10 +75,6 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 			<AdminSidebar active={section} elevated={elevated} open={navOpen} onClose={onCloseNav} />
 			<main id="main" ref={mainRef} className="admin-main" tabIndex={-1}>
 				<div className="admin-content">
-					<Link to={INBOX_PATH} className="back-link">
-						<Icon name="back" size={16} />
-						Back to Mail
-					</Link>
 					<h1>{title}</h1>
 					{state.status === "loading" && <p className="muted">Loading the directory…</p>}
 					{state.status === "error" && (
@@ -120,13 +112,12 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 			);
 		}
 		switch (section) {
-			case "team":
-				return <PrincipalTable principals={principals} />;
-			case "new":
+			case "members":
 				return (
-					<CreatePrincipalForm
+					<MembersSection
 						me={me}
-						humans={humans}
+						principals={principals}
+						onChanged={() => void load()}
 						onCreated={(principal, key) => {
 							setCreated({ principal, key });
 							void load();
@@ -155,10 +146,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 						</div>
 					</div>
 				);
-			case "sign-in":
-				return <PersonSignInCard me={me} people={humans} />;
-			case "team-mailboxes":
-				return <TeamMailboxesCard principals={principals} />;
+			case "shared-mailboxes":
+				return <SharedMailboxesSection principals={principals} />;
 			case "domains":
 				return <MailDomainsCard />;
 		}

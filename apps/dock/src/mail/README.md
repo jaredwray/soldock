@@ -92,6 +92,8 @@ who can.
   An unknown principal id gets `not_found`.
 - A member, also the sponsor of the agent, gets `forbidden`. An agent never gets the mailbox of a
   different agent.
+- An archived agent cannot act, but owners and admins can still read its mailbox. A deleted agent is
+  not in the list, and its id gets `not_found`: its mailbox stays in storage, and nobody opens it.
 - Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
   `mail.get_attachment` in the mailbox of an agent writes an audit line with the field `mailbox`.
   The line of `mail.list_threads` names the mailbox, not the query, because a query can hold private

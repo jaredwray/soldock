@@ -38,6 +38,7 @@ export function readCookie(request: Request, name: string): string | null {
 
 /**
  * Finds the principal of a request. A bearer token comes first: an API key or an OAuth access token.
+ * An archived principal is not authenticated, with any credential. A deleted principal has no record.
  * When a request has an Authorization header that is not a live token, the request is not
  * authenticated, and the session cookie is not tried. The cookie is tried only when `allowSession` is
  * true: MCP takes bearer tokens only.
@@ -54,7 +55,7 @@ export async function authenticate(
 		if (!match?.[1]) return null;
 		if (match[1].startsWith(ACCESS_TOKEN_PREFIX)) {
 			const granted = await findGrantByAccessToken(env.DIRECTORY, match[1]);
-			if (!granted) return null;
+			if (!granted || granted.principal.archived_at !== null) return null;
 			waitUntil(touchGrant(env.DIRECTORY, granted.grant));
 			const ceiling = new Set<Scope>(scopeCeiling(granted.principal.kind));
 			return {
@@ -68,7 +69,7 @@ export async function authenticate(
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
-		if (!found) return null;
+		if (!found || found.principal.archived_at !== null) return null;
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
 		const ceiling = new Set<Scope>(scopeCeiling(found.principal.kind));
@@ -86,7 +87,7 @@ export async function authenticate(
 	const token = readCookie(request, SESSION_COOKIE);
 	if (!token) return null;
 	const session = await findSession(env.DIRECTORY, token);
-	if (session?.principal.kind !== "human") return null;
+	if (session?.principal.kind !== "human" || session.principal.archived_at !== null) return null;
 	// A human signs in with a password and, when it is on, a TOTP code, so a session holds every human scope.
 	return {
 		id: session.principal.id,

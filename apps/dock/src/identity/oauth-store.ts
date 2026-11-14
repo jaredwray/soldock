@@ -261,7 +261,7 @@ export function approveStatement(
 			`UPDATE oauth_requests SET principal_id = ?1, granted_scopes = ?2, approved_by = ?3, code_hash = ?4,
 			code_expires_at = ?5, expires_at = ?5
 			WHERE id = ?6 AND code_hash IS NULL AND denied_at IS NULL AND expires_at > ?7
-			AND EXISTS (SELECT 1 FROM principals WHERE id = ?1)`,
+			AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND archived_at IS NULL AND deleted_at IS NULL)`,
 		)
 		.bind(
 			approval.principalId,
@@ -417,7 +417,8 @@ export async function refreshGrant(
 			consumed_refresh_hash = previous_refresh_hash, previous_refresh_hash = refresh_hash, previous_refresh_until = ?6
 			WHERE client_id = ?7 AND revoked_at IS NULL AND refresh_expires_at > ?8
 			AND (refresh_hash = ?5 OR (previous_refresh_hash = ?5 AND previous_refresh_until > ?8))
-			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id)
+			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id AND archived_at IS NULL
+				AND deleted_at IS NULL)
 			RETURNING id`,
 		)
 		.bind(

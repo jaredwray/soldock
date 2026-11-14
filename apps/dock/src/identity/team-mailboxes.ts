@@ -86,7 +86,8 @@ export async function createTeamMailbox(
 				db
 					.prepare(
 						`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
-						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)`,
+						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)
+						AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)`,
 					)
 					.bind(id, principalId, input.created_by, now),
 			),
@@ -100,7 +101,7 @@ export async function createTeamMailbox(
 
 /**
  * Adds a member. A second call for the same member changes nothing. Returns false when the mailbox
- * has the most members that it can have.
+ * has the most members that it can have, or when the principal was deleted during the request.
  */
 export async function addTeamMailboxMember(
 	db: D1Database,
@@ -115,6 +116,7 @@ export async function addTeamMailboxMember(
 			`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
 			SELECT ?1, ?2, ?3, ?4
 			WHERE (SELECT COUNT(*) FROM team_mailbox_members WHERE mailbox_id = ?1) < ?5
+			AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)
 			ON CONFLICT DO NOTHING`,
 		)
 		.bind(mailboxId, principalId, addedBy, new Date().toISOString(), TEAM_MAILBOX_LIMITS.members)
@@ -185,13 +187,18 @@ export async function agentMailboxes(db: D1Database): Promise<MailboxRecord[]> {
 }
 
 /**
- * The own mailbox of an agent, for an owner or an admin. Throws `not_found` for an unknown id, and
- * `forbidden` for a person: the mailbox of a person is private. Each call reads the directory.
+ * The own mailbox of an agent, for an owner or an admin. Throws `not_found` for an unknown id and for a
+ * deleted principal, and `forbidden` for a person: the mailbox of a person is private. An archived agent
+ * keeps its mailbox, so they can still read it. Each call reads the directory.
  */
 export async function agentMailboxFor(db: D1Database, principalId: string): Promise<MailboxRecord> {
+	// A deleted principal has no address, so the join leaves it out.
 	const agent = await db.prepare(`${AGENT_MAILBOX_SELECT} AND p.id = ?`).bind(principalId).first<MailboxRecord>();
 	if (agent) return { id: agent.id, kind: "agent", address: agent.address, display_name: agent.display_name };
-	const exists = await db.prepare("SELECT 1 AS found FROM principals WHERE id = ?").bind(principalId).first();
+	const exists = await db
+		.prepare("SELECT 1 AS found FROM principals WHERE id = ? AND deleted_at IS NULL")
+		.bind(principalId)
+		.first();
 	if (!exists) throw new OperationError("not_found", "No principal has that id.");
 	throw new OperationError(
 		"forbidden",

@@ -186,6 +186,23 @@ describe("the mailbox of an agent", () => {
 	});
 });
 
+// An archived agent cannot act, but its mail stays for oversight. A deleted agent's mailbox stays in
+// storage, and nobody can open it.
+describe("the mailbox of an archived or a deleted agent", () => {
+	it("stays readable after an archive, and closes after a delete", async () => {
+		const threadId = await mailForBot();
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		expect((await admin.call("mail.list_mailboxes")).mailboxes.map((m) => m.id)).toContain(bot.id);
+		expect((await admin.call("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId })).subject).toBe(
+			"Invoice 7",
+		);
+
+		await owner.call("directory.delete_principal", { principal_id: bot.id });
+		expect((await admin.call("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal"]);
+		expect(await codeOf(admin.call("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId }))).toBe("not_found");
+	});
+});
+
 describe("the mailbox of a person", () => {
 	it("stays private for owners and admins", async () => {
 		expect(await codeOf(owner.call("mail.list_threads", { mailbox_id: ada.id }))).toBe("forbidden");

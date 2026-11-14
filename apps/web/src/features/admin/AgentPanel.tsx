@@ -28,6 +28,7 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 			<summary className="agent-summary">
 				<span className="agent-name">{agent.display_name}</span>
 				<span className="agent-address">{agent.address}</span>
+				{agent.archived_at !== null && <span className="chip">Archived</span>}
 				<span className="chip">{policySummary(policy)}</span>
 				<Icon name="chevronDown" className="agent-chevron" />
 			</summary>
