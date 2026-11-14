@@ -469,3 +469,126 @@ export function readSse(response: Response): SseReader {
 		cancel: () => reader.cancel(),
 	};
 }
+
+/**
+ * Replaces the webhook queue of one mailbox object with a recorder, and returns the events that the
+ * object puts on the queue. Call it before mail arrives. The queue is the boundary: a test sees exactly
+ * what the event outbox sends, and no real queue consumer runs.
+ */
+export async function captureWebhookEvents(mailboxId: string): Promise<unknown[]> {
+	const events: unknown[] = [];
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const queue = { send: async (body: unknown) => void events.push(body) } as unknown as Queue;
+		target.env = { ...target.env, WEBHOOKS: queue };
+	});
+	return events;
+}
+
+/**
+ * Replaces the webhook queue of one mailbox object with a recorder whose sends wait until `release`.
+ * `started` counts the sends that began. A test can then deliver mail while a send runs.
+ */
+export async function holdWebhookEvents(mailboxId: string) {
+	const events: unknown[] = [];
+	let started = 0;
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const queue = {
+			send: async (body: unknown) => {
+				started++;
+				await held;
+				events.push(body);
+			},
+		} as unknown as Queue;
+		target.env = { ...target.env, WEBHOOKS: queue };
+	});
+	return { events, started: () => started, release };
+}
+
+/** The rows of the event outbox of a mailbox: the webhook events that wait. */
+export async function webhookEventRows(mailboxId: string): Promise<number> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	return runInDurableObject(
+		stub,
+		(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM event_outbox").one().n,
+	);
+}
+
+/**
+ * Waits until the event outbox of a mailbox has no due event. The runtime fires the alarm by itself, so
+ * this runs a pending alarm and then waits for one in flight.
+ */
+export async function drainWebhookEvents(mailboxId: string): Promise<void> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const due = await runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ n: number }>("SELECT COUNT(*) AS n FROM event_outbox WHERE next_attempt_at <= ?", Date.now())
+						.one().n,
+			);
+			if (due > 0) throw new Error(`${due} webhook events are due`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/**
+ * Runs the webhook queue consumer on the given job bodies, as delivery number `attempts`. The queue
+ * producer is a fake: `sent` holds the jobs that the consumer puts on the queue. With `failQueue`, each
+ * send to the queue fails.
+ */
+export async function consumeWebhooks(jobs: unknown[], attempts = 1, options: { failQueue?: boolean } = {}) {
+	const sent: unknown[] = [];
+	const refuse = () => {
+		if (options.failQueue) throw new Error("the queue is unavailable");
+	};
+	const queue = {
+		send: async (body: unknown) => {
+			refuse();
+			sent.push(body);
+		},
+		sendBatch: async (messages: { body: unknown }[]) => {
+			refuse();
+			sent.push(...messages.map((message) => message.body));
+		},
+	} as unknown as Queue;
+	const batch = createMessageBatch(
+		"soldock-webhooks",
+		jobs.map((body, i) => ({ id: `webhook-job-${++counter}-${i}`, timestamp: new Date(), attempts, body })),
+	);
+	const ctx = createExecutionContext();
+	await handlers.queue(batch, { ...env, WEBHOOKS: queue } as Env, ctx);
+	return { sent, result: await getQueueResult(batch, ctx) };
+}
+
+export interface WebhookPost {
+	url: string;
+	headers: Headers;
+	body: string;
+}
+
+/**
+ * Replaces the global `fetch` with a receiver that records each POST of the webhook consumer and answers
+ * with `respond`. The outbound request is the boundary. Restore it with `vi.restoreAllMocks()`.
+ */
+export function receiveWebhooks(respond: (post: WebhookPost) => Response = () => new Response(null, { status: 204 })) {
+	const posts: WebhookPost[] = [];
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+		const outgoing = new Request(input, init);
+		const post = { url: outgoing.url, headers: outgoing.headers, body: await outgoing.text() };
+		posts.push(post);
+		return respond(post);
+	});
+	return posts;
+}

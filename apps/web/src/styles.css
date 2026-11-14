@@ -2830,6 +2830,13 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
+/* The URL of a webhook, under its label. A long URL wraps instead of widening the table. */
+.cell-url {
+	font-family: var(--mono);
+	font-size: 12px;
+	overflow-wrap: anywhere;
+}
+
 .cell-address {
 	overflow-wrap: anywhere;
 }
@@ -2918,6 +2925,13 @@ fieldset {
 
 .panel-card > p + p {
 	margin-top: 8px;
+}
+
+/* The webhooks of a mailbox inside a dialog: the note, then the card with the list. */
+.webhooks {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 }
 
 /* A card with a list: each row has its own space above and below. */

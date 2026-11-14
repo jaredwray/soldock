@@ -159,7 +159,13 @@ export function mountMcp(
 		const rpc: RpcRequest = { id: validId, method, params: params ?? {} };
 		const era = eraOf(c.req.raw.headers, rpc);
 		if (era instanceof Response) return era;
-		const call: CallContext = { caller, env: c.env, requestId: c.var.requestId, waitUntil };
+		const call: CallContext = {
+			caller,
+			env: c.env,
+			requestId: c.var.requestId,
+			origin: new URL(c.req.url).origin,
+			waitUntil,
+		};
 		try {
 			return await dispatch({ era, rpc, call, handlers, watchers, reauthenticate, signal: c.req.raw.signal });
 		} catch (error) {

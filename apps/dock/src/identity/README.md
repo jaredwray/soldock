@@ -7,7 +7,7 @@
 | | |
 | --- | --- |
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
-| **Owns** | D1 `directory` tables. Later: `PrincipalDO` (settings, event feed, notifications, webhook subscriptions, agent counters only); R2 `audit`. |
+| **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` (`mail`). Later: `PrincipalDO` (settings, event feed, notifications, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
@@ -26,7 +26,9 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
   the sign-in state (`sign_in.password_set`, `sign_in.totp_enabled`), to its owner. A `CHECK` in D1
   stops an agent from having a password or a TOTP secret. Agents never sign in to the web app.
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
-  `allowlist` (domains and addresses) or `any`.
+  `allowlist` (domains and addresses) or `any`. The policy also limits the hosts of the webhooks
+  that the agent creates: `any` allows each host, `allowlist` allows a host that is a domain entry,
+  and `internal-only` allows no webhook ([`mail`](../mail/README.md#webhooks)).
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
@@ -64,6 +66,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
   deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
+  The same transaction deletes the webhooks that the principal created and the webhooks of its
+  mailbox (table `webhooks` of [`mail`](../mail/README.md#webhooks)), because each one holds a
+  signing secret and nobody can see it after the delete.
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
     items out of Shared with me and Starred.
@@ -348,8 +353,8 @@ Each call passes three checks:
 
 1. **Caller kind and scopes** (the shared invoker): the operation lists the principal kinds that
    can call it and the scopes that the credential must hold. A key holds the scopes that it was
-   given, and never more than the ceiling of its principal kind: agents can hold only
-   `account.read`, `directory.read`, `mail.read`, `mail.modify` and `mail.send`. A session holds
+   given, and never more than the ceiling of its principal kind: agents can hold only the scopes in
+   `AGENT_SCOPES` of `@soldock/contracts`, which has no `account.keys` and no `directory.write`. A session holds
    every human scope, because only a credential with every human scope can set a password.
 2. **Role and resource** (the handler):
    - Only owners and admins create, change, archive, restore and delete principals. Only the owner
@@ -385,7 +390,14 @@ Each call passes three checks:
      knew the old password.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
    `policy_denied`, before anything is stored. The policy belongs to the agent, so it also applies
-   to mail that the agent sends from a team mailbox.
+   to mail that the agent sends from a team mailbox. `mail.create_webhook` refuses a host outside the
+   policy in the same way.
+
+A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the
+API key, the OAuth grant (`AuthContext.grantId`) or a session. `credentialState` tells if that
+credential still works: `live`, `archived` (a restore makes it work again) or `ended` (the principal
+was deleted, or the key or the grant was revoked or expired). A session binding ends only with its
+principal.
 
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
 alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.

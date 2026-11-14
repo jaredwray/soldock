@@ -1,15 +1,17 @@
 import { env } from "cloudflare:workers";
 import { UNTRUSTED_NOTICE } from "@soldock/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
 	api,
 	callTool,
 	codeOf,
+	consumeWebhooks,
 	createActor,
 	mcp,
 	ORIGIN,
 	PASSWORD,
+	receiveWebhooks,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
@@ -657,5 +659,47 @@ describe("OAuth tokens", () => {
 		});
 		expect(res.status).toBe(201);
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
+	});
+});
+
+describe("OAuth and webhooks", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	// A webhook outlives the request that made it, so it must stop with the connection that made it.
+	it("stops a webhook that a connection created when the connection is revoked", async () => {
+		const owner = await setupOwner();
+		const clientId = await registerClient();
+		const { requestId, verifier } = await startAuthorization(clientId, "mail.read mail.webhooks");
+		const approved = await owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			new_agent: { display_name: "Claude", address: "claude@dock.test" },
+			scopes: ["mail.read", "mail.webhooks"],
+		});
+		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
+		const agent = approved.principal;
+		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
+		const created = await callTool(tokens.access_token, "mail_create_webhook", { url: "https://hooks.example.com/a" });
+		const webhook = created.structuredContent?.webhook as { id: string; mailbox_id: string };
+		const job = {
+			v: 1,
+			kind: "delivery",
+			webhookId: webhook.id,
+			mailboxId: webhook.mailbox_id,
+			eventId: "evt_01JC0000000000000000000000",
+			occurredAt: Date.now(),
+		};
+		const posts = receiveWebhooks();
+		await consumeWebhooks([job]);
+		expect(posts).toHaveLength(1);
+
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
+		await consumeWebhooks([job]);
+		expect(posts).toHaveLength(1);
+		expect((await owner.call("mail.list_webhooks", { mailbox_id: agent.id })).webhooks).toMatchObject([
+			{ status: "disabled", disabled_reason: "credential_revoked" },
+		]);
 	});
 });

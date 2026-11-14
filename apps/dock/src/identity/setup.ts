@@ -5,6 +5,7 @@ import teamMailboxSchema from "../../migrations/0005_team_mailboxes.sql";
 import chatIndexSchema from "../../migrations/0006_chat_index.sql";
 import oauthSchema from "../../migrations/0007_oauth.sql";
 import lifecycleSchema from "../../migrations/0008_principal_lifecycle.sql";
+import webhookSchema from "../../migrations/0009_webhooks.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -71,6 +72,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// stays in storage, and no new account is a member of them.
 		"DROP TABLE IF EXISTS chat_members",
 		"DROP TABLE IF EXISTS chat_rooms",
+		// The webhooks act for the old principals.
+		"DROP TABLE IF EXISTS webhooks",
 		// The OAuth connections act as the old principals. The clients go too: each must register again.
 		"DROP TABLE IF EXISTS oauth_grants",
 		"DROP TABLE IF EXISTS oauth_requests",
@@ -91,6 +94,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...chatIndexSchema.split("--> statement-breakpoint"),
 		...oauthSchema.split("--> statement-breakpoint"),
 		...lifecycleSchema.split("--> statement-breakpoint"),
+		...webhookSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -110,4 +114,5 @@ const BUNDLED_MIGRATIONS = [
 	"0006_chat_index.sql",
 	"0007_oauth.sql",
 	"0008_principal_lifecycle.sql",
+	"0009_webhooks.sql",
 ] as const;

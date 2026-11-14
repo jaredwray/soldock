@@ -10,6 +10,7 @@ await applyD1Migrations(env.DIRECTORY, (env as unknown as { TEST_MIGRATIONS: D1M
 // The rooms of Chat have new ids in each test. Only their index is in the directory.
 beforeEach(async () => {
 	await env.DIRECTORY.batch([
+		env.DIRECTORY.prepare("DELETE FROM webhooks"),
 		env.DIRECTORY.prepare("DELETE FROM oauth_grants"),
 		env.DIRECTORY.prepare("DELETE FROM oauth_requests"),
 		env.DIRECTORY.prepare("DELETE FROM oauth_clients"),

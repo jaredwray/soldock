@@ -40,7 +40,7 @@ export const mailInbox = defineResource({
 	name: "mail.inbox",
 	title: "Inbox",
 	description:
-		"The newest threads in the inbox of a mailbox, as mail.list_threads returns them for the query in:inbox. Subscribe to it with subscriptions/listen to get a notification when new mail arrives.",
+		"The newest threads in the inbox of a mailbox, as mail.list_threads returns them for the query in:inbox. Subscribe to it with subscriptions/listen to get a notification when new mail arrives. A client that cannot keep a stream open can use mail.create_webhook instead.",
 	uriTemplate: "soldock://mail/{mailbox_id}/inbox",
 	mimeType: "application/json",
 	read: { operation: "mail.list_threads", input: (vars) => ({ mailbox_id: vars.mailbox_id, query: "in:inbox" }) },

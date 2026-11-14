@@ -3,6 +3,7 @@ export {
 	base64ToBytes,
 	base64UrlEncode,
 	bytesToBase64,
+	hmacSha256,
 	randomToken,
 	sameSecret,
 	sha256Hex,

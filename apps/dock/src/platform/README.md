@@ -17,7 +17,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `http/request-id.ts`: Hono middleware giving each request a server-generated id (`c.var.requestId`, `x-request-id` header).
 - `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path.
 - `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
-- `crypto/crypto.ts`: SHA-256, random tokens, base64 and a constant-time secret comparison.
+- `crypto/crypto.ts`: SHA-256, HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.
 - `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`.

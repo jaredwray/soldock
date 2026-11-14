@@ -1,5 +1,11 @@
 // Public surface of the identity module. Other modules import from here, never from its files.
-export { canReadAgentMailboxes } from "./access.ts";
+export {
+	type CredentialBinding,
+	canManageCredentialsOf,
+	canReadAgentMailboxes,
+	credentialBinding,
+	credentialState,
+} from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
@@ -8,6 +14,7 @@ export { mountAuthRoutes } from "./routes.ts";
 export {
 	addressTag,
 	domainOf,
+	getPrincipal,
 	getPrincipals,
 	mailDomains,
 	normalizeAddress,
@@ -20,6 +27,7 @@ export {
 	agentMailboxFor,
 	getMailbox,
 	isTeamMailboxId,
+	isTeamMailboxMember,
 	type MailboxRecord,
 	resolveMailboxAddress,
 	teamMailboxesOf,

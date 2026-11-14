@@ -1,9 +1,17 @@
 import { AllowlistEntry, type OutboundPolicy } from "@soldock/contracts";
 
 export const POLICY_MODES: readonly { mode: OutboundPolicy["mode"]; title: string; hint: string }[] = [
-	{ mode: "internal-only", title: "Internal only", hint: "Only people and agents in this organization." },
-	{ mode: "allowlist", title: "Allowlist", hint: "This organization, plus the domains and addresses in the list." },
-	{ mode: "any", title: "Any recipient", hint: "Every address on the internet." },
+	{
+		mode: "internal-only",
+		title: "Internal only",
+		hint: "Only people and agents in this organization. The agent cannot create webhooks.",
+	},
+	{
+		mode: "allowlist",
+		title: "Allowlist",
+		hint: "This organization, plus the domains and addresses in the list. A webhook can use a domain in the list as its host.",
+	},
+	{ mode: "any", title: "Any recipient", hint: "Every address on the internet, and webhooks to each host." },
 ];
 
 export function policySummary(policy: OutboundPolicy): string {

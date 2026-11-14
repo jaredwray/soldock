@@ -467,8 +467,8 @@ export async function restorePrincipal(db: D1Database, id: string): Promise<void
 /**
  * Deletes a principal in one transaction. The row stays, because keys, team mailboxes and OAuth rows of
  * other principals refer to it. The credential columns are cleared, the addresses (so the address becomes
- * free and inbound mail to it is refused), the sessions and the team mailbox memberships are removed, and
- * the keys and grants are revoked. The owner and a human who sponsors an agent cannot be deleted. Returns
+ * free and inbound mail to it is refused), the sessions, the team mailbox memberships and the webhooks are
+ * removed, and the keys and grants are revoked. The owner and a human who sponsors an agent cannot be deleted. Returns
  * false, and changes nothing, when the first update matched no row.
  */
 export async function deletePrincipal(db: D1Database, id: string): Promise<boolean> {
@@ -493,6 +493,9 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 		db
 			.prepare(`UPDATE oauth_grants SET revoked_at = ?1 WHERE principal_id = ?2 AND revoked_at IS NULL AND ${deleted}`)
 			.bind(now, id),
+		// The webhooks of the mail module that the principal created or that watch its mailbox. Nobody can
+		// see them after the delete, and each one holds a signing secret.
+		db.prepare(`DELETE FROM webhooks WHERE (created_by = ?2 OR mailbox_id = ?2) AND ${deleted}`).bind(now, id),
 	]);
 	return first?.meta.changes === 1;
 }
