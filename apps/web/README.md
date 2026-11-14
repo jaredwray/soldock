@@ -119,8 +119,9 @@ MCP clients. The app has no UI-only path.
   - Until the person uses a chevron, only the open mailbox is expanded. The shell keeps the state,
     so it stays when the mailbox changes. The state is not saved: a reload resets it.
   - The name of a mailbox opens its inbox and expands the mailbox.
-  - An expanded mailbox that is not open gets its labels one time, when it expands. Its counts do
-    not change with the poll. Labels can be added and deleted only in the open mailbox.
+  - An expanded mailbox that is not open gets its labels when it expands, and again after each
+    mailbox switch. Its counts do not change with the poll. Labels can be added and deleted only in
+    the open mailbox.
   - A deep link to a mailbox that is not in the list gives that mailbox a row, so its folders show.
   - A person with only the own mailbox sees the folders and the labels with no mailbox rows.
   - The Compose button of Mail fills the width of the sidebar.
