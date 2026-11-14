@@ -285,9 +285,7 @@ MCP clients. The app has no UI-only path.
     the last change and the size. A folder view sorts by the name or by the last change. "More" loads
     the next page. The list has loading, empty and error states. The error state has "Try again".
   - The rows of the list have no lines between them. A row has a fill under the pointer and when it
-    is selected. The icon of the kind is on a tile. With a mouse, a star that is not set shows only
-    for the row under the pointer, the row with the focus and a selected row. On a touch screen,
-    each star shows.
+    is selected. The icon of the kind is on a tile. Each row shows its star, as in the Mail list.
   - The header row starts with the icon of the view. A folder view shows the path of the folder
     (`drive.get_item`): the folders above are quiet links, and the folder on screen is the title.
     The first entry is "My Drive" in the own drive, and "Shared with me" in the drive of somebody

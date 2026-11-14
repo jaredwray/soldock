@@ -249,19 +249,6 @@ a.drive-crumb:hover {
 	cursor: pointer;
 }
 
-/* With a mouse, a star that is not set shows only for the row under the pointer or with the focus. */
-@media (hover: hover) and (pointer: fine) {
-	.drive-star-off {
-		opacity: 0;
-	}
-
-	.drive-row:hover .drive-star-off,
-	.drive-row:focus-within .drive-star-off,
-	.drive-row.drive-row-selected .drive-star-off {
-		opacity: 1;
-	}
-}
-
 .drive-sort {
 	display: inline-flex;
 	align-items: center;
