@@ -9,7 +9,6 @@
 
 <p align="center">
   <a href="#what-it-does">What it does</a> ·
-  <a href="#soldock-and-google-workspace-side-by-side">Soldock and Google Workspace</a> ·
   <a href="#what-it-costs">What it costs</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="docs/self-hosting.md">Self-hosting guide</a> ·
@@ -110,66 +109,6 @@ The web app adapts to a narrow screen: the sidebar becomes a drawer, and the lis
 width. Soldock has no native app, no offline mode and no push notifications.
 
 ![Soldock on three phones: the inbox, the Design room, and a doc in dark mode](docs/screenshots/phones.png)
-
-## Soldock and Google Workspace, side by side
-
-Google Workspace does much more than Soldock, and it has a price for each person. Soldock does a
-small part of that work today, in your own account. The Google Workspace prices are those listed in
-November 2026 for the January 2025 price change. Read the current prices on
-[workspace.google.com/pricing](https://workspace.google.com/pricing).
-
-### Price and ownership
-
-| | Soldock | Google Workspace |
-|---|---|---|
-| **Price** | Free and open source. You pay Cloudflare $5 a month for the account, plus use above the included amounts | $7 (Business Starter), $14 (Business Standard) or $22 (Business Plus) for each person, each month, with an annual commitment. Enterprise: contact sales |
-| **Number of people** | No limit in the price | Starter, Standard and Plus: 300 people at most |
-| **Storage** | R2 in your account: 10 GB free, then $0.015 for each GB-month | 30 GB, 2 TB or 5 TB for each person, pooled |
-| **Where it runs** | Your Cloudflare account | The cloud of Google |
-| **Source code** | MIT license, on GitHub | Closed |
-| **Who operates it** | You | Google |
-
-### Everyday work
-
-| | Soldock | Google Workspace |
-|---|---|---|
-| **Mail on your domain** | Yes: threads, labels, stars, search, attachments | Yes: Gmail |
-| **Shared mailboxes** | Yes | Yes: groups and delegation |
-| **Mail filters and vacation replies** | Not yet | Yes |
-| **Chat rooms and direct messages** | Yes: public and private rooms, unread state | Yes: Google Chat |
-| **Threads, reactions, files and search in Chat** | Not yet | Yes |
-| **Files and folders** | Yes: versions, stars, search, trash, shares | Yes: Google Drive |
-| **Documents** | Yes: rich text, and Markdown for agents | Yes: Google Docs |
-| **Spreadsheets** | Yes: formulas with a basic set of functions | Yes: Google Sheets |
-| **Edits by many people at the same time** | Not yet. The page gets the changes of other people every 15 seconds | Yes |
-| **Comments and version history in documents** | Not yet | Yes |
-| **Two-step verification** | Yes: an authenticator app | Yes, with more methods |
-| **Light and dark** | Yes | Yes |
-| **AI agents as users** | Yes: each agent has its own address, drive, rooms, policy and sponsor | No agent accounts. Gemini is in Standard and higher plans |
-| **MCP endpoint for each operation** | Yes | No |
-| **REST API** | Yes: the same operations as the web app | Yes: a separate API for each product |
-
-### Where Google Workspace does more
-
-| | Soldock | Google Workspace |
-|---|---|---|
-| **Video meetings** | Planned. Meet does not exist yet | Yes: Google Meet, for 100, 150 or 500 participants, by plan |
-| **Presentations** | Planned. Slides does not exist yet | Yes: Google Slides |
-| **Calendar** | No | Yes: Google Calendar |
-| **Other apps** | No | Yes: Forms, Sites, Keep and others |
-| **Native apps for phones** | No. The web app adapts to a phone | Yes: iPhone and Android apps |
-| **Offline work** | No | Yes |
-| **Push notifications** | No | Yes |
-| **AI in the apps** | No. Bring your own agent | Yes: Gemini, limited in Starter |
-| **Single sign-on and passkeys** | Not yet | Yes |
-| **Backups, retention, legal hold and exports** | Planned. Not built yet | Yes: Google Vault on some plans |
-| **Import from a different mail system** | Not yet | Yes |
-| **Proven scale** | No load measurement yet | Yes |
-| **Support** | GitHub issues | Yes: support from Google |
-
-If your organization needs meetings, a calendar, phone apps or support, Google Workspace is the
-correct selection today. Soldock is for a team that wants its mail, chat and documents in its own
-account, with agents as real users. That team must accept an early product.
 
 ## What it costs
 
