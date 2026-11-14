@@ -9,6 +9,7 @@ import { CreatePrincipalDialog } from "./CreatePrincipalForm.tsx";
 import { EditPrincipalDialog } from "./EditPrincipalDialog.tsx";
 import { policySummary } from "./policy.ts";
 import { ResetSignInDialog } from "./ResetSignInDialog.tsx";
+import { RowButton } from "./RowButton.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -223,22 +224,6 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 				/>
 			)}
 		</div>
-	);
-}
-
-function RowButton({
-	icon,
-	label,
-	onClick,
-}: {
-	icon: "pencil" | "lock" | "archive" | "restore" | "trash";
-	label: string;
-	onClick: () => void;
-}) {
-	return (
-		<button type="button" className="icon-button" aria-label={label} title={label} onClick={onClick}>
-			<Icon name={icon} size={18} />
-		</button>
 	);
 }
 

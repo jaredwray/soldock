@@ -99,33 +99,13 @@ export async function createTeamMailbox(
 	return getTeamMailbox(db, id);
 }
 
-/**
- * Changes the name or the address of a team mailbox. The triggers of migration 0005 check inserts only,
- * so this statement repeats their address checks in its transaction. Returns false, and changes
- * nothing, when the mailbox is gone, a principal has the address, or its mail domain is not saved.
- */
-export async function updateTeamMailbox(
-	db: D1Database,
-	id: string,
-	changes: { display_name?: string | undefined; address?: string | undefined },
-): Promise<boolean> {
-	const address = changes.address === undefined ? null : normalizeAddress(changes.address);
-	try {
-		const result = await db
-			.prepare(
-				`UPDATE team_mailboxes SET display_name = COALESCE(?1, display_name), address = COALESCE(?2, address)
-				WHERE id = ?3 AND (?2 IS NULL OR (
-					NOT EXISTS (SELECT 1 FROM addresses WHERE address = ?2)
-					AND EXISTS (SELECT 1 FROM mail_domains WHERE domain = substr(?2, instr(?2, '@') + 1))
-				))`,
-			)
-			.bind(changes.display_name ?? null, address, id)
-			.run();
-		return result.meta.changes === 1;
-	} catch (error) {
-		// A different team mailbox has the address: the UNIQUE constraint of the column.
-		throw conflictOf(error) ?? error;
-	}
+/** Changes the name of a team mailbox. Returns false when the mailbox is gone, for example after a reset. */
+export async function renameTeamMailbox(db: D1Database, id: string, displayName: string): Promise<boolean> {
+	const result = await db
+		.prepare("UPDATE team_mailboxes SET display_name = ? WHERE id = ?")
+		.bind(displayName, id)
+		.run();
+	return result.meta.changes === 1;
 }
 
 /**

@@ -65,24 +65,17 @@ export const createTeamMailbox = defineOperation({
 
 export const updateTeamMailbox = defineOperation({
 	name: "directory.update_team_mailbox",
-	summary: "Change the name or the address of a team mailbox",
+	summary: "Change the name of a team mailbox",
 	description: [
 		ADMIN_ONLY,
-		"Send only the fields to change. The new address must use a saved mail domain, and no principal or other team mailbox can have it.",
-		"The mail, the labels and the members stay. After an address change, mail to the old address is refused, and mail in the outbox from the old address is not sent.",
+		"Mail that the members send from the mailbox has the new name in From. The address, the mail, the labels and the members do not change.",
+		"The address of a team mailbox cannot change.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/team-mailboxes/{mailbox_id}" },
 	scopes: ["directory.write"],
 	callers: ["human"],
-	// An address change stops mail to the old address and fails the queued sends from it.
-	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
-	input: z
-		.strictObject({
-			mailbox_id: TeamMailboxId,
-			display_name: DisplayName.optional(),
-			address: EmailAddress.optional(),
-		})
-		.refine((input) => input.display_name !== undefined || input.address !== undefined, "send display_name or address"),
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ mailbox_id: TeamMailboxId, display_name: DisplayName }),
 	output: z.object({ team_mailbox: TeamMailbox }),
 	errors: ["not_found", "conflict"],
 });

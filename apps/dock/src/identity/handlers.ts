@@ -40,9 +40,8 @@ import {
 	getTeamMailbox,
 	listTeamMailboxes,
 	removeTeamMailboxMember,
-	resolveMailboxAddress,
+	renameTeamMailbox,
 	type TeamMailboxRecord,
-	updateTeamMailbox,
 } from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
@@ -366,20 +365,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	},
 
 	async "directory.update_team_mailbox"(call, input) {
-		const mailbox = await teamMailboxToManage(call, input.mailbox_id, "change");
-		if (input.address !== undefined) {
-			const domains = await mailDomains(call.env.DIRECTORY);
-			if (!domains.has(domainOf(input.address))) {
-				throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
-			}
-			assertPrimaryAddress(input.address);
-			const holder = await resolveMailboxAddress(call.env.DIRECTORY, input.address);
-			if (holder && holder.id !== mailbox.id) {
-				throw new OperationError("conflict", "That address belongs to another principal or team mailbox.");
-			}
-		}
-		const changes = { display_name: input.display_name, address: input.address };
-		if (!(await updateTeamMailbox(call.env.DIRECTORY, mailbox.id, changes))) {
+		const mailbox = await teamMailboxToManage(call, input.mailbox_id, "rename");
+		if (!(await renameTeamMailbox(call.env.DIRECTORY, mailbox.id, input.display_name))) {
 			throw new OperationError("conflict", DIRECTORY_CHANGED);
 		}
 		auditOk(call, "directory.update_team_mailbox", mailbox.id);
@@ -491,14 +478,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 };
 
 /**
- * The team mailbox that the call changes: its name, its address or its members. Only owners and admins
+ * The team mailbox that the call changes: its name or its members. Only owners and admins
  * change them. A member, also an agent, can never add itself or others: an agent holds no
  * `directory.write` scope, and these operations accept humans only.
  */
 async function teamMailboxToManage(
 	call: CallContext,
 	mailboxId: string,
-	action: "change" | "change the members of",
+	action: "rename" | "change the members of",
 ): Promise<TeamMailboxRecord> {
 	if (!isAdmin(call.caller)) {
 		throw new OperationError("forbidden", `Only owners and admins can ${action} a team mailbox.`);

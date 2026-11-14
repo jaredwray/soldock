@@ -30,7 +30,7 @@ The first flows to cover, because they are tested by hand only:
   as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
   under 768px (open, Escape, a link). In Members: the New person or agent dialog, Edit (a name, a
   role, a sponsor), Archive and Restore, Delete, and the sponsor notice. In Shared mailboxes: the New
-  shared mailbox dialog, Edit (a name, an address and its warning), and the Members dialog.
+  shared mailbox dialog, Edit (a name), and the Members dialog.
 
 - OAuth for agents: the MCP endpoint banner and its copy button, a client that registers and opens
   `/oauth/authorize`, sign-in on the `/connect` page, a new agent with an address and scopes, an

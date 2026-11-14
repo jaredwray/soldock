@@ -88,8 +88,8 @@ not a principal: it has no credential, no scopes and no role, and nobody signs i
 resource with a list of members. Each member, a person or an agent, uses it with their own
 credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
 
-- Only owners and admins create a team mailbox, change its name or its address, and change its
-  members (`directory.create_team_mailbox`, `directory.update_team_mailbox`,
+- Only owners and admins create a team mailbox, rename it, and change its members
+  (`directory.create_team_mailbox`, `directory.update_team_mailbox`,
   `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`). These operations
   need `directory.write` and accept humans only. So an agent can never add itself, and a member
   cannot add others.
@@ -101,20 +101,17 @@ credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
   `addresses` and `team_mailboxes` at the same time, in the transaction of the write. A team
   address is lowercase, uses a saved mail domain, and cannot contain `+`. A domain with a team
   mailbox address cannot be removed.
-- A change of address keeps the same rules. The triggers of `0005` check inserts only, so the
-  `UPDATE` repeats their checks in its `WHERE`: no row of `addresses` has the new address, and its
-  domain is saved. The `UNIQUE` column stops a second team mailbox. The handler checks the address
-  first for a clear error. If a parallel write takes the address or removes the domain, the update
-  changes nothing and the caller gets `conflict`.
-- After a change of address, the old address is free. Mail to it is refused, as for an unknown
-  address. The outbox sends nothing more from it (see the [`mail`](../mail/README.md#team-mailboxes)
-  module). The id stays, so the mail, the labels and the members stay.
+- A rename changes only `display_name`. The mail handlers read the name from D1 on each call, so
+  the members see the new name at once, and the next send has it in `From`.
+- The address of a team mailbox cannot change. Stored mail names the old address in `To` and `Cc`,
+  so Reply all would send to an address that the mailbox no longer owns, and a new holder of the
+  old address would get those replies. A change of address needs aliases first.
 - A team mailbox can have 100 members (`TEAM_MAILBOX_LIMITS.members`). A second add of the same
   member, and a remove of a principal that is not a member, change nothing.
 - `resolveMailboxAddress` gives the mailbox of an address (the own mailbox of a principal, or a
   team mailbox) for inbound and local delivery. `teamMailboxFor` is the membership check of each
   mail operation. It reads D1 on each call, so removed access ends at once.
-- No operation removes a team mailbox yet.
+- No operation changes the address of a team mailbox or removes it yet.
 
 ## Mail domain settings
 
@@ -358,7 +355,7 @@ Each call passes three checks:
    - Only owners and admins create, change, archive, restore and delete principals. Only the owner
      changes the owner, and nobody archives or deletes the owner or themselves.
    - An archived principal is not authenticated, with any credential.
-   - Only owners and admins create and change team mailboxes and change their members. A principal uses a team
+   - Only owners and admins create and rename team mailboxes and change their members. A principal uses a team
      mailbox only as a member. The mail handlers check the membership on each call.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy. An agent never
      can: it has no `directory.write` scope, and the operation accepts humans only.

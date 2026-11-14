@@ -6,6 +6,7 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { EditSharedMailboxDialog } from "./EditSharedMailboxDialog.tsx";
+import { RowButton } from "./RowButton.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -164,14 +165,6 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 				<MembersDialog mailbox={open} principals={principals} onChanged={save} onClose={() => setAction(null)} />
 			)}
 		</div>
-	);
-}
-
-function RowButton({ icon, label, onClick }: { icon: "pencil" | "team"; label: string; onClick: () => void }) {
-	return (
-		<button type="button" className="icon-button" aria-label={label} title={label} onClick={onClick}>
-			<Icon name={icon} size={18} />
-		</button>
 	);
 }
 

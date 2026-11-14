@@ -190,11 +190,11 @@ MCP clients. The app has no UI-only path.
     the members.
     - **New shared mailbox**, above the table, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
-    - **Edit** (a pencil icon) in a row opens a dialog that changes the name and the address
-      (`directory.update_team_mailbox`). A new address shows a warning: mail to the old address is
-      refused, and mail in the outbox from it is not sent.
-    - **Members** (a people icon) in a row opens a dialog with the members, a control to add a member and a button to
-      remove each member, with a confirmation (`directory.add_team_mailbox_member`,
+    - **Edit** (a pencil icon) in a row opens a dialog that changes the name
+      (`directory.update_team_mailbox`). The address cannot change, so the dialog shows it under
+      the title.
+    - **Members** (a people icon) in a row opens a dialog with the members, a control to add a member
+      and a button to remove each member, with a confirmation (`directory.add_team_mailbox_member`,
       `directory.remove_team_mailbox_member`).
     - The lists of new members do not offer an archived account.
   - **Email domains** (`domains`) lists the saved domains and provides Add and Remove controls.
