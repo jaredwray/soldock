@@ -54,7 +54,7 @@ function ownMailbox(call: CallContext): MailboxRecord {
  * is a member of. This is the resource check of each mail operation. The scopes of the credential
  * decide what the caller can do, and this decides in which mailbox.
  */
-export async function openMailbox(call: CallContext, mailboxId: string | undefined) {
+async function openMailbox(call: CallContext, mailboxId: string | undefined) {
 	let record: MailboxRecord;
 	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
 	else if (isTeamMailboxId(mailboxId)) record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id);

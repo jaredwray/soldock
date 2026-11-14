@@ -94,6 +94,8 @@ gives the same data as REST.
 - `resources/read` runs the read operation with the scope checks and the validation of REST. The
   content is the JSON of the operation result (`application/json`). When the JSON holds untrusted
   content, a `text/plain` notice comes first, with the same URI.
+- Only the canonical form of a URI names a resource: the form that `resources/list` gives. An alias
+  with other percent-encoding names no resource.
 - A URI that names no resource, or a read that the operation refuses, gets error `-32602`. A legacy
   request gets `-32002`. `data` has the URI and, for a refused read, the error code of the operation.
 
@@ -118,21 +120,33 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   - The caller loses access to a watched resource. The new acknowledgment leaves it out.
   - A change feed stops, for example when its object restarts.
   - The stream is one hour old. This limits the subrequests of one request.
+
+  The specification says that a server SHOULD send the result when it ends a subscription. This
+  server sends no result in these conditions, on purpose: a client reconnects after an abrupt end, and
+  it can stop after a graceful end.
+- The log line `mcp subscriptions/listen ended` gives the reason of each end.
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
-  each resource again first. So a lost access stops the notifications within about one minute.
+  each resource kind again first, with all of its resources in one call. So a lost access stops the
+  notifications within about one minute. The scopes of a credential do not change, so the check does
+  not read them again.
+- Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, and one watch
+  socket for each mailbox (at most 100). Each later access check makes at most four D1 calls: the
+  credential, the principal, the last-use time of the credential, and one query for all team
+  mailboxes. With one check each minute, one stream makes at most about 350 subrequests in its hour.
 - When the client closes the connection, the stream ends at once and closes its change feeds. The
   `enable_request_signal` compatibility flag makes `request.signal` abort on the disconnect.
 - One request can name at most 100 URIs. A filter that is not valid gets error `-32602`.
 
 A domain module gives the change feed of each resource kind (`ResourceWatcher` in
-[`platform`](../platform/README.md)). The feed checks the access of the caller with the rules of its
-domain. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
+[`platform`](../platform/README.md)). Its `allowed` checks the access of the caller to a list of
+resources with the rules of its domain, and its `open` opens the feed of one allowed resource. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
 `mail.inbox`.
 
 Known limits:
 
 - A principal can open any number of streams. Each stream holds one Worker request and one watch
-  socket for each watched mailbox.
+  socket for each watched mailbox. A Durable Object accepts at most 32,768 WebSockets, so many streams
+  on one team mailbox can fill it. A limit for each principal needs shared state, and is not built yet.
 - Mail that arrives before the acknowledgment can send no notification. Read the inbox after the
   acknowledgment.

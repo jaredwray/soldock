@@ -97,7 +97,16 @@ connection with `mail.read`.
 
 1. Call `resources/list`. Keep the URI of each inbox that you want to watch: your own inbox, and the
    inbox of each team mailbox that you are a member of.
-2. Send `subscriptions/listen` with the URIs:
+2. Send `subscriptions/listen` with the URIs. An MCP client sets the headers. A client that you
+   write yourself must send them, or the request gets `400`:
+
+   ```text
+   Authorization: Bearer <token>
+   Content-Type: application/json
+   Accept: application/json, text/event-stream
+   MCP-Protocol-Version: 2026-07-28
+   Mcp-Method: subscriptions/listen
+   ```
 
    ```json
    {

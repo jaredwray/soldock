@@ -3,7 +3,7 @@ import type { ResourceName } from "@soldock/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { log, type ResourceWatcher, type Watch, type WatcherMap } from "../platform/index.ts";
 import { isObject, type JsonRpcId, META, RPC_ERRORS, rpcError, SERVER_INFO } from "./protocol.ts";
-import { canRead, type ResolvedResource, resolveUri } from "./resources.ts";
+import { type ResolvedResource, resolveUri } from "./resources.ts";
 
 /** An SSE comment goes out at this interval, so idle timeouts of proxies and clients do not close the stream. */
 export const KEEPALIVE_MS = 30_000;
@@ -88,9 +88,11 @@ export async function listen(input: ListenInput): Promise<Response> {
 	};
 	const send = (message: Record<string, unknown>) =>
 		write(`data: ${JSON.stringify({ jsonrpc: "2.0", ...message })}\n\n`);
-	const stop = () => {
+	/** Ends the stream without a result, and says why in the log. */
+	const stop = (reason: string) => {
 		if (!open) return;
 		open = false;
+		log("info", "mcp subscriptions/listen ended", { principalId: call.caller.id, reason, requestId: call.requestId });
 		clearInterval(timer);
 		for (const feed of feeds.values()) feed.watch.close();
 		try {
@@ -104,11 +106,12 @@ export async function listen(input: ListenInput): Promise<Response> {
 		start(c) {
 			controller = c;
 		},
-		cancel: stop,
+		cancel: () => stop("the client closed the stream"),
 	});
 	// The client closed the connection: that cancels the subscription (flag enable_request_signal).
-	if (input.signal.aborted) stop();
-	input.signal.addEventListener("abort", stop);
+	const disconnected = () => stop("the client disconnected");
+	if (input.signal.aborted) disconnected();
+	input.signal.addEventListener("abort", disconnected);
 
 	const openedAt = Date.now();
 	let checkedAt = openedAt;
@@ -116,12 +119,16 @@ export async function listen(input: ListenInput): Promise<Response> {
 	const recheck = async () => {
 		try {
 			const caller = await input.reauthenticate();
-			if (caller?.id !== call.caller.id) return stop();
+			if (caller?.id !== call.caller.id) return stop("the credential stopped working");
+			// The scopes of a credential do not change, so the check asks only if each resource is still usable.
 			const fresh: CallContext = { ...call, caller };
+			const byWatcher = new Map<ResourceWatcher<CallContext>, Readonly<Record<string, string>>[]>();
 			for (const feed of feeds.values()) {
-				if (!canRead(caller, feed.resolved.resource) || !(await feed.watcher.allowed(fresh, feed.resolved.vars))) {
-					return stop();
-				}
+				byWatcher.set(feed.watcher, [...(byWatcher.get(feed.watcher) ?? []), feed.resolved.vars]);
+			}
+			for (const [watcher, resources] of byWatcher) {
+				const answers = await watcher.allowed(fresh, resources);
+				if (!answers.every(Boolean)) return stop("the caller lost access to a resource");
 			}
 			checkedAt = Date.now();
 		} catch (error) {
@@ -130,12 +137,12 @@ export async function listen(input: ListenInput): Promise<Response> {
 				requestId: call.requestId,
 				err: error instanceof Error ? error.message : String(error),
 			});
-			stop();
+			stop("the access check failed");
 		}
 	};
 	/** True while the stream can send: it is open, young enough, and its last access check is recent. */
 	const current = async (): Promise<boolean> => {
-		if (open && Date.now() - openedAt >= MAX_STREAM_MS) stop();
+		if (open && Date.now() - openedAt >= MAX_STREAM_MS) stop("the stream reached its longest life");
 		if (open && Date.now() - checkedAt >= RECHECK_MS) {
 			checking ??= recheck().finally(() => {
 				checking = null;
@@ -168,25 +175,42 @@ export async function listen(input: ListenInput): Promise<Response> {
 					requestId: call.requestId,
 					err: error instanceof Error ? error.message : String(error),
 				});
-				stop();
+				stop("a notification could not be sent");
 			});
 	};
 
 	try {
+		// One access check for each resource kind, with all of its URIs, then one feed for each allowed URI.
+		const byWatcher = new Map<ResourceWatcher<CallContext>, { uri: string; resolved: ResolvedResource }[]>();
+		for (const uri of uris ?? []) {
+			const resolved = resolveUri(call.caller, uri);
+			if (!resolved) continue;
+			const watcher = input.watchers[resolved.resource.name as ResourceName];
+			byWatcher.set(watcher, [...(byWatcher.get(watcher) ?? []), { uri, resolved }]);
+		}
+		const allowed: { uri: string; resolved: ResolvedResource; watcher: ResourceWatcher<CallContext> }[] = [];
+		for (const [watcher, entries] of byWatcher) {
+			const answers = await watcher.allowed(
+				call,
+				entries.map((entry) => entry.resolved.vars),
+			);
+			entries.forEach((entry, index) => {
+				if (answers[index] === true) allowed.push({ ...entry, watcher });
+			});
+		}
 		await Promise.all(
-			(uris ?? []).map(async (uri) => {
-				const resolved = resolveUri(call.caller, uri);
-				if (!resolved) return;
-				const watcher = input.watchers[resolved.resource.name as ResourceName];
-				const watch = await watcher.open(call, resolved.vars, { change: () => changed(uri), end: stop });
-				if (!watch) return;
+			allowed.map(async ({ uri, resolved, watcher }) => {
+				const watch = await watcher.open(call, resolved.vars, {
+					change: () => changed(uri),
+					end: () => stop("a change feed stopped"),
+				});
 				feeds.set(uri, { resolved, watcher, watch });
 				// The client left while the feed opened.
 				if (!open) watch.close();
 			}),
 		);
 	} catch (error) {
-		stop();
+		stop("a change feed could not be opened");
 		log("error", "subscriptions/listen could not open a change feed", {
 			requestId: call.requestId,
 			err: error instanceof Error ? (error.stack ?? error.message) : String(error),
@@ -216,10 +240,12 @@ export async function listen(input: ListenInput): Promise<Response> {
 			id,
 			result: { resultType: "complete", _meta: { [META.subscriptionId]: id, [META.serverInfo]: SERVER_INFO } },
 		});
-		stop();
+		stop("nothing to watch");
 		return new Response(stream, { headers: SSE_HEADERS });
 	}
 
+	// The stream can end while its feeds open. Then no timer starts.
+	if (!open) return new Response(stream, { headers: SSE_HEADERS });
 	timer = setInterval(() => {
 		write(": keep-alive\n\n");
 		void current();

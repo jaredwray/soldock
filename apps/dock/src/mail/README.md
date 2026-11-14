@@ -185,7 +185,8 @@ The inbox of each mailbox is the MCP resource `mail.inbox`, with the URI
 client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 ([`mcp`](../mcp/README.md#subscriptions)).
 
-1. The Worker checks the mailbox of the caller with `openMailbox`, as each mail operation does.
+1. The Worker checks the mailboxes with the rule of each mail operation: the own mailbox, or a team
+   mailbox that the caller is a member of. One query reads all team mailboxes of the caller.
 2. The Worker opens a watch socket to the `MailboxDO`: a WebSocket that the object accepts with
    `acceptWebSocket` and the tag `watch`. The object can sleep while its sockets wait.
 3. `deliver()` sends the message `inbox` to each watch socket after it stores a message that is not

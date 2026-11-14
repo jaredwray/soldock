@@ -32,8 +32,10 @@ function describe(resource: ResourceDefinition): string {
 
 /**
  * The resource of a URI, or null. The URI must match a template of a resource kind that the
- * credential can read, and the read input from its variables must be valid. This does not check
- * that the resource exists or that the caller can use it: the read operation and the watcher do.
+ * credential can read, and the read input from its variables must be valid. Only the canonical form
+ * of a URI counts: an alias with other percent-encoding names no resource, so one request cannot
+ * watch one mailbox many times. This does not check that the resource exists or that the caller can
+ * use it: the read operation and the watcher do.
  */
 export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource | null {
 	if (typeof uri !== "string" || uri.length > MAX_URI_CHARS) return null;
@@ -41,6 +43,7 @@ export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource 
 		if (!canRead(caller, resource)) continue;
 		const vars = matchTemplate(resource.uriTemplate, uri);
 		if (!vars) continue;
+		if (expandTemplate(resource.uriTemplate, vars) !== uri) return null;
 		const input = operations[resource.read.operation].input.safeParse(resource.read.input(vars));
 		return input.success ? { uri, resource, vars } : null;
 	}

@@ -19,13 +19,14 @@ export interface Watch {
  */
 export interface ResourceWatcher<C> {
 	/**
-	 * Opens a change feed for the resource with these URI variables. Returns null when the caller
-	 * cannot use the resource. The answer is the same for a resource that does not exist, so it
-	 * tells nothing about other mailboxes or items.
+	 * For each resource (its URI variables), true when the caller can use it now. A resource that does
+	 * not exist gets false too, so the answer tells nothing about other mailboxes or items. A stream asks
+	 * with all of its resources of this kind in one call, so the check can use one query. It asks
+	 * before it opens the feeds, and again from time to time.
 	 */
-	open(call: C, vars: Readonly<Record<string, string>>, listener: WatchListener): Promise<Watch | null>;
-	/** True while the caller can still use the resource. A long-lived stream asks again from time to time. */
-	allowed(call: C, vars: Readonly<Record<string, string>>): Promise<boolean>;
+	allowed(call: C, resources: readonly Readonly<Record<string, string>>[]): Promise<boolean[]>;
+	/** Opens a change feed for one resource. Call it only for a resource that `allowed` accepted. */
+	open(call: C, vars: Readonly<Record<string, string>>, listener: WatchListener): Promise<Watch>;
 }
 
 /** One change feed for each resource kind of the registry. */

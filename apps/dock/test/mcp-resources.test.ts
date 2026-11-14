@@ -129,12 +129,12 @@ describe("MCP resources", () => {
 describe("MCP subscriptions/listen", () => {
 	it("notifies a subscriber of new mail in its own inbox and its team inboxes, and of nothing else", async () => {
 		const { ada, bot, support, finance } = await seedTeams();
+		// An alias with other percent-encoding names no resource, so one request cannot watch a mailbox many times.
+		const alias = inbox(support.id).replace("tmb_", "%74mb_");
 		const stream = await listen(
 			bot.key,
-			[inbox(bot.id), inbox(support.id), inbox(finance.id), "soldock://x", inbox(bot.id)],
-			{
-				toolsListChanged: true,
-			},
+			[inbox(bot.id), inbox(support.id), inbox(finance.id), "soldock://x", inbox(bot.id), alias],
+			{ toolsListChanged: true },
 		);
 		// The acknowledgment comes first. It keeps only what the caller can watch, and gives no reason for the rest.
 		expect(await stream.next()).toEqual({
@@ -144,6 +144,11 @@ describe("MCP subscriptions/listen", () => {
 				_meta: { "io.modelcontextprotocol/subscriptionId": "sub-1" },
 				notifications: { resourceSubscriptions: [inbox(bot.id), inbox(support.id)] },
 			},
+		});
+		// A person who is a member watches the same team inbox with a human key.
+		const human = await listen(ada.key, [inbox(support.id)], {}, "ada-1");
+		expect(await human.next()).toMatchObject({
+			params: { notifications: { resourceSubscriptions: [inbox(support.id)] } },
 		});
 
 		// Spam, mail to somebody else and mail to a team that Bot is not in send nothing.
@@ -168,6 +173,8 @@ describe("MCP subscriptions/listen", () => {
 			"support@dock.test",
 		);
 		expect(await stream.next()).toEqual(updated(inbox(support.id)));
+		expect(await human.next()).toEqual(updated(inbox(support.id), "ada-1"));
+		await human.cancel();
 
 		// Mail that a mailbox sends to itself is new mail in its inbox too.
 		const sent = await callTool(bot.key, "mail_send", { to: ["bot@dock.test"], subject: "Note to self", text: "Hi." });

@@ -1,33 +1,26 @@
-import type { CallContext } from "../identity/index.ts";
-import { OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
+import { type CallContext, isTeamMailboxId, teamMailboxesOf } from "../identity/index.ts";
+import type { ResourceWatcher, WatcherMap } from "../platform/index.ts";
 import { mailboxStub } from "./delivery.ts";
-import { openMailbox } from "./handlers.ts";
 import { INBOX_SIGNAL } from "./mailbox.ts";
 
-/** True when the caller can use the mailbox: the same check as each mail operation. */
-async function canUse(call: CallContext, mailboxId: string | undefined): Promise<boolean> {
-	if (mailboxId === undefined) return false;
-	try {
-		await openMailbox(call, mailboxId);
-		return true;
-	} catch (error) {
-		if (error instanceof OperationError) return false;
-		throw error;
-	}
-}
-
 /**
- * The change feed of the `mail.inbox` resource. It opens a watch socket to the `MailboxDO`, after
- * the same access check as each mail operation. The mailbox sends a signal for each new message in
- * its inbox, and it can sleep while the socket waits.
+ * The change feed of the `mail.inbox` resource. The access rule is the rule of each mail operation:
+ * the own mailbox of the caller, or a team mailbox that the caller is a member of. One query reads
+ * all team mailboxes of the caller. The feed is a watch socket to the `MailboxDO`, which sends a
+ * signal for each new message in its inbox and can sleep while the socket waits.
  */
 const inboxWatcher: ResourceWatcher<CallContext> = {
-	allowed: (call, vars) => canUse(call, vars.mailbox_id),
+	async allowed(call, resources) {
+		const ids = resources.map((vars) => vars.mailbox_id);
+		const own = (id: string | undefined) => id === call.caller.id;
+		const teams = ids.some((id) => id !== undefined && !own(id) && isTeamMailboxId(id))
+			? new Set((await teamMailboxesOf(call.env.DIRECTORY, call.caller.id)).map((mailbox) => mailbox.id))
+			: new Set<string>();
+		return ids.map((id) => id !== undefined && (own(id) || teams.has(id)));
+	},
 
 	async open(call, vars, listener) {
-		const mailboxId = vars.mailbox_id;
-		if (mailboxId === undefined || !(await canUse(call, mailboxId))) return null;
-		const response = await mailboxStub(call.env, mailboxId).fetch("https://mailbox.internal/watch", {
+		const response = await mailboxStub(call.env, vars.mailbox_id as string).fetch("https://mailbox.internal/watch", {
 			headers: { upgrade: "websocket" },
 		});
 		const socket = response.webSocket;

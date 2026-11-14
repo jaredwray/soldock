@@ -420,8 +420,8 @@ export async function modern(key: string, method: string, params?: Record<string
 const SSE_READ_MS = 5000;
 
 export interface SseReader {
-	/** The next JSON-RPC message, `"comment"` for a keep-alive when `comments` is true, or `"closed"` at the end. */
-	next(options?: { comments?: boolean }): Promise<Record<string, unknown> | "comment" | "closed">;
+	/** The next JSON-RPC message, or `"closed"` at the end. Keep-alive comments are skipped. */
+	next(): Promise<Record<string, unknown> | "closed">;
 	/** Closes the stream from the client side. */
 	cancel(): Promise<void>;
 }
@@ -453,14 +453,11 @@ export function readSse(response: Response): SseReader {
 		return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
 	};
 	return {
-		async next({ comments = false } = {}) {
+		async next() {
 			for (;;) {
 				const text = await timed(block());
 				if (text === null) return "closed";
-				if (text.startsWith(":")) {
-					if (comments) return "comment";
-					continue;
-				}
+				if (text.startsWith(":")) continue;
 				const data = text
 					.split("\n")
 					.filter((line) => line.startsWith("data:"))
