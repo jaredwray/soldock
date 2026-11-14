@@ -56,60 +56,70 @@ export function MailDomainsCard() {
 	}
 
 	return (
-		<div className="card">
-			<p className="muted">
-				Manage the domains for your email addresses. Changes take effect without a new deployment.
-			</p>
-			<p className="field-hint">
-				For each domain, configure Cloudflare Email Routing to this Worker. Verify the domain in Cloudflare Email
-				Service. Publish the DNS records that Cloudflare provides. A saved domain does not confirm that mail delivery is
-				ready.
-			</p>
-			{domains === null && !error && <p className="muted">Loading email domains…</p>}
+		<section className="panel">
+			<div className="panel-heading">
+				<p className="panel-intro">
+					Manage the domains for your email addresses. Changes take effect without a new deployment.
+				</p>
+				<p className="panel-note">
+					For each domain, configure Cloudflare Email Routing to this Worker. Verify the domain in Cloudflare Email
+					Service. Publish the DNS records that Cloudflare provides. A saved domain does not confirm that mail delivery
+					is ready.
+				</p>
+			</div>
+			{domains === null && !error && <p className="panel-card panel-empty">Loading email domains…</p>}
 			{error && (
 				<p className="form-error" role="alert">
 					{error}
 				</p>
 			)}
 			{domains === null && error && (
-				<button type="button" className="button" onClick={() => void load()}>
-					Try again
-				</button>
+				<div>
+					<button type="button" className="button" onClick={() => void load()}>
+						Try again
+					</button>
+				</div>
 			)}
 			{domains !== null && (
 				<>
-					<div className="table-scroll">
-						<table className="table">
-							<caption className="visually-hidden">Saved email domains</caption>
-							<thead>
-								<tr>
-									<th scope="col">Domain</th>
-									<th scope="col">Action</th>
-								</tr>
-							</thead>
-							<tbody>
-								{domains.map((value) => (
-									<tr key={value}>
-										<td className="cell-address">{value}</td>
-										<td>
-											<button
-												type="button"
-												className="button"
-												aria-label={`Remove ${value}`}
-												onClick={() => setRemove(value)}
-												disabled={busy}
-											>
-												Remove
-											</button>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
+					<div className="panel-card panel-card-list">
+						{domains.length === 0 && <p className="panel-empty">There are no email domains yet.</p>}
+						{domains.length > 0 && (
+							<div className="table-scroll">
+								<table className="table table-rows">
+									<caption className="visually-hidden">Saved email domains</caption>
+									<thead>
+										<tr>
+											<th scope="col">Domain</th>
+											<th scope="col" className="cell-actions">
+												Action
+											</th>
+										</tr>
+									</thead>
+									<tbody>
+										{domains.map((value) => (
+											<tr key={value}>
+												<td className="cell-address row-title">{value}</td>
+												<td className="cell-actions">
+													<button
+														type="button"
+														className="button button-small"
+														aria-label={`Remove ${value}`}
+														onClick={() => setRemove(value)}
+														disabled={busy}
+													>
+														Remove
+													</button>
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						)}
 					</div>
-					{domains.length === 0 && <p className="muted">There are no email domains yet.</p>}
-					<p className="field-hint">You cannot remove a domain with mailbox addresses.</p>
-					<form className="create-key" onSubmit={add} noValidate>
+					<p className="panel-note">You cannot remove a domain with mailbox addresses.</p>
+					<form className="panel-card panel-form" onSubmit={add} noValidate>
 						<div className="field">
 							<label htmlFor={inputId} className="field-label">
 								New email domain
@@ -148,6 +158,6 @@ export function MailDomainsCard() {
 					<p>Remove {remove} from Soldock? Cloudflare and DNS records stay in place.</p>
 				</ConfirmDialog>
 			)}
-		</div>
+		</section>
 	);
 }

@@ -34,7 +34,7 @@ export function ThreadList(props: ThreadListProps) {
 
 	if (list.status === "loading") {
 		return (
-			<div className="list-state" aria-live="polite">
+			<div className="list-state mail-state" aria-live="polite">
 				<span className="spinner" aria-hidden="true" />
 				Loading conversations…
 			</div>
@@ -42,8 +42,12 @@ export function ThreadList(props: ThreadListProps) {
 	}
 	if (list.status === "error") {
 		return (
-			<div className="list-state" role="alert">
-				<p>The conversations did not load. {list.error}</p>
+			<div className="list-state mail-state" role="alert">
+				<span className="mail-state-icon">
+					<Icon name="warning" size={22} />
+				</span>
+				<p className="mail-state-title">The conversations did not load.</p>
+				<p className="mail-state-text">{list.error}</p>
 				<button type="button" className="button" onClick={props.onRetry}>
 					Try again
 				</button>
@@ -52,9 +56,11 @@ export function ThreadList(props: ThreadListProps) {
 	}
 	if (list.threads.length === 0) {
 		return (
-			<div className="list-state list-empty">
-				<Icon name={view.kind === "search" ? "search" : "inbox"} size={40} />
-				<p>{emptyText(view, props.title, owner)}</p>
+			<div className="list-state mail-state">
+				<span className="mail-state-icon">
+					<Icon name={view.kind === "search" ? "search" : "inbox"} size={22} />
+				</span>
+				<p className="mail-state-text">{emptyText(view, props.title, owner)}</p>
 			</div>
 		);
 	}
@@ -158,13 +164,16 @@ function ThreadRow({
 				</span>
 			) : (
 				<>
-					<input
-						type="checkbox"
-						className="checkbox thread-check"
-						checked={selected}
-						onChange={() => onToggleSelect(thread.id)}
-						aria-label={`Select: ${subject}`}
-					/>
+					{/* The label is the touch target of the box: 44px on a touch screen. */}
+					<label className="thread-check">
+						<input
+							type="checkbox"
+							className="checkbox"
+							checked={selected}
+							onChange={() => onToggleSelect(thread.id)}
+							aria-label={`Select: ${subject}`}
+						/>
+					</label>
 					<button
 						type="button"
 						className={
@@ -186,14 +195,7 @@ function ThreadRow({
 					{thread.message_count > 1 && <span className="thread-count">{thread.message_count}</span>}
 				</span>
 				<span className="thread-main">
-					<span className="thread-subject-line">
-						{userLabels.slice(0, 3).map((label) => (
-							<span key={label.id} className="chip chip-small">
-								{label.name}
-							</span>
-						))}
-						<span className="thread-subject">{subject}</span>
-					</span>
+					<span className="thread-subject">{subject}</span>
 					{thread.snippet && (
 						<>
 							<span className="thread-dash"> – </span>
@@ -202,13 +204,37 @@ function ThreadRow({
 					)}
 				</span>
 				<span className="thread-meta">
+					{userLabels.length > 0 && (
+						<span className="thread-labels">
+							<span className="visually-hidden">Labels: </span>
+							{userLabels.slice(0, 2).map((label) => (
+								<span key={label.id} className="thread-label" title={label.name}>
+									{label.name}
+								</span>
+							))}
+							{userLabels.length > 2 && (
+								<span
+									className="thread-label"
+									title={userLabels
+										.slice(2)
+										.map((label) => label.name)
+										.join(", ")}
+								>
+									<span className="visually-hidden">and </span>+{userLabels.length - 2}
+									<span className="visually-hidden"> more</span>
+								</span>
+							)}
+						</span>
+					)}
 					{thread.has_attachments && (
 						<span className="thread-attachment" title="Has attachments">
 							<Icon name="paperclip" size={16} />
 							<span className="visually-hidden">Has attachments, </span>
 						</span>
 					)}
-					<time dateTime={thread.last_message_at}>{shortDate(thread.last_message_at)}</time>
+					<time className="thread-date" dateTime={thread.last_message_at}>
+						{shortDate(thread.last_message_at)}
+					</time>
 				</span>
 			</Link>
 		</li>

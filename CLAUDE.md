@@ -54,6 +54,7 @@ pnpm test               # Vitest (all projects)
 | `packages/contracts/` | The operation registry: schemas, scopes, errors, events |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
 | `tools/licenses/`, `tools/budgets/` | License policy check, Worker bundle and startup budgets |
+| `tools/seed/` | `pnpm seed`: sample data for a local Soldock (a made-up organization) |
 | `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
 | `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
 | `spikes/` | Spike harnesses that need live Cloudflare credentials, deleted when the spike is done |

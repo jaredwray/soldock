@@ -13,10 +13,7 @@
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	margin: 0 16px 16px 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	overflow: hidden;
+	background: var(--background);
 }
 
 .drive-main:focus {
@@ -24,13 +21,14 @@
 }
 
 .drive-main-drop {
-	outline: 2px dashed var(--accent);
+	outline: 2px dashed var(--foreground);
 	outline-offset: -4px;
 }
 
 .drive-scroll {
 	flex: 1;
 	min-height: 0;
+	padding: 0 14px;
 	overflow: auto;
 }
 
@@ -39,37 +37,43 @@
 	flex-direction: column;
 	gap: 2px;
 	margin-top: auto;
-	padding: 24px 24px 0;
+	padding: 12px 9px 0;
 	font-size: 13px;
 }
 
-/* Header: the title of a view, or the path of a folder */
+/* Header: the icon of the view, then its title or the path of a folder. The box rules of the header
+   are with the page header in styles.css. */
 
 .drive-header {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-height: 56px;
-	padding: 8px 20px 0;
+	gap: 10px;
+}
+
+.drive-header-icon {
+	flex: none;
+	color: var(--muted-foreground);
 }
 
 .drive-title,
-.drive-crumb {
-	font-size: 20px;
-	font-weight: 500;
+.drive-crumb-current {
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
 }
 
 .drive-title {
-	padding: 4px 8px;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .drive-crumbs {
 	min-width: 0;
 }
 
+/* The path stays on one line. The folders above get shorter before the folder on screen does. */
 .drive-crumbs ol {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
 	margin: 0;
@@ -79,53 +83,99 @@
 
 .drive-crumbs li {
 	display: inline-flex;
+	flex: 0 100 auto;
 	align-items: center;
 	gap: 2px;
 	min-width: 0;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
+.drive-crumbs li:last-child {
+	flex-shrink: 1;
+}
+
+.drive-crumbs .icon {
+	flex: none;
+}
+
+/* A folder above is quiet text. The folder on screen has the size of a page title. */
 .drive-crumb {
 	max-width: 280px;
-	padding: 4px 8px;
 	overflow: hidden;
-	border-radius: var(--radius);
-	color: var(--text-muted);
-	text-decoration: none;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
+a.drive-crumb {
+	margin: 0 -2px;
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-size: 14px;
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.drive-crumbs li:first-child a.drive-crumb {
+	margin-left: -6px;
+}
+
 a.drive-crumb:hover {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .drive-crumb-current {
-	color: var(--text);
+	margin-left: 4px;
+	color: var(--foreground);
+}
+
+.drive-crumbs li:first-child .drive-crumb-current {
+	margin-left: 0;
+}
+
+.drive-chip {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+/* The row of actions above the list: the box for all items, then the actions of the selection. */
+.drive-main .toolbar {
+	min-height: 44px;
+	padding: 4px 22px;
+	border-bottom: 0;
+}
+
+.drive-selected-count {
+	margin-right: 6px;
+	font-size: 13px;
+	font-weight: 600;
+	white-space: nowrap;
 }
 
 .drive-note {
-	padding: 8px 20px;
-	border-bottom: 1px solid var(--border);
-	background: var(--surface-2);
-	color: var(--text-muted);
+	margin: 0 22px 8px;
+	padding: 8px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
-/* Item table */
+/* Item table: rows with no lines between them. A row has a round fill on hover and when selected. */
 
 .drive-table {
 	width: 100%;
-	border-collapse: collapse;
+	border-collapse: separate;
+	border-spacing: 0 1px;
 	table-layout: fixed;
 }
 
 .drive-table th,
 .drive-table td {
-	height: 48px;
+	height: 46px;
 	padding: 0 8px;
-	border-bottom: 1px solid var(--border);
 	overflow: hidden;
 	font-weight: 400;
 	text-align: left;
@@ -137,56 +187,73 @@ a.drive-crumb:hover {
 	position: sticky;
 	top: 0;
 	z-index: 2;
-	height: 40px;
-	background: var(--surface);
-	color: var(--text-muted);
-	font-size: 13px;
-	font-weight: 600;
+	height: 34px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+/* Room between the line of the header and the first row. */
+.drive-table tbody::before {
+	display: table-row;
+	height: 4px;
+	content: "";
+}
+
+.drive-row > :first-child {
+	border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.drive-row > :last-child {
+	border-radius: 0 var(--radius-md) var(--radius-md) 0;
 }
 
 .drive-col-check {
-	width: 48px;
-	padding-left: 12px;
+	width: 44px;
 }
 
 .drive-table .drive-col-star {
-	width: 36px;
+	width: 34px;
 	padding: 0;
 }
 
 .drive-col-owner {
 	width: 16%;
+	color: var(--muted-foreground);
 }
 
 .drive-col-modified {
 	width: 24%;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-col-size {
 	width: 96px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
+	font-variant-numeric: tabular-nums;
 }
 
 .drive-table .drive-col-more {
-	width: 48px;
-	padding: 0 8px 0 0;
+	width: 44px;
+	padding: 0 6px 0 0;
 	overflow: visible;
 }
 
-.drive-row:hover {
-	background: var(--surface-2);
+.drive-row:hover > :is(td, th) {
+	background: var(--row-hover);
 }
 
-.drive-row-selected,
-.drive-row-selected:hover {
-	background: var(--accent-soft);
+.drive-row.drive-row-selected > :is(td, th),
+.drive-row-selected:hover > :is(td, th) {
+	background: var(--selected);
 }
 
 .drive-check {
 	display: inline-grid;
-	place-items: center;
-	width: 32px;
+	place-items: center start;
+	width: 28px;
 	height: 32px;
 	cursor: pointer;
 }
@@ -195,10 +262,10 @@ a.drive-crumb:hover {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	margin-left: -8px;
-	padding: 4px 8px;
+	margin-left: -6px;
+	padding: 3px 6px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-sm);
 	background: none;
 	color: inherit;
 	font: inherit;
@@ -206,12 +273,12 @@ a.drive-crumb:hover {
 }
 
 .drive-sort:hover {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .drive-sort-active {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .drive-name {
@@ -224,14 +291,14 @@ a.drive-crumb:hover {
 .drive-name-link {
 	display: inline-flex;
 	align-items: center;
-	gap: 12px;
+	gap: 10px;
 	min-width: 0;
 	max-width: 100%;
-	padding: 6px 4px;
+	padding: 4px 6px 4px 0;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	font-weight: 500;
 	text-align: left;
@@ -255,26 +322,50 @@ button.drive-name-link:hover .drive-name-text {
 	text-decoration: underline;
 }
 
+/* The icon of the kind, on a tile. */
 .drive-kind {
-	color: var(--text-muted);
+	display: inline-grid;
+	flex: none;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 7px;
+	background: var(--surface);
+	color: var(--muted-foreground);
 }
 
-.drive-kind-doc {
-	color: var(--accent);
+.drive-row:hover .drive-kind,
+.drive-row.drive-row-selected .drive-kind {
+	background: var(--background);
 }
 
-.drive-kind-sheet {
-	color: var(--success);
+.drive-kind-folder {
+	color: var(--foreground);
 }
 
 .drive-shared-mark {
 	display: inline-flex;
 	flex: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-modified-by {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
+}
+
+.drive-main .list-footer {
+	padding: 12px 8px 24px;
+}
+
+/* The empty state: the icon on a tile, then one line of text. */
+.drive-empty-tile {
+	display: inline-grid;
+	place-items: center;
+	width: 56px;
+	height: 56px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 /* Menu of actions */
@@ -284,24 +375,24 @@ button.drive-name-link:hover .drive-name-text {
 	z-index: 60;
 	min-width: 200px;
 	max-width: calc(100vw - 16px);
-	padding: 6px;
+	padding: 4px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	box-shadow: var(--shadow-menu);
 }
 
 .drive-menu-item {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	width: 100%;
-	min-height: 36px;
-	padding: 0 12px;
+	min-height: 32px;
+	padding: 0 8px;
 	border: 0;
-	border-radius: 6px;
+	border-radius: var(--radius-sm);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	white-space: nowrap;
@@ -309,12 +400,12 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-menu-item .icon {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-menu-item:hover,
 .drive-menu-item:focus {
-	background: var(--surface-3);
+	background: var(--hover);
 	outline: none;
 }
 
@@ -325,15 +416,14 @@ button.drive-name-link:hover .drive-name-text {
 
 .drive-menu-item-danger,
 .drive-menu-item-danger .icon {
-	color: var(--danger);
+	color: var(--negative);
 }
 
 /* The New button is a menu button. A disabled one stays visible. */
 
 .compose-button:disabled {
-	opacity: 0.6;
+	opacity: 0.5;
 	cursor: not-allowed;
-	box-shadow: none;
 }
 
 /* Upload state and drop target */
@@ -348,43 +438,109 @@ button.drive-name-link:hover .drive-name-text {
 	justify-content: center;
 	gap: 12px;
 	padding: 16px;
-	background: color-mix(in srgb, var(--surface) 88%, transparent);
-	color: var(--accent);
+	background: color-mix(in srgb, var(--background) 88%, transparent);
+	color: var(--foreground);
 	font-size: 16px;
 	font-weight: 600;
 	text-align: center;
 	pointer-events: none;
 }
 
+/* The upload card: the name and the size of the file, a bar, and the count. */
 .drive-upload {
 	position: absolute;
 	right: 16px;
 	bottom: 16px;
 	z-index: 6;
-	display: flex;
-	align-items: center;
+	display: grid;
 	gap: 10px;
-	padding: 10px 16px;
+	width: min(340px, calc(100% - 32px));
+	padding: 14px 16px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: 12px;
 	background: var(--surface);
-	box-shadow: var(--shadow);
+}
+
+.drive-upload-head {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	min-width: 0;
+}
+
+.drive-upload-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.drive-upload-size,
+.drive-upload-text {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.drive-upload-size {
+	flex: none;
+}
+
+.drive-upload-bar {
+	display: block;
+	width: 100%;
+	height: 6px;
+	border: 0;
+	border-radius: 999px;
+	overflow: hidden;
+	background: var(--border);
+	appearance: none;
+}
+
+.drive-upload-bar::-webkit-progress-bar {
+	border-radius: 999px;
+	background: var(--border);
+}
+
+.drive-upload-bar::-webkit-progress-value {
+	border-radius: 999px;
+	background: var(--foreground);
+}
+
+.drive-upload-bar::-moz-progress-bar {
+	border-radius: 999px;
+	background: var(--foreground);
 }
 
 /* Dialogs */
 
 .drive-picker-path {
 	display: flex;
+	margin-left: -6px;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
 	margin-bottom: 8px;
 }
 
-.drive-picker-path .link-button:disabled {
-	color: var(--text);
-	font-weight: 600;
+.drive-picker-path .link-button {
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-weight: 500;
 	text-decoration: none;
+}
+
+.drive-picker-path .link-button:hover:not(:disabled) {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+.drive-picker-path .link-button:disabled {
+	color: var(--foreground);
+	font-weight: 600;
 	cursor: default;
 }
 
@@ -392,14 +548,16 @@ button.drive-name-link:hover .drive-name-text {
 	display: inline-flex;
 	align-items: center;
 	gap: 2px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-picker {
 	min-height: 180px;
 	max-height: 320px;
+	padding: 4px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
+	background: var(--surface);
 	overflow-y: auto;
 }
 
@@ -409,7 +567,7 @@ button.drive-name-link:hover .drive-name-text {
 	justify-content: center;
 	gap: 8px;
 	padding: 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
@@ -427,21 +585,22 @@ button.drive-name-link:hover .drive-name-text {
 	gap: 12px;
 	width: 100%;
 	min-height: 40px;
-	padding: 0 12px;
+	padding: 0 10px;
 	border: 0;
+	border-radius: var(--radius-md);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
 }
 
 .drive-picker-item .icon {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .drive-picker-item:hover:not(:disabled) {
-	background: var(--surface-2);
+	background: var(--hover);
 }
 
 .drive-picker-item:focus-visible {
@@ -466,16 +625,26 @@ button.drive-name-link:hover .drive-name-text {
 	grid-template-columns: minmax(0, 1fr) 120px auto;
 	align-items: end;
 	gap: 12px;
+	padding: 14px 16px 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .drive-share-add .button {
-	min-height: 40px;
+	min-height: 36px;
 }
 
 .drive-share-heading {
-	margin: 20px 0 4px;
-	font-size: 14px;
-	font-weight: 600;
+	margin: 20px 0 6px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.drive-share-add + .drive-share-heading,
+.dialog-body > .drive-share-heading:first-child {
+	margin-top: 16px;
 }
 
 .drive-share-row {
@@ -484,11 +653,10 @@ button.drive-name-link:hover .drive-name-text {
 	gap: 12px;
 	min-height: 52px;
 	padding: 6px 0;
-	border-bottom: 1px solid var(--border);
 }
 
-.drive-share-row:last-child {
-	border-bottom: 0;
+.drive-share-row .avatar {
+	flex: none;
 }
 
 .drive-share-who {
@@ -516,9 +684,10 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-share-role {
-	width: 110px;
-	min-height: 34px;
+	width: 104px;
+	min-height: 32px;
 	padding: 4px 8px;
+	font-size: 13px;
 }
 
 .drive-share-actions {
@@ -531,7 +700,10 @@ button.drive-name-link:hover .drive-name-text {
 	gap: 8px;
 	min-height: 52px;
 	padding: 6px 0;
-	border-bottom: 1px solid var(--border);
+}
+
+.drive-version + .drive-version {
+	border-top: 1px dashed var(--border);
 }
 
 .drive-version-text {
@@ -547,75 +719,163 @@ button.drive-name-link:hover .drive-name-text {
 
 .drive-version-current {
 	margin: 0 0 0 8px;
-	background: var(--success-soft);
-	color: var(--success);
+	background: var(--positive-soft);
+	color: var(--positive);
 }
 
 .drive-version-status {
 	min-height: 20px;
 	margin-top: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
+/* The preview is a lightbox: it fills the window, over the page with a blur. The name and Close are
+   at the top, the file is in the center, and the details and Download are at the bottom. */
+
 .drive-preview {
-	width: min(880px, calc(100vw - 32px));
+	inset: 0;
+	width: 100dvw;
+	max-width: none;
+	height: 100dvh;
+	max-height: none;
+	margin: 0;
+	border: 0;
+	border-radius: 0;
+	background: color-mix(in srgb, var(--background) 66%, transparent);
+	box-shadow: none;
+	backdrop-filter: blur(66px);
+}
+
+.drive-preview[open] {
+	display: flex;
+	flex-direction: column;
+}
+
+.drive-preview::backdrop {
+	background: none;
+}
+
+.drive-preview .dialog-header {
+	flex: none;
+	align-items: center;
+	padding: 12px 16px 12px 22px;
 }
 
 .drive-preview .dialog-title {
 	min-width: 0;
 	overflow: hidden;
+	font-size: 15px;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
+.drive-preview .dialog-header .icon-button {
+	width: 36px;
+	height: 36px;
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--background);
+	color: var(--foreground);
+}
+
+.drive-preview .dialog-header .icon-button:hover {
+	background: var(--hover);
+}
+
 .drive-preview-body {
-	overflow-y: auto;
+	display: grid;
+	flex: 1;
+	grid-template-rows: minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr);
+	place-items: center;
+	min-height: 0;
+	padding: 4px 22px;
 }
 
 .drive-preview-image {
 	display: block;
 	max-width: 100%;
-	max-height: 60dvh;
-	margin: 0 auto;
-	border-radius: var(--radius);
+	max-height: 100%;
+	border-radius: var(--radius-md);
 	/* A light pattern, so a transparent image shows in the two themes. */
-	background: repeating-conic-gradient(var(--surface-3) 0% 25%, var(--surface) 0% 50%) 50% / 16px 16px;
+	background: repeating-conic-gradient(var(--hover) 0% 25%, var(--background) 0% 50%) 50% / 16px 16px;
 	object-fit: contain;
 }
 
+.drive-preview-sheet {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: min(880px, 100%);
+	max-height: 100%;
+}
+
 .drive-preview-text {
-	max-height: 60dvh;
+	flex: 1;
+	min-height: 0;
 	margin: 0;
-	padding: 12px;
+	padding: 16px 20px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
-	background: var(--surface-2);
-	font: 13px / 1.5 var(--mono);
+	background: var(--background);
+	font: 13px / 1.6 var(--mono);
 	overflow: auto;
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
 
+/* A file with no preview shows as a card: the icon on a tile, then the reason. */
 .drive-preview-none {
-	display: flex;
-	flex-direction: column;
+	display: inline-flex;
 	align-items: center;
-	gap: 12px;
-	padding: 32px 16px;
-	color: var(--text-muted);
+	gap: 10px;
+	max-width: 100%;
+	padding: 8px 14px 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--background);
+	font-weight: 500;
+}
+
+.drive-kind-large {
+	width: 36px;
+	height: 36px;
+}
+
+.drive-preview-footer {
+	display: flex;
+	flex: none;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	padding: 12px 16px 16px 22px;
+}
+
+.drive-preview-footer .form-error {
+	margin: 0;
 }
 
 .drive-details {
-	display: grid;
-	grid-template-columns: max-content minmax(0, 1fr);
-	gap: 4px 16px;
-	margin: 16px 0 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 20px;
+	min-width: 0;
+	margin: 0;
 	font-size: 13px;
 }
 
+.drive-details > div {
+	display: flex;
+	gap: 6px;
+	min-width: 0;
+}
+
 .drive-details dt {
-	color: var(--text-muted);
+	flex: none;
+	color: var(--muted-foreground);
 }
 
 .drive-details dd {
@@ -625,37 +885,36 @@ button.drive-name-link:hover .drive-name-text {
 
 /* The header of the Docs and Sheets editors */
 
+/* One row with the height of the header row of the shell: Back, the icon of the kind, the name, the
+   star, the save state, and the controls at the right. The box rules are with the page header in
+   styles.css. */
 .document-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-height: 56px;
-	padding: 4px 16px 4px 8px;
-	background: var(--bg);
+	gap: 6px;
+	padding-left: 14px;
 }
 
-.document-header-title {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
+.document-header-icon {
+	flex: none;
+	margin: 0 4px 0 2px;
+	color: var(--muted-foreground);
 }
 
 .document-header-name {
 	min-width: 0;
 	overflow: hidden;
-	font-size: 18px;
-	font-weight: 500;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .document-header-rename {
-	/* The negative margin puts the text in line with the save state. The width gets it back. */
-	max-width: calc(100% + 7px);
-	margin-left: -7px;
-	padding: 2px 6px;
-	border: 1px solid transparent;
-	border-radius: 6px;
+	display: block;
+	max-width: 100%;
+	padding: 4px 6px;
+	border: 0;
+	border-radius: var(--radius-sm);
 	overflow: hidden;
 	background: none;
 	color: inherit;
@@ -667,52 +926,77 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .document-header-rename:hover {
-	border-color: var(--border);
+	background: var(--hover);
+}
+
+.document-header-form {
+	min-width: 0;
 }
 
 .document-header-input {
 	width: min(420px, 50vw);
-	min-height: 32px;
+	max-width: 100%;
+	min-height: 34px;
 	padding: 2px 6px;
-	font-size: 18px;
-	font-weight: 500;
+	font-size: 17px;
+	font-weight: 650;
 }
 
+/* The save state is quiet text. A long error text gets shorter before the name does. */
 .document-header-state {
-	color: var(--text-muted);
-	font-size: 12px;
+	flex: none;
+	min-width: 0;
+	margin-left: 4px;
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .document-header-state-error {
-	color: var(--danger);
+	flex: 0 1000 auto;
+	color: var(--negative);
 }
 
 .document-header-spacer {
 	flex: 1;
 }
 
-@media (max-width: 767px) {
+.document-header .button-primary {
+	margin-left: 6px;
+}
+
+/* After each other rule for an icon, because this selector is more specific. */
+.drive-main .list-empty .icon {
+	color: var(--muted-foreground);
+}
+
+@media (max-width: 900px) {
 	.drive-layout {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.drive-main {
-		margin: 0;
-		border-radius: 0;
+	.drive-main .toolbar {
+		padding: 4px 16px;
 	}
 
-	.drive-header {
-		min-height: 48px;
-		padding: 4px 12px 0;
+	.drive-scroll {
+		padding: 0 8px;
+	}
+
+	.drive-header-icon,
+	.document-header-icon {
+		display: none;
 	}
 
 	.drive-title,
-	.drive-crumb {
-		font-size: 18px;
+	.drive-crumb-current {
+		font-size: 16px;
 	}
 
 	.drive-crumb {
-		max-width: 160px;
+		max-width: 140px;
 	}
 
 	.drive-col-owner,
@@ -722,12 +1006,17 @@ button.drive-name-link:hover .drive-name-text {
 	}
 
 	.drive-col-modified {
-		width: 100px;
+		width: 92px;
 	}
 
-	.drive-col-check {
-		width: 40px;
-		padding-left: 4px;
+	.drive-note {
+		margin: 0 16px 8px;
+	}
+
+	/* The title keeps its width. The search box takes the room that stays. */
+	.drive-header > .drive-title {
+		flex: none;
+		max-width: 50%;
 	}
 
 	.drive-share-add {
@@ -738,8 +1027,13 @@ button.drive-name-link:hover .drive-name-text {
 		grid-column: 1 / -1;
 	}
 
+	.drive-preview-body {
+		padding: 4px 8px;
+	}
+
 	.document-header {
-		padding-right: 8px;
+		gap: 2px;
+		padding-left: 60px;
 	}
 
 	.document-header-share {
@@ -748,5 +1042,260 @@ button.drive-name-link:hover .drive-name-text {
 
 	.document-header .button-primary {
 		padding: 0 12px;
+	}
+}
+
+/* From 901px to 1100px, the Last change column has room for the name of the person. */
+@media (min-width: 901px) and (max-width: 1100px) {
+	.drive-col-modified {
+		width: 32%;
+	}
+}
+
+/* The link to the folder above. It shows only on a phone, where the header row has only the folder on screen. */
+.drive-up {
+	display: none;
+}
+
+/* Touch targets. */
+@media (max-width: 900px), (pointer: coarse) {
+	.drive-check {
+		place-items: center;
+		width: 44px;
+		height: 44px;
+	}
+
+	.drive-table td {
+		height: 52px;
+	}
+
+	.drive-table .drive-col-check {
+		width: 44px;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-star,
+	.drive-table .drive-col-more {
+		width: 44px;
+		padding: 0;
+	}
+
+	.drive-sort,
+	.drive-name-link,
+	.drive-menu-item,
+	.drive-picker-item,
+	.drive-share-role,
+	.drive-share-add .button,
+	.document-header-rename,
+	.document-header-input {
+		min-height: 44px;
+	}
+
+	a.drive-crumb {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+	}
+
+	.drive-preview .dialog-header .icon-button {
+		width: 44px;
+		height: 44px;
+	}
+
+	.document-header-input,
+	.drive-share-role {
+		font-size: 16px;
+	}
+}
+
+/* A phone. */
+@media (max-width: 600px) {
+	.drive-up {
+		display: inline-flex;
+		margin-right: -2px;
+	}
+
+	/* Only the folder on screen shows. The link before it goes to the folder above. */
+	.drive-crumbs li:not(:last-child),
+	.drive-crumbs .icon {
+		display: none;
+	}
+
+	.drive-crumb,
+	.drive-header > .drive-title {
+		max-width: none;
+	}
+
+	.drive-header > .drive-title {
+		flex: 0 1 auto;
+	}
+
+	.drive-crumb-current {
+		margin-left: 0;
+	}
+
+	/* The save state is under the name, so that the name has room. The button of the name is 44px
+	   high: the save state shows on its bottom part. */
+	.document-header:has(.document-header-state) {
+		display: grid;
+		grid-auto-flow: column;
+		grid-template-columns: 44px minmax(0, 1fr);
+		grid-template-rows: 28px 16px;
+		align-content: center;
+	}
+
+	.document-header:has(.document-header-state) > * {
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-name,
+	.document-header:has(.document-header-state) > .document-header-form {
+		grid-column: 2;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-state {
+		grid-area: 2 / 2;
+		margin-left: 6px;
+		font-size: 12px;
+		line-height: 16px;
+		pointer-events: none;
+	}
+
+	.document-header:has(.document-header-state) .document-header-rename {
+		padding: 3px 6px 19px;
+		line-height: 22px;
+	}
+
+	.document-header:has(.document-header-state) .document-header-name {
+		line-height: 22px;
+	}
+
+	.document-header:has(.document-header-state) > .document-header-form {
+		align-self: start;
+	}
+
+	.document-header:has(.document-header-state) .document-header-input {
+		min-height: 28px;
+		padding-top: 0;
+		padding-bottom: 0;
+	}
+
+	.document-header-spacer {
+		display: none;
+	}
+
+	/* The list: each row has two lines. The name is above the date of the last change. The link of
+	   the name is 52px high, and the date shows on its bottom part. */
+	.drive-table,
+	.drive-table thead,
+	.drive-table tbody,
+	.drive-table tbody::before {
+		display: block;
+	}
+
+	.drive-table tr {
+		display: grid;
+		grid-template-columns: 44px 44px minmax(0, 1fr) 44px;
+		grid-template-rows: 30px 22px;
+	}
+
+	/* The trash has no star. */
+	.drive-table tr:not(:has(.drive-col-star)) {
+		grid-template-columns: 44px 0 minmax(0, 1fr) 44px;
+	}
+
+	.drive-table tbody tr {
+		margin-bottom: 1px;
+	}
+
+	.drive-table th,
+	.drive-table td {
+		width: auto;
+		height: auto;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-check,
+	.drive-table .drive-col-star,
+	.drive-table .drive-col-more {
+		display: grid;
+		place-items: center;
+		grid-row: 1 / span 2;
+		width: auto;
+		padding: 0;
+	}
+
+	.drive-table .drive-col-check {
+		grid-column: 1;
+	}
+
+	.drive-table .drive-col-star {
+		grid-column: 2;
+	}
+
+	.drive-table .drive-col-more {
+		grid-column: 4;
+	}
+
+	.drive-table .drive-col-name {
+		grid-area: 1 / 3 / span 2;
+		padding-left: 4px;
+	}
+
+	.drive-name-link {
+		min-height: 52px;
+	}
+
+	.drive-name-text {
+		align-self: flex-start;
+		padding-top: 7px;
+		line-height: 21px;
+	}
+
+	.drive-shared-mark {
+		align-self: flex-start;
+		padding-top: 11px;
+	}
+
+	.drive-table .drive-col-modified {
+		grid-area: 2 / 3;
+		padding: 0 8px 0 46px;
+		font-size: 12px;
+		line-height: 16px;
+		pointer-events: none;
+	}
+
+	/* The header row: the two sort buttons are next to each other. */
+	.drive-table thead tr {
+		grid-template-columns: 44px 44px minmax(0, 1fr) auto;
+		grid-template-rows: 44px;
+	}
+
+	.drive-table thead {
+		position: sticky;
+		top: 0;
+		z-index: 2;
+	}
+
+	.drive-table thead th {
+		position: static;
+		display: flex;
+		align-items: center;
+		grid-row: 1;
+		height: 44px;
+		padding: 0 8px 0 4px;
+	}
+
+	.drive-table thead .drive-col-modified {
+		grid-area: 1 / 4;
+		padding: 0 8px;
+		pointer-events: auto;
+	}
+
+	.drive-table thead .drive-col-more,
+	.drive-table .drive-col-owner,
+	.drive-table .drive-col-size {
+		display: none;
 	}
 }

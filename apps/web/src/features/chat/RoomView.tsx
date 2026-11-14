@@ -1,5 +1,5 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
-import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -10,7 +10,7 @@ import { chatPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
-import { roomTitle, startsGroup } from "./model.ts";
+import { dayLabel, draftPlaceholder, roomTitle, startsDay, startsGroup, timeLabel } from "./model.ts";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -191,31 +191,42 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	return (
 		<>
 			<header className="chat-header">
-				<Icon name={room.kind === "dm" ? "chat" : room.kind === "private" ? "lock" : "hash"} />
-				<div className="chat-header-text">
-					<h1 className="chat-title">{title}</h1>
-					{room.topic && <p className="chat-topic muted">{room.topic}</p>}
-				</div>
-				<button
-					type="button"
-					className="button button-small"
-					onClick={() => setDialog({ type: "members" })}
-					aria-label={`Members: ${plural(room.member_count, "member")}`}
-				>
-					<Icon name="team" size={16} />
-					{room.member_count}
-				</button>
-				{room.role === "owner" && (
+				{room.kind === "dm" ? (
+					<span className="avatar avatar-small chat-header-avatar" aria-hidden="true">
+						{initials(title)}
+					</span>
+				) : (
+					<Icon name={room.kind === "private" ? "lock" : "hash"} size={22} />
+				)}
+				<h1 className="chat-title">
+					{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
+					{title}
+				</h1>
+				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
+				{room.topic && <p className="chat-topic">{room.topic}</p>}
+				<span className="chat-header-actions">
 					<button
 						type="button"
-						className="icon-button"
-						aria-label="Change the name and the topic"
-						title="Change the name and the topic"
-						onClick={() => setDialog({ type: "settings" })}
+						className="chat-header-button"
+						onClick={() => setDialog({ type: "members" })}
+						aria-label={`Members: ${plural(room.member_count, "member")}`}
+						title="Members"
 					>
-						<Icon name="pencil" />
+						<Icon name="team" />
+						{room.member_count}
 					</button>
-				)}
+					{room.role === "owner" && (
+						<button
+							type="button"
+							className="icon-button"
+							aria-label="Change the name and the topic"
+							title="Change the name and the topic"
+							onClick={() => setDialog({ type: "settings" })}
+						>
+							<Icon name="pencil" />
+						</button>
+					)}
+				</span>
 			</header>
 
 			{isMember ? (
@@ -234,27 +245,41 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 							</p>
 						)}
 						{messages.length === 0 && (
-							<p className="list-state">
-								{room.kind === "dm"
-									? `This is the start of your direct messages with ${title}.`
-									: "This room has no messages yet. Write the first one."}
-							</p>
+							<div className="chat-empty">
+								<span className="chat-empty-tile" aria-hidden="true">
+									<Icon name={room.kind === "dm" ? "chat" : room.kind === "private" ? "lock" : "hash"} size={24} />
+								</span>
+								<p className="chat-empty-title">{room.kind === "dm" ? title : `#${title}`}</p>
+								<p>
+									{room.kind === "dm"
+										? `This is the start of your direct messages with ${title}.`
+										: "This room has no messages yet. Write the first one."}
+								</p>
+							</div>
 						)}
 						<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
 							{messages.map((message, index) => (
-								<MessageItem
-									key={message.id}
-									message={message}
-									head={startsGroup(messages[index - 1], message)}
-									own={message.author.principal_id === ownId}
-									canDelete={message.author.principal_id === ownId || room.role === "owner"}
-									editing={editing?.id === message.id ? editing.text : null}
-									onEditStart={() => setEditing({ id: message.id, text: message.text })}
-									onEditChange={(text) => setEditing({ id: message.id, text })}
-									onEditSave={() => void saveEdit()}
-									onEditCancel={() => setEditing(null)}
-									onDelete={() => setDialog({ type: "delete", message })}
-								/>
+								<Fragment key={message.id}>
+									{startsDay(messages[index - 1], message) && (
+										<li className="chat-day">
+											<h2 className="chat-day-heading">
+												<time dateTime={message.created_at}>{dayLabel(message.created_at)}</time>
+											</h2>
+										</li>
+									)}
+									<MessageItem
+										message={message}
+										head={startsGroup(messages[index - 1], message)}
+										own={message.author.principal_id === ownId}
+										canDelete={message.author.principal_id === ownId || room.role === "owner"}
+										editing={editing?.id === message.id ? editing.text : null}
+										onEditStart={() => setEditing({ id: message.id, text: message.text })}
+										onEditChange={(text) => setEditing({ id: message.id, text })}
+										onEditSave={() => void saveEdit()}
+										onEditCancel={() => setEditing(null)}
+										onDelete={() => setDialog({ type: "delete", message })}
+									/>
+								</Fragment>
 							))}
 						</ol>
 					</div>
@@ -268,32 +293,40 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 						<label htmlFor={draftId} className="visually-hidden">
 							Message to {title}
 						</label>
-						<textarea
-							id={draftId}
-							className="input chat-draft"
-							rows={1}
-							placeholder={`Message ${title}`}
-							value={draft}
-							maxLength={CHAT_LIMITS.messageChars}
-							onChange={(event) => {
-								sendKey.current = null;
-								setDraft(event.target.value);
-							}}
-							onKeyDown={onDraftKeyDown}
-						/>
-						<button
-							type="submit"
-							className="icon-button chat-send"
-							aria-label="Send the message"
-							title="Send (Enter)"
-							disabled={sending || !draft.trim()}
-						>
-							<Icon name="send" />
-						</button>
+						<div className="chat-composer-box">
+							<textarea
+								id={draftId}
+								className="chat-draft"
+								rows={1}
+								placeholder={draftPlaceholder(room)}
+								value={draft}
+								maxLength={CHAT_LIMITS.messageChars}
+								onChange={(event) => {
+									sendKey.current = null;
+									setDraft(event.target.value);
+								}}
+								onKeyDown={onDraftKeyDown}
+							/>
+							<span className="chat-composer-bar">
+								<button
+									type="submit"
+									className="chat-send"
+									aria-label="Send the message"
+									title="Send (Enter)"
+									disabled={sending || !draft.trim()}
+								>
+									<Icon name="arrowUp" size={18} />
+								</button>
+							</span>
+						</div>
 					</form>
 				</>
 			) : (
-				<div className="list-state">
+				<div className="chat-empty chat-empty-page">
+					<span className="chat-empty-tile" aria-hidden="true">
+						<Icon name="hash" size={24} />
+					</span>
+					<p className="chat-empty-title">#{title}</p>
 					<p>You are not a member of this public room. Join it to read and write messages.</p>
 					<button type="button" className="button button-primary" disabled={joining} onClick={() => void join()}>
 						{joining ? "Joining…" : "Join the room"}
@@ -371,21 +404,27 @@ function MessageItem({
 	const editId = useId();
 	const author = message.author.display_name;
 	return (
-		<li className={head ? "chat-message chat-message-head" : "chat-message"}>
-			{head ? (
-				<span className="avatar avatar-small chat-avatar" aria-hidden="true">
+		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
+		<li
+			className={head ? "chat-message chat-message-head" : "chat-message"}
+			tabIndex={!message.deleted && editing === null && (own || canDelete) ? -1 : undefined}
+		>
+			{/* The avatar of a person is a square with round corners. The avatar of an agent is a circle. */}
+			{head && (
+				<span
+					className={message.author.kind === "agent" ? "chat-avatar chat-avatar-agent" : "chat-avatar"}
+					aria-hidden="true"
+				>
 					{initials(author)}
 				</span>
-			) : (
-				<span className="chat-avatar" aria-hidden="true" />
 			)}
 			<div className="chat-message-body">
 				{/* A message that continues a group keeps its author and time for a screen reader. */}
 				<p className={head ? "chat-message-meta" : "visually-hidden"}>
-					<strong>{author}</strong>
+					<strong className="chat-author">{author}</strong>
 					{message.author.kind === "agent" && <span className="kind kind-agent">agent</span>}
-					<time className="muted" dateTime={message.created_at} title={fullDate(message.created_at)}>
-						{shortDate(message.created_at)}
+					<time className="chat-time" dateTime={message.created_at} title={fullDate(message.created_at)}>
+						{timeLabel(message.created_at)}
 					</time>
 				</p>
 				{editing !== null ? (
@@ -401,7 +440,7 @@ function MessageItem({
 						</label>
 						<textarea
 							id={editId}
-							className="input chat-draft"
+							className="input chat-edit-draft"
 							value={editing}
 							maxLength={CHAT_LIMITS.messageChars}
 							onChange={(event) => onEditChange(event.target.value)}
@@ -421,12 +460,12 @@ function MessageItem({
 						</span>
 					</form>
 				) : message.deleted ? (
-					<p className="chat-text muted">This message was deleted.</p>
+					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
 					<p className="chat-text">
 						{message.text}
 						{message.edited_at && (
-							<span className="chat-edited muted" title={fullDate(message.edited_at)}>
+							<span className="chat-edited" title={fullDate(message.edited_at)}>
 								{" "}
 								(edited)
 							</span>

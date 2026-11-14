@@ -1,66 +1,98 @@
-/* Soldock web app. Plain CSS with custom properties. Dark mode follows prefers-color-scheme. */
+/* Soldock web app. Plain CSS with custom properties. The names and the values of the colors follow
+   Ember (https://github.com/NYLLON-SOFTWARE/ember-cloudflare, MIT). The `dark` class on <html> selects
+   the dark colors. src/lib/appearance.ts sets it from the Light, Dark or System choice. */
 
 :root {
 	color-scheme: light;
-	--bg: #f4f6fb;
-	--surface: #ffffff;
-	--surface-2: #f2f4f8;
-	--surface-3: #e8ebf1;
-	--text: #1f1f1f;
-	--text-muted: #5b6168;
-	--border: #d9dde3;
-	--accent: #1a56db;
-	--accent-hover: #1647b8;
-	--accent-text: #ffffff;
-	--accent-soft: #dbe7fd;
-	--selected: #c9dcfb;
-	--unread-bg: #ffffff;
-	--read-bg: #f6f8fb;
-	--danger: #b3261e;
-	--danger-soft: #fbe9e7;
-	--success: #146c2e;
-	--success-soft: #e3f4e6;
-	--warning-text: #6b4500;
-	--warning-bg: #fff4d6;
-	--warning-border: #f0c75e;
-	--star: #e2a400;
-	--focus: #1a56db;
-	--shadow: 0 1px 2px rgb(15 23 42 / 0.08), 0 4px 16px rgb(15 23 42 / 0.12);
-	--radius: 8px;
-	--radius-large: 16px;
-	--topbar-height: 64px;
-	--sidebar-width: 248px;
+	--background: #ffffff;
+	--foreground: #171717;
+	--surface: #fafafa;
+	--hover: #f2f2f2;
+	--row-hover: #f8f8f8;
+	--card: #ffffff;
+	--popover: #ffffff;
+	--border: #e5e5e5;
+	--input: #d4d4d4;
+	--muted-foreground: #6b6b6b;
+	--primary: #171717;
+	--primary-hover: #2e2e2e;
+	--primary-foreground: #fafafa;
+	--ring: #737373;
+	--focus: #171717;
+	--link: #0066ef;
+	--positive: #166534;
+	--negative: #b91c1c;
+	--destructive: #b91c1c;
+	--destructive-hover: #a01818;
+	--destructive-foreground: #ffffff;
+	--warning: #daa038;
+	--control: var(--background);
+	--control-hover: var(--hover);
+	--control-border: var(--border);
+	--field: transparent;
+	--star: var(--foreground);
+	--selected: var(--hover);
+	--positive-soft: color-mix(in srgb, var(--positive) 12%, var(--background));
+	--negative-soft: color-mix(in srgb, var(--negative) 10%, var(--background));
+	--negative-border: color-mix(in srgb, var(--negative) 25%, var(--border));
+	--warning-soft: color-mix(in srgb, var(--warning) 10%, var(--background));
+	--warning-border: color-mix(in srgb, var(--warning) 55%, var(--border));
+	--backdrop: rgb(0 0 0 / 0.5);
+	--drawer-backdrop: rgb(0 0 0 / 0.4);
+	--shadow-xs: 0 1px 2px rgb(0 0 0 / 0.05);
+	--shadow-menu: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+	--shadow-dialog: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+	--radius: 10px;
+	--radius-md: 8px;
+	--radius-sm: 6px;
+	--rail-width: 80px;
+	--sidebar-width: 280px;
+	--header-height: 60px;
 	--font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 	--mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
+/* The dark colors. */
+:root.dark {
+	color-scheme: dark;
+	--background: #171717;
+	--foreground: #f5f5f5;
+	--surface: #1c1c1c;
+	--hover: #282828;
+	--row-hover: #202020;
+	--card: #1c1c1c;
+	--popover: #1c1c1c;
+	--border: #343434;
+	--input: #404040;
+	--muted-foreground: #a3a3a3;
+	--primary: #f5f5f5;
+	--primary-hover: #dedede;
+	--primary-foreground: #171717;
+	--ring: #a3a3a3;
+	--focus: #f5f5f5;
+	--link: #43abff;
+	--positive: #4ade80;
+	--negative: #fca5a5;
+	--warning: #efb146;
+	--control: rgb(64 64 64 / 0.3);
+	--control-hover: rgb(64 64 64 / 0.5);
+	--control-border: var(--input);
+	--field: rgb(64 64 64 / 0.3);
+}
+
+/* Before main.tsx runs, <html> has no data-appearance attribute, and the page shows only the body. A dark
+   device then gets the dark body, so that the page does not flash white. */
 @media (prefers-color-scheme: dark) {
-	:root {
+	:root:not([data-appearance]) {
 		color-scheme: dark;
-		--bg: #111317;
-		--surface: #1a1d23;
-		--surface-2: #20242b;
-		--surface-3: #2a2f37;
-		--text: #e7e9ec;
-		--text-muted: #a3aab4;
-		--border: #353b44;
-		--accent: #8ab4f8;
-		--accent-hover: #a8c7fa;
-		--accent-text: #0b1d3a;
-		--accent-soft: #233a5e;
-		--selected: #27426b;
-		--unread-bg: #1f232a;
-		--read-bg: #1a1d23;
-		--danger: #f2b8b5;
-		--danger-soft: #3c1f1d;
-		--success: #8fd19e;
-		--success-soft: #1d3324;
-		--warning-text: #fdd663;
-		--warning-bg: #3a2f0b;
-		--warning-border: #7a6216;
-		--star: #fdd663;
-		--focus: #8ab4f8;
-		--shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px rgb(0 0 0 / 0.5);
+		--surface: #1c1c1c;
+	}
+}
+
+/* From 901px to 1100px, the sidebar is narrower. */
+@media (min-width: 901px) and (max-width: 1100px) {
+	:root {
+		--sidebar-width: 230px;
 	}
 }
 
@@ -77,9 +109,9 @@ body {
 }
 
 body {
-	background: var(--bg);
-	color: var(--text);
-	font: 14px / 1.45 var(--font);
+	background: var(--surface);
+	color: var(--foreground);
+	font: 14px / 1.5 var(--font);
 	-webkit-font-smoothing: antialiased;
 }
 
@@ -95,12 +127,18 @@ h4 {
 	line-height: 1.25;
 }
 
+h1,
+h2,
+h3 {
+	letter-spacing: -0.025em;
+}
+
 p {
 	margin: 0;
 }
 
 a {
-	color: var(--accent);
+	color: var(--link);
 }
 
 code,
@@ -114,9 +152,8 @@ kbd {
 	min-width: 1.6em;
 	padding: 0 0.4em;
 	border: 1px solid var(--border);
-	border-bottom-width: 2px;
 	border-radius: 4px;
-	background: var(--surface-2);
+	background: var(--background);
 	text-align: center;
 	line-height: 1.5;
 }
@@ -144,9 +181,9 @@ kbd {
 	left: 8px;
 	z-index: 100;
 	padding: 8px 16px;
-	border-radius: var(--radius);
-	background: var(--accent);
-	color: var(--accent-text);
+	border-radius: var(--radius-md);
+	background: var(--primary);
+	color: var(--primary-foreground);
 	font-weight: 600;
 }
 
@@ -155,7 +192,7 @@ kbd {
 }
 
 .muted {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .icon {
@@ -169,7 +206,7 @@ kbd {
 	width: 20px;
 	height: 20px;
 	border: 2px solid var(--border);
-	border-top-color: var(--accent);
+	border-top-color: var(--foreground);
 	border-radius: 50%;
 	animation: spin 0.8s linear infinite;
 }
@@ -190,9 +227,12 @@ kbd {
 		animation-duration: 2.4s;
 	}
 
+	.rail,
+	.rail-open,
 	.sidebar,
 	.sidebar-open,
-	.nav-chevron {
+	.nav-chevron,
+	.switch::after {
 		transition: none;
 	}
 }
@@ -203,61 +243,77 @@ kbd {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	gap: 6px;
+	gap: 8px;
 	min-height: 36px;
 	padding: 0 16px;
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	background: var(--surface);
-	color: var(--text);
+	border: 1px solid var(--control-border);
+	border-radius: var(--radius-md);
+	background: var(--control);
+	color: var(--foreground);
 	font: inherit;
 	font-weight: 500;
 	cursor: pointer;
 	white-space: nowrap;
 	text-decoration: none;
+	box-shadow: var(--shadow-xs);
 }
 
 .button:hover:not(:disabled) {
-	background: var(--surface-2);
+	background: var(--control-hover);
 }
 
 .button:disabled,
 .button-disabled {
-	opacity: 0.6;
+	opacity: 0.5;
 	cursor: not-allowed;
 }
 
 .button-primary {
-	border-color: var(--accent);
-	background: var(--accent);
-	color: var(--accent-text);
+	border-color: transparent;
+	background: var(--primary);
+	color: var(--primary-foreground);
+	box-shadow: none;
 }
 
 .button-primary:hover:not(:disabled) {
-	border-color: var(--accent-hover);
-	background: var(--accent-hover);
+	background: var(--primary-hover);
 }
 
 .button-danger {
-	border-color: var(--danger);
-	background: var(--danger);
-	color: var(--surface);
+	border-color: transparent;
+	background: var(--destructive);
+	color: var(--destructive-foreground);
+	box-shadow: none;
 }
 
 .button-danger:hover:not(:disabled) {
-	background: var(--danger);
-	filter: brightness(1.1);
+	background: var(--destructive-hover);
 }
 
 .button-danger-outline {
-	border-color: var(--danger);
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .button-small {
-	min-height: 30px;
+	min-height: 32px;
 	padding: 0 12px;
+	gap: 6px;
 	font-size: 13px;
+}
+
+.button-large {
+	min-height: 40px;
+	padding: 0 24px;
+}
+
+.button-ghost {
+	border-color: transparent;
+	background: none;
+	box-shadow: none;
+}
+
+.button-ghost:hover:not(:disabled) {
+	background: var(--hover);
 }
 
 .button-block {
@@ -269,19 +325,19 @@ kbd {
 	align-items: center;
 	justify-content: center;
 	flex: none;
-	width: 40px;
-	height: 40px;
+	width: 36px;
+	height: 36px;
 	padding: 0;
 	border: 0;
-	border-radius: 50%;
+	border-radius: var(--radius-md);
 	background: transparent;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	cursor: pointer;
 }
 
 .icon-button:hover:not(:disabled) {
-	background: var(--surface-3);
-	color: var(--text);
+	background: var(--hover);
+	color: var(--foreground);
 }
 
 .icon-button:disabled {
@@ -302,7 +358,7 @@ kbd {
 	padding: 0;
 	border: 0;
 	background: none;
-	color: var(--accent);
+	color: var(--link);
 	font: inherit;
 	cursor: pointer;
 	text-decoration: underline;
@@ -319,7 +375,7 @@ kbd {
 .field-label {
 	display: block;
 	margin-bottom: 6px;
-	font-weight: 600;
+	font-weight: 500;
 	font-size: 13px;
 }
 
@@ -329,41 +385,52 @@ kbd {
 
 .field-hint {
 	margin-top: 6px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
 .field-error {
 	margin-top: 4px;
-	color: var(--danger);
+	color: var(--negative);
 	font-size: 13px;
 }
 
 .form-error {
 	margin: 12px 0;
 	padding: 10px 12px;
-	border-radius: var(--radius);
-	background: var(--danger-soft);
-	color: var(--danger);
+	border: 1px solid var(--negative-border);
+	border-radius: var(--radius-md);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 .input {
 	width: 100%;
-	min-height: 40px;
-	padding: 8px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--surface);
-	color: var(--text);
+	min-height: 36px;
+	padding: 6px 12px;
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
 	font: inherit;
+	box-shadow: var(--shadow-xs);
 }
 
-.input:focus {
-	border-color: var(--accent);
+.input::placeholder {
+	color: var(--muted-foreground);
+}
+
+/* A text field with the focus: a darker border and a soft ring. */
+.input:focus-visible,
+.search-input:focus-visible,
+.label-select:focus-visible {
+	border-color: var(--ring);
+	outline: none;
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
 }
 
 .input[aria-invalid="true"] {
-	border-color: var(--danger);
+	border-color: var(--negative);
 }
 
 .input-mono {
@@ -376,11 +443,44 @@ kbd {
 }
 
 .checkbox {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	accent-color: var(--primary);
+	cursor: pointer;
+}
+
+/* A switch: a button with role="switch" and aria-checked. */
+.switch {
+	position: relative;
+	flex: none;
+	width: 42px;
+	height: 24px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: var(--muted-foreground);
+	cursor: pointer;
+}
+
+.switch::after {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 3px;
 	width: 18px;
 	height: 18px;
-	margin: 0;
-	accent-color: var(--accent);
-	cursor: pointer;
+	border-radius: 50%;
+	background: var(--background);
+	transition: transform 0.15s ease;
+}
+
+.switch[aria-checked="true"] {
+	background: var(--foreground);
+}
+
+.switch[aria-checked="true"]::after {
+	transform: translateX(18px);
 }
 
 fieldset {
@@ -400,12 +500,12 @@ fieldset {
 
 .check-row input {
 	margin-top: 2px;
-	accent-color: var(--accent);
+	accent-color: var(--primary);
 }
 
 .check-hint {
 	display: block;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -427,9 +527,10 @@ fieldset {
 .notice {
 	margin: 12px 0;
 	padding: 10px 12px;
-	border-radius: var(--radius);
-	background: var(--accent-soft);
-	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	color: var(--foreground);
 }
 
 .notice-small {
@@ -445,9 +546,15 @@ fieldset {
 	margin-bottom: 16px;
 	padding: 12px;
 	border: 1px solid var(--warning-border);
-	border-radius: var(--radius);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	border-radius: var(--radius-md);
+	background: var(--warning-soft);
+	color: var(--foreground);
+}
+
+/* The text of a warning is ink. Only the icon has the warning color. */
+.warning-box > .icon,
+.external-notice > .icon {
+	color: var(--warning);
 }
 
 .form-grid {
@@ -477,20 +584,20 @@ fieldset {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	padding: 8px 16px;
+	padding: 6px 12px;
 	border: 1px solid var(--border);
-	border-radius: 999px;
+	border-radius: var(--radius-md);
 	cursor: pointer;
 }
 
 .segment input {
 	margin: 0;
-	accent-color: var(--accent);
+	accent-color: var(--primary);
 }
 
 .segment-active {
-	border-color: var(--accent);
-	background: var(--accent-soft);
+	border-color: var(--foreground);
+	background: var(--hover);
 }
 
 .segment:focus-within {
@@ -508,115 +615,218 @@ fieldset {
 	gap: 12px;
 	height: 100%;
 	padding: 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
 .boot-title {
-	color: var(--text);
+	color: var(--foreground);
 	font-size: 20px;
 }
 
-.sign-in {
+/* The pages with one card on the surface: sign-in and setup. The Connect page uses the same card. */
+
+.auth {
 	display: grid;
-	place-items: center;
+	justify-items: center;
+	align-content: start;
 	min-height: 100%;
-	padding: 16px;
+	padding: clamp(24px, 7vh, 88px) 16px 32px;
+	background: var(--surface);
 }
 
-.sign-in-card {
+.auth-card {
 	width: 100%;
-	max-width: 420px;
+	max-width: 440px;
 	padding: 32px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: 16px;
+	background: var(--background);
 }
 
-.sign-in-title {
-	margin: 24px 0 8px;
-	font-size: 24px;
-	font-weight: 600;
+.auth-card-wide {
+	max-width: 600px;
 }
 
-.sign-in form {
-	margin-top: 16px;
+.auth-heading {
+	margin-bottom: 28px;
+	text-align: center;
 }
 
-.sign-in .field-hint {
-	margin-bottom: 16px;
-}
-
-.sign-in-sent {
-	margin: 0 0 16px;
-	overflow-wrap: anywhere;
-}
-
-.sign-in-fields {
+/* The mark of Soldock, 48px wide, above the title. */
+.auth-logo {
 	display: grid;
-	gap: 16px;
-	margin-bottom: 16px;
+	place-items: center;
+	margin-bottom: 20px;
 }
 
-.sign-in-help {
-	margin: 16px 0 0;
-	color: var(--text-muted);
+.auth-title {
+	font-size: 24px;
+	font-weight: 650;
+	line-height: 1.25;
+	text-wrap: balance;
+}
+
+.auth-subtitle {
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+	text-wrap: balance;
+}
+
+.auth-subtitle strong {
+	color: var(--foreground);
+	font-weight: 550;
+}
+
+/* The parts of a card are 20px apart. */
+.auth-form {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+	min-width: 0;
+}
+
+.auth-form > .notice,
+.auth-form > .warning-box,
+.auth-form .form-error,
+.auth-form .field-hint {
+	margin: 0;
+}
+
+/* The live region of an error takes no room while it is empty. */
+.auth-form > [aria-live]:empty {
+	display: none;
+}
+
+.auth-card .field {
+	gap: 7px;
+}
+
+.auth-card .field-label {
+	font-weight: 550;
+}
+
+/* The fields and the buttons of a card are 42px high, and the fields have 16px text. */
+.auth-card .input {
+	min-height: 42px;
+	padding: 8px 11px;
+	border-color: var(--border);
+	border-radius: 9px;
+	background: var(--background);
+	font-size: 16px;
+	box-shadow: none;
+}
+
+.auth-card .input-mono {
+	font-size: 15px;
+}
+
+.auth-card .input[aria-invalid="true"] {
+	border-color: var(--negative);
+}
+
+.auth-card .button {
+	min-height: 42px;
+	border-radius: 9px;
+	font-weight: 550;
+}
+
+/* The error of a card: red text in a box with a red tint. */
+.auth-card .form-error {
+	padding: 12px 14px;
+	border-radius: var(--radius-md);
+	background: color-mix(in srgb, var(--negative) 8%, var(--background));
+	line-height: 1.5;
+}
+
+.auth-help {
+	color: var(--muted-foreground);
 	font-size: 13px;
+	text-align: center;
+	text-wrap: balance;
 }
 
-.sign-in-links {
+.auth-links {
 	display: flex;
 	flex-wrap: wrap;
-	justify-content: space-between;
+	justify-content: center;
 	gap: 8px 16px;
-	margin-top: 16px;
-	font-size: 14px;
 }
 
-.brand {
-	display: inline-flex;
-	align-items: center;
-	gap: 10px;
-	color: var(--text);
-	font-size: 20px;
-	font-weight: 600;
-	text-decoration: none;
-	white-space: nowrap;
+/* Buttons one under the other, 12px apart. */
+.auth-actions {
+	display: grid;
+	gap: 12px;
 }
 
-.brand-large {
-	font-size: 22px;
+@media (max-width: 900px) {
+	.auth {
+		padding: 18px 12px 24px;
+	}
+
+	.auth-card {
+		padding: 24px 20px;
+		border-radius: 12px;
+	}
 }
 
+/* Touch: the fields and the buttons of a card are 44px high. */
+@media (max-width: 900px), (pointer: coarse) {
+	.auth-card .input,
+	.auth-card .button,
+	.mcp-banner-row .button,
+	.link-field {
+		min-height: 44px;
+	}
+
+	.row-button {
+		width: 44px;
+		height: 44px;
+	}
+}
 .brand-mark {
 	display: inline-grid;
 	place-items: center;
+	flex: none;
 	width: 34px;
 	height: 34px;
-	border-radius: 10px;
-	background: var(--accent);
-	color: var(--accent-text);
+	border-radius: var(--radius);
+	background: var(--primary);
+	color: var(--primary-foreground);
 }
 
-/* App frame */
+.auth-logo .brand-mark {
+	width: 48px;
+	height: 48px;
+	border-radius: 12px;
+}
+
+/* App frame: the rail at the left, and the page of the route. */
 
 .app {
+	position: relative;
 	display: grid;
-	grid-template-rows: var(--topbar-height) minmax(0, 1fr);
+	/* The safe-area values are 0 on a screen with no notch. On a phone on its side, the rail and the
+	   content stay clear of the notch. */
+	grid-template-columns: calc(var(--rail-width) + env(safe-area-inset-left)) minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr);
 	height: 100%;
+	padding-right: env(safe-area-inset-right);
+	background: var(--background);
 }
 
 .app-with-banner {
-	grid-template-rows: var(--topbar-height) auto minmax(0, 1fr);
+	grid-template-rows: auto minmax(0, 1fr);
 }
 
 .app-banner {
+	grid-column: 2;
 	margin: 0;
-	padding: 10px 16px;
+	padding: 10px 22px;
 	border-bottom: 1px solid var(--warning-border);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	background: var(--warning-soft);
+	color: var(--foreground);
 	font-size: 14px;
 }
 
@@ -625,108 +835,92 @@ fieldset {
 	font-weight: 600;
 }
 
-.topbar {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	padding: 0 16px;
-	background: var(--bg);
-}
-
-.topbar .brand {
-	width: calc(var(--sidebar-width) - 28px);
-}
-
+/* The menu button shows only in the drawer layout, at 900px and below. */
 .menu-button {
 	display: none;
 }
 
-.search {
-	flex: 1;
-	max-width: 720px;
-	min-width: 0;
-}
+/* The rail */
 
-.search form {
-	position: relative;
-}
-
-.search-icon {
-	position: absolute;
-	top: 50%;
-	left: 16px;
-	transform: translateY(-50%);
-	color: var(--text-muted);
-	pointer-events: none;
-}
-
-.search-input {
-	width: 100%;
-	height: 46px;
-	padding: 0 16px 0 52px;
-	border: 1px solid transparent;
-	border-radius: 999px;
-	background: var(--surface-3);
-	color: var(--text);
-	font: inherit;
-	font-size: 15px;
-}
-
-.search-input::placeholder {
-	color: var(--text-muted);
-}
-
-.search-input:focus {
-	border-color: var(--border);
-	background: var(--surface);
-	box-shadow: var(--shadow);
-	outline: none;
-}
-
-/* The links to the products: Mail and Drive. */
-
-.product-nav {
+.rail {
+	grid-row: 1 / -1;
 	display: flex;
-	gap: 4px;
-	margin-left: auto;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	min-height: 0;
+	padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom))
+		calc(12px + env(safe-area-inset-left));
+	border-right: 1px solid var(--border);
+	background: var(--surface);
+	overflow-y: auto;
+	scrollbar-width: none;
 }
 
-.product-link {
-	display: inline-flex;
+.rail-brand {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 56px;
+	height: 56px;
+	margin-bottom: 4px;
+	border-radius: var(--radius);
+}
+
+.rail-brand .brand-mark {
+	width: 44px;
+	height: 44px;
+}
+
+.rail-link {
+	position: relative;
+	display: flex;
+	flex-direction: column;
 	align-items: center;
-	gap: 8px;
-	height: 40px;
-	padding: 0 14px;
-	border-radius: 999px;
-	color: var(--text-muted);
-	font-weight: 500;
+	justify-content: center;
+	gap: 5px;
+	flex: none;
+	width: 56px;
+	height: 56px;
+	padding: 6px 3px;
+	border-radius: var(--radius);
+	color: var(--muted-foreground);
+	font-size: 11px;
+	line-height: 1.2;
 	text-decoration: none;
 }
 
-.product-link:hover {
-	background: var(--surface-3);
-	color: var(--text);
+.rail-link:hover,
+.rail-link[aria-current] {
+	background: var(--hover);
+	color: var(--foreground);
 }
 
-.product-link-active {
-	background: var(--accent-soft);
-	color: var(--text);
+.rail-rule {
+	flex: none;
+	width: 32px;
+	height: 0;
+	margin: 4px 0;
+	border: 0;
+	border-top: 1px solid var(--border);
 }
+
+.rail-spacer {
+	flex: 1;
+}
+
+/* The account button and its panel */
 
 .account {
 	position: relative;
-	margin-left: auto;
-}
-
-.product-nav + .account {
-	margin-left: 0;
+	flex: none;
 }
 
 .avatar-button {
 	display: inline-grid;
 	place-items: center;
-	width: 40px;
-	height: 40px;
+	width: 44px;
+	height: 44px;
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
@@ -738,84 +932,248 @@ fieldset {
 	display: inline-grid;
 	place-items: center;
 	flex: none;
-	width: 34px;
-	height: 34px;
+	width: 36px;
+	height: 36px;
 	border-radius: 50%;
-	background: #6d4fc2;
-	color: #ffffff;
-	font-size: 14px;
+	background: var(--primary);
+	color: var(--primary-foreground);
+	font-size: 13px;
 	font-weight: 600;
 }
 
 .avatar-large {
-	width: 48px;
-	height: 48px;
-	font-size: 18px;
+	width: 40px;
+	height: 40px;
+	font-size: 14px;
 }
 
 .avatar-small {
 	width: 32px;
 	height: 32px;
+	border: 1px solid var(--border);
+	background: var(--hover);
+	color: var(--foreground);
 	font-size: 13px;
-	background: #0b7a75;
 }
 
+/* Fixed, because the rail scrolls and cuts off an absolute panel. */
 .account-panel {
-	position: absolute;
-	top: calc(100% + 8px);
-	right: 0;
+	position: fixed;
+	bottom: max(12px, env(safe-area-inset-bottom));
+	left: calc(var(--rail-width) + env(safe-area-inset-left) + 8px);
 	z-index: 40;
-	width: min(320px, calc(100vw - 32px));
-	padding: 16px 8px 8px;
+	width: min(280px, calc(100vw - var(--rail-width) - env(safe-area-inset-left) - 16px));
+	padding: 8px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	box-shadow: var(--shadow);
+	border-radius: 12px;
+	background: var(--popover);
+	color: var(--foreground);
+	box-shadow: var(--shadow-menu);
 }
 
 .account-identity {
 	display: flex;
-	gap: 12px;
+	gap: 10px;
 	align-items: center;
-	padding: 0 8px 12px;
-	border-bottom: 1px solid var(--border);
+	padding: 6px 8px 10px;
 }
 
 .account-text {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
+	line-height: 1.35;
 }
 
 .account-text span {
 	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
 	text-overflow: ellipsis;
 }
 
-.account-links {
-	margin: 8px 0 0;
-	padding: 0;
-	list-style: none;
+/* Menus: the parts that the account panel and the menus of Drive share. */
+
+.menu-separator {
+	height: 1px;
+	margin: 4px -8px;
+	background: var(--border);
 }
 
-.account-link {
+.menu-item {
 	display: flex;
 	align-items: center;
-	gap: 12px;
+	gap: 8px;
 	width: 100%;
-	padding: 10px 12px;
+	min-height: 32px;
+	padding: 6px 8px;
 	border: 0;
-	border-radius: var(--radius);
+	border-radius: var(--radius-sm);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	text-decoration: none;
 	cursor: pointer;
 }
 
-.account-link:hover {
-	background: var(--surface-2);
+.menu-item .icon {
+	color: var(--muted-foreground);
+}
+
+.menu-item:hover {
+	background: var(--hover);
+}
+
+/* The Appearance choice: Light, Dark or System. The radio buttons are in the page, but they do not show. */
+
+.appearance legend {
+	padding: 6px 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.appearance-options {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 2px;
+	margin: 0 4px 4px;
+	padding: 3px;
+	border-radius: var(--radius-md);
+	background: var(--hover);
+}
+
+.appearance-option {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 30px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.appearance-option input {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: 0;
+	opacity: 0;
+}
+
+.appearance-option:has(input:checked) {
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: var(--shadow-xs);
+}
+
+.appearance-option:has(input:focus-visible) {
+	outline: 2px solid var(--focus);
+	outline-offset: 1px;
+}
+
+/* The header row of a page: the title at the left, the search box and the controls at the right. */
+
+.page-header,
+.toolbar,
+.drive-header,
+.chat-header,
+.document-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex: none;
+	min-height: var(--header-height);
+	padding: 10px 22px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
+}
+
+.page-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.page-title .icon {
+	color: var(--muted-foreground);
+}
+
+.page-heading,
+.toolbar-title {
+	overflow: hidden;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 1.4;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.toolbar-spacer {
+	flex: 1;
+}
+
+.search {
+	flex: 0 1 320px;
+	min-width: 96px;
+}
+
+.search form {
+	position: relative;
+}
+
+.search-icon {
+	position: absolute;
+	top: 50%;
+	left: 10px;
+	transform: translateY(-50%);
+	color: var(--muted-foreground);
+	pointer-events: none;
+}
+
+.search-input {
+	width: 100%;
+	height: 36px;
+	padding: 0 36px 0 34px;
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
+	font: inherit;
+	box-shadow: var(--shadow-xs);
+}
+
+.search-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+/* The `/` key moves the focus to the search box. The hint hides while the box is in use. */
+.search-key {
+	position: absolute;
+	top: 50%;
+	right: 8px;
+	display: inline-grid;
+	place-items: center;
+	min-width: 20px;
+	height: 20px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 11px;
+	transform: translateY(-50%);
+	pointer-events: none;
+}
+
+.search-input:focus ~ .search-key,
+.search-input:not(:placeholder-shown) ~ .search-key {
+	display: none;
 }
 
 /* Mail layout */
@@ -826,70 +1184,113 @@ fieldset {
 	min-height: 0;
 }
 
+/* The sidebar of a product: Mail, Drive, Chat and Admin. */
+
 .sidebar {
 	display: flex;
 	flex-direction: column;
+	gap: 14px;
 	min-height: 0;
-	padding: 8px 8px 16px 0;
+	padding: 20px 12px;
+	border-right: 1px solid var(--border);
+	background: var(--surface);
 	overflow-y: auto;
-	background: var(--bg);
 }
 
+.sidebar-header {
+	margin: 0;
+	padding: 0 9px;
+}
+
+.sidebar-title {
+	display: flex;
+	align-items: center;
+	min-height: 28px;
+	font-size: 17px;
+	font-weight: 650;
+	line-height: 24px;
+}
+
+.sidebar-subtitle {
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 18px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The main action of a sidebar: Compose, New and New room. It fills the width of the sidebar. */
 .compose-button {
 	display: inline-flex;
 	align-items: center;
-	gap: 12px;
-	align-self: flex-start;
-	margin: 0 0 16px 8px;
-	padding: 18px 24px 18px 20px;
+	justify-content: center;
+	gap: 8px;
+	align-self: stretch;
+	flex: none;
+	height: 36px;
+	padding: 0 16px;
 	border: 0;
-	border-radius: var(--radius-large);
-	background: var(--accent-soft);
-	color: var(--text);
+	border-radius: var(--radius-md);
+	background: var(--primary);
+	color: var(--primary-foreground);
 	font: inherit;
-	font-weight: 600;
-	font-size: 15px;
+	font-weight: 500;
 	cursor: pointer;
-	box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
 }
 
 .compose-button:hover {
-	box-shadow: var(--shadow);
+	background: var(--primary-hover);
 }
 
 .nav-list {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
+/* A list with no rows takes no room in the sidebar. */
+.nav-list:empty {
+	display: none;
+}
+
 .nav-item {
 	display: flex;
 	align-items: center;
-	gap: 16px;
-	min-height: 34px;
-	padding: 0 12px 0 24px;
-	border-radius: 0 999px 999px 0;
-	color: var(--text);
+	gap: 10px;
+	min-height: 36px;
+	padding: 7px 9px;
+	border-radius: var(--radius-md);
+	color: var(--foreground);
+	line-height: 22px;
 	text-decoration: none;
 }
 
+.nav-item:focus-visible {
+	outline-offset: -2px;
+}
+
 .nav-item:hover {
-	background: var(--surface-3);
+	background: var(--hover);
 }
 
 .nav-item-active,
 .nav-item-active:hover {
-	background: var(--selected);
-	font-weight: 700;
+	background: var(--hover);
+	font-weight: 600;
 }
 
 .nav-item .icon {
-	color: var(--text-muted);
+	width: 18px;
+	height: 18px;
+	color: var(--muted-foreground);
 }
 
 .nav-item-active .icon {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .nav-name {
@@ -901,37 +1302,36 @@ fieldset {
 }
 
 .nav-count {
+	color: var(--foreground);
 	font-size: 12px;
-	font-weight: 700;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
 }
 
+/* The sidebar has a gap between its parts, so a section adds only a small margin. */
 .nav-section {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin: 16px 0 4px;
-	padding: 0 4px 0 24px;
+	min-height: 28px;
+	margin: 0 0 -9px;
+	padding: 0 0 0 9px;
 }
 
 .nav-heading {
-	font-size: 15px;
-	font-weight: 600;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0;
 }
 
-/* The mail Compose button: the full width of the sidebar, with a small gap on each side. */
-.compose-button-block {
-	align-self: stretch;
-	justify-content: center;
-	margin: 0 4px 12px 12px;
-	padding: 10px 16px;
-	border-radius: var(--radius);
+.nav-section .icon-button-small {
+	width: 28px;
+	height: 28px;
+	color: var(--foreground);
 }
 
 /* A mailbox row in the mail sidebar. The chevron on the right expands or collapses the folders and labels of the mailbox. */
-.nav-tree-node + .nav-tree-node {
-	margin-top: 2px;
-}
-
 .nav-mailbox-row {
 	position: relative;
 	display: flex;
@@ -941,25 +1341,24 @@ fieldset {
 .nav-mailbox-row .nav-mailbox {
 	flex: 1;
 	min-width: 0;
-	padding-right: 44px;
+	padding-right: 40px;
 }
 
+/* Only the open view has a fill. The open mailbox shows with its weight. */
 .nav-mailbox-current {
-	font-weight: 700;
+	font-weight: 600;
 }
 
 .nav-mailbox-current .icon {
-	color: var(--text);
+	color: var(--foreground);
 }
 
 .nav-mailbox-toggle {
 	position: absolute;
 	right: 4px;
-	color: var(--text-muted);
-}
-
-.nav-mailbox-toggle:hover {
-	color: var(--text);
+	width: 28px;
+	height: 28px;
+	color: var(--muted-foreground);
 }
 
 .nav-chevron {
@@ -979,19 +1378,25 @@ fieldset {
 .nav-label-row .nav-item {
 	flex: 1;
 	min-width: 0;
-	padding-right: 40px;
+}
+
+/* Room for the delete button of a label. */
+.nav-label-row:has(.nav-label-delete) .nav-item {
+	padding-right: 36px;
 }
 
 /* A parent path that is not a label. It is text, not a link. */
 .nav-group,
 .nav-group:hover {
 	background: none;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .nav-label-delete {
 	position: absolute;
 	right: 4px;
+	width: 28px;
+	height: 28px;
 	opacity: 0;
 }
 
@@ -1008,46 +1413,34 @@ fieldset {
 
 .nav-empty,
 .nav-error {
-	padding: 4px 24px;
-	color: var(--text-muted);
+	padding: 4px 9px;
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
-/* The folders and labels under a mailbox row are indented. The labels get their indent from Sidebar.tsx. */
+/* The folders and labels under a mailbox row. A line under the icon of the mailbox shows the level. */
 .nav-tree-children {
-	padding-bottom: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin: 3px 0 8px 17px;
+	padding-left: 8px;
+	border-left: 1px solid var(--border);
 }
 
-.nav-tree-children > .nav-list > li > .nav-item {
-	padding-inline-start: 40px;
+.nav-tree-children[hidden] {
+	display: none;
 }
 
 /* The same height with or without the New label button. */
 .nav-section-nested {
-	min-height: 32px;
-	margin: 8px 0 0;
-	padding-left: 40px;
-}
-
-.nav-section-nested .nav-heading {
-	color: var(--text-muted);
-	font-size: 13px;
-}
-
-.nav-tree-children .nav-empty,
-.nav-tree-children .nav-error {
-	padding-left: 40px;
-}
-
-/* The first section follows the Compose button, which has its own margin. */
-.nav-section-first {
-	margin-top: 0;
+	margin: 5px 0 0;
 }
 
 .nav-hint {
 	margin-top: auto;
-	padding: 24px 24px 0;
-	color: var(--text-muted);
+	padding: 12px 9px 0;
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1055,15 +1448,13 @@ fieldset {
 	display: none;
 }
 
+/* The content of a product is on the canvas, with no card. */
 .mail-main {
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-	margin: 0 16px 16px 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	overflow: hidden;
+	background: var(--background);
 }
 
 .mail-main:focus {
@@ -1076,22 +1467,39 @@ fieldset {
 	overflow-y: auto;
 }
 
-/* Toolbar */
+/* Toolbar: the header row of Mail, and the row of actions above the list of Drive. The box rules
+   are with the page header above. */
 
 .toolbar {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	min-height: 52px;
-	padding: 4px 12px;
-	border-bottom: 1px solid var(--border);
+	gap: 8px;
 }
 
+/* The header row of Mail stays one row. While the actions show, a row narrower than 800px has no
+   room for the search box. A phone has the actions in a fixed bar, and a container can change the
+   position of a fixed element, so the row is a container only above 600px. */
+@media (min-width: 601px) {
+	.toolbar {
+		container: toolbar / inline-size;
+	}
+}
+
+@container toolbar (max-width: 800px) {
+	.toolbar-has-targets .search,
+	.toolbar-has-targets .page-title .icon {
+		display: none;
+	}
+}
+
+.toolbar-has-targets .page-title {
+	flex: none;
+}
+
+/* The actions stay on one row. */
 .toolbar-actions {
 	display: flex;
-	flex-wrap: wrap;
+	flex: none;
 	align-items: center;
-	gap: 2px 4px;
+	gap: 4px;
 }
 
 .toolbar-divider {
@@ -1101,37 +1509,21 @@ fieldset {
 	background: var(--border);
 }
 
-.toolbar-spacer {
-	flex: 1;
-}
-
-.toolbar-title {
-	overflow: hidden;
-	color: var(--text-muted);
-	font-size: 14px;
-	font-weight: 500;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
+/* The box lines up with the boxes of the rows. */
 .select-all {
 	display: inline-grid;
-	place-items: center;
-	width: 40px;
-	height: 40px;
-	border-radius: 50%;
+	place-items: center start;
+	flex: none;
+	width: 28px;
+	height: 36px;
 	cursor: pointer;
-}
-
-.select-all:hover {
-	background: var(--surface-3);
 }
 
 .label-picker {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .label-picker .icon {
@@ -1141,12 +1533,13 @@ fieldset {
 }
 
 .label-select {
-	height: 34px;
+	max-width: 180px;
+	height: 32px;
 	padding: 0 12px 0 34px;
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	background: var(--surface);
-	color: var(--text);
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: var(--field);
+	color: var(--foreground);
 	font: inherit;
 	font-size: 13px;
 	cursor: pointer;
@@ -1161,7 +1554,7 @@ fieldset {
 	justify-content: center;
 	gap: 12px;
 	padding: 64px 16px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-align: center;
 }
 
@@ -1170,31 +1563,25 @@ fieldset {
 }
 
 .thread-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
 	margin: 0;
-	padding: 0;
+	padding: 8px 10px 0;
 	list-style: none;
 }
 
 .thread-row {
 	position: relative;
 	display: grid;
-	grid-template-columns: 40px 36px minmax(0, 1fr);
+	grid-template-columns: 28px 32px minmax(0, 1fr);
 	align-items: center;
-	padding-left: 8px;
-	border-bottom: 1px solid var(--border);
-	background: var(--read-bg);
+	padding: 0 12px;
+	border-radius: var(--radius-md);
 }
 
 .thread-row:hover {
-	z-index: 1;
-	box-shadow:
-		inset 1px 0 0 var(--border),
-		inset -1px 0 0 var(--border),
-		0 1px 3px rgb(15 23 42 / 0.16);
-}
-
-.thread-unread {
-	background: var(--unread-bg);
+	background: var(--row-hover);
 }
 
 .thread-selected,
@@ -1202,6 +1589,7 @@ fieldset {
 	background: var(--selected);
 }
 
+/* The keyboard cursor: a bar at the left of the row. A touch screen has no cursor. */
 @media (hover: none) {
 	.thread-cursor::before {
 		display: none;
@@ -1211,19 +1599,38 @@ fieldset {
 .thread-cursor::before {
 	content: "";
 	position: absolute;
-	top: 0;
-	bottom: 0;
-	left: 0;
+	top: 10px;
+	bottom: 10px;
+	left: 2px;
 	width: 3px;
-	background: var(--accent);
+	border-radius: 2px;
+	background: var(--foreground);
+}
+
+/* The focus ring is around the full row, not only around the link. The ring then replaces the bar. */
+.thread-row:has(.thread-link:focus-visible) {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.thread-row:has(.thread-link:focus-visible)::before {
+	display: none;
 }
 
 .thread-check {
-	justify-self: center;
+	display: inline-grid;
+	place-items: center start;
+	justify-self: start;
+	width: 28px;
+	height: 28px;
+	cursor: pointer;
 }
 
 .star {
-	color: var(--text-muted);
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
 }
 
 .star-on {
@@ -1232,7 +1639,7 @@ fieldset {
 
 /* The mailbox of an agent, which an owner or an admin can only read: no checkbox, and a star that only shows the state. */
 .thread-row-read-only {
-	grid-template-columns: 36px minmax(0, 1fr);
+	grid-template-columns: 32px minmax(0, 1fr);
 }
 
 .star-static {
@@ -1260,13 +1667,17 @@ fieldset {
 	align-items: center;
 	gap: 16px;
 	min-height: 44px;
-	padding: 0 16px 0 4px;
-	color: var(--text);
+	padding: 0 0 0 6px;
+	border-radius: var(--radius-sm);
+	color: var(--foreground);
 	text-decoration: none;
 }
 
-.thread-link:focus-visible {
-	outline-offset: -2px;
+/* The row shows the focus ring (see above). A browser without :has() keeps the ring of the link. */
+@supports selector(:has(a)) {
+	.thread-link:focus-visible {
+		outline: none;
+	}
 }
 
 .thread-from {
@@ -1277,15 +1688,14 @@ fieldset {
 }
 
 .thread-from-names,
-.thread-main,
-.thread-subject-line {
+.thread-main {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .thread-count {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 }
 
@@ -1295,27 +1705,83 @@ fieldset {
 
 .thread-snippet,
 .thread-dash {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .thread-meta {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
 	white-space: nowrap;
+}
+
+/* The labels of a thread: quiet chips with a border and no fill, so they also show on a selected row. */
+.thread-labels {
+	display: inline-flex;
+	gap: 4px;
+}
+
+.thread-label {
+	max-width: 128px;
+	padding: 0 6px;
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 18px;
+	text-overflow: ellipsis;
 }
 
 .thread-attachment {
 	display: inline-flex;
 }
 
+/* The dates have one width, so the labels and the attachment marks line up. */
+.thread-date {
+	min-width: 60px;
+	text-align: right;
+}
+
 .thread-unread .thread-from-names,
 .thread-unread .thread-subject,
-.thread-unread .thread-meta time {
-	color: var(--text);
-	font-weight: 700;
+.thread-unread .thread-date {
+	color: var(--foreground);
+	font-weight: 650;
+}
+
+/* The loading, empty and error states of the thread list and of the thread view. */
+.mail-state {
+	gap: 8px;
+}
+
+.mail-state-icon {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	margin-bottom: 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: var(--muted-foreground);
+}
+
+.mail-state-title {
+	color: var(--foreground);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.mail-state-text {
+	max-width: 440px;
+	overflow-wrap: anywhere;
+}
+
+.mail-state .button {
+	margin-top: 8px;
 }
 
 .chips {
@@ -1330,18 +1796,22 @@ fieldset {
 .chip {
 	display: inline-flex;
 	align-items: center;
-	padding: 1px 8px;
-	border-radius: 4px;
-	background: var(--surface-3);
-	color: var(--text);
+	padding: 1px 7px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	color: var(--foreground);
 	font-size: 12px;
 	font-weight: 500;
+	line-height: 18px;
 	white-space: nowrap;
 }
 
 .chip-small {
 	margin-right: 6px;
+	padding: 0 6px;
 	font-size: 11px;
+	line-height: 16px;
 	vertical-align: 1px;
 }
 
@@ -1349,27 +1819,30 @@ fieldset {
 	display: flex;
 	align-items: center;
 	gap: 16px;
-	padding: 16px;
+	padding: 12px 22px;
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
 /* Thread view */
 
 .thread-view {
-	padding: 20px 24px 32px;
+	max-width: 1000px;
+	padding: 20px 22px 32px;
 }
 
+/* The subject starts where the text of the messages starts: after the avatar. */
 .thread-header {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 12px;
-	margin: 0 0 16px 44px;
+	gap: 8px 12px;
+	margin: 0 0 12px 48px;
 }
 
 .thread-subject-heading {
-	font-size: 22px;
-	font-weight: 400;
+	font-size: 20px;
+	font-weight: 650;
 	overflow-wrap: anywhere;
 }
 
@@ -1381,85 +1854,168 @@ fieldset {
 	outline: 2px solid var(--focus);
 }
 
+/* A label chip in the thread view is quiet: muted text and no fill. */
+.mail-chip {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+
+/* The messages go 10px past the text column on each side, so the hover fill of a collapsed message has room. */
 .messages {
 	display: flex;
 	flex-direction: column;
-	border-top: 1px solid var(--border);
+	margin: 0 -10px;
 }
 
-.message {
-	border-bottom: 1px solid var(--border);
+.message + .message {
+	border-top: 1px solid var(--border);
 }
 
 .message-heading {
 	font-size: inherit;
 	font-weight: inherit;
+	letter-spacing: normal;
 }
 
+/* A collapsed message is one calm line: a small avatar, the sender, the snippet and a short date. */
 .message-toggle {
 	display: flex;
 	align-items: center;
 	gap: 12px;
 	width: 100%;
-	padding: 12px 0;
+	margin: 4px 0;
+	padding: 6px 10px;
 	border: 0;
+	border-radius: var(--radius-md);
 	background: none;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 	text-align: left;
 	cursor: pointer;
 }
 
+.message-toggle:hover {
+	background: var(--row-hover);
+}
+
+.message-toggle:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+.message-expanded .message-toggle {
+	align-items: flex-start;
+	margin: 0;
+	padding: 14px 10px 0;
+}
+
+.message-expanded .message-toggle:hover {
+	background: none;
+}
+
+.message-avatar {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 36px;
+}
+
+.message-avatar-mark {
+	width: 28px;
+	height: 28px;
+	background: var(--hover);
+	color: var(--foreground);
+	font-size: 11px;
+}
+
+.message-expanded .message-avatar-mark {
+	width: 36px;
+	height: 36px;
+	font-size: 13px;
+}
+
+.message-summary {
+	display: flex;
+	flex: 1;
+	align-items: baseline;
+	gap: 10px;
+	min-width: 0;
+	line-height: 22px;
+}
+
 .message-sender {
 	display: flex;
-	flex-wrap: wrap;
+	flex: none;
 	align-items: baseline;
 	gap: 0 6px;
+	max-width: 60%;
 	min-width: 0;
 }
 
+.message-expanded .message-sender {
+	flex: 1;
+	flex-wrap: wrap;
+	max-width: none;
+}
+
 .message-sender-name {
-	font-weight: 700;
+	overflow: hidden;
+	font-weight: 650;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .message-sender-address {
-	color: var(--text-muted);
-	font-size: 12px;
-}
-
-.message:not(.message-expanded) .message-sender-address {
-	display: none;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
 }
 
 .message-snippet {
 	flex: 1;
 	min-width: 0;
 	overflow: hidden;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.message-mark {
+	display: inline-flex;
+	flex: none;
+	color: var(--muted-foreground);
 }
 
 .message-date {
 	flex: none;
 	margin-left: auto;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
+	line-height: 22px;
+	white-space: nowrap;
 }
 
 .message-content {
-	padding: 0 0 16px 44px;
+	padding: 0 10px 20px 58px;
 }
 
+/* The recipients are under the name of the sender, next to the avatar. The header is 50px high, and
+   the name is 22px high, so the list moves up 14px. */
 .message-recipients {
-	margin: -6px 0 10px;
-	color: var(--text-muted);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 14px;
+	min-height: 14px;
+	margin: -14px 0 12px;
+	color: var(--muted-foreground);
 	font-size: 13px;
+	line-height: 20px;
 }
 
 .recipient-line {
 	display: flex;
-	gap: 6px;
+	gap: 5px;
+	min-width: 0;
 }
 
 .recipient-line dt {
@@ -1482,46 +2038,52 @@ fieldset {
 	margin-bottom: 12px;
 	padding: 10px 12px;
 	border: 1px solid var(--warning-border);
-	border-radius: var(--radius);
-	background: var(--warning-bg);
-	color: var(--warning-text);
+	border-radius: var(--radius-md);
+	background: var(--warning-soft);
+	color: var(--foreground);
 	font-size: 13px;
 }
 
 .external-notice .icon {
+	flex: none;
 	margin-top: 1px;
 }
 
 .spam-notice {
-	border-color: var(--danger);
-	background: var(--danger-soft);
-	color: var(--danger);
+	border-color: var(--negative-border);
+	background: var(--negative-soft);
 }
 
+.spam-notice > .icon {
+	color: var(--negative);
+}
+
+/* The SPF, DKIM and DMARC results: quiet chips. The color of the text shows pass or fail, and the text tells it. */
 .auth-results {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 6px;
-	margin: 6px 0 0;
+	margin: 8px 0 0;
 	padding: 0;
 	list-style: none;
 }
 
 .auth-results li {
-	padding: 1px 8px;
-	border-radius: 4px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
 	font-family: var(--mono);
-	font-size: 12px;
+	font-size: 11px;
+	line-height: 18px;
 }
 
 .auth-pass {
-	background: var(--success-soft);
-	color: var(--success);
+	color: var(--positive);
 }
 
 .auth-fail {
-	background: var(--danger-soft);
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .message-frame {
@@ -1530,7 +2092,7 @@ fieldset {
 	height: 60vh;
 	min-height: 140px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius);
+	border-radius: var(--radius-md);
 	background: #ffffff;
 	color-scheme: light;
 }
@@ -1543,9 +2105,10 @@ fieldset {
 	align-items: center;
 	min-height: 64px;
 	padding: 12px;
-	border: 1px dashed var(--border);
-	border-radius: var(--radius);
-	color: var(--text-muted);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	color: var(--muted-foreground);
 	font-size: 14px;
 }
 
@@ -1553,109 +2116,188 @@ fieldset {
 	margin: 0;
 }
 
+/* Reading text: 15px on a 22px line. */
 .message-text {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	font-size: 14px;
-	line-height: 1.55;
+	font-size: 15px;
+	line-height: 22px;
 }
 
 .attachments,
 .delivery {
-	margin-top: 16px;
+	margin-top: 20px;
 }
 
-.attachments-title {
-	display: flex;
-	align-items: center;
-	gap: 6px;
+.attachments .field-hint {
+	margin-top: 8px;
+}
+
+.message-section-title {
 	margin-bottom: 8px;
-	font-size: 13px;
-	font-weight: 600;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: normal;
 }
 
-.attachment-list,
-.delivery-list,
-.compose-attachments {
+/* A file card: the icon of the file on a tile, the name, the size, and one action. The thread view
+   and the composer use it. */
+.file-cards {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
+	flex-wrap: wrap;
+	gap: 8px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
 
-.attachment {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
+.file-card {
+	display: flex;
 	align-items: center;
-	gap: 12px;
-	max-width: 640px;
-	padding: 8px 8px 8px 12px;
+	gap: 10px;
+	width: 280px;
+	max-width: 100%;
+	padding: 8px 8px 8px 10px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
+	background: var(--background);
 }
 
-.attachment-name {
+.file-card-icon {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 36px;
+	height: 36px;
+	border-radius: var(--radius-sm);
+	background: var(--hover);
+	color: var(--muted-foreground);
+}
+
+.file-card-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 18px;
+}
+
+.file-card-name {
 	overflow: hidden;
 	font-weight: 500;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.attachment-meta {
-	color: var(--text-muted);
+.file-card-meta {
+	overflow: hidden;
+	color: var(--muted-foreground);
 	font-size: 12px;
+	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.file-card-action {
+	border-radius: 50%;
+}
+
+/* The delivery status of each recipient of a sent message: a quiet chip with a dot. */
+.delivery-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
 .delivery-item {
 	display: flex;
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: 4px;
+	max-width: 100%;
+}
+
+.delivery-chip {
+	display: inline-flex;
 	align-items: center;
-	gap: 4px 12px;
-	font-size: 13px;
+	gap: 6px;
+	max-width: 100%;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	font-size: 12px;
+	line-height: 18px;
+}
+
+.delivery-dot {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--muted-foreground);
 }
 
 .delivery-address {
+	overflow: hidden;
 	font-weight: 500;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.delivery-kind,
+.delivery-status {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.delivery-delivered .delivery-dot,
+.delivery-sent .delivery-dot {
+	background: var(--positive);
+}
+
+.delivery-delivered .delivery-status,
+.delivery-sent .delivery-status {
+	color: var(--positive);
+}
+
+.delivery-failed .delivery-dot {
+	background: var(--negative);
+}
+
+.delivery-failed .delivery-status,
+.delivery-error {
+	color: var(--negative);
 }
 
 .delivery-error {
-	flex-basis: 100%;
-	color: var(--danger);
+	font-size: 12px;
+	overflow-wrap: anywhere;
 }
 
+/* A status badge. The admin page uses it. */
 .status {
 	display: inline-block;
 	margin-left: 8px;
-	padding: 1px 8px;
+	padding: 2px 8px;
 	border-radius: 999px;
-	background: var(--surface-3);
+	background: var(--hover);
 	font-size: 12px;
-	font-weight: 600;
-}
-
-.delivery-item .status {
-	margin-left: 0;
-}
-
-.status-delivered,
-.status-sent {
-	background: var(--success-soft);
-	color: var(--success);
+	font-weight: 500;
+	line-height: 16px;
 }
 
 .status-failed {
-	background: var(--danger-soft);
-	color: var(--danger);
+	background: var(--negative-soft);
+	color: var(--negative);
 }
 
 .message-actions {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
-	margin-top: 16px;
+	margin-top: 20px;
 }
 
 /* Dialogs */
@@ -1664,15 +2306,15 @@ fieldset {
 	width: min(560px, calc(100vw - 32px));
 	max-height: calc(100dvh - 32px);
 	padding: 0;
-	border: 0;
-	border-radius: var(--radius-large);
-	background: var(--surface);
-	color: var(--text);
-	box-shadow: var(--shadow);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: var(--shadow-dialog);
 }
 
 .dialog::backdrop {
-	background: rgb(15 23 42 / 0.45);
+	background: var(--backdrop);
 }
 
 .dialog-small {
@@ -1681,20 +2323,32 @@ fieldset {
 
 .dialog-header {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 12px 12px 8px 24px;
+	padding: 20px 16px 8px 24px;
+}
+
+.dialog-header .icon-button {
+	width: 32px;
+	height: 32px;
+	margin-top: -4px;
+}
+
+.dialog-header .icon-button .icon {
+	width: 16px;
+	height: 16px;
 }
 
 .dialog-title {
 	font-size: 18px;
 	font-weight: 600;
+	line-height: 1.3;
 }
 
 .dialog-description {
 	padding: 0 24px 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .dialog-body {
@@ -1727,24 +2381,66 @@ fieldset {
 	gap: 8px;
 }
 
-.shortcut-table {
-	width: calc(100% - 48px);
-	margin: 8px 24px 0;
-	border-collapse: collapse;
+/* The keyboard shortcuts dialog: groups of rows, with the action at the left and the keys at the right. */
+
+.shortcut-groups {
+	padding: 4px 24px 0;
 }
 
-.shortcut-table th,
-.shortcut-table td {
-	padding: 6px 8px;
-	border-bottom: 1px solid var(--border);
-	text-align: left;
+.shortcut-group + .shortcut-group {
+	margin-top: 16px;
 }
 
-.shortcut-table th {
-	color: var(--text-muted);
+.shortcut-group-title {
+	margin-bottom: 2px;
+	color: var(--muted-foreground);
 	font-size: 12px;
-	font-weight: 600;
-	text-transform: uppercase;
+	font-weight: 500;
+	letter-spacing: normal;
+}
+
+.shortcut-list {
+	margin: 0;
+}
+
+.shortcut-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.shortcut-row:last-child {
+	border-bottom: 0;
+}
+
+.shortcut-keys,
+.shortcut-key {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+}
+
+.shortcut-or {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.shortcut-dialog kbd {
+	display: grid;
+	place-items: center;
+	min-width: 24px;
+	height: 24px;
+	padding: 0 6px;
+	background: var(--surface);
+	color: var(--muted-foreground);
+	font-family: var(--font);
+	font-size: 12px;
+	line-height: 1;
 }
 
 /* Composer */
@@ -1769,13 +2465,18 @@ fieldset {
 	border-bottom: 1px solid var(--border);
 }
 
+/* The To row, with the "Add Cc and Bcc" button at its end. */
+.compose-row-extra {
+	grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
 .compose-row .field-error {
-	grid-column: 2;
+	grid-column: 2 / -1;
 	margin: 0 0 6px;
 }
 
 .compose-label {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
@@ -1794,7 +2495,7 @@ fieldset {
 	padding: 6px 0;
 	border: 0;
 	background: transparent;
-	color: var(--text);
+	color: var(--foreground);
 	font: inherit;
 }
 
@@ -1802,26 +2503,41 @@ fieldset {
 	outline: none;
 }
 
-.compose-row:focus-within {
-	border-bottom-color: var(--accent);
-	box-shadow: 0 1px 0 var(--accent);
+.compose-row:has(.compose-input:focus) {
+	border-bottom-color: var(--foreground);
+	box-shadow: 0 1px 0 var(--foreground);
 }
 
 .compose-input[aria-invalid="true"] {
-	color: var(--danger);
+	color: var(--negative);
 }
 
 .compose-copies {
-	margin: 8px 0;
+	padding: 4px 8px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: none;
+	color: var(--muted-foreground);
+	font: inherit;
 	font-size: 13px;
+	white-space: nowrap;
+	cursor: pointer;
 }
 
-/* The rich-text editor: a ProseMirror view, and the formatting toolbar under it. */
+.compose-copies:hover {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+/* The rich-text editor: a rounded box with a ProseMirror view, and the formatting toolbar at its bottom. */
 
 .rich-editor {
 	display: flex;
 	flex-direction: column;
-	margin: 12px 24px 0;
+	margin: 16px 24px 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .rich-editor-mount {
@@ -1830,12 +2546,13 @@ fieldset {
 }
 
 .compose-body {
-	min-height: 260px;
-	height: 40vh;
-	padding: 8px 0;
+	min-height: 220px;
+	height: 36vh;
+	padding: 12px 14px 8px;
 	overflow-y: auto;
-	color: var(--text);
-	line-height: 1.55;
+	color: var(--foreground);
+	font-size: 15px;
+	line-height: 22px;
 	resize: vertical;
 }
 
@@ -1854,12 +2571,12 @@ fieldset {
 .compose-body blockquote {
 	margin-left: 0.8ex;
 	padding-left: 1ex;
-	border-left: 1px solid var(--border);
-	color: var(--text-muted);
+	border-left: 2px solid var(--border);
+	color: var(--muted-foreground);
 }
 
 .compose-body a {
-	color: var(--accent);
+	color: var(--link);
 	text-decoration: underline;
 }
 
@@ -1871,7 +2588,7 @@ fieldset {
 	content: attr(data-placeholder);
 	float: left;
 	height: 0;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	pointer-events: none;
 }
 
@@ -1880,17 +2597,23 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 2px;
-	padding-top: 4px;
-	border-top: 1px solid var(--border);
+	padding: 4px 8px 8px;
+}
+
+.format-button {
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-sm);
 }
 
 .format-group-start:not(:first-child) {
 	margin-left: 10px;
 }
 
+/* The box has the color of the surface, so a button that is on has a darker fill than a hover. */
 .format-button[aria-pressed="true"] {
-	background: var(--accent-soft);
-	color: var(--accent);
+	background: var(--border);
+	color: var(--foreground);
 }
 
 .format-button:focus-visible {
@@ -1903,7 +2626,7 @@ fieldset {
 	align-items: center;
 	gap: 8px;
 	padding-bottom: 24px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .link-fields {
@@ -1916,21 +2639,12 @@ fieldset {
 }
 
 .compose-attachments {
-	margin: 8px 24px 0;
-}
-
-.compose-attachment {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto;
-	align-items: center;
-	gap: 8px;
-	padding: 2px 4px 2px 10px;
-	border-radius: var(--radius);
-	background: var(--surface-2);
+	margin: 12px 24px 0;
 }
 
 .compose-size {
-	margin: 8px 24px 0;
+	margin: 10px 24px 0;
+	font-size: 12px;
 }
 
 .compose-form .form-error {
@@ -1942,7 +2656,7 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 8px;
-	padding: 16px 16px 16px 24px;
+	padding: 16px 24px 20px;
 }
 
 .compose-actions input[type="file"]:focus-visible + label {
@@ -1958,19 +2672,21 @@ fieldset {
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 13px;
 }
 
-/* Toasts */
+/* Toasts. They are at the bottom right: the account button is at the bottom left. A toast has the
+   colors of the page the other way round: ink in light mode, and near white in dark mode. */
 
 .toasts {
 	position: fixed;
+	right: 24px;
 	bottom: 24px;
-	left: 24px;
 	z-index: 60;
 	display: flex;
 	flex-direction: column;
+	align-items: flex-end;
 	gap: 8px;
 	max-width: min(480px, calc(100vw - 32px));
 	pointer-events: none;
@@ -1979,6 +2695,7 @@ fieldset {
 .toast-region {
 	display: flex;
 	flex-direction: column;
+	align-items: flex-end;
 	gap: 8px;
 }
 
@@ -1986,17 +2703,17 @@ fieldset {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px 8px 10px 16px;
-	border-radius: var(--radius);
-	background: #2b2f36;
-	color: #f1f3f4;
-	box-shadow: var(--shadow);
+	padding: 8px 8px 8px 16px;
+	border-radius: var(--radius-md);
+	background: var(--foreground);
+	color: var(--background);
+	box-shadow: var(--shadow-menu);
 	pointer-events: auto;
 }
 
 .toast-error {
-	background: #8c1d18;
-	color: #ffffff;
+	background: var(--destructive);
+	color: var(--destructive-foreground);
 }
 
 .toast-message {
@@ -2004,19 +2721,16 @@ fieldset {
 }
 
 .toast-action {
-	padding: 6px 10px;
+	padding: 4px 10px;
 	border: 0;
-	border-radius: 4px;
+	border-radius: var(--radius-sm);
 	background: none;
-	color: #a8c7fa;
+	color: inherit;
 	font: inherit;
 	font-weight: 600;
-	cursor: pointer;
-}
-
-.toast-error .toast-action {
-	color: #ffffff;
 	text-decoration: underline;
+	text-underline-offset: 3px;
+	cursor: pointer;
 }
 
 .toast-close {
@@ -2024,7 +2738,7 @@ fieldset {
 	height: 28px;
 	padding: 0;
 	border: 0;
-	border-radius: 50%;
+	border-radius: var(--radius-sm);
 	background: none;
 	color: inherit;
 	font-size: 18px;
@@ -2034,32 +2748,56 @@ fieldset {
 
 .toast-close:hover,
 .toast-action:hover {
-	background: rgb(255 255 255 / 0.12);
+	background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .toast :focus-visible {
-	outline-color: #ffffff;
+	outline-color: currentColor;
 }
 
 /* Settings and the other pages with one column. Admin also uses the cards and the forms. */
 
-.page {
-	width: 100%;
-	max-width: 880px;
-	margin: 0 auto;
-	padding: 8px 16px 48px;
+/* A page with a header row: the page scrolls under the header. */
+.page-main {
+	min-width: 0;
+	min-height: 0;
 	overflow-y: auto;
+	background: var(--background);
 }
 
+.page-main:focus {
+	outline: none;
+}
+
+.page-main > .page-header,
+.admin-main > .page-header {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+}
+
+/* The content has a width of 880px at most, in the center. */
+.page {
+	width: 100%;
+	padding: 24px max(22px, calc((100% - 880px) / 2)) 48px;
+}
+
+.page > p + p {
+	margin-top: 8px;
+}
+
+/* A page with no header row, for example while a doc loads. */
 .app > .page {
 	min-height: 0;
+	overflow-y: auto;
+	background: var(--background);
 }
 
 .page:focus {
 	outline: none;
 }
 
-/* Admin: the side navigation and one section at a time */
+/* Admin: the sidebar and one section at a time */
 
 .admin-layout {
 	display: grid;
@@ -2072,8 +2810,8 @@ fieldset {
 	position: relative;
 	min-width: 0;
 	min-height: 0;
-	padding: 8px 16px 48px;
 	overflow-y: auto;
+	background: var(--background);
 }
 
 .admin-main:focus {
@@ -2081,109 +2819,41 @@ fieldset {
 }
 
 .admin-content {
-	max-width: 1040px;
+	display: flex;
+	flex-direction: column;
+	gap: 28px;
+	max-width: 960px;
 	margin: 0 auto;
-}
-
-.page > h1,
-.admin-content > h1 {
-	margin: 12px 0 20px;
-	font-size: 26px;
-	font-weight: 500;
-}
-
-.back-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	margin-top: 8px;
-	font-size: 13px;
-	text-decoration: none;
-}
-
-.back-link:hover {
-	text-decoration: underline;
-}
-
-.card {
-	margin-bottom: 20px;
-	padding: 20px 24px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-large);
-	background: var(--surface);
-}
-
-.card .card {
-	padding: 16px;
-	border-radius: var(--radius);
-	background: var(--surface-2);
-}
-
-.card-title {
-	margin-bottom: 12px;
-	font-size: 18px;
-	font-weight: 600;
-}
-
-.card .card .card-title {
-	font-size: 15px;
-}
-
-.card-subtitle {
-	margin-bottom: 4px;
-	font-size: 15px;
-	font-weight: 600;
-}
-
-.card > .muted {
-	margin-bottom: 12px;
-}
-
-.details {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-	gap: 12px 24px;
-	margin: 0;
-}
-
-.details dt {
-	color: var(--text-muted);
-	font-size: 12px;
-}
-
-.details dd {
-	margin: 2px 0 0;
-	overflow-wrap: anywhere;
+	padding: 32px 32px 64px;
 }
 
 .table-scroll {
-	margin: 0 -8px 16px;
 	overflow-x: auto;
 }
 
 .table {
 	width: 100%;
 	border-collapse: collapse;
-	font-size: 13px;
+	font-size: 14px;
 }
 
 .table th,
 .table td {
-	padding: 8px;
+	padding: 10px 8px;
 	border-bottom: 1px solid var(--border);
 	text-align: left;
 	vertical-align: top;
 }
 
 .table th {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
 	white-space: nowrap;
 }
 
 .row-muted td {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .cell-scopes {
@@ -2207,19 +2877,302 @@ fieldset {
 	text-align: right;
 }
 
-/* The text and the main button above a list in the admin page, for example "New person or agent". */
-.section-toolbar {
+/* Panels: the sections of Settings and Admin. A panel has a heading, a short muted line, and its
+   content. The content is in a card on the surface, only where it is a list or a form. */
+
+/* Settings: one column of 720px, with the panels 36px apart. */
+.settings-column {
 	display: flex;
-	flex-wrap: wrap;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px 24px;
-	margin-bottom: 12px;
+	flex-direction: column;
+	gap: 36px;
+	width: 100%;
+	max-width: 784px;
+	margin: 0 auto;
+	padding: 36px 32px 64px;
 }
 
-.section-toolbar > .muted {
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
+}
+
+/* The heading of a panel, and a button at its right. */
+.panel-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px 24px;
+}
+
+.panel-heading {
+	min-width: 0;
+	margin-bottom: 4px;
+}
+
+.panel-head > .panel-heading {
 	flex: 1 1 320px;
+	margin-bottom: 0;
+}
+
+.panel-title {
+	margin-bottom: 6px;
+	font-size: 17px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+.panel-note {
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.panel-note + .panel-note {
+	margin-top: 6px;
+}
+
+/* The first text of an Admin section, which has its title in the header row. */
+.panel-intro {
+	color: var(--muted-foreground);
+}
+
+.panel-intro + .panel-note {
+	margin-top: 6px;
+}
+
+.panel > .notice,
+.panel > .form-error {
 	margin: 0;
+}
+
+.panel-card {
+	min-width: 0;
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.panel-card > p + p {
+	margin-top: 8px;
+}
+
+/* The webhooks of a mailbox inside a dialog: the note, then the card with the list. */
+.webhooks {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+/* A card with a list: each row has its own space above and below. */
+.panel-card-list {
+	padding: 4px 20px;
+}
+
+.panel-empty {
+	padding: 28px 20px;
+	color: var(--muted-foreground);
+	text-align: center;
+}
+
+.panel-card-list > .panel-empty {
+	padding: 24px 0;
+}
+
+/* A field in a card is on the canvas color. */
+.panel-card .input {
+	background: var(--background);
+}
+
+/* A form in a card: the fields one under the other, and the button at the left. */
+.panel-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 16px;
+	min-width: 0;
+}
+
+.panel-form .field {
+	width: 100%;
+	max-width: 400px;
+}
+
+.panel-form .scope-list {
+	width: 100%;
+}
+
+.panel-form .field-hint,
+.panel-form .form-error,
+.panel-form > .notice {
+	margin: 0;
+}
+
+/* A check box keeps its size next to long text, and a legend starts at the left edge of its fields. */
+.panel-form .check-row input,
+.connect-form .check-row input,
+.policy-form .check-row input {
+	flex: none;
+}
+
+.panel-form legend,
+.connect-form legend,
+.policy-form legend {
+	padding: 0;
+}
+
+/* A form under a list, in the same card or in a dialog. */
+.panel-form-divided {
+	margin-top: 4px;
+	padding: 20px 0 16px;
+	border-top: 1px solid var(--border);
+}
+
+.dialog-body .panel-form-divided {
+	padding-bottom: 0;
+}
+
+/* A field and its button in one row. */
+.panel-inline-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 12px;
+}
+
+.panel-inline-form .field {
+	flex: 1 1 240px;
+	max-width: 400px;
+}
+
+/* The rows of a card with a name at the left and a value at the right, for example the account. */
+.setting-rows {
+	margin: 0;
+	padding: 4px 20px;
+}
+
+.setting-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 4px 24px;
+	padding: 12px 0;
+}
+
+.setting-row + .setting-row {
+	border-top: 1px solid var(--border);
+}
+
+.setting-row dt {
+	font-weight: 500;
+}
+
+.setting-row dd {
+	min-width: 0;
+	margin: 0;
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+	text-align: right;
+}
+
+/* A long value is below its name. */
+.setting-row-stack {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.setting-row-stack dd {
+	text-align: left;
+}
+
+/* A card with text at the left and one control at the right. */
+.setting-action {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px 24px;
+}
+
+.setting-action-text {
+	flex: 1 1 280px;
+	min-width: 0;
+}
+
+.setting-action-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+/* Tables in a card or a dialog: each row is a list row, with a line between the rows. */
+.table-rows th,
+.table-rows td {
+	padding: 12px 16px 12px 0;
+	vertical-align: middle;
+}
+
+.table-rows th {
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
+
+.table-rows th:last-child,
+.table-rows td:last-child {
+	padding-right: 0;
+}
+
+.table-rows tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.table-rows .cell-actions {
+	text-align: right;
+}
+
+/* The second line of a row: an address, the scopes of a key or the names of the members. */
+.row-note {
+	margin-top: 2px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.row-note.cell-scopes {
+	font-size: 12px;
+}
+
+.row-title {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.row-title .status {
+	font-weight: 500;
+}
+
+.cell-date {
+	white-space: nowrap;
+}
+
+/* The person, the agent or the mailbox of a row: an avatar, the name and the address. */
+.member {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.member-avatar {
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--foreground);
+}
+
+.member-text {
+	min-width: 0;
 }
 
 .member-name {
@@ -2227,26 +3180,65 @@ fieldset {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 4px 8px;
-	font-weight: 500;
+	font-weight: 600;
 }
 
-.kind-inline {
+.member-name .chip-small {
+	margin-right: 0;
+}
+
+.member-you {
+	color: var(--muted-foreground);
+	font-weight: 400;
+}
+
+/* The chip of an agent next to its name. It shows only at 900px and below, where the Kind column hides. */
+.kind.kind-inline {
+	display: none;
+}
+
+/* The mailbox of a webhook under its URL. It shows only at 900px and below, where the Mailbox column hides. */
+.row-note.row-note-inline {
 	display: none;
 }
 
 .row-muted .member-name {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
-/* The icon buttons of a table row: edit, archive or restore, and delete. */
+.row-muted .member-avatar {
+	opacity: 0.6;
+}
+
+/* The role of a person: a quiet chip. Owner and Admin have ink text. */
+.role-chip {
+	display: inline-block;
+	padding: 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+.role-chip-strong {
+	color: var(--foreground);
+}
+
+/* The icon buttons of a table row: edit, archive or restore, and delete. Each is a round button with a border. */
 .row-actions {
 	display: inline-flex;
-	gap: 2px;
+	gap: 6px;
 }
 
-.row-actions .icon-button {
-	width: 32px;
-	height: 32px;
+.row-button {
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--background);
+	color: var(--foreground);
 }
 
 /* Fields one under the other, in a small dialog. */
@@ -2258,80 +3250,84 @@ fieldset {
 
 .kind {
 	display: inline-block;
-	padding: 1px 8px;
+	padding: 2px 8px;
+	border: 1px solid transparent;
 	border-radius: 999px;
 	font-size: 12px;
-	font-weight: 600;
+	font-weight: 500;
+	line-height: 16px;
 }
 
 .kind-human {
-	background: var(--accent-soft);
+	background: var(--hover);
 }
 
 .kind-agent {
-	background: var(--warning-bg);
-	color: var(--warning-text);
-}
-
-.create-key {
-	display: flex;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 12px;
-	padding-top: 16px;
-	border-top: 1px solid var(--border);
-}
-
-.create-key .field {
-	width: 100%;
-	max-width: 360px;
-}
-
-.create-key .scope-list {
-	width: 100%;
+	border-color: var(--border);
 }
 
 /* The full URL of the MCP endpoint, at the top of the Agents section and in the agent form. */
 .mcp-banner {
-	margin: 0 0 16px;
-	padding: 12px 16px;
-	border: 1px solid var(--accent);
-	border-radius: var(--radius);
-	background: var(--accent-soft);
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
 }
 
 .mcp-banner-title {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin-bottom: 8px;
+	display: block;
+	margin-bottom: 2px;
+	font-size: 16px;
 	font-weight: 600;
 }
 
-.mcp-banner-url {
-	flex: 1;
-	min-width: 0;
+.mcp-banner .field-hint {
+	margin: 0;
 }
 
-.mcp-banner .field-hint:empty {
-	display: none;
-}
-
-/* The OAuth approval page (/connect). */
-.connect-host {
-	overflow-wrap: anywhere;
-}
-
-.connect-requested {
-	margin-left: 8px;
-}
-
-.connect-actions {
+.mcp-banner-row {
 	display: flex;
-	flex-wrap: wrap;
 	gap: 8px;
 }
 
+/* The URL in a box with an icon. The box shows the focus of the field. */
+.link-field {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	min-height: 42px;
+	padding: 0 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--background);
+}
+
+.link-field:focus-within {
+	border-color: var(--ring);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+}
+
+.link-field-input {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--foreground);
+	font: 14px / 1.5 var(--mono);
+}
+
+.link-field-input:focus {
+	outline: none;
+}
+
+.mcp-banner-row .button {
+	min-height: 42px;
+	border-radius: 9px;
+}
+
+/* The Agents section: one card for each agent. The card opens and shows the settings of the agent. */
 .agent-list {
 	display: flex;
 	flex-direction: column;
@@ -2341,28 +3337,67 @@ fieldset {
 .agent {
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .agent-summary {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
-	gap: 4px 12px;
-	padding: 12px 16px;
+	gap: 12px;
+	padding: 14px 20px;
+	border-radius: var(--radius);
 	cursor: pointer;
+	list-style: none;
 }
 
 .agent-summary:hover {
-	background: var(--surface-2);
+	background: var(--hover);
+}
+
+.agent[open] > .agent-summary {
+	border-radius: var(--radius) var(--radius) 0 0;
 }
 
 .agent-summary::-webkit-details-marker {
 	display: none;
 }
 
+.agent-summary:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.agent-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.agent-name {
+	display: block;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.agent-address {
+	display: block;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.agent-chips {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+.agent-chips .chip {
+	background: var(--background);
+}
+
 .agent-chevron {
-	margin-left: auto;
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 	transition: transform 0.15s ease;
 }
 
@@ -2370,35 +3405,47 @@ fieldset {
 	transform: rotate(180deg);
 }
 
-.agent-name {
-	font-weight: 600;
-}
-
-.agent-address {
-	color: var(--text-muted);
-	overflow-wrap: anywhere;
-}
-
+/* The parts of an open agent, with a line above each part. */
 .agent-body {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
-	padding: 4px 16px 16px;
+	padding: 0 20px;
 }
 
-.agent-body .card {
-	margin-bottom: 0;
+.agent-body > * {
+	padding: 20px 0;
+	border-top: 1px solid var(--border);
 }
 
-.agent-mail-link {
+/* In an agent, a panel has no card of its own: the agent is the card. */
+.agent-body .panel-card {
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+}
+
+.agent-body .panel-title,
+.subpanel-title {
+	margin-bottom: 4px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.agent-body .panel-form-divided {
+	padding-bottom: 0;
+}
+
+.agent-meta {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px 12px;
+	justify-content: space-between;
+	gap: 12px 24px;
 }
 
-.agent-mail-link .field-hint {
-	margin-top: 0;
+.agent-meta .field-hint {
+	margin: 2px 0 0;
 }
 
 .policy-form {
@@ -2408,59 +3455,116 @@ fieldset {
 	gap: 12px;
 }
 
+.policy-form legend {
+	margin-bottom: 8px;
+}
+
 .policy-form .field {
 	width: 100%;
 	max-width: 480px;
 }
 
-/* Under 768px: the sidebar is a drawer behind the menu button. */
+.policy-form .field-hint,
+.policy-form .form-error {
+	margin: 0;
+}
 
-@media (max-width: 767px) {
+/* The OAuth approval page (/connect): one card in the center, on the surface. */
+.connect-main {
+	background: var(--surface);
+}
+
+.connect-page {
+	display: grid;
+	justify-items: center;
+	padding: clamp(24px, 6vh, 64px) 16px 48px;
+}
+
+.connect-host {
+	overflow-wrap: anywhere;
+}
+
+.connect-requested {
+	margin-left: 8px;
+}
+
+.connect-form {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 20px 16px;
+	align-items: start;
+}
+
+.connect-form .field-hint,
+.connect-form .form-error {
+	margin: 0;
+}
+
+.connect-actions {
+	display: grid;
+	gap: 12px;
+}
+
+.connect-state {
+	text-align: center;
+}
+
+.connect-state > * + * {
+	margin-top: 12px;
+}
+
+/* At 900px and below, the rail and the sidebar of the page are a drawer behind the menu button. */
+
+@media (max-width: 900px) {
 	:root {
-		--topbar-height: 56px;
+		--header-height: 56px;
 	}
 
-	.topbar {
-		gap: 4px;
-		padding: 0 8px;
+	.app {
+		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.app-banner {
+		grid-column: 1;
+		padding: 10px 16px;
+	}
+
+	/* The button is in the page cell of the grid, at the left of the header row of the page. */
 	.menu-button {
+		position: absolute;
+		grid-column: 1;
+		grid-row: -2 / -1;
+		top: 6px;
+		left: 8px;
+		z-index: 5;
 		display: inline-flex;
+		width: 44px;
+		height: 44px;
 	}
 
-	.topbar .brand {
-		width: auto;
+	/* The header row keeps room for the menu button. */
+	.page-header,
+	.toolbar,
+	.drive-header,
+	.chat-header,
+	.document-header {
+		gap: 6px;
+		padding: 6px 8px 6px 60px;
 	}
 
-	.brand-name {
+	.page-heading,
+	.toolbar-title {
+		font-size: 16px;
+	}
+
+	/* The title keeps its width. The search box takes the room that stays. */
+	.toolbar .page-title {
+		flex: none;
+		max-width: 50%;
+	}
+
+	.toolbar .page-title .icon {
 		display: none;
-	}
-
-	.product-name {
-		display: none;
-	}
-
-	.product-link {
-		padding: 0 10px;
-	}
-
-	.brand-mark {
-		width: 30px;
-		height: 30px;
-	}
-
-	.search {
-		margin-left: 4px;
-	}
-
-	.search-input {
-		height: 42px;
-		padding-left: 44px;
-	}
-
-	.search-icon {
-		left: 14px;
 	}
 
 	.mail-layout,
@@ -2468,23 +3572,34 @@ fieldset {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	.rail,
 	.sidebar {
 		position: fixed;
-		top: var(--topbar-height);
+		top: 0;
 		bottom: 0;
-		left: 0;
-		z-index: 30;
-		width: min(300px, 85vw);
-		padding-top: 12px;
-		background: var(--surface);
-		box-shadow: var(--shadow);
-		transform: translateX(-105%);
+		transform: translateX(-380px);
 		visibility: hidden;
 		transition:
 			transform 0.2s ease,
 			visibility 0s linear 0.2s;
 	}
 
+	.rail {
+		left: 0;
+		z-index: 31;
+		width: calc(var(--rail-width) + env(safe-area-inset-left));
+		padding-bottom: max(16px, env(safe-area-inset-bottom));
+		padding-left: calc(12px + env(safe-area-inset-left));
+	}
+
+	.sidebar {
+		left: calc(var(--rail-width) + env(safe-area-inset-left));
+		z-index: 30;
+		width: min(280px, calc(100vw - var(--rail-width) - 16px));
+		padding-bottom: max(20px, env(safe-area-inset-bottom));
+	}
+
+	.rail-open,
 	.sidebar-open {
 		transform: none;
 		visibility: visible;
@@ -2493,33 +3608,23 @@ fieldset {
 
 	.nav-backdrop {
 		position: fixed;
-		inset: var(--topbar-height) 0 0 0;
+		inset: 0;
 		z-index: 20;
 		display: block;
 		padding: 0;
 		border: 0;
-		background: rgb(15 23 42 / 0.4);
+		background: var(--drawer-backdrop);
 		cursor: default;
 	}
 
-	.mail-main {
-		margin: 0;
-		border-radius: 0;
+	/* The search box of Mail hides while conversations are selected, so the actions have room. */
+	.toolbar-has-targets .search {
+		display: none;
 	}
 
 	.toolbar {
-		padding: 4px;
 		overflow-x: auto;
 		scrollbar-width: none;
-	}
-
-	.toolbar-actions {
-		flex-wrap: nowrap;
-	}
-
-	.toolbar .icon-button {
-		width: 36px;
-		height: 36px;
 	}
 
 	.toolbar-divider {
@@ -2527,17 +3632,17 @@ fieldset {
 	}
 
 	.label-select {
-		max-width: 124px;
+		max-width: 160px;
 		padding-right: 4px;
 	}
 
-	.toolbar-title {
-		max-width: 50%;
+	.thread-list {
+		padding: 4px 4px 0;
 	}
 
 	.thread-row {
-		grid-template-columns: 36px minmax(0, 1fr) 36px;
-		padding: 4px 0 4px 4px;
+		grid-template-columns: 28px minmax(0, 1fr) 32px;
+		padding: 4px 4px 4px 8px;
 	}
 
 	.thread-link {
@@ -2560,7 +3665,7 @@ fieldset {
 	}
 
 	.thread-row-read-only {
-		grid-template-columns: minmax(0, 1fr) 36px;
+		grid-template-columns: minmax(0, 1fr) 32px;
 		padding-left: 12px;
 	}
 
@@ -2595,22 +3700,68 @@ fieldset {
 		display: none;
 	}
 
+	/* Only the first label shows next to the date. */
+	.thread-label {
+		max-width: 96px;
+	}
+
+	.thread-label:nth-child(n + 3) {
+		display: none;
+	}
+
+	.thread-date {
+		min-width: 0;
+	}
+
 	.thread-view {
-		padding: 12px 12px 24px;
+		padding: 12px 16px 24px;
 	}
 
-	.thread-header,
-	.message-content {
+	.thread-header {
 		margin-left: 0;
-		padding-left: 0;
 	}
 
-	.attachment {
-		grid-template-columns: minmax(0, 1fr) auto;
+	/* The body of a message uses the full width, under the avatar. */
+	.message-content {
+		padding-left: 10px;
 	}
 
-	.attachment-meta {
-		grid-row: 2;
+	.message-recipients {
+		margin: 10px 0 12px;
+	}
+
+	.message-expanded .message-date {
+		white-space: normal;
+		text-align: right;
+	}
+
+	.file-card {
+		width: 100%;
+	}
+
+	.message-toggle {
+		min-height: 44px;
+	}
+
+	.compose-fields {
+		padding: 0 16px;
+	}
+
+	/* Text of 16px, so that iOS does not zoom in on the fields. */
+	.compose-input,
+	.compose-body {
+		font-size: 16px;
+	}
+
+	.rich-editor,
+	.compose-attachments,
+	.compose-size {
+		margin-right: 16px;
+		margin-left: 16px;
+	}
+
+	.compose-actions {
+		padding: 12px 16px 16px;
 	}
 
 	.dialog,
@@ -2629,7 +3780,7 @@ fieldset {
 		height: fit-content;
 		max-height: calc(100dvh - 32px);
 		margin: auto;
-		border-radius: var(--radius-large);
+		border-radius: var(--radius);
 	}
 
 	.rich-editor,
@@ -2651,18 +3802,58 @@ fieldset {
 		right: 16px;
 		bottom: 16px;
 		left: 16px;
+		align-items: stretch;
 	}
 
-	.card {
-		padding: 16px;
+	.page {
+		padding: 16px 16px 32px;
 	}
 
-	.page > h1,
-	.admin-content > h1 {
-		font-size: 22px;
+	.admin-content {
+		gap: 24px;
+		padding: 20px 16px 40px;
 	}
 
-	/* The Members table keeps the name, the kind, the role and the actions on a phone. */
+	.settings-column {
+		gap: 28px;
+		padding: 24px 16px 40px;
+	}
+
+	.panel-card {
+		padding: 14px;
+	}
+
+	.panel-card-list,
+	.setting-rows {
+		padding: 2px 14px;
+	}
+
+	.agent-summary {
+		flex-wrap: wrap;
+		padding: 12px 14px;
+	}
+
+	.agent-body {
+		padding: 0 14px;
+	}
+
+	.agent-body .panel-card {
+		padding: 0;
+	}
+
+	.connect-page {
+		padding: 18px 12px 32px;
+	}
+
+	.mcp-banner-row {
+		flex-wrap: wrap;
+	}
+
+	.mcp-banner-row .link-field {
+		flex-basis: 100%;
+	}
+
+	/* The Members table keeps the name, the role and the actions on a phone. */
 	.col-optional {
 		display: none;
 	}
@@ -2671,13 +3862,91 @@ fieldset {
 		min-width: 140px;
 	}
 
-	.kind-inline {
+	.kind.kind-inline {
 		display: inline-block;
 	}
 
-	.row-actions {
-		display: inline-grid;
-		grid-template-columns: repeat(2, 32px);
+	.row-note.row-note-inline {
+		display: block;
+	}
+}
+
+/* A phone: a row of the Members table and of the Shared mailboxes table has two lines. The name
+   and the address are above the role, or the members, and the buttons. The header row stays for a
+   screen reader. */
+@media (max-width: 600px) {
+	.table-rows:has(.member-cell),
+	.table-rows:has(.member-cell) tbody {
+		display: block;
+	}
+
+	.table-rows:has(.member-cell) thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+
+	.table-rows:has(.member-cell) tbody tr {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px 12px;
+		padding: 12px 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.table-rows:has(.member-cell) tbody tr:last-child {
+		border-bottom: 0;
+	}
+
+	.table-rows:has(.member-cell) td {
+		display: block;
+		flex: 1 1 0;
+		min-width: 0;
+		padding: 0;
+		border-bottom: 0;
+	}
+
+	.table-rows:has(.member-cell) td.member-cell {
+		flex: 1 0 100%;
+	}
+
+	.table-rows:has(.member-cell) td.cell-actions {
+		flex: none;
+	}
+
+	.table-rows:has(.member-cell) td.col-optional {
+		display: none;
+	}
+}
+
+/* From 901px to 1100px, the Admin tables have the sidebar next to them. They keep the name, the role
+   and the actions, as at 900px and below. */
+@media (min-width: 901px) and (max-width: 1100px) {
+	.admin-layout .col-optional {
+		display: none;
+	}
+
+	.admin-layout .kind.kind-inline {
+		display: inline-block;
+	}
+
+	.admin-layout .member-cell {
+		min-width: 200px;
+	}
+}
+
+/* A narrow phone has no room for the avatar of a row. */
+@media (max-width: 500px) {
+	.table-rows .member-avatar {
+		display: none;
+	}
+
+	.table-rows th,
+	.table-rows td {
+		padding-right: 10px;
 	}
 }
 
@@ -2686,84 +3955,19 @@ fieldset {
 .setup-steps {
 	display: grid;
 	gap: 8px;
-	margin: 16px 0 20px;
+	margin: 0;
 	padding-left: 20px;
 }
 
-.setup-form {
-	display: grid;
-	gap: 16px;
-}
-
-.setup-choices {
-	display: grid;
-	gap: 16px;
-	margin-top: 16px;
-}
-
-.setup-choices .field-hint {
-	margin: 0;
-}
-
-.setup-actions {
-	display: grid;
-	gap: 12px;
+.setup-steps li::marker {
+	color: var(--muted-foreground);
 }
 
 .setup-intro {
 	margin: 0;
 }
 
-.setup-form .form-error {
-	margin: 0;
-}
-
-/* Two-step verification setup */
-
-.totp-setup {
-	display: grid;
-	gap: 12px;
-}
-
-.totp-setup .setup-steps {
-	margin: 0;
-}
-
-.totp-setup .field-label,
-.totp-setup .field-hint {
-	margin: 0;
-}
-
-.totp-qr {
-	justify-self: start;
-	padding: 8px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: #ffffff;
-	line-height: 0;
-}
-
-.qr-code {
-	display: block;
-	max-width: 100%;
-	height: auto;
-}
-
-.totp-secret {
-	margin: 0;
-	font-family: var(--mono);
-	font-size: 15px;
-	letter-spacing: 0.04em;
-	overflow-wrap: anywhere;
-	user-select: all;
-}
-
-.totp-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-
+/* The owner address: the mailbox name in a field, and the domain as text after it. */
 .address-row {
 	display: flex;
 	align-items: center;
@@ -2776,11 +3980,434 @@ fieldset {
 }
 
 .address-at {
-	color: var(--text-muted);
+	color: var(--muted-foreground);
 }
 
 .address-row .address-domain {
 	flex: 0 1 auto;
 	width: auto;
 	overflow-wrap: anywhere;
+}
+
+/* Two-step verification setup */
+
+.totp-setup {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+
+.totp-setup .field-hint,
+.totp-setup .form-error {
+	margin: 0;
+}
+
+.totp-setup .field {
+	max-width: 400px;
+}
+
+.totp-setup > [aria-live]:empty {
+	display: none;
+}
+
+/* The QR code at the left, and the key at its right. On a narrow card, the key is below the code. */
+.totp-scan {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 16px 20px;
+}
+
+/* The QR code stays black on white in the two modes: some scanners cannot read an inverted code. */
+.totp-qr {
+	flex: none;
+	padding: 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: #ffffff;
+	line-height: 0;
+}
+
+.qr-code {
+	display: block;
+	max-width: 100%;
+	height: auto;
+}
+
+.totp-key {
+	flex: 1 1 180px;
+	min-width: 0;
+}
+
+.totp-key .field-label {
+	margin-bottom: 6px;
+}
+
+.totp-secret {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--background);
+	font-family: var(--mono);
+	font-size: 14px;
+	letter-spacing: 0.04em;
+	overflow-wrap: anywhere;
+	user-select: all;
+}
+
+.totp-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* The setup of two-step verification opens below the text, with the full width. */
+.setting-action > .totp-setup,
+.setting-action > [role="alert"] {
+	flex: 1 0 100%;
+}
+
+.setting-action > .totp-setup {
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+
+/* The hint above a list of scopes has a space below it. An empty hint takes no room. */
+.panel-form .scope-list .field-hint,
+.connect-form .scope-list .field-hint {
+	margin-bottom: 8px;
+}
+
+.mcp-banner .field-hint:empty {
+	display: none;
+}
+
+/* Touch: at 900px and below, and for a finger on a wider screen, the rows are 44px high. The text
+   fields have 16px text, so that iOS does not zoom in on them. */
+
+@media (max-width: 900px), (pointer: coarse) {
+	.nav-item,
+	.menu-item,
+	.drive-menu-item,
+	.appearance-option {
+		min-height: 44px;
+	}
+
+	.input,
+	.search-input {
+		min-height: 44px;
+		font-size: 16px;
+	}
+
+	.search-input {
+		height: 44px;
+	}
+
+	.search-key {
+		display: none;
+	}
+}
+
+/* Phones and tablets.
+   - The drawer layout (900px and below) keeps clear of the notch and of the home indicator.
+   - At 900px and below, and for a touch screen, each control is 44px or more.
+   - At 600px and below, the header row of a page has room for one title and for icon buttons. */
+
+@keyframes backdrop-in {
+	from {
+		opacity: 0;
+	}
+}
+
+@media (max-width: 900px) {
+	/* The page is inside the safe area. The canvas color fills the area next to the notch. */
+	.app {
+		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+	}
+
+	/* The drawer scrolls by itself, and the page behind it does not move. At least 16px of the page shows. */
+	.rail,
+	.sidebar {
+		transform: translateX(calc(-380px - env(safe-area-inset-left)));
+		overscroll-behavior: contain;
+	}
+
+	.rail-open,
+	.sidebar-open {
+		transform: none;
+	}
+
+	.sidebar {
+		width: min(280px, calc(100vw - var(--rail-width) - env(safe-area-inset-left) - 16px));
+		padding-top: max(16px, env(safe-area-inset-top));
+	}
+
+	.nav-backdrop {
+		animation: backdrop-in 0.2s ease;
+	}
+
+	/* A dialog that fills the screen keeps its content in the safe area. */
+	.dialog,
+	.composer {
+		padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+	}
+
+	.dialog-small {
+		padding: 0;
+	}
+
+	.composer .compose-form {
+		min-height: calc(100dvh - 60px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+	}
+
+	.toasts {
+		right: max(16px, env(safe-area-inset-right));
+		bottom: calc(16px + env(safe-area-inset-bottom));
+		left: max(16px, env(safe-area-inset-left));
+	}
+
+	/* Sign-in and setup are not in the shell. */
+	.auth {
+		padding: max(18px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+			max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.nav-backdrop {
+		animation: none;
+	}
+}
+
+/* Touch targets. */
+@media (max-width: 900px), (pointer: coarse) {
+	.button,
+	.button-small,
+	.compose-button,
+	.compose-copies,
+	.toast-action,
+	.compose-input,
+	.compose-from {
+		min-height: 44px;
+	}
+
+	.icon-button,
+	.icon-button-small,
+	.nav-section .icon-button-small,
+	.nav-mailbox-toggle,
+	.nav-label-delete,
+	.dialog-header .icon-button,
+	.format-button,
+	.star,
+	.toast-close {
+		width: 44px;
+		height: 44px;
+	}
+
+	/* The label around a box is the target. The box keeps its size. */
+	.select-all,
+	.thread-check {
+		place-items: center;
+		width: 44px;
+		height: 44px;
+	}
+
+	.nav-mailbox-toggle,
+	.nav-label-delete {
+		right: 0;
+	}
+
+	.nav-mailbox-row .nav-mailbox,
+	.nav-label-row:has(.nav-label-delete) .nav-item {
+		padding-right: 44px;
+	}
+
+	.label-select {
+		height: 44px;
+		font-size: 16px;
+	}
+
+	.link-field {
+		min-height: 46px;
+	}
+
+	.link-field-input {
+		align-self: stretch;
+		font-size: 16px;
+	}
+
+	.mcp-banner-row .button {
+		min-height: 46px;
+	}
+
+	/* The switch keeps its size. An area around it takes the tap. */
+	.switch::before {
+		content: "";
+		position: absolute;
+		inset: -10px -1px;
+	}
+
+	.check-row {
+		align-items: center;
+		min-height: 44px;
+	}
+
+	.check-row input {
+		margin-top: 0;
+	}
+
+	.thread-row {
+		grid-template-columns: 44px 44px minmax(0, 1fr);
+		padding: 0 12px 0 0;
+	}
+
+	.thread-row-read-only {
+		grid-template-columns: 44px minmax(0, 1fr);
+	}
+
+	.format-group-start:not(:first-child) {
+		margin-left: 0;
+	}
+}
+
+@media (max-width: 900px) {
+	.thread-row {
+		grid-template-columns: 44px minmax(0, 1fr) 44px;
+		padding: 2px 0;
+	}
+
+	.thread-row-read-only {
+		grid-template-columns: minmax(0, 1fr) 44px;
+		padding-left: 12px;
+	}
+
+	.toolbar,
+	.drive-header {
+		position: relative;
+	}
+}
+
+/* A phone. */
+@media (max-width: 600px) {
+	/* The search box is an icon in the header row. With the focus, it opens across the row. With a
+	   query, it shows next to the title. */
+	.search {
+		flex: none;
+		width: 44px;
+		min-width: 0;
+	}
+
+	.search-input {
+		padding: 0 0 0 43px;
+		border-color: transparent;
+		background: transparent;
+		box-shadow: none;
+		cursor: pointer;
+	}
+
+	.search-input::placeholder {
+		color: transparent;
+	}
+
+	.search-icon {
+		left: 12px;
+		width: 20px;
+		height: 20px;
+	}
+
+	.search:has(.search-input:not(:placeholder-shown)) {
+		flex: 100 1 0;
+		min-width: 96px;
+	}
+
+	.search:focus-within {
+		position: absolute;
+		top: 6px;
+		right: 8px;
+		left: 60px;
+		z-index: 4;
+		width: auto;
+		background: var(--background);
+	}
+
+	.search:focus-within .search-input,
+	.search-input:not(:placeholder-shown) {
+		padding: 0 12px 0 36px;
+		border-color: var(--input);
+		background: var(--field);
+		box-shadow: var(--shadow-xs);
+		cursor: text;
+	}
+
+	.search:focus-within .search-input::placeholder {
+		color: var(--muted-foreground);
+	}
+
+	.search:focus-within .search-icon,
+	.search:has(.search-input:not(:placeholder-shown)) .search-icon {
+		left: 10px;
+		width: 16px;
+		height: 16px;
+	}
+
+	/* The title of the view uses the room that the search box gives back. */
+	.toolbar .page-title {
+		flex: 0 1 auto;
+		max-width: none;
+	}
+
+	/* The box with a query has the room of the title. The title stays for a screen reader. */
+	.toolbar:has(.search-input:not(:placeholder-shown)) .page-title,
+	.drive-header:has(.search-input:not(:placeholder-shown)) > .drive-title {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+
+	.drive-header:has(.search-input:not(:placeholder-shown)) > .drive-crumbs {
+		flex: 0 1 auto;
+		max-width: 40%;
+	}
+
+	/* The actions on the selection, or on the open thread, are a bar at the bottom of the screen. */
+	.toolbar-has-targets .toolbar-actions {
+		position: fixed;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 6;
+		justify-content: space-around;
+		gap: 0;
+		min-height: 56px;
+		padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
+			max(8px, env(safe-area-inset-left));
+		border-top: 1px solid var(--border);
+		background: var(--background);
+	}
+
+	.toolbar-has-targets .toolbar-divider {
+		display: none;
+	}
+
+	/* The label list uses the room that stays. */
+	.toolbar-has-targets .label-picker {
+		flex: 0 1 140px;
+		min-width: 0;
+	}
+
+	.toolbar-has-targets .label-select {
+		width: 100%;
+		min-width: 0;
+	}
+
+	.mail-main:has(.toolbar-has-targets) {
+		padding-bottom: 56px;
+	}
+
+	body:has(.toolbar-has-targets) .toasts {
+		bottom: calc(68px + env(safe-area-inset-bottom));
+	}
 }

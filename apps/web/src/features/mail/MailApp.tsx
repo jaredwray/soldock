@@ -79,15 +79,6 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 		document.title = `${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Soldock`;
 	}, [title, inboxUnread, mailboxName]);
 
-	useEffect(() => {
-		if (!navOpen) return;
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") closeNavRef.current();
-		}
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [navOpen]);
-
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
@@ -118,6 +109,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 				<Sidebar
 					mailboxId={mailboxId}
 					mailboxName={mailboxName}
+					address={myAddress}
 					mailboxes={mailboxes}
 					expanded={expandedMailboxes}
 					onSetExpanded={onSetExpanded}

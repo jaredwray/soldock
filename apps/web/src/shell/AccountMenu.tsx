@@ -1,20 +1,25 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useAdminAccess } from "../features/admin/access.ts";
 import { SIGN_OUT_FAILED } from "../features/auth/auth.ts";
 import { useSession } from "../features/auth/session.tsx";
+import { type Appearance, chooseAppearance, useAppearance } from "../lib/appearance.ts";
 import { initials } from "../lib/format.ts";
-import { Icon } from "../lib/icons.tsx";
-import { Link } from "../lib/router.tsx";
+import { Icon, type IconName } from "../lib/icons.tsx";
 import { useToast } from "../lib/toast.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
-/** The account button and its panel: identity, Settings, Admin (when allowed) and Sign out. */
+const APPEARANCES: readonly { value: Appearance; label: string; icon: IconName }[] = [
+	{ value: "light", label: "Light", icon: "sun" },
+	{ value: "dark", label: "Dark", icon: "moon" },
+	{ value: "system", label: "System", icon: "system" },
+];
+
+/** The account button at the bottom of the rail, and its panel: identity, Appearance and Sign out. */
 export function AccountMenu() {
 	const { whoami, signOut } = useSession();
 	const toast = useToast();
 	const principal = whoami.principal;
-	const showAdmin = useAdminAccess(principal);
+	const appearance = useAppearance();
 	const [open, setOpen] = useState(false);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const buttonRef = useRef<HTMLButtonElement>(null);
@@ -37,8 +42,6 @@ export function AccountMenu() {
 			document.removeEventListener("keydown", onKeyDown);
 		};
 	}, [open]);
-
-	const close = () => setOpen(false);
 
 	return (
 		<div className="account" ref={rootRef}>
@@ -67,32 +70,35 @@ export function AccountMenu() {
 							{principal.org_role && <span className="muted">{ROLE_NAMES[principal.org_role]}</span>}
 						</div>
 					</div>
-					<ul className="account-links">
-						<li>
-							<Link to="/settings" className="account-link" onClick={close}>
-								<Icon name="settings" />
-								Settings
-							</Link>
-						</li>
-						{showAdmin && (
-							<li>
-								<Link to="/admin" className="account-link" onClick={close}>
-									<Icon name="shield" />
-									Admin
-								</Link>
-							</li>
-						)}
-						<li>
-							<button
-								type="button"
-								className="account-link"
-								onClick={() => void signOut().catch(() => toast({ message: SIGN_OUT_FAILED, tone: "error" }))}
-							>
-								<Icon name="signOut" />
-								Sign out
-							</button>
-						</li>
-					</ul>
+					<div className="menu-separator" />
+					{/* A choice applies at once. The panel stays open. */}
+					<fieldset className="appearance">
+						<legend>Appearance</legend>
+						<div className="appearance-options">
+							{APPEARANCES.map((option) => (
+								<label key={option.value} className="appearance-option">
+									<input
+										type="radio"
+										name="appearance"
+										value={option.value}
+										checked={appearance === option.value}
+										onChange={() => chooseAppearance(option.value)}
+									/>
+									<Icon name={option.icon} size={16} />
+									{option.label}
+								</label>
+							))}
+						</div>
+					</fieldset>
+					<div className="menu-separator" />
+					<button
+						type="button"
+						className="menu-item"
+						onClick={() => void signOut().catch(() => toast({ message: SIGN_OUT_FAILED, tone: "error" }))}
+					>
+						<Icon name="signOut" size={16} />
+						Sign out
+					</button>
 				</div>
 			)}
 		</div>

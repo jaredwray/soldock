@@ -51,6 +51,7 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 	const canEdit = (item.role === "owner" || item.role === "editor") && !item.trashed;
 	const space = spaceInput(item.space_id, ownId);
 	const failed = saveState === "error" || saveState === "conflict";
+	const stateText = saveState === null ? (item.trashed ? "In the trash" : "View only") : SAVE_TEXT[saveState];
 
 	useEffect(() => {
 		if (editing) {
@@ -112,63 +113,55 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 			>
 				<Icon name="back" />
 			</Link>
-			<Icon name={itemIcon(item)} size={24} className={`drive-kind drive-kind-${item.kind}`} />
-			<div className="document-header-title">
-				{editing ? (
-					<form
-						className="document-header-form"
-						onSubmit={(event: FormEvent<HTMLFormElement>) => {
+			<Icon name={itemIcon(item)} size={22} className="document-header-icon" />
+			{editing ? (
+				<form
+					className="document-header-form"
+					onSubmit={(event: FormEvent<HTMLFormElement>) => {
+						event.preventDefault();
+						refocusRef.current = true;
+						void rename();
+					}}
+				>
+					<label className="visually-hidden" htmlFor="document-name">
+						Name
+					</label>
+					<input
+						id="document-name"
+						ref={inputRef}
+						className="input document-header-input"
+						value={name}
+						maxLength={DRIVE_LIMITS.nameChars}
+						autoComplete="off"
+						disabled={renaming}
+						onChange={(event) => setName(event.target.value)}
+						onBlur={() => void rename()}
+						onKeyDown={(event) => {
+							if (event.key !== "Escape") return;
 							event.preventDefault();
 							refocusRef.current = true;
-							void rename();
+							setEditing(false);
 						}}
-					>
-						<label className="visually-hidden" htmlFor="document-name">
-							Name
-						</label>
-						<input
-							id="document-name"
-							ref={inputRef}
-							className="input document-header-input"
-							value={name}
-							maxLength={DRIVE_LIMITS.nameChars}
-							autoComplete="off"
-							disabled={renaming}
-							onChange={(event) => setName(event.target.value)}
-							onBlur={() => void rename()}
-							onKeyDown={(event) => {
-								if (event.key !== "Escape") return;
-								event.preventDefault();
-								refocusRef.current = true;
-								setEditing(false);
-							}}
-						/>
-					</form>
-				) : (
-					<h1 className="document-header-name">
-						{canEdit ? (
-							<button
-								ref={nameButtonRef}
-								type="button"
-								className="document-header-rename"
-								title="Rename"
-								onClick={startRename}
-							>
-								{item.name}
-								<span className="visually-hidden">, rename</span>
-							</button>
-						) : (
-							item.name
-						)}
-					</h1>
-				)}
-				<p
-					className={failed ? "document-header-state document-header-state-error" : "document-header-state"}
-					role="status"
-				>
-					{saveState === null ? (item.trashed ? "In the trash" : "View only") : SAVE_TEXT[saveState]}
-				</p>
-			</div>
+					/>
+				</form>
+			) : (
+				<h1 className="document-header-name">
+					{canEdit ? (
+						<button
+							ref={nameButtonRef}
+							type="button"
+							className="document-header-rename"
+							title="Rename"
+							onClick={startRename}
+						>
+							{item.name}
+							<span className="visually-hidden">, rename</span>
+						</button>
+					) : (
+						item.name
+					)}
+				</h1>
+			)}
 			<button
 				type="button"
 				className={item.starred ? "icon-button icon-button-star" : "icon-button"}
@@ -179,6 +172,13 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 			>
 				<Icon name="star" filled={item.starred} />
 			</button>
+			<p
+				className={failed ? "document-header-state document-header-state-error" : "document-header-state"}
+				role="status"
+				title={stateText}
+			>
+				{stateText}
+			</p>
 			<span className="document-header-spacer" />
 			{actions}
 			{item.role === "owner" && (

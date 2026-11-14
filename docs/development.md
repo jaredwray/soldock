@@ -41,6 +41,19 @@ Then open http://localhost:8787 and sign in with `owner@example.com` and the pas
 For the SPA with hot reload, run `pnpm --filter @soldock/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.
 
+## Sample data
+
+`pnpm seed` fills an empty local Soldock with a made-up organization: people, agents, a shared
+mailbox, mail, chat rooms and drive items. Use it for demonstrations and screenshots.
+
+```sh
+SETUP_TOKEN=local-setup-token-0123456789abcdef pnpm seed    # the same token as the Worker
+```
+
+Run it in a second terminal, while `wrangler dev` runs and before you create an owner. It does the
+setup, and then it prints the address and the password of each person. It stops if an owner exists.
+[`tools/seed`](../tools/seed/README.md) has the details.
+
 ## Inject inbound mail
 
 `wrangler dev` runs the `email()` handler for a raw message that you post to
