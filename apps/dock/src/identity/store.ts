@@ -90,7 +90,7 @@ export function normalizeAddress(address: string): string {
 
 /**
  * The `+tag` in the local part of an address, or null. Mail to `ada+news@example.com` has the tag
- * `news`. It uses the same rule as `normalizeAddress`, so a tag exists only where that function removes one.
+ * `news`. It finds the `+` with the same rule as `normalizeAddress`. An empty tag (`ada+@`) gives null.
  */
 export function addressTag(address: string): string | null {
 	const trimmed = address.trim();

@@ -91,16 +91,23 @@ message in `SPAM` instead.
 Mail to `user+tag@` goes to the mailbox of `user@`. The tag applies a user label to the message:
 
 - The tag is the text after the first `+` of the local part, up to the `@`. `jw+netflix@` has the tag `netflix`.
-- The message gets the user label whose name is the tag. The comparison is the same as for label
-  names: `jw+NETFLIX@` matches the label `Netflix`.
+- The message gets the user label whose name is the tag. The comparison uses the NFC form in
+  lowercase, as for label names: `jw+NETFLIX@` matches the label `Netflix`.
+- The tag must be the full name of the label. A nested label needs its full path: the label
+  `Clients/Acme` matches `jw+clients/acme@`, and not `jw+acme@`. A label name with a character
+  that an address cannot hold, for example a space, matches no tag.
 - A tag never creates a label. The sender chooses the tag, so a stranger cannot add labels to a
   mailbox. When no user label matches, the message gets only its usual labels.
 - A tag never selects a system label. `jw+spam@` and `jw+trash@` go to the inbox.
-- The message keeps `INBOX`. A tag label does not archive the message.
-- The same message can come to two tags of one mailbox. The mailbox stores one message, and the
-  second copy adds its tag label.
-- Local mail and mail to yourself use the tag of the recipient address too. When one send names two
-  addresses of one mailbox, the mailbox gets one copy, with the tag of the first address.
+- The message keeps `INBOX`. A tag label does not archive the message. Mail that fails DMARC gets
+  `SPAM`, `UNREAD` and the tag label. The label views hide it, as they hide all spam.
+- The same message can come to two tags of one mailbox. When the two copies have the same bytes,
+  the mailbox stores one message, and the second copy adds its tag label. Otherwise, each copy is a
+  message with its own tag label.
+- A second delivery of one copy (a queue redelivery or an outbox retry) applies the tag label again.
+  Known limit: if the owner removed the label between the two deliveries, the label comes back.
+- Local mail and mail to yourself use the tag of the recipient address too. Known limit: when one
+  send names two addresses of one mailbox, the mailbox gets one copy, with the tag of the first address.
 - Team mailboxes use the same rules, with the labels of the team mailbox.
 
 ## Threads

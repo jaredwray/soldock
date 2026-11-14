@@ -23,7 +23,8 @@ export interface DeliverInput {
 	spam: boolean;
 	/**
 	 * The `+tag` of the recipient address. The message gets the user label with the same name, if one
-	 * exists. A tag never creates a label and never selects a system label. Optional for callers from before tags.
+	 * exists. A tag never creates a label and never selects a system label. The field is optional,
+	 * because earlier callers do not send it.
 	 */
 	tag?: string | null;
 }

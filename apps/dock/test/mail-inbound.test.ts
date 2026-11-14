@@ -89,6 +89,10 @@ describe("+tag labels", () => {
 		const threads = await inbox(ada.call);
 		expect(threads).toHaveLength(1);
 		expect(threads[0]?.label_ids.sort()).toEqual(["INBOX", "UNREAD", bank.id, tax.id].sort());
+		// A redelivery of a copy changes nothing, so the web app does not fetch again.
+		const { version } = await ada.call("mail.get_profile");
+		await inject(raw, "ada+tax@dock.test");
+		expect((await ada.call("mail.get_profile")).version).toBe(version);
 	});
 });
 
