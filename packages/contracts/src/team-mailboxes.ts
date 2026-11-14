@@ -63,6 +63,23 @@ export const createTeamMailbox = defineOperation({
 	errors: ["conflict", "not_found"],
 });
 
+export const updateTeamMailbox = defineOperation({
+	name: "directory.update_team_mailbox",
+	summary: "Change the name of a team mailbox",
+	description: [
+		ADMIN_ONLY,
+		"Mail that the members send from the mailbox has the new name in From. The address, the mail, the labels and the members do not change.",
+		"The address of a team mailbox cannot change.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/directory/team-mailboxes/{mailbox_id}" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ mailbox_id: TeamMailboxId, display_name: DisplayName }),
+	output: z.object({ team_mailbox: TeamMailbox }),
+	errors: ["not_found", "conflict"],
+});
+
 export const addTeamMailboxMember = defineOperation({
 	name: "directory.add_team_mailbox_member",
 	summary: "Give a person or an agent access to a team mailbox",
@@ -96,6 +113,7 @@ export const removeTeamMailboxMember = defineOperation({
 export const teamMailboxOperations = {
 	"directory.list_team_mailboxes": listTeamMailboxes,
 	"directory.create_team_mailbox": createTeamMailbox,
+	"directory.update_team_mailbox": updateTeamMailbox,
 	"directory.add_team_mailbox_member": addTeamMailboxMember,
 	"directory.remove_team_mailbox_member": removeTeamMailboxMember,
 } as const;

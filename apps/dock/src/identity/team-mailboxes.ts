@@ -99,6 +99,15 @@ export async function createTeamMailbox(
 	return getTeamMailbox(db, id);
 }
 
+/** Changes the name of a team mailbox. Returns false when the mailbox is gone, for example after a reset. */
+export async function renameTeamMailbox(db: D1Database, id: string, displayName: string): Promise<boolean> {
+	const result = await db
+		.prepare("UPDATE team_mailboxes SET display_name = ? WHERE id = ?")
+		.bind(displayName, id)
+		.run();
+	return result.meta.changes === 1;
+}
+
 /**
  * Adds a member. A second call for the same member changes nothing. Returns false when the mailbox
  * has the most members that it can have, or when the principal was deleted during the request.
