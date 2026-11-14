@@ -1,16 +1,26 @@
-import type { Label, Mailbox } from "@soldock/contracts";
-import { useEffect, useRef } from "react";
+import type { Label, Mailbox, MailSettings } from "@soldock/contracts";
+import { useEffect, useId, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type MailView, viewPath } from "../../routes.ts";
 import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/TopBar.tsx";
+import { DEFAULT_SIDEBAR, type MailboxSection, mailboxNav } from "./mailboxNav.ts";
 import { labelRows, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
-	/** The team mailbox of the views, or null for the own mailbox. */
+	/** The team mailbox or the agent mailbox of the views, or null for the own mailbox. */
 	mailboxId: string | null;
-	/** The mailboxes that the person can use. The switcher shows when a team mailbox is in the list. */
+	/**
+	 * The mailboxes that the person can use. The switcher shows when a team mailbox or an agent mailbox
+	 * is in the list. Only owners and admins get agent mailboxes.
+	 */
 	mailboxes: readonly Mailbox[] | null;
+	/** The saved sidebar settings: which mailbox sections are collapsed. Null while they load. */
+	sidebarSettings: MailSettings["sidebar"] | null;
+	/** Collapses or expands a mailbox section, and saves the state in the mail settings of the person. */
+	onToggleSection: (setting: keyof MailSettings["sidebar"], collapsed: boolean) => void;
+	/** True in the mailbox of an agent: no compose button and no label changes. */
+	readOnly: boolean;
 	view: MailView;
 	labels: Label[] | null;
 	labelsError: string | null;
@@ -25,6 +35,9 @@ interface SidebarProps {
 export function Sidebar({
 	mailboxId,
 	mailboxes,
+	sidebarSettings,
+	onToggleSection,
+	readOnly,
 	view,
 	labels,
 	labelsError,
@@ -38,9 +51,8 @@ export function Sidebar({
 	const rows = labelRows(labels ?? []);
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
-	const teamMailboxes = (mailboxes ?? []).filter((mailbox) => mailbox.kind === "team");
-	// A deep link can open a team mailbox before the list loads, or after the access ended.
-	const showMailboxes = teamMailboxes.length > 0 || mailboxId !== null;
+	const nav = mailboxNav(mailboxes, mailboxId, sidebarSettings ?? DEFAULT_SIDEBAR);
+	const ownAddress = mailboxes?.find((mailbox) => mailbox.kind === "personal")?.address ?? null;
 
 	// The drawer under 768px: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
@@ -66,37 +78,31 @@ export function Sidebar({
 				className={open ? "sidebar sidebar-open" : "sidebar"}
 				aria-label="Mailboxes, folders and labels"
 			>
-				<button type="button" className="compose-button" onClick={onCompose}>
-					<Icon name="pencil" />
-					Compose
-				</button>
-				{showMailboxes && (
+				{!readOnly && (
+					<button type="button" className="compose-button" onClick={onCompose}>
+						<Icon name="pencil" />
+						Compose
+					</button>
+				)}
+				{nav && (
 					<>
-						<div className="nav-section nav-section-first">
-							<h2 className="nav-heading">Mailboxes</h2>
-						</div>
-						<ul className="nav-list nav-mailboxes">
-							{(mailboxes ?? []).map((mailbox) => {
-								const id = mailbox.kind === "team" ? mailbox.id : null;
-								const active = id === mailboxId;
-								return (
-									<li key={mailbox.id}>
-										<Link
-											to={viewPath({ kind: "system", view: "inbox" }, id)}
-											className={active ? "nav-item nav-item-active" : "nav-item"}
-											aria-current={active ? "true" : undefined}
-											title={mailbox.address}
-										>
-											<Icon name={mailbox.kind === "team" ? "team" : "mail"} />
-											<span className="nav-name">
-												{mailbox.kind === "team" ? mailbox.display_name : "My mailbox"}
-												<span className="visually-hidden">{`, ${mailbox.address}`}</span>
-											</span>
-										</Link>
-									</li>
-								);
-							})}
+						<ul className="nav-list nav-mailboxes" aria-label="Your mailbox">
+							<MailboxLink
+								to={viewPath({ kind: "system", view: "inbox" })}
+								name="My mailbox"
+								address={ownAddress}
+								icon="mail"
+								active={mailboxId === null}
+							/>
 						</ul>
+						{nav.sections.map((section) => (
+							<MailboxGroup
+								key={section.key}
+								section={section}
+								current={mailboxId}
+								onToggle={() => onToggleSection(section.setting, !section.collapsed)}
+							/>
+						))}
 						<div className="nav-section">
 							<h2 className="nav-heading">Folders</h2>
 						</div>
@@ -128,15 +134,17 @@ export function Sidebar({
 				</ul>
 				<div className="nav-section">
 					<h2 className="nav-heading">Labels</h2>
-					<button
-						type="button"
-						className="icon-button icon-button-small"
-						aria-label="New label"
-						title="New label"
-						onClick={onNewLabel}
-					>
-						<Icon name="plus" size={18} />
-					</button>
+					{!readOnly && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="New label"
+							title="New label"
+							onClick={onNewLabel}
+						>
+							<Icon name="plus" size={18} />
+						</button>
+					)}
 				</div>
 				{labelsError && labels === null && <p className="nav-error">Labels are not available.</p>}
 				<ul className="nav-list">
@@ -184,15 +192,17 @@ export function Sidebar({
 										</span>
 									)}
 								</Link>
-								<button
-									type="button"
-									className="icon-button icon-button-small nav-label-delete"
-									aria-label={`Delete label ${label.name}`}
-									title="Delete label"
-									onClick={() => onDeleteLabel(label)}
-								>
-									<Icon name="trash" size={16} />
-								</button>
+								{!readOnly && (
+									<button
+										type="button"
+										className="icon-button icon-button-small nav-label-delete"
+										aria-label={`Delete label ${label.name}`}
+										title="Delete label"
+										onClick={() => onDeleteLabel(label)}
+									>
+										<Icon name="trash" size={16} />
+									</button>
+								)}
 							</li>
 						);
 					})}
@@ -203,5 +213,92 @@ export function Sidebar({
 				</p>
 			</nav>
 		</>
+	);
+}
+
+/**
+ * A section of mailboxes with a heading that collapses it: the shared mailboxes or the agent mailboxes.
+ * A collapsed section still shows the open mailbox.
+ */
+function MailboxGroup({
+	section,
+	current,
+	onToggle,
+}: {
+	section: MailboxSection;
+	current: string | null;
+	onToggle: () => void;
+}) {
+	const listId = useId();
+	return (
+		<>
+			<div className="nav-section">
+				<h2 className="nav-heading">
+					<button
+						type="button"
+						className="nav-section-toggle"
+						aria-expanded={!section.collapsed}
+						aria-controls={listId}
+						onClick={onToggle}
+					>
+						<Icon
+							name="chevronDown"
+							size={16}
+							className={section.collapsed ? "nav-chevron nav-chevron-collapsed" : "nav-chevron"}
+						/>
+						{section.title}
+					</button>
+				</h2>
+			</div>
+			<ul
+				id={listId}
+				className="nav-list nav-mailboxes"
+				hidden={section.shown.length === 0}
+				aria-label={section.key === "agents" ? "Agent mailboxes, read only" : section.title}
+			>
+				{section.shown.map((mailbox) => (
+					<MailboxLink
+						key={mailbox.id}
+						to={viewPath({ kind: "system", view: "inbox" }, mailbox.id)}
+						name={mailbox.display_name}
+						address={mailbox.address}
+						icon={mailbox.kind === "agent" ? "bot" : "team"}
+						active={mailbox.id === current}
+					/>
+				))}
+			</ul>
+		</>
+	);
+}
+
+/** One row of the mailbox switcher. It opens the inbox of the mailbox. */
+function MailboxLink({
+	to,
+	name,
+	address,
+	icon,
+	active,
+}: {
+	to: string;
+	name: string;
+	address: string | null;
+	icon: "mail" | "team" | "bot";
+	active: boolean;
+}) {
+	return (
+		<li>
+			<Link
+				to={to}
+				className={active ? "nav-item nav-item-active" : "nav-item"}
+				aria-current={active ? "true" : undefined}
+				title={address ?? undefined}
+			>
+				<Icon name={icon} />
+				<span className="nav-name">
+					{name}
+					{address && <span className="visually-hidden">{`, ${address}`}</span>}
+				</span>
+			</Link>
+		</li>
 	);
 }

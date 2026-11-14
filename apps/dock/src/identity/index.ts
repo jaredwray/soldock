@@ -1,4 +1,5 @@
 // Public surface of the identity module. Other modules import from here, never from its files.
+export { canReadAgentMailboxes } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
@@ -14,6 +15,8 @@ export {
 	unknownPrincipalIds,
 } from "./store.ts";
 export {
+	agentMailboxes,
+	agentMailboxFor,
 	getMailbox,
 	isTeamMailboxId,
 	type MailboxRecord,

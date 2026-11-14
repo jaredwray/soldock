@@ -139,6 +139,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 									key={agent.id}
 									agent={agent}
 									sponsor={principals.find((p) => p.id === agent.sponsor_id) ?? null}
+									canReadMail={elevated}
 									onChanged={() => void load()}
 								/>
 							))}

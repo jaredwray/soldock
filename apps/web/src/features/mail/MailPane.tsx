@@ -1,6 +1,7 @@
 import type { Label, Message, ThreadSummary } from "@soldock/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
+import { Icon } from "../../lib/icons.tsx";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
@@ -19,7 +20,7 @@ import {
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
-import { useMailboxId } from "./mailbox.tsx";
+import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -29,12 +30,15 @@ import type { ViewQuery } from "./views.ts";
 /** Actions that send the open thread back to the list. */
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
 
+/** The shortcuts that change the mailbox, select threads for a change, or start a message. */
+const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x", "c", "r"]);
+
 interface MailPaneProps {
 	view: MailView;
 	threadId: string | null;
 	query: ViewQuery;
 	title: string;
-	/** The name of the team mailbox of the views, or null in the own mailbox. */
+	/** The name of the team mailbox or the agent mailbox of the views, or null in the own mailbox. */
 	mailboxName: string | null;
 	labels: readonly Label[] | null;
 	labelsById: ReadonlyMap<string, Label>;
@@ -52,6 +56,7 @@ export function MailPane(props: MailPaneProps) {
 	const { view, threadId, query, title, labelsById, myAddress, onChanged, onCompose } = props;
 	const toast = useToast();
 	const mailboxId = useMailboxId();
+	const readOnly = useReadOnlyMailbox();
 	const list = useThreadList(mailboxId, query.status === "ready" ? query.query : null);
 	const thread = useThread(mailboxId, threadId);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -96,12 +101,13 @@ export function MailPane(props: MailPaneProps) {
 
 	// When an unread thread opens, the pane marks it as read. mail.get_thread does not do it. A refresh
 	// can bring a new unread message into the open thread, so the guard keys on the unread message ids:
-	// a new set is marked again, and the same set is not sent twice.
+	// a new set is marked again, and the same set is not sent twice. In the mailbox of an agent, the
+	// thread stays unread: the agent must still find its new mail.
 	const openThread = thread.thread;
 	const patchThread = thread.patch;
 	const patchList = list.patch;
 	useEffect(() => {
-		if (!openThread) return;
+		if (!openThread || readOnly) return;
 		const unreadIds = openThread.messages.filter((m) => m.label_ids.includes("UNREAD")).map((m) => m.id);
 		if (unreadIds.length === 0 && !openThread.label_ids.includes("UNREAD")) return;
 		const key = `${openThread.id} ${unreadIds.sort().join(" ")}`;
@@ -113,7 +119,7 @@ export function MailPane(props: MailPaneProps) {
 		modifyThreads(mailboxId, [openThread.id], change).then(onChanged, (error: unknown) =>
 			toast({ message: `The conversation was not marked as read. ${errorMessage(error)}`, tone: "error" }),
 		);
-	}, [mailboxId, openThread, patchThread, patchList, view, onChanged, toast]);
+	}, [mailboxId, readOnly, openThread, patchThread, patchList, view, onChanged, toast]);
 
 	const labelsOf = useCallback(
 		(id: string): readonly string[] | null =>
@@ -122,7 +128,7 @@ export function MailPane(props: MailPaneProps) {
 	);
 
 	async function run(action: MailAction, ids: readonly string[]) {
-		if (ids.length === 0) return;
+		if (ids.length === 0 || readOnly) return;
 		const change = actionChange(action);
 		// Undo reverts the change only on the threads that it changed.
 		const changed = ids.filter((id) => {
@@ -191,6 +197,7 @@ export function MailPane(props: MailPaneProps) {
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
 
 	useShortcuts((event) => {
+		if (readOnly && CHANGE_KEYS.has(event.key)) return;
 		const current = threads[cursorIndex];
 		const keyTargets = listMode ? (selectedIds.length > 0 ? selectedIds : current ? [current.id] : []) : targets;
 		switch (event.key) {
@@ -269,6 +276,7 @@ export function MailPane(props: MailPaneProps) {
 				allStarred={allStarred}
 				userLabels={userLabels}
 				listEmpty={threads.length === 0}
+				readOnly={readOnly}
 				onToggleAll={() => setSelected(selection === "all" ? new Set() : new Set(threads.map((item) => item.id)))}
 				onAction={(action) => void run(action, targets)}
 				onBack={() => navigate(viewPath(view, mailboxId))}
@@ -277,6 +285,16 @@ export function MailPane(props: MailPaneProps) {
 					onChanged();
 				}}
 			/>
+			{readOnly && (
+				<p className="notice read-only-notice">
+					<Icon name="eye" size={18} />
+					<span>
+						<strong>Read only.</strong> This is the mailbox of an agent. As an owner or an admin, you can read it. You
+						cannot change it or send from it, and the conversations that you open stay unread for the agent. The audit
+						log records the lists and the conversations that you open.
+					</span>
+				</p>
+			)}
 			<div className="mail-scroll" ref={scrollRef}>
 				{query.status === "missing" ? (
 					<div className="list-state" role="alert">
@@ -287,7 +305,8 @@ export function MailPane(props: MailPaneProps) {
 						view={view}
 						title={title}
 						list={list}
-						// In a team mailbox, more than one person sends from the address, so no sender shows as "me".
+						// In a team mailbox, more than one person sends from the address, so no sender shows as "me". In
+						// the mailbox of an agent, the person who reads is not the sender.
 						myAddress={mailboxId ? "" : myAddress}
 						labelsById={labelsById}
 						selected={selected}
