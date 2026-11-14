@@ -214,6 +214,16 @@ export function viewPath(view: MailView, mailboxId: string | null = null): strin
 	}
 }
 
+/**
+ * The same view in the own mailbox, for a mail route that names the person's own id as an agent mailbox,
+ * or null for each other route. The server treats that id as the own mailbox, so the app goes to the
+ * own mailbox, with all its controls, and not to a read-only view of it.
+ */
+export function ownMailboxPath(route: Route, selfId: string): string | null {
+	if (route.page !== "mail" || route.mailboxId !== selfId) return null;
+	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
+}
+
 /** The path of one thread, opened from a view. */
 export function threadPath(view: MailView, threadId: string, mailboxId: string | null = null): string {
 	const id = encodeURIComponent(threadId);

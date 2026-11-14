@@ -110,8 +110,16 @@ MCP clients. The app has no UI-only path.
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list. Shortcuts do not work while the focus is in a text field.
-- **Team mailboxes.** When the person is a member of a team mailbox, the sidebar shows a
-  **Mailboxes** section: "My mailbox" and each team mailbox (`mail.list_mailboxes`).
+- **Mailbox switcher.** When the person can use more than the own mailbox, the sidebar shows
+  "My mailbox" first, without a heading (`mail.list_mailboxes`, `mailboxNav.ts`).
+  - Under it, **Shared mailboxes** lists the team mailboxes of the person, and **Agent mailboxes**
+    lists the agents, for owners and admins. A section without mailboxes does not show.
+  - Each section heading is a button that collapses the section (`aria-expanded`). A collapsed
+    section still shows the open mailbox.
+  - The collapsed state is saved in the mail settings of the person (`mail.get_settings`,
+    `mail.update_settings`), so it is the same in each browser. The shell loads the settings one
+    time. A change shows at once. When the save fails, the section goes back and a toast shows the error.
+- **Team mailboxes.** The sidebar calls them shared mailboxes.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -126,6 +134,8 @@ MCP clients. The app has no UI-only path.
     admin removed the access.
 - **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
   shows an **Agent mailboxes** section with each agent (`mail.list_mailboxes`, kind `agent`).
+  - An agent mailbox path with the own id of the person goes to the same view under `/mail/…`
+    (`ownMailboxPath`), because the server treats that id as the own mailbox.
   - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
     the app that the mailbox is read only (`isAgentMailbox` in `routes.ts`, `useReadOnlyMailbox`).
   - A notice above the list says that the mailbox is read only and that the audit log records the lists

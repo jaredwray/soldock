@@ -917,6 +917,34 @@ fieldset {
 	font-weight: 600;
 }
 
+/* The heading of a mailbox section is a button that collapses it. The chevron sits in the gutter, so the text lines up with the other headings. */
+.nav-section-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-height: 32px;
+	margin-left: -20px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--radius);
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.nav-chevron {
+	color: var(--text-muted);
+}
+
+.nav-section-toggle:hover .nav-chevron {
+	color: var(--text);
+}
+
+.nav-chevron-collapsed {
+	transform: rotate(-90deg);
+}
+
 /* The first section follows the Compose button, which has its own margin. */
 .nav-section-first {
 	margin-top: 0;

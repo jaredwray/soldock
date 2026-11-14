@@ -32,6 +32,8 @@ import { htmlToText, replySubject } from "./threading.ts";
 
 type MailOperation =
 	| "mail.list_mailboxes"
+	| "mail.get_settings"
+	| "mail.update_settings"
 	| "mail.get_profile"
 	| "mail.list_labels"
 	| "mail.create_label"
@@ -239,6 +241,16 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
 		return { mailboxes: [ownMailbox(call), ...teams, ...agents] };
+	},
+
+	// The settings of a person live in their own mailbox. These operations take no mailbox_id, so a member
+	// of a team mailbox never changes the settings of the other members.
+	async "mail.get_settings"(call) {
+		return mailboxStub(call.env, call.caller.id).settings();
+	},
+
+	async "mail.update_settings"(call, input) {
+		return mailboxStub(call.env, call.caller.id).updateSettings(input);
 	},
 
 	async "mail.get_profile"(call, input) {

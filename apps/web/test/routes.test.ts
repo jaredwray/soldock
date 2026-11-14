@@ -8,6 +8,7 @@ import {
 	isAgentMailbox,
 	itemPath,
 	type MailView,
+	ownMailboxPath,
 	parseRoute,
 	threadPath,
 	viewPath,
@@ -81,6 +82,20 @@ describe("routes", () => {
 		expect(viewPath({ kind: "system", view: "inbox" }, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
 		expect(parseRoute(`/mail/agent/${AGENT}`)).toEqual({ page: "redirect", to: `/mail/agent/${AGENT}/inbox` });
 		expect([AGENT, TEAM, null].map(isAgentMailbox)).toEqual([true, false, false]);
+	});
+
+	// The server treats the own id of the person as the own mailbox, so the app must not show it read only.
+	it("sends an agent mailbox path with the own id of the person to the own mailbox", () => {
+		const inbox: MailView = { kind: "system", view: "inbox" };
+		expect(ownMailboxPath(parseRoute(threadPath(inbox, THREAD, AGENT)), AGENT)).toBe(threadPath(inbox, THREAD));
+		expect(ownMailboxPath(parseRoute(viewPath({ kind: "search", query: "a b" }, AGENT)), AGENT)).toBe(
+			"/mail/search?q=a%20b",
+		);
+		// The id of a different principal, a team mailbox and the own paths stay as they are.
+		const other = "prn_01JD0000000000000000OTHER0";
+		for (const path of [viewPath(inbox, AGENT), viewPath(inbox, TEAM), viewPath(inbox), "/drive"]) {
+			expect(ownMailboxPath(parseRoute(path), other), path).toBeNull();
+		}
 	});
 
 	it("parses the path of a thread back to its view and thread id", () => {

@@ -445,8 +445,59 @@ export const getAttachment = defineOperation({
 	errors: ["not_found", "payload_too_large"],
 });
 
+/**
+ * The mail settings of a person. They live in the own mailbox of the person, never in a team mailbox
+ * or in the mailbox of an agent. Each setting has a default, so a person without saved settings gets them.
+ */
+export const MailSettings = z.object({
+	sidebar: z.object({
+		/** True when the Shared mailboxes section of the sidebar of the web app is collapsed. */
+		shared_mailboxes_collapsed: z.boolean(),
+		/** True when the Agent mailboxes section of the sidebar of the web app is collapsed. */
+		agent_mailboxes_collapsed: z.boolean(),
+	}),
+});
+export type MailSettings = z.infer<typeof MailSettings>;
+
+export const getSettings = defineOperation({
+	name: "mail.get_settings",
+	summary: "Get your mail settings",
+	description:
+		"Returns your mail settings: for now, the sections of the sidebar of the web app that are collapsed. The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value.",
+	http: { method: "GET", path: "/api/v1/mail/settings" },
+	scopes: ["mail.read"],
+	callers: ["human"],
+	annotations: READ,
+	input: z.strictObject({}),
+	output: MailSettings,
+	errors: [],
+});
+
+export const updateSettings = defineOperation({
+	name: "mail.update_settings",
+	summary: "Change your mail settings",
+	description:
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns.",
+	http: { method: "POST", path: "/api/v1/mail/settings" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		sidebar: z
+			.strictObject({
+				shared_mailboxes_collapsed: z.boolean().optional(),
+				agent_mailboxes_collapsed: z.boolean().optional(),
+			})
+			.optional(),
+	}),
+	output: MailSettings,
+	errors: [],
+});
+
 export const mailOperations = {
 	"mail.list_mailboxes": listMailboxes,
+	"mail.get_settings": getSettings,
+	"mail.update_settings": updateSettings,
 	"mail.get_profile": getProfile,
 	"mail.list_labels": listLabels,
 	"mail.create_label": createLabel,

@@ -10,7 +10,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, idempotency keys); raw MIME in R2 `blobs`. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -98,6 +98,21 @@ who can.
   words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
   return no mail content.
 - The access check reads the directory on each call, so a role change applies to the next call.
+
+## Settings
+
+`mail.get_settings` and `mail.update_settings` read and change the mail settings of a person. For now,
+the settings are the collapsed sections of the sidebar of the web app
+(`sidebar.shared_mailboxes_collapsed`, `sidebar.agent_mailboxes_collapsed`).
+
+- The settings live in the own mailbox of the caller, in the `meta` table. The operations take no
+  `mailbox_id`, so a team mailbox and the mailbox of an agent never get settings.
+- Each setting has a default (`false`). A stored value that does not parse gets the defaults.
+- `mail.update_settings` changes only the settings that the request names, and returns all of them.
+  A second call with the same values changes nothing.
+- A change does not change the mailbox `version`, so the web app does not get the list again.
+- Only people can call them. An agent has no web app. A change writes no audit line, as for
+  `chat.mark_read`: it changes the view of the person, not their data.
 
 ## Inbound
 
@@ -239,6 +254,7 @@ Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, wit
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
+| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids and keys, never message content |
 

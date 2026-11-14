@@ -42,6 +42,7 @@ export {
 	Mailbox,
 	MailboxId,
 	MailboxKind,
+	MailSettings,
 	Message,
 	SYSTEM_LABELS,
 	type SystemLabel,
