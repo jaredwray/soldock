@@ -35,6 +35,7 @@ export interface WebhookRow {
 	consecutive_failures: number;
 	last_failed_event_id: string | null;
 	retry_until: string | null;
+	retry_event_id: string | null;
 	last_delivery_at: string | null;
 	last_failure_at: string | null;
 	last_error: string | null;
@@ -42,7 +43,7 @@ export interface WebhookRow {
 }
 
 const WEBHOOK_COLUMNS = `id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, status,
-	disabled_reason, consecutive_failures, last_failed_event_id, retry_until, last_delivery_at, last_failure_at,
+	disabled_reason, consecutive_failures, last_failed_event_id, retry_until, retry_event_id, last_delivery_at, last_failure_at,
 	last_error, created_at`;
 
 function toWebhook(row: WebhookRow): Webhook {
@@ -173,6 +174,7 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 			consecutive_failures: 0,
 			last_failed_event_id: null,
 			retry_until: null,
+			retry_event_id: null,
 			last_delivery_at: null,
 			last_failure_at: null,
 			last_error: null,
@@ -332,26 +334,41 @@ function recordDisable(row: WebhookRow, reason: DisabledReason): void {
 export async function recordDelivery(db: D1Database, id: string): Promise<void> {
 	await db
 		.prepare(
-			"UPDATE webhooks SET last_delivery_at = ?, consecutive_failures = 0, last_error = NULL, retry_until = NULL WHERE id = ?",
+			"UPDATE webhooks SET last_delivery_at = ?, consecutive_failures = 0, last_error = NULL, retry_until = NULL, retry_event_id = NULL WHERE id = ?",
 		)
 		.bind(new Date().toISOString(), id)
 		.run();
 }
 
 /**
- * Records one failed attempt that gets a retry. Until `retryUntil`, a new event joins this retry and
- * sends no POST of its own.
+ * Records one failed attempt of an event whose retry is on the queue. Until `retryUntil`, a different
+ * event joins this retry and sends no POST of its own.
  */
-export async function recordFailedAttempt(db: D1Database, id: string, error: string, retryUntil: Date): Promise<void> {
+export async function recordFailedAttempt(
+	db: D1Database,
+	id: string,
+	eventId: string,
+	error: string,
+	retryUntil: Date,
+): Promise<void> {
 	await db
-		.prepare("UPDATE webhooks SET last_failure_at = ?, last_error = ?, retry_until = ? WHERE id = ?")
-		.bind(new Date().toISOString(), error, retryUntil.toISOString(), id)
+		.prepare(
+			"UPDATE webhooks SET last_failure_at = ?, last_error = ?, retry_until = ?, retry_event_id = ? WHERE id = ?",
+		)
+		.bind(new Date().toISOString(), error, retryUntil.toISOString(), eventId, id)
 		.run();
 }
 
-/** True while a failed POST of the webhook waits for its next attempt. */
-export function retryWaits(row: Pick<WebhookRow, "retry_until">, now: number): boolean {
-	return row.retry_until !== null && Date.parse(row.retry_until) > now;
+/**
+ * True when the event joins a retry of a different event that waits. A redelivery of the event of the
+ * retry itself does not join it, so a lost retry job cannot end the attempts of its event.
+ */
+export function joinsWaitingRetry(
+	row: Pick<WebhookRow, "retry_until" | "retry_event_id">,
+	eventId: string,
+	now: number,
+): boolean {
+	return row.retry_until !== null && Date.parse(row.retry_until) > now && row.retry_event_id !== eventId;
 }
 
 /**
@@ -369,7 +386,7 @@ export async function recordFailedEvent(
 	const updated = await db
 		.prepare(
 			`UPDATE webhooks SET consecutive_failures = consecutive_failures + 1, last_failed_event_id = ?5,
-				last_failure_at = ?1, last_error = ?2, retry_until = NULL,
+				last_failure_at = ?1, last_error = ?2, retry_until = NULL, retry_event_id = NULL,
 				status = CASE WHEN consecutive_failures + 1 >= ?3 THEN 'disabled' ELSE status END,
 				disabled_reason = CASE WHEN consecutive_failures + 1 >= ?3 AND status = 'active' THEN 'failures'
 					ELSE disabled_reason END

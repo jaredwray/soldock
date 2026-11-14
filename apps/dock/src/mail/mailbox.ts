@@ -346,6 +346,11 @@ function readSettings(raw: string | null): MailSettings {
 export class MailboxDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private drainTask: Promise<void> | null = null;
+	/**
+	 * The event outbox row whose queue send runs now. New mail cannot join it: the receiver can read the
+	 * inbox before the send returns, so that mail gets a row of its own.
+	 */
+	private sendingEventRow: number | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -487,14 +492,18 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/**
 	 * Records new mail in the inbox as a webhook event, inside the transaction of the message. Mail that
-	 * arrives while an event waits joins that event, and one mailbox sends at most one event in each
-	 * `eventGapMs`. Returns the time of the alarm that sends the new event, or null.
+	 * arrives while an event waits joins that event, but not an event whose queue send runs now. One
+	 * mailbox sends at most one event in each `eventGapMs`. Returns the time of the alarm that sends the
+	 * new event, or null.
 	 */
 	private queueInboxEvent(): number | null {
 		if (this.meta(EVENTS_MAILBOX_KEY) === null) return null;
-		if (this.one<{ id: number }>("SELECT id FROM event_outbox LIMIT 1")) return null;
+		const sending = this.sendingEventRow;
+		if (this.one<{ id: number }>("SELECT id FROM event_outbox WHERE id IS NOT ? LIMIT 1", sending)) return null;
 		const now = Date.now();
-		const at = Math.max(now, Number(this.meta(EVENTS_LAST_KEY) ?? 0) + WEBHOOK_LIMITS.eventGapMs);
+		// While a send runs, the new event waits one gap after now, because the last event goes out now.
+		const last = sending === null ? Number(this.meta(EVENTS_LAST_KEY) ?? 0) : now;
+		const at = Math.max(now, last + WEBHOOK_LIMITS.eventGapMs);
 		this.sql.exec(
 			"INSERT INTO event_outbox (event_id, occurred_at, next_attempt_at) VALUES (?, ?, ?)",
 			newId("evt"),
@@ -526,7 +535,12 @@ export class MailboxDO extends DurableObject<Env> {
 					eventId: row.event_id,
 					occurredAt: row.occurred_at,
 				};
-				await this.env.WEBHOOKS.send(job);
+				this.sendingEventRow = row.id;
+				try {
+					await this.env.WEBHOOKS.send(job);
+				} finally {
+					this.sendingEventRow = null;
+				}
 				this.ctx.storage.transactionSync(() => {
 					this.sql.exec("DELETE FROM event_outbox WHERE id = ?", row.id);
 					this.setMeta(EVENTS_LAST_KEY, String(Date.now()));

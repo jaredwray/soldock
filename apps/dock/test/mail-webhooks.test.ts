@@ -11,6 +11,7 @@ import {
 	consumeWebhooks,
 	createActor,
 	drainWebhookEvents,
+	holdWebhookEvents,
 	inject,
 	PASSWORD,
 	rawMessage,
@@ -18,6 +19,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	webhookEventRows,
 } from "./helpers.ts";
 
 // Webhooks: a URL outside Soldock gets a signed POST, with no mail content, when new mail arrives in the
@@ -316,6 +318,20 @@ describe("delivery", () => {
 		expect(events).toHaveLength(1);
 	});
 
+	// The receiver can read the inbox before the send of an event returns, so later mail cannot join it.
+	it("gives mail that arrives during the queue send of an event an event of its own", async () => {
+		await ada.call("mail.create_webhook", { url: HOOK });
+		const queue = await holdWebhookEvents(ada.id);
+		await inject(rawMessage({ from: "eve@customer.example", to: "ada@dock.test", subject: "One" }), "ada@dock.test");
+		const draining = drainWebhookEvents(ada.id);
+		await vi.waitFor(() => expect(queue.started()).toBe(1), { timeout: 5000, interval: 20 });
+		await inject(rawMessage({ from: "eve@customer.example", to: "ada@dock.test", subject: "Two" }), "ada@dock.test");
+		queue.release();
+		await draining;
+		expect(queue.events).toHaveLength(1);
+		expect(await webhookEventRows(ada.id)).toBe(1);
+	});
+
 	it("sends an event for mail that a mailbox sends to itself", async () => {
 		await ada.call("mail.create_webhook", { url: HOOK });
 		const events = await captureWebhookEvents(ada.id);
@@ -354,6 +370,18 @@ describe("delivery", () => {
 			consecutive_failures: 0,
 			last_error: "http_500",
 		});
+	});
+
+	// A lost retry job must not end the attempts of its event.
+	it("posts again when the queue refuses the retry job", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK });
+		const posts = receiveWebhooks(() => new Response(null, { status: 503 }));
+		const job = deliveryJob(webhook);
+		const refused = await consumeWebhooks([job], 1, { failQueue: true });
+		expect(refused.result.retryMessages).toHaveLength(1);
+		const again = await consumeWebhooks([job], 2);
+		expect(posts).toHaveLength(2);
+		expect(again.sent).toEqual([{ ...job, attempt: 2 }]);
 	});
 
 	// A receiver that is down gets one chain of attempts, not one chain for each mail.

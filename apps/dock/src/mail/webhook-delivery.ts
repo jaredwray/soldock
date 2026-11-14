@@ -5,10 +5,10 @@ import {
 	checkWebhook,
 	disableWebhook,
 	getWebhook,
+	joinsWaitingRetry,
 	recordDelivery,
 	recordFailedAttempt,
 	recordFailedEvent,
-	retryWaits,
 	type WebhookRow,
 } from "./webhooks.ts";
 
@@ -125,7 +125,7 @@ async function deliver(env: Env, job: WebhookDeliveryJob): Promise<void> {
 	const attempt = job.attempt ?? 1;
 	const row = await getWebhook(db, job.webhookId);
 	if (row?.status !== "active" || row.mailbox_id !== job.mailboxId) return;
-	if (attempt === 1 && retryWaits(row, Date.now())) return;
+	if (attempt === 1 && joinsWaitingRetry(row, job.eventId, Date.now())) return;
 	const check = await checkWebhook(db, row);
 	if (check.action === "skip") return;
 	if (check.action === "disable") {
@@ -144,8 +144,10 @@ async function deliver(env: Env, job: WebhookDeliveryJob): Promise<void> {
 	}
 	const delay = RETRY_DELAYS_S[attempt - 1];
 	if (attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
-		await recordFailedAttempt(db, row.id, result, new Date(Date.now() + delay * 1000 + RETRY_GRACE_MS));
+		// The retry job first: when the send fails, the queue runs this job again, and nothing marks a retry
+		// that does not exist.
 		await env.WEBHOOKS.send({ ...job, attempt: attempt + 1 } satisfies WebhookDeliveryJob, { delaySeconds: delay });
+		await recordFailedAttempt(db, row.id, job.eventId, result, new Date(Date.now() + delay * 1000 + RETRY_GRACE_MS));
 		return;
 	}
 	await recordFailedEvent(db, row, job.eventId, result);

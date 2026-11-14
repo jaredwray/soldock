@@ -487,6 +487,41 @@ export async function captureWebhookEvents(mailboxId: string): Promise<unknown[]
 }
 
 /**
+ * Replaces the webhook queue of one mailbox object with a recorder whose sends wait until `release`.
+ * `started` counts the sends that began. A test can then deliver mail while a send runs.
+ */
+export async function holdWebhookEvents(mailboxId: string) {
+	const events: unknown[] = [];
+	let started = 0;
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const queue = {
+			send: async (body: unknown) => {
+				started++;
+				await held;
+				events.push(body);
+			},
+		} as unknown as Queue;
+		target.env = { ...target.env, WEBHOOKS: queue };
+	});
+	return { events, started: () => started, release };
+}
+
+/** The rows of the event outbox of a mailbox: the webhook events that wait. */
+export async function webhookEventRows(mailboxId: string): Promise<number> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	return runInDurableObject(
+		stub,
+		(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM event_outbox").one().n,
+	);
+}
+
+/**
  * Waits until the event outbox of a mailbox has no due event. The runtime fires the alarm by itself, so
  * this runs a pending alarm and then waits for one in flight.
  */

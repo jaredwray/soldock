@@ -315,7 +315,8 @@ on a server, a REST client or an MCP client of an older protocol.
 
 1. In the transaction of a message that is not spam, `deliver()` adds a row to `event_outbox` when
    webhook events are on for the mailbox. Mail that the mailbox sends to itself also adds a row.
-   New mail joins a row that waits. One mailbox sends at most one event in each 5 seconds.
+   New mail joins a row that waits, but not a row whose queue send runs now: the receiver can read
+   the inbox before that send returns. One mailbox sends at most one event in each 5 seconds.
 2. The alarm puts the event on the queue `soldock-webhooks` and then deletes the row. The event keeps
    its id on each attempt.
 3. The consumer reads the active webhooks of the mailbox and puts one delivery job for each on the
@@ -330,9 +331,11 @@ on a server, a REST client or an MCP client of an older protocol.
 - The attempt is in the job, not in the queue delivery count. So a failure of Soldock itself, such
   as D1, runs the same job again and uses no attempt of the receiver. After 10 such failures the
   queue moves the job to `soldock-webhooks-dlq`.
-- While a failed POST waits for its retry (`retry_until`), a new event of the webhook sends no POST.
-  The POST holds no content, so the retry tells the receiver to read the inbox. A receiver that is
-  down gets one chain of attempts, not one chain for each mail.
+- While a failed POST of one event waits for its retry (`retry_until`, `retry_event_id`), a different
+  event of the webhook sends no POST. The POST holds no content, so the retry tells the receiver to
+  read the inbox. A receiver that is down gets one chain of attempts, not one chain for each mail.
+- The retry job goes on the queue before the webhook records the retry. So when the queue refuses
+  the retry job, the queue runs the failed job again, and the attempts of its event go on.
 - A failed event counts one time (`last_failed_event_id`), also when a redelivery repeats its jobs.
 
 The body holds no mail content. The receiver reads the inbox with its own credential, with the scope

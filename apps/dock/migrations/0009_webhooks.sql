@@ -24,9 +24,11 @@ CREATE TABLE IF NOT EXISTS webhooks (
 	-- The events in a row whose last attempt failed. An event counts one time, also when its jobs repeat.
 	consecutive_failures INTEGER NOT NULL DEFAULT 0,
 	last_failed_event_id TEXT,
-	-- Set while a failed POST waits for its next attempt. A new event in that time joins the retry,
-	-- because a POST holds no content: one success tells the receiver to read the inbox.
+	-- Set while a failed POST of the event retry_event_id waits for its next attempt. A different event
+	-- in that time joins the retry, because a POST holds no content: one success tells the receiver to
+	-- read the inbox.
 	retry_until TEXT,
+	retry_event_id TEXT,
 	last_delivery_at TEXT,
 	last_failure_at TEXT,
 	-- A code that the Worker makes, such as http_500 or timeout. Never the response body.
