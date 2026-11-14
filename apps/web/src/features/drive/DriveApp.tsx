@@ -155,15 +155,6 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		document.title = `${title} – Soldock`;
 	}, [title]);
 
-	useEffect(() => {
-		if (!navOpen) return;
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") closeNavRef.current();
-		}
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [navOpen]);
-
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });
 
 	function clearSelection() {

@@ -52,7 +52,7 @@
 	--mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
-/* The dark colors. Keep this list the same as the list in the media query below. */
+/* The dark colors. */
 :root.dark {
 	color-scheme: dark;
 	--background: #171717;
@@ -80,33 +80,12 @@
 	--field: rgb(64 64 64 / 0.3);
 }
 
-/* Before main.tsx runs, <html> has no data-appearance attribute. The page then follows the device. */
+/* Before main.tsx runs, <html> has no data-appearance attribute, and the page shows only the body. A dark
+   device then gets the dark body, so that the page does not flash white. */
 @media (prefers-color-scheme: dark) {
 	:root:not([data-appearance]) {
 		color-scheme: dark;
-		--background: #171717;
-		--foreground: #f5f5f5;
 		--surface: #1c1c1c;
-		--hover: #282828;
-		--row-hover: #202020;
-		--card: #1c1c1c;
-		--popover: #1c1c1c;
-		--border: #343434;
-		--input: #404040;
-		--muted-foreground: #a3a3a3;
-		--primary: #f5f5f5;
-		--primary-hover: #dedede;
-		--primary-foreground: #171717;
-		--ring: #a3a3a3;
-		--focus: #f5f5f5;
-		--link: #43abff;
-		--positive: #4ade80;
-		--negative: #fca5a5;
-		--warning: #efb146;
-		--control: rgb(64 64 64 / 0.3);
-		--control-hover: rgb(64 64 64 / 0.5);
-		--control-border: var(--input);
-		--field: rgb(64 64 64 / 0.3);
 	}
 }
 

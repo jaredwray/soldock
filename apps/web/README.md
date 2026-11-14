@@ -470,8 +470,8 @@ With the focus, the border changes to `--ring`, which has 4.74:1 in light mode a
 - The module sets the `dark` class, `data-appearance` and `color-scheme` on `<html>`.
 - `main.tsx` applies the choice before the first render. The CSP has `script-src 'self'`, so
   `index.html` has no inline script.
-- Before the script runs, `<html>` has no `data-appearance`. A media query in `styles.css` then gives
-  the dark colors to a dark device. Keep its list the same as the list of `:root.dark`.
+- Before the script runs, `<html>` has no `data-appearance`, and the page shows only the body. A media
+  query in `styles.css` then gives the dark body color to a dark device, so the page does not flash white.
 - The choice is a display setting of one browser. Thus it has no operation in `packages/contracts`.
 
 ### Icons

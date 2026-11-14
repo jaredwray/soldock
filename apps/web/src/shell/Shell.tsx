@@ -40,7 +40,7 @@ export function Shell() {
 
 	useOnChange(location, () => setNavOpen(false));
 
-	// Escape closes the navigation drawer on each page.
+	// Escape closes the navigation drawer on each page. The shell owns this key for the drawer, not the sidebars.
 	useEffect(() => {
 		if (!navOpen) return;
 		function onKeyDown(event: KeyboardEvent) {

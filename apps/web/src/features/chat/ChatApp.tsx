@@ -28,25 +28,11 @@ type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
 	const [dialog, setDialog] = useState<ChatDialog>(null);
-	const closeNavRef = useRef(onCloseNav);
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
-
-	useEffect(() => {
-		closeNavRef.current = onCloseNav;
-	});
 
 	useEffect(() => {
 		if (roomId === null) document.title = "Chat – Soldock";
 	}, [roomId]);
-
-	useEffect(() => {
-		if (!navOpen) return;
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") closeNavRef.current();
-		}
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [navOpen]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {

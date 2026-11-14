@@ -45,12 +45,7 @@ export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarPr
 	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
-	const closeRef = useRef(onClose);
 	const sections = ADMIN_SECTIONS.filter((section) => elevated || !SECTIONS[section].adminOnly);
-
-	useEffect(() => {
-		closeRef.current = onClose;
-	});
 
 	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
@@ -63,15 +58,6 @@ export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarPr
 		} else if (nav.contains(document.activeElement) || document.activeElement === document.body) {
 			document.getElementById(MENU_BUTTON_ID)?.focus();
 		}
-	}, [open]);
-
-	useEffect(() => {
-		if (!open) return;
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") closeRef.current();
-		}
-		document.addEventListener("keydown", onKeyDown);
-		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [open]);
 
 	return (
