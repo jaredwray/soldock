@@ -9,6 +9,7 @@ import {
 	problemResponse,
 	type RequestIdVariables,
 	requestId,
+	type WatcherMap,
 } from "./platform/index.ts";
 
 export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
@@ -16,9 +17,10 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 /**
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
  * `/.well-known/*`), REST and MCP. The REST routes and the MCP tools
- * come from the operation registry, with the handlers that the composition root passes in.
+ * come from the operation registry, with the handlers that the composition root passes in. MCP
+ * resource subscriptions use the change feeds that it passes in.
  */
-export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
+export function createApp(handlers: HandlerMap<CallContext>, watchers: WatcherMap<CallContext>): Hono<AppEnv> {
 	const app = new Hono<AppEnv>();
 
 	app.use(requestId());
@@ -28,7 +30,7 @@ export function createApp(handlers: HandlerMap<CallContext>): Hono<AppEnv> {
 	mountAuthRoutes(app);
 	mountOAuthRoutes(app);
 	mountRestApi(app, handlers);
-	mountMcp(app, handlers);
+	mountMcp(app, handlers, watchers);
 
 	app.notFound((c) => {
 		const { pathname } = new URL(c.req.url);

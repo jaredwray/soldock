@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { type Actor, callTool, inject, mcp, ORIGIN, rawMessage, request, seedOrg, signIn } from "./helpers.ts";
+import {
+	type Actor,
+	callTool,
+	inject,
+	MODERN_MCP,
+	mcp,
+	modern,
+	ORIGIN,
+	rawMessage,
+	request,
+	seedOrg,
+	signIn,
+} from "./helpers.ts";
 
 const names = (body: Record<string, unknown> | null) =>
 	((body?.result ?? { tools: [] }) as { tools: { name: string }[] }).tools.map((tool) => tool.name).sort();
@@ -182,9 +194,102 @@ describe("the MCP endpoint", () => {
 		expect(
 			(await post({ jsonrpc: "2.0", id: 1, method: "ping" }, { "mcp-protocol-version": "1999-01-01" })).status,
 		).toBe(400);
-		expect(await (await post({ jsonrpc: "2.0", id: 7, method: "resources/list" })).json()).toMatchObject({
+		expect(await (await post({ jsonrpc: "2.0", id: 7, method: "prompts/list" })).json()).toMatchObject({
 			id: 7,
 			error: { code: -32601 },
 		});
+	});
+});
+
+describe("the MCP endpoint with protocol 2026-07-28", () => {
+	// A modern client sends no initialize: each request carries its version, and each result says what it is.
+	it("serves discovery, tools and results without a handshake", async () => {
+		const { bot } = await seedOrg();
+		const discover = await modern(bot.key, "server/discover");
+		expect(discover.status).toBe(200);
+		const result = discover.body?.result as Record<string, unknown>;
+		expect(result).toMatchObject({
+			resultType: "complete",
+			supportedVersions: [MODERN_MCP, "2025-11-25", "2025-06-18", "2025-03-26"],
+			capabilities: { tools: {}, resources: { subscribe: true } },
+			cacheScope: "private",
+			_meta: { "io.modelcontextprotocol/serverInfo": { name: "soldock" } },
+		});
+		expect(result.ttlMs).toBeGreaterThanOrEqual(0);
+		expect(result.instructions).toEqual(expect.stringContaining("bot@dock.test"));
+		expect(result.instructions).toEqual(expect.stringContaining("subscriptions/listen"));
+
+		const legacy = (await mcp(bot.key, "tools/list")).body?.result as { tools: unknown[] };
+		const tools = (await modern(bot.key, "tools/list")).body?.result as Record<string, unknown>;
+		expect(tools).toMatchObject({ resultType: "complete", tools: legacy.tools, cacheScope: "private" });
+		const call = (await modern(bot.key, "tools/call", { name: "mail_get_profile", arguments: {} })).body?.result;
+		expect(call).toMatchObject({
+			resultType: "complete",
+			structuredContent: await bot.call("mail.get_profile"),
+		});
+	});
+
+	// Intermediaries route on the headers and the server runs the body, so the two must agree.
+	it("refuses a request whose headers or _meta break the transport rules", async () => {
+		const { bot } = await seedOrg();
+		const profile = { name: "mail_get_profile", arguments: {} };
+		const cases: [string, Promise<{ status: number; body: Record<string, unknown> | null }>, number, number][] = [
+			[
+				"no version header",
+				modern(bot.key, "tools/list", {}, { headers: { "mcp-protocol-version": null } }),
+				400,
+				-32020,
+			],
+			[
+				"_meta and header differ",
+				modern(bot.key, "tools/list", {}, { headers: { "mcp-protocol-version": "2025-11-25" } }),
+				400,
+				-32020,
+			],
+			["no _meta", modern(bot.key, "tools/list", {}, { meta: null }), 400, -32602],
+			[
+				"no client capabilities",
+				modern(bot.key, "tools/list", {}, { meta: { "io.modelcontextprotocol/protocolVersion": MODERN_MCP } }),
+				400,
+				-32602,
+			],
+			["wrong Mcp-Method", modern(bot.key, "tools/list", {}, { headers: { "mcp-method": "tools/call" } }), 400, -32020],
+			["no Mcp-Name", modern(bot.key, "tools/call", profile, { headers: { "mcp-name": null } }), 400, -32020],
+			["wrong Mcp-Name", modern(bot.key, "tools/call", profile, { headers: { "mcp-name": "mail_send" } }), 400, -32020],
+			[
+				"unknown version",
+				modern(bot.key, "tools/list", {}, { headers: { "mcp-protocol-version": "2099-01-01" }, meta: null }),
+				400,
+				-32022,
+			],
+			["a legacy method", modern(bot.key, "initialize"), 404, -32601],
+			["ping", modern(bot.key, "ping"), 404, -32601],
+			["no filter", modern(bot.key, "subscriptions/listen", {}), 200, -32602],
+			[
+				"a filter with too many URIs",
+				modern(bot.key, "subscriptions/listen", {
+					notifications: { resourceSubscriptions: Array.from({ length: 101 }, (_, i) => `soldock://x/${i}`) },
+				}),
+				200,
+				-32602,
+			],
+		];
+		for (const [label, pending, status, code] of cases) {
+			const { status: actual, body } = await pending;
+			expect({ label, status: actual, code: (body?.error as { code?: number } | undefined)?.code }).toEqual({
+				label,
+				status,
+				code,
+			});
+		}
+		const unknown = await modern(bot.key, "tools/list", {}, { headers: { "mcp-protocol-version": "2099-01-01" } });
+		expect(unknown.body?.error).toMatchObject({
+			data: { supported: expect.arrayContaining([MODERN_MCP, "2025-11-25"]), requested: "2099-01-01" },
+		});
+		// A name that is not plain ASCII comes as Base64 in the header.
+		const encoded = await modern(bot.key, "tools/call", profile, {
+			headers: { "mcp-name": `=?base64?${btoa("mail_get_profile")}?=` },
+		});
+		expect(encoded.body?.result).toMatchObject({ resultType: "complete" });
 	});
 });

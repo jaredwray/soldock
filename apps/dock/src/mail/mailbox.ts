@@ -107,6 +107,12 @@ export interface LabelRecord {
 
 const SYSTEM_LABEL_ORDER = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
 
+/** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */
+const WATCH_TAG = "watch";
+
+/** The message that each watch socket gets when a new message arrives in the inbox. */
+export const INBOX_SIGNAL = "inbox";
+
 /** Ordered migrations. Each inner list runs in one transaction. Append only. */
 const MIGRATIONS: string[][] = [
 	[
@@ -369,7 +375,50 @@ export class MailboxDO extends DurableObject<Env> {
 			this.bump();
 			return inserted;
 		});
+		if (!input.spam) this.signalInbox();
 		return { status: "delivered", messageId: stored.id, threadId: stored.threadId };
+	}
+
+	// --- Watch sockets ---------------------------------------------------------------------------
+
+	/**
+	 * Accepts a watch socket: a hibernatable WebSocket that gets `INBOX_SIGNAL` for each new message in
+	 * the inbox. The Worker opens it for a `subscriptions/listen` stream after it checks the access of
+	 * the caller. The object can sleep while its sockets wait, and wakes when mail arrives.
+	 */
+	override async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			return new Response("This object accepts watch sockets only.", {
+				status: 426,
+				headers: { upgrade: "websocket" },
+			});
+		}
+		const { 0: client, 1: server } = new WebSocketPair();
+		this.ctx.acceptWebSocket(server, [WATCH_TAG]);
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/** Tells each watch socket that a new message is in the inbox. A socket that closed is skipped. */
+	private signalInbox(): void {
+		for (const socket of this.ctx.getWebSockets(WATCH_TAG)) {
+			try {
+				socket.send(INBOX_SIGNAL);
+			} catch {
+				// The socket closed between the list and the send.
+			}
+		}
+	}
+
+	/** A watcher sends nothing. A message from one has no effect. */
+	override webSocketMessage(): void {}
+
+	override webSocketClose(socket: WebSocket, code: number, reason: string): void {
+		try {
+			// Completes the close handshake. The runtime can reply by itself, and a closed socket throws.
+			socket.close(code, reason);
+		} catch {
+			// Closed already.
+		}
 	}
 
 	private insertMessage(m: {
@@ -940,6 +989,7 @@ export class MailboxDO extends DurableObject<Env> {
 		if (this.meta("delivery_pause"))
 			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
+		const selfDelivery = input.recipients.some((r) => r.self);
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
@@ -947,7 +997,6 @@ export class MailboxDO extends DurableObject<Env> {
 				if (earlier && "error" in earlier) return earlier;
 				if (earlier) return { duplicate: true, result: earlier };
 			}
-			const selfDelivery = input.recipients.some((r) => r.self);
 			const stored = this.insertMessage({
 				id: input.messageId,
 				threadHint: input.replyThreadId,
@@ -997,9 +1046,10 @@ export class MailboxDO extends DurableObject<Env> {
 			this.bump();
 			return { duplicate: false, result: sendResult };
 		});
-		if (!("error" in result) && !result.duplicate && input.recipients.some((r) => !r.self)) {
-			await this.ctx.storage.setAlarm(now);
-		}
+		if ("error" in result || result.duplicate) return result;
+		// Mail to the mailbox itself is in its inbox now.
+		if (selfDelivery) this.signalInbox();
+		if (input.recipients.some((r) => !r.self)) await this.ctx.storage.setAlarm(now);
 		return result;
 	}
 

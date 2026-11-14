@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { AGENT_SCOPES, operationList, operations, pathParams, toolName } from "../src/index.ts";
+import {
+	AGENT_SCOPES,
+	expandTemplate,
+	matchTemplate,
+	operationList,
+	operations,
+	pathParams,
+	resourceList,
+	resources,
+	templateVars,
+	toolName,
+} from "../src/index.ts";
 
 function shape(schema: z.ZodType): Record<string, z.ZodType> {
 	expect(schema).toBeInstanceOf(z.ZodObject);
@@ -68,5 +79,42 @@ describe("the operation registry", () => {
 
 	it("marks an operation read-only only when it is a GET, and a GET only when it is read-only", () => {
 		for (const op of operationList) expect(op.annotations.readOnly, op.name).toBe(op.http.method === "GET");
+	});
+});
+
+describe("the resource registry", () => {
+	// A resource read must change nothing, and the adapter fills the read input from the URI variables.
+	it("reads each resource with a read-only operation that takes each URI variable", () => {
+		for (const [key, resource] of Object.entries(resources)) {
+			expect(resource.name).toBe(key);
+			const read = operations[resource.read.operation];
+			const list = operations[resource.list.operation];
+			expect(read.annotations.readOnly, resource.name).toBe(true);
+			expect(list.annotations.readOnly, resource.name).toBe(true);
+			const fields = shape(read.input);
+			for (const name of templateVars(resource.uriTemplate))
+				expect(fields, `${resource.name} {${name}}`).toHaveProperty(name);
+		}
+		const templates = resourceList.map((resource) => resource.uriTemplate);
+		expect(new Set(templates).size).toBe(templates.length);
+	});
+
+	// The adapter finds the resource of a URI with this match. A loose match would accept a URI that names something else.
+	it("matches a URI only when each variable is one whole path segment", () => {
+		const template = "soldock://mail/{mailbox_id}/inbox";
+		const id = "tmb_01JC0000000000000000000000";
+		expect(matchTemplate(template, expandTemplate(template, { mailbox_id: id }))).toEqual({ mailbox_id: id });
+		expect(expandTemplate(template, { mailbox_id: "a/b" })).toBe("soldock://mail/a%2Fb/inbox");
+		expect(matchTemplate(template, "soldock://mail/a%2Fb/inbox")).toEqual({ mailbox_id: "a/b" });
+		for (const uri of [
+			"soldock://mail//inbox",
+			"soldock://mail/a/b/inbox",
+			`soldock://mail/${id}/inbox?x=1`,
+			`soldock://mail/${id}/inbox/`,
+			`xsoldock://mail/${id}/inbox`,
+			"soldock://mail/%E0%A4%A/inbox",
+		]) {
+			expect(matchTemplate(template, uri), uri).toBeNull();
+		}
 	});
 });

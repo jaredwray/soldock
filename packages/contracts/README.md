@@ -1,7 +1,7 @@
 # `@soldock/contracts`
 
 > Status: **started**. The registry holds the Mail, Drive, Docs, Sheets, Chat, account and directory
-> operations. Events and the SDK build come later.
+> operations, and the resource kinds of MCP. Events and the SDK build come later.
 
 The operation registry: operation definitions (Zod schemas, scopes, annotations, errors), the error
 catalogue, the scope catalogue and the typed client. Shared by `dock`, `web` and `sdk`. Must stay
@@ -11,6 +11,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | --- | --- |
 | `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, callers, annotations, input and output schemas, errors |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
+| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. `mail.inbox` is the only kind |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`) |
 | `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
@@ -29,4 +30,6 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 - Each capability is one operation here. The REST route, the MCP tool and the client come from it.
 - GET inputs other than path parameters are scalars, because they come from the query string.
 - An operation that agents can call needs only scopes in `AGENT_SCOPES`.
+- A resource kind reads and lists with read-only operations. Each variable of its URI template is an
+  input field of the read operation and one whole path segment of the URI.
 - `test/registry.test.ts` checks these rules, and that each schema converts to JSON Schema for MCP.

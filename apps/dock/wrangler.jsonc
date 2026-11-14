@@ -10,7 +10,9 @@
 	"main": "src/index.ts",
 	// Pinned. Bump deliberately, in its own PR, after reading the compatibility-flag changelog.
 	"compatibility_date": "2026-10-01",
-	"compatibility_flags": ["nodejs_compat"],
+	// enable_request_signal: request.signal aborts when the client disconnects. A subscriptions/listen stream
+	// of /mcp then ends at once and closes its watch sockets.
+	"compatibility_flags": ["nodejs_compat", "enable_request_signal"],
 	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
 	// Production serves only its custom domain, never a second origin on workers.dev.
 	"workers_dev": false,
