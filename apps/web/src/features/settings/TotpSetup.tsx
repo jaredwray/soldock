@@ -112,13 +112,17 @@ export function TotpSetup({ onEnabled, needsPassword, currentPassword }: TotpSet
 				<li>Scan this QR code. If you cannot scan it, enter the key below.</li>
 				<li>Enter the {TOTP_DIGITS}-digit code that the app shows.</li>
 			</ol>
-			<div className="totp-qr">
-				<QrCode value={state.uri} label="QR code for your authenticator app" />
+			<div className="totp-scan">
+				<div className="totp-qr">
+					<QrCode value={state.uri} label="QR code for your authenticator app" />
+				</div>
+				<div className="totp-key">
+					<p className="field-label">Key</p>
+					<p className="totp-secret">
+						<code>{grouped(state.secret)}</code>
+					</p>
+				</div>
 			</div>
-			<p className="field-label">Key</p>
-			<p className="totp-secret">
-				<code>{grouped(state.secret)}</code>
-			</p>
 			<div className="field">
 				<label htmlFor={ids.code} className="field-label">
 					Code

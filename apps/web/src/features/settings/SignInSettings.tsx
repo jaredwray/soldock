@@ -29,7 +29,7 @@ export function PasswordCard() {
 	const [confirmation, setConfirmation] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { current: useId(), password: useId(), confirmation: useId(), hint: useId() };
+	const ids = { title: useId(), current: useId(), password: useId(), confirmation: useId(), hint: useId() };
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -56,16 +56,19 @@ export function PasswordCard() {
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Password</h2>
-			{hasPassword ? (
-				<p className="muted">You sign in with your address and your password.</p>
-			) : (
+		<section className="panel" aria-labelledby={ids.title}>
+			<header className="panel-heading">
+				<h2 id={ids.title} className="panel-title">
+					Password
+				</h2>
+				{hasPassword && <p className="panel-note">You sign in with your address and your password.</p>}
+			</header>
+			{!hasPassword && (
 				<p className="notice">
 					You have no password yet. Set one now: after this session ends, you sign in with your address and a password.
 				</p>
 			)}
-			<form className="create-key" onSubmit={submit} noValidate>
+			<form className="panel-card panel-form" onSubmit={submit} noValidate>
 				{hasPassword && (
 					<div className="field">
 						<label htmlFor={ids.current} className="field-label">
@@ -138,6 +141,7 @@ export function TwoStepCard() {
 	const [confirmOff, setConfirmOff] = useState(false);
 	const [current, setCurrent] = useState("");
 	const currentId = useId();
+	const titleId = useId();
 
 	async function turnOff() {
 		await api.call("account.disable_totp", hasPassword ? { current_password: current } : {});
@@ -148,33 +152,40 @@ export function TwoStepCard() {
 	}
 
 	return (
-		<section className="card">
-			<h2 className="card-title">Two-step verification</h2>
-			{enabled ? (
-				<>
-					<p className="muted">
-						<strong>On.</strong> Each sign-in needs your password and a code from your authenticator app.
-					</p>
-					<button type="button" className="button" onClick={() => setConfirmOff(true)}>
-						Turn off
-					</button>
-				</>
-			) : (
-				<>
-					<p className="muted">
-						<strong>Off.</strong> Add a code from an authenticator app to each sign-in. Then a stolen password alone
-						cannot sign in.
-					</p>
-					<TotpSetup
-						needsPassword={hasPassword}
-						onEnabled={() => {
-							setChanged(true);
-							toast({ message: "Two-step verification is on." });
-							void refresh().catch(() => undefined);
-						}}
-					/>
-				</>
-			)}
+		<section className="panel" aria-labelledby={titleId}>
+			<h2 id={titleId} className="panel-title">
+				Two-step verification
+			</h2>
+			<div className="panel-card setting-action">
+				{enabled ? (
+					<>
+						<div className="setting-action-text">
+							<p className="setting-action-title">On</p>
+							<p className="panel-note">Each sign-in needs your password and a code from your authenticator app.</p>
+						</div>
+						<button type="button" className="button" onClick={() => setConfirmOff(true)}>
+							Turn off
+						</button>
+					</>
+				) : (
+					<>
+						<div className="setting-action-text">
+							<p className="setting-action-title">Off</p>
+							<p className="panel-note">
+								Add a code from an authenticator app to each sign-in. Then a stolen password alone cannot sign in.
+							</p>
+						</div>
+						<TotpSetup
+							needsPassword={hasPassword}
+							onEnabled={() => {
+								setChanged(true);
+								toast({ message: "Two-step verification is on." });
+								void refresh().catch(() => undefined);
+							}}
+						/>
+					</>
+				)}
+			</div>
 			{confirmOff && (
 				<ConfirmDialog
 					title="Turn off two-step verification?"

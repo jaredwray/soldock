@@ -19,6 +19,9 @@ MCP clients. The app has no UI-only path.
   - Each refusal shows the same message from the server, also during a lock after 10 failed attempts.
   - Agents have no password, so they cannot sign in to the UI. Each 401 from an operation
     shows the sign-in page again.
+  - The page is one card on the surface: the mark of Soldock, the title and one line of text, then
+    the fields and an ink button with the full width. An error shows in a box with a red tint,
+    above the button. Setup uses the same card.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
   An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
   Otherwise, the session decides between the app and the sign-in page.
@@ -188,16 +191,19 @@ MCP clients. The app has no UI-only path.
   - The page loads the directory one time. The directory stays when the section changes. Each
     section starts at its top. The page has no link back to Mail: the rail links to each product.
   - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
+  - Each section is a column of 960px at most. A section starts with a muted line of text. Its lists
+    and its forms are in cards on the surface (`.panel-card`). A table in a card shows as list rows.
   - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
-    role, the sponsor and the agent policy of each person and agent. An archived account has an
-    **Archived** chip. At 900px and below, the table shows only the name, the role and the actions, and an
-    agent gets its chip next to its name.
+    role, the sponsor and the agent policy of each person and agent. Each row starts with an avatar:
+    the initials of a person, or the agent icon. The kind and the role are chips. An archived account
+    has an **Archived** chip. At 900px and below, the table shows only the name, the role and the
+    actions, and an agent gets its chip next to its name. At 500px and below, the rows have no avatar.
     - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
       shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
       form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`. For a
       person, the app sends these scopes as `key_scopes`. A person also needs a first password, which
       the admin gives to the person. An archived person cannot be a sponsor.
-    - Each row has icon buttons, with the name in the accessible name: **Edit**, **Reset sign-in**
+    - Each row has round icon buttons, with the name in the accessible name: **Edit**, **Reset sign-in**
       (people only), **Archive** or **Restore**, and **Delete**. The buttons follow the rules of the
       server: the owner and you have no Reset sign-in, Archive or Delete, and only the owner edits the owner.
     - **Edit** opens a dialog for the name, the role of a person (Member or Admin) or the sponsor of an
@@ -212,7 +218,8 @@ MCP clients. The app has no UI-only path.
       tells the admin to give them a different sponsor first.
   - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
-    For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
+    Each agent is one card, which opens on a click and shows the parts of the agent with a line
+    between them. For each agent, the page sets the outbound mail policy, lists the apps that connected as it with
     OAuth (with a Revoke button, `oauth.list_grants`, `oauth.revoke_grant`), and manages the API keys.
     For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
@@ -245,9 +252,14 @@ MCP clients. The app has no UI-only path.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.
+  - The page shows one card in the center, on the surface, as the sign-in page does.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke) and sign out. A new password (`account.set_password`) ends your sessions
   on other browsers. A new key can hold only the scopes of the session.
+  - The page is one column of 720px. Each part has a heading and a short muted line, and its content
+    is in a card on the surface. The account shows as rows with the name at the left and the value
+    at the right. A key shows its label above its scopes. At 900px and below, the table of keys has
+    no Created and Last used columns.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
@@ -255,7 +267,7 @@ MCP clients. The app has no UI-only path.
     notice at the top of each other page until they set one.
   - **Two-step verification.** A click on **Set up two-step verification** calls
     `account.create_totp_secret` and shows the secret as a QR code (black on white in both themes)
-    and as text. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
+    and as text, at the right of the code or below it. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
     (`account.disable_totp`) asks for a confirmation first. The secret comes from a click, not from
     an effect, because each request replaces the waiting secret on the server.
 - **Drive** (`/drive`). A sidebar with the **New** menu, the views and the storage in use, an item
@@ -500,6 +512,9 @@ The icons are from [Iconoir](https://iconoir.com) 7.12.1 (MIT): a 24px grid and 
 - The app has one breakpoint for the drawer: 900px. At 900px and below, and for a touch screen,
   rows are 44px high and text fields have 16px text.
 - Toasts are at the bottom right, because the account button is at the bottom left.
+- Settings and Admin use panels: a heading (`.panel-title`), a muted line (`.panel-note`), and a
+  card on the surface (`.panel-card`) only for a list or a form. Sign-in, setup and Connect use one
+  card of 440px (600px for Connect) on the surface (`.auth-card`), with fields and buttons 42px high.
 
 ## Routes
 

@@ -65,9 +65,9 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 		action && action.kind !== "create" ? mailboxes?.find((mailbox) => mailbox.id === action.mailboxId) : undefined;
 
 	return (
-		<div className="card">
-			<div className="section-toolbar">
-				<p className="muted">
+		<section className="panel">
+			<div className="panel-head">
+				<p className="panel-heading panel-intro">
 					A shared mailbox has its own address, for example support@example.com. Each member, a person or an agent, can
 					read it and send from its address. The members share the labels and the read state.
 				</p>
@@ -81,21 +81,25 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 					New shared mailbox
 				</button>
 			</div>
-			{mailboxes === null && !error && <p className="muted">Loading shared mailboxes…</p>}
+			{mailboxes === null && !error && <p className="panel-card panel-empty">Loading shared mailboxes…</p>}
 			{error && (
 				<p className="form-error" role="alert">
 					{error}
 				</p>
 			)}
 			{mailboxes === null && error && (
-				<button type="button" className="button" onClick={() => void load()}>
-					Try again
-				</button>
+				<div>
+					<button type="button" className="button" onClick={() => void load()}>
+						Try again
+					</button>
+				</div>
 			)}
-			{mailboxes !== null && mailboxes.length === 0 && <p className="muted">There are no shared mailboxes yet.</p>}
+			{mailboxes !== null && mailboxes.length === 0 && (
+				<p className="panel-card panel-empty">There are no shared mailboxes yet.</p>
+			)}
 			{mailboxes !== null && mailboxes.length > 0 && (
-				<div className="table-scroll">
-					<table className="table">
+				<div className="panel-card panel-card-list table-scroll">
+					<table className="table table-rows">
 						<caption className="visually-hidden">Shared mailboxes of the organization</caption>
 						<thead>
 							<tr>
@@ -112,12 +116,19 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 								return (
 									<tr key={mailbox.id}>
 										<td className="member-cell">
-											<div className="member-name">{mailbox.display_name}</div>
-											<div className="cell-address muted">{mailbox.address}</div>
+											<div className="member">
+												<span className="avatar member-avatar" aria-hidden="true">
+													<Icon name="inbox" size={18} />
+												</span>
+												<div className="member-text">
+													<div className="member-name">{mailbox.display_name}</div>
+													<div className="row-note">{mailbox.address}</div>
+												</div>
+											</div>
 										</td>
 										<td>
 											<div>{members.length === 1 ? "1 member" : `${members.length} members`}</div>
-											{members.length > 0 && <div className="muted">{memberNames(members)}</div>}
+											{members.length > 0 && <div className="row-note">{memberNames(members)}</div>}
 										</td>
 										<td className="cell-actions">
 											<div className="row-actions">
@@ -164,7 +175,7 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 			{open && action?.kind === "members" && (
 				<MembersDialog mailbox={open} principals={principals} onChanged={save} onClose={() => setAction(null)} />
 			)}
-		</div>
+		</section>
 	);
 }
 
@@ -232,7 +243,7 @@ function MembersDialog({ mailbox, principals, onChanged, onClose }: MembersDialo
 					<p className="muted">Nobody can use this mailbox yet. Mail to its address still arrives.</p>
 				) : (
 					<div className="table-scroll">
-						<table className="table">
+						<table className="table table-rows">
 							<caption className="visually-hidden">Members of {mailbox.display_name}</caption>
 							<thead>
 								<tr>
@@ -251,7 +262,7 @@ function MembersDialog({ mailbox, principals, onChanged, onClose }: MembersDialo
 												{member.display_name}
 												{member.archived_at !== null && <span className="chip chip-small">Archived</span>}
 											</div>
-											<div className="cell-address muted">{member.address}</div>
+											<div className="row-note">{member.address}</div>
 										</td>
 										<td>
 											<span className={`kind kind-${member.kind}`}>{member.kind === "agent" ? "Agent" : "Person"}</span>
@@ -273,7 +284,7 @@ function MembersDialog({ mailbox, principals, onChanged, onClose }: MembersDialo
 						</table>
 					</div>
 				)}
-				<form className="create-key" onSubmit={add} noValidate>
+				<form className="panel-form panel-form-divided" onSubmit={add} noValidate>
 					<div className="field">
 						<label htmlFor={selectId} className="field-label">
 							Add a member

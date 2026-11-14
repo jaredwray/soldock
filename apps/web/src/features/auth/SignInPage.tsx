@@ -109,96 +109,101 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 	);
 
 	return (
-		<main className="sign-in">
-			<div className="sign-in-card">
-				<div className="brand brand-large">
-					<BrandMark />
-					<span>Soldock</span>
-				</div>
-				<h1 className="sign-in-title">Sign in</h1>
-				{expired && step === "password" && <p className="notice">Your session ended. Sign in again to continue.</p>}
+		<main className="auth">
+			<div className="auth-card">
+				<header className="auth-heading">
+					<div className="auth-logo">
+						<BrandMark />
+					</div>
+					<h1 className="auth-title">Sign in</h1>
+					{step === "password" ? (
+						<p className="auth-subtitle">Use your Soldock address and your password.</p>
+					) : (
+						<p className="auth-subtitle">
+							Two-step verification is on for <strong>{address.trim()}</strong>. Open your authenticator app and enter
+							the code for Soldock.
+						</p>
+					)}
+				</header>
 				{step === "password" ? (
-					<form onSubmit={submitPassword} noValidate>
-						<div className="sign-in-fields">
-							<div className="field">
-								<label htmlFor={ids.address} className="field-label">
-									Address
-								</label>
-								<input
-									ref={addressRef}
-									id={ids.address}
-									className="input"
-									type="email"
-									name="username"
-									autoComplete="username"
-									spellCheck={false}
-									placeholder="ada@example.com"
-									value={address}
-									onChange={(event) => setAddress(event.target.value)}
-									aria-invalid={error ? true : undefined}
-									disabled={busy}
-								/>
-							</div>
-							<div className="field">
-								<label htmlFor={ids.password} className="field-label">
-									Password
-								</label>
-								<input
-									ref={passwordRef}
-									id={ids.password}
-									className="input"
-									type="password"
-									name="password"
-									autoComplete="current-password"
-									value={password}
-									onChange={(event) => setPassword(event.target.value)}
-									aria-invalid={error ? true : undefined}
-									disabled={busy}
-								/>
-							</div>
+					<form className="auth-form" onSubmit={submitPassword} noValidate>
+						{expired && <p className="notice">Your session ended. Sign in again to continue.</p>}
+						<div className="field">
+							<label htmlFor={ids.address} className="field-label">
+								Address
+							</label>
+							<input
+								ref={addressRef}
+								id={ids.address}
+								className="input"
+								type="email"
+								name="username"
+								autoComplete="username"
+								spellCheck={false}
+								placeholder="ada@example.com"
+								value={address}
+								onChange={(event) => setAddress(event.target.value)}
+								aria-invalid={error ? true : undefined}
+								disabled={busy}
+							/>
+						</div>
+						<div className="field">
+							<label htmlFor={ids.password} className="field-label">
+								Password
+							</label>
+							<input
+								ref={passwordRef}
+								id={ids.password}
+								className="input"
+								type="password"
+								name="password"
+								autoComplete="current-password"
+								value={password}
+								onChange={(event) => setPassword(event.target.value)}
+								aria-invalid={error ? true : undefined}
+								disabled={busy}
+							/>
 						</div>
 						{feedback}
 						<button type="submit" className="button button-primary button-block" disabled={busy}>
 							{busy ? "Signing in…" : "Sign in"}
 						</button>
-						<p className="sign-in-help">
+						<p className="auth-help">
 							Forgot your password? Ask an admin to set a new one. The owner can set it with the API key from setup.
 						</p>
 					</form>
 				) : (
-					<form onSubmit={submitCode} noValidate>
-						<p className="sign-in-sent">
-							Two-step verification is on for <strong>{address.trim()}</strong>. Open your authenticator app and enter
-							the code for Soldock.
-						</p>
-						<label htmlFor={ids.code} className="field-label">
-							Code
-						</label>
-						<input
-							ref={codeRef}
-							id={ids.code}
-							className="input input-mono"
-							type="text"
-							name="totp"
-							inputMode="numeric"
-							autoComplete="one-time-code"
-							spellCheck={false}
-							maxLength={TOTP_DIGITS + 4}
-							placeholder={"0".repeat(TOTP_DIGITS)}
-							value={code}
-							onChange={(event) => setCode(event.target.value)}
-							aria-describedby={ids.codeHint}
-							aria-invalid={error ? true : undefined}
-							disabled={busy}
-						/>
-						<p id={ids.codeHint} className="field-hint">
-							The {TOTP_DIGITS} digits in the app. A code works one time. If a code fails, wait for the next code.
-						</p>
+					<form className="auth-form" onSubmit={submitCode} noValidate>
+						<div className="field">
+							<label htmlFor={ids.code} className="field-label">
+								Code
+							</label>
+							<input
+								ref={codeRef}
+								id={ids.code}
+								className="input input-mono"
+								type="text"
+								name="totp"
+								inputMode="numeric"
+								autoComplete="one-time-code"
+								spellCheck={false}
+								maxLength={TOTP_DIGITS + 4}
+								placeholder={"0".repeat(TOTP_DIGITS)}
+								value={code}
+								onChange={(event) => setCode(event.target.value)}
+								aria-describedby={ids.codeHint}
+								aria-invalid={error ? true : undefined}
+								disabled={busy}
+							/>
+							<p id={ids.codeHint} className="field-hint">
+								The {TOTP_DIGITS} digits in the app. A code works one time. If a code fails, wait for the next code.
+							</p>
+						</div>
 						{feedback}
 						<button type="submit" className="button button-primary button-block" disabled={busy}>
 							{busy ? "Signing in…" : "Verify"}
 						</button>
-						<div className="sign-in-links">
+						<div className="auth-links">
 							<button type="button" className="link-button" onClick={startAgain} disabled={busy}>
 								Use a different account
 							</button>
