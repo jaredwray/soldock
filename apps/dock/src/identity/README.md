@@ -59,7 +59,8 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
-    the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id.
+    the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
+    items out of Shared with me and Starred.
   - The mailbox and the drive objects of the deleted principal stay in storage, and nobody can open
     them: a new principal with the same address gets a new id, and so new objects. A later layer
     erases this data.
@@ -70,8 +71,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
 - Nobody archives or deletes the owner or themselves. A person who sponsors an agent cannot be
   deleted: give the agent a different sponsor first, or delete the agent.
 - The checks of the owner, of the sponsor and of a deleted principal are also in the SQL of each
-  write: the change, the archive, the restore, the delete, a new agent and a new team mailbox
-  member. So a parallel change cannot break them.
+  write: the change, the archive, the restore, the delete, a new agent (also through OAuth), and a
+  new team mailbox member (also a first member of a new team mailbox). So a parallel change cannot
+  break them.
 
 ## Team mailboxes
 

@@ -21,6 +21,7 @@ import {
 	getPrincipal,
 	listApiKeys,
 	listPrincipals,
+	liveSponsorCondition,
 	mailDomains,
 	type PrincipalRecord,
 	pendingTotpSecret,
@@ -221,14 +222,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 			// A sponsor archived or deleted during the request must not get a new agent.
-			sponsorId
-				? {
-						condition: {
-							sql: "EXISTS (SELECT 1 FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL)",
-							params: [sponsorId],
-						},
-					}
-				: {},
+			sponsorId ? { condition: liveSponsorCondition(sponsorId) } : {},
 		);
 		if (!created) {
 			throw new OperationError(

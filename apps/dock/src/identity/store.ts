@@ -190,6 +190,17 @@ export interface NewPrincipal {
 	password_hash: string | null;
 }
 
+/**
+ * The condition of an agent insert that its sponsor is still a person who is not archived or deleted, in
+ * the transaction of the insert. A sponsor that a parallel request archives or deletes gets no new agent.
+ */
+export function liveSponsorCondition(sponsorId: string): { sql: string; params: unknown[] } {
+	return {
+		sql: "EXISTS (SELECT 1 FROM principals WHERE id = ? AND kind = 'human' AND archived_at IS NULL AND deleted_at IS NULL)",
+		params: [sponsorId],
+	};
+}
+
 /** Turns a directory constraint failure into an error that the caller can read. */
 export function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);

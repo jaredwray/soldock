@@ -15,6 +15,7 @@ import {
 	callTool,
 	cookieOf,
 	createActor,
+	drainDrive,
 	mcp,
 	ORIGIN,
 	PASSWORD,
@@ -1186,7 +1187,15 @@ describe("changes to people and agents", () => {
 		});
 		await owner.call("mail.send", { to: [bot.address], subject: "Old mail", text: "Hello." });
 		const folder = (await ada.call("drive.create_folder", { name: "Plans" })).item;
+		const shared = (await bot.call("drive.create_folder", { name: "Bot notes" })).item;
+		await bot.call("drive.share_item", { item_id: shared.id, principal_id: ada.id, role: "viewer" });
+		await drainDrive(bot.id);
+		expect((await ada.call("drive.list_items", { view: "shared" })).items.map((item) => item.name)).toEqual([
+			"Bot notes",
+		]);
 		await owner.call("directory.delete_principal", { principal_id: bot.id });
+		// The drive of the agent stays in storage, but nobody can open it, so it leaves the shared list.
+		expect((await ada.call("drive.list_items", { view: "shared" })).items).toEqual([]);
 		expect((await mcp(bot.key, "tools/list")).status).toBe(401);
 		expect((await owner.call("directory.list_principals")).principals.map((p) => p.id)).not.toContain(bot.id);
 		const mailboxes = (await owner.call("directory.list_team_mailboxes")).team_mailboxes;

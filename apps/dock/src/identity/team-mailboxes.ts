@@ -85,7 +85,8 @@ export async function createTeamMailbox(
 				db
 					.prepare(
 						`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
-						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)`,
+						SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM team_mailboxes WHERE id = ?1)
+						AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)`,
 					)
 					.bind(id, principalId, input.created_by, now),
 			),
