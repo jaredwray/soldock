@@ -43,11 +43,12 @@ const GROUP_MS = 5 * 60 * 1000;
 
 /**
  * True when a message is the first message of its day in the list. The day is the day of the device.
- * The list then shows the date above the message.
+ * The list then shows the date above the message. The day uses the same format as the date label, so
+ * the two always agree, also after the time zone of the device changes.
  */
 export function startsDay(previous: ChatMessage | undefined, message: ChatMessage): boolean {
 	if (!previous) return true;
-	return new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
+	return dayLabel(previous.created_at) !== dayLabel(message.created_at);
 }
 
 /**
@@ -61,6 +62,7 @@ export function startsGroup(previous: ChatMessage | undefined, message: ChatMess
 	return Date.parse(message.created_at) - Date.parse(previous.created_at) > GROUP_MS;
 }
 
+// The formats keep the time zone of the device when the page loads, as the formats of lib/format.ts do.
 const dayFormat = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
