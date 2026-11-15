@@ -56,6 +56,102 @@ export function parseAddressList(input: string): ParsedAddresses {
 	return { addresses, invalid };
 }
 
+/** The address at the caret of an address field: the text between the separators around the caret. */
+export interface AddressToken {
+	/** The index after the separator before the caret, or 0. */
+	start: number;
+	/** The index of the separator after the caret, or the length of the text. */
+	end: number;
+	/**
+	 * The address text, without the spaces around it. For `Name <address`, it is the text after the
+	 * angle bracket.
+	 */
+	text: string;
+}
+
+const SEPARATOR = /[,;\n]/;
+
+export function addressTokenAt(value: string, caret: number): AddressToken {
+	let start = Math.min(Math.max(caret, 0), value.length);
+	let end = start;
+	while (start > 0 && !SEPARATOR.test(value.charAt(start - 1))) start--;
+	while (end < value.length && !SEPARATOR.test(value.charAt(end))) end++;
+	const text = value.slice(start, end).trim();
+	const bracket = text.lastIndexOf("<");
+	return { start, end, text: (bracket < 0 ? text : text.slice(bracket + 1)).replace(/>$/, "").trim() };
+}
+
+/**
+ * Puts `address` in place of the address at the caret. At the end of the field, a comma and a space
+ * follow it, so the next address can start at once. Returns the new text and the new caret.
+ */
+export function completeAddress(value: string, token: AddressToken, address: string): { value: string; caret: number } {
+	const before = value.slice(0, token.start);
+	const after = value.slice(token.end);
+	const head = before === "" ? "" : `${before} `;
+	const tail = after === "" ? ", " : after;
+	return {
+		value: `${head}${address}${tail}`,
+		caret: head.length + address.length + (after === "" ? tail.length : 0),
+	};
+}
+
+/**
+ * The suggestions to show for the typed address, and the index of the one that Enter takes. An address
+ * that is in the fields already is not shown. An address that is the same as the typed text comes
+ * first. When the typed text is a full address that no suggestion is the same as, Enter takes none: so
+ * Enter never replaces an address that the person typed in full.
+ */
+export function recipientOptions(
+	typed: string,
+	suggestions: readonly string[],
+	present: readonly string[],
+): { options: string[]; active: number | null } {
+	const options = suggestions.filter((address) => !present.some((other) => sameAddress(other, address)));
+	const same = options.findIndex((address) => sameAddress(address, typed));
+	if (same > 0) options.unshift(...options.splice(same, 1));
+	if (options.length === 0) return { options, active: null };
+	if (same >= 0) return { options, active: 0 };
+	return { options, active: EmailAddress.safeParse(typed).success ? null : 0 };
+}
+
+/**
+ * What a key does in an address field with its list of suggestions. `preventDefault` stops the default
+ * action of the key: Enter sends the form, Escape closes the composer, and an arrow key moves the caret.
+ */
+export type RecipientKeyAction =
+	| { kind: "none"; preventDefault: false }
+	| { kind: "select"; index: number; preventDefault: true }
+	| { kind: "take"; index: number; preventDefault: boolean }
+	| { kind: "close"; preventDefault: true };
+
+/**
+ * The arrow keys move the selection, and go around at the ends. Enter takes the selected address and
+ * does not send. Tab takes it, and the focus moves on. Escape closes the list and not the composer.
+ * With the list closed, or with no address selected for Enter and Tab, the key does its usual action.
+ */
+export function recipientKeyAction(
+	key: string,
+	shiftKey: boolean,
+	list: { open: boolean; active: number | null; count: number },
+): RecipientKeyAction {
+	const none = { kind: "none", preventDefault: false } as const;
+	if (!list.open || list.count === 0) return none;
+	const last = list.count - 1;
+	const { active } = list;
+	if (key === "ArrowDown") {
+		return { kind: "select", index: active === null || active === last ? 0 : active + 1, preventDefault: true };
+	}
+	if (key === "ArrowUp") {
+		return { kind: "select", index: active === null || active === 0 ? last : active - 1, preventDefault: true };
+	}
+	if (key === "Escape") return { kind: "close", preventDefault: true };
+	if (active === null) return none;
+	if (key === "Enter") return { kind: "take", index: active, preventDefault: true };
+	if (key === "Tab" && !shiftKey) return { kind: "take", index: active, preventDefault: false };
+	return none;
+}
+
 function addressList(addresses: readonly Address[]): string {
 	return addresses.map((address) => address.address).join(", ");
 }

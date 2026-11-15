@@ -104,6 +104,13 @@ export interface ThreadSummaryRecord {
 	lastMessageAt: number;
 }
 
+/** An address that the mailbox sent mail to. */
+export interface RecipientRecord {
+	address: string;
+	times_sent: number;
+	last_sent_at: number;
+}
+
 export interface LabelRecord {
 	id: string;
 	name: string;
@@ -232,6 +239,43 @@ const MIGRATIONS: string[][] = [
 			next_attempt_at INTEGER NOT NULL,
 			last_error TEXT
 		)`,
+	],
+	// The addresses that the mailbox sent mail to, for mail.suggest_recipients. The key is the address in
+	// lowercase. The backfill reads the sent mail that exists, with the rules of recordRecipients: one
+	// message counts once for each address, the first entry of a message (To, then Cc, then Bcc) gives its
+	// form, and the newest message gives the stored form (the later message when two have the same time).
+	// Addresses are ASCII (the EmailAddress schema), so SQLite's lower() gives the same key as toLowerCase().
+	[
+		`CREATE TABLE recipients (
+			address_key TEXT PRIMARY KEY,
+			address TEXT NOT NULL,
+			times_sent INTEGER NOT NULL,
+			last_sent_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`INSERT INTO recipients (address_key, address, times_sent, last_sent_at)
+		SELECT address_key, address, times_sent, sent_at FROM (
+			SELECT address_key, address, sent_at,
+				COUNT(*) OVER (PARTITION BY address_key) AS times_sent,
+				ROW_NUMBER() OVER (PARTITION BY address_key ORDER BY sent_at DESC, seq DESC) AS newest
+			FROM (
+				SELECT address_key, address, seq, sent_at,
+					ROW_NUMBER() OVER (PARTITION BY address_key, seq ORDER BY part, position) AS first
+				FROM (
+					SELECT m.seq, m.internal_date AS sent_at, 0 AS part, a.key AS position,
+						json_extract(a.value, '$.address') AS address, lower(json_extract(a.value, '$.address')) AS address_key
+					FROM messages m, json_each(m.to_json) a WHERE m.origin = 'sent'
+					UNION ALL
+					SELECT m.seq, m.internal_date, 1, a.key, json_extract(a.value, '$.address'), lower(json_extract(a.value, '$.address'))
+					FROM messages m, json_each(m.cc_json) a WHERE m.origin = 'sent'
+					UNION ALL
+					SELECT m.seq, m.internal_date, 2, a.key, json_extract(a.value, '$.address'), lower(json_extract(a.value, '$.address'))
+					FROM messages m, json_each(m.bcc_json) a WHERE m.origin = 'sent'
+				)
+				WHERE address_key IS NOT NULL
+			)
+			WHERE first = 1
+		)
+		WHERE newest = 1`,
 	],
 ];
 
@@ -1076,6 +1120,56 @@ export class MailboxDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * The addresses that this mailbox sent mail to and that hold `query`, without regard to case. An
+	 * address that starts with the query comes first. Then comes an address with a part that starts with
+	 * it: after `@`, `.`, `_`, `-` or `+`, or a query that starts with one of them. Then the others. The
+	 * most recent send comes first in each group. An empty query matches each address.
+	 */
+	suggestRecipients(query: string, limit: number): RecipientRecord[] {
+		return this.all<RecipientRecord & Row>(
+			`WITH q (text) AS (SELECT ?)
+			SELECT r.address, r.times_sent, r.last_sent_at FROM recipients r, q
+			WHERE instr(r.address_key, q.text) > 0
+			ORDER BY CASE
+				WHEN instr(r.address_key, q.text) = 1 THEN 0
+				WHEN substr(q.text, 1, 1) IN ('@', '.', '_', '-', '+')
+					OR instr(r.address_key, '@' || q.text) > 0 OR instr(r.address_key, '.' || q.text) > 0
+					OR instr(r.address_key, '_' || q.text) > 0 OR instr(r.address_key, '-' || q.text) > 0
+					OR instr(r.address_key, '+' || q.text) > 0 THEN 1
+				ELSE 2 END,
+				r.last_sent_at DESC, r.address_key
+			LIMIT ?`,
+			query.trim().toLowerCase(),
+			limit,
+		).map((row) => ({ address: row.address, times_sent: row.times_sent, last_sent_at: row.last_sent_at }));
+	}
+
+	/**
+	 * Counts one send to each address of a sent message, inside the transaction of the message. The same
+	 * address twice in one message (for example in To and in Cc) counts once, with the form of its first
+	 * entry. The stored form is the form of the newest send. A send with the same time as the stored one
+	 * is newer, because it is stored later. The migration backfill uses the same rules.
+	 */
+	private recordRecipients(addresses: MailAddress[], sentAt: number): void {
+		const seen = new Set<string>();
+		for (const { address } of addresses) {
+			const key = address.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			this.sql.exec(
+				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at) VALUES (?, ?, 1, ?)
+				ON CONFLICT (address_key) DO UPDATE SET
+					address = CASE WHEN excluded.last_sent_at >= last_sent_at THEN excluded.address ELSE address END,
+					times_sent = times_sent + 1,
+					last_sent_at = MAX(last_sent_at, excluded.last_sent_at)`,
+				key,
+				address,
+				sentAt,
+			);
+		}
+	}
+
 	// --- Changes --------------------------------------------------------------------------------
 
 	createLabel(name: string): LabelRecord | Refusal {
@@ -1221,6 +1315,7 @@ export class MailboxDO extends DurableObject<Env> {
 				subjectFallback: true,
 				sentBy: input.sentBy,
 			});
+			this.recordRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.internalDate);
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";

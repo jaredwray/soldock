@@ -8,6 +8,7 @@ import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { type Draft, parseAddressList } from "./compose.ts";
 import { mailboxInput, useMailboxId } from "./mailbox.tsx";
+import { RecipientInput } from "./RecipientInput.tsx";
 import { RichTextEditor } from "./RichTextEditor.tsx";
 import { docToHtml, docToText, textToDoc } from "./richText.ts";
 
@@ -21,7 +22,8 @@ interface PendingAttachment {
 	content_base64: string;
 }
 
-type AddressField = "to" | "cc" | "bcc";
+const ADDRESS_FIELDS = ["to", "cc", "bcc"] as const;
+type AddressField = (typeof ADDRESS_FIELDS)[number];
 
 const MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
@@ -228,23 +230,21 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 			<label htmlFor={ids[field]} className="compose-label">
 				{label}
 			</label>
-			<input
+			<RecipientInput
 				id={ids[field]}
-				className="compose-input"
-				type="text"
-				inputMode="email"
-				autoComplete="off"
-				spellCheck={false}
 				value={fields[field]}
-				onChange={(event) => {
-					setFields((current) => ({ ...current, [field]: event.target.value }));
+				onChange={(value) => {
+					setFields((current) => ({ ...current, [field]: value }));
 					// The error can name a recipient, so it goes when the recipients change.
 					setError(null);
 				}}
-				aria-invalid={fieldErrors[field] ? true : undefined}
-				aria-describedby={fieldErrors[field] ? `${ids[field]}-error` : undefined}
+				otherAddresses={ADDRESS_FIELDS.filter((other) => other !== field).flatMap(
+					(other) => parseAddressList(fields[other]).addresses,
+				)}
+				invalid={Boolean(fieldErrors[field])}
+				describedBy={fieldErrors[field] ? `${ids[field]}-error` : undefined}
 				disabled={sending}
-				data-autofocus={autofocus ? true : undefined}
+				autofocus={autofocus}
 			/>
 			{extra}
 			{fieldErrors[field] && (
