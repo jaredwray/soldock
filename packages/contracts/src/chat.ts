@@ -14,7 +14,7 @@ export const CHAT_LIMITS = {
 	membersPerCall: 50,
 	pageSize: 100,
 	queryChars: 100,
-	/** The live sockets of one member in one room. One more socket closes the oldest one. */
+	/** The live sockets of one member in one room, with the feeds of its MCP streams. */
 	socketsPerMember: 8,
 } as const;
 
@@ -126,11 +126,17 @@ export function chatSocketPath(roomId: string): string {
 
 /** The codes with which the server closes a room socket. Each other code is a failure: try again later. */
 export const CHAT_SOCKET_CLOSE = {
-	/** The server must authenticate the credential again. Open a new socket now. */
+	/**
+	 * The server must authenticate the credential again. Open a new socket now. An OAuth client gets this
+	 * code when its access token expired or when a refresh replaced the token: use the new token.
+	 */
 	reconnect: 4001,
 	/** The member opened more sockets than `CHAT_LIMITS.socketsPerMember`. Do not open a new socket for this one. */
 	replaced: 4002,
-	/** The credential stopped, or its principal is not a member now. Do not open a new socket. */
+	/**
+	 * The credential stopped and cannot be renewed, or its principal is not a member now. Do not open a
+	 * new socket with this credential.
+	 */
 	ended: 4003,
 } as const;
 

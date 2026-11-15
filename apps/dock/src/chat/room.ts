@@ -8,7 +8,7 @@ import {
 	type RoomKind,
 	type RoomRole,
 } from "@soldock/contracts";
-import { type CredentialRef, liveCredentials } from "../identity/index.ts";
+import { type CredentialCheck, type CredentialRef, checkCredentials } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -73,6 +73,11 @@ export interface SocketOpen {
 	roomId: string;
 	actor: ActorRecord;
 	credential: CredentialRef;
+	/**
+	 * True for the change feed of an MCP stream. One stream holds many feeds, and the end of one feed
+	 * ends the stream. So the room never closes a feed to make room for a new socket.
+	 */
+	feed: boolean;
 }
 
 /** The header with the `SocketOpen` of an upgrade request: JSON, percent-encoded. */
@@ -89,6 +94,7 @@ export const SOCKET_MAX_MS = 60 * 60_000;
 /** What a socket keeps while the object sleeps. */
 interface SocketState {
 	credential: CredentialRef;
+	feed: boolean;
 	openedAt: number;
 	/** The time of the last check of the credential. */
 	checkedAt: number;
@@ -211,6 +217,7 @@ const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
 const NO_MESSAGE = "No message has that id in this room.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+const TOO_MANY_SOCKETS = `One member can have ${CHAT_LIMITS.socketsPerMember} sockets to a room at most.`;
 
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 	return { error: { code, message } };
@@ -769,20 +776,30 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const opened = this.openAsMember({ roomId: open.roomId, actor: open.actor });
 		if ("error" in opened) return Response.json(opened, { status: 403 });
 
-		// One more socket than the limit closes the oldest socket of this member.
+		// At the limit, a new socket closes the oldest socket of this member that is not a feed. A feed is
+		// never closed for this, and a new feed is refused: its stream then leaves the room out.
 		const tag = socketTag(open.actor.principal_id);
-		const mine = this.ctx
-			.getWebSockets(tag)
-			.map((socket) => ({ socket, openedAt: (socket.deserializeAttachment() as SocketState | null)?.openedAt ?? 0 }))
-			.sort((a, b) => a.openedAt - b.openedAt);
-		for (const { socket } of mine.slice(0, Math.max(0, mine.length + 1 - CHAT_LIMITS.socketsPerMember))) {
-			this.end(socket, CHAT_SOCKET_CLOSE.replaced, "This member opened too many sockets to the room.");
+		const mine = this.ctx.getWebSockets(tag);
+		if (mine.length >= CHAT_LIMITS.socketsPerMember) {
+			const oldest = open.feed
+				? undefined
+				: mine
+						.map((socket) => ({ socket, state: socket.deserializeAttachment() as SocketState | null }))
+						.filter((entry) => entry.state?.feed !== true)
+						.sort((a, b) => (a.state?.openedAt ?? 0) - (b.state?.openedAt ?? 0))[0];
+			if (!oldest) return Response.json(refuse("conflict", TOO_MANY_SOCKETS), { status: 409 });
+			this.end(oldest.socket, CHAT_SOCKET_CLOSE.replaced, "This member opened too many sockets to the room.");
 		}
 
 		const { 0: client, 1: server } = new WebSocketPair();
 		this.ctx.acceptWebSocket(server, [tag]);
 		const now = Date.now();
-		server.serializeAttachment({ credential: open.credential, openedAt: now, checkedAt: now } satisfies SocketState);
+		server.serializeAttachment({
+			credential: open.credential,
+			feed: open.feed,
+			openedAt: now,
+			checkedAt: now,
+		} satisfies SocketState);
 		// The runtime answers a ping by itself, so a client can test its connection and the object stays asleep.
 		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
 		this.send(server, {
@@ -835,48 +852,63 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Sends one event to each socket. A socket whose credential check is older than `SOCKET_RECHECK_MS`
-	 * gets the event only after a new check: one read of the directory for all such sockets. A socket
-	 * whose credential stopped closes, without the event. If the check fails, those sockets close, and
-	 * their clients open new ones, which the Worker authenticates.
+	 * gets the event only after a new check. That check reads the credentials of all sockets of the room
+	 * with one query, and all of them get the time of the check. So a room makes one read of the
+	 * directory in `SOCKET_RECHECK_MS` at most, also when its sockets opened at different times.
+	 *
+	 * A socket whose credential stopped closes. If the check fails, the sockets that waited for it
+	 * close, and their clients open new ones, which the Worker authenticates.
 	 */
 	private async deliver(text: string): Promise<void> {
 		const now = Date.now();
-		const stale: { socket: WebSocket; state: SocketState }[] = [];
+		const open: { socket: WebSocket; state: SocketState; waits: boolean }[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
 			const state = socket.deserializeAttachment() as SocketState | null;
 			if (!state || now - state.openedAt >= SOCKET_MAX_MS) {
 				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
-			} else if (now - state.checkedAt >= SOCKET_RECHECK_MS) {
-				stale.push({ socket, state });
-			} else {
-				this.send(socket, text);
+				continue;
 			}
+			const waits = now - state.checkedAt >= SOCKET_RECHECK_MS;
+			if (!waits) this.send(socket, text);
+			open.push({ socket, state, waits });
 		}
-		if (stale.length === 0) return;
-		let live: boolean[] | null = null;
+		if (!open.some((entry) => entry.waits)) return;
+		let checks: CredentialCheck[] | null = null;
 		try {
-			live = await liveCredentials(
+			checks = await checkCredentials(
 				this.env.DIRECTORY,
-				stale.map((entry) => entry.state.credential),
+				open.map((entry) => entry.state.credential),
 			);
 		} catch (error) {
-			log("warn", "chat socket credential check failed; the sockets close", {
-				sockets: stale.length,
+			log("warn", "chat socket credential check failed; the sockets that waited close", {
+				sockets: open.filter((entry) => entry.waits).length,
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 		const checkedAt = Date.now();
-		for (const [index, { socket, state }] of stale.entries()) {
-			if (live === null) {
-				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
-			} else if (!live[index]) {
+		let ended = 0;
+		for (const [index, { socket, state, waits }] of open.entries()) {
+			const check = checks?.[index];
+			if (check === undefined) {
+				if (waits) this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
+			} else if (check === "renew") {
+				ended += 1;
+				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access token stopped. Open a new socket with a new token.");
+			} else if (check === "ended") {
+				ended += 1;
 				this.end(socket, CHAT_SOCKET_CLOSE.ended, "The credential stopped.");
-			} else if (socket.readyState === WebSocket.READY_STATE_OPEN) {
-				// The room can remove a member during the check. Its sockets are closed then, and get nothing.
-				socket.serializeAttachment({ ...state, checkedAt } satisfies SocketState);
-				this.send(socket, text);
+			} else {
+				// The room can remove a member during the check. Its sockets are closed then: the two calls
+				// below do nothing for a closed socket.
+				try {
+					socket.serializeAttachment({ ...state, checkedAt } satisfies SocketState);
+				} catch {
+					// Closed during the check.
+				}
+				if (waits) this.send(socket, text);
 			}
 		}
+		if (ended > 0) log("info", "chat sockets closed: the credential stopped", { sockets: ended });
 	}
 
 	// --- The index in D1 ------------------------------------------------------------------------

@@ -39,8 +39,6 @@ function fakeServer() {
 		onEnd: () => {
 			ended += 1;
 		},
-		// The middle of the random range: each wait is the time of its step.
-		random: () => 0.5,
 	});
 	const last = () => connections[connections.length - 1] as FakeConnection;
 	return { socket, connections, events, last, ended: () => ended };
@@ -48,9 +46,12 @@ function fakeServer() {
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	// The middle of the random range: each wait is the time of its step.
+	vi.spyOn(Math, "random").mockReturnValue(0.5);
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.useRealTimers();
 });
 

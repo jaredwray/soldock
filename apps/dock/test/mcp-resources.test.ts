@@ -1,9 +1,20 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { UNTRUSTED_NOTICE } from "@soldock/contracts";
+import { CHAT_LIMITS, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.ts";
-import { callTool, inject, mcp, modern, modernRequest, rawMessage, readSse, seedOrg } from "./helpers.ts";
+import {
+	bearer,
+	callTool,
+	inject,
+	mcp,
+	modern,
+	modernRequest,
+	rawMessage,
+	readSse,
+	seedOrg,
+	upgradeRoomSocket,
+} from "./helpers.ts";
 
 const inbox = (mailboxId: string) => `soldock://mail/${mailboxId}/inbox`;
 const roomMessages = (roomId: string) => `soldock://chat/${roomId}/messages`;
@@ -320,6 +331,33 @@ describe("MCP subscriptions/listen", () => {
 		await ada.call("chat.post_message", { room_id: kept.id, text: "The other feeds work." });
 		expect(await stream.next()).toEqual(updated(roomMessages(kept.id)));
 		await stream.cancel();
+	});
+
+	// A feed that the room closes ends its stream, with all of its other feeds. So a new stream must not close a feed.
+	it("leaves a room out of a new stream when the caller has too many sockets to it, and keeps the older streams", async () => {
+		const { ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const streams: Awaited<ReturnType<typeof listen>>[] = [];
+		for (let index = 0; index < CHAT_LIMITS.socketsPerMember; index++) {
+			const stream = await listen(bot.key, [roomMessages(room.id)], {}, `sub-${index}`);
+			expect(await stream.next()).toMatchObject({
+				params: { notifications: { resourceSubscriptions: [roomMessages(room.id)] } },
+			});
+			streams.push(stream);
+		}
+		const extra = await listen(bot.key, [roomMessages(room.id), inbox(bot.id)], {}, "extra");
+		expect(await extra.next()).toMatchObject({
+			params: { notifications: { resourceSubscriptions: [inbox(bot.id)] } },
+		});
+		// A socket of the same agent that is not a feed has no socket to close: the room refuses it.
+		expect((await upgradeRoomSocket(room.id, bearer(bot.key))).status).toBe(409);
+
+		await ada.call("chat.post_message", { room_id: room.id, text: "Each older stream works." });
+		for (const [index, stream] of streams.entries()) {
+			expect(await stream.next()).toEqual(updated(roomMessages(room.id), `sub-${index}`));
+			await stream.cancel();
+		}
+		await extra.cancel();
 	});
 
 	// A long-lived stream must not outlive the access that opened it.

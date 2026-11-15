@@ -291,6 +291,12 @@ app uses.
 - **Open a socket.** A client that is not an MCP client can open a WebSocket to
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.
+  - Close code `4001`: open a new socket. With an OAuth connection, refresh the token first. Each
+    socket of an OAuth connection closes with this code in one hour or less.
+  - Close code `4003`: your credential stopped, or you are not a member of the room now. Do not
+    open a new socket with that credential.
+  - Close code `4002`: you opened more than 8 sockets to the room, and this one was the oldest.
+  - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Write.** `chat_post_message` takes plain text. Set `idempotency_key`, so a retry does not post
   the text two times. `chat_mark_read` sets what you read.
 - **Change and delete.** You change only your own messages. You delete your own messages, and each

@@ -1,5 +1,6 @@
 import { isErrorCode, operations, RoomId } from "@soldock/contracts";
 import type { Hono } from "hono";
+import { unauthenticatedResponse } from "../api/index.ts";
 import { type AuthContext, authenticate, credentialRef, isSameOrigin } from "../identity/index.ts";
 import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { type Refusal, SOCKET_HEADER, type SocketOpen } from "./room.ts";
@@ -17,12 +18,14 @@ const READ_OPERATION = operations["chat.list_messages"];
 
 /**
  * Asks the object of a room for a socket for the caller. The object accepts the socket only for a
- * member. A refusal comes back as an `OperationError`, with the code that `chat.list_messages` gives.
+ * member. A refusal comes back as an `OperationError`, with the code that `chat.list_messages` gives,
+ * or `conflict` when the member has too many sockets to the room.
  */
 export async function openRoomSocket(
 	env: Pick<Env, "CHAT_ROOM">,
 	caller: AuthContext,
 	roomId: string,
+	options: { feed: boolean },
 ): Promise<Response> {
 	const open: SocketOpen = {
 		roomId,
@@ -32,6 +35,7 @@ export async function openRoomSocket(
 			display_name: caller.principal.display_name,
 		},
 		credential: credentialRef(caller),
+		feed: options.feed,
 	};
 	const response = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).fetch("https://room.internal/socket", {
 		headers: { upgrade: "websocket", [SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },
@@ -58,7 +62,7 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 		}
 		const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
 		const caller = await authenticate(request, c.env, waitUntil, { allowSession: true });
-		if (!caller) throw new OperationError("unauthenticated", "Send an API key as a bearer token, or sign in.");
+		if (!caller) return unauthenticatedResponse(c.var.requestId, new URL(request.url).pathname);
 		if (caller.credential === "session" && !isSameOrigin(request)) {
 			throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
 		}
@@ -72,7 +76,7 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 		// An id that is not a room id names no room. No object wakes for it.
 		const roomId = RoomId.safeParse(c.req.param("room_id"));
 		if (!roomId.success) throw new OperationError("not_found", "No room has that id, or you have no access to it.");
-		const response = await openRoomSocket(c.env, caller, roomId.data);
+		const response = await openRoomSocket(c.env, caller, roomId.data, { feed: false });
 		log("info", "chat socket opened", {
 			principalId: caller.id,
 			credential: caller.credential,

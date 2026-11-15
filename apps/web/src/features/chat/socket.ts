@@ -34,8 +34,6 @@ export interface RoomSocketOptions {
 	onEvent(event: ChatSocketEvent): void;
 	/** The server ended the socket for good: the credential stopped, or the person is not a member now. */
 	onEnd?(): void;
-	/** A number from 0 to 1, for the random part of a wait. */
-	random?(): number;
 }
 
 export interface RoomSocket {
@@ -60,7 +58,6 @@ export interface RoomSocket {
  * version of the room, and the sync of the room gets what the page did not get.
  */
 export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
-	const random = options.random ?? Math.random;
 	let connection: Connection | null = null;
 	let closed = false;
 	let failures = 0;
@@ -112,12 +109,12 @@ export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
 			return;
 		}
 		if (code === CHAT_SOCKET_CLOSE.reconnect) {
-			retry = setTimeout(open, random() * RECONNECT_SPREAD_MS);
+			retry = setTimeout(open, Math.random() * RECONNECT_SPREAD_MS);
 			return;
 		}
 		const step = Math.min(RETRY_MIN_MS * 2 ** failures, RETRY_MAX_MS);
 		failures += 1;
-		retry = setTimeout(open, step * (1 - JITTER + random() * 2 * JITTER));
+		retry = setTimeout(open, step * (1 - JITTER + Math.random() * 2 * JITTER));
 	}
 
 	function open(): void {

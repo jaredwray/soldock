@@ -401,9 +401,10 @@ principal.
 
 A live connection, such as the socket of a chat room, keeps a reference to its credential
 (`credentialRef`): the SHA-256 of the session cookie, the id of the API key, or the SHA-256 of the
-OAuth access token. `liveCredentials` tells for a list of references which credentials work now, with
-one query. It uses the rules of `authenticate`. So a sign-out ends a session reference, and the expiry
-or the refresh of an OAuth access token ends the reference of that token.
+OAuth access token. `checkCredentials` tells for a list of references what each credential can do
+now, with one query. It uses the rules of `authenticate`. So a sign-out ends a session reference, and
+the expiry or the refresh of an OAuth access token stops the reference of that token. The answer for
+such a token is `renew` while its grant works: the client can get a new token.
 
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
 alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.

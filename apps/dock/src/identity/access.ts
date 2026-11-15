@@ -136,12 +136,13 @@ export async function credentialState(
  * A credential, named by a value that is not its secret: the SHA-256 of a session cookie, the id of
  * an API key, or the SHA-256 of an OAuth access token. A live connection keeps it, and asks again
  * later if the credential works. For OAuth it names the token and not the grant, so a connection
- * stops with the token that opened it.
+ * stops with the token that opened it. `grantId` then names the grant, which can give a new token.
  */
 export interface CredentialRef {
 	principalId: string;
 	kind: AuthContext["credential"];
 	id: string;
+	grantId?: string;
 }
 
 export function credentialRef(caller: AuthContext): CredentialRef {
@@ -152,40 +153,62 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 				? caller.keyId
 				: caller.accessHash;
 	if (id === null) throw new Error(`a ${caller.credential} credential without an id`);
-	return { principalId: caller.principal.id, kind: caller.credential, id };
+	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
+	if (caller.grantId !== null) ref.grantId = caller.grantId;
+	return ref;
 }
 
 /**
- * For each credential, true while it works now, by the rules of `authenticate`: the principal is not
+ * What a credential can do now.
+ * - `live`: it works.
+ * - `renew`: an OAuth access token that expired, or that a refresh replaced, while its grant works.
+ *   The client can get a new token and connect again.
+ * - `ended`: it does not work, and its owner cannot renew it.
+ */
+export type CredentialCheck = "live" | "renew" | "ended";
+
+/**
+ * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
  * not revoked, and an OAuth access token is the current token of a grant that is not revoked, and did
- * not expire. So a refresh of a grant, which replaces its access token, ends the old token here too.
- * One query reads the whole list, so a room with many sockets makes one read.
+ * not expire. So a refresh of a grant, which replaces its access token, stops the old token here too.
+ * One query reads the whole list, and a credential that the list has many times is read one time. So
+ * a room with many sockets makes one read.
  */
-export async function liveCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<boolean[]> {
+export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
+	const keys = refs.map((ref) => `${ref.kind}:${ref.id}`);
+	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(
-			`SELECT ref.key AS position
+			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') AS key,
+				CASE json_extract(ref.value, '$.kind')
+					WHEN 'session' THEN CASE WHEN p.kind = 'human' AND EXISTS (
+						SELECT 1 FROM sessions s
+						WHERE s.token_hash = json_extract(ref.value, '$.id') AND s.principal_id = p.id AND s.expires_at > ?2)
+						THEN 'live' END
+					WHEN 'api_key' THEN CASE WHEN EXISTS (
+						SELECT 1 FROM api_keys k
+						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL)
+						THEN 'live' END
+					WHEN 'oauth' THEN CASE
+						WHEN EXISTS (
+							SELECT 1 FROM oauth_grants g
+							WHERE g.access_hash = json_extract(ref.value, '$.id') AND g.principal_id = p.id
+								AND g.revoked_at IS NULL AND g.access_expires_at > ?2)
+							THEN 'live'
+						WHEN EXISTS (
+							SELECT 1 FROM oauth_grants g
+							WHERE g.id = json_extract(ref.value, '$.grantId') AND g.principal_id = p.id
+								AND g.revoked_at IS NULL AND g.refresh_expires_at > ?2)
+							THEN 'renew' END
+				END AS state
 			FROM json_each(?1) AS ref
 			JOIN principals p ON p.id = json_extract(ref.value, '$.principalId')
-				AND p.archived_at IS NULL AND p.deleted_at IS NULL
-			WHERE CASE json_extract(ref.value, '$.kind')
-				WHEN 'session' THEN p.kind = 'human' AND EXISTS (
-					SELECT 1 FROM sessions s
-					WHERE s.token_hash = json_extract(ref.value, '$.id') AND s.principal_id = p.id AND s.expires_at > ?2)
-				WHEN 'api_key' THEN EXISTS (
-					SELECT 1 FROM api_keys k
-					WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL)
-				WHEN 'oauth' THEN EXISTS (
-					SELECT 1 FROM oauth_grants g
-					WHERE g.access_hash = json_extract(ref.value, '$.id') AND g.principal_id = p.id
-						AND g.revoked_at IS NULL AND g.access_expires_at > ?2)
-				ELSE 0
-			END`,
+				AND p.archived_at IS NULL AND p.deleted_at IS NULL`,
 		)
-		.bind(JSON.stringify(refs), new Date().toISOString())
-		.all<{ position: number }>();
-	const live = new Set(results.map((row) => Number(row.position)));
-	return refs.map((_ref, position) => live.has(position));
+		.bind(JSON.stringify(unique), new Date().toISOString())
+		.all<{ key: string; state: CredentialCheck | null }>();
+	const states = new Map(results.map((row) => [row.key, row.state ?? "ended"]));
+	return keys.map((key) => states.get(key) ?? "ended");
 }

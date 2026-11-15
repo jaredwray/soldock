@@ -205,12 +205,17 @@ A socket stays open after its request. It must not outlive the access that opene
   reaches them.
 - A socket keeps a reference to its credential: the SHA-256 of the session cookie, the id of the
   API key, or the SHA-256 of the OAuth access token. It keeps no secret.
-- Before an event, the room checks each credential whose last check is 60 seconds old or more
-  (`SOCKET_RECHECK_MS`). `liveCredentials` of `identity` reads all of them with one D1 query. A
-  socket whose credential stopped closes, and does not get the event.
+- Before an event, the room looks for a socket whose last check is 60 seconds old or more
+  (`SOCKET_RECHECK_MS`). When it finds one, `checkCredentials` of `identity` reads the credentials of
+  all sockets of the room with one D1 query, and each socket gets the time of that check. A socket
+  that waited for the check gets the event only when its credential works.
+- A socket whose credential stopped closes.
 - So these stop a socket: a sign-out, the end of a session, a revoked key, a revoked OAuth
   connection, the expiry or the refresh of an OAuth access token, and a principal that is archived or
-  deleted. An OAuth client opens a new socket with its new token.
+  deleted.
+- An OAuth access token lasts one hour, so each socket of an OAuth client closes in that time. While
+  the connection works, the close code is `reconnect`: the client gets a new token and opens a new
+  socket. A revoked connection gets `ended`.
 - If the check fails, those sockets close with the code `reconnect`. The Worker then authenticates
   each new socket.
 - A socket lives one hour at most (`SOCKET_MAX_MS`). The room closes it at the next event after
@@ -222,10 +227,10 @@ A socket stays open after its request. It must not outlive the access that opene
 
 | Close code | Meaning | What the client does |
 | --- | --- | --- |
-| `4001` (`reconnect`) | The Worker must authenticate the credential again | Opens a new socket |
+| `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, or an OAuth access token stopped while its connection works | Opens a new socket. An OAuth client uses its new token |
 | `4002` (`replaced`) | The member opened more than 8 sockets to the room (`CHAT_LIMITS.socketsPerMember`), and this one is the oldest | Opens no new socket for this one |
-| `4003` (`ended`) | The credential stopped, or the principal is not a member now | Opens no new socket |
-| `1008` | The client sent a message | Opens no new socket |
+| `4003` (`ended`) | The credential stopped and cannot be renewed, or the principal is not a member now | Opens no new socket with this credential |
+| `1008` | The client sent a message | A client must send nothing but `ping`. The web app sends nothing else |
 
 ### Agents
 
@@ -237,6 +242,9 @@ A socket stays open after its request. It must not outlive the access that opene
 - The change feed of the resource is a room socket that the Worker opens for the stream
   (`watch.ts`). So the room makes the same member check and the same credential check for the two.
 - Only a `message` event sends `notifications/resources/updated`.
+- A feed counts for the limit of 8 sockets of one member in one room. The room never closes a feed
+  to make room for a new socket, because the end of one feed ends its stream with all of its other
+  feeds. At the limit, the room refuses a new feed, and the new stream leaves the room out.
 - The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
   one query, which wakes no room. The index is a first filter only. The room object decides when the
   feed opens. When the index is behind and the room refuses the caller, the stream leaves that room
@@ -245,9 +253,13 @@ A socket stays open after its request. It must not outlive the access that opene
 ### Cost and limits
 
 - A change sends one frame to each socket of the room. It makes no write for the sockets.
-- A room with activity makes one D1 read each minute for the credential checks, for all of its
-  sockets together.
+- A room with activity makes one D1 read each minute at most for the credential checks, for all of
+  its sockets together. The operation that made the event waits for that read.
 - One member has at most 8 sockets in one room. A room has at most 500 members.
+- At the limit, a new socket closes the oldest socket of the member that is not a feed. When each
+  socket of the member is a feed, the room refuses the new socket with `conflict`.
+- Known limit: the room has no limit for the events that wait for a client that does not read its
+  socket.
 - Known limit: `chat.post_message` has no rate limit yet. A later change of this layer adds it.
 
 ## Clients without a socket

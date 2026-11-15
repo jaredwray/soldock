@@ -1,13 +1,14 @@
 // Public surface of the identity module. Other modules import from here, never from its files.
 export {
 	type CredentialBinding,
+	type CredentialCheck,
 	type CredentialRef,
 	canManageCredentialsOf,
 	canReadAgentMailboxes,
+	checkCredentials,
 	credentialBinding,
 	credentialRef,
 	credentialState,
-	liveCredentials,
 } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export { identityHandlers } from "./handlers.ts";

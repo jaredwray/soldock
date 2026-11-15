@@ -12,7 +12,24 @@ import { openRoomSocket } from "./socket.ts";
  * is a first filter only, and it can be behind the room. The object of the room decides when the feed
  * opens. When it refuses the caller, `open` returns null, and the stream leaves the room out. The room
  * closes the socket of a member that it removes, which ends the stream.
+ *
+ * A feed counts for the limit of sockets of one member in one room. The room never closes a feed to
+ * make room for a new socket, because that would end a stream with all of its other feeds. At the
+ * limit, the room refuses a new feed, and the stream leaves the room out.
  */
+/** The refusals of a room that leave the room out of a stream. Each other failure fails the request. */
+const REFUSALS: ReadonlySet<string> = new Set(["not_found", "forbidden", "conflict"]);
+
+/** The `type` of a socket event, or null for text that is no event. */
+function eventType(data: string): string | null {
+	try {
+		const type = (JSON.parse(data) as { type?: unknown }).type;
+		return typeof type === "string" ? type : null;
+	} catch {
+		return null;
+	}
+}
+
 const roomWatcher: ResourceWatcher<CallContext> = {
 	async allowed(call, resources) {
 		const ids = resources.map((vars) => vars.room_id);
@@ -27,10 +44,11 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 	async open(call, vars, listener) {
 		let response: Response;
 		try {
-			response = await openRoomSocket(call.env, call.caller, vars.room_id as string);
+			response = await openRoomSocket(call.env, call.caller, vars.room_id as string, { feed: true });
 		} catch (error) {
-			// The index has the caller as a member, and the room does not: the index is behind.
-			if (error instanceof OperationError && (error.code === "not_found" || error.code === "forbidden")) return null;
+			// `not_found`, `forbidden`: the index has the caller as a member, and the room does not, so the
+			// index is behind. `conflict`: the caller has too many sockets to the room.
+			if (error instanceof OperationError && REFUSALS.has(error.code)) return null;
 			throw error;
 		}
 		const socket = response.webSocket as WebSocket;
@@ -44,7 +62,7 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 		socket.addEventListener("message", (event) => {
 			if (closed || typeof event.data !== "string") return;
 			// Only a change of a message is a change of this resource. `hello` and `room` are not.
-			if (event.data.startsWith('{"type":"message"')) listener.change();
+			if (eventType(event.data) === "message") listener.change();
 		});
 		socket.addEventListener("close", ended);
 		socket.addEventListener("error", ended);

@@ -142,15 +142,21 @@ describe("a room socket", () => {
 		const signedOut = await connect(room.id, { cookie, origin: ORIGIN });
 		const revoked = await connect(room.id, bearer(second.secret));
 		const steady = await connect(room.id, bearer(bot.key));
+		const expired = await connect(room.id, { cookie: await signIn(owner.address), origin: ORIGIN });
 
 		const signOut = await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } });
 		expect(signOut.status).toBe(204);
 		await ada.call("account.revoke_api_key", { key_id: second.id });
+		// The session of the owner reaches its end.
+		await env.DIRECTORY.prepare("UPDATE sessions SET expires_at = ? WHERE principal_id = ?")
+			.bind(new Date(Date.now() - 1000).toISOString(), owner.id)
+			.run();
 		// The next event after SOCKET_RECHECK_MS makes the room check each credential first.
 		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
 		const posted = (await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" })).message;
 		expect(await signedOut.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
 		expect(await revoked.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
+		expect(await expired.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
 		expect(await steady.next()).toEqual({ type: "message", message: posted });
 
 		// An archived principal cannot use a credential. Its socket closes at the next check.
@@ -164,6 +170,39 @@ describe("a room socket", () => {
 		vi.setSystemTime(Date.now() + SOCKET_MAX_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "One hour later." });
 		expect(await old.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.reconnect });
+	});
+
+	// Each check is a read of the directory, which also authenticates each request. A busy room must not read it for each message.
+	it("reads the directory one time in each check interval, for all of its sockets together", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		// The sockets open at different times, so their checks get old at different times.
+		const first = await connect(room.id, bearer(ada.key));
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS / 3);
+		const second = await connect(room.id, bearer(bot.key));
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS / 3);
+		const third = await connect(room.id, bearer(bot.key));
+		let checks = 0;
+		await runInDurableObject(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const directory = target.env.DIRECTORY;
+			const counted = {
+				prepare: (sql: string) => {
+					if (sql.includes("FROM sessions")) checks += 1;
+					return directory.prepare(sql);
+				},
+				batch: (statements: D1PreparedStatement[]) => directory.batch(statements),
+			} as unknown as D1Database;
+			target.env = { ...target.env, DIRECTORY: counted };
+		});
+
+		// Six messages in two check intervals: each socket gets each message, and the room checks two times.
+		for (let index = 0; index < 6; index++) {
+			vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS / 3);
+			const { message } = await ada.call("chat.post_message", { room_id: room.id, text: `Message ${index}` });
+			for (const socket of [first, second, third]) expect(await socket.next()).toEqual({ type: "message", message });
+		}
+		expect(checks).toBe(2);
 	});
 
 	it("closes the oldest socket of a member that opens more sockets than the limit", async () => {

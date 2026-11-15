@@ -142,9 +142,10 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   notifications within about one minute. The scopes of a credential do not change, so the check does
   not read them again.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
-  for all chat rooms, and one socket for each mailbox and each room (at most 100). Each later access check makes at most four D1 calls: the
-  credential, the principal, the last-use time of the credential, and one query for all team
-  mailboxes. With one check each minute, one stream makes at most about 350 subrequests in its hour.
+  for all chat rooms, and one socket for each mailbox and each room (at most 100). Each later access
+  check makes at most five D1 calls: the credential, the principal, the last-use time of the
+  credential, one query for all team mailboxes, and one query for all chat rooms. With one check each
+  minute, one stream makes at most about 400 subrequests in its hour.
 - When the client closes the connection, the stream ends at once and closes its change feeds. The
   `enable_request_signal` compatibility flag makes `request.signal` abort on the disconnect.
 - One request can name at most 100 URIs. A filter that is not valid gets error `-32602`.
@@ -162,5 +163,7 @@ Known limits:
 - A principal can open any number of streams. Each stream holds one Worker request and one watch
   socket for each watched mailbox. A Durable Object accepts at most 32,768 WebSockets, so many streams
   on one team mailbox can fill it. A limit for each principal needs shared state, and is not built yet.
+- A chat room has a limit: one principal has at most 8 sockets to one room, with the feeds of its
+  streams. A stream that asks for a room at that limit gets an acknowledgment without the room.
 - Mail that arrives before the acknowledgment can send no notification. Read the inbox after the
   acknowledgment.

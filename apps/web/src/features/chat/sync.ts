@@ -34,10 +34,11 @@ export interface RoomSync {
 
 /**
  * Gets each new, changed and deleted message after the version that the page has, and gives them to
- * `apply`. `apply` can get the same message two times: from `push` and from a read. One sync runs at a time. A call during a sync makes the sync run one more time. After a
- * failed read, the version stays, so the next sync asks for the same changes again. A page that was
- * read before a new `start` is dropped, and the sync reads again from the new version: that page was
- * for the list from before the load.
+ * `apply`. `apply` can get the same message two times: from `push` and from a read. One sync runs at
+ * a time. A call during a sync makes the sync run one more time. After a failed read, the version
+ * stays, so the next sync asks for the same changes again. A page that was read before a new `start`
+ * is dropped, and the sync reads again from the new version: that page was for the list from before
+ * the load.
  */
 export function createRoomSync(
 	read: (changedAfter: number) => Promise<ChangePage>,
