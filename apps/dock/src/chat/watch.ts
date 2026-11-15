@@ -1,5 +1,5 @@
 import type { CallContext } from "../identity/index.ts";
-import type { ResourceWatcher, WatcherMap } from "../platform/index.ts";
+import { OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
 import { joinedRoomIds } from "./room-index.ts";
 import { openRoomSocket } from "./socket.ts";
 
@@ -9,8 +9,9 @@ import { openRoomSocket } from "./socket.ts";
  * credential check for the two. Each `message` event of the socket is one change.
  *
  * `allowed` reads the index in D1: one query for all rooms of a stream, which wakes no room. The index
- * is a first filter only. The object of the room decides when the feed opens, and it closes the socket
- * of a member that it removes, which ends the stream.
+ * is a first filter only, and it can be behind the room. The object of the room decides when the feed
+ * opens. When it refuses the caller, `open` returns null, and the stream leaves the room out. The room
+ * closes the socket of a member that it removes, which ends the stream.
  */
 const roomWatcher: ResourceWatcher<CallContext> = {
 	async allowed(call, resources) {
@@ -24,7 +25,14 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 	},
 
 	async open(call, vars, listener) {
-		const response = await openRoomSocket(call.env, call.caller, vars.room_id as string);
+		let response: Response;
+		try {
+			response = await openRoomSocket(call.env, call.caller, vars.room_id as string);
+		} catch (error) {
+			// The index has the caller as a member, and the room does not: the index is behind.
+			if (error instanceof OperationError && (error.code === "not_found" || error.code === "forbidden")) return null;
+			throw error;
+		}
 		const socket = response.webSocket as WebSocket;
 		socket.accept();
 		let closed = false;

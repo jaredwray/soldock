@@ -299,6 +299,29 @@ describe("MCP subscriptions/listen", () => {
 		expect(await stream.next()).toBe("closed");
 	});
 
+	// The index of the rooms in D1 can be behind a room. A room that refuses the caller must not stop the other feeds.
+	it("leaves out a room that refuses the caller while the index still has the caller as a member", async () => {
+		const { ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const { room: kept } = await ada.call("chat.create_room", { kind: "private", name: "Ops", member_ids: [bot.id] });
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		// The row of the removed member is in the index again, as after a write to the index that failed.
+		await env.DIRECTORY.prepare(
+			"INSERT INTO chat_members (principal_id, room_id, role, last_read_seq) VALUES (?, ?, 'member', 0)",
+		)
+			.bind(bot.id, room.id)
+			.run();
+
+		const stream = await listen(bot.key, [roomMessages(room.id), roomMessages(kept.id), inbox(bot.id)]);
+		expect(await stream.next()).toMatchObject({
+			method: "notifications/subscriptions/acknowledged",
+			params: { notifications: { resourceSubscriptions: [roomMessages(kept.id), inbox(bot.id)] } },
+		});
+		await ada.call("chat.post_message", { room_id: kept.id, text: "The other feeds work." });
+		expect(await stream.next()).toEqual(updated(roomMessages(kept.id)));
+		await stream.cancel();
+	});
+
 	// A long-lived stream must not outlive the access that opened it.
 	it("ends when the caller loses a mailbox or its credential, and after its longest life", async () => {
 		const { owner, bot, support } = await seedTeams();

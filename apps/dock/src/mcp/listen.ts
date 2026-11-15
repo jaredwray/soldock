@@ -214,6 +214,8 @@ export async function listen(input: ListenInput): Promise<Response> {
 					change: () => changed(uri),
 					end: () => stop("a change feed stopped"),
 				});
+				// The resource refused the caller after `allowed` accepted it. The acknowledgment leaves it out.
+				if (!watch) return;
 				feeds.set(uri, { resolved, watcher, watch });
 				// The client left while the feed opened.
 				if (!open) watch.close();

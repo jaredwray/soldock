@@ -151,7 +151,9 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 
 A domain module gives the change feed of each resource kind (`ResourceWatcher` in
 [`platform`](../platform/README.md)). Its `allowed` checks the access of the caller to a list of
-resources with the rules of its domain, and its `open` opens the feed of one allowed resource. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
+resources with the rules of its domain, and its `open` opens the feed of one allowed resource. `open`
+returns nothing when the resource refuses the caller at that time, and the acknowledgment then
+leaves that resource out. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
 `mail.inbox`. The [`chat`](../chat/README.md#agents) module gives the feed of `chat.room`: a room
 socket. The room closes that socket when it removes the member, so the stream ends at once.
 

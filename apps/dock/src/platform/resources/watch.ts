@@ -25,8 +25,12 @@ export interface ResourceWatcher<C> {
 	 * before it opens the feeds, and again from time to time.
 	 */
 	allowed(call: C, resources: readonly Readonly<Record<string, string>>[]): Promise<boolean[]>;
-	/** Opens a change feed for one resource. Call it only for a resource that `allowed` accepted. */
-	open(call: C, vars: Readonly<Record<string, string>>, listener: WatchListener): Promise<Watch>;
+	/**
+	 * Opens a change feed for one resource. Call it only for a resource that `allowed` accepted. It
+	 * returns null when the resource refuses the caller at that time: `allowed` can use a copy that is a
+	 * moment behind. The stream then leaves the resource out, as for a resource that `allowed` refused.
+	 */
+	open(call: C, vars: Readonly<Record<string, string>>, listener: WatchListener): Promise<Watch | null>;
 }
 
 /** One change feed for each resource kind of the registry. */

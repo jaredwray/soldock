@@ -239,7 +239,8 @@ A socket stays open after its request. It must not outlive the access that opene
 - Only a `message` event sends `notifications/resources/updated`.
 - The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
   one query, which wakes no room. The index is a first filter only. The room object decides when the
-  feed opens, and the socket of a removed member closes, which ends the stream.
+  feed opens. When the index is behind and the room refuses the caller, the stream leaves that room
+  out and opens its other feeds. The socket of a removed member closes, which ends the stream.
 
 ### Cost and limits
 
