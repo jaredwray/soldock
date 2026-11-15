@@ -1,7 +1,7 @@
-import type { ChatMessage, ChatRoom, OperationName } from "@soldock/contracts";
+import type { ChatRoom, OperationName } from "@soldock/contracts";
 import { type CallContext, getPrincipals } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import type { ActorRecord, MessageRecord, Refusal, RoomCall, RoomRecord } from "./room.ts";
+import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
 import { listJoinedRooms, listPublicRooms } from "./room-index.ts";
 
 type ChatOperation = Extract<OperationName, `chat.${string}`>;
@@ -41,14 +41,6 @@ function toRoom(record: RoomRecord): ChatRoom {
 		...record,
 		created_at: iso(record.created_at),
 		last_message_at: record.last_message_at === null ? null : iso(record.last_message_at),
-	};
-}
-
-function toMessage(record: MessageRecord): ChatMessage {
-	return {
-		...record,
-		created_at: iso(record.created_at),
-		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
 }
 
@@ -203,7 +195,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				limit: input.limit ?? DEFAULT_PAGE,
 			}),
 		);
-		return { messages: page.messages.map(toMessage), version: page.version, has_more: page.hasMore };
+		return { messages: page.messages.map(messageOutput), version: page.version, has_more: page.hasMore };
 	},
 
 	async "chat.post_message"(call, input) {
@@ -216,14 +208,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			}),
 		);
 		if (!posted.duplicate) auditOk(call, "chat.post_message", `${input.room_id}:${posted.message.id}`);
-		return { message: toMessage(posted.message) };
+		return { message: messageOutput(posted.message) };
 	},
 
 	async "chat.edit_message"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		const edited = accept(await opened.room.editMessage(opened.ctx, input.message_id, input.text));
 		if (edited.changed) auditOk(call, "chat.edit_message", `${input.room_id}:${input.message_id}`);
-		return { message: toMessage(edited.message) };
+		return { message: messageOutput(edited.message) };
 	},
 
 	async "chat.delete_message"(call, input) {

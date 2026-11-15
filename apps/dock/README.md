@@ -33,13 +33,18 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   `/blob/`, `/dl/`, `/hooks/`) go to the Hono app. Unknown ones get a `404` with an
   `application/problem+json` body, never the SPA.
 - Every app response carries a server-generated `x-request-id`. A client-supplied one is ignored.
+  The answer to a WebSocket upgrade (`101`) is the exception: it has no such header.
 - `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
 - `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
-- `/mcp`: the MCP endpoint, with one tool for each operation and the inbox of each mailbox as a
-  resource ([`src/mcp/`](src/mcp/)). It speaks protocol 2026-07-28 and the older protocols. A
-  `subscriptions/listen` request gets a long-lived SSE response with a notification for new mail.
-  Its `401` names the OAuth metadata.
+- `/mcp`: the MCP endpoint, with one tool for each operation, and the inbox of each mailbox and
+  the messages of each chat room as resources ([`src/mcp/`](src/mcp/)). It speaks protocol
+  2026-07-28 and the older protocols. A `subscriptions/listen` request gets a long-lived SSE response
+  with a notification for new mail and for each change of a chat message. Its `401` names the OAuth
+  metadata.
+- `/ws/chat/rooms/{room_id}`: the WebSocket of a chat room, for its members
+  ([`src/chat/`](src/chat/README.md#the-socket-of-a-room)). It carries events from the room only.
+  Each other path under `/ws/` gets `404`.
 - `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server`,
   `/oauth/register`, `/oauth/authorize` and `/oauth/token`: the OAuth server for MCP clients. A
   person approves a client on the `/connect/<id>` page of the SPA

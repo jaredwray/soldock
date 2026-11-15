@@ -1,11 +1,14 @@
 import { env } from "cloudflare:workers";
-import { UNTRUSTED_NOTICE } from "@soldock/contracts";
+import { CHAT_SOCKET_CLOSE, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {
 	type Actor,
 	api,
+	bearer,
 	callTool,
 	codeOf,
+	connectRoomSocket,
 	consumeWebhooks,
 	createActor,
 	mcp,
@@ -451,6 +454,10 @@ describe("OAuth approval", () => {
 });
 
 describe("OAuth tokens", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	// RFC 9700: somebody else can hold a code. A second use must fail and end what the first use made.
 	it("uses a code one time: a second use fails and revokes the tokens of the first use", async () => {
 		const owner = await setupOwner();
@@ -592,6 +599,42 @@ describe("OAuth tokens", () => {
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
 		const renewed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
 		expect((await mcp(renewed.access_token, "tools/list")).status).toBe(200);
+	});
+
+	// A room socket stays open after its request. It must not outlive the token that opened it.
+	it("closes the room socket of a token that a refresh replaced or that expired, and of a revoked connection", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens: firstTokens } = await connectNewAgent(owner);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
+		const post = async (text: string) => (await owner.call("chat.post_message", { room_id: room.id, text })).message;
+		// Only the clock is fake: the room checks a credential again when its last check is old.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		// A refresh replaces the access token. A copy of the old token must not keep a socket open.
+		const replaced = await connectRoomSocket(room.id, bearer(firstTokens.access_token));
+		const tokens = (await (await refresh(clientId, firstTokens.refresh_token)).json()) as Tokens;
+		const socket = await connectRoomSocket(room.id, bearer(tokens.access_token));
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		const first = await post("Deploy 42 is done.");
+		// The connection works, so the code tells the client to open a new socket with its new token.
+		expect(await replaced.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.reconnect });
+		expect(await socket.next()).toEqual({ type: "message", message: first });
+
+		// The access token expires, and the client did not refresh it yet.
+		await env.DIRECTORY.prepare("UPDATE oauth_grants SET access_expires_at = ?")
+			.bind(new Date(Date.now() - 1000).toISOString())
+			.run();
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		await post("The token is expired.");
+		expect(await socket.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.reconnect });
+
+		const renewed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
+		const last = await connectRoomSocket(room.id, bearer(renewed.access_token));
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		await post("The connection is revoked.");
+		// A revoked connection gives no new token: the client must not open a new socket.
+		expect(await last.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
 	});
 
 	it("stops each token at once when the sponsor revokes the connection", async () => {

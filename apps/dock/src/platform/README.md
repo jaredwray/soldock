@@ -14,7 +14,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 ## What exists
 
-- `http/request-id.ts`: Hono middleware giving each request a server-generated id (`c.var.requestId`, `x-request-id` header).
+- `http/request-id.ts`: Hono middleware giving each request a server-generated id (`c.var.requestId`, `x-request-id` header). The answer to a WebSocket upgrade keeps its socket, so it gets no header.
 - `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path.
 - `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
 - `crypto/crypto.ts`: SHA-256, HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.

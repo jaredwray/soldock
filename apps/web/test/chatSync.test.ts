@@ -134,3 +134,75 @@ describe("the sync of an open room", () => {
 		expect(applied).toEqual([2]);
 	});
 });
+
+describe("a message from the socket of the room", () => {
+	// The socket brings each change. A read for each message would make the socket useless.
+	it("shows without a read when it has the next version, and one time when it arrives two times", async () => {
+		const room = fakeRoom([message(1, 1), message(2, 2), message(3, 3)]);
+		const applied: number[] = [];
+		const sync = createRoomSync(room.read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(1);
+		sync.push(message(2, 2));
+		// The answer of the operation and the event of the socket have the same message.
+		sync.push(message(2, 2));
+		sync.push(message(3, 3));
+		expect(applied).toEqual([2, 3]);
+		// The page is current, so the next room list starts no read.
+		await sync.notice(3);
+		expect(room.calls).toEqual([]);
+	});
+
+	// An event can get lost, for example while the socket connects again. The version shows the gap.
+	it("shows at once, and gets the changes that the page did not get, when a version is missing", async () => {
+		const room = fakeRoom([message(1, 1), message(2, 2), message(3, 3), message(4, 4)]);
+		const applied: number[] = [];
+		const sync = createRoomSync(room.read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(1);
+		sync.push(message(4, 4));
+		expect(applied).toEqual([4]);
+		await sync.run();
+		expect(room.calls[0]).toBe(1);
+		expect(applied).toEqual([4, 2, 3, 4]);
+		// The sync has version 4 now: the same message again changes nothing.
+		sync.push(message(4, 4));
+		expect(applied).toEqual([4, 2, 3, 4]);
+	});
+
+	// A read that started before the message can answer without it. The sync must not stop at that answer.
+	it("reads again when it arrives during a read", async () => {
+		const changes = [message(1, 1)];
+		let release: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const calls: number[] = [];
+		const read = async (changedAfter: number): Promise<ChangePage> => {
+			calls.push(changedAfter);
+			// The first read saw the room before the new message, and answers late.
+			const seen = calls.length === 1 ? [...changes] : changes;
+			if (calls.length === 1) await held;
+			const after = seen.filter((change) => change.version > changedAfter);
+			return { messages: after, version: seen[seen.length - 1]?.version ?? 0, has_more: false };
+		};
+		const applied: number[] = [];
+		const sync = createRoomSync(read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(1);
+		const running = sync.run();
+		changes.push(message(2, 2), message(3, 3));
+		sync.push(message(3, 3));
+		release();
+		await running;
+		expect(calls).toEqual([1, 1]);
+		expect(applied).toEqual([3, 2, 3]);
+	});
+
+	it("is dropped before the load of the room and after a stop", () => {
+		const applied: number[] = [];
+		const sync = createRoomSync(fakeRoom([]).read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.push(message(1, 1));
+		sync.start(0);
+		sync.stop();
+		sync.push(message(1, 1));
+		expect(applied).toEqual([]);
+	});
+});
