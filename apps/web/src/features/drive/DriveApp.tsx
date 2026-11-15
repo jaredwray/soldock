@@ -400,7 +400,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	async function runUploads() {
 		uploadingRef.current = true;
 		const queue = queueRef.current;
-		const destinations = new Set<string>();
+		// The name of each folder that got a file, by its target: two folders can have the same name.
+		const destinations = new Map<string, string>();
 		let done = 0;
 		let uploaded = 0;
 		for (let job = queue.shift(); job; job = queue.shift()) {
@@ -420,7 +421,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						idempotency_key: crypto.randomUUID(),
 					});
 					uploaded += 1;
-					destinations.add(job.destination);
+					destinations.set(JSON.stringify(job.target), job.destination);
 				} catch (caught) {
 					toast({ message: `“${file.name}” did not upload. ${errorMessage(caught)}`, tone: "error" });
 				}
@@ -430,7 +431,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		uploadingRef.current = false;
 		setUpload(null);
 		if (uploaded > 0) {
-			const [only] = destinations;
+			const [only] = destinations.values();
 			const files = plural(uploaded, "file");
 			toast({ message: destinations.size === 1 ? `Uploaded ${files} to ${only}.` : `Uploaded ${files}.` });
 			changedRef.current();
