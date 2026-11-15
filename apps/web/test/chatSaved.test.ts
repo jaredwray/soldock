@@ -65,6 +65,10 @@ describe("the messages that wait, after a reload of the page", () => {
 		expect(old).toMatchObject([{ state: "failed", error: TOO_OLD }]);
 		const young = fromSaved([saved("k2", { created_at: new Date(NOW - RESTORE_SEND_MS + 1000).toISOString() })], NOW);
 		expect(young).toMatchObject([{ state: "waiting", error: null }]);
+		// The clock of the device went back, or the record has no time. The page does not know the age.
+		const future = fromSaved([saved("k3", { created_at: new Date(NOW + 60_000).toISOString() })], NOW);
+		expect(future).toMatchObject([{ state: "failed", error: TOO_OLD }]);
+		expect(fromSaved([saved("k4", { created_at: "no time" })], NOW)).toMatchObject([{ state: "failed" }]);
 	});
 
 	it("stay failed, with the reason, when they failed before the reload", () => {
