@@ -347,6 +347,37 @@ describe("the tabs of a sheet", () => {
 		expect(calls).toHaveLength(1);
 	});
 
+	// A read that started before the rename can arrive after it, with the old formulas of its tab.
+	it("locks the cells of a read that started before a rename", async () => {
+		const { store, sheet, api, calls } = await openStore();
+		sheet.tabs.push({ id: "tab_2", name: "Sheet2", rows: 1, columns: 1 });
+		sheet.cells.tab_2 = [text("A1", "=Sheet1!B1")];
+		await store.refresh();
+		const get = api.get;
+		let answerOld = () => {};
+		api.get = (tabId) =>
+			tabId === "tab_2"
+				? get(tabId).then((old) => new Promise<SheetData>((resolve) => (answerOld = () => resolve(old))))
+				: get(tabId);
+		// The person opens tab_2, and goes back to tab_1 before the cells of tab_2 arrive.
+		store.selectTab("tab_2");
+		await settle();
+		api.get = get;
+		store.selectTab("tab_1");
+		sheet.cells.tab_2 = [text("A1", "=Costs!B1")];
+		await store.changeTab({ kind: "rename", tabId: "tab_1", name: "Costs" });
+		answerOld();
+		await settle();
+		expect(store.getSnapshot()).toMatchObject({ activeTab: "tab_1", tabLoading: false });
+		store.selectTab("tab_2");
+		expect(store.getSnapshot().tabLoading).toBe(true);
+		store.commit([{ cell: "A1", input: "=Sheet1!B2" }]);
+		await settle();
+		expect(calls).toHaveLength(0);
+		expect(store.inputOf("A1")).toBe("=Costs!B1");
+		expect(store.getSnapshot().tabLoading).toBe(false);
+	});
+
 	// Without the cells of the tab, an edit starts from an empty input, and a save then deletes the real input.
 	it("refuses a change to a tab whose cells did not arrive", async () => {
 		const { store, sheet, calls } = await openStore();

@@ -92,9 +92,9 @@ export class SheetStore {
 	 */
 	private server = new Map<string, TabCells>();
 	/**
-	 * The tabs whose cells are older than a rename, with the revision of the rename. A rename changes
-	 * the formulas of each tab that refers to the old name, so these cells show the old name. The grid
-	 * shows them without edits until a read of the tab at that revision or later.
+	 * The tabs whose cells can be older than a rename, with the revision of the rename. A rename
+	 * changes the formulas of each tab that refers to the old name, so older cells show the old name.
+	 * The grid shows them without edits until a read of the tab at that revision or later.
 	 */
 	private staleUntil = new Map<string, number>();
 	/** The changes that no request has yet, by tab. */
@@ -204,7 +204,8 @@ export class SheetStore {
 				this.item = answer.item;
 				this.setTabs(answer.tabs, answer.revision);
 				if (answer.tab_id) this.active = answer.tab_id;
-				if (action.kind === "rename") for (const id of this.server.keys()) this.staleUntil.set(id, answer.revision);
+				// Each tab, also one whose read is in progress: that read can arrive with cells from before the rename.
+				if (action.kind === "rename") for (const { id } of this.tabs) this.staleUntil.set(id, answer.revision);
 				this.prune();
 				// The page sees the new tabs at once, also when the next read fails.
 				this.emit();
