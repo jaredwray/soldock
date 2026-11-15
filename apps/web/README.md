@@ -450,7 +450,9 @@ MCP clients. The app has no UI-only path.
     the name. The Enter that ends an input method composition does not end the rename.
   - Each tab has its own editor, so the selection, Undo and Redo, and the scroll position belong to
     the tab. The page keeps them while a different tab is open. A rename clears Undo and Redo of
-    each tab, because the steps hold formulas with the old name.
+    each tab, because the steps hold formulas with the old name. This is also true for a rename by a
+    different person, and for a rename whose next read fails: the page clears them when a tab
+    name in the snapshot changes.
   - While the cells of a tab did not arrive, the grid takes no edit, and the store refuses a change
     to that tab. An edit then would start from an empty input and delete the real input.
   - The store keeps the cells of each tab that the page read. A new tab shows these cells at once,

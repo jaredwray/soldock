@@ -198,6 +198,8 @@ export class SheetStore {
 				this.setTabs(answer.tabs, answer.revision);
 				if (answer.tab_id) this.active = answer.tab_id;
 				this.prune();
+				// The page sees the new tabs at once, also when the next read fails.
+				this.emit();
 				this.take(await this.fetchTab(this.active), null);
 				this.emit();
 			});
