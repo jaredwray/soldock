@@ -88,8 +88,9 @@ describe("mail.suggest_recipients", () => {
 		await ada.call("mail.send", { to: ["bob@example.org"], cc: ["carol@example.net"], text: "One" });
 		await tick();
 		await ada.call("mail.send", {
+			// One address twice, in two forms: the first entry gives the form.
 			to: ["Bob@example.org"],
-			cc: ["owner@dock.test"],
+			cc: ["bob@example.org", "owner@dock.test"],
 			bcc: ["dave@example.com", "owner@dock.test"],
 			text: "Two",
 		});

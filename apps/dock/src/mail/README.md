@@ -104,8 +104,8 @@ who can.
 - Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message`,
   `mail.get_attachment` and `mail.suggest_recipients` in the mailbox of an agent writes an audit line
   with the field `mailbox`. The lines of `mail.list_threads` and `mail.suggest_recipients` name the
-  mailbox, not the query, because a query can hold private words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
-  return no mail content.
+  mailbox, not the query, because a query can hold private words. `mail.get_profile` and
+  `mail.list_labels` write no line: the web app polls them, and they return no mail content.
 - The access check reads the directory on each call, so a role change applies to the next call.
 
 ## Settings
@@ -225,8 +225,9 @@ web app uses it to complete an address while the person types it.
   that stores the message. One message counts once for each address, also when the address is in To
   and in Cc. A repeated send with the same idempotency key adds nothing.
 - Mail that arrives adds no address. So a stranger or spam cannot add a suggestion.
-- The key is the address in lowercase. The stored form is the form of the last send. Its domain is
-  lowercase, and its local part keeps its case.
+- The key is the address in lowercase. The stored form is the form of the newest send. Its domain is
+  lowercase, and its local part keeps its case. When one message has the address twice, the first
+  entry (To, then Cc, then Bcc) gives the form.
 - The query matches the address without regard to case. The result has three groups, in this order:
   1. An address that starts with the query.
   2. An address with a part that starts with the query: after `@`, `.`, `_`, `-` or `+`. A query that
@@ -240,6 +241,10 @@ web app uses it to complete an address while the person types it.
   then is a suggestion for the people. The Sent view shows the same send, so a suggestion shows
   nothing new.
 - The migration that adds the table fills it from the sent mail that exists, with the same rules.
+  The migration runs when the object starts. It reads each message, so a mailbox with very much mail
+  starts more slowly one time.
+- A mistyped address stays a suggestion. No operation removes a suggestion yet, and Soldock does not
+  read bounces yet.
 
 ## Outbound
 

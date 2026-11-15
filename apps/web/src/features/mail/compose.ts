@@ -62,7 +62,10 @@ export interface AddressToken {
 	start: number;
 	/** The index of the separator after the caret, or the length of the text. */
 	end: number;
-	/** The address text, without the spaces around it. */
+	/**
+	 * The address text, without the spaces around it. For `Name <address`, it is the text after the
+	 * angle bracket.
+	 */
 	text: string;
 }
 
@@ -73,7 +76,9 @@ export function addressTokenAt(value: string, caret: number): AddressToken {
 	let end = start;
 	while (start > 0 && !SEPARATOR.test(value.charAt(start - 1))) start--;
 	while (end < value.length && !SEPARATOR.test(value.charAt(end))) end++;
-	return { start, end, text: value.slice(start, end).trim() };
+	const text = value.slice(start, end).trim();
+	const bracket = text.lastIndexOf("<");
+	return { start, end, text: (bracket < 0 ? text : text.slice(bracket + 1)).replace(/>$/, "").trim() };
 }
 
 /**
@@ -108,6 +113,43 @@ export function recipientOptions(
 	if (options.length === 0) return { options, active: null };
 	if (same >= 0) return { options, active: 0 };
 	return { options, active: EmailAddress.safeParse(typed).success ? null : 0 };
+}
+
+/**
+ * What a key does in an address field with its list of suggestions. `preventDefault` stops the default
+ * action of the key: Enter sends the form, Escape closes the composer, and an arrow key moves the caret.
+ */
+export type RecipientKeyAction =
+	| { kind: "none"; preventDefault: false }
+	| { kind: "select"; index: number; preventDefault: true }
+	| { kind: "take"; index: number; preventDefault: boolean }
+	| { kind: "close"; preventDefault: true };
+
+/**
+ * The arrow keys move the selection, and go around at the ends. Enter takes the selected address and
+ * does not send. Tab takes it, and the focus moves on. Escape closes the list and not the composer.
+ * With the list closed, or with no address selected for Enter and Tab, the key does its usual action.
+ */
+export function recipientKeyAction(
+	key: string,
+	shiftKey: boolean,
+	list: { open: boolean; active: number | null; count: number },
+): RecipientKeyAction {
+	const none = { kind: "none", preventDefault: false } as const;
+	if (!list.open || list.count === 0) return none;
+	const last = list.count - 1;
+	const { active } = list;
+	if (key === "ArrowDown") {
+		return { kind: "select", index: active === null || active === last ? 0 : active + 1, preventDefault: true };
+	}
+	if (key === "ArrowUp") {
+		return { kind: "select", index: active === null || active === 0 ? last : active - 1, preventDefault: true };
+	}
+	if (key === "Escape") return { kind: "close", preventDefault: true };
+	if (active === null) return none;
+	if (key === "Enter") return { kind: "take", index: active, preventDefault: true };
+	if (key === "Tab" && !shiftKey) return { kind: "take", index: active, preventDefault: false };
+	return none;
 }
 
 function addressList(addresses: readonly Address[]): string {

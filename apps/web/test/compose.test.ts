@@ -5,6 +5,7 @@ import {
 	completeAddress,
 	forwardDraft,
 	parseAddressList,
+	recipientKeyAction,
 	recipientOptions,
 	replyDraft,
 } from "../src/features/mail/compose.ts";
@@ -73,6 +74,32 @@ describe("address completion", () => {
 			caret: 19,
 		});
 		expect(addressTokenAt("ada@example.com,\n", 17)).toEqual({ start: 17, end: 17, text: "" });
+		// In the form Name <address>, the address part is the text to complete.
+		expect(addressTokenAt("Ada Lovelace <ad", 16).text).toBe("ad");
+	});
+
+	// Enter must not send and Escape must not close the composer while the list is open.
+	it("maps each key to its action in the list, and keeps the usual action when the list cannot use it", () => {
+		const list: Parameters<typeof recipientKeyAction>[2] = { open: true, active: 1, count: 3 };
+		const cases: [string, boolean, typeof list, ReturnType<typeof recipientKeyAction>][] = [
+			["ArrowDown", false, list, { kind: "select", index: 2, preventDefault: true }],
+			["ArrowDown", false, { ...list, active: 2 }, { kind: "select", index: 0, preventDefault: true }],
+			["ArrowUp", false, { ...list, active: 0 }, { kind: "select", index: 2, preventDefault: true }],
+			["ArrowUp", false, { ...list, active: null }, { kind: "select", index: 2, preventDefault: true }],
+			["Enter", false, list, { kind: "take", index: 1, preventDefault: true }],
+			["Tab", false, list, { kind: "take", index: 1, preventDefault: false }],
+			["Escape", false, list, { kind: "close", preventDefault: true }],
+			// No address is selected: Enter sends and Tab moves the focus, as without the list.
+			["Enter", false, { ...list, active: null }, { kind: "none", preventDefault: false }],
+			["Tab", false, { ...list, active: null }, { kind: "none", preventDefault: false }],
+			["Tab", true, list, { kind: "none", preventDefault: false }],
+			// The list is closed: Escape closes the composer.
+			["Escape", false, { ...list, open: false }, { kind: "none", preventDefault: false }],
+			["a", false, list, { kind: "none", preventDefault: false }],
+		];
+		for (const [key, shift, state, action] of cases) {
+			expect([key, shift, state, recipientKeyAction(key, shift, state)]).toEqual([key, shift, state, action]);
+		}
 	});
 
 	it("leaves out the addresses in the fields, and never lets Enter replace a full address", () => {

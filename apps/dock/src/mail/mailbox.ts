@@ -241,9 +241,10 @@ const MIGRATIONS: string[][] = [
 		)`,
 	],
 	// The addresses that the mailbox sent mail to, for mail.suggest_recipients. The key is the address in
-	// lowercase. The backfill reads the sent mail that exists: one message counts once for each address.
-	// The address of the newest message gives the stored form. Addresses are ASCII (the EmailAddress schema),
-	// so SQLite's lower() gives the same key as toLowerCase() in recordRecipients.
+	// lowercase. The backfill reads the sent mail that exists, with the rules of recordRecipients: one
+	// message counts once for each address, the first entry of a message (To, then Cc, then Bcc) gives its
+	// form, and the newest message gives the stored form (the later message when two have the same time).
+	// Addresses are ASCII (the EmailAddress schema), so SQLite's lower() gives the same key as toLowerCase().
 	[
 		`CREATE TABLE recipients (
 			address_key TEXT PRIMARY KEY,
@@ -252,20 +253,29 @@ const MIGRATIONS: string[][] = [
 			last_sent_at INTEGER NOT NULL
 		) WITHOUT ROWID`,
 		`INSERT INTO recipients (address_key, address, times_sent, last_sent_at)
-		SELECT address_key, address, COUNT(*), MAX(sent_at) FROM (
-			SELECT lower(json_extract(entry, '$.address')) AS address_key, MAX(json_extract(entry, '$.address')) AS address,
-				seq, internal_date AS sent_at
+		SELECT address_key, address, times_sent, sent_at FROM (
+			SELECT address_key, address, sent_at,
+				COUNT(*) OVER (PARTITION BY address_key) AS times_sent,
+				ROW_NUMBER() OVER (PARTITION BY address_key ORDER BY sent_at DESC, seq DESC) AS newest
 			FROM (
-				SELECT m.seq, m.internal_date, a.value AS entry FROM messages m, json_each(m.to_json) a WHERE m.origin = 'sent'
-				UNION ALL
-				SELECT m.seq, m.internal_date, a.value FROM messages m, json_each(m.cc_json) a WHERE m.origin = 'sent'
-				UNION ALL
-				SELECT m.seq, m.internal_date, a.value FROM messages m, json_each(m.bcc_json) a WHERE m.origin = 'sent'
+				SELECT address_key, address, seq, sent_at,
+					ROW_NUMBER() OVER (PARTITION BY address_key, seq ORDER BY part, position) AS first
+				FROM (
+					SELECT m.seq, m.internal_date AS sent_at, 0 AS part, a.key AS position,
+						json_extract(a.value, '$.address') AS address, lower(json_extract(a.value, '$.address')) AS address_key
+					FROM messages m, json_each(m.to_json) a WHERE m.origin = 'sent'
+					UNION ALL
+					SELECT m.seq, m.internal_date, 1, a.key, json_extract(a.value, '$.address'), lower(json_extract(a.value, '$.address'))
+					FROM messages m, json_each(m.cc_json) a WHERE m.origin = 'sent'
+					UNION ALL
+					SELECT m.seq, m.internal_date, 2, a.key, json_extract(a.value, '$.address'), lower(json_extract(a.value, '$.address'))
+					FROM messages m, json_each(m.bcc_json) a WHERE m.origin = 'sent'
+				)
+				WHERE address_key IS NOT NULL
 			)
-			WHERE json_extract(entry, '$.address') IS NOT NULL
-			GROUP BY address_key, seq
+			WHERE first = 1
 		)
-		GROUP BY address_key`,
+		WHERE newest = 1`,
 	],
 ];
 
@@ -1137,8 +1147,9 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/**
 	 * Counts one send to each address of a sent message, inside the transaction of the message. The same
-	 * address twice in one message (for example in To and in Cc) counts once. The stored form is the form
-	 * of the last send.
+	 * address twice in one message (for example in To and in Cc) counts once, with the form of its first
+	 * entry. The stored form is the form of the newest send. A send with the same time as the stored one
+	 * is newer, because it is stored later. The migration backfill uses the same rules.
 	 */
 	private recordRecipients(addresses: MailAddress[], sentAt: number): void {
 		const seen = new Set<string>();
@@ -1148,7 +1159,9 @@ export class MailboxDO extends DurableObject<Env> {
 			seen.add(key);
 			this.sql.exec(
 				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at) VALUES (?, ?, 1, ?)
-				ON CONFLICT (address_key) DO UPDATE SET address = excluded.address, times_sent = times_sent + 1,
+				ON CONFLICT (address_key) DO UPDATE SET
+					address = CASE WHEN excluded.last_sent_at >= last_sent_at THEN excluded.address ELSE address END,
+					times_sent = times_sent + 1,
 					last_sent_at = MAX(last_sent_at, excluded.last_sent_at)`,
 				key,
 				address,
