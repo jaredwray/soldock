@@ -2531,6 +2531,50 @@ fieldset {
 	color: var(--foreground);
 }
 
+/* An address field, with the list of the addresses that the mailbox sent mail to under it. */
+.recipient-field {
+	position: relative;
+	min-width: 0;
+}
+
+.recipient-suggestions {
+	position: absolute;
+	top: calc(100% + 4px);
+	/* The border, the padding of the list and the padding of an option: the text lines up with the field. */
+	left: -13px;
+	z-index: 20;
+	width: min(360px, calc(100% + 13px));
+	/* On a phone the field is narrow, because "Add Cc and Bcc" is on the same row. */
+	min-width: min(320px, calc(100vw - 64px));
+	max-height: 296px;
+	padding: 4px;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	color: var(--foreground);
+	box-shadow: var(--shadow-menu);
+}
+
+.recipient-option {
+	min-height: 32px;
+	padding: 6px 8px;
+	overflow: hidden;
+	border-radius: var(--radius-sm);
+	font-size: 14px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.recipient-option[aria-selected="true"] {
+	background: var(--hover);
+}
+
+.recipient-option strong {
+	font-weight: 600;
+}
+
 /* The rich-text editor: a rounded box with a ProseMirror view, and the formatting toolbar at its bottom. */
 
 .rich-editor {
@@ -4209,6 +4253,12 @@ fieldset {
 	.compose-input,
 	.compose-from {
 		min-height: 44px;
+	}
+
+	.recipient-option {
+		min-height: 44px;
+		padding-top: 12px;
+		padding-bottom: 12px;
 	}
 
 	.icon-button,

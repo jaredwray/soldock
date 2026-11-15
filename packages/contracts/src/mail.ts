@@ -27,6 +27,8 @@ export const MAIL_LIMITS = {
 	pageSize: 100,
 	/** An attachment that `mail.get_attachment` returns as base64, for the same memory reason. */
 	attachmentDownloadBytes: 10 * 1024 * 1024,
+	/** The addresses that one `mail.suggest_recipients` call returns. */
+	recipientSuggestions: 25,
 } as const;
 
 const ThreadId = prefixedId("thr");
@@ -445,6 +447,42 @@ export const getAttachment = defineOperation({
 	errors: ["not_found", "payload_too_large"],
 });
 
+/** An address that the mailbox sent mail to. */
+export const RecipientSuggestion = z.object({
+	/** The address as the last message to it had it. The domain is lowercase. */
+	address: z.string(),
+	/** The sent messages that had the address in To, Cc or Bcc. */
+	times_sent: z.number().int(),
+	/** The time of the last sent message to the address. */
+	last_sent_at: Timestamp,
+});
+export type RecipientSuggestion = z.infer<typeof RecipientSuggestion>;
+
+export const suggestRecipients = defineOperation({
+	name: "mail.suggest_recipients",
+	summary: "Find addresses that the mailbox sent mail to",
+	description: [
+		"Returns the addresses that the mailbox sent mail to in To, Cc or Bcc, and that match the query.",
+		"Use it to complete an address that you type. The query matches the address without regard to case.",
+		"First come the addresses that start with the query. Then come the addresses with a part that starts with the query, after @ . _ - or +.",
+		"Then come the other matches. In each group, the address of the most recent send comes first.",
+		"Without a query, the result has the most recent addresses.",
+		"Mail that arrives adds no address: a sender that you never wrote to is not in the result.",
+		`${IN_MAILBOX_READ} The members of a team mailbox share its addresses.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/mail/recipients" },
+	scopes: ["mail.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		query: z.string().max(254).optional(),
+		limit: z.coerce.number().int().min(1).max(MAIL_LIMITS.recipientSuggestions).optional(),
+	}),
+	output: z.object({ recipients: z.array(RecipientSuggestion) }),
+	errors: [],
+});
+
 /**
  * The mail settings of a person. They live in the own mailbox of the person, never in a team mailbox
  * or in the mailbox of an agent. Each setting has a default, so a person without saved settings gets them.
@@ -777,6 +815,7 @@ export const mailOperations = {
 	"mail.get_message": getMessage,
 	"mail.modify_threads": modifyThreads,
 	"mail.send": send,
+	"mail.suggest_recipients": suggestRecipients,
 	"mail.get_attachment": getAttachment,
 	"mail.create_webhook": createWebhook,
 	"mail.list_webhooks": listWebhooks,

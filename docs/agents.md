@@ -86,6 +86,10 @@ policy.
 `<domain>_<verb>`: `mail_list_threads`, `mail_get_thread`, `mail_send`, `mail_modify_threads` and
 others. A REST client calls the same operations under `/api/v1`.
 
+To find an address that you wrote to before, call `mail_suggest_recipients` with a part of the
+address, for example `{"query": "acme"}`. The result has only the addresses that your mailbox sent
+mail to, with the newest send first. Mail that arrives adds no address.
+
 `resources/list` shows the inbox of each mailbox that you can use, with the URI
 `soldock://mail/<mailbox id>/inbox`. `resources/read` returns the newest threads of the inbox, as
 `mail_list_threads` with the query `in:inbox` returns them.
