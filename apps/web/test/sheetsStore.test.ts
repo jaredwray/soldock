@@ -1,7 +1,7 @@
 import { ApiError, type Cell, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import type { CellChange } from "../src/features/sheets/cells.ts";
-import { applyFormatChanges, type FormatChange, formatsOf } from "../src/features/sheets/formats.ts";
+import { applyFormatChanges, CLEAR_FORMAT, type FormatChange, formatsOf } from "../src/features/sheets/formats.ts";
 import { type SheetApi, type SheetData, SheetStore, type TabAction } from "../src/features/sheets/store.ts";
 
 function item(role: DriveItem["role"] = "owner"): DriveItem {
@@ -511,5 +511,117 @@ describe("the formats of a sheet", () => {
 		expect(log).toEqual(["format tab_1 1"]);
 		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
 		expect(store.getSnapshot().formats.get("C3")).toEqual({ italic: true });
+	});
+
+	// The person types while a format request runs. That input must go to the server, and the header
+	// must not say "saved" before it does.
+	it("sends an input that arrives during a format request", async () => {
+		const { store, api, log, accept } = await openStore();
+		const format = api.format;
+		let release = () => {};
+		api.format = (...args) =>
+			new Promise((resolve) => {
+				release = () => resolve(format(...args));
+			});
+		store.format([{ range: "A1", format: { bold: true } }]);
+		await settle();
+		store.commit([{ cell: "B1", input: "typed" }]);
+		release();
+		await settle();
+		expect(log).toEqual(["format tab_1 1", "update tab_1"]);
+		expect(store.getSnapshot().saveState).toBe("saving");
+		accept();
+		await settle();
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
+		expect(store.getSnapshot().cells.get("B1")).toMatchObject({ input: "typed", pending: false });
+		expect(store.hasUnsaved()).toBe(false);
+	});
+
+	// A copy of a tab must not miss formats that the grid shows. Only the delete of their tab continues.
+	it("stops a change of the tabs while a format save failed, but deletes the tab of the failed format", async () => {
+		const { store, api, log } = await openStore();
+		await store.changeTab({ kind: "add" });
+		api.format = async () => {
+			throw new ApiError(500, { code: "internal", detail: "No." });
+		};
+		store.format([{ range: "A1", format: { bold: true } }], "tab_2");
+		await settle();
+		await expect(store.changeTab({ kind: "duplicate", tabId: "tab_2" })).rejects.toThrow("not saved");
+		expect(log).toEqual(["add"]);
+		await store.changeTab({ kind: "delete", tabId: "tab_2" });
+		expect(log).toEqual(["add", "delete"]);
+		expect(store.hasUnsaved()).toBe(false);
+	});
+
+	// A refused change gets the same answer each time, so it must not wait for Try again forever.
+	it("drops a format change that the server refuses, and sends the next one", async () => {
+		const { store, api, log } = await openStore();
+		const format = api.format;
+		api.format = async () => {
+			throw new ApiError(413, { code: "payload_too_large", detail: "Too many formats." });
+		};
+		store.format([{ range: "A1:B2", format: { bold: true } }]);
+		await settle();
+		expect(store.getSnapshot()).toMatchObject({ saveState: "error" });
+		expect(store.getSnapshot().formats.size).toBe(0);
+		expect(store.hasUnsaved()).toBe(false);
+		api.format = format;
+		store.format([{ range: "C3", format: { italic: true } }]);
+		await settle();
+		expect(log).toEqual(["format tab_1 1"]);
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
+	});
+
+	// The server takes at most 5,000 changes and 52,000 cells in one call. Undo of a large range sends
+	// a clear of the range and one change for each formatted cell, which can be more.
+	it("sends format changes in parts of at most 5,000 changes and 52,000 cells", async () => {
+		const { store, log } = await openStore();
+		store.format([
+			{ range: "A1:AZ1000", format: CLEAR_FORMAT },
+			{ range: "B2", format: { italic: true } },
+		]);
+		await settle();
+		expect(log).toEqual(["format tab_1 1", "format tab_1 2"]);
+		const many: FormatChange[] = [];
+		for (let row = 1; many.length <= SHEET_LIMITS.cellsPerUpdate; row++) {
+			for (const column of ["A", "B", "C", "D", "E", "F"])
+				many.push({ range: `${column}${row}`, format: { bold: true } });
+		}
+		store.format(many);
+		await settle();
+		expect(log.slice(2)).toEqual(["format tab_1 3", "format tab_1 4"]);
+		expect(store.getSnapshot().formats.get("B2")).toEqual({ bold: true, italic: true });
+	});
+
+	it("after a conflict, gets the tab again and sends the format change again", async () => {
+		const { store, api, log, sheet } = await openStore();
+		const format = api.format;
+		api.format = async (...args) => {
+			api.format = format;
+			sheet.revision++;
+			throw conflict();
+		};
+		store.format([{ range: "A1", format: { bold: true } }]);
+		await settle();
+		expect(log).toEqual(["format tab_1 2"]);
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved", revision: 3 });
+		expect(store.getSnapshot().formats.get("A1")).toEqual({ bold: true });
+	});
+
+	it("drops the format changes that wait on a discard", async () => {
+		const { store, api, log } = await openStore();
+		const format = api.format;
+		api.format = async () => {
+			throw new ApiError(500, { code: "internal", detail: "No." });
+		};
+		store.format([{ range: "A1", format: { bold: true } }]);
+		await settle();
+		await store.discard();
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
+		expect(store.getSnapshot().formats.size).toBe(0);
+		api.format = format;
+		store.retry();
+		await settle();
+		expect(log).toEqual([]);
 	});
 });

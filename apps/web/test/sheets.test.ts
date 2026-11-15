@@ -250,6 +250,8 @@ describe("the functions of the toolbar", () => {
 	});
 
 	it("never replaces an input, and never writes outside the sheet", () => {
+		// One selected cell with an input: Enter or a blur would save the formula over it.
+		expect(autoSum("SUM", one("B3"), cellAt, SHEET_LIMITS)).toMatchObject({ kind: "refused" });
 		// B5 below B2:B4 has an input, and so does C3 to the right of A3:B3.
 		expect(autoSum("SUM", { top: 1, left: 1, bottom: 3, right: 1 }, cellAt, SHEET_LIMITS)).toMatchObject({
 			kind: "refused",

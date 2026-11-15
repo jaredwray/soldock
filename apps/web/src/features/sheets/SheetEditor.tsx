@@ -19,7 +19,14 @@ import { type CellPos, cellName, columnNames, parseCell, rangeName } from "./a1.
 import { autoSum, type SumFunction } from "./autosum.ts";
 import { type CellChange, clearChanges, pasteChanges, rangeInputs, tooLong, usedSize, type ViewCell } from "./cells.ts";
 import { formatTsv, parseTsv } from "./clipboard.ts";
-import { CLEAR_FORMAT, changesFormats, decimalsShown, type FormatChange, restoreFormats } from "./formats.ts";
+import {
+	applyFormatChanges,
+	CLEAR_FORMAT,
+	changesFormats,
+	decimalsShown,
+	type FormatChange,
+	restoreFormats,
+} from "./formats.ts";
 import { ColumnHeads, cellId, SheetRow } from "./SheetRow.tsx";
 import { SheetToolbar } from "./SheetToolbar.tsx";
 import {
@@ -165,7 +172,8 @@ export function SheetEditor({
 	/** True when the next selection must not scroll the grid, for example a whole column. */
 	const keepScrollRef = useRef(false);
 
-	const used = useMemo(() => usedSize(cells.keys()), [cells]);
+	// A cell with only a format counts too, so the grid draws it, for example a format of an agent far down.
+	const used = useMemo(() => usedSize([...cells.keys(), ...formats.keys()]), [cells, formats]);
 	const size = gridSize(used, selection);
 	const names = useMemo(() => columnNames(size.columns), [size.columns]);
 	const range = rangeOf(selection);
@@ -230,6 +238,14 @@ export function SheetEditor({
 		if (locked) return;
 		const changes = [{ range: rangeName(range), format }];
 		if (!changesFormats(formats, changes)) return;
+		// The server refuses a sheet with more formatted cells than the limit. Refuse before the grid shows the change.
+		if (applyFormatChanges(formats, changes).size > SHEET_LIMITS.formats) {
+			toast({
+				message: `A sheet can have at most ${SHEET_LIMITS.formats} cells with a format. Select fewer cells.`,
+				tone: "error",
+			});
+			return;
+		}
 		remember({ kind: "formats", before: restoreFormats(formats, changes), after: changes });
 		onFormat(changes);
 	}
@@ -415,6 +431,8 @@ export function SheetEditor({
 	function onGridKeyDown(event: KeyboardEvent<HTMLTableElement>) {
 		if (event.nativeEvent.isComposing) return;
 		const command = event.ctrlKey || event.metaKey;
+		// Ctrl without Alt and Shift. AltGr is Ctrl with Alt on Windows, and it types \ on some layouts.
+		const plainCommand = command && !event.altKey && !event.shiftKey;
 		const leave = leaveRef.current;
 		leaveRef.current = false;
 		// Alt with an up or down arrow, or Ctrl+Shift with Page Up or Page Down, shows the tab before or the next tab.
@@ -480,11 +498,11 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
-				} else if (command && key === "b") {
+				} else if (plainCommand && key === "b") {
 					applyFormat({ bold: activeFormat?.bold !== true });
-				} else if (command && key === "i") {
+				} else if (plainCommand && key === "i") {
 					applyFormat({ italic: activeFormat?.italic !== true });
-				} else if (command && key === "\\") {
+				} else if (plainCommand && key === "\\") {
 					applyFormat(CLEAR_FORMAT);
 				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠" || event.code === "Equal")) {
 					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠, or a different

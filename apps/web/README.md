@@ -494,14 +494,14 @@ MCP clients. The app has no UI-only path.
     that waits for its result keep their own color over a text color.
   - The Σ menu has `SUM`, `AVERAGE`, `COUNT`, `MAX` and `MIN`. `Alt+=` (`⌥=` on a Mac) in the grid
     does `SUM`. The page writes only the formula. The server calculates it.
-  - With one cell selected, an edit of that cell starts with the function of the numbers directly
+  - With one empty cell selected, an edit of that cell starts with the function of the numbers directly
     above the cell, for example `=SUM(B2:B8)`. When the cell above has no number, the function reads
     the numbers to the left. The edit selects the range, so a typed range replaces it. Enter saves.
   - With a range selected, the formulas go after the range in one change, so one Undo removes them.
     A range with more than one row gets one formula below each column. A range of one row gets one
     formula to the right. The selection then moves to the new cells.
-  - For a range, a formula never replaces an input. When a cell for a result is not empty, or is
-    outside the sheet, a message tells why, and nothing changes.
+  - A formula never replaces an input. When the selected cell, or a cell for a result of a range,
+    is not empty, or is outside the sheet, a message tells why, and nothing changes.
   - The grid is one tab stop (`role="grid"` with `aria-activedescendant`). Escape and then Tab
     leave the grid.
   - The tab bar shows each tab of the sheet. A click shows a tab. The tabs are a `tablist`: the

@@ -18,6 +18,8 @@ export const SHEET_LIMITS = {
 	tabNameChars: 31,
 	/** The cells of one sheet that have a format, in all tabs. */
 	formats: 20_000,
+	/** The cells that one sheets.format_cells changes, as the sum of its ranges: each cell of a tab once. */
+	formatCellsPerCall: 52_000,
 	/** The digits after the decimal point that a number format can show. */
 	decimals: 10,
 } as const;
@@ -292,7 +294,7 @@ export const formatCells = defineOperation({
 		"Changes the format of each cell in the given ranges of one tab: the number format, the decimals, bold, italic, the text color, the fill color and the alignment. You need the editor role.",
 		"Each change has a range (B2 or A1:D20) and the fields to change. A field that is not given stays. null, or false for bold and italic, removes the field. The changes apply in order.",
 		"number_format currency shows $1,234.50, and percent shows 0.125 as 12.50%. decimals is the count of digits after the decimal point: the default is 2 with a number format. Colors are #rrggbb.",
-		`A cell keeps its format when its input changes or is cleared. A sheet can have at most ${SHEET_LIMITS.formats} cells with a format, and one call can change at most ${SHEET_LIMITS.rows * SHEET_LIMITS.columns} cells.`,
+		`A cell keeps its format when its input changes or is cleared. A sheet can have at most ${SHEET_LIMITS.formats} cells with a format, and one call can change at most ${SHEET_LIMITS.formatCellsPerCall} cells, counted as the sum of its ranges.`,
 		"The result has each cell of the tab whose format changed, with its format, and with text when a number format changes how its number shows.",
 		"Set tab_id to change a different tab than the first. Set base_revision to the revision that you read.",
 		IN_SPACE,

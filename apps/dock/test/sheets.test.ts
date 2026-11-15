@@ -562,4 +562,40 @@ describe("formats", () => {
 		expect(revision).toBe(1);
 		expect(cells.some((cell) => cell.format)).toBe(false);
 	});
+
+	// A sheet that nobody formatted must keep its stored form, and a format that goes away must leave
+	// no trace, so the stored form after a removal is the same as before the format.
+	it("stores formats only for a tab that has one", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
+		const stored = async () => {
+			const state = await env.DOCUMENT.get(env.DOCUMENT.idFromName(item.id)).read();
+			return state?.content ?? "";
+		};
+		const before = await stored();
+		expect(before).not.toContain("formats");
+		await ada.call("sheets.format_cells", { item_id: item.id, formats: [{ range: "A1", format: { bold: true } }] });
+		expect(JSON.parse(await stored()).tabs[0].formats).toEqual({ A1: { bold: true } });
+		await ada.call("sheets.format_cells", { item_id: item.id, formats: [{ range: "A1", format: { bold: false } }] });
+		expect(await stored()).toBe(before);
+	});
+
+	it("refuses formats over the byte limit of a sheet", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
+		// About 120 bytes of JSON for each of 10,400 cells: under the count limit, over 1 MiB.
+		const full = {
+			number_format: "currency",
+			decimals: 10,
+			bold: true,
+			italic: true,
+			color: "#123456",
+			fill: "#abcdef",
+			align: "center",
+		} as const;
+		const format = ada.call("sheets.format_cells", {
+			item_id: item.id,
+			formats: [{ range: "A1:AZ200", format: full }],
+		});
+		expect(await codeOf(format)).toBe("payload_too_large");
+		expect((await ada.call("sheets.get", { item_id: item.id })).revision).toBe(1);
+	});
 });

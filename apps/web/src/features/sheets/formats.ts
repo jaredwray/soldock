@@ -30,6 +30,12 @@ export function formatsOf(cells: ReadonlyMap<string, Cell>): Map<string, CellFor
 	return formats;
 }
 
+/** The count of cells of a range such as B2 or A1:D20. 0 for a range that is not valid. */
+export function cellCount(range: string): number {
+	const area = parseRange(range);
+	return area ? (area.bottom - area.top + 1) * (area.right - area.left + 1) : 0;
+}
+
 /** Each cell name of a range such as B2 or A1:D20. Nothing for a range that is not valid. */
 function* cellsIn(range: string): Generator<string> {
 	const area = parseRange(range);

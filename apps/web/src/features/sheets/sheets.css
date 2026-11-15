@@ -270,9 +270,14 @@
 	text-align: center;
 }
 
-/* The server did not send the result of this input yet. */
+/* The server did not send the result of this input yet. On a fill, the muted color comes from the
+   text color of the fill, so it stays easy to read also in the dark appearance. */
 .sheet-cell-pending {
 	color: var(--muted-foreground);
+}
+
+.sheet-cell-filled.sheet-cell-pending {
+	color: color-mix(in srgb, var(--cell-color) 60%, var(--cell-fill));
 }
 
 /* An alignment of the format goes before the alignment of the type. */

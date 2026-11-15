@@ -39,14 +39,13 @@ function numbersNextTo(pos: CellPos, cellAt: (name: string) => ViewCell | undefi
 /**
  * Where the formula of `fn` goes for the selected range, and what it reads.
  *
- * - One cell: an edit of that cell starts with the function of the numbers above it, or else of
- *   the numbers to its left. The person can change the range, and Enter saves it.
+ * - One empty cell: an edit of that cell starts with the function of the numbers above it, or else
+ *   of the numbers to its left. The person can change the range, and Enter saves it.
  * - A range with more than one row: one formula below each column of the range.
  * - A range with one row: one formula to the right of the range.
  *
- * For a range, a formula never replaces an input: when a cell for a result is not empty, or is
- * outside the sheet, nothing changes. For one cell, the edit replaces the input only when the
- * person saves it, as a typed input does.
+ * A formula never replaces an input: when a cell for a result is not empty, or is outside the
+ * sheet, nothing changes.
  */
 export function autoSum(
 	fn: SumFunction,
@@ -55,6 +54,9 @@ export function autoSum(
 	limit: GridSize,
 ): AutoSum {
 	if (isOneCell(range)) {
+		if (cellAt(cellName({ row: range.top, col: range.left }))) {
+			return { kind: "refused", message: "The formula goes in the selected cell, but that cell is not empty." };
+		}
 		const numbers = numbersNextTo({ row: range.top, col: range.left }, cellAt);
 		const head = `=${fn}(`;
 		const text = numbers ? rangeName(numbers) : "";

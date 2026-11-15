@@ -19,16 +19,16 @@ function command(key: string, shift = false): { keys: string; hint: string } {
 const SUM_HINT = MAC ? "⌥=" : "Alt+=";
 
 /**
- * The colors of the text color menu. Each one is easy to read on the light and on the dark
- * background of a cell.
+ * The colors of the text color menu. Each one has a contrast of at least 4.5:1 on the light
+ * background of a cell, and at least 3.2:1 on the dark background.
  */
 const TEXT_COLORS = [
 	["Gray", "#6b7280"],
 	["Red", "#dc2626"],
-	["Orange", "#ea580c"],
-	["Yellow", "#ca8a04"],
-	["Green", "#16a34a"],
-	["Teal", "#0d9488"],
+	["Orange", "#c2410c"],
+	["Yellow", "#a16207"],
+	["Green", "#15803d"],
+	["Teal", "#0f766e"],
 	["Blue", "#2563eb"],
 	["Purple", "#9333ea"],
 	["Pink", "#db2777"],
@@ -46,6 +46,15 @@ const FILL_COLORS = [
 	["Purple", "#f3e8ff"],
 	["Pink", "#fce7f3"],
 ] as const;
+
+/**
+ * The name of a color menu with the color of the active cell, so a screen reader tells it: "Text
+ * color, Blue". A color that is not in the menu, for example of an agent, is its #rrggbb.
+ */
+function colorLabel(label: string, palette: readonly (readonly [string, string])[], color: string | undefined): string {
+	if (!color) return label;
+	return `${label}, ${palette.find(([, value]) => value === color)?.[0] ?? color}`;
+}
 
 interface SheetToolbarProps {
 	/** The element id of the grid, which the toolbar changes. */
@@ -245,7 +254,7 @@ export function SheetToolbar({
 				onClick={() => onFormat({ italic: format?.italic !== true })}
 			/>
 			<Menu
-				label="Text color"
+				label={colorLabel("Text color", TEXT_COLORS, format?.color)}
 				className="icon-button icon-button-small format-button format-group-start"
 				items={textColors}
 				align="start"
@@ -257,7 +266,7 @@ export function SheetToolbar({
 				</ColorIcon>
 			</Menu>
 			<Menu
-				label="Fill color"
+				label={colorLabel("Fill color", FILL_COLORS, format?.fill)}
 				className="icon-button icon-button-small format-button"
 				items={fillColors}
 				align="start"

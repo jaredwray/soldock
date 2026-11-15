@@ -97,9 +97,6 @@ export function parseRange(range: string): { from: CellPosition; to: CellPositio
 	};
 }
 
-/** The most cells that one call can format: each cell of a tab. */
-export const MAX_FORMAT_CELLS = SHEET_LIMITS.rows * SHEET_LIMITS.columns;
-
 /** The formats after the changes, in order. Throws the message for a cell outside the grid, or for too many cells. */
 export function applyFormats(
 	formats: ReadonlyMap<string, CellFormat>,
@@ -110,8 +107,8 @@ export function applyFormats(
 	for (const change of changes) {
 		const { from, to } = parseRange(change.range);
 		count += (to.row - from.row + 1) * (to.col - from.col + 1);
-		if (count > MAX_FORMAT_CELLS) {
-			throw new RangeError(`One call can change the format of at most ${MAX_FORMAT_CELLS} cells.`);
+		if (count > SHEET_LIMITS.formatCellsPerCall) {
+			throw new RangeError(`One call can change the format of at most ${SHEET_LIMITS.formatCellsPerCall} cells.`);
 		}
 		for (let row = from.row; row <= to.row; row++) {
 			for (let col = from.col; col <= to.col; col++) {

@@ -211,18 +211,21 @@ function tabsOutput(written: Awaited<ReturnType<typeof changeSheet>>) {
 
 const NO_VALUES: ReadonlyMap<string, Value> = new Map();
 
-/** The output of an operation that changes the cells of one tab: each cell whose input, result or format changed. */
-function cellsOutput(written: Awaited<ReturnType<typeof changeSheet<string>>>) {
+/**
+ * The output of an operation that changes the cells of one tab: each cell whose input, result or
+ * format changed. A format cannot change a result, so a format change does not calculate the sheet
+ * before it.
+ */
+function cellsOutput(written: Awaited<ReturnType<typeof changeSheet<string>>>, resultsSame = false) {
 	const tabId = written.result;
 	const after = tabOf(written.after, tabId);
+	const values = written.values.get(tabId) ?? NO_VALUES;
+	const old = resultsSame ? values : (evaluateWorkbook(written.before.tabs).get(tabId) ?? NO_VALUES);
 	return {
 		...tabsOutput(written),
 		tab_id: tabId,
 		...extent(after.inputs),
-		cells: changedCells(
-			{ tab: tabOf(written.before, tabId), values: evaluateWorkbook(written.before.tabs).get(tabId) ?? NO_VALUES },
-			{ tab: after, values: written.values.get(tabId) ?? NO_VALUES },
-		),
+		cells: changedCells({ tab: tabOf(written.before, tabId), values: old }, { tab: after, values }),
 	};
 }
 
@@ -299,7 +302,7 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 				result: tab.id,
 			};
 		});
-		return cellsOutput(written);
+		return cellsOutput(written, true);
 	},
 
 	async "sheets.add_tab"(call, input) {

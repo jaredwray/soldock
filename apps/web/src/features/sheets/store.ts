@@ -1,7 +1,7 @@
 import { ApiError, type Cell, type CellFormat, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
 import type { SaveState } from "../drive/DocumentHeader.tsx";
 import { applyCells, type CellChange, toCellMap, type ViewCell, viewCells } from "./cells.ts";
-import { applyFormatChanges, type FormatChange, formatsOf } from "./formats.ts";
+import { applyFormatChanges, cellCount, type FormatChange, formatsOf } from "./formats.ts";
 
 // The state of one open sheet: its tabs, the cells of each tab from the server, the changes that
 // wait for the server, and the save queue. The store has no DOM use. The page gives it the calls that
@@ -71,6 +71,34 @@ function isConflict(error: unknown): boolean {
 
 function isNotFound(error: unknown): boolean {
 	return error instanceof ApiError && error.code === "not_found";
+}
+
+/** True for an error that the same request gets again: the server refused the change itself. */
+function isRefused(error: unknown): boolean {
+	return error instanceof ApiError && (error.code === "invalid" || error.code === "payload_too_large");
+}
+
+/**
+ * The parts of format changes for the requests, in order: each part has at most cellsPerUpdate
+ * changes and formatCellsPerCall cells.
+ */
+function formatParts(changes: readonly FormatChange[]): FormatChange[][] {
+	const parts: FormatChange[][] = [];
+	let part: FormatChange[] = [];
+	let cells = 0;
+	for (const change of changes) {
+		const count = cellCount(change.range);
+		const full = part.length >= SHEET_LIMITS.cellsPerUpdate || cells + count > SHEET_LIMITS.formatCellsPerCall;
+		if (part.length > 0 && full) {
+			parts.push(part);
+			part = [];
+			cells = 0;
+		}
+		part.push(change);
+		cells += count;
+	}
+	if (part.length > 0) parts.push(part);
+	return parts;
 }
 
 /** The cells of a tab from the server, and the revision of the sheet that they are complete for. */
@@ -227,7 +255,8 @@ export class SheetStore {
 		try {
 			await this.exclusive(async () => {
 				const saved = await this.sendWaiting();
-				const onlyDeleted = [...this.waiting.keys()].every((tab) => action.kind === "delete" && tab === action.tabId);
+				const unsaved = [...this.waiting.keys(), ...this.formatWaiting.map((job) => job.tab)];
+				const onlyDeleted = unsaved.every((tab) => action.kind === "delete" && tab === action.tabId);
 				if (!saved && !onlyDeleted) {
 					throw new Error("Your last changes are not saved. Try again or discard them, then change the tabs.");
 				}
@@ -408,6 +437,18 @@ export class SheetStore {
 
 	/** Sends each waiting change. Returns false when a save failed: the changes then wait again. */
 	private async sendWaiting(): Promise<boolean> {
+		// A change can arrive during each request, also during a format request, so the loop runs until
+		// both queues are empty.
+		while (this.pending() > 0) {
+			if (!(await this.sendCells()) || !(await this.sendFormatJobs())) return false;
+		}
+		this.saveState = "saved";
+		this.emit();
+		return true;
+	}
+
+	/** Sends the waiting changes of cells. Returns false when a save failed: the changes then wait again. */
+	private async sendCells(): Promise<boolean> {
 		for (let batch = this.nextBatch(); batch; batch = this.nextBatch()) {
 			this.sending = batch;
 			this.view = null;
@@ -432,6 +473,15 @@ export class SheetStore {
 			this.sending = null;
 			this.view = null;
 		}
+		return true;
+	}
+
+	/**
+	 * Sends the waiting format changes. Returns false when a save failed. A change that the server
+	 * refuses, for example over the limit of formats, goes away: the same request would get the same
+	 * answer. Other changes wait again.
+	 */
+	private async sendFormatJobs(): Promise<boolean> {
 		for (let job = this.formatWaiting.shift(); job; job = this.formatWaiting.shift()) {
 			this.formatSending = job;
 			this.saveState = "saving";
@@ -443,7 +493,7 @@ export class SheetStore {
 				if (isNotFound(error)) await this.readTabs();
 				// The changes wait again, first, while their tab exists. A part that the server has gets
 				// the same formats again, because the changes apply in order.
-				if (this.tabs.some((tab) => tab.id === job.tab)) this.formatWaiting.unshift(job);
+				if (!isRefused(error) && this.tabs.some((tab) => tab.id === job.tab)) this.formatWaiting.unshift(job);
 				this.formatSending = null;
 				this.view = null;
 				this.saveState = isConflict(error) ? "conflict" : "error";
@@ -454,15 +504,12 @@ export class SheetStore {
 			this.formatSending = null;
 			this.view = null;
 		}
-		this.saveState = "saved";
-		this.emit();
 		return true;
 	}
 
-	/** Sends format changes, in parts of at most cellsPerUpdate changes, in order. */
+	/** Sends format changes in parts, in order. */
 	private async sendFormats(job: FormatJob): Promise<void> {
-		for (let start = 0; start < job.changes.length; start += SHEET_LIMITS.cellsPerUpdate) {
-			const part = job.changes.slice(start, start + SHEET_LIMITS.cellsPerUpdate);
+		for (const part of formatParts(job.changes)) {
 			let answer: SheetData;
 			try {
 				answer = await this.api.format(part, this.server.get(job.tab)?.revision ?? 0, job.tab);
