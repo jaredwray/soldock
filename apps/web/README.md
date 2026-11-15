@@ -955,7 +955,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   only, as before.
 - The drafts follow the same rule: a sign-out, the end of the session, and a sign-in as a
   different person remove the drafts of the person from before. A browser that refuses
-  `localStorage` keeps the drafts in the memory of the page only.
+  `localStorage`, or a write to it, keeps the drafts in the memory of the page only.
+- A session can end while the page is closed. The page then starts with nobody signed in, and
+  removes the messages that wait and the drafts at that time (`show` in `App.tsx`).
 
 The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
 from the operations.

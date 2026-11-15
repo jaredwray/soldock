@@ -14,10 +14,11 @@ import { Shell } from "./shell/Shell.tsx";
 // The browser keeps the chat messages of a person that wait for the server, and the drafts of the
 // person. They go away when the person signs out, and when a different person signs in. This runs
 // also when the Chat page did not load.
-onAccountChange(() => {
+function forgetOtherPeople(): void {
 	void forgetOthers(currentAccount());
 	forgetOtherDrafts(draftStorage(), currentAccount());
-});
+}
+onAccountChange(forgetOtherPeople);
 
 /**
  * Boot checks setup before session authentication. A setup token also permits a fresh start.
@@ -31,6 +32,10 @@ export function App() {
 	 */
 	const show = useCallback((next: SessionState) => {
 		setAccount(next.status === "signed-in" ? next.whoami.principal.id : null);
+		// A session can end while the page is closed. The page then starts with nobody signed in, which
+		// is no change of the person, so the listeners do not run. The server told that nobody is signed
+		// in: the browser must not keep the text of the person from before.
+		if (next.status === "signed-out") forgetOtherPeople();
 		setState(next);
 	}, []);
 

@@ -95,6 +95,32 @@ describe("the drafts of the rooms", () => {
 		]);
 	});
 
+	// The storage is full, or the browser refuses the write. The text must not go away when the person
+	// opens a different room.
+	it("stay in the memory of the page when a write to the storage fails, and go to the storage when it works again", () => {
+		const storage = fakeStorage();
+		const drafts = createDraftStore(storage, ADA);
+		drafts.set("rm_1", "Stored");
+		const setItem = storage.setItem;
+		storage.setItem = () => {
+			throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+		};
+		drafts.set("rm_2", "Not stored");
+		drafts.set("rm_1", "Changed");
+		const next = createDraftStore(storage, ADA);
+		expect([next.get("rm_1"), next.get("rm_2")]).toEqual(["Changed", "Not stored"]);
+		storage.setItem = setItem;
+		next.set("rm_3", "Stored again");
+		// A reload has no memory of the page: each draft must be in the storage.
+		forgetOtherDrafts(null, null);
+		const reloaded = createDraftStore(storage, ADA);
+		expect([reloaded.get("rm_1"), reloaded.get("rm_2"), reloaded.get("rm_3")]).toEqual([
+			"Changed",
+			"Not stored",
+			"Stored again",
+		]);
+	});
+
 	// Some browsers refuse localStorage. The draft must still stay when the person opens a different room.
 	it("stay in the memory of the page when the browser has no storage, until the person signs out", () => {
 		createDraftStore(null, ADA).set("rm_1", "Hello");

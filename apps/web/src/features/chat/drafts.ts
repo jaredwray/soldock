@@ -23,12 +23,18 @@ export interface DraftStore {
 	set(roomId: string, text: string): void;
 }
 
-/** The drafts of the page for a browser that refuses `localStorage`, by person. They stay until a reload. */
+/**
+ * The drafts of the page for a browser that refuses `localStorage`, or a write to it, by person. They
+ * stay until a reload. While a person has drafts here, they are the drafts of that person: the
+ * storage has an older state.
+ */
 const inMemory = new Map<string, Map<string, Draft>>();
 
 function read(storage: DraftStorage | null, owner: string): Map<string, Draft> {
-	if (!storage) return inMemory.get(owner) ?? new Map();
+	const kept = inMemory.get(owner);
+	if (kept) return kept;
 	const drafts = new Map<string, Draft>();
+	if (!storage) return drafts;
 	try {
 		const parsed: unknown = JSON.parse(storage.getItem(PREFIX + owner) ?? "{}");
 		if (typeof parsed !== "object" || parsed === null) return drafts;
@@ -45,22 +51,22 @@ function read(storage: DraftStorage | null, owner: string): Map<string, Draft> {
 }
 
 function write(storage: DraftStorage | null, owner: string, drafts: Map<string, Draft>): void {
-	if (!storage) {
-		if (drafts.size === 0) inMemory.delete(owner);
-		else inMemory.set(owner, drafts);
-		return;
-	}
 	try {
+		if (!storage) throw new Error("no storage");
 		if (drafts.size === 0) storage.removeItem(PREFIX + owner);
 		else storage.setItem(PREFIX + owner, JSON.stringify(Object.fromEntries(drafts)));
+		// The storage has each draft again.
+		inMemory.delete(owner);
 	} catch {
-		// The browser refused the write, or the storage is full. The draft stays in the box only.
+		// The browser has no storage, refused the write, or the storage is full. The drafts stay in the
+		// memory of the page, so the text does not go away when the person opens a different room.
+		inMemory.set(owner, drafts);
 	}
 }
 
 /**
- * The drafts of one person. `storage` is `localStorage`, or null when the browser refuses it: the
- * drafts then stay in the memory of the page.
+ * The drafts of one person. `storage` is `localStorage`, or null when the browser refuses it. When
+ * the browser has no storage, or refuses a write, the drafts stay in the memory of the page.
  *
  * Each call reads the storage again, so a draft from a different tab is not lost. Two tabs that
  * change the draft of the same room keep the last change.
