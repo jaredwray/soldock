@@ -612,7 +612,8 @@ MCP clients. The app has no UI-only path.
     goes out again with the same key, also for a room that the person does not open. A failed
     message shows "Not sent" again.
   - A message that waited more than 12 hours does not go out by itself. It shows "Not sent", and
-    the person decides. The room keeps an idempotency key for 24 hours, so an attempt after that
+    the person decides. So does a message with a time in the future: the clock of the device went
+    back, and the page does not know the age of the message. The room keeps an idempotency key for 24 hours, so an attempt after that
     time can make a second message.
   - Two tabs of the same person can send the same message after a reload. The two attempts have
     the same key, so the room has the message one time.

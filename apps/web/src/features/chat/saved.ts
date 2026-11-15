@@ -48,7 +48,8 @@ export function toSaved(message: PendingMessage, owner: string, roomId: string):
  *
  * - A message that waited, or whose call ran, goes out again with the same key. The server can have
  *   the message of a call that ran, so that message is uncertain.
- * - A message older than `RESTORE_SEND_MS` shows as "Not sent", and the person decides.
+ * - A message older than `RESTORE_SEND_MS` shows as "Not sent", and the person decides. So does a
+ *   message with a time in the future, or a time that is no time: its age is not known.
  * - A failed message stays failed.
  * - No message knows the start of its call in the new list.
  */
@@ -66,8 +67,9 @@ export function fromSaved(saved: readonly SavedMessage[], now: number): PendingM
 				afterSeq: null,
 			};
 			if (record.state === "failed") return { ...message, state: "failed", error: record.error };
-			if (now - Date.parse(record.created_at) >= RESTORE_SEND_MS)
-				return { ...message, state: "failed", error: TOO_OLD };
+			// A time in the future shows that the clock of the device went back. The age is then not known.
+			const age = now - Date.parse(record.created_at);
+			if (!(age >= 0 && age < RESTORE_SEND_MS)) return { ...message, state: "failed", error: TOO_OLD };
 			return message;
 		});
 }

@@ -140,6 +140,8 @@ const RESTORE_WAIT_MS = 2000;
 const restores = new Map<string, Promise<void>>();
 /** The people whose saved messages are in the outboxes. */
 const restored = new Set<string>();
+/** The number of changes of the person of the page. A read from before a change must not continue. */
+let accountChanges = 0;
 
 /**
  * Puts the messages of the person that waited before a reload of the page into the outbox of each
@@ -152,9 +154,12 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 	let restore = restores.get(ownId);
 	if (!restore) {
 		restore = (async () => {
+			const started = accountChanges;
 			const wait = new Promise<[]>((resolve) => setTimeout(() => resolve([]), RESTORE_WAIT_MS));
 			const records = await Promise.race([loadSaved(ownId), wait]);
-			if (currentAccount() !== ownId) return;
+			// The person signed out during the read. A sign-out removes the saved messages, so the records
+			// of this read must not go out, also when the same person signed in again.
+			if (accountChanges !== started || currentAccount() !== ownId) return;
 			restored.add(ownId);
 			const byRoom = new Map<string, typeof records>();
 			for (const record of records) byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
@@ -169,6 +174,7 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 // The page sends each call with the session of its person. After a sign-out, or a sign-in as a
 // different person, a message that waits must not go out: it would be a message of the new person.
 onAccountChange(() => {
+	accountChanges += 1;
 	for (const outbox of outboxes.values()) outbox.stop();
 	outboxes.clear();
 	restores.clear();
