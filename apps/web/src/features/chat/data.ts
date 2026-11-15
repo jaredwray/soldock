@@ -4,6 +4,8 @@ import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { withChanges, withOlder } from "./model.ts";
 import { createOutbox, type Outbox } from "./outbox.ts";
+import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
+import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
 
@@ -107,8 +109,40 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 			active: () => currentAccount() === ownId,
 		});
 		outboxes.set(name, outbox);
+		keepSaved(outbox, ownId, roomId);
 	}
 	return outbox;
+}
+
+/** Writes each change of the messages that wait to the store of the browser, so they stay after a reload. */
+function keepSaved(outbox: Outbox, ownId: string, roomId: string): void {
+	let before = outbox.getState().pending;
+	outbox.subscribe(() => {
+		const after = outbox.getState().pending;
+		// A stop removes the messages from the page. `forgetOthers` removes them from the store.
+		if (currentAccount() !== ownId) return;
+		const changes = savedChanges(before, after);
+		before = after;
+		for (const message of changes.put) void putSaved(toSaved(message, ownId, roomId));
+		for (const key of changes.remove) void removeSaved(key);
+	});
+}
+
+/** The people whose messages from before the reload are in the outboxes of this page. */
+const restored = new Set<string>();
+
+/**
+ * Puts the messages of the person that waited before a reload of the page into the outbox of each
+ * room. Each one goes out again with its key, also for a room that the person does not open.
+ */
+export async function restoreOutboxes(ownId: string): Promise<void> {
+	if (restored.has(ownId)) return;
+	restored.add(ownId);
+	const byRoom = new Map<string, Awaited<ReturnType<typeof loadSaved>>>();
+	for (const record of await loadSaved(ownId))
+		byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
+	if (currentAccount() !== ownId) return;
+	for (const [roomId, records] of byRoom) outboxOf(ownId, roomId).restore(fromSaved(records, Date.now()));
 }
 
 // The page sends each call with the session of its person. After a sign-out, or a sign-in as a
@@ -116,6 +150,7 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 onAccountChange(() => {
 	for (const outbox of outboxes.values()) outbox.stop();
 	outboxes.clear();
+	restored.clear();
 });
 
 /**

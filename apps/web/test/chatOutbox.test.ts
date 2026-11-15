@@ -247,4 +247,33 @@ describe("the outbox of a room", () => {
 		await room.calls[2]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
 		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true, afterSeq: 10 }]);
 	});
+
+	// The messages from before a reload are older than the messages that the person wrote after it.
+	it("puts the messages from before a reload at the start of the line, and sends them with their keys", async () => {
+		const room = fakeRoom();
+		room.outbox.send("After the reload");
+		const before = (key: string, text: string, state: "waiting" | "failed") => ({
+			key,
+			text,
+			created_at: "2026-01-01T08:00:00.000Z",
+			state,
+			error: state === "failed" ? "No connection." : null,
+			uncertain: state === "failed",
+			afterSeq: null,
+		});
+		room.outbox.restore([before("old-1", "Not sent before", "failed"), before("old-2", "Waited before", "waiting")]);
+		// A second restore of the same messages adds nothing.
+		room.outbox.restore([before("old-2", "Waited before", "waiting")]);
+		expect(room.pending()).toEqual([
+			["Not sent before", "failed"],
+			["Waited before", "waiting"],
+			["After the reload", "sending"],
+		]);
+		await room.calls[0]?.succeed();
+		expect(room.calls[1]).toMatchObject({ text: "Waited before", key: "old-2" });
+		await room.calls[1]?.succeed();
+		// A failed message waits for the person.
+		expect(room.pending()).toEqual([["Not sent before", "failed"]]);
+		expect(room.calls).toHaveLength(2);
+	});
 });
