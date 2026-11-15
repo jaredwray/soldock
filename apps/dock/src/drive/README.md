@@ -1,14 +1,14 @@
 # `drive` module
 
 > Status: **started**. The first end-to-end layer exists: folders, files with versions, docs and
-> sheets as items, the trash, stars, search, access for people and agents with roles, and shared
-> drives with members. Keep
+> sheets as items, the trash, stars, search, access for people and agents with roles, shared
+> drives with members, and moves between drives. Keep
 > this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Drive backend: spaces (My Drive and shared drives), item tree, uploads/downloads, versions, trash, permissions and inheritance, link sharing, shared-with-me fan-out, previews, search, access checks for native items. |
-| **Owns** | `DriveSpaceDO` (items, versions, permissions, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, and the members of a shared drive); file bytes in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
+| **Owns** | `DriveSpaceDO` (items, versions, permissions, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
 | **Depends on** | `platform`, `identity`, `collab` (the content of a doc or a sheet, for a copy). |
 | **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -19,7 +19,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 | File | What |
 | --- | --- |
-| `space.ts` | `DriveSpaceDO`: schema, access checks, the item tree, versions, the trash, grants, search, the user state of the owner, the members of a shared drive, the writes to the index in D1, and the outbox alarm |
+| `space.ts` | `DriveSpaceDO`: schema, access checks, the item tree, versions, the trash, grants, search, the user state of the owner, the members of a shared drive, the writes to the index in D1, the moves between drives, and the outbox alarm |
 | `access.ts` | What the handlers of `drive`, `docs` and `sheets` share: the drive of a call (`openSpace`), the output form of an item, the audit line, idempotency keys, and the read and write of doc and sheet content |
 | `shared-index.ts` | The reads of the index of the shared drives in D1: the list of drives, and the check that an id is a live shared drive |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the drive of the call, move bytes to and from R2, and call the `DriveSpaceDO` |
@@ -211,8 +211,115 @@ count for the drive. No principal is the owner of an item.
 
 ### Moves between drives
 
-`drive.move_to_drive` has its contract in `packages/contracts`. The handler is not built yet: it
-answers `invalid`.
+`drive.move_to_drive` moves items, with all that they hold, from one drive to a different drive.
+
+Rules:
+
+- Source: the owner of a personal drive, or a manager of a shared drive.
+- Target: the own drive of the caller, or a shared drive where the caller is an editor or a manager.
+  A move to the drive of a different person gets `invalid`: transfer of ownership is not built.
+- A selected item in the trash gets `invalid`. An item in the trash under a selected folder moves
+  with the folder, and stays in the trash of the target.
+- One move has at most 1,000 items. Each item under a selected folder counts.
+- The limit of 30 levels of folders applies in the target.
+- `dry_run` makes each check and returns the totals and `kept_shares`. It changes nothing.
+
+What moves, and what stays:
+
+- The ids of the items and of the versions do not change. The content of a doc or a sheet is in its
+  `DocumentDO`, which has the item id as its name, so the content does not move.
+- Each version gets a new R2 object under the key of the target drive. The old object is deleted
+  after the move.
+- Each direct grant on a moved item stays (`kept_shares`). A grant for the owner of a personal
+  target drive goes away, because an owner needs no grant.
+- A grant on a folder above the moved items stays in the source. It gives no access to the moved
+  items after the move.
+- The target drive owns the items. Its members get access. The members of a source shared drive
+  lose their access.
+
+#### Steps
+
+The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the next step
+(`state`) and the place in that step (`cursor`). Each step is safe to run again.
+
+1. **Lock.** In one transaction, the source makes the checks, stores the `transfers` row and one
+   `transfer_items` row for each item of the move. It sets an alarm.
+2. **Stage** (`stage`). The source sends the items to the target in parts of 25 items
+   (`stageImport`): the rows, the versions, the grants and the text for the search index. The
+   target keeps each part in its `imports` table. Its own tables do not change.
+3. **Copy** (`copy`). The source copies the bytes of each version to its key in the target (get,
+   then put). A second copy to the same key changes nothing.
+4. **Commit** (`commit`). The target makes the checks again and stores each staged item in one
+   transaction (`commitImport`). The selected items get the `parent_id` of the move. The target puts
+   a `share` row in its outbox for each grant. A row with `seq` -1 in `imports` records the commit,
+   so a second call changes nothing.
+5. **Refresh** (`refresh`). The source sends the current state of each doc and sheet to the target
+   (`applyDocumentChange`). Thus a write that arrived during the move is not lost.
+6. **Finish** (`finish`). In one transaction, the source deletes the rows of the items, stores a
+   `moved` row for each item, and deletes the `transfers` and `transfer_items` rows. It puts these
+   rows in its outbox: a `blob` row for each old R2 object, and a `moved` row for each principal
+   with a grant in the moved items. When the source is a personal drive, it also gives the stars of
+   its owner the new drive.
+
+- The target shows no item of the move before the commit, and each item after it. The target can
+  refuse the commit: the caller lost the role, the folder is gone or in the trash, or the folders
+  are too deep. The source then stops the move. The items stay in the source and accept changes
+  again. The outbox of the source deletes the copies.
+- The call runs the steps and answers `done`. It answers `moving` when the steps are not complete
+  after 20 seconds, after 400 calls to R2 and to the target, or after a step fails. The alarm of
+  the source then continues the move, also after the object stops. The web app polls
+  `drive.get_about` and sees the change.
+- A step that fails is tried again (1 minute, doubled, at most 1 hour). Before the commit, the
+  source stops a move after 8 failures of one step, and the items stay in the source. After the
+  commit, the source tries the move until it is complete.
+- A second call with the same input, during the move, joins that move and starts no new one. After
+  the move, such a call gets `not_found`, with the new drive in the message.
+- One audit line records the move: the source, the target and the item ids.
+
+#### An item of a move
+
+- From the lock to the finish, each item of the move refuses each change with `conflict`: "The
+  item is moving to a different drive. Try again in a moment." This applies to a rename, new
+  content, a new version, a move, the trash, a restore, a delete, a grant, a new item in a moving
+  folder, and a second move. A folder that holds a moving item cannot go to the trash.
+- A read of a moving item works in the source.
+- A writer of a doc or a sheet can pass the role check before the lock, and write after it. The
+  `DocumentDO` and the handler then tell the source about the change. After the commit, and after
+  the move, the source sends such a change on to the target. Before the commit, the refresh step
+  sends it.
+
+#### After the move
+
+- The source keeps a `moved` row for each item for 30 days: the item id and the target drive. A
+  call for such an item in the source gets `not_found` with the message "The item moved to the
+  drive <target space id>. Use that space_id." Only the owner and the members of the source get
+  that message. The source deletes older rows when it finishes a move and in its alarm.
+- An item that comes back to a drive deletes its `moved` row there.
+- The `moved` notice goes to the own drive of each principal with a direct grant in the moved
+  items, and to the person who moved items out of a shared drive. That drive gives its `stars` and
+  `shared_with_me` rows for the moved items the new drive (`applyMoved`). A second delivery
+  changes nothing. The `share` rows of the target make the same pointers, so the order of the two
+  does not matter.
+- The key of an R2 object has the drive in it, so an item that comes back to a drive gets its old
+  keys again. A `blob` row for such a key can still wait in an outbox. The source deletes its own
+  such rows at the lock, and the target deletes its rows when it stages the items. Each waits for
+  a delete of such a key that is in progress.
+
+#### Known limits
+
+- A principal that had access only as a member of the source shared drive keeps its stars on the
+  old drive. Those stars give no item. The stars of the person who moved the items are correct.
+- A star is correct after the outbox of the source ran. The `items` of the answer can show
+  `starred: false` for an item that has a star.
+- An open editor of a doc or a sheet must load the item again after a move, with the new
+  `space_id`.
+- When the alarm stops a move, no caller gets the reason. The reason is in the log
+  (`drive move stopped`).
+- The move of a file with many versions uses many calls to R2. One run copies at most 200
+  versions. The alarm runs again immediately, so such a move answers `moving`.
+- A version without bytes in R2 moves without bytes. The move logs it as an error.
+- A third drive can hold a `blob` row for a key of the target, from a move that it stopped. If
+  that row waits through two more moves of the same item, it deletes the new copy.
 
 ## Search
 
@@ -232,12 +339,17 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | `unshare` | Removes that pointer | Yes |
 | `blob` | Deletes one R2 object | Yes |
 | `document` | Deletes the content of a doc or a sheet (`DocumentDO.destroy()`) | Yes |
+| `moved` | Gives the stars and the shared pointers of a principal the new drive of moved items (`applyMoved`) | Yes |
 
 - The alarm delivers the rows in order. A failed row stops the drain until its next attempt
   (1 minute, doubled, at most 1 hour). Thus a share and the removal of that share arrive in order.
 - After 8 failed attempts, the row is dropped and logged as an error. A dropped `share` or
   `unshare` leaves a stale or missing pointer. A dropped `blob` or `document` leaves an orphan.
 - One alarm takes 50 rows. When the object starts with outbox rows and no alarm, it sets one.
+- Migration 3 of the object makes the `outbox` table again with the `moved` kind, because SQLite
+  cannot change a CHECK. The rows stay.
+- The alarm does its work in this order: the writes to the index in D1, the moves between drives,
+  then the outbox.
 
 ## Idempotency
 
@@ -249,7 +361,8 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
   different input gets `conflict`. The key belongs to its caller: the stored key has the principal
   id in front. Keys stay 24 hours.
 - The other changes are safe to repeat: a rename, a move, a star, a grant, the trash and a restore
-  give the same state.
+  give the same state. A second `drive.move_to_drive` joins the move in progress, or finds that the
+  items moved.
 
 ## Safety
 
@@ -277,12 +390,16 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |
 | Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role and who added it. The source of the access |
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |
+| Moves to a different drive that are not complete | `DriveSpaceDO` tables `transfers` and `transfer_items`, in the source drive | The target, the folder, the actor, the totals, the next step, and each item of the move. Deleted when the move is complete or stopped |
+| Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |
+| Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source. Deleted at the commit or at a refusal. The record of a commit (`seq` -1) is kept 30 days |
 | Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0011_shared_drives.sql` |
 | File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key |
 
 Blob reference counts: each object has exactly one owner, the version row with its key. A copy
 makes a new object. A permanent delete and a version over the limit delete the object through the
-outbox. An error after an R2 write and before the drive answers can leave an orphan, which blob GC
+outbox. A move between drives makes a new object for each version, and deletes the old object
+through the outbox after the target has the version rows. An error after an R2 write and before the drive answers can leave an orphan, which blob GC
 will collect.
 
 A directory reset gives each new account a new principal id, and thus a new, empty drive. The
@@ -305,10 +422,12 @@ Backups: not built yet. Originals also come with Takeout.
 | Members of one shared drive | 100 | `SHARED_DRIVE_LIMITS.members` |
 | Name of a shared drive | 100 characters, no control characters | |
 | Items in one move between drives | 1,000 | `SHARED_DRIVE_LIMITS.moveItems` |
+| One run of a move between drives | 20 seconds, 400 calls to R2 and to the target | The subrequest limit of one invocation. The alarm continues |
+| Record of where a moved item went | 30 days | |
 
 ## Not built yet
 
-- Moves between drives (`drive.move_to_drive`), and transfer of ownership
+- Transfer of ownership: a move to the drive of a different person
 - A contributor role and a content manager role in a shared drive
 - A way for an agent to leave a shared drive
 - Link sharing (anyone with the link), and sharing with people outside the organization

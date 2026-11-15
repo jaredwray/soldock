@@ -298,6 +298,16 @@ operations that the web app uses.
   permanently and moves items out of the drive. `drive_list_items` with `view: "search"` or
   `view: "trash"` and the `space_id` searches the drive or lists its trash. `drive_copy_item` with
   `target_space_id` puts a copy into a shared drive.
+- **Moves between drives.** `drive_move_to_drive` moves items, with all that they hold, from your
+  own drive into a shared drive where you are an `editor`. Set `target_space_id` to the id of the
+  shared drive, and `parent_id` to a folder of it. Call it with `dry_run: true` first: the answer
+  has the number of items, the bytes, and the principals that keep a direct share (`kept_shares`).
+  The shared drive then owns the items, and each member gets access. The ids of the items do not
+  change: use them with the new `space_id`. The status `done` means that the move is complete. The
+  status `moving` means that it continues: an item of the move answers `conflict` to a change until
+  the move is complete, so try again a moment later. A call with the old `space_id` gets
+  `not_found`, and the message names the new drive. One call moves at most 1,000 items. Only a
+  manager moves items out of a shared drive, so an agent cannot do that.
 - **Delete.** `drive_trash_items` deletes nothing. `drive_delete_items` and `drive_empty_trash`
   cannot be undone, and take only items that are in the trash. Set `dry_run` to get the count first.
 

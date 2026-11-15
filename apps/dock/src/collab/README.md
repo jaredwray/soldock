@@ -39,6 +39,10 @@ One object for each doc and each sheet. Its name is the id of the Drive item (`i
   - The handler also tells the drive directly after the write, so the item is current in the answer.
     The drive drops a revision that it has, so the second message changes nothing.
   - A new change replaces a message that waits: only the newest state matters.
+  - The message goes to the drive that the writer named. After a move between drives
+    (`drive.move_to_drive`), a writer with access from before the move can name the old drive. That
+    drive sends the change on to the drive that holds the item now. The content itself does not
+    move: the name of the object is the item id.
   - A failed send is tried again with backoff (1 minute, doubled, at most 1 hour), 8 times. Then
     the message is dropped and logged. The next change sends the newer state.
 - **Delete.** `destroy()` deletes all storage of the object. The drive calls it from its outbox

@@ -5,6 +5,7 @@ import { audit, OperationError, sha256Hex } from "../platform/index.ts";
 import { unknownSharedDriveIds } from "./shared-index.ts";
 import {
 	type ActorRecord,
+	blobKeyFor,
 	type ItemRecord,
 	type ItemRef,
 	isSharedDriveId,
@@ -18,10 +19,7 @@ export function spaceStub(env: Pick<Env, "DRIVE_SPACE">, spaceId: string) {
 	return env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));
 }
 
-/** The R2 key of one version of a file. Each object has one owner: the version in its key. */
-export function blobKeyFor(spaceId: string, itemId: string, versionId: string): string {
-	return `drive/${spaceId}/${itemId}/${versionId}`;
-}
+export { blobKeyFor };
 
 export function actorOf(call: CallContext): ActorRecord {
 	const { principal } = call.caller;

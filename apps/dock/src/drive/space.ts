@@ -33,6 +33,11 @@ export interface SpaceCall {
 	admin?: boolean;
 }
 
+/** The R2 key of one version of a file. Each object has one owner: the version in its key. */
+export function blobKeyFor(spaceId: string, itemId: string, versionId: string): string {
+	return `drive/${spaceId}/${itemId}/${versionId}`;
+}
+
 /** True for the id of a shared drive. A personal drive has the id of its owner. */
 export function isSharedDriveId(spaceId: string): boolean {
 	return spaceId.startsWith("drv_");
@@ -147,6 +152,60 @@ export interface DocumentChange {
 	text: string;
 }
 
+/** The input of a move to a different drive. */
+export interface MoveOutInput {
+	itemIds: string[];
+	/** The drive that gets the items. The Worker checked that the caller can add items to it. */
+	targetId: string;
+	/** A folder of the target, or null for its root. */
+	parentId: string | null;
+	/** The level that an item gets in that folder: 1 at the root of the target. */
+	targetDepth: number;
+	dryRun: boolean;
+}
+
+/** The answer of a move to a different drive. */
+export interface MoveOutResult {
+	status: "done" | "moving" | "dry_run";
+	/** Each item of the move: the selected items and all that they hold. */
+	itemsTotal: number;
+	bytes: number;
+	/** The principals that keep a direct grant on a moved item. */
+	keptShares: string[];
+	/** The selected items that are not in a different selected item. */
+	topIds: string[];
+}
+
+/** One item of a move, as the source drive sends it to the target drive. */
+export interface StagedItem {
+	id: string;
+	/** True for a selected item. It goes into the folder of the move. Each other item keeps its folder. */
+	top: boolean;
+	parent_id: string | null;
+	kind: ItemKind;
+	name: string;
+	mime_type: string | null;
+	size: number;
+	head_version_id: string | null;
+	content_revision: number;
+	created_at: number;
+	modified_at: number;
+	modified_by_json: string | null;
+	trashed_at: number | null;
+	trash_root: string | null;
+	/** The text of a doc or a sheet, for the search index. */
+	text: string;
+	versions: {
+		id: string;
+		size: number;
+		mime_type: string;
+		sha256: string;
+		created_at: number;
+		created_by_json: string | null;
+	}[];
+	grants: { principal_id: string; role: "editor" | "viewer"; granted_by_json: string | null; created_at: number }[];
+}
+
 export interface Page<T> {
 	items: T[];
 	nextCursor: string | null;
@@ -186,11 +245,42 @@ interface VersionRow extends Row {
 
 interface OutboxRow extends Row {
 	id: number;
-	kind: "share" | "unshare" | "blob" | "document";
+	kind: "share" | "unshare" | "blob" | "document" | "moved";
 	target: string;
 	payload: string;
 	attempts: number;
 	next_attempt_at: number;
+}
+
+/** A move to a different drive that is not complete. The state is the next step. */
+interface TransferRow extends Row {
+	id: string;
+	target: string;
+	parent_id: string | null;
+	/** JSON: the selected ids, in order. A second call with the same ids joins this move. */
+	item_ids: string;
+	actor_json: string;
+	/** JSON: the totals of the answer. */
+	totals_json: string;
+	state: "stage" | "copy" | "commit" | "refresh" | "finish";
+	/** Where the step continues: the last item or version that it handled. */
+	cursor: string;
+	attempts: number;
+	next_attempt_at: number;
+}
+
+/** The totals of a move, as the `transfers` row keeps them. */
+interface MoveTotals {
+	itemsTotal: number;
+	bytes: number;
+	keptShares: string[];
+	topIds: string[];
+}
+
+/** The time and the calls that one run of the moves can use. */
+interface MoveBudget {
+	deadline: number;
+	calls: number;
 }
 
 /** A row of the index in D1 that is behind this drive: `drive`, or `member:<principal id>`. */
@@ -308,6 +398,59 @@ const MIGRATIONS: string[][] = [
 			last_error TEXT
 		) WITHOUT ROWID`,
 	],
+	[
+		// A move to a different drive that is not complete. The source drive has the row.
+		`CREATE TABLE transfers (
+			id TEXT PRIMARY KEY,
+			target TEXT NOT NULL,
+			parent_id TEXT,
+			item_ids TEXT NOT NULL,
+			actor_json TEXT NOT NULL,
+			totals_json TEXT NOT NULL,
+			state TEXT NOT NULL CHECK (state IN ('stage', 'copy', 'commit', 'refresh', 'finish')),
+			cursor TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT
+		)`,
+		// Each item of a move that is not complete. An item with a row here refuses each change.
+		`CREATE TABLE transfer_items (
+			item_id TEXT PRIMARY KEY,
+			transfer_id TEXT NOT NULL,
+			top INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		"CREATE INDEX transfer_items_transfer ON transfer_items (transfer_id)",
+		// Where an item went. A call for the item in this drive gets the id of the new drive.
+		`CREATE TABLE moved (
+			item_id TEXT PRIMARY KEY,
+			target TEXT NOT NULL,
+			moved_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		// The items that a source drive sent, until the move commits them. The row with seq -1 shows
+		// that the move committed.
+		`CREATE TABLE imports (
+			transfer_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			payload TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (transfer_id, seq)
+		) WITHOUT ROWID`,
+		// SQLite cannot change a CHECK. The outbox gets the `moved` kind in a new table with the same rows.
+		`CREATE TABLE outbox_next (
+			id INTEGER PRIMARY KEY,
+			kind TEXT NOT NULL CHECK (kind IN ('share', 'unshare', 'blob', 'document', 'moved')),
+			target TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT
+		)`,
+		`INSERT INTO outbox_next (id, kind, target, payload, attempts, next_attempt_at, last_error)
+			SELECT id, kind, target, payload, attempts, next_attempt_at, last_error FROM outbox`,
+		"DROP TABLE outbox",
+		"ALTER TABLE outbox_next RENAME TO outbox",
+	],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -325,6 +468,19 @@ const INDEX_ROUNDS = 10;
  * index. The end of each write moves this alarm.
  */
 const ALARM_GUARD_MS = 30_000;
+
+/** The wall time of one run of the moves between drives. A call answers `moving` after it. */
+const MOVE_BUDGET_MS = 20_000;
+/** The calls to R2 and to other objects in one run of the moves. The next alarm continues. */
+const MOVE_CALLS = 400;
+/** The items of one message to the target drive. */
+const STAGE_BATCH = 25;
+/** A move that fails this many times before the target has the items is stopped. The items stay. */
+const MOVE_MAX_ATTEMPTS = 8;
+/** The time that a drive keeps the new place of a moved item. */
+const MOVED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** R2 holds the bytes of a file with a neutral type. Nothing serves them from R2 to a browser. */
+const STORED_TYPE = { httpMetadata: { contentType: "application/octet-stream" } };
 
 const RANK: Record<DriveRole, number> = { viewer: 1, editor: 2, manager: 3, owner: 4 };
 
@@ -349,6 +505,7 @@ const DOWN = `WITH RECURSIVE down (id, depth) AS (
 const NOT_FOUND = "No item has that id, or you have no access to it.";
 const OWN_DRIVE_ONLY = "Only the owner of a drive can do this, in their own drive.";
 const IN_TRASH = "The item is in the trash. Restore it first.";
+const MOVING = "The item is moving to a different drive. Try again in a moment.";
 const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
 const LAST_MANAGER =
 	"A shared drive needs at least one manager who is a person. Give a different person the manager role first.";
@@ -419,6 +576,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	private drainTask: Promise<void> | null = null;
 	/** The end of the line of index writes. Each write starts after the one before it ends. */
 	private flushed: Promise<void> = Promise.resolve();
+	/** The run of the moves between drives. One run at a time keeps the steps of a move in order. */
+	private moveTask: Promise<Map<string, "done" | Refusal>> | null = null;
+	/** The R2 deletes of the outbox that are in progress, by key. */
+	private readonly deleting = new Map<string, Promise<unknown>>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -426,9 +587,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
 			// A change sets the alarm after its transaction commits. If the object stopped between the
-			// two, the outbox has rows and no alarm: set one now.
+			// two, the outbox has rows and no alarm: set one now. A move that is not complete also needs one.
 			const pending =
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0) +
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM transfers")?.n ?? 0) +
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n ?? 0);
 			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
@@ -551,8 +713,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** The item and the access of the caller, or a refusal when the caller has less than the `need` role. */
 	private open(call: SpaceCall, itemId: string, need: DriveRole): { item: ItemRow; access: Access } | Refusal {
 		const item = this.row(itemId);
-		const access = item ? this.access(call, item) : null;
-		if (!item || !access) return refuse("not_found", NOT_FOUND);
+		if (!item) return this.missing(call, itemId, NOT_FOUND);
+		const access = this.access(call, item);
+		if (!access) return refuse("not_found", NOT_FOUND);
 		if (RANK[access.role] < RANK[need]) {
 			return refuse(
 				"forbidden",
@@ -563,7 +726,25 @@ export class DriveSpaceDO extends DurableObject<Env> {
 						: `You have the ${access.role} role for this item. This needs the ${need} role. Ask the owner of the item.`,
 			);
 		}
+		if (need !== "viewer" && this.busy(itemId)) return refuse("conflict", MOVING);
 		return { item, access };
+	}
+
+	/** True for an item of a move to a different drive that is not complete. Such an item refuses each change. */
+	private busy(itemId: string): boolean {
+		return this.one("SELECT 1 AS found FROM transfer_items WHERE item_id = ?", itemId) !== null;
+	}
+
+	/**
+	 * The refusal for an id that this drive does not hold. The owner and the members of the drive get
+	 * the new drive of an item that moved away. Each other caller gets the usual message.
+	 */
+	private missing(call: SpaceCall, itemId: string, message: string): Refusal {
+		const moved = this.one<{ target: string }>("SELECT target FROM moved WHERE item_id = ?", itemId);
+		if (moved && (this.isOwner(call) || this.memberRole(call.actor.principal_id) !== null)) {
+			return refuse("not_found", `The item moved to the drive ${moved.target}. Use that space_id.`);
+		}
+		return refuse("not_found", message);
 	}
 
 	private starredIds(itemIds: string[]): Set<string> {
@@ -1208,8 +1389,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		);
 		for (const id of ids) {
 			const item = this.row(id);
-			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			if (!item) return this.missing(call, id, `No item has the id ${id}.`);
 			if (item.trash_root !== null) return refuse("invalid", `${item.name} is in the trash. Restore it first.`);
+			if (this.busy(id)) return refuse("conflict", MOVING);
 			if (above.has(id)) return refuse("invalid", `${item.name} cannot move into itself or into a folder under it.`);
 			// The lowest folder in the moved item, counted from the item. Null when the item holds no folder and is none.
 			const height = this.one<{ n: number | null }>(
@@ -1278,7 +1460,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const rows: ItemRow[] = [];
 		for (const id of ids) {
 			const item = this.row(id);
-			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			if (!item) return this.missing(call, id, `No item has the id ${id}.`);
+			// A folder that holds an item of a move stays out of the trash until the move is complete.
+			if (this.one(`${DOWN} SELECT 1 AS found FROM down JOIN transfer_items t ON t.item_id = down.id LIMIT 1`, id)) {
+				return refuse("conflict", MOVING);
+			}
 			// An item that is in the trash, or under a folder in the trash, stays as it is.
 			if (item.trash_root === null) rows.push(item);
 		}
@@ -1314,7 +1500,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const wanted = new Set(itemIds);
 		for (const id of wanted) {
 			const item = this.row(id);
-			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			if (!item) return this.missing(call, id, `No item has the id ${id}.`);
+			if (this.busy(id)) return refuse("conflict", MOVING);
 			// An item that went to the trash with its folder comes back with that folder.
 			if (item.trash_root !== null && wanted.has(item.trash_root) && item.trash_root !== item.id) continue;
 			if (item.trash_root !== null && item.trash_root !== item.id) {
@@ -1348,7 +1535,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const ids = [...new Set(itemIds)];
 		for (const id of ids) {
 			const item = this.row(id);
-			if (!item) return refuse("not_found", `No item has the id ${id}.`);
+			if (!item) return this.missing(call, id, `No item has the id ${id}.`);
+			if (this.busy(id)) return refuse("conflict", MOVING);
 			if (item.trash_root !== item.id) {
 				return refuse("invalid", `${item.name} is not in the trash. Move it to the trash first.`);
 			}
@@ -1453,6 +1641,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const self = call.actor.principal_id === principalId;
 		const found = this.open(call, itemId, self ? "viewer" : this.top(call));
 		if ("error" in found) return found;
+		if (this.busy(itemId)) return refuse("conflict", MOVING);
 		let removed = false;
 		this.ctx.storage.transactionSync(() => {
 			removed =
@@ -1732,6 +1921,653 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { deleted: true };
 	}
 
+	// --- Moves between drives -------------------------------------------------------------------
+
+	/**
+	 * Checks that the caller can add items of a move to a folder of this drive, or to its root: the owner
+	 * of a personal drive, or a member of a shared drive with the editor role. Returns the level of a new
+	 * item there. A grant on a folder is not sufficient.
+	 */
+	checkImport(call: SpaceCall, parentId: string | null): { depth: number } | Refusal {
+		this.enter(call);
+		return this.gate(call, "editor") ?? this.checkCreate(call, parentId);
+	}
+
+	/** The checks of a move to a different drive, and its totals. Nothing changes. */
+	private planMove(call: SpaceCall, input: MoveOutInput, ids: string[]): (MoveTotals & { all: string[] }) | Refusal {
+		const selected = new Set(ids);
+		const topIds: string[] = [];
+		for (const id of ids) {
+			const item = this.row(id);
+			if (!item) return this.missing(call, id, `No item has the id ${id}.`);
+			if (item.trash_root !== null) return refuse("invalid", `${item.name} is in the trash. Restore it first.`);
+			// An item in a folder of the same call moves with that folder.
+			const inside = this.all<{ id: string }>(`${UP} SELECT id FROM up WHERE depth >= 1`, id).some((above) =>
+				selected.has(above.id),
+			);
+			if (!inside) topIds.push(id);
+		}
+		let count = 0;
+		for (const id of topIds) {
+			count += this.one<{ n: number }>(`${DOWN} SELECT COUNT(*) AS n FROM down`, id)?.n ?? 0;
+			if (count > SHARED_DRIVE_LIMITS.moveItems) {
+				return refuse(
+					"invalid",
+					`One move can have at most ${SHARED_DRIVE_LIMITS.moveItems} items, with the items in each folder. Move fewer items in each call.`,
+				);
+			}
+			const height = this.one<{ n: number | null }>(
+				`${DOWN} SELECT MAX(down.depth) AS n FROM down JOIN items i ON i.id = down.id WHERE i.kind = 'folder'`,
+				id,
+			)?.n;
+			const deep = height === null || height === undefined ? null : this.tooDeep(input.targetDepth + height);
+			if (deep) return deep;
+		}
+		const all = topIds.flatMap((id) =>
+			this.all<{ id: string }>(`${DOWN} SELECT id FROM down`, id).map((row) => row.id),
+		);
+		const list = JSON.stringify(all);
+		if (
+			this.one("SELECT 1 AS found FROM transfer_items WHERE item_id IN (SELECT value FROM json_each(?)) LIMIT 1", list)
+		) {
+			return refuse("conflict", MOVING);
+		}
+		const bytes =
+			(this.one<{ n: number }>(
+				"SELECT COALESCE(SUM(size), 0) AS n FROM versions WHERE item_id IN (SELECT value FROM json_each(?))",
+				list,
+			)?.n ?? 0) +
+			(this.one<{ n: number }>(
+				"SELECT COALESCE(SUM(size), 0) AS n FROM items WHERE kind IN ('doc', 'sheet') AND id IN (SELECT value FROM json_each(?))",
+				list,
+			)?.n ?? 0);
+		// The owner of a personal drive needs no grant, so a grant for the owner of the target goes away.
+		const keptShares = this.all<{ principal_id: string }>(
+			`SELECT DISTINCT principal_id FROM permissions
+			WHERE item_id IN (SELECT value FROM json_each(?1)) AND principal_id != ?2 ORDER BY principal_id`,
+			list,
+			input.targetId,
+		).map((row) => row.principal_id);
+		return { itemsTotal: all.length, bytes, keptShares, topIds, all };
+	}
+
+	/**
+	 * Moves items, with all that they hold, to a different drive. Only the owner of a personal drive, or
+	 * a manager of a shared drive, can do this. The Worker checked the target drive. This call locks the
+	 * items and records the move in one step. Then it runs the steps of the move until they are complete
+	 * or the time budget ends. The alarm continues a move that is not complete.
+	 *
+	 * A second call with the same input, while the move runs, joins that move.
+	 */
+	async moveOut(call: SpaceCall, input: MoveOutInput): Promise<MoveOutResult | Refusal> {
+		this.enter(call);
+		const refused = this.gate(call, "manager");
+		if (refused) return refused;
+		const ids = [...new Set(input.itemIds)].sort();
+		const key = JSON.stringify(ids);
+		let transferId: string;
+		let totals: MoveTotals;
+		const running = this.one<TransferRow>(
+			"SELECT * FROM transfers WHERE item_ids = ? AND target = ? AND parent_id IS ?",
+			key,
+			input.targetId,
+			input.parentId,
+		);
+		if (running) {
+			totals = JSON.parse(running.totals_json) as MoveTotals;
+			if (input.dryRun) return { status: "dry_run", ...totals };
+			transferId = running.id;
+		} else {
+			const plan = this.planMove(call, input, ids);
+			if ("error" in plan) return plan;
+			const { all, ...rest } = plan;
+			totals = rest;
+			if (input.dryRun) return { status: "dry_run", ...totals };
+			transferId = crypto.randomUUID();
+			const now = Date.now();
+			const top = new Set(totals.topIds);
+			// The keys that the copies get in the target. A delete of such a key can wait in the outbox, from
+			// a move that was stopped. It must not delete the new copy.
+			const keys = this.all<{ id: string; item_id: string }>(
+				"SELECT id, item_id FROM versions WHERE item_id IN (SELECT value FROM json_each(?))",
+				JSON.stringify(all),
+			).map((version) => blobKeyFor(input.targetId, version.item_id, version.id));
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					`INSERT INTO transfers (id, target, parent_id, item_ids, actor_json, totals_json, state, created_at, next_attempt_at)
+					VALUES (?, ?, ?, ?, ?, ?, 'stage', ?, ?)`,
+					transferId,
+					input.targetId,
+					input.parentId,
+					key,
+					JSON.stringify(call.actor),
+					JSON.stringify(totals),
+					now,
+					now,
+				);
+				for (const id of all) {
+					this.sql.exec(
+						"INSERT INTO transfer_items (item_id, transfer_id, top) VALUES (?, ?, ?)",
+						id,
+						transferId,
+						top.has(id) ? 1 : 0,
+					);
+				}
+				this.sql.exec(
+					"DELETE FROM outbox WHERE kind = 'blob' AND target IN (SELECT value FROM json_each(?))",
+					JSON.stringify(keys),
+				);
+				this.bump();
+			});
+			// The alarm comes first. If the object stops during the steps, the alarm continues the move.
+			const set = await this.ctx.storage.getAlarm();
+			const guard = now + ALARM_GUARD_MS;
+			if (set === null || set > guard) await this.ctx.storage.setAlarm(guard);
+			await this.deletesDone(keys);
+		}
+		const outcome = await this.settle(transferId, Date.now() + MOVE_BUDGET_MS);
+		await this.schedule();
+		await this.scheduleTransfers();
+		if (typeof outcome !== "string") return outcome;
+		return { status: outcome, ...totals };
+	}
+
+	/** Waits for the R2 deletes of these keys that are in progress. */
+	private async deletesDone(keys: string[]): Promise<void> {
+		await Promise.all(keys.map((key) => this.deleting.get(key)?.catch(() => undefined)));
+	}
+
+	/** One run of the moves. A second caller gets the run that is in progress. */
+	private runMoves(deadline: number): Promise<Map<string, "done" | Refusal>> {
+		this.moveTask ??= this.advanceAll({ deadline, calls: 0 }).finally(() => {
+			this.moveTask = null;
+		});
+		return this.moveTask;
+	}
+
+	/** Runs the moves until one move is complete, is stopped, must wait, or the time budget ends. */
+	private async settle(transferId: string, deadline: number): Promise<"done" | "moving" | Refusal> {
+		for (;;) {
+			const outcome = (await this.runMoves(deadline)).get(transferId);
+			if (outcome) return outcome;
+			const row = this.one<{ next_attempt_at: number }>(
+				"SELECT next_attempt_at FROM transfers WHERE id = ?",
+				transferId,
+			);
+			if (!row) return "done";
+			if (row.next_attempt_at > Date.now() || Date.now() >= deadline) return "moving";
+		}
+	}
+
+	/**
+	 * Continues each move that is due, the oldest first. A step that fails waits for its next attempt
+	 * (1 minute, doubled, at most 1 hour). Before the target has the items, a move that fails 8 times is
+	 * stopped: the items stay in this drive. After that point, the move is tried until it is complete.
+	 */
+	private async advanceAll(budget: MoveBudget): Promise<Map<string, "done" | Refusal>> {
+		const outcomes = new Map<string, "done" | Refusal>();
+		for (;;) {
+			const row = this.one<TransferRow>(
+				"SELECT * FROM transfers WHERE next_attempt_at <= ? ORDER BY created_at, id LIMIT 1",
+				Date.now(),
+			);
+			if (!row) break;
+			try {
+				const outcome = await this.advance(row, budget);
+				if (outcome === "more") break;
+				outcomes.set(row.id, outcome);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				const now = this.one<TransferRow>("SELECT * FROM transfers WHERE id = ?", row.id);
+				if (!now) continue;
+				const attempts = now.attempts + 1;
+				const early = now.state === "stage" || now.state === "copy";
+				log(early && attempts >= MOVE_MAX_ATTEMPTS ? "error" : "warn", "drive move step failed", {
+					state: now.state,
+					attempts,
+					error: message,
+				});
+				if (early && attempts >= MOVE_MAX_ATTEMPTS) {
+					this.abandon(now);
+					outcomes.set(
+						row.id,
+						refuse("conflict", "The move did not complete. The items are in the source drive. Try again."),
+					);
+					continue;
+				}
+				this.sql.exec(
+					"UPDATE transfers SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
+					attempts,
+					Date.now() + backoff(attempts),
+					message.slice(0, 500),
+					row.id,
+				);
+			}
+		}
+		return outcomes;
+	}
+
+	/**
+	 * The steps of one move, from the state of its row. Each step is safe to run again:
+	 *
+	 * 1. `stage`: sends the items to the target drive, which holds them apart from its own items.
+	 * 2. `copy`: copies the bytes of each version to its key in the target.
+	 * 3. `commit`: the target makes the items its own, in one step, or refuses the move.
+	 * 4. `refresh`: sends the current state of each doc and sheet, for a write that came during the move.
+	 * 5. `finish`: deletes the items here, and records where they went.
+	 *
+	 * Returns `more` when the budget of the run ends before the move.
+	 */
+	private async advance(row: TransferRow, budget: MoveBudget): Promise<"done" | "more" | Refusal> {
+		const target = this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(row.target));
+		const targetCall: SpaceCall = { spaceId: row.target, actor: JSON.parse(row.actor_json) as ActorRecord };
+		let state = row.state;
+		let cursor = row.cursor;
+		const spent = () => Date.now() >= budget.deadline || budget.calls >= MOVE_CALLS;
+		const next = (nextState: TransferRow["state"], nextCursor: string) => {
+			// A step that makes progress starts the count of failures again.
+			this.sql.exec(
+				"UPDATE transfers SET state = ?, cursor = ?, attempts = 0 WHERE id = ?",
+				nextState,
+				nextCursor,
+				row.id,
+			);
+			state = nextState;
+			cursor = nextCursor;
+		};
+
+		while (state === "stage") {
+			if (spent()) return "more";
+			const items = this.all<ItemRow>(
+				`SELECT ${ITEM_COLUMNS} FROM items i JOIN transfer_items t ON t.item_id = i.id
+				WHERE t.transfer_id = ? AND i.seq > ? ORDER BY i.seq LIMIT ?`,
+				row.id,
+				Number(cursor || 0),
+				STAGE_BATCH,
+			);
+			const first = items[0];
+			const last = items[items.length - 1];
+			if (!first || !last) {
+				next("copy", "");
+				break;
+			}
+			budget.calls++;
+			const answer = await target.stageImport(targetCall, {
+				transferId: row.id,
+				seq: first.seq,
+				items: items.map((item) => this.staged(item)),
+			});
+			if ("error" in answer) return this.abandon(row, answer);
+			next("stage", String(last.seq));
+		}
+
+		while (state === "copy") {
+			const versions = this.all<{ id: string; item_id: string; blob_key: string }>(
+				`SELECT v.id, v.item_id, v.blob_key FROM versions v JOIN transfer_items t ON t.item_id = v.item_id
+				WHERE t.transfer_id = ? AND v.id > ? ORDER BY v.id LIMIT 20`,
+				row.id,
+				cursor,
+			);
+			if (versions.length === 0) next("commit", "");
+			for (const version of versions) {
+				if (spent()) return "more";
+				budget.calls += 2;
+				const object = await this.env.BLOBS.get(version.blob_key);
+				if (object) {
+					await this.env.BLOBS.put(blobKeyFor(row.target, version.item_id, version.id), object.body, STORED_TYPE);
+				} else {
+					// The version has no bytes in this drive. The move cannot repair that, and does not stop for it.
+					log("error", "drive move found a version without bytes", { key: version.blob_key });
+				}
+				next("copy", version.id);
+			}
+		}
+
+		if (state === "commit") {
+			if (spent()) return "more";
+			budget.calls++;
+			const answer = await target.commitImport(targetCall, { transferId: row.id, parentId: row.parent_id });
+			if ("error" in answer) return this.abandon(row, answer);
+			next("refresh", "");
+		}
+
+		while (state === "refresh") {
+			const docs = this.all<{ id: string }>(
+				`SELECT i.id FROM items i JOIN transfer_items t ON t.item_id = i.id
+				WHERE t.transfer_id = ? AND i.kind IN ('doc', 'sheet') AND i.content_revision > 0 AND i.id > ?
+				ORDER BY i.id LIMIT 20`,
+				row.id,
+				cursor,
+			);
+			if (docs.length === 0) next("finish", "");
+			for (const doc of docs) {
+				if (spent()) return "more";
+				// The row as it is now. The target drops a revision that it has.
+				const item = this.row(doc.id);
+				const author = parseActor(item?.modified_by_json ?? null);
+				if (item && author) {
+					budget.calls++;
+					await target.applyDocumentChange({
+						itemId: item.id,
+						revision: item.content_revision,
+						modifiedAt: item.modified_at,
+						modifiedBy: author,
+						size: item.size,
+						text: this.textOf(item.seq),
+					});
+				}
+				next("refresh", doc.id);
+			}
+		}
+
+		this.finish(row);
+		return "done";
+	}
+
+	private textOf(seq: number): string {
+		return this.one<{ content: string }>("SELECT content FROM items_fts WHERE rowid = ?", seq)?.content ?? "";
+	}
+
+	/** One item of a move, with its versions, its grants and its text, for the target drive. */
+	private staged(item: ItemRow): StagedItem {
+		return {
+			id: item.id,
+			top: this.one<{ top: number }>("SELECT top FROM transfer_items WHERE item_id = ?", item.id)?.top === 1,
+			parent_id: item.parent_id,
+			kind: item.kind,
+			name: item.name,
+			mime_type: item.mime_type,
+			size: item.size,
+			head_version_id: item.head_version_id,
+			content_revision: item.content_revision,
+			created_at: item.created_at,
+			modified_at: item.modified_at,
+			modified_by_json: item.modified_by_json,
+			trashed_at: item.trashed_at,
+			trash_root: item.trash_root,
+			text: this.textOf(item.seq),
+			versions: this.all<StagedItem["versions"][number] & Row>(
+				"SELECT id, size, mime_type, sha256, created_at, created_by_json FROM versions WHERE item_id = ? ORDER BY created_at, id",
+				item.id,
+			),
+			grants: this.all<StagedItem["grants"][number] & Row>(
+				"SELECT principal_id, role, granted_by_json, created_at FROM permissions WHERE item_id = ?",
+				item.id,
+			),
+		};
+	}
+
+	/**
+	 * Stops a move that the target refused, or that failed too many times before the target had the
+	 * items. The items stay in this drive and accept changes again. The copies in the target have no
+	 * owner, so the outbox deletes them.
+	 */
+	private abandon(row: TransferRow, refusal?: Refusal): Refusal {
+		this.ctx.storage.transactionSync(() => {
+			const state = this.one<{ state: string }>("SELECT state FROM transfers WHERE id = ?", row.id)?.state;
+			if (state !== undefined && state !== "stage") {
+				for (const version of this.all<{ id: string; item_id: string }>(
+					"SELECT v.id, v.item_id FROM versions v JOIN transfer_items t ON t.item_id = v.item_id WHERE t.transfer_id = ?",
+					row.id,
+				)) {
+					this.enqueue("blob", blobKeyFor(row.target, version.item_id, version.id), {});
+				}
+			}
+			this.sql.exec("DELETE FROM transfer_items WHERE transfer_id = ?", row.id);
+			this.sql.exec("DELETE FROM transfers WHERE id = ?", row.id);
+			this.bump();
+		});
+		log("warn", "drive move stopped", { target: row.target, reason: refusal?.error.message ?? "too many failures" });
+		return refusal ?? refuse("conflict", "The move did not complete. The items are in the source drive. Try again.");
+	}
+
+	/**
+	 * The last step of a move, in one transaction. The target has the items, so this drive deletes its
+	 * rows and records where each item went. The old bytes go away through the outbox. Each principal
+	 * with a grant in the moved items gets a notice that moves its pointers to the new drive.
+	 */
+	private finish(row: TransferRow): void {
+		const spaceId = this.meta("space_id") as string;
+		const actor = JSON.parse(row.actor_json) as ActorRecord;
+		const now = Date.now();
+		this.ctx.storage.transactionSync(() => {
+			const itemIds = this.all<{ item_id: string }>(
+				"SELECT item_id FROM transfer_items WHERE transfer_id = ? ORDER BY item_id",
+				row.id,
+			).map((item) => item.item_id);
+			const list = JSON.stringify(itemIds);
+			const inList = "(SELECT value FROM json_each(?1))";
+			for (const version of this.all<{ blob_key: string }>(
+				`SELECT blob_key FROM versions WHERE item_id IN ${inList}`,
+				list,
+			)) {
+				this.enqueue("blob", version.blob_key, {});
+			}
+			const notified = new Set(
+				this.all<{ principal_id: string }>(
+					`SELECT DISTINCT principal_id FROM permissions WHERE item_id IN ${inList}`,
+					list,
+				).map((grant) => grant.principal_id),
+			);
+			// In a shared drive, the stars of the person who moves the items are in the drive of that person.
+			if (actor.principal_id !== spaceId) notified.add(actor.principal_id);
+			this.sql.exec(`DELETE FROM versions WHERE item_id IN ${inList}`, list);
+			this.sql.exec(`DELETE FROM permissions WHERE item_id IN ${inList}`, list);
+			this.sql.exec(`DELETE FROM items_fts WHERE rowid IN (SELECT seq FROM items WHERE id IN ${inList})`, list);
+			this.sql.exec(`DELETE FROM items WHERE id IN ${inList}`, list);
+			this.sql.exec(
+				`INSERT INTO moved (item_id, target, moved_at) SELECT value, ?2, ?3 FROM json_each(?1) WHERE true
+				ON CONFLICT (item_id) DO UPDATE SET target = excluded.target, moved_at = excluded.moved_at`,
+				list,
+				row.target,
+				now,
+			);
+			// The stars of the owner of a personal drive are in this drive.
+			this.repoint("stars", spaceId, row.target, list);
+			for (const principalId of notified) this.enqueue("moved", principalId, { to: row.target, itemIds });
+			this.sql.exec("DELETE FROM transfer_items WHERE transfer_id = ?", row.id);
+			this.sql.exec("DELETE FROM transfers WHERE id = ?", row.id);
+			this.forget(now);
+			this.bump();
+		});
+	}
+
+	/** Deletes the records of moves that are older than 30 days. */
+	private forget(now: number): void {
+		this.sql.exec("DELETE FROM moved WHERE moved_at < ?", now - MOVED_TTL_MS);
+		this.sql.exec("DELETE FROM imports WHERE created_at < ?", now - MOVED_TTL_MS);
+	}
+
+	/** Changes the drive of the pointers to moved items. A pointer that the new drive has stays as it is. */
+	private repoint(table: "stars" | "shared_with_me", from: string, to: string, itemList: string): number {
+		const columns = table === "stars" ? "item_id, created_at" : "item_id, role, shared_at";
+		const copied = this.sql.exec(
+			`INSERT OR IGNORE INTO ${table} (space_id, ${columns})
+			SELECT ?2, ${columns} FROM ${table} WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?3))`,
+			from,
+			to,
+			itemList,
+		).rowsWritten;
+		const removed = this.sql.exec(
+			`DELETE FROM ${table} WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))`,
+			from,
+			itemList,
+		).rowsWritten;
+		return copied + removed;
+	}
+
+	/** Moves the alarm to the next attempt of a move, when that is before the alarm. */
+	private async scheduleTransfers(): Promise<void> {
+		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM transfers")?.at ?? null;
+		if (next === null) return;
+		const set = await this.ctx.storage.getAlarm();
+		if (set === null || set > next) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+	}
+
+	/**
+	 * From a source drive: one part of the items of a move. This drive holds them apart from its own
+	 * items until `commitImport`. A second call with the same part replaces it. The caller of the move
+	 * must be able to add items here.
+	 */
+	async stageImport(
+		call: SpaceCall,
+		input: { transferId: string; seq: number; items: StagedItem[] },
+	): Promise<{ staged: number } | Refusal> {
+		this.enter(call);
+		const refused = this.gate(call, "editor");
+		if (refused) {
+			this.sql.exec("DELETE FROM imports WHERE transfer_id = ?", input.transferId);
+			return refused;
+		}
+		if (this.one("SELECT 1 AS found FROM imports WHERE transfer_id = ? AND seq = -1", input.transferId)) {
+			return { staged: 0 };
+		}
+		// A delete of a key of these versions can wait in the outbox, from the time that the item left
+		// this drive. The source copies the bytes to that key after this call, so the delete must not run.
+		const keys = input.items.flatMap((item) =>
+			item.versions.map((version) => blobKeyFor(call.spaceId, item.id, version.id)),
+		);
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				`INSERT INTO imports (transfer_id, seq, payload, created_at) VALUES (?, ?, ?, ?)
+				ON CONFLICT (transfer_id, seq) DO UPDATE SET payload = excluded.payload`,
+				input.transferId,
+				input.seq,
+				JSON.stringify(input.items),
+				Date.now(),
+			);
+			this.sql.exec(
+				"DELETE FROM outbox WHERE kind = 'blob' AND target IN (SELECT value FROM json_each(?))",
+				JSON.stringify(keys),
+			);
+		});
+		await this.deletesDone(keys);
+		return { staged: input.items.length };
+	}
+
+	/**
+	 * From a source drive: makes the staged items of a move the items of this drive, in one transaction.
+	 * The selected items go into the folder `parentId`. Each grant stays, and its principal gets a
+	 * pointer through the outbox. A refusal deletes the staged items and changes nothing more. A second
+	 * call after a commit changes nothing.
+	 */
+	async commitImport(
+		call: SpaceCall,
+		input: { transferId: string; parentId: string | null },
+	): Promise<{ items: number } | Refusal> {
+		this.enter(call);
+		if (this.one("SELECT 1 AS found FROM imports WHERE transfer_id = ? AND seq = -1", input.transferId)) {
+			return { items: 0 };
+		}
+		const batches = this.all<{ payload: string }>(
+			"SELECT payload FROM imports WHERE transfer_id = ? AND seq >= 0 ORDER BY seq",
+			input.transferId,
+		);
+		const place = this.checkImport(call, input.parentId);
+		let refusal: Refusal | null =
+			"error" in place
+				? place
+				: batches.length === 0
+					? refuse("conflict", "The target drive does not have the items of the move. Try again.")
+					: null;
+		let count = 0;
+		if (!refusal && !("error" in place)) {
+			const now = Date.now();
+			try {
+				this.ctx.storage.transactionSync(() => {
+					const tops: string[] = [];
+					for (const batch of batches) {
+						for (const item of JSON.parse(batch.payload) as StagedItem[]) {
+							if (this.row(item.id)) {
+								refusal = refuse("conflict", `The target drive already holds the item ${item.id}.`);
+								throw new Error("import refused");
+							}
+							this.importItem(call.spaceId, item, input.parentId);
+							if (item.top) tops.push(item.id);
+							count++;
+						}
+					}
+					for (const id of tops) {
+						const height = this.one<{ n: number | null }>(
+							`${DOWN} SELECT MAX(down.depth) AS n FROM down JOIN items i ON i.id = down.id WHERE i.kind = 'folder'`,
+							id,
+						)?.n;
+						refusal = height === null || height === undefined ? null : this.tooDeep(place.depth + height);
+						if (refusal) throw new Error("import refused");
+					}
+					this.sql.exec("DELETE FROM imports WHERE transfer_id = ?", input.transferId);
+					this.sql.exec(
+						"INSERT INTO imports (transfer_id, seq, payload, created_at) VALUES (?, -1, '', ?)",
+						input.transferId,
+						now,
+					);
+					this.forget(now);
+					this.bump();
+				});
+			} catch (error) {
+				if (!refusal) throw error;
+			}
+		}
+		if (refusal) {
+			this.sql.exec("DELETE FROM imports WHERE transfer_id = ?", input.transferId);
+			return refusal;
+		}
+		await this.schedule();
+		return { items: count };
+	}
+
+	/** Stores one item of a move in this drive, in the transaction of the caller. */
+	private importItem(spaceId: string, item: StagedItem, parentId: string | null): void {
+		const seq = this.one<{ seq: number }>(
+			`INSERT INTO items (id, parent_id, kind, name, name_key, mime_type, size, head_version_id, content_revision,
+				created_at, modified_at, modified_by_json, trashed_at, trash_root)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+			item.id,
+			item.top ? parentId : item.parent_id,
+			item.kind,
+			item.name,
+			nameKey(item.name),
+			item.mime_type,
+			item.size,
+			item.head_version_id,
+			item.content_revision,
+			item.created_at,
+			item.modified_at,
+			item.modified_by_json,
+			item.trashed_at,
+			item.trash_root,
+		)?.seq as number;
+		this.sql.exec("INSERT INTO items_fts (rowid, name, content) VALUES (?, ?, ?)", seq, item.name, item.text);
+		for (const version of item.versions) {
+			this.sql.exec(
+				"INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at, created_by_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				version.id,
+				item.id,
+				blobKeyFor(spaceId, item.id, version.id),
+				version.size,
+				version.mime_type,
+				version.sha256,
+				version.created_at,
+				version.created_by_json,
+			);
+		}
+		for (const grant of item.grants) {
+			// The owner of a personal drive needs no grant.
+			if (grant.principal_id === spaceId) continue;
+			this.sql.exec(
+				"INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at) VALUES (?, ?, ?, ?, ?)",
+				item.id,
+				grant.principal_id,
+				grant.role,
+				grant.granted_by_json,
+				grant.created_at,
+			);
+			this.enqueue("share", grant.principal_id, { itemId: item.id, role: grant.role, sharedAt: grant.created_at });
+		}
+		// The item is here again. The record that it moved away is not correct now.
+		this.sql.exec("DELETE FROM moved WHERE item_id = ?", item.id);
+	}
+
 	// --- The index in D1 ------------------------------------------------------------------------
 
 	/** Records that a row of the index is behind. `gen` shows a change that came during a write. */
@@ -1883,10 +2719,54 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * From the outbox of a different drive: items moved from the drive `from` to the drive `to`. The
+	 * stars and the shared pointers of the owner of this drive get the new drive. A second call changes
+	 * nothing.
+	 */
+	applyMoved(input: { principalId: string; from: string; to: string; itemIds: string[] }): void {
+		const list = JSON.stringify(input.itemIds);
+		this.ctx.storage.transactionSync(() => {
+			let changed = this.repoint("stars", input.from, input.to, list);
+			if (input.to === input.principalId) {
+				// The items are in the own drive of this principal now. An own item has no shared pointer.
+				changed += this.sql.exec(
+					"DELETE FROM shared_with_me WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))",
+					input.from,
+					list,
+				).rowsWritten;
+			} else {
+				changed += this.repoint("shared_with_me", input.from, input.to, list);
+			}
+			if (changed > 0) this.bump();
+		});
+	}
+
+	/**
 	 * From the Worker and from the outbox of a `DocumentDO`: the content of a doc or a sheet changed.
 	 * A call with a revision that is not newer changes nothing, so a second delivery is safe.
+	 *
+	 * A change can arrive for an item that moved to a different drive, because the writer got its
+	 * access before the move. This drive sends such a change on to the drive that holds the item.
 	 */
-	applyDocumentChange(change: DocumentChange): void {
+	async applyDocumentChange(change: DocumentChange): Promise<void> {
+		this.applyChange(change);
+		// Before the commit of a move, the target has no row for the item. The `refresh` step of the move
+		// sends the state of this drive then.
+		const next =
+			this.one<{ target: string }>(
+				`SELECT r.target FROM transfer_items t JOIN transfers r ON r.id = t.transfer_id
+				WHERE t.item_id = ? AND r.state IN ('refresh', 'finish')`,
+				change.itemId,
+			) ??
+			(this.row(change.itemId)
+				? null
+				: this.one<{ target: string }>("SELECT target FROM moved WHERE item_id = ?", change.itemId));
+		if (next) {
+			await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(next.target)).applyDocumentChange(change);
+		}
+	}
+
+	private applyChange(change: DocumentChange): void {
 		const item = this.one<{ seq: number; content_revision: number }>(
 			"SELECT seq, content_revision FROM items WHERE id = ? AND kind IN ('doc', 'sheet')",
 			change.itemId,
@@ -1923,11 +2803,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 	}
 
-	/** The work of one alarm: the writes to the index in D1, then the outbox. */
+	/** The work of one alarm: the writes to the index in D1, then the moves between drives, then the outbox. */
 	private async runAlarm(): Promise<void> {
 		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n) await this.flush();
+		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM transfers")?.n) {
+			await this.runMoves(Date.now() + MOVE_BUDGET_MS);
+		}
+		this.forget(Date.now());
 		await this.drain();
 		await this.scheduleIndex();
+		await this.scheduleTransfers();
 	}
 
 	/**
@@ -1977,7 +2862,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** One effect on a different object. Each is safe to run two times. */
 	private async deliver(row: OutboxRow): Promise<void> {
 		const spaceId = this.meta("space_id") as string;
-		const payload = JSON.parse(row.payload) as { itemId?: string; role?: string; sharedAt?: number };
+		const payload = JSON.parse(row.payload) as {
+			itemId?: string;
+			role?: string;
+			sharedAt?: number;
+			to?: string;
+			itemIds?: string[];
+		};
 		switch (row.kind) {
 			case "share":
 				await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(row.target)).applyShare({
@@ -1993,8 +2884,24 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					itemId: payload.itemId as string,
 				});
 				return;
-			case "blob":
-				await this.env.BLOBS.delete(row.target);
+			case "blob": {
+				// A move between drives waits for a delete in progress before it writes the same key.
+				const done = this.env.BLOBS.delete(row.target);
+				this.deleting.set(row.target, done);
+				try {
+					await done;
+				} finally {
+					this.deleting.delete(row.target);
+				}
+				return;
+			}
+			case "moved":
+				await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(row.target)).applyMoved({
+					principalId: row.target,
+					from: spaceId,
+					to: payload.to as string,
+					itemIds: payload.itemIds as string[],
+				});
 				return;
 			case "document":
 				await this.env.DOCUMENT.get(this.env.DOCUMENT.idFromName(row.target)).destroy();

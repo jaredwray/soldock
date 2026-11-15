@@ -337,9 +337,45 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		return { items: await toItems(call, items) };
 	},
 
-	// The move between drives comes in a later change. The contract is complete.
-	async "drive.move_to_drive"() {
-		throw new OperationError("invalid", "Moves between drives are not built yet.");
+	async "drive.move_to_drive"(call, input) {
+		const source = await openSpace(call, input.space_id);
+		if (input.target_space_id === source.spaceId) {
+			throw new OperationError(
+				"invalid",
+				"target_space_id is the drive that holds the items. Use drive.move_items to move items in one drive.",
+			);
+		}
+		if (!isSharedDriveId(input.target_space_id) && input.target_space_id !== call.caller.id) {
+			throw new OperationError(
+				"invalid",
+				"target_space_id must be your own drive or a shared drive. Items cannot move into the drive of a different person.",
+			);
+		}
+		const target = await openSpace(call, input.target_space_id);
+		const parentId = input.parent_id ?? null;
+		// The target drive checks the caller here, and again when it gets the items.
+		const place = accept(await target.space.checkImport(target.ctx, parentId));
+		const moved = accept(
+			await source.space.moveOut(source.ctx, {
+				itemIds: input.item_ids,
+				targetId: target.spaceId,
+				parentId,
+				targetDepth: place.depth,
+				dryRun: input.dry_run,
+			}),
+		);
+		if (moved.status !== "dry_run") {
+			auditOk(call, source, "drive.move_to_drive", `${source.spaceId}>${target.spaceId}:${input.item_ids.join(",")}`);
+		}
+		const items =
+			moved.status === "done" ? await target.space.getItems(target.ctx, moved.topIds, { includeTrashed: false }) : [];
+		return {
+			status: moved.status,
+			items_total: moved.itemsTotal,
+			bytes: moved.bytes,
+			kept_shares: moved.keptShares,
+			items: await toItems(call, items),
+		};
 	},
 
 	async "drive.copy_item"(call, input) {
