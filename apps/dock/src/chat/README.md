@@ -109,6 +109,24 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - The other changes are safe to repeat: a join, an add, a removal, an edit with the same text, a
   delete and a read marker give the same state.
 
+### The rate limit
+
+- One member can send 20 new or changed messages to one room at once (`CHAT_LIMITS.messageBurst`).
+  After that, the member gets one message back in each second (`CHAT_LIMITS.messageRefillSeconds`),
+  up to 20.
+- `chat.post_message` and `chat.edit_message` use this allowance: the room sends a new and a changed
+  message to each of its sockets. A call above the limit gets `rate_limited` (HTTP `429`), and the
+  message of the error has the seconds to wait. The room stores nothing for that call.
+- The limit is for one member in one room. It is the same for a person and for an agent.
+- A retry with the same `idempotency_key` returns the first message and uses no allowance. An edit
+  with the same text uses none.
+- `chat.delete_message` has no limit, so an owner can remove many messages.
+- The room keeps the allowances in memory, so the limit makes no write.
+- Known limit: a room object that stops starts again with full allowances. A room stops when nobody
+  uses it for some seconds, and after a deploy. So a member can get its 20 messages back sooner
+  than one in each second.
+- The log line `chat message rate limited` has the room and the principal. It has no text.
+
 ## The read marker
 
 - Each member has `last_read_seq`. A room is `unread` for a member while `last_seq` is higher.
@@ -260,7 +278,6 @@ A socket stays open after its request. It must not outlive the access that opene
   socket of the member is a feed, the room refuses the new socket with `conflict`.
 - Known limit: the room has no limit for the events that wait for a client that does not read its
   socket.
-- Known limit: `chat.post_message` has no rate limit yet. A later change of this layer adds it.
 
 ## Clients without a socket
 
@@ -316,7 +333,7 @@ when the planned `PrincipalDO` gives each person one socket for the sidebar.
 
 ## Later layers
 
-Not built yet: a rate limit for posts, threads, reactions, mentions, rich text, files in messages
+Not built yet: threads, reactions, mentions, rich text, files in messages
 (through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
 notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has

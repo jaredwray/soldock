@@ -309,6 +309,9 @@ app uses.
   - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Write.** `chat_post_message` takes plain text. Set `idempotency_key`, so a retry does not post
   the text two times. `chat_mark_read` sets what you read.
+- **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
+  second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
+  again with the same `idempotency_key`.
 - **Change and delete.** You change only your own messages. You delete your own messages, and each
   message of a room that you own. A delete cannot be undone.
 

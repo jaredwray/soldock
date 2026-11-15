@@ -12,7 +12,9 @@ import { type CredentialCheck, type CredentialRef, checkCredentials } from "../i
 import { log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
-export type Refusal = { error: { code: "invalid" | "not_found" | "conflict" | "forbidden"; message: string } };
+export type Refusal = {
+	error: { code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited"; message: string };
+};
 
 /** The person or agent of a change, with the name at that time. */
 export interface ActorRecord {
@@ -278,6 +280,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private hasTables: boolean;
 	/** The end of the line of index writes. Each write starts after the one before it ends. */
 	private flushed: Promise<void> = Promise.resolve();
+	/**
+	 * The message allowance of each member, by principal id: the messages that the member can send now,
+	 * and the time of that count. It is in memory only. A room that sleeps has no member that sends
+	 * messages, so a new start with full allowances gives nothing away.
+	 */
+	private readonly allowances = new Map<string, { messages: number; at: number }>();
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
 
@@ -618,6 +626,31 @@ export class ChatRoomDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * Takes one message from the allowance of the caller, or refuses the call when the allowance is
+	 * empty. A member starts with `CHAT_LIMITS.messageBurst` messages, and gets one more in each
+	 * `CHAT_LIMITS.messageRefillSeconds`, up to that number. Each new and each changed message uses one:
+	 * the room sends the two to each socket.
+	 */
+	private spendAllowance(call: RoomCall, now: number): Refusal | null {
+		const refillMs = CHAT_LIMITS.messageRefillSeconds * 1000;
+		const earlier = this.allowances.get(call.actor.principal_id);
+		const messages = earlier
+			? Math.min(CHAT_LIMITS.messageBurst, earlier.messages + Math.max(0, now - earlier.at) / refillMs)
+			: CHAT_LIMITS.messageBurst;
+		if (messages < 1) {
+			this.allowances.set(call.actor.principal_id, { messages, at: now });
+			const seconds = Math.ceil(((1 - messages) * refillMs) / 1000);
+			log("info", "chat message rate limited", { roomId: call.roomId, principalId: call.actor.principal_id });
+			return refuse(
+				"rate_limited",
+				`You sent too many messages to this room. Try again in ${seconds === 1 ? "1 second" : `${seconds} seconds`}.`,
+			);
+		}
+		this.allowances.set(call.actor.principal_id, { messages: messages - 1, at: now });
+		return null;
+	}
+
 	private message(messageId: string): MessageRow | null {
 		return this.one<MessageRow>("SELECT * FROM messages WHERE id = ?", messageId);
 	}
@@ -644,6 +677,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return { message: toMessage(opened.room.room_id, row), duplicate: true };
 			}
 		}
+		// A retry with the same key returned above: it adds no message, so it uses no allowance.
+		const limited = this.spendAllowance(call, now);
+		if (limited) return limited;
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			const seq = this.one<{ seq: number }>(
@@ -691,6 +727,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
 		if (row.text === text) return { message: toMessage(opened.room.room_id, row), changed: false };
+		const limited = this.spendAllowance(call, Date.now());
+		if (limited) return limited;
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
