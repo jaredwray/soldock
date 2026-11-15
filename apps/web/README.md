@@ -647,6 +647,9 @@ MCP clients. The app has no UI-only path.
     So the room has the last text that the person saved, also when that is the first text again.
   - A refusal of an older change does not open the edit box when a newer change of the message
     waits.
+  - A call that waits for an earlier call does not start after a sign-out, or after a different
+    person signs in. The page sends each call with the session of its person at that time
+    (`callLine.ts`).
   - A deleted message shows as deleted from the confirmation on. It does not wait for the room to
     send the deleted message.
   - **Show older messages** gets the page before the first message, and the list stays at the same

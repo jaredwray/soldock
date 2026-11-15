@@ -1,5 +1,6 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
 import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { currentAccount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -8,6 +9,7 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
+import { createCallLine } from "./callLine.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import {
@@ -106,9 +108,9 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	// change of each message at each moment. `changes` is its copy for the list.
 	const latest = useRef(new Map<string, LocalChange>());
 	const [changes, setChanges] = useState<ReadonlyMap<string, LocalChange>>(() => new Map());
-	// The end of the calls for each message. The calls for one message run one at a time, in the order
-	// of the changes, so the room gets the newest change last.
-	const calls = useRef(new Map<string, Promise<void>>());
+	// The calls for one message run one at a time, in the order of the changes, so the room gets the
+	// newest change last. A call that waits does not start after a sign-out, or for a different person.
+	const afterEarlierCalls = useMemo(() => createCallLine(() => currentAccount() === ownId), [ownId]);
 	const rows = useMemo(
 		() => chatRows(messages, outbox.state, own, roomId, changes),
 		[messages, outbox.state, own, roomId, changes],
@@ -176,12 +178,6 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		latest.current.delete(id);
 		setChanges(new Map(latest.current));
 		return true;
-	}
-
-	/** Runs the call of a change after each earlier call for the same message. */
-	function afterEarlierCalls(id: string, call: () => Promise<void>) {
-		const next = (calls.current.get(id) ?? Promise.resolve()).then(call);
-		calls.current.set(id, next);
 	}
 
 	function saveEdit() {
