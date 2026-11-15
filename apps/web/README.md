@@ -668,8 +668,12 @@ MCP clients. The app has no UI-only path.
       get there, and when the person opens a different room.
     - While the list is not at the newest messages, a line below the list tells about the
       messages of the person that the list does not show: that a message was not sent, that
-      messages wait, or that the room has the new messages (`unseenSendsNote` in `model.ts`). So
-      the person does not send a message a second time.
+      the page got no answer for a message, that messages wait, or that the room has the new
+      messages (`unseenSendsNote` in `model.ts`). So the person does not send a message a second
+      time.
+    - Known limit: such a list cannot find the stored message of a send whose answers got lost.
+      The line then tells that the page got no answer. At the newest messages, the row shows
+      "Not sent", and **Try again** gets the stored message: the send keeps its key.
     - A full list at its end drops its oldest messages when a new message comes in. When the
       person reads older messages in a full list, they stay: the new message does not go in, and
       the list shows **Show newer messages**.

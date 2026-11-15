@@ -130,10 +130,18 @@ export function storedSends(
  * the list does not show: the messages that wait for the server, and `sent`, the number of messages
  * that the room stored since the list left the newest messages. Without the line, the person sees
  * nothing of a send, and can send the message a second time. Null when the list hides no such message.
+ *
+ * A send can fail without an answer of the server. The room possibly has that message, and a list
+ * that is not at the newest messages cannot find it. So the line does not tell that the message was
+ * not sent. "Try again" on the row is safe: the send keeps its key, and the room stores it one time.
  */
 export function unseenSendsNote(outbox: OutboxState, sent: number): string | null {
-	if (outbox.pending.some((pending) => pending.state === "failed")) {
+	const failed = outbox.pending.filter((pending) => pending.state === "failed");
+	if (failed.some((pending) => !pending.uncertain)) {
 		return "A message was not sent. Go to the newest messages to send it again.";
+	}
+	if (failed.length > 0) {
+		return "The page got no answer for a message. Go to the newest messages to see if the room has it.";
 	}
 	if (outbox.pending.length > 0) return "Your new messages wait. They show after the newest messages.";
 	if (sent > 0) return "The room has your new messages. They show after the newest messages.";

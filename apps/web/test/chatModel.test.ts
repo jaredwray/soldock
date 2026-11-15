@@ -310,16 +310,17 @@ describe("the messages with the changes that wait for the server", () => {
 });
 
 describe("the line about the sends that a list does not show", () => {
-	const pending = (state: "waiting" | "sending" | "failed") => ({
+	type SendState = "waiting" | "sending" | "failed" | "no answer";
+	const pending = (state: SendState) => ({
 		key: `k_${state}`,
 		text: "Hello",
 		created_at: "2026-01-01T09:10:00.000Z",
-		state,
-		error: state === "failed" ? "No connection." : null,
-		uncertain: false,
+		state: state === "no answer" ? ("failed" as const) : state,
+		error: state === "failed" || state === "no answer" ? "No connection." : null,
+		uncertain: state === "no answer",
 		afterSeq: null,
 	});
-	const outbox = (...states: ("waiting" | "sending" | "failed")[]) => ({
+	const outbox = (...states: SendState[]) => ({
 		pending: states.map(pending),
 		keys: new Map<string, string>(),
 		sendingKey: null,
@@ -335,5 +336,11 @@ describe("the line about the sends that a list does not show", () => {
 	it("tells first that a message was not sent, then that messages wait", () => {
 		expect(unseenSendsNote(outbox("sending", "waiting"), 1)).toMatch(/^Your new messages wait/);
 		expect(unseenSendsNote(outbox("waiting", "failed"), 1)).toMatch(/^A message was not sent/);
+	});
+
+	// The answers of a send got lost. The room possibly has the message, so "not sent" is not true.
+	it("does not tell that a message was not sent when the server gave no answer", () => {
+		expect(unseenSendsNote(outbox("no answer"), 0)).toMatch(/^The page got no answer for a message/);
+		expect(unseenSendsNote(outbox("no answer", "failed"), 0)).toMatch(/^A message was not sent/);
 	});
 });
