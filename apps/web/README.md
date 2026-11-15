@@ -340,9 +340,22 @@ MCP clients. The app has no UI-only path.
     In a folder of somebody else, New works only with the editor role. From each view that is not a
     folder, the new item goes to the root of the own drive.
   - An upload refuses a file larger than `DRIVE_LIMITS.fileBytes` before it reads the file. Files
-    upload one at a time, each with an idempotency key. A drop of files on a folder view uploads them
-    to that folder. During an upload, a card at the bottom right shows the name and the size of the
-    file, a bar and the count of files.
+    upload one at a time, each with an idempotency key. During an upload, a card at the bottom right
+    shows the name and the size of the file, a bar and the count of files. Files that the person adds
+    during an upload go into the same queue, and the count includes them. At the end, a toast gives
+    the number of files and, when they went to one folder, the name of that folder.
+  - Files that the person drags from the computer upload where they drop (`drive.upload_file`):
+    - A folder row takes the files when the person is its owner or an editor. The row gets a fill and
+      a line around it.
+    - Each other part of the list sends the files to the folder of New: the folder on screen, or the
+      root of the own drive from Recent, Starred, Shared with me and the search results. The list
+      then gets a dashed line. The trash and a folder that the person can only view take no files.
+    - During the drag, a hint at the bottom of the list gives the name of the folder that gets the files.
+    - A folder in the drop does not upload, and a toast tells the person to drop its files. The other
+      files of the drop upload.
+    - The listeners are on the window. A drop on a part of the page that takes no files does nothing,
+      so the browser does not open the file in place of the app.
+    - The drop is for a pointer only. New › File upload does the same with the keyboard.
   - A folder, a doc and a sheet open as links. A file opens a preview. The preview is a dialog that
     fills the window, with a blur of the page behind it: the name and **Close** at the top, the file
     in the center, and the details and **Download** at the bottom. A PNG, JPEG, GIF or WebP image
