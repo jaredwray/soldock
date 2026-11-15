@@ -79,8 +79,11 @@ const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: 
 export const whoami = defineOperation({
 	name: "account.whoami",
 	summary: "Get the principal and the scopes of this credential",
-	description:
+	description: [
 		"Returns who you are (a human or an agent), your address, and the scopes that the current credential holds.",
+		"missing_scopes lists the scopes that the credential does not hold, with the operations that need each one.",
+		"For an OAuth connection of an agent, the sponsor of the agent, an owner or an admin can add a scope. The scopes of an API key do not change: get a new key.",
+	].join(" "),
 	http: { method: "GET", path: "/api/v1/account" },
 	scopes: ["account.read"],
 	callers: ["human", "agent"],
@@ -89,6 +92,17 @@ export const whoami = defineOperation({
 	output: z.object({
 		principal: Principal,
 		scopes: z.array(z.string()),
+		/**
+		 * The scopes that a credential of your kind can hold and this credential does not hold, with the
+		 * operations that need each one. Empty when the credential holds each scope of its kind.
+		 */
+		missing_scopes: z.array(
+			z.object({
+				scope: z.string(),
+				description: z.string(),
+				operations: z.array(z.string()),
+			}),
+		),
 		/** `oauth`: an access token that an MCP client got through OAuth. */
 		credential: z.enum(["session", "api_key", "oauth"]),
 		/** How a human signs in to the web app. Null for an agent, which never signs in. */

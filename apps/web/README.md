@@ -272,10 +272,13 @@ MCP clients. The app has no UI-only path.
     Each agent is one card (`AdminCard`), which opens on a click and shows the parts of the agent
     with a line between them. The parts load their data, so the card renders them at the first open
     only. For each agent, the page sets the outbound policy (mail recipients and webhook
-    hosts), lists the apps that connected as it with OAuth (with a Revoke button, `oauth.list_grants`,
-    `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
+    hosts), lists the apps that connected as it with OAuth (`oauth.list_grants`, with an **Add
+    scopes** button, `oauth.add_grant_scopes`, and a Revoke button, `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
     button), and manages the API keys. Only the sponsor sees the form that creates a webhook for the
     agent (`mail.create_webhook` with the id of the agent).
+    **Add scopes** shows on a live connection when the session can give one more agent scope. Its
+    dialog lists those scopes. The confirm button stays off until the person selects a scope. The
+    dialog does not offer a removal: it tells the person to revoke the connection and connect again.
     For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
     The **New person or agent** dialog also shows the banner when Agent is selected.

@@ -9,7 +9,7 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` (`mail`). Later: `PrincipalDO` (settings, event feed, notifications, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -301,8 +301,24 @@ with `account.keys`.
 - `oauth.list_grants` and `oauth.revoke_grant` follow the rules of `account.list_api_keys` and
   `account.revoke_api_key`. A revoke stops the access token and the refresh tokens at once. A new
   grant of a principal deletes its grants that were revoked or expired 30 days before.
+- `oauth.add_grant_scopes` adds agent scopes to a live grant, for example a scope that a new release
+  added. The principals that can revoke the grant can call it, and `grantableScopes` applies.
+  - An archived agent gets `invalid`, as in `oauth.approve_authorization`. So a restore never gives
+    more than a person approved while the agent was active.
+  - The next request of the access token uses the new scopes, because `authenticate` reads them from
+    the grant. The client needs no refresh and no new approval. A modern client can keep its tool list
+    for the `ttlMs` of `tools/list` (5 minutes).
+  - The update writes the new list only while the grant still holds the list that the call read, the
+    grant is live, and the agent is not archived. So a parallel change, revoke or archive is never
+    lost: the call gets `conflict`.
+  - A stored scope outside the ceiling stays in the list, at the end. `authenticate` ignores it.
+  - A scope that the grant holds already changes nothing.
+  - The operation cannot remove a scope. A removal must also stop the open sockets and webhooks that
+    need the scope, and they do not check scopes again. A revoke stops all of them. So a person
+    removes a scope with a revoke and a new approval.
 
-Each approval, denial, revoke, registration and token issue writes an audit line.
+Each approval, denial, revoke, scope addition, registration and token issue writes an audit line. The
+line of a scope addition names the added scopes.
 
 Known limits:
 
@@ -410,7 +426,12 @@ A change with the session cookie must come from this origin (`Origin` header), b
 alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.
 
 An OAuth access token acts as an agent, with the scopes of its grant, never more than the agent
-ceiling. An agent cannot call the `oauth.*` operations, so it cannot approve a connection for itself.
+ceiling. An agent cannot call the `oauth.*` operations, so it cannot approve a connection for itself
+or add a scope to it.
+
+`account.whoami` returns `missing_scopes` (`missingScopes`): each scope of the ceiling that the
+credential does not hold, with the operations of the caller kind that need it. MCP lists only the
+tools that a credential can call, so without this list an agent cannot know that a tool exists.
 Delegated tokens (OAuth for MCP clients that act for a human) do not exist yet. Until then, a
 narrow API key is the way to give a client less than the full access of a person.
 

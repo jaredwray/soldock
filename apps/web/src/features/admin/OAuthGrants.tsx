@@ -1,16 +1,22 @@
-import type { OAuthGrant } from "@soldock/contracts";
+import { AGENT_SCOPES, type OAuthGrant, SCOPES, type Scope } from "@soldock/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { useToast } from "../../lib/toast.tsx";
+import { useSession } from "../auth/session.tsx";
 
-/** The MCP clients that connected with OAuth as one agent, with a revoke button for each live one. */
+/**
+ * The MCP clients that connected with OAuth as one agent. Each live one has a button to add scopes,
+ * for example a scope that a new release added, and a revoke button.
+ */
 export function OAuthGrants({ principalId, agentName }: { principalId: string; agentName: string }) {
 	const toast = useToast();
+	const { whoami } = useSession();
 	const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [revoking, setRevoking] = useState<OAuthGrant | null>(null);
+	const [adding, setAdding] = useState<OAuthGrant | null>(null);
 	const heading = `Apps connected as ${agentName}`;
 	const headingId = useId();
 
@@ -31,6 +37,9 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 	const status = (grant: OAuthGrant) =>
 		grant.revoked ? "Revoked" : Date.parse(grant.expires_at) <= now ? "Expired" : null;
 	const sorted = [...(grants ?? [])].sort((a, b) => Number(status(a) !== null) - Number(status(b) !== null));
+	/** The agent scopes that this session can give and the connection does not hold. */
+	const addable = (grant: OAuthGrant) =>
+		AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope) && !grant.scopes.includes(scope));
 
 	return (
 		<section className="panel" aria-labelledby={headingId}>
@@ -83,6 +92,16 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 											{grant.last_used_at ? shortDate(grant.last_used_at) : "Never"}
 										</td>
 										<td className="cell-actions">
+											{!ended && addable(grant).length > 0 && (
+												<button
+													type="button"
+													className="button button-small"
+													onClick={() => setAdding(grant)}
+													aria-label={`Add scopes to the connection of ${grant.client_name}`}
+												>
+													Add scopes
+												</button>
+											)}
 											{!grant.revoked && (
 												<button
 													type="button"
@@ -100,6 +119,18 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 						</tbody>
 					</table>
 				</div>
+			)}
+			{adding && (
+				<AddScopesDialog
+					grant={adding}
+					offered={addable(adding)}
+					onClose={() => setAdding(null)}
+					onAdded={async () => {
+						toast({ message: `Scopes added to the connection of “${adding.client_name}”.` });
+						await load();
+					}}
+					onFailed={load}
+				/>
 			)}
 			{revoking && (
 				<ConfirmDialog
@@ -120,5 +151,67 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 				</ConfirmDialog>
 			)}
 		</section>
+	);
+}
+
+interface AddScopesDialogProps {
+	grant: OAuthGrant;
+	/** The scopes that this session can add. */
+	offered: readonly Scope[];
+	onClose: () => void;
+	onAdded: () => Promise<void>;
+	/** Loads the list again, for example after somebody revoked the connection during the dialog. */
+	onFailed: () => Promise<void>;
+}
+
+/** Adds scopes to a live connection. A person removes a scope with a revoke and a new approval. */
+function AddScopesDialog({ grant, offered, onClose, onAdded, onFailed }: AddScopesDialogProps) {
+	const [selected, setSelected] = useState<ReadonlySet<Scope>>(() => new Set());
+
+	function toggle(scope: Scope) {
+		setSelected((current) => {
+			const next = new Set(current);
+			if (next.has(scope)) next.delete(scope);
+			else next.add(scope);
+			return next;
+		});
+	}
+
+	return (
+		<ConfirmDialog
+			title="Add scopes to this connection"
+			confirmLabel="Add scopes"
+			confirmDisabled={selected.size === 0}
+			onClose={onClose}
+			onConfirm={async () => {
+				const scopes = offered.filter((scope) => selected.has(scope));
+				try {
+					await api.call("oauth.add_grant_scopes", { grant_id: grant.id, scopes });
+				} catch (caught) {
+					void onFailed();
+					throw caught;
+				}
+				await onAdded();
+			}}
+		>
+			<p>
+				<strong>{grant.client_name}</strong> gets the tools of the new scopes without a new approval. An app can keep
+				its old tool list for up to 5 minutes. Some apps read it only when they connect: in such an app, start a new
+				conversation.
+			</p>
+			<fieldset className="scope-list">
+				<legend className="field-label">Scopes to add</legend>
+				{offered.map((scope) => (
+					<label key={scope} className="check-row">
+						<input type="checkbox" className="checkbox" checked={selected.has(scope)} onChange={() => toggle(scope)} />
+						<span>
+							<code>{scope}</code>
+							<span className="check-hint">{SCOPES[scope]}</span>
+						</span>
+					</label>
+				))}
+			</fieldset>
+			<p className="field-hint">To remove a scope, revoke the connection and connect the app again.</p>
+		</ConfirmDialog>
 	);
 }

@@ -76,6 +76,15 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   to `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`.
+- The instructions name each scope that the credential does not hold, with the number of its
+  tools (`missingScopes` of `identity`). They also tell how to get the scope:
+  - An OAuth connection: the sponsor, an owner or an admin adds the scope in Admin › Agents
+    (`oauth.add_grant_scopes`). The connection stays.
+  - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
+    sponsor, an owner or an admin creates the key.
+
+  `account_whoami` names the tools of each missing scope (`missing_scopes`). A credential that
+  holds each scope of its kind gets no such sentence.
 - A result has `structuredContent` and the same JSON as text. When the result holds content marked
   `untrusted: true`, a notice comes first and tells the model to treat that content as data.
 - An operation error (also for arguments that are not valid) is a tool result with `isError: true` and
