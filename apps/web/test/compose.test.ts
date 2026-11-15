@@ -1,6 +1,13 @@
 import { type Address, MAIL_LIMITS, type Message } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { forwardDraft, parseAddressList, replyDraft } from "../src/features/mail/compose.ts";
+import {
+	addressTokenAt,
+	completeAddress,
+	forwardDraft,
+	parseAddressList,
+	recipientOptions,
+	replyDraft,
+} from "../src/features/mail/compose.ts";
 
 const ME = "me@soldock.test";
 
@@ -47,6 +54,41 @@ describe("parseAddressList", () => {
 			addresses: ["ada@example.com"],
 			invalid: ["not an address", "Bob <bob@>"],
 		});
+	});
+});
+
+describe("address completion", () => {
+	// The caret can be in any address of the field, not only the last one.
+	it("finds the address at the caret and puts the chosen address in its place", () => {
+		const value = "ada@example.com, bo; carol@example.com";
+		const middle = addressTokenAt(value, value.indexOf("bo") + 2);
+		expect(middle).toEqual({ start: 16, end: 19, text: "bo" });
+		const done = completeAddress(value, middle, "bob@example.org");
+		expect(done.value).toBe("ada@example.com, bob@example.org; carol@example.com");
+		expect(done.value.slice(0, done.caret)).toBe("ada@example.com, bob@example.org");
+
+		// At the end of the field, a separator follows, so the next address can start.
+		expect(completeAddress("ca", addressTokenAt("ca", 2), "carol@example.com")).toEqual({
+			value: "carol@example.com, ",
+			caret: 19,
+		});
+		expect(addressTokenAt("ada@example.com,\n", 17)).toEqual({ start: 17, end: 17, text: "" });
+	});
+
+	it("leaves out the addresses in the fields, and never lets Enter replace a full address", () => {
+		const suggestions = ["bob@example.org", "Bob@example.org.uk", "ada@example.com"];
+		expect(recipientOptions("bo", suggestions, ["ADA@example.com"])).toEqual({
+			options: ["bob@example.org", "Bob@example.org.uk"],
+			active: 0,
+		});
+		// The typed address is a suggestion: it comes first, and Enter takes it.
+		expect(recipientOptions("bob@example.org.uk", suggestions, [])).toEqual({
+			options: ["Bob@example.org.uk", "bob@example.org", "ada@example.com"],
+			active: 0,
+		});
+		// A full address that no suggestion is: Enter takes nothing.
+		expect(recipientOptions("bob@example.co", suggestions, []).active).toBeNull();
+		expect(recipientOptions("bo", ["ada@example.com"], ["ada@example.com"])).toEqual({ options: [], active: null });
 	});
 });
 

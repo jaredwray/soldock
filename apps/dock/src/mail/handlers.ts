@@ -44,6 +44,7 @@ type MailOperation =
 	| "mail.get_message"
 	| "mail.modify_threads"
 	| "mail.send"
+	| "mail.suggest_recipients"
 	| "mail.get_attachment"
 	| "mail.create_webhook"
 	| "mail.list_webhooks"
@@ -52,6 +53,7 @@ type MailOperation =
 
 const DEFAULT_QUERY = "in:inbox";
 const DEFAULT_PAGE = 25;
+const DEFAULT_SUGGESTIONS = 10;
 
 /** The own mailbox of the caller. Its id is the id of the principal. */
 function ownMailbox(call: CallContext): MailboxRecord {
@@ -490,6 +492,21 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		if (sent.duplicate) await call.env.BLOBS.delete(rawKey);
 		else auditOk(call, record, "mail.send", sent.result.message_id);
 		return sent.result;
+	},
+
+	async "mail.suggest_recipients"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const recipients = await box.suggestRecipients(input.query ?? "", input.limit ?? DEFAULT_SUGGESTIONS);
+		// The addresses tell to whom the agent writes, so a read by an owner or an admin gets a line. The query
+		// can hold a private address, so the line names the mailbox only, as for mail.list_threads.
+		auditAgentRead(call, record, "mail.suggest_recipients", record.id);
+		return {
+			recipients: recipients.map((recipient) => ({
+				address: recipient.address,
+				times_sent: recipient.times_sent,
+				last_sent_at: iso(recipient.last_sent_at),
+			})),
+		};
 	},
 
 	async "mail.get_attachment"(call, input) {

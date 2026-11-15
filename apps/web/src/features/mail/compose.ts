@@ -56,6 +56,60 @@ export function parseAddressList(input: string): ParsedAddresses {
 	return { addresses, invalid };
 }
 
+/** The address at the caret of an address field: the text between the separators around the caret. */
+export interface AddressToken {
+	/** The index after the separator before the caret, or 0. */
+	start: number;
+	/** The index of the separator after the caret, or the length of the text. */
+	end: number;
+	/** The address text, without the spaces around it. */
+	text: string;
+}
+
+const SEPARATOR = /[,;\n]/;
+
+export function addressTokenAt(value: string, caret: number): AddressToken {
+	let start = Math.min(Math.max(caret, 0), value.length);
+	let end = start;
+	while (start > 0 && !SEPARATOR.test(value.charAt(start - 1))) start--;
+	while (end < value.length && !SEPARATOR.test(value.charAt(end))) end++;
+	return { start, end, text: value.slice(start, end).trim() };
+}
+
+/**
+ * Puts `address` in place of the address at the caret. At the end of the field, a comma and a space
+ * follow it, so the next address can start at once. Returns the new text and the new caret.
+ */
+export function completeAddress(value: string, token: AddressToken, address: string): { value: string; caret: number } {
+	const before = value.slice(0, token.start);
+	const after = value.slice(token.end);
+	const head = before === "" ? "" : `${before} `;
+	const tail = after === "" ? ", " : after;
+	return {
+		value: `${head}${address}${tail}`,
+		caret: head.length + address.length + (after === "" ? tail.length : 0),
+	};
+}
+
+/**
+ * The suggestions to show for the typed address, and the index of the one that Enter takes. An address
+ * that is in the fields already is not shown. An address that is the same as the typed text comes
+ * first. When the typed text is a full address that no suggestion is the same as, Enter takes none: so
+ * Enter never replaces an address that the person typed in full.
+ */
+export function recipientOptions(
+	typed: string,
+	suggestions: readonly string[],
+	present: readonly string[],
+): { options: string[]; active: number | null } {
+	const options = suggestions.filter((address) => !present.some((other) => sameAddress(other, address)));
+	const same = options.findIndex((address) => sameAddress(address, typed));
+	if (same > 0) options.unshift(...options.splice(same, 1));
+	if (options.length === 0) return { options, active: null };
+	if (same >= 0) return { options, active: 0 };
+	return { options, active: EmailAddress.safeParse(typed).success ? null : 0 };
+}
+
 function addressList(addresses: readonly Address[]): string {
 	return addresses.map((address) => address.address).join(", ");
 }

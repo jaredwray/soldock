@@ -134,6 +134,20 @@ MCP clients. The app has no UI-only path.
     sizes its own label, so the text field starts right after the label.
   - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
     Discard and Send are at the right. An attached file is a file card with a Remove button.
+  - Each address field (To, Cc and Bcc) is an ARIA combobox ([`RecipientInput.tsx`](src/features/mail/RecipientInput.tsx)).
+    While the person types an address, a list under the field shows the addresses that the mailbox
+    sent mail to (`mail.suggest_recipients`, 8 at most). The part that matches the typed text is
+    bold. The address can be in any position of the field, not only the last one.
+  - The arrow keys select an address in the list. Enter takes it and does not send. Tab takes it,
+    and the focus moves on. A click takes it. Escape closes the list and keeps the composer open.
+  - After a completion at the end of the field, a comma and a space follow the address, so the next
+    address can start at once.
+  - The first address of the list is selected. When the typed text is a full address that is not in
+    the list, no address is selected: so Enter never replaces an address that the person typed in
+    full. An address that is in To, Cc or Bcc already is not in the list.
+  - The field asks the server 120 ms after the last key, and keeps each answer for the life of the
+    composer. While a new answer loads, the list keeps the addresses of the last answer that still
+    match. A failed call shows no list, and the field works as before.
   - The message body is a rich-text editor on [ProseMirror](https://prosemirror.net). The editor
     and its formatting toolbar are in one rounded box. The
     formatting toolbar at the bottom of the box has bold, italic, underline, strikethrough, link, numbered

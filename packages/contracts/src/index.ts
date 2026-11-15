@@ -45,6 +45,7 @@ export {
 	MailboxKind,
 	MailSettings,
 	Message,
+	RecipientSuggestion,
 	SYSTEM_LABELS,
 	type SystemLabel,
 	Thread,

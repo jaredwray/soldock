@@ -9,9 +9,9 @@
 | | |
 | --- | --- |
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
-| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys); raw MIME in R2 `blobs`; the D1 table `webhooks` in the directory database. |
+| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients); raw MIME in R2 `blobs`; the D1 table `webhooks` in the directory database. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.update_webhook`, `mail.delete_webhook` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.update_webhook`, `mail.delete_webhook` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -22,7 +22,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `inbound.ts` | The `email()` handler and the `soldock-mail-inbound` queue consumer |
 | `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
-| `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, the outbox alarm and the watch sockets |
+| `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
 | `webhooks.ts` | The webhook operations, the D1 rows of the webhooks, and the access check before each POST |
@@ -90,8 +90,8 @@ who can.
 - `mail.list_mailboxes` gives an owner or an admin the mailbox of each agent after the team
   mailboxes, with the kind `agent`, by name.
 - With the id of an agent as `mailbox_id`, the read operations work: `mail.get_profile`,
-  `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
-  `mail.get_attachment`.
+  `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`,
+  `mail.get_attachment` and `mail.suggest_recipients`.
 - The operations that change the mailbox or send from it get `forbidden`: `mail.create_label`,
   `mail.delete_label`, `mail.modify_threads` (also with `dry_run`) and `mail.send`. A change would
   change what the agent sees, for example the read state. A send would come from the address of the agent.
@@ -101,10 +101,10 @@ who can.
   different agent.
 - An archived agent cannot act, but owners and admins can still read its mailbox. A deleted agent is
   not in the list, and its id gets `not_found`: its mailbox stays in storage, and nobody opens it.
-- Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message` and
-  `mail.get_attachment` in the mailbox of an agent writes an audit line with the field `mailbox`.
-  The line of `mail.list_threads` names the mailbox, not the query, because a query can hold private
-  words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
+- Each successful `mail.list_threads`, `mail.get_thread`, `mail.get_message`,
+  `mail.get_attachment` and `mail.suggest_recipients` in the mailbox of an agent writes an audit line
+  with the field `mailbox`. The lines of `mail.list_threads` and `mail.suggest_recipients` name the
+  mailbox, not the query, because a query can hold private words. `mail.get_profile` and `mail.list_labels` write no line: the web app polls them, and they
   return no mail content.
 - The access check reads the directory on each call, so a role change applies to the next call.
 
@@ -215,6 +215,31 @@ of the message that it answers.
   `mail.get_message` returns that message with its body.
 - Each message is sanitized alone. When the sanitizer fails on one message, that message gets
   `body.html: null` and a text body from its HTML. The other messages of the thread do not change.
+
+## Recipient suggestions
+
+`mail.suggest_recipients` returns the addresses that the mailbox sent mail to. The composer of the
+web app uses it to complete an address while the person types it.
+
+- Each sent message adds its To, Cc and Bcc addresses to the table `recipients`, in the transaction
+  that stores the message. One message counts once for each address, also when the address is in To
+  and in Cc. A repeated send with the same idempotency key adds nothing.
+- Mail that arrives adds no address. So a stranger or spam cannot add a suggestion.
+- The key is the address in lowercase. The stored form is the form of the last send. Its domain is
+  lowercase, and its local part keeps its case.
+- The query matches the address without regard to case. The result has three groups, in this order:
+  1. An address that starts with the query.
+  2. An address with a part that starts with the query: after `@`, `.`, `_`, `-` or `+`. A query that
+     starts with one of these characters is also in this group.
+  3. An address that has the query in a different position.
+- In each group, the address of the most recent send comes first. Without a query, the result has
+  the most recent addresses. The default limit is 10, and the maximum is 25.
+- A team mailbox has one table, so its members share its addresses. The own mailbox of a member has
+  its own table.
+- An agent can send to an address because of a prompt injection. In a team mailbox, that address
+  then is a suggestion for the people. The Sent view shows the same send, so a suggestion shows
+  nothing new.
+- The migration that adds the table fills it from the sent mail that exists, with the same rules.
 
 ## Outbound
 
@@ -444,6 +469,7 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
+| Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages and the time of the last one. Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
@@ -481,6 +507,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 ## Not built yet
 
 - Drafts, undo send and scheduled send
+- For recipient suggestions: the names of the people (from the directory, or from mail that they
+  sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
+  suggestion
 - Filters, vacation responder and forwarding
 - Aliases, groups, delegation and send-as
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread

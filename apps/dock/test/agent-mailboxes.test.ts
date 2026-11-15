@@ -101,7 +101,8 @@ describe("the mailbox of an agent", () => {
 			expect(tool.structuredContent).toEqual({ threads, next_cursor: null });
 		}
 
-		// Each read of mail content writes one line. The profile and the labels, which the web app polls, write none.
+		// Each read of mail content, and of the addresses that the agent sent mail to, writes one line. The profile
+		// and the labels, which the web app polls, write none.
 		const [message] = (await admin.call("mail.get_thread", { mailbox_id: bot.id, thread_id: threadId })).messages;
 		const messageId = message?.id as string;
 		const readAll = (reader: Actor, inBox: { mailbox_id?: string }) => async () => {
@@ -111,6 +112,7 @@ describe("the mailbox of an agent", () => {
 			await reader.call("mail.get_thread", { ...inBox, thread_id: threadId });
 			await reader.call("mail.get_message", { ...inBox, message_id: messageId });
 			await reader.call("mail.get_attachment", { ...inBox, message_id: messageId, index: 0 });
+			await reader.call("mail.suggest_recipients", { ...inBox, query: "cy" });
 		};
 		const lines = await auditLines(readAll(admin, { mailbox_id: bot.id }));
 		expect(lines.map(({ op, actor, mailbox, target }) => ({ op, actor, mailbox, target }))).toEqual([
@@ -118,6 +120,7 @@ describe("the mailbox of an agent", () => {
 			{ op: "mail.get_thread", actor: admin.id, mailbox: bot.id, target: threadId },
 			{ op: "mail.get_message", actor: admin.id, mailbox: bot.id, target: messageId },
 			{ op: "mail.get_attachment", actor: admin.id, mailbox: bot.id, target: `${messageId}/0` },
+			{ op: "mail.suggest_recipients", actor: admin.id, mailbox: bot.id, target: bot.id },
 		]);
 		// The agent reads its own mail without an audit line.
 		expect(await auditLines(readAll(bot, {}))).toEqual([]);
