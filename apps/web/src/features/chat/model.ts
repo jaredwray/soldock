@@ -61,6 +61,10 @@ export interface ChatRow {
  *
  * The send whose call runs comes first. A person can write the text of a failed send again. The
  * message that arrives is then the message of the new send, and the failed send must stay.
+ *
+ * Two failed sends with the same text get no stored message: the list cannot know which of them the
+ * server has. The two stay "Not sent". "Try again" then gives the correct answer for each one: the
+ * stored message for the send that the server has, and a new message for the other one.
  */
 function storedOf(
 	messages: readonly ChatMessage[],
@@ -68,9 +72,10 @@ function storedOf(
 	own: ChatMessage["author"],
 ): Map<string, PendingMessage> {
 	const stored = new Map<string, PendingMessage>();
+	const failed = outbox.pending.filter((pending) => pending.state === "failed" && pending.uncertain);
 	const sends = [
 		...outbox.pending.filter((pending) => pending.state === "sending"),
-		...outbox.pending.filter((pending) => pending.state === "failed" && pending.uncertain),
+		...failed.filter((pending) => failed.every((other) => other === pending || other.text !== pending.text)),
 	];
 	for (const pending of sends) {
 		const afterSeq = pending.afterSeq;

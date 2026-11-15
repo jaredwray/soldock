@@ -250,10 +250,23 @@ describe("a failed send whose message the list has", () => {
 		]);
 	});
 
-	it("gives one stored message to one send, when two failed sends have the same text", () => {
-		const messages = [message(1), message(2, { text: "Ping" })];
-		expect(storedSends(messages, outbox([failed("k1", "Ping", 1), failed("k2", "Ping", 1)]), ADA)).toEqual([
+	// The list cannot know which of two sends with the same text the server has. A pair with the wrong one removes
+	// a message that the room does not have.
+	it("is no message for two failed sends with the same text, and one message for each of two different texts", () => {
+		const messages = [message(1), message(2, { text: "Ping" }), message(3, { text: "Pong" })];
+		const same = outbox([failed("k1", "Ping", 1), failed("k2", "Ping", 1)]);
+		expect(storedSends(messages, same, ADA)).toEqual([]);
+		// The stored message shows, and the two sends stay "Not sent".
+		expect(chatRows(messages, same, ADA, "rm_01JD0000000000000000000001").map((row) => row.key)).toEqual([
+			"cmsg_1",
+			"cmsg_2",
+			"cmsg_3",
+			"k1",
+			"k2",
+		]);
+		expect(storedSends(messages, outbox([failed("k1", "Ping", 1), failed("k2", "Pong", 1)]), ADA)).toEqual([
 			{ key: "k1", id: "cmsg_2" },
+			{ key: "k2", id: "cmsg_3" },
 		]);
 	});
 });

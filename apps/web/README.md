@@ -599,6 +599,10 @@ MCP clients. The app has no UI-only path.
     message, the send did not fail: the "Not sent" row becomes the row of the stored message. This is
     for a send with an attempt whose answer did not arrive. A send that the server refused each
     time stays "Not sent".
+  - The send whose call runs gets a stored message before a failed send, so a failed send stays
+    when the person writes its text again. Two failed sends with the same text get no stored
+    message: the page cannot know which of them the server has. **Try again** gives the correct
+    answer for each one.
   - The messages that wait stay while the page stays, also when the person opens a different room.
     They go away on a reload of the page. A later change keeps them.
   - The messages that wait are for one person. After a sign-out, or a sign-in as a different
