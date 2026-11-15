@@ -5,6 +5,7 @@ import {
 	breadcrumbs,
 	bulkActions,
 	createTarget,
+	dropZone,
 	idBatches,
 	itemActions,
 	linkPath,
@@ -97,6 +98,42 @@ describe("createTarget", () => {
 		expect(createTarget(foreign, "editor", ME)).toEqual({ space_id: BOB, parent_id: FOLDER });
 		expect(createTarget(foreign, "viewer", ME)).toBeNull();
 		expect(createTarget(foreign, null, ME)).toBeNull();
+	});
+});
+
+describe("dropZone", () => {
+	const myDrive: DriveView = { kind: "folder", spaceId: null, folderId: null };
+	const folder = (change: Partial<DriveItem>) => item({ id: FOLDER, kind: "folder", name: "Plans", ...change });
+
+	it("uploads into a folder row of the owner or of an editor", () => {
+		expect(dropZone(myDrive, {}, "My Drive", folder({}), ME)).toEqual({
+			target: { parent_id: FOLDER },
+			name: "Plans",
+			rowId: FOLDER,
+		});
+		expect(dropZone({ kind: "shared" }, {}, "Shared with me", folder({ space_id: BOB, role: "editor" }), ME)).toEqual({
+			target: { space_id: BOB, parent_id: FOLDER },
+			name: "Plans",
+			rowId: FOLDER,
+		});
+	});
+
+	// The server refuses an upload to a folder that the person can only view.
+	it("sends the files of each other row to the folder of New", () => {
+		const view: DriveView = { kind: "folder", spaceId: null, folderId: ITEM };
+		for (const row of [folder({ space_id: BOB, role: "viewer" }), folder({ trashed: true }), item(), null]) {
+			expect(dropZone(view, { parent_id: ITEM }, "Site", row, ME)).toEqual({
+				target: { parent_id: ITEM },
+				name: "Site",
+				rowId: null,
+			});
+		}
+		expect(dropZone({ kind: "recent" }, {}, "Recent", null, ME)).toEqual({ target: {}, name: "My Drive", rowId: null });
+	});
+
+	it("takes no files in the trash, or in a folder of somebody else without the editor role", () => {
+		expect(dropZone({ kind: "trash" }, {}, "Trash", null, ME)).toBeNull();
+		expect(dropZone({ kind: "folder", spaceId: BOB, folderId: FOLDER }, null, "Plans", item(), ME)).toBeNull();
 	});
 });
 

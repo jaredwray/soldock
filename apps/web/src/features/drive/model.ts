@@ -66,6 +66,34 @@ export function createTarget(
 	return { parent_id: view.folderId };
 }
 
+/** The place that gets the files of a drop. */
+export interface DropZone {
+	target: CreateTarget;
+	/** The name of the folder that gets the files, for the drop hint and the toast. */
+	name: string;
+	/** The folder row that gets the files. Null when the view gets them. */
+	rowId: string | null;
+}
+
+/**
+ * Where a drop of files goes. A folder row gets the files when the person can add items to it: the
+ * owner or an editor. Each other part of the list sends them to the target of New, but the trash
+ * takes no files. `row` is the item under the pointer. Null when no part of the page takes files.
+ */
+export function dropZone(
+	view: DriveView,
+	viewTarget: CreateTarget | null,
+	viewName: string,
+	row: DriveItem | null,
+	ownSpaceId: string,
+): DropZone | null {
+	if (row && row.kind === "folder" && !row.trashed && (row.role === "owner" || row.role === "editor")) {
+		return { target: { ...spaceInput(row.space_id, ownSpaceId), parent_id: row.id }, name: row.name, rowId: row.id };
+	}
+	if (view.kind === "trash" || viewTarget === null) return null;
+	return { target: viewTarget, name: view.kind === "folder" ? viewName : "My Drive", rowId: null };
+}
+
 export function viewTitle(view: DriveView, folderName: string | null): string {
 	switch (view.kind) {
 		case "folder":
@@ -186,6 +214,14 @@ export function uploadRefusal(file: { name: string; size: number }): string | nu
 		return `“${file.name}” is larger than ${DRIVE_LIMITS.fileBytes / (1024 * 1024)} MB, the limit for one file.`;
 	}
 	return null;
+}
+
+/** The message for the folders of a drop. Drive uploads only files. */
+export function folderRefusal(names: readonly string[]): string {
+	const first = names[0];
+	return names.length === 1 && first
+		? `“${first}” is a folder, and Drive uploads only files. Drop the files that are in it.`
+		: `${names.length} folders did not upload. Drive uploads only files. Drop the files that are in them.`;
 }
 
 export type ItemAction =
