@@ -2667,6 +2667,80 @@ fieldset {
 	outline-offset: -2px;
 }
 
+/* The toolbar of the Docs and the Sheets editors: a row below the document header. Its buttons are
+   quiet: an icon with no box. */
+.editor-toolbar {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 2px;
+	min-height: 44px;
+	padding: 5px 16px;
+	border-bottom: 1px solid var(--border);
+	background: var(--background);
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+
+.editor-toolbar .format-button {
+	border-radius: 7px;
+}
+
+.editor-toolbar .format-button[aria-disabled="true"] {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.editor-toolbar .format-button[aria-disabled="true"]:hover {
+	background: transparent;
+	color: var(--muted-foreground);
+}
+
+/* A line before each group of buttons. */
+.editor-toolbar .format-group-start:not(:first-child) {
+	position: relative;
+	margin-left: 13px;
+	overflow: visible;
+}
+
+.editor-toolbar .format-group-start:not(:first-child)::before {
+	position: absolute;
+	top: 7px;
+	bottom: 7px;
+	left: -7px;
+	width: 1px;
+	background: var(--border);
+	content: "";
+}
+
+@media (max-width: 900px) {
+	.editor-toolbar {
+		padding: 5px 8px;
+	}
+}
+
+/* Touch: the toolbar is one row that scrolls, with 44px buttons. */
+@media (max-width: 900px), (pointer: coarse) {
+	.editor-toolbar {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: none;
+	}
+
+	.editor-toolbar .format-button {
+		flex: none;
+		width: 44px;
+		height: 44px;
+	}
+}
+
+@media print {
+	.editor-toolbar {
+		display: none;
+	}
+}
+
 .composer-loading {
 	display: flex;
 	align-items: center;

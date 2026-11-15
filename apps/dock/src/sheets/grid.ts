@@ -1,26 +1,48 @@
-import { type Cell, SHEET_LIMITS, type Tab } from "@soldock/contracts";
-import { type CellPosition, ErrorValue, parseCellName, type TabInputs, type Value } from "./formula.ts";
+import {
+	type Cell,
+	type CellFormat,
+	type FormatPatch,
+	formatCellNumber,
+	patchFormat,
+	SHEET_LIMITS,
+	type Tab,
+} from "@soldock/contracts";
+import { type CellPosition, cellName, ErrorValue, parseCellName, type TabInputs, type Value } from "./formula.ts";
 
 // The stored form of a sheet and its output form. A sheet has one or more tabs. Each tab stores the
-// input of each cell that is not empty, by cell name. The results are never stored: each read
-// calculates them.
+// input of each cell that is not empty, and the format of each cell that has one, by cell name. The
+// results are never stored: each read calculates them.
+
+/** A tab in memory: the inputs that the engine calculates, and the format of each cell that has one. */
+export interface SheetTab extends TabInputs {
+	formats: ReadonlyMap<string, CellFormat>;
+}
 
 /** A sheet in memory: its tabs in order, and the number of the next new tab id. */
 export interface Workbook {
-	tabs: TabInputs[];
+	tabs: SheetTab[];
 	nextTab: number;
 }
 
-/** The stored JSON. The first layer stored `{ cells }` with one grid: that is one tab, Sheet1. */
+/**
+ * The stored JSON. The first layer stored `{ cells }` with one grid: that is one tab, Sheet1. A tab
+ * without a format has no `formats`, so a sheet that nobody formatted keeps the same stored form.
+ */
 type StoredSheet =
-	| { tabs: { id: string; name: string; cells: Record<string, string> }[]; next_tab: number }
+	| {
+			tabs: { id: string; name: string; cells: Record<string, string>; formats?: Record<string, CellFormat> }[];
+			next_tab: number;
+	  }
 	| { cells: Record<string, string> };
 
 /** The name of the first tab of a new sheet. */
 export const FIRST_TAB_NAME = "Sheet1";
 
 function firstTab(cells: Record<string, string>): Workbook {
-	return { tabs: [{ id: "tab_1", name: FIRST_TAB_NAME, inputs: new Map(Object.entries(cells)) }], nextTab: 2 };
+	return {
+		tabs: [{ id: "tab_1", name: FIRST_TAB_NAME, inputs: new Map(Object.entries(cells)), formats: new Map() }],
+		nextTab: 2,
+	};
 }
 
 /** The sheet from the stored JSON. A sheet that nobody wrote has one empty tab. */
@@ -29,14 +51,24 @@ export function readWorkbook(content: string | null): Workbook {
 	const stored = JSON.parse(content) as StoredSheet;
 	if (!("tabs" in stored)) return firstTab(stored.cells);
 	return {
-		tabs: stored.tabs.map((tab) => ({ id: tab.id, name: tab.name, inputs: new Map(Object.entries(tab.cells)) })),
+		tabs: stored.tabs.map((tab) => ({
+			id: tab.id,
+			name: tab.name,
+			inputs: new Map(Object.entries(tab.cells)),
+			formats: new Map(Object.entries(tab.formats ?? {})),
+		})),
 		nextTab: stored.next_tab,
 	};
 }
 
 export function storeWorkbook(book: Workbook): string {
 	const stored: StoredSheet = {
-		tabs: book.tabs.map((tab) => ({ id: tab.id, name: tab.name, cells: Object.fromEntries(tab.inputs) })),
+		tabs: book.tabs.map((tab) => ({
+			id: tab.id,
+			name: tab.name,
+			cells: Object.fromEntries(tab.inputs),
+			...(tab.formats.size > 0 ? { formats: Object.fromEntries(tab.formats) } : {}),
+		})),
 		next_tab: book.nextTab,
 	};
 	return JSON.stringify(stored);
@@ -54,6 +86,42 @@ export function positionOf(name: string): CellPosition {
 	return position;
 }
 
+/** The first and the last cell of a range such as B2 or A1:D20. Throws the message for a cell outside the grid. */
+export function parseRange(range: string): { from: CellPosition; to: CellPosition } {
+	const [first, last = first] = range.split(":") as [string, string?];
+	const a = positionOf(first);
+	const b = positionOf(last);
+	return {
+		from: { col: Math.min(a.col, b.col), row: Math.min(a.row, b.row) },
+		to: { col: Math.max(a.col, b.col), row: Math.max(a.row, b.row) },
+	};
+}
+
+/** The formats after the changes, in order. Throws the message for a cell outside the grid, or for too many cells. */
+export function applyFormats(
+	formats: ReadonlyMap<string, CellFormat>,
+	changes: readonly { range: string; format: FormatPatch }[],
+): Map<string, CellFormat> {
+	const next = new Map(formats);
+	let count = 0;
+	for (const change of changes) {
+		const { from, to } = parseRange(change.range);
+		count += (to.row - from.row + 1) * (to.col - from.col + 1);
+		if (count > SHEET_LIMITS.formatCellsPerCall) {
+			throw new RangeError(`One call can change the format of at most ${SHEET_LIMITS.formatCellsPerCall} cells.`);
+		}
+		for (let row = from.row; row <= to.row; row++) {
+			for (let col = from.col; col <= to.col; col++) {
+				const name = cellName({ col, row });
+				const format = patchFormat(next.get(name), change.format);
+				if (format) next.set(name, format);
+				else next.delete(name);
+			}
+		}
+	}
+	return next;
+}
+
 /** The inputs after the changes. An empty input clears its cell. */
 export function applyChanges(
 	inputs: ReadonlyMap<string, string>,
@@ -68,7 +136,15 @@ export function applyChanges(
 	return next;
 }
 
-export function toCell(name: string, input: string | undefined, value: Value | undefined): Cell {
+/** A cell for the output, with its format, and with the text of its number when the format changes it. */
+export function toCell(name: string, input: string | undefined, value: Value | undefined, format?: CellFormat): Cell {
+	const cell = plainCell(name, input, value);
+	if (!format) return cell;
+	const text = typeof cell.value === "number" ? formatCellNumber(cell.value, format) : null;
+	return text === null ? { ...cell, format } : { ...cell, format, text };
+}
+
+function plainCell(name: string, input: string | undefined, value: Value | undefined): Cell {
 	if (input === undefined) return { cell: name, input: "", value: null, type: "empty" };
 	if (value instanceof ErrorValue) return { cell: name, input, value: value.code, type: "error" };
 	if (value === null || value === undefined) return { cell: name, input, value: null, type: "empty" };
@@ -89,31 +165,49 @@ function byPosition(a: string, b: string): number {
 	return first.row - second.row || first.col - second.col;
 }
 
-/** The cells of a sheet for the output, row by row. `range` keeps only the cells in it. */
+/**
+ * The cells of a tab for the output, row by row: each cell with an input or a format. `range` keeps
+ * only the cells in it.
+ */
 export function toCells(
-	inputs: ReadonlyMap<string, string>,
+	tab: SheetTab,
 	values: ReadonlyMap<string, Value>,
 	range?: { from: CellPosition; to: CellPosition },
 ): Cell[] {
-	const names = [...inputs.keys()].filter((name) => {
+	const names = [...new Set([...tab.inputs.keys(), ...tab.formats.keys()])].filter((name) => {
 		if (!range) return true;
 		const { col, row } = positionOf(name);
 		return col >= range.from.col && col <= range.to.col && row >= range.from.row && row <= range.to.row;
 	});
-	return names.sort(byPosition).map((name) => toCell(name, inputs.get(name), values.get(name)));
+	return names
+		.sort(byPosition)
+		.map((name) => toCell(name, tab.inputs.get(name), values.get(name), tab.formats.get(name)));
 }
 
-/** The cells whose input or result is different after a change, also the cells that the change cleared. */
+/**
+ * The cells whose input, result or format is different after a change, also the cells that the
+ * change cleared.
+ */
 export function changedCells(
-	before: { inputs: ReadonlyMap<string, string>; values: ReadonlyMap<string, Value> },
-	after: { inputs: ReadonlyMap<string, string>; values: ReadonlyMap<string, Value> },
+	before: { tab: SheetTab; values: ReadonlyMap<string, Value> },
+	after: { tab: SheetTab; values: ReadonlyMap<string, Value> },
 ): Cell[] {
-	const names = new Set([...before.inputs.keys(), ...after.inputs.keys()]);
+	const names = new Set([
+		...before.tab.inputs.keys(),
+		...after.tab.inputs.keys(),
+		...before.tab.formats.keys(),
+		...after.tab.formats.keys(),
+	]);
 	const cells: Cell[] = [];
 	for (const name of [...names].sort(byPosition)) {
-		const old = toCell(name, before.inputs.get(name), before.values.get(name));
-		const next = toCell(name, after.inputs.get(name), after.values.get(name));
-		if (old.input !== next.input || old.value !== next.value || old.type !== next.type) cells.push(next);
+		const old = toCell(name, before.tab.inputs.get(name), before.values.get(name), before.tab.formats.get(name));
+		const next = toCell(name, after.tab.inputs.get(name), after.values.get(name), after.tab.formats.get(name));
+		const same =
+			old.input === next.input &&
+			old.value === next.value &&
+			old.type === next.type &&
+			JSON.stringify(old.format) === JSON.stringify(next.format);
+		if (!same) cells.push(next);
 	}
 	return cells;
 }

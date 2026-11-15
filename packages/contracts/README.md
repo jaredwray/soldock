@@ -15,7 +15,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the webhook operations, `Webhook`, `WEBHOOK_LIMITS` and `WEBHOOK_EVENT_TYPE` |
 | `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
-| `src/sheets.ts` | The Sheets operations, the cell and tab schemas, the error values and `SHEET_LIMITS` |
+| `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
 | `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |

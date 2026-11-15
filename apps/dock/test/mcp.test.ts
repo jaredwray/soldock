@@ -52,7 +52,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(90);
+		expect(all).toHaveLength(91);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
@@ -120,6 +120,7 @@ describe("the MCP endpoint", () => {
 			"sheets_create",
 			"sheets_delete_tab",
 			"sheets_duplicate_tab",
+			"sheets_format_cells",
 			"sheets_get",
 			"sheets_move_tab",
 			"sheets_rename_tab",

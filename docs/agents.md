@@ -255,6 +255,12 @@ operations that the web app uses.
   `sheets_delete_tab` with `dry_run: true` returns the count of cells and of formulas that get
   `#REF!`, without a change. Pass `name` to `sheets_add_tab` and `sheets_duplicate_tab` when you
   can send a call again: the second call then gets `invalid`.
+- **Formats.** `sheets_format_cells` changes the format of ranges of one tab, for example
+  `{"range": "B2:E9", "format": {"number_format": "currency", "decimals": 0}}` or
+  `{"range": "A1:E1", "format": {"bold": true, "fill": "#fef9c3"}}`. A field that you do not give
+  stays. `null`, or `false` for `bold` and `italic`, removes it. `sheets_get` returns `format` for
+  each cell that has one, and `text` with the number as people see it, for example `$1,234.50`.
+  `value` stays the plain number.
 - **Changes at the same time.** `docs_get` and `sheets_get` return a `revision`. Pass it as
   `base_revision` to `docs_update` or `sheets_update_cells`. When somebody changed the content after
   your read, the call fails with `conflict` and changes nothing: read again.

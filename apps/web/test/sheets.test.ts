@@ -1,6 +1,7 @@
 import { type Cell, SHEET_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import { cellName, columnName, parseCell } from "../src/features/sheets/a1.ts";
+import { autoSum } from "../src/features/sheets/autosum.ts";
 import {
 	applyCells,
 	clearChanges,
@@ -11,6 +12,13 @@ import {
 	viewCells,
 } from "../src/features/sheets/cells.ts";
 import { formatTsv, parseTsv } from "../src/features/sheets/clipboard.ts";
+import {
+	applyFormatChanges,
+	changesFormats,
+	decimalsShown,
+	restoreFormats,
+	textColorOn,
+} from "../src/features/sheets/formats.ts";
 import { gridSize, moveSelection, rangeOf, selectCell } from "../src/features/sheets/selection.ts";
 
 function cell(name: string, input: string, value: Cell["value"], type: Cell["type"]): Cell {
@@ -131,7 +139,15 @@ describe("the cells of the grid", () => {
 
 	it("puts the changed cells of an answer into the sheet, and removes a cleared cell", () => {
 		const server = toCellMap([cell("A1", "1", 1, "number"), cell("B1", "=A1", 1, "number")]);
-		applyCells(server, [cell("A1", "", null, "empty"), cell("B1", "=A1", 0, "number"), cell("C1", "x", "x", "text")]);
+		applyCells(server, [
+			cell("A1", "", null, "empty"),
+			cell("B1", "=A1", 0, "number"),
+			cell("C1", "x", "x", "text"),
+			// A cleared cell with a format keeps the format for its next input.
+			{ ...cell("D1", "", null, "empty"), format: { bold: true } },
+		]);
+		expect(server.get("D1")?.format).toEqual({ bold: true });
+		server.delete("D1");
 		expect([...server.keys()].sort()).toEqual(["B1", "C1"]);
 		expect(server.get("B1")?.value).toBe(0);
 		expect(usedSize(server.keys())).toEqual({ rows: 1, columns: 3 });
@@ -173,5 +189,134 @@ describe("the cells of the grid", () => {
 			{ cell: "B2", input: "" },
 			{ cell: "B900", input: "" },
 		]);
+	});
+});
+
+describe("the functions of the toolbar", () => {
+	// A fee table: a header in B1, numbers in B2:B5, a text in C3, and numbers in A7:C7.
+	const view = viewCells(
+		toCellMap([
+			cell("B1", "Fee", "Fee", "text"),
+			cell("B2", "10", 10, "number"),
+			cell("B3", "20", 20, "number"),
+			cell("B4", "=B2+B3", 30, "number"),
+			cell("B5", "40", 40, "number"),
+			cell("C3", "note", "note", "text"),
+			cell("A7", "1", 1, "number"),
+			cell("B7", "2", 2, "number"),
+			cell("C7", "3", 3, "number"),
+		]),
+	);
+	const cellAt = (name: string) => view.get(name);
+	const one = (name: string) => {
+		const pos = parseCell(name);
+		if (!pos) throw new Error(name);
+		return { top: pos.row, left: pos.col, bottom: pos.row, right: pos.col };
+	};
+
+	it("starts an edit of one cell with the numbers above it, or else to its left, and selects the range", () => {
+		const above = autoSum("SUM", one("B6"), cellAt, SHEET_LIMITS);
+		// The header in B1 is text, so the range stops at B2. A formula with a number result counts.
+		expect(above).toEqual({ kind: "edit", input: "=SUM(B2:B5)", select: [5, 10] });
+		expect(autoSum("MAX", one("D7"), cellAt, SHEET_LIMITS)).toEqual({
+			kind: "edit",
+			input: "=MAX(A7:C7)",
+			select: [5, 10],
+		});
+		// No number next to the cell: the cursor goes between the parentheses.
+		expect(autoSum("AVERAGE", one("E1"), cellAt, SHEET_LIMITS)).toEqual({
+			kind: "edit",
+			input: "=AVERAGE()",
+			select: [9, 9],
+		});
+		expect(autoSum("COUNT", one("C4"), cellAt, SHEET_LIMITS)).toMatchObject({ input: "=COUNT(B4)" });
+	});
+
+	it("writes one formula below each column of a range, or one to the right of a row", () => {
+		expect(autoSum("SUM", { top: 6, left: 0, bottom: 7, right: 2 }, cellAt, SHEET_LIMITS)).toEqual({
+			kind: "write",
+			changes: [
+				{ cell: "A9", input: "=SUM(A7:A8)" },
+				{ cell: "B9", input: "=SUM(B7:B8)" },
+				{ cell: "C9", input: "=SUM(C7:C8)" },
+			],
+			range: { top: 8, left: 0, bottom: 8, right: 2 },
+		});
+		expect(autoSum("MIN", { top: 6, left: 0, bottom: 6, right: 2 }, cellAt, SHEET_LIMITS)).toEqual({
+			kind: "write",
+			changes: [{ cell: "D7", input: "=MIN(A7:C7)" }],
+			range: { top: 6, left: 3, bottom: 6, right: 3 },
+		});
+	});
+
+	it("never replaces an input, and never writes outside the sheet", () => {
+		// One selected cell with an input: Enter or a blur would save the formula over it.
+		expect(autoSum("SUM", one("B3"), cellAt, SHEET_LIMITS)).toMatchObject({ kind: "refused" });
+		// B5 below B2:B4 has an input, and so does C3 to the right of A3:B3.
+		expect(autoSum("SUM", { top: 1, left: 1, bottom: 3, right: 1 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		expect(autoSum("SUM", { top: 2, left: 0, bottom: 2, right: 1 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		const lastRow = SHEET_LIMITS.rows - 1;
+		const lastCol = SHEET_LIMITS.columns - 1;
+		expect(autoSum("SUM", { top: 0, left: 4, bottom: lastRow, right: 4 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		expect(autoSum("SUM", { top: 0, left: 4, bottom: 0, right: lastCol }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+	});
+});
+
+describe("the formats of cells", () => {
+	it("shows a number with the text of its number format", () => {
+		const view = viewCells(
+			toCellMap([
+				{ ...cell("A1", "1234.5", 1234.5, "number"), format: { number_format: "currency" } },
+				{ ...cell("A2", "0.125", 0.125, "number"), format: { number_format: "percent", decimals: 1 } },
+				{ ...cell("A3", "-0.004", -0.004, "number"), format: { decimals: 2 } },
+				{ ...cell("A4", "text", "text", "text"), format: { number_format: "currency" } },
+			]),
+		);
+		expect(["A1", "A2", "A3", "A4"].map((name) => view.get(name)?.text)).toEqual([
+			"$1,234.50",
+			"12.5%",
+			"0.00",
+			"text",
+		]);
+	});
+
+	// Undo sends restoreFormats. It must give each cell of the range its exact format of before, also a
+	// cell with no format, and a cell that the change did not touch must keep its format.
+	it("restores the formats of before a change, and finds a change that changes nothing", () => {
+		const before = new Map([
+			["A1", { bold: true, color: "#dc2626" }],
+			["B2", { number_format: "currency" as const, decimals: 0 }],
+			["D4", { italic: true }],
+		]);
+		const changes = [
+			{ range: "A1:B2", format: { bold: true, fill: "#fef9c3", number_format: null } },
+			{ range: "C3", format: { align: "center" as const } },
+		];
+		const after = applyFormatChanges(before, changes);
+		expect(after.get("A1")).toEqual({ bold: true, color: "#dc2626", fill: "#fef9c3" });
+		expect(after.get("B2")).toEqual({ decimals: 0, bold: true, fill: "#fef9c3" });
+		expect(after.get("A2")).toEqual({ bold: true, fill: "#fef9c3" });
+		expect(applyFormatChanges(after, restoreFormats(after, [])).size).toBe(after.size);
+		expect(applyFormatChanges(after, restoreFormats(before, changes))).toEqual(before);
+		expect(changesFormats(before, [{ range: "A1", format: { bold: true } }])).toBe(false);
+		expect(changesFormats(before, [{ range: "A1:A2", format: { bold: true } }])).toBe(true);
+	});
+
+	it("starts the decimal buttons from the digits that a cell shows, and picks a text color for a fill", () => {
+		expect(decimalsShown("0.25", undefined)).toBe(2);
+		expect(decimalsShown("48200", undefined)).toBe(0);
+		expect(decimalsShown("$1.00", { number_format: "currency" })).toBe(2);
+		expect(decimalsShown("1.5", { decimals: 4 })).toBe(4);
+		expect(decimalsShown("0.3333333333", undefined)).toBe(10);
+		expect(textColorOn("#fef9c3")).toBe("#111827");
+		expect(textColorOn("#1e3a8a")).toBe("#ffffff");
 	});
 });

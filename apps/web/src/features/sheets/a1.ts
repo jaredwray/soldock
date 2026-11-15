@@ -41,3 +41,32 @@ export function parseCell(name: string): CellPos | null {
 	const pos = { row: Number(digits) - 1, col: col - 1 };
 	return pos.row < SHEET_LIMITS.rows && pos.col < SHEET_LIMITS.columns ? pos : null;
 }
+
+/** A block of cells by position. Each edge is in the block. */
+interface Area {
+	top: number;
+	left: number;
+	bottom: number;
+	right: number;
+}
+
+/** A range in A1 form: B2 for one cell, B2:D9 for more. */
+export function rangeName(area: Area): string {
+	const first = cellName({ row: area.top, col: area.left });
+	if (area.top === area.bottom && area.left === area.right) return first;
+	return `${first}:${cellName({ row: area.bottom, col: area.right })}`;
+}
+
+/** The block of a range such as B2 or A1:D20, in either order, or null for text that is not a range of a sheet. */
+export function parseRange(text: string): Area | null {
+	const [first = "", last = first, ...rest] = text.split(":");
+	const a = parseCell(first);
+	const b = parseCell(last);
+	if (!a || !b || rest.length > 0) return null;
+	return {
+		top: Math.min(a.row, b.row),
+		left: Math.min(a.col, b.col),
+		bottom: Math.max(a.row, b.row),
+		right: Math.max(a.col, b.col),
+	};
+}

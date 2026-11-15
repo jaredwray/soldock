@@ -1,4 +1,4 @@
-import { SHEET_LIMITS } from "@soldock/contracts";
+import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@soldock/contracts";
 import {
 	type ClipboardEvent,
 	type CSSProperties,
@@ -10,14 +10,25 @@ import {
 	useId,
 	useLayoutEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
 import { useToast } from "../../lib/toast.tsx";
-import { type CellPos, cellName, columnNames, parseCell } from "./a1.ts";
+import { type CellPos, cellName, columnNames, parseCell, rangeName } from "./a1.ts";
+import { autoSum, type SumFunction } from "./autosum.ts";
 import { type CellChange, clearChanges, pasteChanges, rangeInputs, tooLong, usedSize, type ViewCell } from "./cells.ts";
 import { formatTsv, parseTsv } from "./clipboard.ts";
+import {
+	applyFormatChanges,
+	CLEAR_FORMAT,
+	changesFormats,
+	decimalsShown,
+	type FormatChange,
+	restoreFormats,
+} from "./formats.ts";
 import { ColumnHeads, cellId, SheetRow } from "./SheetRow.tsx";
+import { SheetToolbar } from "./SheetToolbar.tsx";
 import {
 	FIRST_CELL,
 	gridSize,
@@ -51,13 +62,14 @@ interface Edit {
 	mode: "replace" | "keep";
 	/** Where the person types: the editor over the cell, or the formula bar. */
 	source: "cell" | "bar";
+	/** The part of `value` that the editor over the cell selects when the edit starts. The default puts the cursor after the text. */
+	select?: readonly [number, number];
 }
 
-/** One change of the person, for Undo and Redo. */
-interface Step {
-	before: CellChange[];
-	after: CellChange[];
-}
+/** One change of the person, for Undo and Redo: of inputs, or of formats. */
+type Step =
+	| { kind: "cells"; before: CellChange[]; after: CellChange[] }
+	| { kind: "formats"; before: FormatChange[]; after: FormatChange[] };
 
 /**
  * What the editor of one tab keeps while a different tab is open: the selection, Undo and Redo,
@@ -106,6 +118,8 @@ interface SheetEditorProps {
 	/** The name of the sheet and of the tab, for the accessible name of the grid. */
 	name: string;
 	cells: ReadonlyMap<string, ViewCell>;
+	/** The format of each cell that has one, also of a cell without an input. */
+	formats: ReadonlyMap<string, CellFormat>;
 	/** True for a viewer: selection and copy work, and no edit. */
 	readOnly: boolean;
 	/** True while the cells of the tab did not arrive. The grid then takes no edit, as for a viewer. */
@@ -119,21 +133,24 @@ interface SheetEditorProps {
 	 */
 	inputOf: (cell: string) => string;
 	onCommit: (changes: CellChange[]) => void;
+	onFormat: (changes: FormatChange[]) => void;
 }
 
 /**
- * The formula bar and the grid. The grid is one tab stop: the arrow keys move the selection in it.
- * It draws only the rows near the rows on screen, so a sheet with 1000 rows stays fast.
+ * The toolbar, the formula bar and the grid. The grid is one tab stop: the arrow keys move the
+ * selection in it. It draws only the rows near the rows on screen, so a sheet with 1000 rows stays fast.
  */
 export function SheetEditor({
 	name,
 	cells,
+	formats,
 	readOnly,
 	loading,
 	memory,
 	onSwitchTab,
 	inputOf: inputAt,
 	onCommit,
+	onFormat,
 }: SheetEditorProps) {
 	const toast = useToast();
 	const gridId = useId();
@@ -142,6 +159,8 @@ export function SheetEditor({
 	const [edit, setEditState] = useState<Edit | null>(null);
 	const [rowWindow, setRowWindow] = useState({ first: 0, last: 60 });
 	const [nameDraft, setNameDraft] = useState<string | null>(null);
+	/** Draws the editor again after a change of Undo and Redo, which the toolbar shows. */
+	const [, redraw] = useReducer((count: number) => count + 1, 0);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLTableElement>(null);
 	const editorRef = useRef<HTMLInputElement>(null);
@@ -153,7 +172,8 @@ export function SheetEditor({
 	/** True when the next selection must not scroll the grid, for example a whole column. */
 	const keepScrollRef = useRef(false);
 
-	const used = useMemo(() => usedSize(cells.keys()), [cells]);
+	// A cell with only a format counts too, so the grid draws it, for example a format of an agent far down.
+	const used = useMemo(() => usedSize([...cells.keys(), ...formats.keys()]), [cells, formats]);
 	const size = gridSize(used, selection);
 	const names = useMemo(() => columnNames(size.columns), [size.columns]);
 	const range = rangeOf(selection);
@@ -195,30 +215,78 @@ export function SheetEditor({
 		}
 		const after = changes.filter((change) => inputAt(change.cell) !== change.input);
 		if (after.length === 0) return true;
-		const history = memory.history;
-		history.undo.push({ before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })), after });
-		if (history.undo.length > UNDO_STEPS) history.undo.shift();
-		history.redo = [];
+		remember({
+			kind: "cells",
+			before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })),
+			after,
+		});
 		onCommit(after);
 		return true;
 	}
 
-	/** Undo sends the inputs from before a step. Redo sends the inputs of the step again. */
+	/** Keeps a step for Undo. A new step clears Redo. */
+	function remember(step: Step) {
+		const history = memory.history;
+		history.undo.push(step);
+		if (history.undo.length > UNDO_STEPS) history.undo.shift();
+		history.redo = [];
+		redraw();
+	}
+
+	/** Changes the format of each selected cell, in one Undo step. A change that changes nothing makes no step. */
+	function applyFormat(format: FormatPatch) {
+		if (locked) return;
+		const changes = [{ range: rangeName(range), format }];
+		if (!changesFormats(formats, changes)) return;
+		// The server refuses a sheet with more formatted cells than the limit. Refuse before the grid shows the change.
+		if (applyFormatChanges(formats, changes).size > SHEET_LIMITS.formats) {
+			toast({
+				message: `A sheet can have at most ${SHEET_LIMITS.formats} cells with a format. Select fewer cells.`,
+				tone: "error",
+			});
+			return;
+		}
+		remember({ kind: "formats", before: restoreFormats(formats, changes), after: changes });
+		onFormat(changes);
+	}
+
+	/** Undo sends the inputs or the formats from before a step. Redo sends those of the step again. */
 	function replay(from: "undo" | "redo") {
 		if (locked) return;
 		const history = memory.history;
 		const entry = history[from].pop();
 		if (!entry) return;
 		history[from === "undo" ? "redo" : "undo"].push(entry);
+		redraw();
+		if (entry.kind === "formats") {
+			onFormat(from === "undo" ? entry.before : entry.after);
+			return;
+		}
 		const changes = from === "undo" ? entry.before : entry.after;
 		onCommit(changes);
 		const first = parseCell(changes[0]?.cell ?? "");
 		if (first) select(selectCell(first));
 	}
 
-	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string) {
+	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string, select?: Edit["select"]) {
 		if (locked) return;
-		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source });
+		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source, ...(select ? { select } : {}) });
+	}
+
+	/**
+	 * A function of the Σ menu. For one cell, an edit starts with the formula, and the person can
+	 * change its range. For a range, the formulas go after the range, in one Undo step.
+	 */
+	function insertFunction(fn: SumFunction) {
+		if (locked) return;
+		const result = autoSum(fn, range, (cell) => cells.get(cell), SHEET_LIMITS);
+		if (result.kind === "edit") {
+			startEdit("keep", "cell", result.input, result.select);
+			return;
+		}
+		if (result.kind === "refused") toast({ message: result.message, tone: "error" });
+		else if (apply(result.changes)) selectRange(result.range);
+		gridRef.current?.focus();
 	}
 
 	/**
@@ -240,14 +308,17 @@ export function SheetEditor({
 		gridRef.current?.focus();
 	}
 
-	// The editor over the cell gets the focus when an edit starts, with the cursor after the text.
+	// The editor over the cell gets the focus when an edit starts, with the cursor after the text or
+	// with the part of the text that the edit selects.
 	const cellEditing = edit?.source === "cell";
+	const editSelect = edit?.select;
 	useLayoutEffect(() => {
 		const editor = editorRef.current;
 		if (!cellEditing || !editor) return;
 		editor.focus();
-		editor.setSelectionRange(editor.value.length, editor.value.length);
-	}, [cellEditing]);
+		const [start, end] = editSelect ?? [editor.value.length, editor.value.length];
+		editor.setSelectionRange(start, end);
+	}, [cellEditing, editSelect]);
 
 	const updateWindow = useCallback(() => {
 		const scroll = scrollRef.current;
@@ -360,6 +431,8 @@ export function SheetEditor({
 	function onGridKeyDown(event: KeyboardEvent<HTMLTableElement>) {
 		if (event.nativeEvent.isComposing) return;
 		const command = event.ctrlKey || event.metaKey;
+		// Ctrl without Alt and Shift. AltGr is Ctrl with Alt on Windows, and it types \ on some layouts.
+		const plainCommand = command && !event.altKey && !event.shiftKey;
 		const leave = leaveRef.current;
 		leaveRef.current = false;
 		// Alt with an up or down arrow, or Ctrl+Shift with Page Up or Page Down, shows the tab before or the next tab.
@@ -425,6 +498,16 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
+				} else if (plainCommand && key === "b") {
+					applyFormat({ bold: activeFormat?.bold !== true });
+				} else if (plainCommand && key === "i") {
+					applyFormat({ italic: activeFormat?.italic !== true });
+				} else if (plainCommand && key === "\\") {
+					applyFormat(CLEAR_FORMAT);
+				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠" || event.code === "Equal")) {
+					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠, or a different
+					// character on some layouts, so the key of = also counts.
+					insertFunction("SUM");
 				} else if (!command && !event.altKey && event.key.length === 1 && !locked) {
 					// A typed character starts an edit that replaces the input of the cell.
 					startEdit("replace", "cell", event.key);
@@ -498,10 +581,31 @@ export function SheetEditor({
 	const rows: number[] = [];
 	for (let row = first; row <= last; row++) rows.push(row);
 	const activeDrawn = active.row >= first && active.row <= last;
+	const activeFormat = formats.get(activeName);
 	const barValue = edit ? edit.value : inputAt(activeName);
 
 	return (
 		<div className="sheet-editor">
+			{!readOnly && (
+				<SheetToolbar
+					gridId={gridId}
+					disabled={loading}
+					canUndo={memory.history.undo.length > 0}
+					canRedo={memory.history.redo.length > 0}
+					format={activeFormat}
+					decimals={decimalsShown(cells.get(activeName)?.text ?? "", activeFormat)}
+					onUndo={() => {
+						replay("undo");
+						gridRef.current?.focus();
+					}}
+					onRedo={() => {
+						replay("redo");
+						gridRef.current?.focus();
+					}}
+					onFormat={applyFormat}
+					onFunction={insertFunction}
+				/>
+			)}
 			<div className="sheet-bar">
 				<input
 					className="sheet-name-box"
@@ -549,6 +653,7 @@ export function SheetEditor({
 				<div className="sheet-canvas" style={{ ...GRID_STYLE, width: HEAD_WIDTH + size.columns * COLUMN_WIDTH }}>
 					<table
 						ref={gridRef}
+						id={gridId}
 						// biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: a table is the element for a grid. The grid has the focus, and aria-activedescendant names the active cell.
 						role="grid"
 						tabIndex={0}
@@ -590,6 +695,7 @@ export function SheetEditor({
 										row={row}
 										names={names}
 										cells={cells}
+										formats={formats}
 										left={selected ? range.left : -1}
 										right={selected ? range.right : -1}
 										activeCol={row === active.row ? active.col : -1}
@@ -624,7 +730,7 @@ export function SheetEditor({
 			<p id={hintId} className="visually-hidden">
 				{readOnly
 					? "Use the arrow keys to move. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."
-					: "Use the arrow keys to move. Press Enter to change a cell. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."}
+					: "Use the arrow keys to move. Press Enter to change a cell. Press Alt with = to add a SUM. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."}
 			</p>
 		</div>
 	);

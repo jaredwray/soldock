@@ -426,6 +426,14 @@ button.drive-name-link:hover .drive-name-text {
 	color: var(--muted-foreground);
 }
 
+.drive-menu-swatch {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+}
+
 .drive-menu-item:hover,
 .drive-menu-item:focus {
 	background: var(--hover);

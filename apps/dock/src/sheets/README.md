@@ -1,15 +1,15 @@
 # `sheets` module
 
-> Status: **started**. Two layers exist: create a sheet, read its cells with calculated results,
-> and change cells; and tabs, with formulas that read a different tab. Keep this README current as
-> the module grows. It is the module's contract.
+> Status: **started**. Three layers exist: create a sheet, read its cells with calculated results,
+> and change cells; tabs, with formulas that read a different tab; and cell formats. Keep this
+> README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Server-side Sheets operations: range read/write, structural edits, server-side recalculation, XLSX/CSV/PDF conversion. |
 | **Owns** | No own store (content lives in `DocumentDO`). |
 | **Depends on** | `platform`, `identity`, `collab`, `drive`. |
-| **Operations** | `sheets.create`, `sheets.get`, `sheets.update_cells`, `sheets.add_tab`, `sheets.rename_tab`, `sheets.move_tab`, `sheets.duplicate_tab`, `sheets.delete_tab` |
+| **Operations** | `sheets.create`, `sheets.get`, `sheets.update_cells`, `sheets.format_cells`, `sheets.add_tab`, `sheets.rename_tab`, `sheets.move_tab`, `sheets.duplicate_tab`, `sheets.delete_tab` |
 | **Data inventory** | None of its own (content in `DocumentDO`, the item in `DriveSpaceDO`). XLSX/CSV in Takeout. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -19,7 +19,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | File | What |
 | --- | --- |
 | `handlers.ts` | The operation handlers. They ask the drive for the item and the role, then read or write the `DocumentDO`. One write loop (`changeSheet`) serves each operation that changes a sheet |
-| `grid.ts` | The stored form of a sheet and its tabs, the output cells, the changed cells of an update, and the text for the search index |
+| `grid.ts` | The stored form of a sheet and its tabs, the formats of cells, the output cells, the changed cells of a write, and the text for the search index |
 | `formula.ts` | The formula engine: the parser, the functions, the rename of tab references, and the calculation of all tabs of a sheet |
 
 ## A sheet
@@ -30,14 +30,32 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   to 1000. A new sheet has one tab, `Sheet1`.
 - A tab has an id (`tab_1`, `tab_2` and so on) and a name. The id never changes, and the sheet never
   gives the id of a deleted tab to a new tab. The name changes with a rename.
-- The stored content is the JSON `{ "tabs": [{ "id", "name", "cells" }], "next_tab" }`. `cells` has
-  the input of each cell of the tab that is not empty, by cell name. The results are never stored.
-  Each read calculates them, so a result is never stale.
+- The stored content is the JSON `{ "tabs": [{ "id", "name", "cells", "formats" }], "next_tab" }`.
+  `cells` has the input of each cell of the tab that is not empty, by cell name. `formats` has the
+  format of each cell that has one, by cell name, also of a cell without an input. A tab without a
+  format has no `formats`, so the stored form of a sheet that nobody formatted does not change. The
+  results are never stored. Each read calculates them, so a result is never stale.
 - The first layer stored `{ "cells" }` with one grid. A read gives such a sheet one tab, `tab_1`
   with the name `Sheet1`. The next change writes the new form. A call that changes nothing writes
   nothing, also for the old form.
 - The server calculates. The web app shows the results from the server and has no formula engine,
   so a person and an agent always see the same numbers.
+- The Σ menu of the web app adds no operation. It writes a formula such as `=SUM(B2:B8)` with
+  `sheets.update_cells`, as an agent can.
+
+## Formats
+
+- A format has optional fields: `number_format` (`currency` or `percent`), `decimals` (0 to 10),
+  `bold`, `italic`, `color` and `fill` (`#rrggbb`, stored in lower case), and `align` (`left`,
+  `center` or `right`). A cell without a field has the default for it.
+- A format belongs to the cell, not to its input. A cell keeps its format when its input changes or
+  is cleared, so a cell that somebody formats first and fills later gets the format.
+- `currency` shows `$1,234.50`, with a minus before the `$` for a negative number. `percent` shows
+  0.125 as `12.50%`. The default of `decimals` is 2 with a number format. `decimals` without a number
+  format shows the number with that count of digits and with thousands separators. A small negative
+  number that rounds to zero shows as zero, without a minus. The text uses en-US separators.
+- `formatCellNumber` and `patchFormat` are in the contracts, so the server and the web app give a
+  cell the same text and the same format. The server never stores the text.
 
 ## Operations
 
@@ -48,18 +66,25 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `boolean`, `error` or `empty`), row by row. `range` keeps only the cells in a range. `rows` and
   `columns` are the extent of the whole tab. `tabs` lists each tab in order, with its id, name and
   extent.
+- `sheets.get` also returns each cell that has only a format, with `input: ""` and `type: "empty"`.
+  A cell with a format has `format`. A number cell with a number format or `decimals` also has
+  `text`, the number as the grid shows it.
 - `sheets.update_cells` needs the editor role. It sets the input of each given cell of one tab: the
   first tab, or the tab of `tab_id`. An empty input clears the cell.
   - The answer has each cell of the tab whose input or result changed, also the cells of the tab
-    that read a changed cell. A cleared cell has `type: "empty"`. Formulas of other tabs can also
-    get new results: `sheets.get` reads them.
+    that read a changed cell. A cleared cell has `type: "empty"`, and keeps its `format`. Formulas
+    of other tabs can also get new results: `sheets.get` reads them.
+- `sheets.format_cells` needs the editor role. Each change has a `range` (`B2` or `A1:D20`) and a
+  patch of the fields to change. A field that the patch does not give stays. `null`, or `false` for
+  `bold` and `italic`, removes the field. The changes apply in order. The answer has each cell of
+  the tab whose format changed. The same patch again changes nothing and makes no revision.
 - The tab operations need the editor role:
   - `sheets.add_tab` adds an empty tab at `index`, or after the last tab. Without `name`, the tab
     gets the first free name of `Sheet<n>`, where n starts at the count of tabs plus 1.
   - `sheets.rename_tab` gives a tab a new name. Each formula of each tab that refers to the old
     name gets the new name (see [Tabs in formulas](#tabs-in-formulas)).
   - `sheets.move_tab` moves a tab to `index`. An index after the last tab moves it to the end.
-  - `sheets.duplicate_tab` copies a tab with its inputs, directly after the tab. Without `name`, the
+  - `sheets.duplicate_tab` copies a tab with its inputs and formats, directly after the tab. Without `name`, the
     copy gets `Copy of <name>`, then `Copy 2 of <name>` and so on.
   - `sheets.delete_tab` deletes a tab and its cells. The last tab cannot be deleted: `invalid`. The
     answer has `cells` (the cells of the tab with an input) and `references` (the formulas of other
@@ -150,13 +175,17 @@ A formula that reads a cell with an error gets the same error.
 | Cells with an input, in all tabs | 20,000 | |
 | One input | 2,000 characters | |
 | Cells in one update | 5,000 | |
-| Stored inputs of one sheet | 1 MiB of JSON | Durable Object row limit (2 MB) |
+| Cells with a format, in all tabs | 20,000 | |
+| Changes in one `sheets.format_cells` | 5,000 | |
+| Cells that one `sheets.format_cells` changes | 52,000 (each cell of a tab) | |
+| Stored inputs and formats of one sheet | 1 MiB of JSON | Durable Object row limit (2 MB) |
 
 ## Not built yet
 
 - Tab colors, hidden tabs, protected tabs, and a move of a tab with drag and drop in the web app
 - Insert and delete of rows and columns, sort and filter
-- Cell formats (number formats, dates, bold, colors), column widths, and merged cells
+- More formats: date and time formats, other currencies and locales, font size, underline,
+  borders and wrap text; column widths and merged cells
 - Dates and times, lookup functions, and conditional functions (`SUMIF`, `COUNTIF`, `VLOOKUP`)
 - Charts
 - Import and export of XLSX and CSV

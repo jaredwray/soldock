@@ -1,4 +1,4 @@
-import type { Cell } from "@soldock/contracts";
+import { type Cell, formatCellNumber } from "@soldock/contracts";
 import { cellName, parseCell } from "./a1.ts";
 import { type GridSize, inRange, isOneCell, type Range } from "./selection.ts";
 
@@ -37,7 +37,7 @@ function serverCell(cell: Cell): ViewCell | null {
 	if (cell.type === "empty" || cell.value === null) return null;
 	const text =
 		typeof cell.value === "number"
-			? formatNumber(cell.value)
+			? (formatCellNumber(cell.value, cell.format) ?? formatNumber(cell.value))
 			: typeof cell.value === "boolean"
 				? cell.value
 					? "TRUE"
@@ -61,10 +61,13 @@ export function toCellMap(cells: readonly Cell[]): Map<string, Cell> {
 	return applyCells(new Map(), cells);
 }
 
-/** Puts the cells of a server answer into the map. An answer has a cleared cell as `empty`: it leaves the map. */
+/**
+ * Puts the cells of a server answer into the map. An answer has a cleared cell as `empty`: it leaves
+ * the map, unless it has a format, which stays for its next input.
+ */
 export function applyCells(map: Map<string, Cell>, cells: readonly Cell[]): Map<string, Cell> {
 	for (const cell of cells) {
-		if (cell.type === "empty") map.delete(cell.cell);
+		if (cell.type === "empty" && !cell.format) map.delete(cell.cell);
 		else map.set(cell.cell, cell);
 	}
 	return map;
