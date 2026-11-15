@@ -145,9 +145,10 @@ export class SheetStore {
 	/**
 	 * Changes cells of a tab. The grid shows the new inputs at once, and the store sends them to the
 	 * server. A change that gives a cell the input that it has is dropped. A viewer cannot change cells.
+	 * Nobody can change a tab whose cells did not arrive, because the old inputs are not known.
 	 */
 	commit(changes: readonly CellChange[], tab: string = this.active): void {
-		if (!this.canEdit() || !this.tabs.some((entry) => entry.id === tab)) return;
+		if (!this.canEdit() || !this.tabs.some((entry) => entry.id === tab) || !this.server.has(tab)) return;
 		let changed = false;
 		for (const { cell, input } of changes) {
 			if (this.inputOf(cell, tab) === input) continue;
@@ -178,14 +179,20 @@ export class SheetStore {
 
 	/**
 	 * Adds, renames, moves, copies or deletes a tab. The changes of cells that wait go to the server
-	 * first. The grid then shows the new tab of an add or a copy. The active tab is read again, because
-	 * a change to the tabs can change its formulas. Throws the error of the server.
+	 * first. When they do not save, the change of the tabs stops, so a copy cannot miss them. Only the
+	 * delete of the tab that has them continues. The grid then shows the new tab of an add or a copy.
+	 * The active tab is read again, because a change to the tabs can change its formulas. Throws the
+	 * error of the server.
 	 */
 	async changeTab(action: TabAction): Promise<void> {
 		if (!this.canEdit()) return;
 		try {
 			await this.exclusive(async () => {
-				await this.sendWaiting();
+				const saved = await this.sendWaiting();
+				const onlyDeleted = [...this.waiting.keys()].every((tab) => action.kind === "delete" && tab === action.tabId);
+				if (!saved && !onlyDeleted) {
+					throw new Error("Your last changes are not saved. Try again or discard them, then change the tabs.");
+				}
 				const answer = await this.api.changeTab(action);
 				this.item = answer.item;
 				this.setTabs(answer.tabs, answer.revision);
@@ -195,7 +202,9 @@ export class SheetStore {
 				this.emit();
 			});
 		} finally {
-			if (this.pending() > 0) void this.flush();
+			// Changes that came during the change of the tabs go now. After a failed save, Try again sends them.
+			const failed = this.saveState === "error" || this.saveState === "conflict";
+			if (this.pending() > 0 && !failed) void this.flush();
 		}
 	}
 
@@ -334,7 +343,9 @@ export class SheetStore {
 	/** Sends the waiting changes, one request at a time. Changes that arrive during a request go into the next one. */
 	private async flush(): Promise<void> {
 		if (this.running || this.status !== "ready") return;
-		await this.exclusive(() => this.sendWaiting());
+		await this.exclusive(async () => {
+			await this.sendWaiting();
+		});
 	}
 
 	/** The next changes of one tab to send. One call takes at most cellsPerUpdate cells, so a large paste goes in parts. */
@@ -348,7 +359,8 @@ export class SheetStore {
 		return null;
 	}
 
-	private async sendWaiting(): Promise<void> {
+	/** Sends each waiting change. Returns false when a save failed: the changes then wait again. */
+	private async sendWaiting(): Promise<boolean> {
 		for (let batch = this.nextBatch(); batch; batch = this.nextBatch()) {
 			this.sending = batch;
 			this.view = null;
@@ -368,13 +380,14 @@ export class SheetStore {
 				this.saveState = isConflict(error) ? "conflict" : "error";
 				this.saveError = error;
 				this.emit();
-				return;
+				return false;
 			}
 			this.sending = null;
 			this.view = null;
 		}
 		this.saveState = "saved";
 		this.emit();
+		return true;
 	}
 
 	/** Gets the tabs again after a save to a tab that does not exist now. */

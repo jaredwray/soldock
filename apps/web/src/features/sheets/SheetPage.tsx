@@ -90,7 +90,23 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	const activeTab = sheet.activeTab;
 	const inputOf = useCallback((cell: string) => store.inputOf(cell, activeTab), [store, activeTab]);
 	const commit = useCallback((changes: CellChange[]) => store.commit(changes, activeTab), [store, activeTab]);
-	const changeTab = useCallback((action: TabAction) => store.changeTab(action), [store]);
+	const changeTab = useCallback(
+		async (action: TabAction) => {
+			await store.changeTab(action);
+			// The Undo steps of each tab hold the old name in their formulas. Undo would write it back and
+			// give #REF!, so a rename clears them.
+			if (action.kind === "rename") {
+				for (const memory of memories.current.values()) memory.history = { undo: [], redo: [] };
+			}
+		},
+		[store],
+	);
+
+	// The memory of a deleted tab is not needed again: a new tab never gets its id.
+	useEffect(() => {
+		const ids = new Set(sheet.tabs.map((tab) => tab.id));
+		for (const id of memories.current.keys()) if (!ids.has(id)) memories.current.delete(id);
+	}, [sheet.tabs]);
 
 	function memoryOf(tabId: string): TabMemory {
 		let memory = memories.current.get(tabId);

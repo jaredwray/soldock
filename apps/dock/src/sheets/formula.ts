@@ -106,6 +106,39 @@ function tokenizeFormula(source: string): Tok[] {
 	return tokens;
 }
 
+/**
+ * The form of a tab name that the engine compares: NFC, in lower case. Thus a name typed with a
+ * different Unicode form or case is the same name.
+ */
+export function tabKey(name: string): string {
+	return name.normalize("NFC").toLowerCase();
+}
+
+/**
+ * Each tab name that a formula refers to, in the order of the formula, with its text and the
+ * position after its "!". An empty list for an input that is not a formula, and for a formula with
+ * text that is not a token.
+ */
+function tabNamesIn(raw: string): { name: string; text: string; end: number }[] {
+	if (!raw.startsWith("=")) return [];
+	const found: { name: string; text: string; end: number }[] = [];
+	try {
+		for (const { match, end } of scanFormula(raw.slice(1))) {
+			if (match[3] !== undefined) found.push({ name: tabNameOf(match[3]), text: match[3], end });
+		}
+	} catch (error) {
+		if (error instanceof FormulaError) return [];
+		throw error;
+	}
+	return found;
+}
+
+/** True when the input is a formula that refers to the tab `name`. */
+export function refersToTab(raw: string, name: string): boolean {
+	const key = tabKey(name);
+	return tabNamesIn(raw).some((found) => tabKey(found.name) === key);
+}
+
 /** A tab name as a formula writes it. A name that is not one plain word, or that looks like a cell, gets quotes. */
 export function formatTabName(name: string): string {
 	const plain = /^[\p{L}_][\p{L}\p{N}_.]*$/u.test(name) && !/^[A-Za-z]{1,3}[0-9]+$/.test(name);
@@ -117,23 +150,16 @@ export function formatTabName(name: string): string {
  * gets the name `to`. The case of a name does not count. A formula that cannot be read stays as it is.
  */
 export function renameTabInInput(raw: string, from: string, to: string): string {
-	if (!raw.startsWith("=")) return raw;
 	const source = raw.slice(1);
-	const old = from.toLowerCase();
+	const old = tabKey(from);
 	let out = "";
 	let copied = 0;
-	try {
-		for (const { match, end } of scanFormula(source)) {
-			const text = match[3];
-			if (text === undefined || tabNameOf(text).toLowerCase() !== old) continue;
-			// The match ends with the name and then "!".
-			const start = end - text.length - 1;
-			out += source.slice(copied, start) + formatTabName(to);
-			copied = end - 1;
-		}
-	} catch (error) {
-		if (error instanceof FormulaError) return raw;
-		throw error;
+	for (const { name, text, end } of tabNamesIn(raw)) {
+		if (tabKey(name) !== old) continue;
+		// The match ends with the name and then "!".
+		const start = end - text.length - 1;
+		out += source.slice(copied, start) + formatTabName(to);
+		copied = end - 1;
 	}
 	return copied === 0 ? raw : `=${out}${source.slice(copied)}`;
 }
@@ -521,8 +547,8 @@ export function evaluateWorkbook(
 ): Map<string, Map<string, Value>> {
 	const results = new Map<string, Value>();
 	const formulas = new Map<string, Node>();
-	const ids = new Map(tabs.map((tab) => [tab.name.toLowerCase(), tab.id]));
-	const tabOf = (name: string) => ids.get(name.toLowerCase()) ?? null;
+	const ids = new Map(tabs.map((tab) => [tabKey(tab.name), tab.id]));
+	const tabOf = (name: string) => ids.get(tabKey(name)) ?? null;
 	const inputsOf = new Map(tabs.map((tab) => [tab.id, tab.inputs]));
 	for (const tab of tabs) {
 		const context = { tab: tab.id, tabOf };

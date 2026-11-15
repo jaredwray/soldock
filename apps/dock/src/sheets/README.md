@@ -61,13 +61,18 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   - `sheets.move_tab` moves a tab to `index`. An index after the last tab moves it to the end.
   - `sheets.duplicate_tab` copies a tab with its inputs, directly after the tab. Without `name`, the
     copy gets `Copy of <name>`, then `Copy 2 of <name>` and so on.
-  - `sheets.delete_tab` deletes a tab and its cells. The last tab cannot be deleted: `invalid`.
-  - `sheets.add_tab` and `sheets.duplicate_tab` return the id of the new tab in `tab_id`.
+  - `sheets.delete_tab` deletes a tab and its cells. The last tab cannot be deleted: `invalid`. The
+    answer has `cells` (the cells of the tab with an input) and `references` (the formulas of other
+    tabs that refer to the tab). With `dry_run`, the call checks and counts the same, and changes
+    nothing.
+  - `sheets.add_tab` and `sheets.duplicate_tab` return the id of the new tab in `tab_id`. They take
+    no idempotency key. A retry with the same `name` gets `invalid`, so a caller that passes `name`
+    can send a call again safely.
 - A tab id that the sheet does not have gets `not_found`.
 - Each write names the revision that the handler read. When a different writer changed the sheet
   between the read and the write, the handler reads and makes the change again, at most 3 times.
   Thus calls at the same time never lose changes of each other, and two new tabs never get one id
-  or one name.
+  or one name. A call that loses 3 times gets `conflict` and changes nothing: send it again.
 - With `base_revision`, a change from an old revision gets `conflict` and changes nothing.
 - A change that changes nothing makes no revision: the same inputs, or the same name again.
 
@@ -106,9 +111,14 @@ A formula that reads a cell with an error gets the same error.
   the tab `Costs`. A range has one tab name, before its first cell: `Costs!A1:C3`.
 - A name that is not one word of letters, digits, `_` and `.`, or that starts with a digit, needs
   single quotes. A quote in the name is two quotes: `'Bob''s costs'!A1`.
-- The case of a tab name does not count, in a formula and in the check for two tabs with one name.
+- The case and the Unicode form (NFC or NFD) of a tab name do not count, in a formula and in the
+  check for two tabs with one name. The sheet stores each name in NFC.
 - A tab name has 1 to 31 characters, without `[ ] : * ? / \` and control characters, and does not
-  start or end with `'`. Excel has the same rules, so an XLSX export can keep each name.
+  start or end with `'`. Excel has the same rules, so an XLSX export can keep each name. A name also
+  has no format characters (Unicode `Cf`, for example a zero-width space or a direction mark), so
+  two names that look the same are one name.
+- A default name (`Sheet<n>`, `Copy of <name>`) that is too long gets cut between two characters,
+  never in a surrogate pair. A space or a quote at the end of the cut goes.
 - A rename writes the new name into each formula that refers to the old name, with quotes when the
   new name needs them. A formula that the engine cannot read keeps its text. When the new text of an
   input is longer than the input limit, the rename gets `payload_too_large` and changes nothing.

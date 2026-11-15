@@ -11,7 +11,7 @@ import {
 } from "../drive/index.ts";
 import type { CallContext } from "../identity/index.ts";
 import { type HandlerMap, newId, OperationError } from "../platform/index.ts";
-import { evaluateWorkbook, renameTabInInput, type TabInputs, type Value } from "./formula.ts";
+import { evaluateWorkbook, refersToTab, renameTabInInput, type TabInputs, tabKey, type Value } from "./formula.ts";
 import {
 	applyChanges,
 	changedCells,
@@ -64,10 +64,16 @@ function tabOf(book: Workbook, tabId: string | undefined): TabInputs {
 	return tab;
 }
 
-/** Refuses a name that a different tab of the sheet has. The case of a name does not count. */
-function checkFreeName(book: Workbook, name: string, except?: string) {
-	const taken = book.tabs.some((tab) => tab.id !== except && tab.name.toLowerCase() === name.toLowerCase());
-	if (taken) throw new OperationError("invalid", `The sheet has a tab with the name ${name}. Use a different name.`);
+/**
+ * The name to store, in NFC. Refuses a name that a different tab of the sheet has. The case and the
+ * Unicode form of a name do not count.
+ */
+function freeNameOf(book: Workbook, name: string, except?: string): string {
+	const key = tabKey(name);
+	if (book.tabs.some((tab) => tab.id !== except && tabKey(tab.name) === key)) {
+		throw new OperationError("invalid", `The sheet has a tab with the name ${name}. Use a different name.`);
+	}
+	return name.normalize("NFC");
 }
 
 function checkTabCount(book: Workbook) {
@@ -76,17 +82,25 @@ function checkTabCount(book: Workbook) {
 	}
 }
 
-/** A name for a new tab that is not too long, and that does not end with a space or a quote. */
+/**
+ * A name for a new tab that is not too long, and that does not end with a space or a quote. It cuts
+ * between characters, never in a surrogate pair. The start of each candidate is fixed text.
+ */
 function fitName(name: string): string {
-	return name.slice(0, SHEET_LIMITS.tabNameChars).trimEnd().replace(/'+$/, "");
+	let fitted = "";
+	for (const char of name.normalize("NFC")) {
+		if (fitted.length + char.length > SHEET_LIMITS.tabNameChars) break;
+		fitted += char;
+	}
+	return fitted.replace(/[\s']+$/u, "");
 }
 
 /** The first of the candidate names that no tab of the sheet has. */
 function freeName(book: Workbook, candidate: (n: number) => string): string {
-	const taken = new Set(book.tabs.map((tab) => tab.name.toLowerCase()));
+	const taken = new Set(book.tabs.map((tab) => tabKey(tab.name)));
 	for (let n = 1; ; n++) {
 		const name = fitName(candidate(n));
-		if (!taken.has(name.toLowerCase())) return name;
+		if (!taken.has(tabKey(name))) return name;
 	}
 }
 
@@ -268,8 +282,8 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 	async "sheets.add_tab"(call, input) {
 		const written = await changeSheet(call, input, "sheets.add_tab", (book) => {
 			checkTabCount(book);
-			if (input.name !== undefined) checkFreeName(book, input.name);
-			const name = input.name ?? freeName(book, (n) => `Sheet${book.tabs.length + n}`);
+			const name =
+				input.name === undefined ? freeName(book, (n) => `Sheet${book.tabs.length + n}`) : freeNameOf(book, input.name);
 			const added = insertTab(book, { name, inputs: new Map() }, input.index ?? book.tabs.length);
 			return { book: added.book, result: added.id };
 		});
@@ -279,12 +293,12 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 	async "sheets.rename_tab"(call, input) {
 		const written = await changeSheet(call, input, "sheets.rename_tab", (book) => {
 			const tab = tabOf(book, input.tab_id);
-			checkFreeName(book, input.name, tab.id);
+			const newName = freeNameOf(book, input.name, tab.id);
 			// Each formula that refers to the old name gets the new name, so it still reads the same cells.
 			const tabs = book.tabs.map((entry) => {
 				const inputs = new Map<string, string>();
 				for (const [cell, raw] of entry.inputs) {
-					const next = renameTabInInput(raw, tab.name, input.name);
+					const next = renameTabInInput(raw, tab.name, newName);
 					if (next.length > SHEET_LIMITS.inputChars) {
 						throw new OperationError(
 							"payload_too_large",
@@ -293,7 +307,7 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 					}
 					inputs.set(cell, next);
 				}
-				return { ...entry, name: entry === tab ? input.name : entry.name, inputs };
+				return { ...entry, name: entry === tab ? newName : entry.name, inputs };
 			});
 			return { book: withTabs(book, tabs), result: null };
 		});
@@ -314,8 +328,10 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 		const written = await changeSheet(call, input, "sheets.duplicate_tab", (book) => {
 			const tab = tabOf(book, input.tab_id);
 			checkTabCount(book);
-			if (input.name !== undefined) checkFreeName(book, input.name);
-			const name = input.name ?? freeName(book, (n) => (n === 1 ? `Copy of ${tab.name}` : `Copy ${n} of ${tab.name}`));
+			const name =
+				input.name === undefined
+					? freeName(book, (n) => (n === 1 ? `Copy of ${tab.name}` : `Copy ${n} of ${tab.name}`))
+					: freeNameOf(book, input.name);
 			const added = insertTab(book, { name, inputs: new Map(tab.inputs) }, book.tabs.indexOf(tab) + 1);
 			return { book: added.book, result: added.id };
 		});
@@ -323,19 +339,25 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 	},
 
 	async "sheets.delete_tab"(call, input) {
+		// A dry run checks the same things and makes the same counts, and returns the sheet as it is.
 		const written = await changeSheet(call, input, "sheets.delete_tab", (book) => {
 			const tab = tabOf(book, input.tab_id);
 			if (book.tabs.length === 1) {
 				throw new OperationError("invalid", "A sheet keeps at least one tab. Add a different tab first.");
 			}
-			return {
-				book: withTabs(
-					book,
-					book.tabs.filter((entry) => entry !== tab),
-				),
-				result: null,
-			};
+			let references = 0;
+			for (const entry of book.tabs) {
+				if (entry === tab) continue;
+				for (const raw of entry.inputs.values()) if (refersToTab(raw, tab.name)) references++;
+			}
+			const next = input.dry_run
+				? book
+				: withTabs(
+						book,
+						book.tabs.filter((entry) => entry !== tab),
+					);
+			return { book: next, result: { cells: tab.inputs.size, references } };
 		});
-		return tabsOutput(written);
+		return { ...tabsOutput(written), ...written.result, dry_run: input.dry_run };
 	},
 };

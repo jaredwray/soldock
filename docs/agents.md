@@ -248,6 +248,9 @@ operations that the web app uses.
   first. `sheets_add_tab`, `sheets_rename_tab`, `sheets_move_tab`, `sheets_duplicate_tab` and
   `sheets_delete_tab` change the tabs. A formula reads a different tab by its name, for example
   `=SUM(Costs!B2:B9)` or `='Q1 costs'!B4`. A rename changes these formulas to the new name.
+  `sheets_delete_tab` with `dry_run: true` returns the count of cells and of formulas that get
+  `#REF!`, without a change. Pass `name` to `sheets_add_tab` and `sheets_duplicate_tab` when you
+  can send a call again: the second call then gets `invalid`.
 - **Changes at the same time.** `docs_get` and `sheets_get` return a `revision`. Pass it as
   `base_revision` to `docs_update` or `sheets_update_cells`. When somebody changed the content after
   your read, the call fails with `conflict` and changes nothing: read again.

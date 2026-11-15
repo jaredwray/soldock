@@ -259,6 +259,7 @@
 /* The tab bar under the grid */
 
 .sheet-tabs {
+	position: relative;
 	display: flex;
 	flex: none;
 	align-items: center;
@@ -323,7 +324,14 @@
 	outline-offset: -2px;
 }
 
+/* During a rename, the tab keeps its place under the field. */
+.sheet-tab-renaming {
+	visibility: hidden;
+}
+
 .sheet-tab-rename {
+	position: absolute;
+	z-index: 1;
 	padding: 0 8px;
 	border-color: var(--ring);
 	background: var(--background);

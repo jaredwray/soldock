@@ -108,7 +108,7 @@ interface SheetEditorProps {
 	cells: ReadonlyMap<string, ViewCell>;
 	/** True for a viewer: selection and copy work, and no edit. */
 	readOnly: boolean;
-	/** True while the cells of the tab did not arrive. */
+	/** True while the cells of the tab did not arrive. The grid then takes no edit, as for a viewer. */
 	loading: boolean;
 	memory: TabMemory;
 	/** Shows the next tab (1) or the tab before (-1). */
@@ -159,6 +159,8 @@ export function SheetEditor({
 	const range = rangeOf(selection);
 	const active = selection.anchor;
 	const activeName = cellName(active);
+	/** True when no edit is possible: for a viewer, and while the cells of the tab did not arrive. */
+	const locked = readOnly || loading;
 
 	function setEdit(next: Edit | null) {
 		editRef.current = next;
@@ -182,6 +184,7 @@ export function SheetEditor({
 
 	/** Sends changes to the store. Returns false, with a message, when an input is too long. */
 	function apply(changes: CellChange[]): boolean {
+		if (locked) return false;
 		const long = tooLong(changes, SHEET_LIMITS.inputChars);
 		if (long) {
 			toast({
@@ -202,7 +205,7 @@ export function SheetEditor({
 
 	/** Undo sends the inputs from before a step. Redo sends the inputs of the step again. */
 	function replay(from: "undo" | "redo") {
-		if (readOnly) return;
+		if (locked) return;
 		const history = memory.history;
 		const entry = history[from].pop();
 		if (!entry) return;
@@ -214,7 +217,7 @@ export function SheetEditor({
 	}
 
 	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string) {
-		if (readOnly) return;
+		if (locked) return;
 		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source });
 	}
 
@@ -396,7 +399,7 @@ export function SheetEditor({
 				break;
 			case "Enter":
 				if (event.shiftKey) move(-1, 0, false);
-				else if (readOnly) move(1, 0, false);
+				else if (locked) move(1, 0, false);
 				else startEdit("keep", "cell");
 				break;
 			case "F2":
@@ -422,7 +425,7 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
-				} else if (!command && !event.altKey && event.key.length === 1 && !readOnly) {
+				} else if (!command && !event.altKey && event.key.length === 1 && !locked) {
 					// A typed character starts an edit that replaces the input of the cell.
 					startEdit("replace", "cell", event.key);
 				} else {
@@ -525,7 +528,7 @@ export function SheetEditor({
 					aria-label={`Input of cell ${activeName}`}
 					spellCheck={false}
 					autoComplete="off"
-					readOnly={readOnly}
+					readOnly={locked}
 					value={barValue}
 					onFocus={() => {
 						if (!editRef.current) startEdit("keep", "bar");
@@ -555,7 +558,7 @@ export function SheetEditor({
 						aria-rowcount={size.rows + 1}
 						aria-colcount={size.columns + 1}
 						aria-multiselectable="true"
-						aria-readonly={readOnly}
+						aria-readonly={locked}
 						aria-busy={loading}
 						aria-activedescendant={activeDrawn ? cellId(gridId, activeName) : undefined}
 						onKeyDown={onGridKeyDown}

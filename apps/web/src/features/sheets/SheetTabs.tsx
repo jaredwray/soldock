@@ -1,5 +1,5 @@
 import { SHEET_LIMITS, type Tab } from "@soldock/contracts";
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
@@ -34,7 +34,10 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 	const toast = useToast();
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [deleting, setDeleting] = useState<Tab | null>(null);
+	const barRef = useRef<HTMLDivElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
+	/** The tab that gets the focus back when a rename ends with Enter or Escape. */
+	const refocusRef = useRef<string | null>(null);
 	const index = tabs.findIndex((tab) => tab.id === activeTab);
 	const active = tabs[index];
 
@@ -43,6 +46,13 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 		const element = document.getElementById(tabElementId(baseId, activeTab));
 		element?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 	}, [baseId, activeTab]);
+
+	// The rename field leaves the page, so the focus goes back to its tab and not to the top of the page.
+	useEffect(() => {
+		if (renaming !== null || refocusRef.current === null) return;
+		document.getElementById(tabElementId(baseId, refocusRef.current))?.focus();
+		refocusRef.current = null;
+	}, [baseId, renaming]);
 
 	/** Runs a change of the tabs, and shows the error of the server in a toast. */
 	function run(action: TabAction) {
@@ -99,7 +109,7 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 	}
 
 	return (
-		<div className="sheet-tabs">
+		<div ref={barRef} className="sheet-tabs">
 			{!readOnly && (
 				<>
 					<button
@@ -126,37 +136,41 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 				</>
 			)}
 			<div ref={listRef} role="tablist" aria-label="Tabs" className="sheet-tablist" onKeyDown={onListKeyDown}>
-				{tabs.map((tab) =>
-					tab.id === renaming ? (
-						<RenameField
-							key={tab.id}
-							tab={tab}
-							onDone={(name) => {
-								setRenaming(null);
-								if (name !== null && name !== tab.name) run({ kind: "rename", tabId: tab.id, name });
-							}}
-						/>
-					) : (
-						<button
-							key={tab.id}
-							type="button"
-							role="tab"
-							id={tabElementId(baseId, tab.id)}
-							aria-selected={tab.id === activeTab}
-							aria-controls={tab.id === activeTab ? panelId : undefined}
-							tabIndex={tab.id === activeTab ? 0 : -1}
-							className="sheet-tab"
-							title={readOnly ? undefined : "Double-click to rename"}
-							onClick={() => onSelect(tab.id)}
-							onDoubleClick={() => {
-								if (!readOnly) setRenaming(tab.id);
-							}}
-						>
-							{tab.name}
-						</button>
-					),
-				)}
+				{tabs.map((tab) => (
+					<button
+						key={tab.id}
+						type="button"
+						role="tab"
+						id={tabElementId(baseId, tab.id)}
+						aria-selected={tab.id === activeTab}
+						aria-controls={tab.id === activeTab ? panelId : undefined}
+						tabIndex={tab.id === activeTab ? 0 : -1}
+						// During a rename, the field covers the tab. The tab keeps its place, and the panel keeps its name.
+						className={tab.id === renaming ? "sheet-tab sheet-tab-renaming" : "sheet-tab"}
+						title={readOnly ? undefined : "Double-click to rename"}
+						onClick={() => onSelect(tab.id)}
+						onDoubleClick={() => {
+							if (!readOnly) setRenaming(tab.id);
+						}}
+					>
+						{tab.name}
+					</button>
+				))}
 			</div>
+			{renaming !== null && (
+				<RenameField
+					key={renaming}
+					tab={tabs.find((tab) => tab.id === renaming) as Tab}
+					bar={barRef.current}
+					tabElement={document.getElementById(tabElementId(baseId, renaming))}
+					onDone={(name, refocus) => {
+						const tab = tabs.find((entry) => entry.id === renaming);
+						if (refocus) refocusRef.current = renaming;
+						setRenaming(null);
+						if (tab && name !== null && name !== tab.name) run({ kind: "rename", tabId: tab.id, name });
+					}}
+				/>
+			)}
 			{deleting && (
 				<ConfirmDialog
 					title={`Delete the tab ${deleting.name}?`}
@@ -177,32 +191,50 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 
 interface RenameFieldProps {
 	tab: Tab;
-	/** Gets the new name, or null after Escape. */
-	onDone: (name: string | null) => void;
+	/** The tab bar, and the tab that the field covers. */
+	bar: HTMLElement | null;
+	tabElement: HTMLElement | null;
+	/** Gets the new name, or null after Escape. `refocus` is true after Enter or Escape, and false after a blur. */
+	onDone: (name: string | null, refocus: boolean) => void;
 }
 
-/** The field that takes the place of a tab during a rename. Enter or a blur keeps the name, and Escape cancels. */
-function RenameField({ tab, onDone }: RenameFieldProps) {
+/**
+ * The field of a rename. It is outside the tablist, so the tablist holds only tabs, and it covers its
+ * tab. Enter or a blur keeps the name, and Escape cancels.
+ */
+function RenameField({ tab, bar, tabElement, onDone }: RenameFieldProps) {
 	const [value, setValue] = useState(tab.name);
+	const [place, setPlace] = useState<CSSProperties>({ visibility: "hidden" });
 	const doneRef = useRef(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	useLayoutEffect(() => {
+		if (bar && tabElement) {
+			const outer = bar.getBoundingClientRect();
+			const inner = tabElement.getBoundingClientRect();
+			// An absolute position starts inside the border of the bar.
+			setPlace({
+				left: inner.left - outer.left - bar.clientLeft,
+				top: inner.top - outer.top - bar.clientTop,
+				minWidth: inner.width,
+			});
+		}
 		inputRef.current?.focus();
 		inputRef.current?.select();
-	}, []);
+	}, [bar, tabElement]);
 
-	function finish(name: string | null) {
+	function finish(name: string | null, refocus: boolean) {
 		if (doneRef.current) return;
 		doneRef.current = true;
 		const trimmed = name?.trim() ?? null;
-		onDone(trimmed === "" ? null : trimmed);
+		onDone(trimmed === "" ? null : trimmed, refocus);
 	}
 
 	return (
 		<input
 			ref={inputRef}
 			className="sheet-tab-rename"
+			style={place}
 			aria-label={`New name of the tab ${tab.name}`}
 			value={value}
 			maxLength={SHEET_LIMITS.tabNameChars}
@@ -210,14 +242,16 @@ function RenameField({ tab, onDone }: RenameFieldProps) {
 			autoComplete="off"
 			size={Math.max(6, value.length + 1)}
 			onChange={(event) => setValue(event.target.value)}
-			onBlur={() => finish(value)}
+			onBlur={() => finish(value, false)}
 			onKeyDown={(event) => {
+				// The Enter that ends the composition of an input method is not the end of the rename.
+				if (event.nativeEvent.isComposing) return;
 				if (event.key === "Enter") {
 					event.preventDefault();
-					finish(value);
+					finish(value, true);
 				} else if (event.key === "Escape") {
 					event.preventDefault();
-					finish(null);
+					finish(null, true);
 				}
 			}}
 		/>

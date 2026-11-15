@@ -326,6 +326,47 @@ describe("the tabs of a sheet", () => {
 		expect(store.inputOf("A1")).toBe("=Costs!B1");
 	});
 
+	// Without the cells of the tab, an edit starts from an empty input, and a save then deletes the real input.
+	it("refuses a change to a tab whose cells did not arrive", async () => {
+		const { store, sheet, calls } = await openStore();
+		sheet.tabs.push({ id: "tab_2", name: "Sheet2", rows: 1, columns: 1 });
+		sheet.cells.tab_2 = [text("A1", "=Sheet1!A9")];
+		await store.refresh();
+		store.selectTab("tab_2");
+		expect(store.getSnapshot().tabLoading).toBe(true);
+		store.commit([{ cell: "A1", input: "" }]);
+		await settle();
+		expect(calls).toHaveLength(0);
+		expect(store.inputOf("A1")).toBe("=Sheet1!A9");
+	});
+
+	it("stops a change of the tabs while a save failed, but deletes the tab of the failed changes", async () => {
+		const { store, sheet, calls, log } = await openStore();
+		sheet.tabs.push({ id: "tab_2", name: "Sheet2", rows: 0, columns: 0 });
+		sheet.cells.tab_2 = [];
+		await store.refresh();
+		store.selectTab("tab_2");
+		await settle();
+		store.commit([{ cell: "A1", input: "unsaved" }]);
+		await settle();
+		calls.shift()?.reject(new TypeError("offline"));
+		await settle();
+		// The change of the tabs tries the save again first. A copy without the unsaved cells would lose them.
+		const duplicating = store.changeTab({ kind: "duplicate", tabId: "tab_2" });
+		await settle();
+		calls.shift()?.reject(new TypeError("offline"));
+		await expect(duplicating).rejects.toThrow(/not saved/);
+		expect(log.filter((entry) => entry === "duplicate")).toHaveLength(0);
+		expect(store.inputOf("A1", "tab_2")).toBe("unsaved");
+		const deleting = store.changeTab({ kind: "delete", tabId: "tab_2" });
+		await settle();
+		calls.shift()?.reject(new TypeError("offline"));
+		await deleting;
+		expect(log.at(-1)).toBe("delete");
+		expect(store.getSnapshot()).toMatchObject({ activeTab: "tab_1", tabs: [{ id: "tab_1" }] });
+		expect(store.hasUnsaved()).toBe(false);
+	});
+
 	it("shows the first tab, and drops the changes of a tab, when somebody deleted that tab", async () => {
 		const { store, sheet, calls } = await openStore();
 		sheet.tabs.push({ id: "tab_2", name: "Sheet2", rows: 0, columns: 0 });
@@ -340,6 +381,7 @@ describe("the tabs of a sheet", () => {
 		sheet.tabs.push({ id: "tab_2", name: "Sheet2", rows: 0, columns: 0 });
 		await store.refresh();
 		store.selectTab("tab_2");
+		await settle();
 		store.commit([{ cell: "A1", input: "lost" }]);
 		await settle();
 		sheet.tabs.pop();

@@ -445,8 +445,14 @@ MCP clients. The app has no UI-only path.
   - An editor gets **+** (add a tab) and **⋮** (the menu of the active tab: Rename, Duplicate, Move
     left, Move right, Delete). A double click on a tab also starts a rename. Delete asks first. The
     server refuses a name that a different tab has, and the page shows its message.
+  - The rename field covers its tab and is outside the tablist, so the tablist holds only tabs.
+    Enter keeps the name and Escape cancels: the focus then goes back to the tab. A blur also keeps
+    the name. The Enter that ends an input method composition does not end the rename.
   - Each tab has its own editor, so the selection, Undo and Redo, and the scroll position belong to
-    the tab. The page keeps them while a different tab is open.
+    the tab. The page keeps them while a different tab is open. A rename clears Undo and Redo of
+    each tab, because the steps hold formulas with the old name.
+  - While the cells of a tab did not arrive, the grid takes no edit, and the store refuses a change
+    to that tab. An edit then would start from an empty input and delete the real input.
   - The store keeps the cells of each tab that the page read. A new tab shows these cells at once,
     and the store gets the tab again. Each write names the revision of the cells of its tab, so the
     server refuses it when a write to a different tab came after the read. The store then gets the
@@ -454,6 +460,8 @@ MCP clients. The app has no UI-only path.
   - The changes of all tabs go through one save queue. A change of the tabs waits for the cells in
     the queue, and then the store gets the active tab again, because a rename or a delete can change
     its formulas. When somebody deletes the open tab, the page shows the first tab.
+  - When the cells in the queue do not save, a change of the tabs stops with a message, so a copy
+    cannot miss them. Only a delete of the tab that has them continues.
   - A changed input shows at once, in a muted color until the server answers. The page sends one
     request at a time with `base_revision`. Changes that arrive during a request go into the next
     request. A change of more than 5,000 cells goes in parts. An input of more than 2,000

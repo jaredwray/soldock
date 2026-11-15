@@ -53,8 +53,11 @@ export const TabId = z
 	.regex(/^tab_[1-9][0-9]{0,8}$/, "must be the id of a tab, such as tab_2")
 	.describe("The id of a tab, as the tabs of sheets.get return it.");
 
-/** The characters that a tab name cannot have, as in Excel: a formula cannot refer to a tab with them. */
-const TAB_NAME_FORBIDDEN = /[\p{Cc}[\]:*?/\\]/u;
+/**
+ * The characters that a tab name cannot have: the characters that Excel refuses, and control and
+ * format characters, so that two names that look the same are not two different names.
+ */
+const TAB_NAME_FORBIDDEN = /[\p{Cc}\p{Cf}[\]:*?/\\]/u;
 
 /** The name of a tab. A formula refers to a tab with its name, for example ='Q1 costs'!B4. */
 export const TabName = z
@@ -62,7 +65,7 @@ export const TabName = z
 	.trim()
 	.min(1)
 	.max(SHEET_LIMITS.tabNameChars)
-	.refine((name) => !TAB_NAME_FORBIDDEN.test(name), "must not contain control characters or [ ] : * ? / \\")
+	.refine((name) => !TAB_NAME_FORBIDDEN.test(name), "must not contain control or format characters, or [ ] : * ? / \\")
 	.refine((name) => !name.startsWith("'") && !name.endsWith("'"), "must not start or end with '");
 
 /** One grid of a sheet. */
@@ -194,7 +197,7 @@ export const updateCells = defineOperation({
 	errors: ["not_found", "invalid", "conflict", "payload_too_large"],
 });
 
-const TAB_RULES = `A tab name has 1 to ${SHEET_LIMITS.tabNameChars} characters, without [ ] : * ? / \\, and does not start or end with '. Two tabs of a sheet cannot have the same name, in upper or lower case.`;
+const TAB_RULES = `A tab name has 1 to ${SHEET_LIMITS.tabNameChars} characters, without [ ] : * ? / \\, and does not start or end with '. Two tabs of a sheet cannot have the same name, in upper or lower case. A retry with the same name gets invalid, so a call with a name is safe to send again.`;
 
 export const addTab = defineOperation({
 	name: "sheets.add_tab",
@@ -292,8 +295,9 @@ export const deleteTab = defineOperation({
 	name: "sheets.delete_tab",
 	summary: "Delete a tab of a sheet",
 	description: [
-		"Deletes a tab and each of its cells. A sheet keeps at least one tab, so the last tab cannot be deleted.",
+		"Deletes a tab and each of its cells. This cannot be undone. A sheet keeps at least one tab, so the last tab cannot be deleted.",
 		"A formula of a different tab that refers to the deleted tab gets #REF!. It keeps its text, so a new tab with the same name gives it a result again.",
+		"Set dry_run to true to get the count of cells that the delete removes and of formulas that get #REF!, without a change.",
 		"You need the editor role.",
 		IN_SPACE,
 	].join(" "),
@@ -306,8 +310,15 @@ export const deleteTab = defineOperation({
 		item_id: ItemId,
 		tab_id: TabId,
 		base_revision: BASE_REVISION,
+		dry_run: z.boolean().default(false),
 	}),
-	output: TabsOutput,
+	output: TabsOutput.extend({
+		/** The cells of the tab that have an input. */
+		cells: z.number().int(),
+		/** The formulas of other tabs that refer to the tab, and get #REF! after the delete. */
+		references: z.number().int(),
+		dry_run: z.boolean(),
+	}),
 	errors: ["not_found", "invalid", "conflict"],
 });
 
