@@ -2460,14 +2460,16 @@ fieldset {
 
 .compose-row {
 	display: grid;
-	grid-template-columns: 64px minmax(0, 1fr);
+	/* Each row sizes its own label, so the text field starts right after the label. */
+	grid-template-columns: auto minmax(0, 1fr);
+	column-gap: 8px;
 	align-items: center;
 	border-bottom: 1px solid var(--border);
 }
 
 /* The To row, with the "Add Cc and Bcc" button at its end. */
 .compose-row-extra {
-	grid-template-columns: 64px minmax(0, 1fr) auto;
+	grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .compose-row .field-error {
