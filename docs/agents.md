@@ -38,6 +38,21 @@ The **Apps connected as …** list of each agent shows its connections. The spon
 admin can revoke a connection there (`oauth.list_grants`, `oauth.revoke_grant`). Its tokens stop at
 once.
 
+A connection keeps the scopes that the person approved. A new release can add a scope, as
+`mail.webhooks` did. To give it to a connection:
+
+1. Open **Admin › Agents**, and open the agent.
+2. In **Apps connected as …**, select **Add scopes** on the connection.
+3. Select the scopes, then select **Add scopes** (`oauth.add_grant_scopes`).
+
+The client does not need a new approval: its next call uses the new scopes. Some clients read the
+tool list only when they connect. In such a client, start a new conversation. To remove a scope,
+revoke the connection, and connect the app again.
+
+An agent sees only the tools that its credential can call. `account.whoami` lists `missing_scopes`:
+each scope that the credential does not hold, with the operations that need it. The MCP
+instructions also name these scopes, and tell the agent who can add them.
+
 For client developers:
 
 - An unauthenticated call to `/mcp` gets `401` with

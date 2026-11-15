@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { CHAT_SOCKET_CLOSE, UNTRUSTED_NOTICE } from "@soldock/contracts";
+import { CHAT_SOCKET_CLOSE, SCOPES, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {
@@ -14,12 +14,14 @@ import {
 	mcp,
 	ORIGIN,
 	PASSWORD,
+	racing,
 	receiveWebhooks,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
 	setupOwner,
 	signIn,
+	withEnv,
 } from "./helpers.ts";
 
 const REDIRECT = "http://localhost:33418/callback";
@@ -702,6 +704,111 @@ describe("OAuth tokens", () => {
 		});
 		expect(res.status).toBe(201);
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
+	});
+});
+
+describe("OAuth scope changes", () => {
+	const instructions = async (token: string) => {
+		const { body } = await mcp(token, "initialize", {
+			protocolVersion: "2025-06-18",
+			capabilities: {},
+			clientInfo: { name: "t", version: "1" },
+		});
+		return ((body?.result ?? {}) as { instructions?: string }).instructions ?? "";
+	};
+
+	// A grant keeps the scopes of its approval. A scope that a later release adds, such as mail.webhooks,
+	// must reach a connection without a new approval, and the agent must learn what it does not hold.
+	it("tells the agent which scopes it lacks, and the sponsor adds one without a new approval", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens } = await connectNewAgent(owner);
+		const agentApi = api(tokens.access_token);
+		expect((await agentApi("account.whoami")).missing_scopes).toContainEqual({
+			scope: "mail.webhooks",
+			description: SCOPES["mail.webhooks"],
+			operations: ["mail.create_webhook", "mail.list_webhooks", "mail.update_webhook", "mail.delete_webhook"],
+		});
+		const before = await instructions(tokens.access_token);
+		expect(before).toContain("mail.webhooks (4 tools)");
+		expect(before).toContain("Admin › Agents");
+		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).not.toContain("mail_create_webhook");
+
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		const grantId = grant?.id ?? "";
+		const added = await owner.call("oauth.add_grant_scopes", { grant_id: grantId, scopes: ["mail.webhooks"] });
+		expect(added.grant.scopes).toEqual(["account.read", "mail.read", "mail.webhooks", "chat.read"]);
+
+		// The token that the client holds gets the new tools at once: no refresh and no new approval.
+		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).toContain("mail_create_webhook");
+		expect((await agentApi("account.whoami")).missing_scopes.map((missing) => missing.scope)).not.toContain(
+			"mail.webhooks",
+		);
+		expect(await instructions(tokens.access_token)).not.toContain("mail.webhooks (");
+		const refreshed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
+		expect(refreshed.scope.split(" ")).toContain("mail.webhooks");
+
+		// A scope that the connection holds already changes nothing. A person's key can call it over MCP too.
+		const again = await callTool(owner.key, "oauth_add_grant_scopes", {
+			grant_id: grantId,
+			scopes: ["mail.webhooks", "mail.read"],
+		});
+		expect(again.isError).toBeUndefined();
+		expect(again.structuredContent).toMatchObject({ grant: { scopes: added.grant.scopes } });
+	});
+
+	// Two people can add scopes at the same time. The second write must not remove the scope of the first.
+	it("refuses an add when the connection changed during the call, and keeps the other change", async () => {
+		const owner = await setupOwner();
+		const { agent } = await connectNewAgent(owner);
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		const grantId = grant?.id ?? "";
+		const other = `UPDATE oauth_grants SET scopes = '["account.read","mail.read","mail.send","chat.read"]' WHERE id = ?`;
+		const res = await withEnv(
+			{ DIRECTORY: racing(other, grantId, "UPDATE oauth_grants SET scopes") },
+			`/api/v1/oauth/grants/${grantId}/scopes`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ grant_id: grantId, scopes: ["mail.webhooks"] }),
+			},
+		);
+		expect(res.status).toBe(409);
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([
+			"account.read",
+			"mail.read",
+			"mail.send",
+			"chat.read",
+		]);
+	});
+
+	// An agent cannot change its own access. A person adds only scopes that they hold, to an agent that they manage.
+	it("lets only a person who manages the agent add a scope that they hold, to a live connection", async () => {
+		const { owner, ada } = await seedOrg();
+		const { agent, tokens } = await connectNewAgent(owner);
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		const input = { grant_id: grant?.id ?? "", scopes: ["mail.send" as const] };
+
+		expect(await codeOf(api(tokens.access_token)("oauth.add_grant_scopes", input))).toBe("forbidden");
+		// Ada does not sponsor the agent, and she is not an admin.
+		expect(await codeOf(ada.call("oauth.add_grant_scopes", input))).toBe("forbidden");
+		const { api_key } = await owner.call("account.create_api_key", {
+			label: "narrow",
+			scopes: ["account.keys", "mail.read"],
+		});
+		expect(await codeOf(api(api_key.secret)("oauth.add_grant_scopes", input))).toBe("forbidden");
+		const keys = owner.call("oauth.add_grant_scopes", { ...input, scopes: ["account.keys" as "mail.read"] });
+		expect(await codeOf(keys)).toBe("invalid");
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([
+			"account.read",
+			"mail.read",
+			"chat.read",
+		]);
+
+		// A revoked connection stays revoked. The app must connect again, and a person approves it again.
+		await owner.call("oauth.revoke_grant", { grant_id: input.grant_id });
+		expect(await codeOf(owner.call("oauth.add_grant_scopes", input))).toBe("conflict");
+		const unknown = owner.call("oauth.add_grant_scopes", { ...input, grant_id: `grt_${"0".repeat(26)}` });
+		expect(await codeOf(unknown)).toBe("not_found");
 	});
 });
 

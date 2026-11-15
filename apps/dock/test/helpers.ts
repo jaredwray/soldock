@@ -647,3 +647,45 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 	expect(hello).toMatchObject({ type: "hello", protocol: CHAT_SOCKET_PROTOCOL, room_id: roomId });
 	return { ...reader, version: hello.version };
 }
+
+/** Calls the Worker with some bindings replaced, for example a D1 binding that fails or races. */
+export function withEnv(
+	overrides: { SETUP_TOKEN?: string | undefined; DIRECTORY?: D1Database },
+	path: string,
+	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+) {
+	return (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+		new Request(`${ORIGIN}${path}`, init),
+		{ ...env, ...overrides } as unknown as Env,
+		createExecutionContext(),
+	);
+}
+
+/**
+ * A D1 binding that runs `change` just before the batch or the write that a call makes, as a request
+ * that lands during the call would. `write` names the SQL of a write that is not in a batch.
+ */
+export function racing(change: string, bind: string, write?: string) {
+	const run = () => env.DIRECTORY.prepare(change).bind(bind).run();
+	return new Proxy(env.DIRECTORY, {
+		get(target, property) {
+			if (property === "batch") {
+				return async (statements: D1PreparedStatement[]) => {
+					await run();
+					return target.batch(statements);
+				};
+			}
+			if (property === "prepare") {
+				return (sql: string) => {
+					const statement = target.prepare(sql);
+					if (!write || !sql.includes(write)) return statement;
+					return {
+						bind: (...values: unknown[]) => ({ run: async () => (await run(), statement.bind(...values).run()) }),
+					};
+				};
+			}
+			const value = Reflect.get(target, property);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+}

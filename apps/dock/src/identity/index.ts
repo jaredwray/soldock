@@ -9,6 +9,8 @@ export {
 	credentialBinding,
 	credentialRef,
 	credentialState,
+	type MissingScope,
+	missingScopes,
 } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export { identityHandlers } from "./handlers.ts";

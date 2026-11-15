@@ -1,6 +1,6 @@
 import { AGENT_SCOPES, ALL_SCOPES, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
 import { type HandlerMap, OperationError } from "../platform/index.ts";
-import { auditOk, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
+import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
@@ -173,6 +173,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		return {
 			principal: toPrincipalOutput(call.caller.principal),
 			scopes: [...call.caller.scopes],
+			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
 			sign_in:
 				call.caller.kind === "human"

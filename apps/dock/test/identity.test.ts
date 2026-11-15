@@ -1,4 +1,4 @@
-import { applyD1Migrations, createExecutionContext } from "cloudflare:test";
+import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,6 @@ import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
-import worker from "../src/index.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
 	api,
@@ -19,6 +18,7 @@ import {
 	mcp,
 	ORIGIN,
 	PASSWORD,
+	racing,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
@@ -26,6 +26,7 @@ import {
 	signIn,
 	submitSignIn,
 	totpNow,
+	withEnv,
 } from "./helpers.ts";
 
 async function denied(promise: Promise<unknown>): Promise<string> {
@@ -46,18 +47,6 @@ function setup(token: string, body: unknown, origin?: string) {
 }
 
 /** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
-function withEnv(
-	overrides: { SETUP_TOKEN?: string | undefined; DIRECTORY?: D1Database },
-	path: string,
-	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
-) {
-	return (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
-		new Request(`${ORIGIN}${path}`, init),
-		{ ...env, ...overrides } as unknown as Env,
-		createExecutionContext(),
-	);
-}
-
 const OWNER = {
 	mail_domain: "dock.test",
 	display_name: "Olive Owner",
@@ -681,35 +670,6 @@ describe("passwords", () => {
 		expect(await denied(bot.call("account.set_password", { password: "agents have none" }))).toBe("forbidden");
 	});
 });
-
-/**
- * A D1 binding that runs `change` just before the batch or the write that a call makes, as a request
- * that lands during the call would. `write` names the SQL of a write that is not in a batch.
- */
-function racing(change: string, bind: string, write?: string) {
-	const run = () => env.DIRECTORY.prepare(change).bind(bind).run();
-	return new Proxy(env.DIRECTORY, {
-		get(target, property) {
-			if (property === "batch") {
-				return async (statements: D1PreparedStatement[]) => {
-					await run();
-					return target.batch(statements);
-				};
-			}
-			if (property === "prepare") {
-				return (sql: string) => {
-					const statement = target.prepare(sql);
-					if (!write || !sql.includes(write)) return statement;
-					return {
-						bind: (...values: unknown[]) => ({ run: async () => (await run(), statement.bind(...values).run()) }),
-					};
-				};
-			}
-			const value = Reflect.get(target, property);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	});
-}
 
 describe("sessions that end during a change", () => {
 	// A reset by an admin ends the sessions of a person. A slow request from one of those sessions must

@@ -483,6 +483,28 @@ export async function listGrants(db: D1Database, principalId: string): Promise<O
 	return results.map(toGrant);
 }
 
+/**
+ * Replaces the scopes of a live grant, but only while the grant still holds `before`. So a parallel
+ * change is never lost. Each write of `scopes` is the `JSON.stringify` of a list, so the compare of the
+ * text is exact. Returns false when the grant ended or changed. The next request of its access token
+ * uses the new scopes, because `authenticate` reads them from the grant.
+ */
+export async function setGrantScopes(
+	db: D1Database,
+	id: string,
+	before: readonly Scope[],
+	after: readonly Scope[],
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE oauth_grants SET scopes = ?1
+			WHERE id = ?2 AND scopes = ?3 AND revoked_at IS NULL AND refresh_expires_at > ?4`,
+		)
+		.bind(JSON.stringify(after), id, JSON.stringify(before), new Date().toISOString())
+		.run();
+	return result.meta.changes === 1;
+}
+
 /** Revokes a grant: its access token and its refresh tokens stop at once. */
 export async function revokeGrant(db: D1Database, id: string): Promise<void> {
 	await db

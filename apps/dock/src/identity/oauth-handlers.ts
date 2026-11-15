@@ -13,6 +13,7 @@ import {
 	type OAuthRequestRecord,
 	pendingRequestCondition,
 	revokeGrant,
+	setGrantScopes,
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
@@ -23,6 +24,7 @@ import {
 	getPrincipal,
 	liveSponsorCondition,
 	mailDomains,
+	scopeCeiling,
 } from "./store.ts";
 
 type OAuthOperation =
@@ -30,9 +32,12 @@ type OAuthOperation =
 	| "oauth.approve_authorization"
 	| "oauth.deny_authorization"
 	| "oauth.list_grants"
-	| "oauth.revoke_grant";
+	| "oauth.revoke_grant"
+	| "oauth.add_grant_scopes";
 
 const GONE = "This request expired, or somebody approved or denied it. Start the connection again in the app.";
+const ENDED =
+	"This connection is revoked or expired. Connect the app again, and approve it with the scopes that it needs.";
 
 function toAuthorizationOutput(request: OAuthRequestRecord): OAuthAuthorization {
 	return {
@@ -172,5 +177,30 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		await revokeGrant(call.env.DIRECTORY, grant.id);
 		auditOk(call, "oauth.revoke_grant", grant.id);
 		return { revoked: true };
+	},
+
+	// Add only: a narrower grant would also need a new check of the scopes of each open socket and
+	// webhook. A revoke stops all of them, so a person removes a scope with a revoke and a new approval.
+	async "oauth.add_grant_scopes"(call, input) {
+		const grant = await getGrant(call.env.DIRECTORY, input.grant_id);
+		if (!grant) throw new OperationError("not_found", "No OAuth connection has that id.");
+		const principal = await credentialOwner(call, grant.principal_id);
+		const requested = grantableScopes(call.caller, principal, input.scopes);
+		if (grant.revoked_at !== null || Date.parse(grant.refresh_expires_at) <= Date.now()) {
+			throw new OperationError("conflict", ENDED);
+		}
+		const added = requested.filter((scope) => !grant.scopes.includes(scope));
+		if (added.length === 0) return { grant: toGrantOutput(grant) };
+		// The order of the ceiling, so each grant lists its scopes in the same order.
+		const scopes = scopeCeiling(principal.kind).filter(
+			(scope) => grant.scopes.includes(scope) || added.includes(scope),
+		);
+		if (!(await setGrantScopes(call.env.DIRECTORY, grant.id, grant.scopes, scopes))) {
+			throw new OperationError("conflict", "The connection changed or ended. Load it again, then try again.");
+		}
+		auditOk(call, "oauth.add_grant_scopes", `${grant.id}:${added.join(",")}`);
+		const updated = await getGrant(call.env.DIRECTORY, grant.id);
+		if (!updated) throw new Error(`grant ${grant.id} missing after update`);
+		return { grant: toGrantOutput(updated) };
 	},
 };
