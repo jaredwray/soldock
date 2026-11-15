@@ -22,13 +22,19 @@ export interface RoomSync {
 	notice(listedVersion: number): Promise<void>;
 	/** Gets the changes now, for example after a change that this page made. */
 	run(): Promise<void>;
+	/**
+	 * Takes one message from the socket of the room, or from the answer of an operation. The message
+	 * shows at once. When its version is the next version of the room, the page is current, and no read
+	 * runs. When it is later than that, the page did not get a change, and a sync gets it.
+	 */
+	push(message: ChatMessage): void;
 	/** Stops the sync until the next `start`. A page of changes that arrives before that is dropped. */
 	stop(): void;
 }
 
 /**
  * Gets each new, changed and deleted message after the version that the page has, and gives them to
- * `apply`. One sync runs at a time. A call during a sync makes the sync run one more time. After a
+ * `apply`. `apply` can get the same message two times: from `push` and from a read. One sync runs at a time. A call during a sync makes the sync run one more time. After a
  * failed read, the version stays, so the next sync asks for the same changes again. A page that was
  * read before a new `start` is dropped, and the sync reads again from the new version: that page was
  * for the list from before the load.
@@ -87,6 +93,13 @@ export function createRoomSync(
 			return version !== null && listedVersion > version ? run() : Promise.resolve();
 		},
 		run,
+		push(message) {
+			if (version === null || stopped || message.version <= version) return;
+			apply([message]);
+			// A sync that runs read the room before this message, or reads it now. It must run again.
+			if (!running && message.version === version + 1) version = message.version;
+			else void run();
+		},
 		stop() {
 			stopped = true;
 		},

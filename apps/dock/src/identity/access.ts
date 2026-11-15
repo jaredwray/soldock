@@ -131,3 +131,61 @@ export async function credentialState(
 	if (principal.archived_at !== null) return { state: "archived" };
 	return { state: "live", principal };
 }
+
+/**
+ * A credential, named by a value that is not its secret: the SHA-256 of a session cookie, or the id of
+ * an API key or an OAuth grant. A live connection keeps it, and asks again later if the credential works.
+ */
+export interface CredentialRef {
+	principalId: string;
+	kind: AuthContext["credential"];
+	id: string;
+}
+
+export function credentialRef(caller: AuthContext): CredentialRef {
+	const id =
+		caller.credential === "session"
+			? caller.sessionHash
+			: caller.credential === "api_key"
+				? caller.keyId
+				: caller.grantId;
+	if (id === null) throw new Error(`a ${caller.credential} credential without an id`);
+	return { principalId: caller.principal.id, kind: caller.credential, id };
+}
+
+/**
+ * For each credential, true while it works now, by the rules of `authenticate`: the principal is not
+ * archived and not deleted, a session did not expire and its person did not sign out, an API key is
+ * not revoked, and an OAuth grant is not revoked and can still get tokens. One query reads the whole
+ * list, so a room with many sockets makes one read.
+ *
+ * An OAuth access token expires after one hour. This check does not know the token of a connection, so
+ * a connection must also have a longest life of one hour or less.
+ */
+export async function liveCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<boolean[]> {
+	if (refs.length === 0) return [];
+	const { results } = await db
+		.prepare(
+			`SELECT ref.key AS position
+			FROM json_each(?1) AS ref
+			JOIN principals p ON p.id = json_extract(ref.value, '$.principalId')
+				AND p.archived_at IS NULL AND p.deleted_at IS NULL
+			WHERE CASE json_extract(ref.value, '$.kind')
+				WHEN 'session' THEN p.kind = 'human' AND EXISTS (
+					SELECT 1 FROM sessions s
+					WHERE s.token_hash = json_extract(ref.value, '$.id') AND s.principal_id = p.id AND s.expires_at > ?2)
+				WHEN 'api_key' THEN EXISTS (
+					SELECT 1 FROM api_keys k
+					WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL)
+				WHEN 'oauth' THEN EXISTS (
+					SELECT 1 FROM oauth_grants g
+					WHERE g.id = json_extract(ref.value, '$.id') AND g.principal_id = p.id AND g.revoked_at IS NULL
+						AND g.refresh_expires_at > ?2)
+				ELSE 0
+			END`,
+		)
+		.bind(JSON.stringify(refs), new Date().toISOString())
+		.all<{ position: number }>();
+	const live = new Set(results.map((row) => Number(row.position)));
+	return refs.map((_ref, position) => live.has(position));
+}

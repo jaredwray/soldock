@@ -8,13 +8,15 @@ import {
 import { env, exports } from "cloudflare:workers";
 import {
 	ApiError,
+	CHAT_SOCKET_PROTOCOL,
+	chatSocketPath,
 	createClient,
 	type FetchLike,
 	type InputOf,
 	type OperationName,
 	type OutputOf,
 } from "@soldock/contracts";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
 
@@ -591,4 +593,57 @@ export function receiveWebhooks(respond: (post: WebhookPost) => Response = () =>
 		return respond(post);
 	});
 	return posts;
+}
+
+/** The `authorization` header of an API key or an OAuth access token. */
+export const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+/** The upgrade request of a room socket, through the real Worker entry point. */
+export function upgradeRoomSocket(roomId: string, headers: Record<string, string>): Promise<Response> {
+	return request(chatSocketPath(roomId), { headers: { upgrade: "websocket", ...headers } });
+}
+
+export interface SocketReader {
+	socket: WebSocket;
+	/** The next event, `"pong"`, or `{ closed: <code> }` at the end. */
+	next(): Promise<unknown>;
+}
+
+/** Accepts the socket of an upgrade response, and reads its events in order. */
+export function readSocket(response: Response): SocketReader {
+	const socket = response.webSocket;
+	if (!socket) throw new Error(`the answer has no socket: status ${response.status}`);
+	const arrived: unknown[] = [];
+	const waiting: ((value: unknown) => void)[] = [];
+	const push = (value: unknown) => {
+		const next = waiting.shift();
+		if (next) next(value);
+		else arrived.push(value);
+	};
+	socket.addEventListener("message", (event) =>
+		push(event.data === "pong" ? "pong" : JSON.parse(event.data as string)),
+	);
+	socket.addEventListener("close", (event) => push({ closed: event.code }));
+	socket.accept();
+	return {
+		socket,
+		next() {
+			if (arrived.length > 0) return Promise.resolve(arrived.shift());
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const limit = new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => reject(new Error(`no socket event in ${SSE_READ_MS} ms`)), SSE_READ_MS);
+			});
+			return Promise.race([new Promise<unknown>((resolve) => waiting.push(resolve)), limit]).finally(() =>
+				clearTimeout(timer),
+			);
+		},
+	};
+}
+
+/** Opens a room socket, and reads its `hello`. `version` is the version of the room at that time. */
+export async function connectRoomSocket(roomId: string, headers: Record<string, string>) {
+	const reader = readSocket(await upgradeRoomSocket(roomId, headers));
+	const hello = (await reader.next()) as { version: number };
+	expect(hello).toMatchObject({ type: "hello", protocol: CHAT_SOCKET_PROTOCOL, room_id: roomId });
+	return { ...reader, version: hello.version };
 }

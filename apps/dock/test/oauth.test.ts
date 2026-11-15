@@ -1,11 +1,14 @@
 import { env } from "cloudflare:workers";
-import { UNTRUSTED_NOTICE } from "@soldock/contracts";
+import { CHAT_SOCKET_CLOSE, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {
 	type Actor,
 	api,
+	bearer,
 	callTool,
 	codeOf,
+	connectRoomSocket,
 	consumeWebhooks,
 	createActor,
 	mcp,
@@ -451,6 +454,10 @@ describe("OAuth approval", () => {
 });
 
 describe("OAuth tokens", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	// RFC 9700: somebody else can hold a code. A second use must fail and end what the first use made.
 	it("uses a code one time: a second use fails and revokes the tokens of the first use", async () => {
 		const owner = await setupOwner();
@@ -592,6 +599,24 @@ describe("OAuth tokens", () => {
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
 		const renewed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
 		expect((await mcp(renewed.access_token, "tools/list")).status).toBe(200);
+	});
+
+	// A room socket stays open after its request. It must not outlive the connection that opened it.
+	it("closes the room socket of a token when the sponsor revokes the connection", async () => {
+		const owner = await setupOwner();
+		const { agent, tokens } = await connectNewAgent(owner);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
+		// Only the clock is fake: the room checks a credential again when its last check is old.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const socket = await connectRoomSocket(room.id, bearer(tokens.access_token));
+		const first = (await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." })).message;
+		expect(await socket.next()).toEqual({ type: "message", message: first });
+
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		await owner.call("chat.post_message", { room_id: room.id, text: "The connection is revoked." });
+		expect(await socket.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
 	});
 
 	it("stops each token at once when the sponsor revokes the connection", async () => {

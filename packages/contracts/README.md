@@ -11,12 +11,12 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | --- | --- |
 | `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, callers, annotations, input and output schemas, errors |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
-| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. `mail.inbox` is the only kind |
+| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox` and `chat.room` |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the webhook operations, `Webhook`, `WEBHOOK_LIMITS` and `WEBHOOK_EVENT_TYPE` |
 | `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/sheets.ts` | The Sheets operations, the cell and tab schemas, the error values and `SHEET_LIMITS` |
-| `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS` |
+| `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |

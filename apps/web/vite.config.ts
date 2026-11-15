@@ -15,6 +15,8 @@ export default defineConfig({
 			"/api": DOCK,
 			"/auth": DOCK,
 			"/mcp": DOCK,
+			// The room sockets of Chat.
+			"/ws": { target: DOCK, ws: true },
 		},
 	},
 });

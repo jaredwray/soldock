@@ -1,11 +1,16 @@
 // Public surface of @soldock/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
 export {
 	CHAT_LIMITS,
+	CHAT_SOCKET_CLOSE,
+	CHAT_SOCKET_PROTOCOL,
 	ChatMember,
 	ChatMessage,
 	ChatRoom,
+	ChatSocketEvent,
+	chatSocketPath,
 	ROOM_KINDS,
 	ROOM_ROLES,
+	RoomId,
 	type RoomKind,
 	type RoomRole,
 } from "./chat.ts";

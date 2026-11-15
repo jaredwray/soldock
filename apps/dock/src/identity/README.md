@@ -399,6 +399,12 @@ credential still works: `live`, `archived` (a restore makes it work again) or `e
 was deleted, or the key or the grant was revoked or expired). A session binding ends only with its
 principal.
 
+A live connection, such as the socket of a chat room, keeps a reference to its credential
+(`credentialRef`): the SHA-256 of the session cookie, or the id of the API key or of the OAuth grant.
+`liveCredentials` tells for a list of references which credentials work now, with one query. It uses
+the rules of `authenticate`, so a sign-out ends a session reference. It does not know an OAuth access
+token, so the connection must also have a longest life of one hour or less.
+
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
 alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.
 

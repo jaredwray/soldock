@@ -1,7 +1,8 @@
-import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatMessage, type ChatRoom, chatSocketPath } from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { withChanges, withOlder } from "./model.ts";
+import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
 
 /** The time between two reads of the room list. A read is one query of the index, not a call to each room. */
@@ -72,6 +73,20 @@ export function useRooms() {
 	return { ...state, refresh };
 }
 
+/** One WebSocket connection to the socket of a room. The session cookie authenticates it. */
+function connectRoom(roomId: string, handlers: SocketHandlers): Connection {
+	const url = new URL(chatSocketPath(roomId), window.location.href);
+	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+	const socket = new WebSocket(url);
+	socket.onmessage = (event) => handlers.message(event.data);
+	// A connection that fails also closes, so the close is the only end.
+	socket.onclose = (event) => handlers.close(event.code);
+	return {
+		send: (data) => socket.send(data),
+		close: () => socket.close(1000),
+	};
+}
+
 export interface RoomState {
 	status: "loading" | "ready" | "error";
 	/** The room as the room itself gave it, at the time of the load. */
@@ -93,14 +108,22 @@ const ROOM_LOADING: RoomState = {
 };
 
 /**
- * One open room: the room and its messages. `listed` is the version of the room in the room list, with
- * the `tick` of that list. After each list, the hook gets the changes when the room is ahead of the
- * page: new, changed and deleted messages. Use one hook for each room (a `key` on the component).
+ * One open room: the room and its messages. Use one hook for each room (a `key` on the component).
+ *
+ * A member has a socket to the room, which brings each new, changed and deleted message at once.
+ * `onRoomChanged` runs when the socket tells that the name, the topic or the members changed, or that
+ * the person is not a member now.
+ *
+ * `listed` is the version of the room in the room list, with the `tick` of that list. After each list,
+ * the hook gets the changes when the room is ahead of the page. So the page is also current while the
+ * socket is not connected.
  */
-export function useRoom(roomId: string, listed: { version: number | null; tick: number }) {
+export function useRoom(roomId: string, listed: { version: number | null; tick: number }, onRoomChanged: () => void) {
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
 	const alive = useRef(true);
 	const loads = useRef(0);
+	const roomChanged = useRef(onRoomChanged);
+	roomChanged.current = onRoomChanged;
 
 	const sync = useMemo(
 		() =>
@@ -158,6 +181,32 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
 	}, [tick, listedVersion, sync]);
 
+	// The socket opens after the load, for a member only: the room gives its messages to its members.
+	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
+	useEffect(() => {
+		if (!member) return;
+		const socket = createRoomSocket({
+			connect: (handlers) => connectRoom(roomId, handlers),
+			onEvent(event) {
+				// `hello` has the version of the room: the sync gets what changed while no socket was open.
+				if (event.type === "hello") void sync.notice(event.version);
+				else if (event.type === "message") sync.push(event.message);
+				else roomChanged.current();
+			},
+			onEnd: () => roomChanged.current(),
+		});
+		const wake = () => {
+			if (document.visibilityState === "visible") socket.wake();
+		};
+		document.addEventListener("visibilitychange", wake);
+		window.addEventListener("online", wake);
+		return () => {
+			document.removeEventListener("visibilitychange", wake);
+			window.removeEventListener("online", wake);
+			socket.close();
+		};
+	}, [member, roomId, sync]);
+
 	const loadOlder = useCallback(async () => {
 		const first = state.messages[0];
 		if (!first || state.loadingOlder) return;
@@ -177,17 +226,11 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		}
 	}, [roomId, state.messages, state.loadingOlder]);
 
-	/** Puts a message that an operation returned into the list, then gets what else changed. */
-	const apply = useCallback(
-		(message: ChatMessage) => {
-			setState((current) => ({
-				...current,
-				messages: withChanges(current.messages, [message], current.hasOlder),
-			}));
-			void sync.run();
-		},
-		[sync],
-	);
+	/**
+	 * Puts a message that an operation returned into the list. The socket brings the same message. The
+	 * list takes it one time, and a read runs only when the page did not get a change before it.
+	 */
+	const apply = useCallback((message: ChatMessage) => sync.push(message), [sync]);
 
 	return { ...state, reload: load, sync: sync.run, loadOlder, apply };
 }

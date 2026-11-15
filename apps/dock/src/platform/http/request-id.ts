@@ -17,6 +17,8 @@ export function requestId(
 		const id = generate();
 		c.set("requestId", id);
 		await next();
+		// A WebSocket upgrade keeps its response: a copy would lose the socket.
+		if (c.res.status === 101) return;
 		// After `next()` the response is final. Hono copies it before setting the header, so this also
 		// works for responses with immutable headers, such as ones fetched from a binding.
 		c.header(REQUEST_ID_HEADER, id);

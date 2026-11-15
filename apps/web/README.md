@@ -502,10 +502,22 @@ MCP clients. The app has no UI-only path.
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.
+  - The open room has a WebSocket to its room (`/ws/chat/rooms/<room_id>`), for a member. The
+    socket brings each new, changed and deleted message, and the page shows it at once. The page
+    sends nothing on the socket but pings: each change is an operation.
+  - Each message event has the version of the room. When a version is missing, the page calls
+    `chat.list_messages` with `changed_after`. The first event of a socket has the version of the
+    room, so the page gets what changed while it had no socket.
+  - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
+    each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
+    that stopped without a close. When the tab shows again, or the network comes back, the page
+    tests the socket at once.
+  - The page opens no new socket when the server ends it: the person signed out, or is not a member
+    of the room now. The page then reads the room list again.
   - The room list comes from `chat.list_rooms` each 4 seconds while the tab is visible, and on
-    window focus. When the `version` of the open room is higher than the version of the page, the
-    page calls `chat.list_messages` with `changed_after`. It then shows each new, changed and
-    deleted message. The page has no WebSocket.
+    window focus. It gives the sidebar its unread dots. When the `version` of the open room is
+    higher than the version of the page, the page calls `chat.list_messages` with `changed_after`.
+    So the open room is current also while its socket is not connected.
   - A sync that fails runs again after the next room list, also when the version did not change.
   - An open room is read: the page calls `chat.mark_read` with the `seq` of the last message that
     it shows, one time for each new message, only while the tab is visible. The open room has no

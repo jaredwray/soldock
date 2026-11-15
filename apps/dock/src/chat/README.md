@@ -1,15 +1,18 @@
 # `chat` module
 
-> Status: **started**. The first end-to-end layer exists: public and private rooms, direct
-> messages, messages with plain text, the read marker, and access for people and agents. Keep
-> this README current as the module grows. It is the module's contract.
+> Status: **started**. Two layers exist. The first layer has public and private rooms, direct
+> messages, messages with plain text, the read marker, and access for people and agents. The
+> second layer has the live socket of a room. Keep this README current as the module grows. It is
+> the module's contract. The plan for the next layers is in
+> [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists. Later: threads, reactions, mentions, files, search, live push, notifications. |
-| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the lists). |
-| **Depends on** | `platform`, `identity` (the principals of new members). |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mentions, files, search, notifications. |
+| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the lists). |
+| **Depends on** | `platform`, `identity` (the principals of new members, the credential of a request, the credential check of a socket). |
 | **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read` |
+| **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resource `chat.room`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -22,9 +25,11 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 
 | File | What |
 | --- | --- |
-| `room.ts` | `ChatRoomDO`: schema, access checks, members, messages, the read marker, and the writes to the index |
+| `room.ts` | `ChatRoomDO`: schema, access checks, members, messages, the read marker, the writes to the index, and the live sockets with their events |
 | `room-index.ts` | The reads of the index in D1: the rooms of a principal, and the public rooms |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
+| `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
+| `watch.ts` | The change feed of the `chat.room` resource, for MCP `subscriptions/listen` |
 
 ## Rooms
 
@@ -150,12 +155,107 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   authenticates each request. A later layer can join the writes of a busy room, or move the index
   of each principal into its own object (the planned `PrincipalDO`).
 
-## Clients without a live connection
+## The socket of a room
 
-This layer has no WebSocket. A client polls `chat.list_rooms`, which is one D1 query and wakes no
-room object. Each room in the result has `unread` and `version`. When the `version` of the open
-room is higher than the version that the client has, the client calls `chat.list_messages` with
-`changed_after`. The web app does this each 4 seconds while its tab shows. An agent can do the same.
+A member can open a WebSocket to a room: `GET /ws/chat/rooms/{room_id}` with an upgrade. The room
+sends each change to its sockets at once. `chatSocketPath`, `ChatSocketEvent` and
+`CHAT_SOCKET_CLOSE` of the contracts are the contract of the socket.
+
+### Events only
+
+- The socket carries events from the room only. Each change of a room is an operation, with REST
+  and MCP. So the socket adds no second way to write.
+- A message from a client closes the socket with code `1008`. The text `ping` is the exception: the
+  runtime answers `pong`, and the room object stays asleep.
+- The room object accepts the socket with `acceptWebSocket`. It can sleep while its sockets wait,
+  and it wakes for a change.
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `hello` | The first event of a socket | `protocol`, `room_id`, and `version`: the version of the room at that time |
+| `message` | A message is new, changed or deleted | `message`: the message as `chat.list_messages` returns it |
+| `room` | The name, the topic or the members changed | None. Call `chat.get_room` |
+
+- The `version` of a `message` event is the version of the room after the change. A client shows the
+  message at once. When a version is missing, the client calls `chat.list_messages` with
+  `changed_after`. So a lost event does no harm.
+- `hello` gives the version after each connect. A client then gets what changed while it had no socket.
+- The room sends the events in the order of the changes. The sockets do not wait for the write to
+  the index.
+- A read marker sends no event.
+
+### Who gets a socket
+
+1. The Worker authenticates the request as REST does: a bearer token, or the session cookie. A
+   person and an agent get the same socket.
+2. A browser sends the cookie on a WebSocket request from each site. So a session needs the `Origin`
+   of this host, also though the request is a GET.
+3. The credential must be able to call `chat.list_messages`: the scope `chat.read`.
+4. An id that is not a room id gets `not_found`, and wakes no object.
+5. The room object accepts the socket only for a member, in the same step as its member check.
+
+A refusal is a problem response with the code that `chat.list_messages` gives: `unauthenticated`,
+`forbidden` or `not_found`. A request without an upgrade gets `invalid`.
+
+### Access after the open
+
+A socket stays open after its request. It must not outlive the access that opened it.
+
+- The room closes the sockets of a member in the same step as it removes the member. No later event
+  reaches them.
+- A socket keeps a reference to its credential: the SHA-256 of the session cookie, or the id of the
+  API key or of the OAuth grant. It keeps no secret.
+- Before an event, the room checks each credential whose last check is 60 seconds old or more
+  (`SOCKET_RECHECK_MS`). `liveCredentials` of `identity` reads all of them with one D1 query. A
+  socket whose credential stopped closes, and does not get the event.
+- So these stop a socket: a sign-out, the end of a session, a revoked key, a revoked OAuth
+  connection, and a principal that is archived or deleted.
+- If the check fails, those sockets close with the code `reconnect`. The Worker then authenticates
+  each new socket.
+- A socket lives one hour at most (`SOCKET_MAX_MS`), because an OAuth access token lasts one hour.
+  The room closes it at the next event after that time.
+- Known limit: a socket of a credential that stopped can get events for at most 60 seconds after
+  its last check. This is the limit of MCP `subscriptions/listen`. The planned `PrincipalDO` will
+  close such a socket at once.
+
+| Close code | Meaning | What the client does |
+| --- | --- | --- |
+| `4001` (`reconnect`) | The Worker must authenticate the credential again | Opens a new socket |
+| `4002` (`replaced`) | The member opened more than 8 sockets to the room (`CHAT_LIMITS.socketsPerMember`), and this one is the oldest | Opens no new socket for this one |
+| `4003` (`ended`) | The credential stopped, or the principal is not a member now | Opens no new socket |
+| `1008` | The client sent a message | Opens no new socket |
+
+### Agents
+
+- An agent can open the socket with its API key or its OAuth access token.
+- An MCP client subscribes to the resource `chat.room` (`soldock://chat/{room_id}/messages`) with
+  `subscriptions/listen` ([`mcp`](../mcp/README.md#subscriptions)). The read operation of the
+  resource is `chat.list_messages`. Its list operation is `chat.list_rooms`, with the first 100
+  rooms of the caller.
+- The change feed of the resource is a room socket that the Worker opens for the stream
+  (`watch.ts`). So the room makes the same member check and the same credential check for the two.
+- Only a `message` event sends `notifications/resources/updated`.
+- The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
+  one query, which wakes no room. The index is a first filter only. The room object decides when the
+  feed opens, and the socket of a removed member closes, which ends the stream.
+
+### Cost and limits
+
+- A change sends one frame to each socket of the room. It makes no write for the sockets.
+- A room with activity makes one D1 read each minute for the credential checks, for all of its
+  sockets together.
+- One member has at most 8 sockets in one room. A room has at most 500 members.
+- Known limit: `chat.post_message` has no rate limit yet. A later change of this layer adds it.
+
+## Clients without a socket
+
+A client can also poll `chat.list_rooms`, which is one D1 query and wakes no room object. Each room
+in the result has `unread` and `version`. When the `version` of the open room is higher than the
+version that the client has, the client calls `chat.list_messages` with `changed_after`.
+
+The web app still does this each 4 seconds while its tab shows. The list gives the sidebar its
+unread dots, and it keeps the open room current while its socket is not connected. The poll stops
+when the planned `PrincipalDO` gives each person one socket for the sidebar.
 
 ## A fresh start of the directory
 
@@ -179,6 +279,12 @@ room is higher than the version that the client has, the client calls `chat.list
   outside, so no output has `untrusted: true`. When a bot or a webhook can post text from outside,
   those messages must get the mark.
 - The object does not read the text of a message. It never goes into a log.
+- A socket with the session cookie needs the `Origin` of this host. So a page of a different site
+  cannot open a socket with the session of a person, and cannot read a room.
+- The log line `chat socket opened` has the principal, the kind of the credential and the room. A
+  socket is a read, so it has no audit line, as `chat.list_messages` has none.
+- An event has only what `chat.list_messages` gives to the same member. The room sends it only to
+  the sockets of its members.
 
 ## Data inventory
 
@@ -190,10 +296,13 @@ room is higher than the version that the client has, the client calls `chat.list
 | Outbox | `ChatRoomDO` table `outbox` | The index rows that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Schema version | `ChatRoomDO` table `meta` | |
+| Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql` |
 
 ## Later layers
 
-Not built yet: threads, reactions, mentions, files in messages (through Drive), search, live push
-over `/ws/`, presence, notifications, group direct messages, room deletion and archive, incoming
-webhooks for bots, and admin tools for rooms.
+Not built yet: a rate limit for posts, threads, reactions, mentions, rich text, files in messages
+(through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
+notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
+admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
+the order and the decisions.

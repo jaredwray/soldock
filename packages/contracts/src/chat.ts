@@ -14,6 +14,8 @@ export const CHAT_LIMITS = {
 	membersPerCall: 50,
 	pageSize: 100,
 	queryChars: 100,
+	/** The live sockets of one member in one room. One more socket closes the oldest one. */
+	socketsPerMember: 8,
 } as const;
 
 /**
@@ -113,6 +115,46 @@ export const ChatMessage = z.object({
 	version: z.number().int(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
+
+/** The number of the room socket protocol. A change that an older client cannot read gets a new number. */
+export const CHAT_SOCKET_PROTOCOL = 1;
+
+/** The path of the socket of a room. A member opens it to get each change of the room at once. */
+export function chatSocketPath(roomId: string): string {
+	return `/ws/chat/rooms/${encodeURIComponent(roomId)}`;
+}
+
+/** The codes with which the server closes a room socket. Each other code is a failure: try again later. */
+export const CHAT_SOCKET_CLOSE = {
+	/** The server must authenticate the credential again. Open a new socket now. */
+	reconnect: 4001,
+	/** The member opened more sockets than `CHAT_LIMITS.socketsPerMember`. Do not open a new socket for this one. */
+	replaced: 4002,
+	/** The credential stopped, or its principal is not a member now. Do not open a new socket. */
+	ended: 4003,
+} as const;
+
+/**
+ * An event of a room socket. The socket carries events from the server only: each change of a room is
+ * an operation.
+ *
+ * - `hello` is the first event. `version` is the version of the room at that time. A client that has an
+ *   older version calls chat.list_messages with changed_after.
+ * - `message` has a new, changed or deleted message, as chat.list_messages returns it. Its `version` is
+ *   the version of the room after the change, so a client that misses a version gets the changes.
+ * - `room` tells that the name, the topic or the members changed. Call chat.get_room.
+ */
+export const ChatSocketEvent = z.discriminatedUnion("type", [
+	z.object({
+		type: z.literal("hello"),
+		protocol: z.number().int(),
+		room_id: z.string(),
+		version: z.number().int(),
+	}),
+	z.object({ type: z.literal("message"), message: ChatMessage }),
+	z.object({ type: z.literal("room") }),
+]);
+export type ChatSocketEvent = z.infer<typeof ChatSocketEvent>;
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
 const CREATE = { readOnly: false, destructive: false, idempotent: false, openWorld: false } as const;

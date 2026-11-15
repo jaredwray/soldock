@@ -1,3 +1,4 @@
+import { CHAT_LIMITS } from "./chat.ts";
 import type { InputOf, OperationName, OutputOf } from "./registry.ts";
 
 /**
@@ -57,9 +58,35 @@ export const mailInbox = defineResource({
 		"Only a new message in the inbox sends notifications/resources/updated. Other changes, such as a read, a label or an archive, send no notification.",
 });
 
+/** The messages of one room or direct message that the caller is a member of. */
+export const chatRoom = defineResource({
+	name: "chat.room",
+	title: "Room messages",
+	description:
+		"The newest messages of a room or a direct message that you are a member of, as chat.list_messages returns them. Subscribe to it with subscriptions/listen to get a notification when a message is new, changed or deleted. Then call chat.list_messages with changed_after and the version that you have.",
+	uriTemplate: "soldock://chat/{room_id}/messages",
+	mimeType: "application/json",
+	read: { operation: "chat.list_messages", input: (vars) => ({ room_id: vars.room_id as string }) },
+	list: {
+		operation: "chat.list_rooms",
+		input: { view: "joined", limit: CHAT_LIMITS.pageSize },
+		items: (output) =>
+			output.rooms.map((room) => ({
+				vars: { room_id: room.id },
+				title:
+					room.kind === "dm"
+						? `Direct message with ${room.peer?.display_name ?? "a member"}`
+						: `Messages of #${room.name ?? "room"}`,
+			})),
+	},
+	updates:
+		"A new, changed or deleted message sends notifications/resources/updated. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
+});
+
 /** Every resource kind, by name. */
 export const resources = {
 	"mail.inbox": mailInbox,
+	"chat.room": chatRoom,
 } as const;
 
 export type ResourceName = keyof typeof resources;

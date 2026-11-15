@@ -33,7 +33,7 @@ const STICK_PX = 80;
 export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }: RoomViewProps) {
 	const ownId = useSession().whoami.principal.id;
 	const toast = useToast();
-	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick });
+	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
 	const [draft, setDraft] = useState("");

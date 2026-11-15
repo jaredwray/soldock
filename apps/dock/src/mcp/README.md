@@ -90,12 +90,15 @@ gives the same data as REST.
 | Resource kind | URI template | Read | List |
 | --- | --- | --- | --- |
 | `mail.inbox` | `soldock://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
+| `chat.room` | `soldock://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
 
 - A credential sees a resource kind only when it can call the read operation and the list
   operation. A key without `mail.read` sees no inbox.
 - `resources/list` gives one resource for each mailbox of `mail.list_mailboxes`: the own mailbox, each
   team mailbox that the caller is a member of and, for an owner or an admin, the mailbox of each agent.
   An owner or an admin can read the inbox of an agent, but cannot subscribe to it.
+- `resources/list` gives one `chat.room` resource for each room and each direct message that the
+  caller is a member of. A key without `chat.read` sees no room.
 - `resources/read` runs the read operation with the scope checks and the validation of REST. The
   content is the JSON of the operation result (`application/json`). When the JSON holds untrusted
   content, a `text/plain` notice comes first, with the same URI.
@@ -115,7 +118,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
    resource, or a mailbox that the caller cannot use, is left out with no reason. Other filter
    fields, such as `toolsListChanged`, are left out: this server sends no list notifications.
 2. Each change sends `notifications/resources/updated` with the URI. For `mail.inbox`, only a new
-   message in the inbox is a change. A read, a label or an archive sends nothing.
+   message in the inbox is a change. A read, a label or an archive sends nothing. For `chat.room`, a
+   new, changed or deleted message is a change. A read marker, a new name and a new member send nothing.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
 
 - With nothing to watch, the stream sends the acknowledgment and the result of the request, and ends.
@@ -137,8 +141,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   each resource kind again first, with all of its resources in one call. So a lost access stops the
   notifications within about one minute. The scopes of a credential do not change, so the check does
   not read them again.
-- Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, and one watch
-  socket for each mailbox (at most 100). Each later access check makes at most four D1 calls: the
+- Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
+  for all chat rooms, and one socket for each mailbox and each room (at most 100). Each later access check makes at most four D1 calls: the
   credential, the principal, the last-use time of the credential, and one query for all team
   mailboxes. With one check each minute, one stream makes at most about 350 subrequests in its hour.
 - When the client closes the connection, the stream ends at once and closes its change feeds. The
@@ -148,7 +152,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 A domain module gives the change feed of each resource kind (`ResourceWatcher` in
 [`platform`](../platform/README.md)). Its `allowed` checks the access of the caller to a list of
 resources with the rules of its domain, and its `open` opens the feed of one allowed resource. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
-`mail.inbox`.
+`mail.inbox`. The [`chat`](../chat/README.md#agents) module gives the feed of `chat.room`: a room
+socket. The room closes that socket when it removes the member, so the stream ends at once.
 
 Known limits:
 

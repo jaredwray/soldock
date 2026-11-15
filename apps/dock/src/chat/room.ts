@@ -1,5 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
-import { CHAT_LIMITS, type RoomKind, type RoomRole } from "@soldock/contracts";
+import {
+	CHAT_LIMITS,
+	CHAT_SOCKET_CLOSE,
+	CHAT_SOCKET_PROTOCOL,
+	type ChatMessage,
+	type ChatSocketEvent,
+	type RoomKind,
+	type RoomRole,
+} from "@soldock/contracts";
+import { type CredentialRef, liveCredentials } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -54,6 +63,40 @@ export interface MessageRecord {
 	edited_at: number | null;
 	deleted: boolean;
 	version: number;
+}
+
+/**
+ * What the Worker tells the room about a new socket, in the `SOCKET_HEADER` of the upgrade request.
+ * The Worker authenticated the credential. The room decides if its principal is a member.
+ */
+export interface SocketOpen {
+	roomId: string;
+	actor: ActorRecord;
+	credential: CredentialRef;
+}
+
+/** The header with the `SocketOpen` of an upgrade request: JSON, percent-encoded. */
+export const SOCKET_HEADER = "x-soldock-chat-socket";
+
+/** The room checks the credential of a socket again when its last check is this old. */
+export const SOCKET_RECHECK_MS = 60_000;
+/**
+ * The longest life of one socket. Then the room closes it, and the client opens a new one, which the
+ * Worker authenticates again. An OAuth access token lasts one hour.
+ */
+export const SOCKET_MAX_MS = 60 * 60_000;
+
+/** What a socket keeps while the object sleeps. */
+interface SocketState {
+	credential: CredentialRef;
+	openedAt: number;
+	/** The time of the last check of the credential. */
+	checkedAt: number;
+}
+
+/** The tag of each socket of one principal. */
+function socketTag(principalId: string): string {
+	return `p:${principalId}`;
 }
 
 type Row = Record<string, SqlStorageValue>;
@@ -196,6 +239,19 @@ function toMessage(roomId: string, row: MessageRow): MessageRecord {
 	};
 }
 
+function iso(ms: number): string {
+	return new Date(ms).toISOString();
+}
+
+/** A message as the operations and the socket events return it. */
+export function messageOutput(record: MessageRecord): ChatMessage {
+	return {
+		...record,
+		created_at: iso(record.created_at),
+		edited_at: record.edited_at === null ? null : iso(record.edited_at),
+	};
+}
+
 /**
  * One room, keyed by its id. It holds the room, its members with their read markers, and its messages
  * in its SQLite database. It makes each access check in the same step as the read or the change.
@@ -203,6 +259,9 @@ function toMessage(roomId: string, row: MessageRow): MessageRecord {
  * The lists of rooms come from an index in D1 (`chat_rooms`, `chat_members`). After each change, the
  * object writes the current state of the changed rows to that index. The `outbox` table names the rows
  * that are behind. A write that fails stays there, and the alarm tries it again.
+ *
+ * A member can hold live sockets to the room. The room sends each change of a message to them. A
+ * socket carries events from the room only: each change is a call of a method of this class.
  *
  * An object that nobody created has no tables. Such an object costs nothing, so a call with a random
  * id leaves no data.
@@ -212,6 +271,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private hasTables: boolean;
 	/** The end of the line of index writes. Each write starts after the one before it ends. */
 	private flushed: Promise<void> = Promise.resolve();
+	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
+	private announced: Promise<void> = Promise.resolve();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -416,7 +477,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			);
 			this.touch("room");
 		});
-		await this.flush();
+		await this.publish({ type: "room" });
 		return this.record(call.actor.principal_id);
 	}
 
@@ -435,7 +496,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq);
 			this.touch("room");
 		});
-		await this.flush();
+		await this.publish({ type: "room" });
 		return { room: this.record(call.actor.principal_id), joined: true };
 	}
 
@@ -468,7 +529,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				for (const actor of fresh.values()) this.insertMember(actor, "member", now, opened.room.last_seq);
 				this.touch("room");
 			});
-			await this.flush();
+			await this.publish({ type: "room" });
 		}
 		return { added: [...fresh.keys()], room: this.record(call.actor.principal_id) };
 	}
@@ -504,7 +565,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 			}
 			this.touch("room");
 		});
-		await this.flush();
+		// The sockets of the removed member close in the same step, so no later event reaches them.
+		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
+			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+		}
+		await this.publish({ type: "room" });
 		return { removed: true };
 	}
 
@@ -599,8 +664,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch("room");
 			this.touch(`member:${call.actor.principal_id}`);
 		});
-		await this.flush();
-		return { message: toMessage(opened.room.room_id, this.message(input.id) as MessageRow), duplicate: false };
+		const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
+		await this.publish({ type: "message", message: messageOutput(message) });
+		return { message, duplicate: false };
 	}
 
 	/** Replaces the text of a message. Only its author can do this. */
@@ -630,8 +696,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 			this.touch("room");
 		});
-		await this.flush();
-		return { message: toMessage(opened.room.room_id, this.message(messageId) as MessageRow), changed: true };
+		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
+		await this.publish({ type: "message", message: messageOutput(message) });
+		return { message, changed: true };
 	}
 
 	/** Deletes the text of a message. Its author and the owner of the room can do this. */
@@ -658,7 +725,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 			this.touch("room");
 		});
-		await this.flush();
+		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
+		await this.publish({ type: "message", message: messageOutput(message) });
 		return { deleted: true };
 	}
 
@@ -683,6 +751,132 @@ export class ChatRoomDO extends DurableObject<Env> {
 			await this.schedule();
 		}
 		return { lastReadSeq, unread: opened.room.last_seq > lastReadSeq };
+	}
+
+	// --- Live sockets ---------------------------------------------------------------------------
+
+	/**
+	 * Accepts the socket of a member. The Worker authenticated the caller, and sends who it is in
+	 * `SOCKET_HEADER`. The object can sleep while its sockets wait. The first event is `hello`, with the
+	 * version of the room, so the client knows if it must get changes.
+	 */
+	override async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			return new Response("This object accepts sockets only.", { status: 426, headers: { upgrade: "websocket" } });
+		}
+		const open = JSON.parse(decodeURIComponent(request.headers.get(SOCKET_HEADER) ?? "null")) as SocketOpen | null;
+		if (!open) return new Response("The request does not say who opens the socket.", { status: 400 });
+		const opened = this.openAsMember({ roomId: open.roomId, actor: open.actor });
+		if ("error" in opened) return Response.json(opened, { status: 403 });
+
+		// One more socket than the limit closes the oldest socket of this member.
+		const tag = socketTag(open.actor.principal_id);
+		const mine = this.ctx
+			.getWebSockets(tag)
+			.map((socket) => ({ socket, openedAt: (socket.deserializeAttachment() as SocketState | null)?.openedAt ?? 0 }))
+			.sort((a, b) => a.openedAt - b.openedAt);
+		for (const { socket } of mine.slice(0, Math.max(0, mine.length + 1 - CHAT_LIMITS.socketsPerMember))) {
+			this.end(socket, CHAT_SOCKET_CLOSE.replaced, "This member opened too many sockets to the room.");
+		}
+
+		const { 0: client, 1: server } = new WebSocketPair();
+		this.ctx.acceptWebSocket(server, [tag]);
+		const now = Date.now();
+		server.serializeAttachment({ credential: open.credential, openedAt: now, checkedAt: now } satisfies SocketState);
+		// The runtime answers a ping by itself, so a client can test its connection and the object stays asleep.
+		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+		this.send(server, {
+			type: "hello",
+			protocol: CHAT_SOCKET_PROTOCOL,
+			room_id: opened.room.room_id,
+			version: opened.room.version,
+		});
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/** A client sends nothing but pings, which the runtime answers. Each other message closes the socket. */
+	override webSocketMessage(socket: WebSocket): void {
+		this.end(socket, 1008, "This socket takes no messages. Use the operations.");
+	}
+
+	override webSocketClose(socket: WebSocket, code: number, reason: string): void {
+		// Completes the close handshake. The runtime can reply by itself, and a closed socket throws.
+		this.end(socket, code, reason);
+	}
+
+	private end(socket: WebSocket, code: number, reason: string): void {
+		try {
+			socket.close(code, reason);
+		} catch {
+			// Closed already, or the code is one that only the runtime can send.
+		}
+	}
+
+	private send(socket: WebSocket, event: ChatSocketEvent | string): void {
+		try {
+			socket.send(typeof event === "string" ? event : JSON.stringify(event));
+		} catch {
+			// The socket closed between the list and the send.
+		}
+	}
+
+	/** Sends an event to the sockets and writes the index. The sockets do not wait for the index. */
+	private async publish(event: ChatSocketEvent): Promise<void> {
+		const text = JSON.stringify(event);
+		this.announced = this.announced
+			.then(() => this.deliver(text))
+			.catch((error: unknown) => {
+				log("error", "chat socket event failed", { error: error instanceof Error ? error.message : String(error) });
+			});
+		const sent = this.announced;
+		await this.flush();
+		await sent;
+	}
+
+	/**
+	 * Sends one event to each socket. A socket whose credential check is older than `SOCKET_RECHECK_MS`
+	 * gets the event only after a new check: one read of the directory for all such sockets. A socket
+	 * whose credential stopped closes, without the event. If the check fails, those sockets close, and
+	 * their clients open new ones, which the Worker authenticates.
+	 */
+	private async deliver(text: string): Promise<void> {
+		const now = Date.now();
+		const stale: { socket: WebSocket; state: SocketState }[] = [];
+		for (const socket of this.ctx.getWebSockets()) {
+			const state = socket.deserializeAttachment() as SocketState | null;
+			if (!state || now - state.openedAt >= SOCKET_MAX_MS) {
+				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
+			} else if (now - state.checkedAt >= SOCKET_RECHECK_MS) {
+				stale.push({ socket, state });
+			} else {
+				this.send(socket, text);
+			}
+		}
+		if (stale.length === 0) return;
+		let live: boolean[] | null = null;
+		try {
+			live = await liveCredentials(
+				this.env.DIRECTORY,
+				stale.map((entry) => entry.state.credential),
+			);
+		} catch (error) {
+			log("warn", "chat socket credential check failed; the sockets close", {
+				sockets: stale.length,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		const checkedAt = Date.now();
+		for (const [index, { socket, state }] of stale.entries()) {
+			if (live === null) {
+				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
+			} else if (!live[index]) {
+				this.end(socket, CHAT_SOCKET_CLOSE.ended, "The credential stopped.");
+			} else if (socket.readyState === WebSocket.READY_STATE_OPEN) {
+				// The room can remove a member during the check. Its sockets are closed then, and get nothing.
+				socket.serializeAttachment({ ...state, checkedAt } satisfies SocketState);
+				this.send(socket, text);
+			}
+		}
 	}
 
 	// --- The index in D1 ------------------------------------------------------------------------

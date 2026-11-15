@@ -139,3 +139,23 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 		.all<IndexRow>();
 	return page(results, input.limit, (row) => [row.name_key ?? "", row.id]);
 }
+
+/**
+ * The rooms of the list that the index has the principal as a member of. The index can be a moment
+ * behind a room, so this is a first filter only: the object of the room decides each access.
+ */
+export async function joinedRoomIds(
+	db: D1Database,
+	principalId: string,
+	roomIds: readonly string[],
+): Promise<Set<string>> {
+	if (roomIds.length === 0) return new Set();
+	const { results } = await db
+		.prepare(
+			`SELECT m.room_id FROM chat_members m JOIN json_each(?2) wanted ON wanted.value = m.room_id
+			WHERE m.principal_id = ?1`,
+		)
+		.bind(principalId, JSON.stringify([...new Set(roomIds)]))
+		.all<{ room_id: string }>();
+	return new Set(results.map((row) => row.room_id));
+}
