@@ -150,6 +150,23 @@ describe("the drafts of the rooms", () => {
 		]);
 	});
 
+	// The page keeps a mark for a removed draft only while the storage has that draft. A mark for a
+	// draft that the storage never had stays for no reason, and hides a later draft of that room.
+	it("keep no mark for a removed draft that the storage does not have", () => {
+		const storage = fakeStorage();
+		const drafts = createDraftStore(storage, ADA);
+		const setItem = storage.setItem;
+		storage.setItem = () => {
+			throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+		};
+		drafts.set("rm_2", "A draft that stays");
+		drafts.set("rm_1", "Only on this page");
+		drafts.set("rm_1", "");
+		// A different tab, with a storage that works for it, writes a draft for the same room.
+		setItem(`soldock:chat-drafts:${ADA}`, JSON.stringify({ rm_1: { text: "From a different tab", at: 2 } }));
+		expect(drafts.get("rm_1")).toBe("From a different tab");
+	});
+
 	// Some browsers refuse localStorage. The draft must still stay when the person opens a different room.
 	it("stay in the memory of the page when the browser has no storage, until the person signs out", () => {
 		createDraftStore(null, ADA).set("rm_1", "Hello");
