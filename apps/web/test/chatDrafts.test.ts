@@ -121,6 +121,35 @@ describe("the drafts of the rooms", () => {
 		]);
 	});
 
+	// A write of this tab failed. A different tab then writes a draft for a different room. The next
+	// write of this tab must not put its old copy of the drafts over that draft.
+	it("keep a draft from a different tab after a write of this tab failed", () => {
+		const storage = fakeStorage();
+		const drafts = createDraftStore(storage, ADA);
+		drafts.set("rm_1", "Stored");
+		const setItem = storage.setItem;
+		storage.setItem = () => {
+			throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+		};
+		drafts.set("rm_2", "Not stored");
+		storage.setItem = setItem;
+		// The different tab has no memory of this page. It writes to the storage.
+		setItem(
+			`soldock:chat-drafts:${ADA}`,
+			JSON.stringify({ rm_1: { text: "Stored", at: 1 }, rm_9: { text: "From a different tab", at: 2 } }),
+		);
+		expect(drafts.get("rm_9")).toBe("From a different tab");
+		drafts.set("rm_3", "After");
+		forgetOtherDrafts(null, null);
+		const reloaded = createDraftStore(storage, ADA);
+		expect(["rm_1", "rm_2", "rm_3", "rm_9"].map((room) => reloaded.get(room))).toEqual([
+			"Stored",
+			"Not stored",
+			"After",
+			"From a different tab",
+		]);
+	});
+
 	// Some browsers refuse localStorage. The draft must still stay when the person opens a different room.
 	it("stay in the memory of the page when the browser has no storage, until the person signs out", () => {
 		createDraftStore(null, ADA).set("rm_1", "Hello");
