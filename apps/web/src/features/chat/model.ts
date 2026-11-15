@@ -179,6 +179,73 @@ export function withLocalChanges(
 	});
 }
 
+/**
+ * What the person saw of the open room.
+ *
+ * - `seenSeq` is the seq of the last message that the person saw.
+ * - `newAfter` is the seq of the message before the "New messages" line, or null without a line.
+ * - `lineSeen` is true after the person looked at the room while the line showed. The line then
+ *   stays, and it moves when the next message comes while the person does not look.
+ */
+export interface Reading {
+	seenSeq: number;
+	newAfter: number | null;
+	lineSeen: boolean;
+}
+
+/** The reading of a room that opens, from the read marker of the person in that room. */
+export function startReading(lastReadSeq: number): Reading {
+	return { seenSeq: lastReadSeq, newAfter: null, lineSeen: false };
+}
+
+/**
+ * The reading after a change of the list, or of `looking`. The person looks when the tab shows and
+ * the list is at the end of the newest messages.
+ *
+ * - While the person looks, each message of the list is seen.
+ * - When a message of a different author comes while the person does not look, the line goes
+ *   after the last message that the person saw. A line that the person did not see yet stays where
+ *   it is: it marks the first message that is new.
+ *
+ * Without a change, the result is the same object.
+ */
+export function nextReading(
+	reading: Reading,
+	messages: readonly ChatMessage[],
+	ownId: string,
+	looking: boolean,
+): Reading {
+	if (looking) {
+		const seenSeq = Math.max(reading.seenSeq, messages[messages.length - 1]?.seq ?? 0);
+		const lineSeen = reading.newAfter !== null;
+		if (seenSeq === reading.seenSeq && lineSeen === reading.lineSeen) return reading;
+		return { ...reading, seenSeq, lineSeen };
+	}
+	if (reading.newAfter !== null && !reading.lineSeen) return reading;
+	if (newMessages(messages, reading, ownId) === 0) return reading;
+	return { ...reading, newAfter: reading.seenSeq, lineSeen: false };
+}
+
+/** The number of messages of the list, of a different author, that the person did not see. */
+export function newMessages(messages: readonly ChatMessage[], reading: Reading, ownId: string): number {
+	return messages.filter((message) => message.seq > reading.seenSeq && message.author.principal_id !== ownId).length;
+}
+
+/**
+ * True when the "New messages" line goes before a message: the message is the first one after
+ * `newAfter`. When the message is the first one of the list, and the room has older messages, the
+ * list does not know that, and shows no line.
+ */
+export function startsNew(
+	previous: ChatMessage | undefined,
+	message: ChatMessage,
+	newAfter: number | null,
+	hasOlder: boolean,
+): boolean {
+	if (newAfter === null || message.seq <= newAfter) return false;
+	return previous ? previous.seq <= newAfter : !hasOlder;
+}
+
 const GROUP_MS = 5 * 60 * 1000;
 
 /**

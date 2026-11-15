@@ -27,9 +27,14 @@ import {
 	dayLabel,
 	draftPlaceholder,
 	type LocalChange,
+	newMessages,
+	nextReading,
+	type Reading,
 	roomTitle,
+	startReading,
 	startsDay,
 	startsGroup,
+	startsNew,
 	storedSends,
 	timeLabel,
 	unseenSendsNote,
@@ -84,6 +89,10 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stick = useRef(true);
+	/** True while the list is at its end. It is `stick` for the page: the read state and the button to the end use it. */
+	const [atEnd, setAtEnd] = useState(true);
+	/** What the person saw of the room, for the "New messages" line. Null until the room loads. */
+	const [reading, setReading] = useState<Reading | null>(null);
 	/** The first row that shows, with its distance from the top of the list, before the rows change. */
 	const place = useRef<{ key: string; top: number } | null>(null);
 	const markedSeq = useRef(0);
@@ -107,22 +116,41 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		if (stale) void reload();
 	}, [stale, reload]);
 
-	// A room that shows is read, up to the last message that the page shows. The marker never goes past
-	// a message that did not arrive. After a failed call, the next room list tries again.
+	// The person looks at the newest messages when the tab shows, and the list is at the end of the
+	// newest messages of the room. A message below the part that shows is not read.
 	const messages = view.messages;
+	const looking = view.status === "ready" && visible && atEnd && !view.hasNewer;
+
+	// The room opens with the read marker of the person. The messages after it came while the person
+	// did not look, so the line goes before the first of them.
+	const loadedRoom = view.status === "ready" ? view.room : null;
+	useEffect(() => {
+		if (!loadedRoom || loadedRoom.role === null) return;
+		setReading((current) => current ?? nextReading(startReading(loadedRoom.last_read_seq), messages, ownId, false));
+	}, [loadedRoom, messages, ownId]);
+	useEffect(() => {
+		setReading((current) => current && nextReading(current, messages, ownId, looking));
+	}, [messages, ownId, looking]);
+
+	// A room is read up to the last message while the person looks at it. The marker never goes past
+	// a message that did not arrive. After a failed call, the next room list tries again.
 	const lastShown = messages[messages.length - 1];
 	const unreadSeq =
-		room?.role != null && lastShown && lastShown.author.principal_id !== ownId && lastShown.seq > room.last_read_seq
+		looking &&
+		room?.role != null &&
+		lastShown &&
+		lastShown.author.principal_id !== ownId &&
+		lastShown.seq > room.last_read_seq
 			? lastShown.seq
 			: 0;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: listTick starts a new attempt after a failed call.
 	useEffect(() => {
-		if (view.status !== "ready" || !visible || unreadSeq <= markedSeq.current) return;
+		if (unreadSeq <= markedSeq.current) return;
 		markedSeq.current = unreadSeq;
 		api.call("chat.mark_read", { room_id: roomId, seq: unreadSeq }).catch(() => {
 			markedSeq.current = 0;
 		});
-	}, [view.status, visible, unreadSeq, roomId, listTick]);
+	}, [unreadSeq, roomId, listTick]);
 
 	const own = useMemo(
 		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
@@ -148,6 +176,17 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	}, [messages, outbox.state, own, roomId, changes, hasNewer]);
 
 	const unseenNote = hasNewer ? unseenSendsNote(outbox.state, sentUnseen) : null;
+	// The text of the button to the newest messages: the number of new messages below the part that
+	// shows. A list that is not at the newest messages does not have them, and the room list only
+	// tells that the room is unread.
+	const newCount = reading && !hasNewer ? newMessages(messages, reading, ownId) : 0;
+	const jumpLabel = hasNewer
+		? listed?.unread
+			? "New messages"
+			: null
+		: newCount > 0
+			? plural(newCount, "new message")
+			: null;
 
 	// The answers of a send can fail after the server stored the message. When the list has that
 	// message, the send did not fail: the row of the send becomes the row of the stored message.
@@ -193,7 +232,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
 	useLayoutEffect(() => {
 		if (rows.length > 0) holdPlace();
-	}, [rows, view.hasOlder, hasNewer]);
+	}, [rows, view.hasOlder, hasNewer, reading?.newAfter]);
 
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
@@ -217,9 +256,10 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 	/** Sets if the list is at its end. The room then also knows which messages a full list can drop. */
 	const follow = view.follow;
-	function setStick(atEnd: boolean) {
-		stick.current = atEnd;
-		follow(atEnd);
+	function setStick(next: boolean) {
+		stick.current = next;
+		setAtEnd(next);
+		follow(next);
 	}
 
 	function onScroll() {
@@ -296,6 +336,20 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		outbox.send(draft);
 		setDraft("");
 		setStick(true);
+		// The person answers: the messages above are not new for the person now.
+		setReading((current) => current && { ...current, newAfter: null, lineSeen: false });
+	}
+
+	/** Goes to the newest messages of the room: to the end of the list, or to a new list of the newest messages. */
+	function jump() {
+		refocus.current = true;
+		if (hasNewer) {
+			toLatest().catch(fail);
+			return;
+		}
+		setStick(true);
+		const list = scrollRef.current;
+		if (list) list.scrollTop = list.scrollHeight;
 	}
 
 	function onDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -437,88 +491,103 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 			{isMember ? (
 				<>
-					<div className="chat-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1}>
-						{view.hasOlder && (
-							<p className="chat-more">
-								<button
-									type="button"
-									className="button button-small"
-									disabled={view.paging !== null}
-									onClick={loadOlder}
-								>
-									{view.paging === "older" ? "Loading…" : "Show older messages"}
-								</button>
-							</p>
-						)}
-						{rows.length === 0 && (
-							<div className="chat-empty">
-								<span className="chat-empty-tile" aria-hidden="true">
-									<Icon name={room.kind === "dm" ? "chat" : room.kind === "private" ? "lock" : "hash"} size={24} />
-								</span>
-								<p className="chat-empty-title">{room.kind === "dm" ? title : `#${title}`}</p>
-								<p>
-									{room.kind === "dm"
-										? `This is the start of your direct messages with ${title}.`
-										: "This room has no messages yet. Write the first one."}
+					<div className="chat-list">
+						<div className="chat-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1}>
+							{view.hasOlder && (
+								<p className="chat-more">
+									<button
+										type="button"
+										className="button button-small"
+										disabled={view.paging !== null}
+										onClick={loadOlder}
+									>
+										{view.paging === "older" ? "Loading…" : "Show older messages"}
+									</button>
 								</p>
-							</div>
-						)}
-						<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
-							{rows.map(({ key, message, pending }, index) => (
-								<Fragment key={key}>
-									{startsDay(rows[index - 1]?.message, message) && (
-										<li className="chat-day">
-											<h2 className="chat-day-heading">
-												<time dateTime={message.created_at}>{dayLabel(message.created_at)}</time>
-											</h2>
-										</li>
-									)}
-									<MessageItem
-										rowKey={key}
-										message={message}
-										pending={pending}
-										head={startsGroup(rows[index - 1]?.message, message)}
-										own={message.author.principal_id === ownId}
-										canDelete={message.author.principal_id === ownId || room.role === "owner"}
-										editing={editing?.id === message.id ? editing.text : null}
-										onEditStart={() => setEditing({ id: message.id, text: message.text })}
-										onEditChange={(text) => setEditing({ id: message.id, text })}
-										onEditSave={saveEdit}
-										onEditCancel={() => setEditing(null)}
-										onDelete={() => setDialog({ type: "delete", message })}
-										onSendAgain={() => outbox.retry(key)}
-										onSendCancel={() => outbox.discard(key)}
-									/>
-								</Fragment>
-							))}
-						</ol>
-						{view.hasNewer && (
-							<p className="chat-more">
-								<button
-									type="button"
-									className="button button-small"
-									disabled={view.paging !== null}
-									onClick={loadNewer}
-								>
-									{view.paging === "newer" ? "Loading…" : "Show newer messages"}
-								</button>
-								<button
-									type="button"
-									className="button button-small"
-									disabled={goingToLatest}
-									onClick={() => {
-										refocus.current = true;
-										toLatest().catch(fail);
-									}}
-								>
-									{goingToLatest ? "Loading…" : "Go to the newest messages"}
-								</button>
-							</p>
-						)}
-						{unseenNote !== null && (
-							<p className="chat-more-note" role="status">
-								{unseenNote}
-							</p>
+							)}
+							{rows.length === 0 && (
+								<div className="chat-empty">
+									<span className="chat-empty-tile" aria-hidden="true">
+										<Icon name={room.kind === "dm" ? "chat" : room.kind === "private" ? "lock" : "hash"} size={24} />
+									</span>
+									<p className="chat-empty-title">{room.kind === "dm" ? title : `#${title}`}</p>
+									<p>
+										{room.kind === "dm"
+											? `This is the start of your direct messages with ${title}.`
+											: "This room has no messages yet. Write the first one."}
+									</p>
+								</div>
+							)}
+							<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
+								{rows.map(({ key, message, pending }, index) => {
+									const previous = rows[index - 1]?.message;
+									// The first new message shows its author: the line starts a new part of the list.
+									const isNew =
+										pending === null && startsNew(previous, message, reading?.newAfter ?? null, view.hasOlder);
+									return (
+										<Fragment key={key}>
+											{isNew && (
+												<li className="chat-new">
+													<span>New messages</span>
+												</li>
+											)}
+											{startsDay(previous, message) && (
+												<li className="chat-day">
+													<h2 className="chat-day-heading">
+														<time dateTime={message.created_at}>{dayLabel(message.created_at)}</time>
+													</h2>
+												</li>
+											)}
+											<MessageItem
+												rowKey={key}
+												message={message}
+												pending={pending}
+												head={isNew || startsGroup(previous, message)}
+												own={message.author.principal_id === ownId}
+												canDelete={message.author.principal_id === ownId || room.role === "owner"}
+												editing={editing?.id === message.id ? editing.text : null}
+												onEditStart={() => setEditing({ id: message.id, text: message.text })}
+												onEditChange={(text) => setEditing({ id: message.id, text })}
+												onEditSave={saveEdit}
+												onEditCancel={() => setEditing(null)}
+												onDelete={() => setDialog({ type: "delete", message })}
+												onSendAgain={() => outbox.retry(key)}
+												onSendCancel={() => outbox.discard(key)}
+											/>
+										</Fragment>
+									);
+								})}
+							</ol>
+							{view.hasNewer && (
+								<p className="chat-more">
+									<button
+										type="button"
+										className="button button-small"
+										disabled={view.paging !== null}
+										onClick={loadNewer}
+									>
+										{view.paging === "newer" ? "Loading…" : "Show newer messages"}
+									</button>
+								</p>
+							)}
+							{unseenNote !== null && (
+								<p className="chat-more-note" role="status">
+									{unseenNote}
+								</p>
+							)}
+						</div>
+						{(!atEnd || view.hasNewer) && (
+							<button
+								type="button"
+								className={jumpLabel ? "chat-jump chat-jump-new" : "chat-jump"}
+								aria-label={jumpLabel ? `Go to the newest messages: ${jumpLabel}` : "Go to the newest messages"}
+								title="Go to the newest messages"
+								disabled={goingToLatest}
+								onClick={jump}
+							>
+								<Icon name="chevronDown" size={18} />
+								{jumpLabel && <span>{jumpLabel}</span>}
+							</button>
 						)}
 					</div>
 					<form

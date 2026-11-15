@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
 	chatRows,
 	type LocalChange,
+	newMessages,
+	nextReading,
+	startReading,
 	startsDay,
 	startsGroup,
+	startsNew,
 	storedSends,
 	unseenSendsNote,
 	withLocalChanges,
@@ -342,5 +346,64 @@ describe("the line about the sends that a list does not show", () => {
 	it("does not tell that a message was not sent when the server gave no answer", () => {
 		expect(unseenSendsNote(outbox("no answer"), 0)).toMatch(/^The page got no answer for a message/);
 		expect(unseenSendsNote(outbox("no answer", "failed"), 0)).toMatch(/^A message was not sent/);
+	});
+});
+
+describe("the line before the new messages", () => {
+	const own = ADA.principal_id;
+	const fromBot = (seq: number) => message(seq, { author: BOT });
+
+	// The room opens with the read marker at message 2. Messages 3 and 4 came while the person was away.
+	it("goes after the read marker when the room opens with messages that the person did not see", () => {
+		const list = [message(1), fromBot(2), fromBot(3), fromBot(4)];
+		const opened = nextReading(startReading(2), list, own, false);
+		expect(opened).toEqual({ seenSeq: 2, newAfter: 2, lineSeen: false });
+		expect(list.map((entry, index) => startsNew(list[index - 1], entry, opened.newAfter, false))).toEqual([
+			false,
+			false,
+			true,
+			false,
+		]);
+		// A room without a message after the marker has no line.
+		expect(nextReading(startReading(4), list, own, false).newAfter).toBeNull();
+	});
+
+	it("stays while the person reads, and moves to the next messages that come while the person does not look", () => {
+		const list = [message(1), fromBot(2), fromBot(3)];
+		let reading = nextReading(startReading(1), list, own, false);
+		reading = nextReading(reading, list, own, true);
+		expect(reading).toEqual({ seenSeq: 3, newAfter: 1, lineSeen: true });
+		// The person looks, and a message comes: the person sees it, and the line stays.
+		const more = [...list, fromBot(4)];
+		reading = nextReading(reading, more, own, true);
+		expect(reading).toEqual({ seenSeq: 4, newAfter: 1, lineSeen: true });
+		// The person does not look, and two messages come: the line goes before the first of them.
+		reading = nextReading(reading, [...more, fromBot(5)], own, false);
+		reading = nextReading(reading, [...more, fromBot(5), fromBot(6)], own, false);
+		expect(reading).toEqual({ seenSeq: 4, newAfter: 4, lineSeen: false });
+	});
+
+	// A message of the person in a different tab is not new for the person.
+	it("does not start for a message of the person, and counts only the messages of other authors", () => {
+		const list = [fromBot(1), message(2), message(3)];
+		const reading = startReading(1);
+		expect(nextReading(reading, list, own, false)).toBe(reading);
+		expect(newMessages([...list, fromBot(4), fromBot(5)], reading, own)).toBe(2);
+	});
+
+	it("is the same object when nothing changed, so the page does not show the room again", () => {
+		const list = [message(1), fromBot(2)];
+		const seen = nextReading(startReading(1), list, own, true);
+		expect(nextReading(seen, list, own, true)).toBe(seen);
+		expect(nextReading(seen, list, own, false)).toBe(seen);
+	});
+
+	// The first message of the list is after the marker, and the room has older messages. The first
+	// new message is possibly one of them, so the list shows no line there.
+	it("does not go before the first message of a list that has older messages to read", () => {
+		const list = [fromBot(5), fromBot(6)];
+		expect(startsNew(undefined, list[0] as ChatMessage, 3, true)).toBe(false);
+		expect(startsNew(undefined, list[0] as ChatMessage, 3, false)).toBe(true);
+		expect(startsNew(list[0], list[1] as ChatMessage, 5, true)).toBe(true);
 	});
 });

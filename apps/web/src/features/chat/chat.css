@@ -204,6 +204,71 @@
 	padding: 8px;
 }
 
+/* The list and the button to the newest messages. The button is over the end of the list. */
+
+.chat-list {
+	position: relative;
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.chat-jump {
+	position: absolute;
+	right: 20px;
+	bottom: 12px;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 36px;
+	height: 36px;
+	padding: 0 9px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	background: var(--background);
+	color: var(--foreground);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+	cursor: pointer;
+}
+
+.chat-jump-new {
+	padding: 0 14px 0 10px;
+	border-color: var(--primary);
+	background: var(--primary);
+	color: var(--primary-foreground);
+}
+
+.chat-jump:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+/* The line before the first message that the person did not see. */
+
+.chat-new {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 0 20px;
+	margin: 6px 0;
+	color: var(--negative);
+	font-size: 12px;
+	font-weight: 700;
+	line-height: 16px;
+}
+
+.chat-new::before,
+.chat-new::after {
+	flex: 1;
+	border-top: 1px solid var(--negative);
+	content: "";
+}
+
 .chat-more-note {
 	margin: 0;
 	padding: 0 16px 8px;
@@ -743,6 +808,13 @@
 	.chat-start .button,
 	.chat-more .button {
 		min-height: 44px;
+	}
+
+	.chat-jump {
+		min-width: 44px;
+		height: 44px;
+		padding: 0 13px;
+		border-radius: 22px;
 	}
 }
 
