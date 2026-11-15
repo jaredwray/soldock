@@ -20,7 +20,6 @@ import {
 	startsGroup,
 	storedSends,
 	timeLabel,
-	withLocalChanges,
 } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 
@@ -103,10 +102,17 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
 		[ownId, self.kind, self.display_name],
 	);
-	// An edit and a delete show at once, before the answer of the server.
+	// An edit and a delete show at once, before the answer of the server. `latest` has the newest
+	// change of each message at each moment. `changes` is its copy for the list.
+	const latest = useRef(new Map<string, LocalChange>());
 	const [changes, setChanges] = useState<ReadonlyMap<string, LocalChange>>(() => new Map());
-	const shown = useMemo(() => withLocalChanges(messages, changes), [messages, changes]);
-	const rows = useMemo(() => chatRows(shown, outbox.state, own, roomId), [shown, outbox.state, own, roomId]);
+	// The end of the calls for each message. The calls for one message run one at a time, in the order
+	// of the changes, so the room gets the newest change last.
+	const calls = useRef(new Map<string, Promise<void>>());
+	const rows = useMemo(
+		() => chatRows(messages, outbox.state, own, roomId, changes),
+		[messages, outbox.state, own, roomId, changes],
+	);
 
 	// The answers of a send can fail after the server stored the message. When the list has that
 	// message, the send did not fail: the row of the send becomes the row of the stored message.
@@ -160,56 +166,66 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 	/** Shows a change of a message before the answer of the server. */
 	function showChange(id: string, change: LocalChange) {
-		setChanges((current) => new Map(current).set(id, change));
+		latest.current.set(id, change);
+		setChanges(new Map(latest.current));
 	}
 
-	/** Removes a change after its call ended. A newer change of the same message stays. */
-	function endChange(id: string, change: LocalChange) {
-		setChanges((current) => {
-			if (current.get(id) !== change) return current;
-			const next = new Map(current);
-			next.delete(id);
-			return next;
-		});
+	/** Removes a change after its call failed or ended. False when a newer change of the message replaced it. */
+	function endChange(id: string, change: LocalChange): boolean {
+		if (latest.current.get(id) !== change) return false;
+		latest.current.delete(id);
+		setChanges(new Map(latest.current));
+		return true;
+	}
+
+	/** Runs the call of a change after each earlier call for the same message. */
+	function afterEarlierCalls(id: string, call: () => Promise<void>) {
+		const next = (calls.current.get(id) ?? Promise.resolve()).then(call);
+		calls.current.set(id, next);
 	}
 
 	function saveEdit() {
 		if (!editing?.text.trim()) return;
 		const { id, text } = editing;
 		setEditing(null);
-		if (messages.find((message) => message.id === id)?.text === text) return;
-		// The new text shows at once. After a refusal, the old text shows again, and the edit box opens
-		// with the new text, so the person does not write it again.
+		// The text that shows: the text of an edit that waits, or the text that the room has.
+		const waiting = latest.current.get(id);
+		const shown = waiting?.kind === "edit" ? waiting.text : messages.find((message) => message.id === id)?.text;
+		if (shown === text) return;
+		// The new text shows at once.
 		const change: LocalChange = { kind: "edit", text, at: new Date().toISOString() };
 		showChange(id, change);
-		api.call("chat.edit_message", { room_id: roomId, message_id: id, text }).then(
-			({ message }) => {
+		afterEarlierCalls(id, async () => {
+			// A newer change replaced this one before its call started. Only the newest change goes.
+			if (latest.current.get(id) !== change) return;
+			try {
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, text });
 				view.apply(message);
 				endChange(id, change);
-			},
-			(caught: unknown) => {
-				endChange(id, change);
+			} catch (caught) {
+				// After a refusal, the old text shows again, and the edit box opens with the new text, so the
+				// person does not write it again. A newer change of the message stays as it is.
+				if (!endChange(id, change)) return;
 				setEditing((current) => current ?? { id, text });
 				fail(caught);
-			},
-		);
+			}
+		});
 	}
 
 	function deleteMessage(id: string) {
 		// The message shows as deleted at once. After a refusal, it shows again.
 		const change: LocalChange = { kind: "delete" };
 		showChange(id, change);
-		api.call("chat.delete_message", { room_id: roomId, message_id: id }).then(
-			async () => {
-				// The answer has no message. The change stays until the list has the deleted message.
-				await view.sync();
-				endChange(id, change);
-			},
-			(caught: unknown) => {
-				endChange(id, change);
-				fail(caught);
-			},
-		);
+		afterEarlierCalls(id, async () => {
+			try {
+				await api.call("chat.delete_message", { room_id: roomId, message_id: id });
+				// The answer has no message. The change stays: the message shows as deleted also while the
+				// list does not have the deleted message from the room.
+				void view.sync();
+			} catch (caught) {
+				if (endChange(id, change)) fail(caught);
+			}
+		});
 	}
 
 	async function join() {

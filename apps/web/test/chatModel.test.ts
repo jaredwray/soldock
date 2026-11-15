@@ -283,6 +283,44 @@ describe("a failed send whose message the list has", () => {
 describe("the messages with the changes that wait for the server", () => {
 	const AT = "2026-01-01T10:00:00.000Z";
 
+	// The socket brought the stored message of a send, and the person changed it before the answer of the send.
+	// A match on the new text finds nothing, and the send shows a second time at the end.
+	it("stay the row of their send when the person changes or deletes them before the answer of the send", () => {
+		const messages = [message(1), message(2, { text: "Hello" })];
+		const sending = {
+			pending: [
+				{
+					key: "k2",
+					text: "Hello",
+					created_at: "2026-01-01T09:10:00.000Z",
+					state: "sending" as const,
+					error: null,
+					uncertain: false,
+					afterSeq: 1,
+				},
+			],
+			keys: new Map<string, string>(),
+			sendingKey: "k2",
+		};
+		const room = "rm_01JD0000000000000000000001";
+		const edited = chatRows(
+			messages,
+			sending,
+			ADA,
+			room,
+			new Map([["cmsg_2", { kind: "edit", text: "Hello all", at: AT }]]),
+		);
+		expect(edited.map((row) => [row.key, row.message.text, row.pending])).toEqual([
+			["cmsg_1", "message 1", null],
+			["k2", "Hello all", null],
+		]);
+		const deleted = chatRows(messages, sending, ADA, room, new Map([["cmsg_2", { kind: "delete" }]]));
+		expect(deleted.map((row) => [row.key, row.message.deleted])).toEqual([
+			["cmsg_1", false],
+			["k2", true],
+		]);
+	});
+
 	// The person sees the result of an edit or a delete before the answer of the server.
 	it("show the new text of an edit with the edited mark, and a delete without its text", () => {
 		const messages = [message(1), message(2), message(3, { edited_at: "2026-01-01T09:30:00.000Z" })];

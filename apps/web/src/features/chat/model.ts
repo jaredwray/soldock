@@ -101,15 +101,18 @@ function storedOf(
  * - A send whose stored message the list has shows as that stored message, at the position that the
  *   room gave it, with the key of the send. So the message shows one time, and it does not move when
  *   the answer of the send arrives.
+ * - A stored message shows with its change that waits for the server (`changes`). The list finds the
+ *   stored message of a send with the text that the room has, not with the text of a change.
  */
 export function chatRows(
 	messages: readonly ChatMessage[],
 	outbox: OutboxState,
 	own: ChatMessage["author"],
 	roomId: string,
+	changes: ReadonlyMap<string, LocalChange> = NO_CHANGES,
 ): ChatRow[] {
 	const stored = storedOf(messages, outbox, own);
-	const rows: ChatRow[] = messages.map((message) => ({
+	const rows: ChatRow[] = withLocalChanges(messages, changes).map((message) => ({
 		key: stored.get(message.id)?.key ?? outbox.keys.get(message.id) ?? message.id,
 		message,
 		pending: null,
@@ -158,6 +161,8 @@ export function storedSends(
  * a delete. `at` is the time of the edit on the device.
  */
 export type LocalChange = { kind: "edit"; text: string; at: string } | { kind: "delete" };
+
+const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
 
 /**
  * The messages as the person sees them: each message with its change that waits for the server. So
