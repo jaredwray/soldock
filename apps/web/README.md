@@ -130,6 +130,8 @@ MCP clients. The app has no UI-only path.
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
     attachments. One idempotency key for each composed message makes a retry safe.
+  - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
+    sizes its own label, so the text field starts right after the label.
   - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
     Discard and Send are at the right. An attached file is a file card with a Remove button.
   - The message body is a rich-text editor on [ProseMirror](https://prosemirror.net). The editor

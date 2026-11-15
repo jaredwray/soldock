@@ -261,7 +261,7 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 				<div className="compose-fields">
 					{from && (
 						<div className="compose-row">
-							<span className="compose-label">From</span>
+							<span className="compose-label">From:</span>
 							<span className="compose-from">
 								{from.display_name} &lt;{from.address}&gt;
 							</span>
@@ -269,7 +269,7 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					)}
 					{addressInput(
 						"to",
-						"To",
+						"To:",
 						draft.to === "",
 						showCopies ? undefined : (
 							<button type="button" className="compose-copies" onClick={() => setShowCopies(true)}>
@@ -279,13 +279,13 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					)}
 					{showCopies && (
 						<>
-							{addressInput("cc", "Cc", false)}
-							{addressInput("bcc", "Bcc", false)}
+							{addressInput("cc", "Cc:", false)}
+							{addressInput("bcc", "Bcc:", false)}
 						</>
 					)}
 					<div className="compose-row">
 						<label htmlFor={ids.subject} className="compose-label">
-							Subject
+							Subject:
 						</label>
 						<input
 							id={ids.subject}
