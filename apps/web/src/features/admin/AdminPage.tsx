@@ -12,6 +12,7 @@ import { AgentPanel } from "./AgentPanel.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
 import { MembersSection } from "./MembersSection.tsx";
+import { SharedDrivesSection } from "./SharedDrivesSection.tsx";
 import { SharedMailboxesSection } from "./SharedMailboxesSection.tsx";
 
 type DirectoryState =
@@ -151,6 +152,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 				);
 			case "shared-mailboxes":
 				return <SharedMailboxesSection principals={principals} />;
+			case "shared-drives":
+				return <SharedDrivesSection principals={principals} selfId={me.id} />;
 			case "domains":
 				return <MailDomainsCard />;
 		}

@@ -4,9 +4,10 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { isSharedDriveId } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { usePrincipals } from "./data.ts";
-import { linkPath, spaceInput } from "./model.ts";
+import { canShare, linkPath, SHARED_DRIVE_ICON, spaceInput } from "./model.ts";
 
 type GrantRole = Permission["role"];
 
@@ -28,6 +29,9 @@ interface Access {
  * Who can use an item. The owner adds a person or an agent with the viewer or the editor role,
  * changes a role and removes a grant. Each other person sees the list only. A grant from a folder
  * above the item shows as text: the owner changes it on that folder.
+ *
+ * An item of a shared drive has no owner. A manager of the drive shares the item with a person or an
+ * agent that is not a member. The members have access through their role, and are not in the list.
  */
 export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 	const ownId = useSession().whoami.principal.id;
@@ -41,7 +45,9 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 	const [copied, setCopied] = useState(false);
 	const personId = useId();
 	const roleId = useId();
-	const isOwner = item.role === "owner";
+	const isOwner = canShare(item);
+	const inSharedDrive = isSharedDriveId(item.space_id);
+	const space = spaceInput(item.space_id, ownId);
 	const path = linkPath(item);
 
 	const load = useCallback(async () => {
@@ -93,7 +99,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 			return;
 		}
 		void change(async () => {
-			await api.call("drive.share_item", { item_id: item.id, principal_id: principalId, role });
+			await api.call("drive.share_item", { ...space, item_id: item.id, principal_id: principalId, role });
 			setPrincipalId("");
 		});
 	}
@@ -114,9 +120,13 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 			title={`Share “${item.name}”`}
 			onClose={onClose}
 			description={
-				isOwner
-					? "Only people and agents of this organization can get access."
-					: "Only the owner can change who has access."
+				inSharedDrive
+					? isOwner
+						? "The members of the shared drive have access. You can also share this item with a person or an agent that is not a member."
+						: "The members of the shared drive have access. Only a manager can change the other shares."
+					: isOwner
+						? "Only people and agents of this organization can get access."
+						: "Only the owner can change who has access."
 			}
 		>
 			<div className="dialog-body">
@@ -183,9 +193,24 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 				)}
 				{access !== null && (
 					<ul className="drive-share-list">
-						<AccessRow principal={byId.get(access.ownerId)} principalId={access.ownerId} ownId={ownId}>
-							<span className="muted">Owner</span>
-						</AccessRow>
+						{inSharedDrive ? (
+							<li className="drive-share-row">
+								<span className="avatar" aria-hidden="true">
+									<Icon name={SHARED_DRIVE_ICON} size={18} />
+								</span>
+								<span className="drive-share-who">
+									<strong>Members of the shared drive</strong>
+									<span className="muted">Each member has access through the role in the drive</span>
+								</span>
+								<span className="drive-share-control">
+									<span className="muted">Owner</span>
+								</span>
+							</li>
+						) : (
+							<AccessRow principal={byId.get(access.ownerId)} principalId={access.ownerId} ownId={ownId}>
+								<span className="muted">Owner</span>
+							</AccessRow>
+						)}
 						{access.permissions.map((permission) => {
 							const principal = byId.get(permission.principal_id);
 							const name = principal?.display_name ?? "this principal";
@@ -211,6 +236,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 												onChange={(event) =>
 													void change(() =>
 														api.call("drive.share_item", {
+															...space,
 															item_id: item.id,
 															principal_id: permission.principal_id,
 															role: event.target.value as GrantRole,
@@ -230,6 +256,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 												onClick={() =>
 													void change(() =>
 														api.call("drive.unshare_item", {
+															...space,
 															item_id: item.id,
 															principal_id: permission.principal_id,
 														}),

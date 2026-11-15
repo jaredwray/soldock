@@ -41,6 +41,25 @@
 	font-size: 13px;
 }
 
+/* The shared drives of the person, under the Shared drives entry of the sidebar. */
+.drive-nav-drives {
+	margin-top: 3px;
+}
+
+.drive-nav-drives .nav-item {
+	padding-left: 37px;
+}
+
+/* During a drag of items: a drive that can get them has a line around it, and a fill under the pointer. */
+.drive-nav-target {
+	box-shadow: inset 0 0 0 1px var(--border-strong, var(--border));
+}
+
+.drive-nav-target.drive-nav-over {
+	background: var(--selected);
+	box-shadow: inset 0 0 0 2px var(--foreground);
+}
+
 /* Header: the icon of the view, then its title or the path of a folder. The box rules of the header
    are with the page header in styles.css. */
 
@@ -655,6 +674,16 @@ button.drive-name-link:hover .drive-name-text {
 .drive-picker-item:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
+}
+
+/* The note at the right of a drive in the list of drives. */
+.drive-picker-note {
+	flex: none;
+	font-size: 13px;
+}
+
+.drive-picker-hint {
+	margin: 10px 0 0;
 }
 
 .drive-picker-name {
@@ -1342,5 +1371,37 @@ button.drive-name-link:hover .drive-name-text {
 	.drive-table .drive-col-owner,
 	.drive-table .drive-col-size {
 		display: none;
+	}
+}
+
+/* The list of the shared drives: the name, the role, the members and the date. */
+.drive-table-drives .drive-col-size {
+	width: 120px;
+}
+
+@media (max-width: 600px) {
+	/* A phone shows the name and the role of each shared drive. */
+	.drive-table.drive-table-drives thead,
+	.drive-table-drives .drive-col-modified,
+	.drive-table-drives .drive-col-size {
+		display: none;
+	}
+
+	.drive-table.drive-table-drives tbody tr {
+		display: flex;
+		align-items: center;
+	}
+
+	.drive-table.drive-table-drives .drive-col-name {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.drive-table.drive-table-drives .drive-col-owner {
+		display: block;
+		flex: none;
+		width: auto;
+		height: auto;
+		padding: 0 12px;
 	}
 }

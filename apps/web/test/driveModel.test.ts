@@ -4,13 +4,20 @@ import {
 	backPath,
 	breadcrumbs,
 	bulkActions,
+	copyInput,
 	createTarget,
 	dropZone,
 	idBatches,
 	itemActions,
 	linkPath,
 	listInput,
+	moveConfirmText,
+	moveItemsInput,
+	moveSummary,
+	moveTargets,
+	moveToDriveInput,
 	previewKind,
+	spaceBatches,
 	uploadMimeType,
 	uploadRefusal,
 } from "../src/features/drive/model.ts";
@@ -18,6 +25,7 @@ import type { DriveView } from "../src/routes.ts";
 
 const ME = "prn_01JD00000000000000000000ME";
 const BOB = "prn_01JD0000000000000000000B0B";
+const DESIGN = "drv_01JD0000000000000000000DES";
 const FOLDER = "itm_01JD0000000000000000000001";
 const ITEM = "itm_01JD0000000000000000000002";
 
@@ -65,6 +73,19 @@ describe("listInput", () => {
 			{ kind: "search", query: "  q3 report " },
 			{ view: "search", query: "q3 report" },
 		],
+		// The root, the trash and the search of a shared drive send the id of the drive.
+		[
+			{ kind: "folder", spaceId: DESIGN, folderId: null },
+			{ view: "folder", space_id: DESIGN, order: "name" },
+		],
+		[
+			{ kind: "trash", spaceId: DESIGN },
+			{ view: "trash", space_id: DESIGN },
+		],
+		[
+			{ kind: "search", query: "tile", spaceId: DESIGN },
+			{ view: "search", space_id: DESIGN, query: "tile" },
+		],
 	];
 
 	// The server refuses space_id, parent_id and query outside their views, so each input must pass the contract.
@@ -78,6 +99,8 @@ describe("listInput", () => {
 
 	it("makes no call for a search without words, and cuts a query at the limit of the server", () => {
 		expect(listInput({ kind: "search", query: "   " }, "name", ME)).toBeNull();
+		// The list of the shared drives is not a list of items.
+		expect(listInput({ kind: "shared-drives" }, "name", ME)).toBeNull();
 		const long = listInput({ kind: "search", query: "a".repeat(DRIVE_LIMITS.queryChars + 50) }, "name", ME);
 		expect(operations["drive.list_items"].input.safeParse(long).success).toBe(true);
 	});
@@ -98,6 +121,20 @@ describe("createTarget", () => {
 		expect(createTarget(foreign, "editor", ME)).toEqual({ space_id: BOB, parent_id: FOLDER });
 		expect(createTarget(foreign, "viewer", ME)).toBeNull();
 		expect(createTarget(foreign, null, ME)).toBeNull();
+	});
+
+	// A shared drive has a root that the person can open. A viewer of the drive adds no items.
+	it("needs the editor role in a shared drive, at its root and in its folders", () => {
+		const root: DriveView = { kind: "folder", spaceId: DESIGN, folderId: null };
+		const inFolder: DriveView = { kind: "folder", spaceId: DESIGN, folderId: FOLDER };
+		expect(createTarget(root, "manager", ME)).toEqual({ space_id: DESIGN });
+		expect(createTarget(inFolder, "editor", ME)).toEqual({ space_id: DESIGN, parent_id: FOLDER });
+		expect(createTarget(root, "viewer", ME)).toBeNull();
+		expect(createTarget(root, null, ME)).toBeNull();
+		for (const target of [createTarget(root, "editor", ME), createTarget(inFolder, "editor", ME)]) {
+			const input = { ...target, name: "Plans", idempotency_key: "k" };
+			expect(operations["drive.create_folder"].input.safeParse(input).success).toBe(true);
+		}
 	});
 });
 
@@ -144,7 +181,7 @@ describe("itemActions", () => {
 		expect(itemActions(item({ kind: "doc" }))).toEqual(["open", "rename", "move", "copy", "share", "trash"]);
 	});
 
-	// Move, share and trash are for the own drive only. The operations have no space_id.
+	// In the drive of a different person, only the owner can move, share and trash an item.
 	it("keeps the owner actions from an editor and a viewer", () => {
 		const editor = itemActions(item({ space_id: BOB, role: "editor" }));
 		expect(editor).toEqual(["open", "download", "rename", "copy", "access", "versions"]);
@@ -155,6 +192,17 @@ describe("itemActions", () => {
 	it("offers only restore and delete in the trash, to the owner", () => {
 		expect(itemActions(item({ trashed: true }))).toEqual(["restore", "delete"]);
 		expect(itemActions(item({ trashed: true, role: "editor" }))).toEqual([]);
+	});
+
+	// The server refuses a share and a permanent deletion by an editor, and each change by a viewer.
+	it("follows the role of the member in a shared drive", () => {
+		const inDesign = (change: Partial<DriveItem>) => itemActions(item({ space_id: DESIGN, ...change }));
+		const all = ["open", "download", "rename", "move", "copy", "share", "versions", "trash"];
+		expect(inDesign({ role: "manager" })).toEqual(all);
+		expect(inDesign({ role: "editor" })).toEqual(all.map((action) => (action === "share" ? "access" : action)));
+		expect(inDesign({ role: "viewer" })).toEqual(["open", "download", "copy", "access", "versions"]);
+		expect(inDesign({ role: "manager", trashed: true })).toEqual(["restore", "delete"]);
+		expect(inDesign({ role: "editor", trashed: true })).toEqual(["restore"]);
 	});
 });
 
@@ -168,6 +216,104 @@ describe("bulkActions", () => {
 	it("offers restore and delete only when each item is in the trash", () => {
 		expect(bulkActions([item({ trashed: true })])).toEqual(["restore", "delete"]);
 		expect(bulkActions([item({ trashed: true }), item()])).toEqual([]);
+	});
+
+	it("follows the role in a shared drive, and moves only items of one drive", () => {
+		const editor = item({ space_id: DESIGN, role: "editor" });
+		expect(bulkActions([editor, { ...editor, id: FOLDER }])).toEqual(["move", "trash"]);
+		expect(bulkActions([{ ...editor, trashed: true }])).toEqual(["restore"]);
+		expect(bulkActions([{ ...editor, role: "manager", trashed: true }])).toEqual(["restore", "delete"]);
+		expect(bulkActions([{ ...editor, role: "viewer" }])).toEqual([]);
+		// A selection in Starred can have items of two drives. The items of a move go to one place.
+		expect(bulkActions([item(), editor])).toEqual(["trash"]);
+	});
+
+	// Without the space_id of its drive, the server does not find an item of a shared drive.
+	it("sends the ids of each drive in a call of their own, with the space_id of that drive", () => {
+		const items = [item(), item({ id: FOLDER, space_id: DESIGN }), item({ id: "itm_3", space_id: DESIGN })];
+		expect(spaceBatches(items, ME)).toEqual([
+			{ space: {}, ids: [ITEM] },
+			{ space: { space_id: DESIGN }, ids: [FOLDER, "itm_3"] },
+		]);
+	});
+});
+
+describe("copyInput", () => {
+	it("puts a copy next to the item where the person can add items, and in the own drive in each other case", () => {
+		const copy = (change: Partial<DriveItem>) => copyInput(item({ parent_id: FOLDER, ...change }), ME, "k");
+		const cases = [
+			[copy({}), { item_id: ITEM, parent_id: FOLDER, idempotency_key: "k" }],
+			[copy({ space_id: BOB, role: "editor" }), { space_id: BOB, item_id: ITEM, idempotency_key: "k" }],
+			[
+				copy({ space_id: DESIGN, role: "editor" }),
+				{ space_id: DESIGN, item_id: ITEM, target_space_id: DESIGN, parent_id: FOLDER, idempotency_key: "k" },
+			],
+			// A viewer of a shared drive cannot add items to it.
+			[copy({ space_id: DESIGN, role: "viewer" }), { space_id: DESIGN, item_id: ITEM, idempotency_key: "k" }],
+		] as const;
+		for (const [input, expected] of cases) {
+			expect(input).toEqual(expected);
+			expect(operations["drive.copy_item"].input.safeParse(input).success).toBe(true);
+		}
+	});
+});
+
+describe("moves", () => {
+	const SITE = "drv_01JD00000000000000000000ST";
+	const ARCHIVE = "drv_01JD0000000000000000000ARC";
+	const drives = [
+		{ id: ARCHIVE, name: "Archive", role: "viewer" },
+		{ id: DESIGN, name: "Design", role: "editor" },
+		{ id: SITE, name: "Site", role: "manager" },
+	] as const;
+	const myDrive = { spaceId: ME, name: "My Drive", shared: false };
+	const design = { spaceId: DESIGN, name: "Design", shared: true };
+	const site = { spaceId: SITE, name: "Site", shared: true };
+
+	// The server refuses a move into a drive where the person is a viewer, and a move out of a shared
+	// drive by an editor.
+	it("offers the drives that the server accepts as the target of a move", () => {
+		expect(moveTargets([item()], ME, drives)).toEqual([myDrive, design, site]);
+		expect(moveTargets([item({ space_id: SITE, role: "manager" })], ME, drives)).toEqual([myDrive, design, site]);
+		// An editor moves items only in the shared drive.
+		expect(moveTargets([item({ space_id: DESIGN, role: "editor" })], ME, drives)).toEqual([design]);
+		expect(moveTargets([item({ space_id: DESIGN, role: "viewer" })], ME, drives)).toEqual([]);
+		expect(moveTargets([item({ space_id: BOB, role: "editor" })], ME, drives)).toEqual([]);
+		expect(moveTargets([item(), item({ space_id: SITE, role: "manager" })], ME, drives)).toEqual([]);
+		expect(moveTargets([], ME, drives)).toEqual([]);
+	});
+
+	it("makes inputs that drive.move_items and drive.move_to_drive accept", () => {
+		const inDrive = [moveItemsInput(ME, ME, [ITEM], null), moveItemsInput(DESIGN, ME, [ITEM], FOLDER)];
+		expect(inDrive).toEqual([{ item_ids: [ITEM] }, { space_id: DESIGN, item_ids: [ITEM], parent_id: FOLDER }]);
+		for (const input of inDrive) expect(operations["drive.move_items"].input.safeParse(input).success).toBe(true);
+
+		// The target of a move out of a shared drive is the own drive: the operation needs its id.
+		const across = [
+			moveToDriveInput(ME, ME, [ITEM], { spaceId: DESIGN, parentId: FOLDER }, true),
+			moveToDriveInput(SITE, ME, [ITEM], { spaceId: ME, parentId: null }, false),
+		];
+		expect(across).toEqual([
+			{ item_ids: [ITEM], target_space_id: DESIGN, parent_id: FOLDER, dry_run: true },
+			{ space_id: SITE, item_ids: [ITEM], target_space_id: ME, dry_run: false },
+		]);
+		for (const input of across) expect(operations["drive.move_to_drive"].input.safeParse(input).success).toBe(true);
+	});
+
+	// The person must know who owns the items after the move, and who can then read them.
+	it("tells the person who owns the items after the move, and who keeps a direct share", () => {
+		const summary = moveSummary([
+			{ items_total: 2, kept_shares: [BOB, "prn_2"] },
+			{ items_total: 1, kept_shares: [BOB] },
+		]);
+		expect(summary).toEqual({ itemsTotal: 3, keptShares: [BOB, "prn_2"] });
+		expect(moveConfirmText(3, myDrive, design, summary).join(" ")).toBe(
+			"Design will own them. Its members get access. 2 people keep their direct shares.",
+		);
+		expect(moveConfirmText(1, site, myDrive, { itemsTotal: 12, keptShares: [BOB] }).join(" ")).toBe(
+			"You will own it. The members of Site lose the access that their role gives. " +
+				"The move takes 12 items, with all that the folders hold. 1 person keeps a direct share.",
+		);
 	});
 });
 
@@ -206,6 +352,22 @@ describe("breadcrumbs", () => {
 		]);
 	});
 
+	// A shared drive has a root that each member can open. Its name comes from drive.get_about.
+	it("starts at the name of the drive in a shared drive, also for its trash", () => {
+		const view = { kind: "folder", spaceId: DESIGN, folderId: ITEM } as const;
+		const inDrive = { item: { id: ITEM, name: "Bakery", space_id: DESIGN }, path: [] };
+		expect(breadcrumbs(view, inDrive, ME, "Design")).toEqual([
+			{ label: "Design", to: `/drive/shared-drives/${DESIGN}` },
+			{ label: "Bakery", to: null },
+		]);
+		expect(breadcrumbs({ ...view, folderId: null }, null, ME, null)).toEqual([{ label: "Shared drive", to: null }]);
+		expect(breadcrumbs({ kind: "trash", spaceId: DESIGN }, null, ME, "Design")).toEqual([
+			{ label: "Design", to: `/drive/shared-drives/${DESIGN}` },
+			{ label: "Trash", to: null },
+		]);
+		expect(breadcrumbs({ kind: "trash" }, null, ME)).toEqual([]);
+	});
+
 	// The root of the drive of somebody else is not a page that the person can open.
 	it("starts at Shared with me in the drive of somebody else", () => {
 		const view = { kind: "folder", spaceId: BOB, folderId: ITEM } as const;
@@ -229,6 +391,13 @@ describe("linkPath and backPath", () => {
 		expect(backPath(item({ parent_id: FOLDER }))).toBe(`/drive/folders/${ME}/${FOLDER}`);
 		expect(backPath(item())).toBe("/drive");
 		expect(backPath(item({ space_id: BOB, role: "editor", parent_id: FOLDER }))).toBe("/drive/shared");
+	});
+
+	// An item of a shared drive has no owner. Each member can open its folder.
+	it("goes back to the folder or to the root of a shared drive", () => {
+		const doc = { space_id: DESIGN, role: "viewer" } as const;
+		expect(backPath(item({ ...doc, parent_id: FOLDER }))).toBe(`/drive/folders/${DESIGN}/${FOLDER}`);
+		expect(backPath(item(doc))).toBe(`/drive/shared-drives/${DESIGN}`);
 	});
 });
 

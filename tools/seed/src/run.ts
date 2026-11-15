@@ -16,7 +16,7 @@ import {
 	SUPPORT,
 } from "./cast.ts";
 import { DIRECT_MESSAGES, type Line, ROOMS } from "./chat.ts";
-import { DRIVES, type DriveNode } from "./drive.ts";
+import { DRIVES, type DriveNode, SHARED_DRIVES } from "./drive.ts";
 import { composeRaw } from "./eml.ts";
 import { MAIL_STEPS, MAIL_TIDY, type MailboxKey, type MailStep } from "./mail.ts";
 
@@ -231,9 +231,15 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 	log(`Chat: ${ROOMS.length} rooms, ${DIRECT_MESSAGES.length} direct messages.`);
 
 	// 5. Drive. Each owner creates their own items, then shares them.
-	async function createNode(actor: ActorKey, node: DriveNode, parent_id: string | undefined): Promise<void> {
+	// `space_id` is the id of a shared drive, or undefined for the own drive of the actor.
+	async function createNode(
+		actor: ActorKey,
+		node: DriveNode,
+		parent_id: string | undefined,
+		space_id?: string,
+	): Promise<void> {
 		const apiKey = keyOf(actor);
-		const common = { parent_id, name: node.name, idempotency_key: `${KEY_PREFIX}/drive/${node.id}` };
+		const common = { space_id, parent_id, name: node.name, idempotency_key: `${KEY_PREFIX}/drive/${node.id}` };
 		let itemId: string;
 		if (node.kind === "folder") {
 			itemId = (await api.call(apiKey, "drive.create_folder", common)).item.id;
@@ -249,18 +255,30 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			});
 			itemId = upload.item.id;
 		}
-		if (node.kind === "folder") for (const child of node.children) await createNode(actor, child, itemId);
+		if (node.kind === "folder") for (const child of node.children) await createNode(actor, child, itemId, space_id);
 		for (const share of node.share ?? []) {
 			await api.call(apiKey, "drive.share_item", {
+				space_id,
 				item_id: itemId,
 				principal_id: idOf(share.with),
 				role: share.role,
 			});
 		}
-		if (node.starred) await api.call(apiKey, "drive.star_items", { item_ids: [itemId], starred: true });
+		if (node.starred) await api.call(apiKey, "drive.star_items", { space_id, item_ids: [itemId], starred: true });
 	}
 	for (const drive of DRIVES) for (const node of drive.items) await createNode(drive.owner, node, undefined);
-	log(`Drive: the items of ${DRIVES.length} drives, with their shares.`);
+	// Only an owner or an admin creates a shared drive. A member with the editor role adds the items.
+	for (const drive of SHARED_DRIVES) {
+		const created = await api.call(keyOf(OWNER), "drive.create_shared_drive", {
+			name: drive.name,
+			members: drive.members.map((member) => ({ principal_id: idOf(member.who), role: member.role })),
+			idempotency_key: `${KEY_PREFIX}/shared-drive/${drive.id}`,
+		});
+		for (const node of drive.items) await createNode(drive.author, node, undefined, created.shared_drive.id);
+	}
+	log(
+		`Drive: the items of ${DRIVES.length} drives, with their shares, and ${SHARED_DRIVES.length} shared drive (${SHARED_DRIVES.map((drive) => drive.name).join(", ")}).`,
+	);
 }
 
 /** The lines that say how to sign in as each person. */
@@ -288,5 +306,9 @@ export function signInLines(origin: string): string[] {
 		),
 		"",
 		`Shared mailbox: ${SUPPORT.displayName} <${SUPPORT.address}>, for ${SUPPORT.members.map((m) => actorAddress(m).split("@")[0]).join(", ")}.`,
+		...SHARED_DRIVES.map(
+			(drive) =>
+				`Shared drive: ${drive.name}, for ${drive.members.map((m) => `${actorAddress(m.who).split("@")[0]} (${m.role})`).join(", ")}.`,
+		),
 	];
 }

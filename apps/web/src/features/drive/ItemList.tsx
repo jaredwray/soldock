@@ -1,11 +1,12 @@
 import type { DriveItem } from "@soldock/contracts";
+import type { DragEvent } from "react";
 import { formatBytes, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { type DriveView, itemPath } from "../../routes.ts";
 import type { ListState } from "./data.ts";
 import { Menu, type MenuItem } from "./Menu.tsx";
-import { emptyText, type ItemOrder, itemIcon, kindName, ownerName } from "./model.ts";
+import { canMove, emptyText, type ItemOrder, itemIcon, kindName, ownerName } from "./model.ts";
 
 interface ItemListProps {
 	view: DriveView;
@@ -23,6 +24,12 @@ interface ItemListProps {
 	onToggleStar: (item: DriveItem) => void;
 	onOpenFile: (item: DriveItem) => void;
 	menuItems: (item: DriveItem) => MenuItem[];
+	/**
+	 * Starts a drag of the row, to move the item to a drive of the sidebar. The handler cancels the
+	 * drag of an item that the person cannot move.
+	 */
+	onDragItem: (item: DriveItem, event: DragEvent<HTMLTableRowElement>) => void;
+	onDragEnd: () => void;
 	onLoadMore: () => void;
 	onRetry: () => void;
 }
@@ -133,6 +140,8 @@ export function ItemList(props: ItemListProps) {
 							onToggleSelect={props.onToggleSelect}
 							onToggleStar={props.onToggleStar}
 							onOpenFile={props.onOpenFile}
+							onDragItem={props.onDragItem}
+							onDragEnd={props.onDragEnd}
 							menuItems={props.menuItems(item)}
 						/>
 					))}
@@ -177,6 +186,8 @@ interface ItemRowProps {
 	onToggleSelect: (itemId: string) => void;
 	onToggleStar: (item: DriveItem) => void;
 	onOpenFile: (item: DriveItem) => void;
+	onDragItem: (item: DriveItem, event: DragEvent<HTMLTableRowElement>) => void;
+	onDragEnd: () => void;
 	menuItems: MenuItem[];
 }
 
@@ -190,6 +201,8 @@ function ItemRow({
 	onToggleSelect,
 	onToggleStar,
 	onOpenFile,
+	onDragItem,
+	onDragEnd,
 	menuItems,
 }: ItemRowProps) {
 	const path = itemPath(item);
@@ -204,10 +217,14 @@ function ItemRow({
 		</>
 	);
 	return (
-		// The drop of files finds the row under the pointer by its `data-item-id`.
+		// The drop of files finds the row under the pointer by its `data-item-id`. A drag of the row moves
+		// the item, or the selection that it is part of, to a drive of the sidebar.
 		<tr
 			className={`drive-row${selected ? " drive-row-selected" : ""}${dropTarget ? " drive-row-drop" : ""}`}
 			data-item-id={item.id}
+			draggable={!inTrash && canMove(item)}
+			onDragStart={(event) => onDragItem(item, event)}
+			onDragEnd={onDragEnd}
 		>
 			<td className="drive-col-check">
 				<label className="drive-check">

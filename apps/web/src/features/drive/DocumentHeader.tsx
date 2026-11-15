@@ -5,8 +5,9 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { isSharedDriveId } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
-import { backPath, itemIcon, spaceInput } from "./model.ts";
+import { backPath, canShare, itemIcon, canEdit as roleCanEdit, spaceInput } from "./model.ts";
 import { ShareDialog } from "./ShareDialog.tsx";
 
 /** The state of the last save of an editor. */
@@ -48,7 +49,7 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 	const renamingRef = useRef(false);
 	// True after a rename ends from the keyboard: the focus then goes back to the name.
 	const refocusRef = useRef(false);
-	const canEdit = (item.role === "owner" || item.role === "editor") && !item.trashed;
+	const canEdit = roleCanEdit(item.role) && !item.trashed;
 	const space = spaceInput(item.space_id, ownId);
 	const failed = saveState === "error" || saveState === "conflict";
 	const stateText = saveState === null ? (item.trashed ? "In the trash" : "View only") : SAVE_TEXT[saveState];
@@ -107,7 +108,9 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 				to={backPath(item)}
 				className="icon-button"
 				aria-label={
-					item.role === "owner" ? "Back to the folder in Drive" : "Back to the items that are shared with you"
+					item.role === "owner" || isSharedDriveId(item.space_id)
+						? "Back to the folder in Drive"
+						: "Back to the items that are shared with you"
 				}
 				title="Back to Drive"
 			>
@@ -181,7 +184,7 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 			</p>
 			<span className="document-header-spacer" />
 			{actions}
-			{item.role === "owner" && (
+			{canShare(item) && (
 				<button type="button" className="button button-primary" aria-label="Share" onClick={() => setSharing(true)}>
 					<Icon name="share" size={18} />
 					<span className="document-header-share">Share</span>
