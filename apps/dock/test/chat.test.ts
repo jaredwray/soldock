@@ -1,7 +1,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS } from "@soldock/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Actor, api, callTool, codeOf, ORIGIN, PASSWORD, request, SETUP_TOKEN, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
@@ -423,6 +423,58 @@ describe("the scopes of a key", () => {
 		expect((await api(agentReader.secret)("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
 		expect(await codeOf(api(agentReader.secret)("chat.post_message", { room_id: room.id, text: "Hi" }))).toBe(
 			"forbidden",
+		);
+	});
+});
+
+describe("the rate limit of messages", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	// A member or an agent that posts without a stop must not fill a room, or wake each socket for each message.
+	it("refuses the messages of one member above the limit, and takes them again after a wait", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id]);
+		// Only the clock is fake: the room counts the messages of a member against Date.now().
+		vi.useFakeTimers({ toFake: ["Date"] });
+		let last = await post(bot, room.id, "Message 1");
+		for (let index = 2; index <= CHAT_LIMITS.messageBurst; index++) last = await post(bot, room.id, `Message ${index}`);
+		expect(await codeOf(bot.call("chat.post_message", { room_id: room.id, text: "One more." }))).toBe("rate_limited");
+		// A changed message goes to each socket too, so it uses the same allowance.
+		expect(await codeOf(bot.call("chat.edit_message", { room_id: room.id, message_id: last.id, text: "New." }))).toBe(
+			"rate_limited",
+		);
+		// MCP gives the same refusal, with the time to wait.
+		const refused = await callTool(bot.key, "chat_post_message", { room_id: room.id, text: "One more." });
+		expect(refused.isError).toBe(true);
+		expect(JSON.parse(refused.content[0]?.text ?? "{}")).toMatchObject({
+			code: "rate_limited",
+			message: "You sent too many messages to this room. Try again in 1 second.",
+		});
+		expect(await texts(bot, room.id)).toHaveLength(CHAT_LIMITS.messageBurst);
+
+		// The limit is for one member in one room: a different member posts, and the same member posts in a different room.
+		expect((await post(ada, room.id, "From Ada.")).author.principal_id).toBe(ada.id);
+		const other = await createRoom(ada, "private", "Ops", [bot.id]);
+		expect((await post(bot, other.id, "A different room.")).seq).toBe(1);
+		// A delete has no limit: an owner must be able to remove many messages.
+		expect(await bot.call("chat.delete_message", { room_id: room.id, message_id: last.id })).toEqual({ deleted: true });
+
+		// Each second gives one message back.
+		vi.setSystemTime(Date.now() + CHAT_LIMITS.messageRefillSeconds * 1000);
+		expect((await post(bot, room.id, "After the wait.")).text).toBe("After the wait.");
+		expect(await codeOf(bot.call("chat.post_message", { room_id: room.id, text: "Too soon." }))).toBe("rate_limited");
+	});
+
+	// A client sends the same key again when it did not get the answer. That call adds no message.
+	it("returns the first message for a retry with the same key, also above the limit", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const first = await ada.call("chat.post_message", { room_id: room.id, text: "Message 1", idempotency_key: "k1" });
+		for (let index = 2; index <= CHAT_LIMITS.messageBurst; index++) await post(ada, room.id, `Message ${index}`);
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text: "One more." }))).toBe("rate_limited");
+		expect(await ada.call("chat.post_message", { room_id: room.id, text: "Message 1", idempotency_key: "k1" })).toEqual(
+			first,
 		);
 	});
 });

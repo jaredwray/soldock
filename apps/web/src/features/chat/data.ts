@@ -2,6 +2,7 @@ import { CHAT_LIMITS, type ChatMessage, type ChatRoom, chatSocketPath } from "@s
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { withChanges, withOlder } from "./model.ts";
+import { createOutbox, type Outbox } from "./outbox.ts";
 import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
 
@@ -85,6 +86,43 @@ function connectRoom(roomId: string, handlers: SocketHandlers): Connection {
 		send: (data) => socket.send(data),
 		close: () => socket.close(1000),
 	};
+}
+
+/**
+ * The outbox of each room that this page sent messages to, by person and room. An outbox stays while
+ * the page stays, so a message goes out also after the person opens a different room. A different
+ * person on the same page gets a different outbox.
+ */
+const outboxes = new Map<string, Outbox>();
+
+function outboxOf(ownId: string, roomId: string): Outbox {
+	const name = `${ownId}/${roomId}`;
+	let outbox = outboxes.get(name);
+	if (!outbox) {
+		outbox = createOutbox({
+			post: async (text, key) =>
+				(await api.call("chat.post_message", { room_id: roomId, text, idempotency_key: key })).message,
+			describe: errorMessage,
+		});
+		outboxes.set(name, outbox);
+	}
+	return outbox;
+}
+
+/**
+ * The messages of one room that wait for the server, with the calls to send, to send again and to
+ * remove one. `onSent` gets each stored message after its send, while the room shows.
+ */
+export function useOutbox(roomId: string, ownId: string, onSent: (message: ChatMessage) => void) {
+	const outbox = useMemo(() => outboxOf(ownId, roomId), [ownId, roomId]);
+	const state = useSyncExternalStore(outbox.subscribe, outbox.getState);
+	const sent = useRef(onSent);
+	sent.current = onSent;
+	useEffect(() => {
+		outbox.deliverTo((message) => sent.current(message));
+		return () => outbox.deliverTo(null);
+	}, [outbox]);
+	return { state, send: outbox.send, retry: outbox.retry, discard: outbox.discard };
 }
 
 export interface RoomState {
