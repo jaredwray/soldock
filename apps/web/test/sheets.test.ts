@@ -1,6 +1,7 @@
 import { type Cell, SHEET_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import { cellName, columnName, parseCell } from "../src/features/sheets/a1.ts";
+import { autoSum } from "../src/features/sheets/autosum.ts";
 import {
 	applyCells,
 	clearChanges,
@@ -173,5 +174,81 @@ describe("the cells of the grid", () => {
 			{ cell: "B2", input: "" },
 			{ cell: "B900", input: "" },
 		]);
+	});
+});
+
+describe("the functions of the toolbar", () => {
+	// A fee table: a header in B1, numbers in B2:B5, a text in C3, and numbers in A7:C7.
+	const view = viewCells(
+		toCellMap([
+			cell("B1", "Fee", "Fee", "text"),
+			cell("B2", "10", 10, "number"),
+			cell("B3", "20", 20, "number"),
+			cell("B4", "=B2+B3", 30, "number"),
+			cell("B5", "40", 40, "number"),
+			cell("C3", "note", "note", "text"),
+			cell("A7", "1", 1, "number"),
+			cell("B7", "2", 2, "number"),
+			cell("C7", "3", 3, "number"),
+		]),
+	);
+	const cellAt = (name: string) => view.get(name);
+	const one = (name: string) => {
+		const pos = parseCell(name);
+		if (!pos) throw new Error(name);
+		return { top: pos.row, left: pos.col, bottom: pos.row, right: pos.col };
+	};
+
+	it("starts an edit of one cell with the numbers above it, or else to its left, and selects the range", () => {
+		const above = autoSum("SUM", one("B6"), cellAt, SHEET_LIMITS);
+		// The header in B1 is text, so the range stops at B2. A formula with a number result counts.
+		expect(above).toEqual({ kind: "edit", input: "=SUM(B2:B5)", select: [5, 10] });
+		expect(autoSum("MAX", one("D7"), cellAt, SHEET_LIMITS)).toEqual({
+			kind: "edit",
+			input: "=MAX(A7:C7)",
+			select: [5, 10],
+		});
+		// No number next to the cell: the cursor goes between the parentheses.
+		expect(autoSum("AVERAGE", one("E1"), cellAt, SHEET_LIMITS)).toEqual({
+			kind: "edit",
+			input: "=AVERAGE()",
+			select: [9, 9],
+		});
+		expect(autoSum("COUNT", one("C4"), cellAt, SHEET_LIMITS)).toMatchObject({ input: "=COUNT(B4)" });
+	});
+
+	it("writes one formula below each column of a range, or one to the right of a row", () => {
+		expect(autoSum("SUM", { top: 6, left: 0, bottom: 7, right: 2 }, cellAt, SHEET_LIMITS)).toEqual({
+			kind: "write",
+			changes: [
+				{ cell: "A9", input: "=SUM(A7:A8)" },
+				{ cell: "B9", input: "=SUM(B7:B8)" },
+				{ cell: "C9", input: "=SUM(C7:C8)" },
+			],
+			range: { top: 8, left: 0, bottom: 8, right: 2 },
+		});
+		expect(autoSum("MIN", { top: 6, left: 0, bottom: 6, right: 2 }, cellAt, SHEET_LIMITS)).toEqual({
+			kind: "write",
+			changes: [{ cell: "D7", input: "=MIN(A7:C7)" }],
+			range: { top: 6, left: 3, bottom: 6, right: 3 },
+		});
+	});
+
+	it("never replaces an input, and never writes outside the sheet", () => {
+		// B5 below B2:B4 has an input, and so does C3 to the right of A3:B3.
+		expect(autoSum("SUM", { top: 1, left: 1, bottom: 3, right: 1 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		expect(autoSum("SUM", { top: 2, left: 0, bottom: 2, right: 1 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		const lastRow = SHEET_LIMITS.rows - 1;
+		const lastCol = SHEET_LIMITS.columns - 1;
+		expect(autoSum("SUM", { top: 0, left: 4, bottom: lastRow, right: 4 }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
+		expect(autoSum("SUM", { top: 0, left: 4, bottom: 0, right: lastCol }, cellAt, SHEET_LIMITS)).toMatchObject({
+			kind: "refused",
+		});
 	});
 });

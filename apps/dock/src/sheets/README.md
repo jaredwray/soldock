@@ -38,6 +38,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   nothing, also for the old form.
 - The server calculates. The web app shows the results from the server and has no formula engine,
   so a person and an agent always see the same numbers.
+- The Σ menu of the web app adds no operation. It writes a formula such as `=SUM(B2:B8)` with
+  `sheets.update_cells`, as an agent can.
 
 ## Operations
 

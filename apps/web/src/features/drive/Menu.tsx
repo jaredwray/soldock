@@ -4,7 +4,7 @@ import { Icon, type IconName } from "../../lib/icons.tsx";
 export interface MenuItem {
 	key: string;
 	label: string;
-	icon: IconName;
+	icon?: IconName;
 	danger?: boolean;
 	onSelect: () => void;
 }
@@ -21,6 +21,14 @@ interface MenuProps {
 	/** The side of the button that the menu lines up with. */
 	align?: "start" | "end";
 	disabled?: boolean;
+	/**
+	 * True when the menu cannot open now. Not `disabled`: the button stays in the tab order, as a
+	 * button of a toolbar must.
+	 */
+	unavailable?: boolean;
+	/** For a button in a toolbar, which has one tab stop. */
+	tabIndex?: number;
+	onFocus?: () => void;
 }
 
 interface Position {
@@ -36,7 +44,19 @@ const EDGE = 8;
  * cannot cut it. The arrow keys, Home and End move between the items. Escape and Tab close the
  * menu. After Escape or a selection, the focus goes back to the button.
  */
-export function Menu({ label, menuLabel, title, className, children, items, align = "end", disabled }: MenuProps) {
+export function Menu({
+	label,
+	menuLabel,
+	title,
+	className,
+	children,
+	items,
+	align = "end",
+	disabled,
+	unavailable,
+	tabIndex,
+	onFocus,
+}: MenuProps) {
 	const [open, setOpen] = useState(false);
 	const [position, setPosition] = useState<Position | null>(null);
 	const buttonRef = useRef<HTMLButtonElement>(null);
@@ -124,9 +144,15 @@ export function Menu({ label, menuLabel, title, className, children, items, alig
 				aria-expanded={open}
 				aria-controls={open ? menuId : undefined}
 				disabled={disabled}
-				onClick={() => (open ? close(false) : setOpen(true))}
+				aria-disabled={unavailable ? true : undefined}
+				tabIndex={tabIndex}
+				onFocus={onFocus}
+				onClick={() => {
+					if (open) close(false);
+					else if (!unavailable) setOpen(true);
+				}}
 				onKeyDown={(event) => {
-					if (event.key === "ArrowDown" && !open) {
+					if (event.key === "ArrowDown" && !open && !unavailable) {
 						event.preventDefault();
 						setOpen(true);
 					}
@@ -156,7 +182,7 @@ export function Menu({ label, menuLabel, title, className, children, items, alig
 								item.onSelect();
 							}}
 						>
-							<Icon name={item.icon} size={18} />
+							{item.icon && <Icon name={item.icon} size={18} />}
 							{item.label}
 						</button>
 					))}

@@ -1,6 +1,6 @@
 import "./sheets.css";
 import { ApiError } from "@soldock/contracts";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -55,6 +55,8 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	const panelId = useId();
 	/** The selection, Undo and Redo, and the scroll position of each tab. */
 	const memories = useRef(new Map<string, TabMemory>());
+	/** Draws the page again after Undo and Redo are cleared, so the toolbar shows it. */
+	const [, redraw] = useReducer((count: number) => count + 1, 0);
 
 	useEffect(() => {
 		void store.load();
@@ -100,6 +102,7 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 		const before = namesRef.current;
 		if (sheet.tabs.some((tab) => before.has(tab.id) && before.get(tab.id) !== tab.name)) {
 			for (const memory of memories.current.values()) memory.history = { undo: [], redo: [] };
+			redraw();
 		}
 		namesRef.current = new Map(sheet.tabs.map((tab) => [tab.id, tab.name]));
 		// The memory of a deleted tab is not needed again: a new tab never gets its id.

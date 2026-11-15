@@ -10,14 +10,17 @@ import {
 	useId,
 	useLayoutEffect,
 	useMemo,
+	useReducer,
 	useRef,
 	useState,
 } from "react";
 import { useToast } from "../../lib/toast.tsx";
 import { type CellPos, cellName, columnNames, parseCell } from "./a1.ts";
+import { autoSum, type SumFunction } from "./autosum.ts";
 import { type CellChange, clearChanges, pasteChanges, rangeInputs, tooLong, usedSize, type ViewCell } from "./cells.ts";
 import { formatTsv, parseTsv } from "./clipboard.ts";
 import { ColumnHeads, cellId, SheetRow } from "./SheetRow.tsx";
+import { SheetToolbar } from "./SheetToolbar.tsx";
 import {
 	FIRST_CELL,
 	gridSize,
@@ -51,6 +54,8 @@ interface Edit {
 	mode: "replace" | "keep";
 	/** Where the person types: the editor over the cell, or the formula bar. */
 	source: "cell" | "bar";
+	/** The part of `value` that the editor over the cell selects when the edit starts. The default puts the cursor after the text. */
+	select?: readonly [number, number];
 }
 
 /** One change of the person, for Undo and Redo. */
@@ -122,8 +127,8 @@ interface SheetEditorProps {
 }
 
 /**
- * The formula bar and the grid. The grid is one tab stop: the arrow keys move the selection in it.
- * It draws only the rows near the rows on screen, so a sheet with 1000 rows stays fast.
+ * The toolbar, the formula bar and the grid. The grid is one tab stop: the arrow keys move the
+ * selection in it. It draws only the rows near the rows on screen, so a sheet with 1000 rows stays fast.
  */
 export function SheetEditor({
 	name,
@@ -142,6 +147,8 @@ export function SheetEditor({
 	const [edit, setEditState] = useState<Edit | null>(null);
 	const [rowWindow, setRowWindow] = useState({ first: 0, last: 60 });
 	const [nameDraft, setNameDraft] = useState<string | null>(null);
+	/** Draws the editor again after a change of Undo and Redo, which the toolbar shows. */
+	const [, redraw] = useReducer((count: number) => count + 1, 0);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLTableElement>(null);
 	const editorRef = useRef<HTMLInputElement>(null);
@@ -199,6 +206,7 @@ export function SheetEditor({
 		history.undo.push({ before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })), after });
 		if (history.undo.length > UNDO_STEPS) history.undo.shift();
 		history.redo = [];
+		redraw();
 		onCommit(after);
 		return true;
 	}
@@ -210,15 +218,32 @@ export function SheetEditor({
 		const entry = history[from].pop();
 		if (!entry) return;
 		history[from === "undo" ? "redo" : "undo"].push(entry);
+		redraw();
 		const changes = from === "undo" ? entry.before : entry.after;
 		onCommit(changes);
 		const first = parseCell(changes[0]?.cell ?? "");
 		if (first) select(selectCell(first));
 	}
 
-	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string) {
+	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string, select?: Edit["select"]) {
 		if (locked) return;
-		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source });
+		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source, ...(select ? { select } : {}) });
+	}
+
+	/**
+	 * A function of the Σ menu. For one cell, an edit starts with the formula, and the person can
+	 * change its range. For a range, the formulas go after the range, in one Undo step.
+	 */
+	function insertFunction(fn: SumFunction) {
+		if (locked) return;
+		const result = autoSum(fn, range, (cell) => cells.get(cell), SHEET_LIMITS);
+		if (result.kind === "edit") {
+			startEdit("keep", "cell", result.input, result.select);
+			return;
+		}
+		if (result.kind === "refused") toast({ message: result.message, tone: "error" });
+		else if (apply(result.changes)) selectRange(result.range);
+		gridRef.current?.focus();
 	}
 
 	/**
@@ -240,14 +265,17 @@ export function SheetEditor({
 		gridRef.current?.focus();
 	}
 
-	// The editor over the cell gets the focus when an edit starts, with the cursor after the text.
+	// The editor over the cell gets the focus when an edit starts, with the cursor after the text or
+	// with the part of the text that the edit selects.
 	const cellEditing = edit?.source === "cell";
+	const editSelect = edit?.select;
 	useLayoutEffect(() => {
 		const editor = editorRef.current;
 		if (!cellEditing || !editor) return;
 		editor.focus();
-		editor.setSelectionRange(editor.value.length, editor.value.length);
-	}, [cellEditing]);
+		const [start, end] = editSelect ?? [editor.value.length, editor.value.length];
+		editor.setSelectionRange(start, end);
+	}, [cellEditing, editSelect]);
 
 	const updateWindow = useCallback(() => {
 		const scroll = scrollRef.current;
@@ -425,6 +453,9 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
+				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠")) {
+					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠.
+					insertFunction("SUM");
 				} else if (!command && !event.altKey && event.key.length === 1 && !locked) {
 					// A typed character starts an edit that replaces the input of the cell.
 					startEdit("replace", "cell", event.key);
@@ -502,6 +533,23 @@ export function SheetEditor({
 
 	return (
 		<div className="sheet-editor">
+			{!readOnly && (
+				<SheetToolbar
+					gridId={gridId}
+					disabled={loading}
+					canUndo={memory.history.undo.length > 0}
+					canRedo={memory.history.redo.length > 0}
+					onUndo={() => {
+						replay("undo");
+						gridRef.current?.focus();
+					}}
+					onRedo={() => {
+						replay("redo");
+						gridRef.current?.focus();
+					}}
+					onFunction={insertFunction}
+				/>
+			)}
 			<div className="sheet-bar">
 				<input
 					className="sheet-name-box"
@@ -549,6 +597,7 @@ export function SheetEditor({
 				<div className="sheet-canvas" style={{ ...GRID_STYLE, width: HEAD_WIDTH + size.columns * COLUMN_WIDTH }}>
 					<table
 						ref={gridRef}
+						id={gridId}
 						// biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: a table is the element for a grid. The grid has the focus, and aria-activedescendant names the active cell.
 						role="grid"
 						tabIndex={0}

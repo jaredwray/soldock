@@ -38,6 +38,12 @@
 	min-height: 0;
 }
 
+/* The toolbar has the shared .editor-toolbar rules. The Σ of the functions menu is text, because
+   Iconoir has no icon for it. */
+.sheet-function-button {
+	font: 500 18px / 1 var(--font);
+}
+
 /* The formula bar */
 
 .sheet-bar {
