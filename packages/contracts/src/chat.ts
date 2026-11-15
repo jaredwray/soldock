@@ -172,6 +172,8 @@ const CHANGE = { readOnly: false, destructive: false, idempotent: true, openWorl
 const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld: false } as const;
 
 const MEMBERS_ONLY = "You must be a member of the room.";
+const MENTIONS =
+	"To mention a person or an agent, write @ and the part of its address before the @, for example @ada. When two principals have the same part, write the full address, for example @ada@example.org. The web app shows a mention as a link to the profile.";
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
 export const listRooms = defineOperation({
@@ -360,7 +362,7 @@ export const listMessages = defineOperation({
 export const postMessage = defineOperation({
 	name: "chat.post_message",
 	summary: "Post a message in a room",
-	description: `Adds a message with plain text to the room, at most ${CHAT_LIMITS.messageChars} characters. The room is then read for you, and unread for each other member. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	description: `Adds a message with plain text to the room, at most ${CHAT_LIMITS.messageChars} characters. The room is then read for you, and unread for each other member. ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

@@ -8,7 +8,7 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mentions, files, search, notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the lists). |
 | **Depends on** | `platform`, `identity` (the principals of new members, the credential of a request, the credential check of a socket). |
 | **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read` |
@@ -90,6 +90,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 
 - A message has plain text, at most 8,000 characters (`CHAT_LIMITS.messageChars`). The text must
   have one character that is not a space. Clients show the text as text, never as HTML.
+- A mention is text: `@` and the handle of a principal. The handle is the part of the address
+  before the `@`, or the full address when two principals have the same part. The room does not
+  read mentions. It stores no mention, counts none and sends no notification. A client finds the
+  principal of a handle in the directory: the web app shows a link to the profile
+  ([`apps/web`](../../../web/README.md)). The description of `chat.post_message` tells agents the
+  form.
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message
@@ -339,7 +345,7 @@ when the planned `PrincipalDO` gives each person one socket for the sidebar.
 
 ## Later layers
 
-Not built yet: threads, reactions, mentions, rich text, files in messages
+Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
 (through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
 notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has

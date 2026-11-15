@@ -1,9 +1,10 @@
 import "./chat.css";
 import type { ChatRoom } from "@soldock/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
+import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { chatPath } from "../../routes.ts";
 import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -11,12 +12,16 @@ import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
 import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
+import { mentionDirectory } from "./mentions.ts";
 import { roomTitle, sidebarRooms } from "./model.ts";
+import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
 
 export interface ChatAppProps {
 	/** The open room, or null for the page without a room. */
 	roomId: string | null;
+	/** The person or the agent whose profile shows, or null. */
+	profileId: string | null;
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
@@ -24,11 +29,14 @@ export interface ChatAppProps {
 
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
-/** Chat: the rooms and the direct messages of the person at the left, and one room at the right. */
-export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
+/** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
+export function ChatApp({ roomId, profileId, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
 	const [dialog, setDialog] = useState<ChatDialog>(null);
 	const ownId = useSession().whoami.principal.id;
+	// The directory gives the handles of the mentions, and the profiles. It loads one time for the page.
+	const principals = usePrincipals();
+	const directory = useMemo(() => mentionDirectory(principals ?? []), [principals]);
 
 	// The messages that waited for the server before a reload of the page go out again.
 	useEffect(() => {
@@ -37,8 +45,8 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null) document.title = "Chat – Soldock";
-	}, [roomId]);
+		if (roomId === null && profileId === null) document.title = "Chat – Soldock";
+	}, [roomId, profileId]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {
@@ -59,7 +67,16 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 				onNewDm={() => setDialog("new-dm")}
 			/>
 			<main id="main" className="chat-main" tabIndex={-1}>
-				{roomId === null ? (
+				{profileId !== null ? (
+					// The key gives each profile its own view, so a button of one never acts for a different one.
+					<ProfileView
+						key={profileId}
+						principalId={profileId}
+						principals={principals}
+						directory={directory}
+						onOpened={open}
+					/>
+				) : roomId === null ? (
 					<>
 						<PageHeader title="Chat" icon="chat" />
 						<div className="chat-empty chat-empty-page">
@@ -87,6 +104,7 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 						listReady={rooms.status === "ready"}
 						listTick={rooms.tick}
 						onRoomsChanged={rooms.refresh}
+						directory={directory}
 					/>
 				)}
 			</main>

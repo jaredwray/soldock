@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatMessage, type ChatRoom, chatSocketPath } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatMember, type ChatMessage, type ChatRoom, chatSocketPath } from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -237,12 +237,15 @@ export interface RoomState extends PagerState {
 	status: "loading" | "ready" | "error";
 	/** The room as the room itself gave it, at the time of the load. */
 	room: ChatRoom | null;
+	/** The members of the room. The suggestions of a mention show them first. */
+	members: ChatMember[];
 	error: string | null;
 }
 
 const ROOM_LOADING: RoomState = {
 	status: "loading",
 	room: null,
+	members: [],
 	messages: [],
 	hasOlder: false,
 	hasNewer: false,
@@ -302,12 +305,12 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		const request = ++loads.current;
 		const current = () => alive.current && request === loads.current;
 		try {
-			const { room } = await api.call("chat.get_room", { room_id: roomId });
+			const { room, members } = await api.call("chat.get_room", { room_id: roomId });
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
 			// The load replaces the list. The pager starts the sync at the version of the list.
-			setState({ status: "ready", room, ...pager.replace(page), error: null });
+			setState({ status: "ready", room, members, ...pager.replace(page), error: null });
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
@@ -332,6 +335,16 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
 	}, [tick, listedVersion, sync]);
 
+	/** Gets the members again after the socket told that they changed. */
+	const loadMembers = useCallback(async () => {
+		try {
+			const { members } = await api.call("chat.get_room", { room_id: roomId });
+			if (alive.current) setState((current) => (current.status === "ready" ? { ...current, members } : current));
+		} catch {
+			// The members are only for the suggestions of a mention. The next load of the room gets them.
+		}
+	}, [roomId]);
+
 	// The socket opens after the load, for a member only: the room gives its messages to its members.
 	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
 	useEffect(() => {
@@ -342,7 +355,10 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 				// `hello` has the version of the room: the sync gets what changed while no socket was open.
 				if (event.type === "hello") void sync.notice(event.version);
 				else if (event.type === "message") sync.push(event.message);
-				else roomChanged.current();
+				else {
+					roomChanged.current();
+					void loadMembers();
+				}
 			},
 			onEnd: () => roomChanged.current(),
 		});
@@ -356,7 +372,7 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 			window.removeEventListener("online", wake);
 			socket.close();
 		};
-	}, [member, roomId, sync]);
+	}, [member, roomId, sync, loadMembers]);
 
 	const loadOlder = useCallback(() => pager.readPage("older"), [pager]);
 	const loadNewer = useCallback(() => pager.readPage("newer"), [pager]);

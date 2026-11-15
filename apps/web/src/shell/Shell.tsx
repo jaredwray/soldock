@@ -133,7 +133,14 @@ export function Shell() {
 			case "sheet":
 				return <SheetPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;
 			case "chat":
-				return <ChatApp roomId={route.roomId} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
+				return (
+					<ChatApp
+						roomId={route.roomId}
+						profileId={route.profileId ?? null}
+						navOpen={navOpen}
+						onCloseNav={() => setNavOpen(false)}
+					/>
+				);
 			case "admin":
 				return <AdminPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "connect":

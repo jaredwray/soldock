@@ -32,8 +32,11 @@ export type Route =
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
 	| { page: "sheet"; spaceId: string; itemId: string }
-	/** Chat. `roomId` is null for the page without an open room. */
-	| { page: "chat"; roomId: string | null }
+	/**
+	 * Chat. `roomId` is null for the page without an open room. `profileId` is the person or the agent
+	 * whose profile shows in the place of a room.
+	 */
+	| { page: "chat"; roomId: string | null; profileId?: string }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -90,6 +93,11 @@ export function parseRoute(location: string): Route {
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null };
+		if (second === "people") {
+			return parts.length === 3 && isPrincipalId(third)
+				? { page: "chat", roomId: null, profileId: third }
+				: { page: "not-found" };
+		}
 		return parts.length === 2 && isRoomId(second) ? { page: "chat", roomId: second } : { page: "not-found" };
 	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
@@ -119,7 +127,13 @@ function parseMailView(mailboxId: string | null, parts: string[], url: URL): Rou
 	return { page: "not-found" };
 }
 
+/** A drive belongs to one person or agent, and has the id of that principal. */
 function isSpaceId(value: string | undefined): value is string {
+	return isPrincipalId(value);
+}
+
+/** A person and an agent have an id that starts with `prn_`. */
+function isPrincipalId(value: string | undefined): value is string {
 	return value?.startsWith("prn_") === true;
 }
 
@@ -199,6 +213,11 @@ export function adminPath(section: AdminSection): string {
 /** The path of a room of Chat, or of the Chat page without an open room. */
 export function chatPath(roomId: string | null = null): string {
 	return roomId ? `${CHAT_PATH}/${encodeURIComponent(roomId)}` : CHAT_PATH;
+}
+
+/** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */
+export function profilePath(principalId: string): string {
+	return `${CHAT_PATH}/people/${encodeURIComponent(principalId)}`;
 }
 
 /** The path of the thread list of a view, in the own mailbox, in a team mailbox or in the mailbox of an agent. */
