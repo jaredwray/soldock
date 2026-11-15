@@ -59,6 +59,22 @@ interface Step {
 	after: CellChange[];
 }
 
+/**
+ * What the editor of one tab keeps while a different tab is open: the selection, Undo and Redo,
+ * and the scroll position. The page holds one for each tab.
+ */
+export interface TabMemory {
+	selection: Selection | null;
+	history: { undo: Step[]; redo: Step[] };
+	scroll: { top: number; left: number } | null;
+	/** True when the grid gets the focus when it opens, after a keyboard shortcut moved to the tab. */
+	focusOnOpen: boolean;
+}
+
+export function newTabMemory(): TabMemory {
+	return { selection: null, history: { undo: [], redo: [] }, scroll: null, focusOnOpen: false };
+}
+
 type Hit = { kind: "cell"; pos: CellPos } | { kind: "column"; col: number } | { kind: "row"; row: number } | "corner";
 
 /** The part of the grid under a pointer event. */
@@ -87,11 +103,16 @@ function SpacerRow({ columns, height }: { columns: number; height: number }) {
 }
 
 interface SheetEditorProps {
-	/** The name of the sheet, for the accessible name of the grid. */
+	/** The name of the sheet and of the tab, for the accessible name of the grid. */
 	name: string;
 	cells: ReadonlyMap<string, ViewCell>;
 	/** True for a viewer: selection and copy work, and no edit. */
 	readOnly: boolean;
+	/** True while the cells of the tab did not arrive. The grid then takes no edit, as for a viewer. */
+	loading: boolean;
+	memory: TabMemory;
+	/** Shows the next tab (1) or the tab before (-1). */
+	onSwitchTab: (step: 1 | -1) => void;
 	/**
 	 * The current input of a cell. It comes from the store, not from `cells`, so it is correct in the
 	 * same event as a commit, before the grid draws again.
@@ -104,11 +125,20 @@ interface SheetEditorProps {
  * The formula bar and the grid. The grid is one tab stop: the arrow keys move the selection in it.
  * It draws only the rows near the rows on screen, so a sheet with 1000 rows stays fast.
  */
-export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit }: SheetEditorProps) {
+export function SheetEditor({
+	name,
+	cells,
+	readOnly,
+	loading,
+	memory,
+	onSwitchTab,
+	inputOf: inputAt,
+	onCommit,
+}: SheetEditorProps) {
 	const toast = useToast();
 	const gridId = useId();
 	const hintId = useId();
-	const [selection, setSelection] = useState<Selection>(() => selectCell(FIRST_CELL));
+	const [selection, setSelection] = useState<Selection>(() => memory.selection ?? selectCell(FIRST_CELL));
 	const [edit, setEditState] = useState<Edit | null>(null);
 	const [rowWindow, setRowWindow] = useState({ first: 0, last: 60 });
 	const [nameDraft, setNameDraft] = useState<string | null>(null);
@@ -122,7 +152,6 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 	const leaveRef = useRef(false);
 	/** True when the next selection must not scroll the grid, for example a whole column. */
 	const keepScrollRef = useRef(false);
-	const historyRef = useRef<{ undo: Step[]; redo: Step[] }>({ undo: [], redo: [] });
 
 	const used = useMemo(() => usedSize(cells.keys()), [cells]);
 	const size = gridSize(used, selection);
@@ -130,6 +159,8 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 	const range = rangeOf(selection);
 	const active = selection.anchor;
 	const activeName = cellName(active);
+	/** True when no edit is possible: for a viewer, and while the cells of the tab did not arrive. */
+	const locked = readOnly || loading;
 
 	function setEdit(next: Edit | null) {
 		editRef.current = next;
@@ -153,6 +184,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 
 	/** Sends changes to the store. Returns false, with a message, when an input is too long. */
 	function apply(changes: CellChange[]): boolean {
+		if (locked) return false;
 		const long = tooLong(changes, SHEET_LIMITS.inputChars);
 		if (long) {
 			toast({
@@ -163,7 +195,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 		}
 		const after = changes.filter((change) => inputAt(change.cell) !== change.input);
 		if (after.length === 0) return true;
-		const history = historyRef.current;
+		const history = memory.history;
 		history.undo.push({ before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })), after });
 		if (history.undo.length > UNDO_STEPS) history.undo.shift();
 		history.redo = [];
@@ -173,8 +205,8 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 
 	/** Undo sends the inputs from before a step. Redo sends the inputs of the step again. */
 	function replay(from: "undo" | "redo") {
-		if (readOnly) return;
-		const history = historyRef.current;
+		if (locked) return;
+		const history = memory.history;
 		const entry = history[from].pop();
 		if (!entry) return;
 		history[from === "undo" ? "redo" : "undo"].push(entry);
@@ -185,7 +217,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 	}
 
 	function startEdit(mode: Edit["mode"], source: Edit["source"], first?: string) {
-		if (readOnly) return;
+		if (locked) return;
 		setEdit({ cell: active, value: first ?? inputAt(activeName), mode, source });
 	}
 
@@ -220,10 +252,28 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 	const updateWindow = useCallback(() => {
 		const scroll = scrollRef.current;
 		if (!scroll) return;
+		memory.scroll = { top: scroll.scrollTop, left: scroll.scrollLeft };
 		const first = Math.max(0, Math.floor(scroll.scrollTop / ROW_HEIGHT) - SPARE_ROWS);
 		const last = Math.floor((scroll.scrollTop + scroll.clientHeight) / ROW_HEIGHT) + SPARE_ROWS;
 		setRowWindow((current) => (current.first === first && current.last === last ? current : { first, last }));
-	}, []);
+	}, [memory]);
+
+	// The grid of a tab opens where it was: the scroll position, and the focus after a keyboard shortcut.
+	useLayoutEffect(() => {
+		const scroll = scrollRef.current;
+		if (scroll && memory.scroll) {
+			scroll.scrollTop = memory.scroll.top;
+			scroll.scrollLeft = memory.scroll.left;
+		}
+		if (memory.focusOnOpen) {
+			memory.focusOnOpen = false;
+			gridRef.current?.focus();
+		}
+	}, [memory]);
+
+	useEffect(() => {
+		memory.selection = selection;
+	}, [memory, selection]);
 
 	useEffect(() => {
 		const scroll = scrollRef.current;
@@ -312,6 +362,16 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 		const command = event.ctrlKey || event.metaKey;
 		const leave = leaveRef.current;
 		leaveRef.current = false;
+		// Alt with an up or down arrow, or Ctrl+Shift with Page Up or Page Down, shows the tab before or the next tab.
+		const nextTab =
+			(event.altKey && event.key === "ArrowDown") || (command && event.shiftKey && event.key === "PageDown");
+		const tabBefore =
+			(event.altKey && event.key === "ArrowUp") || (command && event.shiftKey && event.key === "PageUp");
+		if (nextTab || tabBefore) {
+			event.preventDefault();
+			onSwitchTab(nextTab ? 1 : -1);
+			return;
+		}
 		const page = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / ROW_HEIGHT) - 2);
 		switch (event.key) {
 			case "ArrowUp":
@@ -339,7 +399,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 				break;
 			case "Enter":
 				if (event.shiftKey) move(-1, 0, false);
-				else if (readOnly) move(1, 0, false);
+				else if (locked) move(1, 0, false);
 				else startEdit("keep", "cell");
 				break;
 			case "F2":
@@ -365,7 +425,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
-				} else if (!command && !event.altKey && event.key.length === 1 && !readOnly) {
+				} else if (!command && !event.altKey && event.key.length === 1 && !locked) {
 					// A typed character starts an edit that replaces the input of the cell.
 					startEdit("replace", "cell", event.key);
 				} else {
@@ -468,7 +528,7 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 					aria-label={`Input of cell ${activeName}`}
 					spellCheck={false}
 					autoComplete="off"
-					readOnly={readOnly}
+					readOnly={locked}
 					value={barValue}
 					onFocus={() => {
 						if (!editRef.current) startEdit("keep", "bar");
@@ -477,6 +537,12 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 					onKeyDown={onBarKeyDown}
 					onBlur={() => commitEdit()}
 				/>
+				{loading && (
+					<span className="sheet-loading" role="status">
+						<span className="spinner spinner-small" aria-hidden="true" />
+						Loading
+					</span>
+				)}
 				{readOnly && <span className="sheet-view-only">View only</span>}
 			</div>
 			<div ref={scrollRef} className="sheet-scroll" onScroll={updateWindow}>
@@ -492,7 +558,8 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 						aria-rowcount={size.rows + 1}
 						aria-colcount={size.columns + 1}
 						aria-multiselectable="true"
-						aria-readonly={readOnly}
+						aria-readonly={locked}
+						aria-busy={loading}
 						aria-activedescendant={activeDrawn ? cellId(gridId, activeName) : undefined}
 						onKeyDown={onGridKeyDown}
 						onPointerDown={onPointerDown}
@@ -556,8 +623,8 @@ export function SheetEditor({ name, cells, readOnly, inputOf: inputAt, onCommit 
 			</div>
 			<p id={hintId} className="visually-hidden">
 				{readOnly
-					? "Use the arrow keys to move. Press Escape, then Tab, to leave the grid."
-					: "Use the arrow keys to move. Press Enter to change a cell. Press Escape, then Tab, to leave the grid."}
+					? "Use the arrow keys to move. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."
+					: "Use the arrow keys to move. Press Enter to change a cell. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."}
 			</p>
 		</div>
 	);

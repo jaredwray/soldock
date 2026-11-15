@@ -29,6 +29,8 @@
 	flex: 1 1 240px;
 }
 
+/* The panel of the active tab holds its editor. */
+.sheet-panel,
 .sheet-editor {
 	display: flex;
 	flex: 1;
@@ -86,6 +88,15 @@
 	flex: none;
 	color: var(--muted-foreground);
 	font: italic 500 13px / 1 var(--mono);
+}
+
+.sheet-loading {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted-foreground);
+	font-size: 12px;
 }
 
 .sheet-view-only {
@@ -245,6 +256,92 @@
 	outline: none;
 }
 
+/* The tab bar under the grid */
+
+.sheet-tabs {
+	position: relative;
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 2px;
+	min-height: 44px;
+	padding: 4px 8px;
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+}
+
+.sheet-tabs-button {
+	width: 32px;
+	height: 32px;
+}
+
+.sheet-tablist {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	padding: 2px 4px;
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+
+.sheet-tab,
+.sheet-tab-rename {
+	flex: none;
+	height: 32px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-sm);
+	font: 500 13px / 1 var(--font);
+}
+
+.sheet-tab {
+	max-width: 220px;
+	padding: 0 14px;
+	overflow: hidden;
+	background: transparent;
+	color: var(--muted-foreground);
+	text-overflow: ellipsis;
+	white-space: pre;
+	cursor: pointer;
+}
+
+.sheet-tab:hover {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+.sheet-tab[aria-selected="true"] {
+	border-color: var(--border);
+	background: var(--background);
+	box-shadow: var(--shadow-xs);
+	color: var(--foreground);
+	font-weight: 600;
+}
+
+.sheet-tab:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+/* During a rename, the tab keeps its place under the field. */
+.sheet-tab-renaming {
+	visibility: hidden;
+}
+
+.sheet-tab-rename {
+	position: absolute;
+	z-index: 1;
+	padding: 0 8px;
+	border-color: var(--ring);
+	background: var(--background);
+	color: var(--foreground);
+}
+
+.sheet-tab-rename:focus {
+	outline: none;
+}
+
 @media (max-width: 900px) {
 	.sheet-bar {
 		padding: 6px 8px;
@@ -263,8 +360,19 @@
 @media (max-width: 900px), (pointer: coarse) {
 	.sheet-name-box,
 	.sheet-formula,
-	.sheet-cell-editor {
+	.sheet-cell-editor,
+	.sheet-tab-rename {
 		font-size: 16px;
+	}
+
+	.sheet-tab,
+	.sheet-tab-rename,
+	.sheet-tabs-button {
+		height: 44px;
+	}
+
+	.sheet-tabs-button {
+		width: 44px;
 	}
 
 	.sheet-name-box,

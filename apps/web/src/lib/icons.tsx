@@ -371,6 +371,7 @@ const PATHS = {
 	],
 	check: [{ d: "M5 13L9 17L19 7" }],
 	chevronRight: [{ d: "M9 6L15 12L9 18" }],
+	chevronLeft: [{ d: "M15 6L9 12L15 18" }],
 	eye: [
 		{ d: "M3 13C6.6 5 17.4 5 21 13" },
 		{

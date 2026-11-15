@@ -12,6 +12,10 @@ export const SHEET_LIMITS = {
 	cellsPerUpdate: 5000,
 	/** The JSON of the inputs of one sheet, in bytes of UTF-8. A Durable Object row holds at most 2 MB. */
 	contentBytes: 1024 * 1024,
+	/** The tabs of one sheet. */
+	tabs: 50,
+	/** The characters of a tab name. Excel has the same limit, so an export to XLSX keeps each name. */
+	tabNameChars: 31,
 } as const;
 
 /** The error values of a cell. A formula that uses an error cell gets the same error. */
@@ -43,6 +47,37 @@ const CellInput = z.strictObject({
 	input: z.string().max(SHEET_LIMITS.inputChars),
 });
 
+/** The id of a tab in its sheet, for example tab_2. The id stays the same when the tab gets a new name. */
+export const TabId = z
+	.string()
+	.regex(/^tab_[1-9][0-9]{0,8}$/, "must be the id of a tab, such as tab_2")
+	.describe("The id of a tab, as the tabs of sheets.get return it.");
+
+/**
+ * The characters that a tab name cannot have: the characters that Excel refuses, and control and
+ * format characters, so that two names that look the same are not two different names.
+ */
+const TAB_NAME_FORBIDDEN = /[\p{Cc}\p{Cf}[\]:*?/\\]/u;
+
+/** The name of a tab. A formula refers to a tab with its name, for example ='Q1 costs'!B4. */
+export const TabName = z
+	.string()
+	.trim()
+	.min(1)
+	.max(SHEET_LIMITS.tabNameChars)
+	.refine((name) => !TAB_NAME_FORBIDDEN.test(name), "must not contain control or format characters, or [ ] : * ? / \\")
+	.refine((name) => !name.startsWith("'") && !name.endsWith("'"), "must not start or end with '");
+
+/** One grid of a sheet. */
+export const Tab = z.object({
+	id: z.string(),
+	name: z.string(),
+	/** The last row and the last column of the tab that have a cell with an input. 0 for an empty tab. */
+	rows: z.number().int(),
+	columns: z.number().int(),
+});
+export type Tab = z.infer<typeof Tab>;
+
 export const Cell = z.object({
 	cell: z.string(),
 	/** The input of the cell, for example =SUM(A1:A3). Empty for a cell that the change cleared. */
@@ -54,14 +89,29 @@ export const Cell = z.object({
 export type Cell = z.infer<typeof Cell>;
 
 const FORMULA_NOTE =
-	"A formula starts with =. It can use numbers, texts in double quotes, TRUE and FALSE, cells (B2), ranges (A1:C3), the operators + - * / ^ & = <> < > <= >= and %, and these functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFERROR, AND, OR, NOT, ROUND, ABS, INT, MOD, POWER, SQRT, CONCAT, CONCATENATE, LEN, UPPER, LOWER, TRIM, LEFT, RIGHT and MID.";
+	"A formula starts with =. It can use numbers, texts in double quotes, TRUE and FALSE, cells (B2), ranges (A1:C3), cells and ranges of a different tab (Costs!B2, 'Q1 costs'!A1:C3), the operators + - * / ^ & = <> < > <= >= and %, and these functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, IFERROR, AND, OR, NOT, ROUND, ABS, INT, MOD, POWER, SQRT, CONCAT, CONCATENATE, LEN, UPPER, LOWER, TRIM, LEFT, RIGHT and MID.";
+
+const TAB_PARAM = TabId.optional().describe("The tab. The default is the first tab.");
+
+const TAB_NOTE =
+	"A sheet has one or more tabs. Each tab is a grid. tabs lists them in order, with the id and the name.";
+
+/** The output of an operation that changes the tabs. */
+const TabsOutput = z.object({ item: DriveItem, revision: z.number().int(), tabs: z.array(Tab) });
+
+const BASE_REVISION = z
+	.number()
+	.int()
+	.min(0)
+	.optional()
+	.describe("The revision that you read. When the sheet changed after it, the call fails with conflict.");
 
 export const createSheet = defineOperation({
 	name: "sheets.create",
 	summary: "Create a sheet",
 	description: [
-		"Creates a spreadsheet with one grid in the folder parent_id, or at the root of the drive without parent_id.",
-		`The grid has the columns A to AZ and the rows 1 to ${SHEET_LIMITS.rows}. Set cells to fill it.`,
+		"Creates a spreadsheet with one tab, Sheet1, in the folder parent_id, or at the root of the drive without parent_id.",
+		`A tab is a grid with the columns A to AZ and the rows 1 to ${SHEET_LIMITS.rows}. Set cells to fill the first tab. Add more tabs with sheets.add_tab.`,
 		FORMULA_NOTE,
 		`In a folder of somebody else, you need the editor role, and the owner of that drive owns the new sheet. ${IN_SPACE}`,
 	].join(" "),
@@ -83,7 +133,7 @@ export const createSheet = defineOperation({
 export const getSheet = defineOperation({
 	name: "sheets.get",
 	summary: "Get the cells of a sheet",
-	description: `Returns each cell that has an input, with the input and the result of its formula. rows and columns give the last row and the last column that have a cell. Set range (for example A1:D20) to get only the cells in that range. ${IN_SPACE}`,
+	description: `Returns each cell of one tab that has an input, with the input and the result of its formula. rows and columns give the last row and the last column of the tab that have a cell. Set range (for example A1:D20) to get only the cells in that range. ${TAB_NOTE} Set tab_id to read a different tab than the first. ${IN_SPACE}`,
 	http: { method: "GET", path: "/api/v1/sheets/{item_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent"],
@@ -91,6 +141,7 @@ export const getSheet = defineOperation({
 	input: z.strictObject({
 		space_id: SpaceParam,
 		item_id: ItemId,
+		tab_id: TAB_PARAM,
 		range: z
 			.string()
 			.trim()
@@ -101,6 +152,9 @@ export const getSheet = defineOperation({
 	output: z.object({
 		item: DriveItem,
 		revision: z.number().int(),
+		tabs: z.array(Tab),
+		/** The tab of `cells`. */
+		tab_id: z.string(),
 		rows: z.number().int(),
 		columns: z.number().int(),
 		cells: z.array(Cell),
@@ -112,9 +166,10 @@ export const updateCells = defineOperation({
 	name: "sheets.update_cells",
 	summary: "Change cells of a sheet",
 	description: [
-		"Sets the input of each given cell. An empty input clears the cell. The server calculates each formula again. You need the editor role.",
+		"Sets the input of each given cell of one tab. An empty input clears the cell. The server calculates each formula again. You need the editor role.",
+		"Set tab_id to change a different tab than the first.",
 		FORMULA_NOTE,
-		"The result has each cell whose input or result changed, also the cells that depend on a changed cell.",
+		"The result has each cell of the tab whose input or result changed, also the cells of the tab that depend on a changed cell. Formulas of other tabs that read a changed cell also get new results: read them with sheets.get.",
 		"Set base_revision to the revision that you read. When somebody changed the sheet after that, the call fails with conflict and changes nothing: read the sheet again.",
 		IN_SPACE,
 	].join(" "),
@@ -125,12 +180,16 @@ export const updateCells = defineOperation({
 	input: z.strictObject({
 		space_id: SpaceParam,
 		item_id: ItemId,
+		tab_id: TAB_PARAM,
 		cells: z.array(CellInput).min(1).max(SHEET_LIMITS.cellsPerUpdate),
 		base_revision: z.number().int().min(0).optional(),
 	}),
 	output: z.object({
 		item: DriveItem,
 		revision: z.number().int(),
+		tabs: z.array(Tab),
+		/** The tab of `cells`. */
+		tab_id: z.string(),
 		rows: z.number().int(),
 		columns: z.number().int(),
 		cells: z.array(Cell),
@@ -138,8 +197,138 @@ export const updateCells = defineOperation({
 	errors: ["not_found", "invalid", "conflict", "payload_too_large"],
 });
 
+const TAB_RULES = `A tab name has 1 to ${SHEET_LIMITS.tabNameChars} characters, without [ ] : * ? / \\, and does not start or end with '. Two tabs of a sheet cannot have the same name, in upper or lower case. A retry with the same name gets invalid, so a call with a name is safe to send again.`;
+
+export const addTab = defineOperation({
+	name: "sheets.add_tab",
+	summary: "Add a tab to a sheet",
+	description: [
+		"Adds an empty tab to a sheet. Without name, the tab gets the first free name of Sheet1, Sheet2 and so on. Without index, the tab goes after the last tab.",
+		"index is the position of the new tab: 0 is the first.",
+		TAB_RULES,
+		`A sheet has at most ${SHEET_LIMITS.tabs} tabs. A formula that refers to the name of the new tab gets its cells. You need the editor role.`,
+		IN_SPACE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		name: TabName.optional(),
+		index: z.number().int().min(0).optional(),
+		base_revision: BASE_REVISION,
+	}),
+	output: TabsOutput.extend({ tab_id: z.string().describe("The id of the new tab.") }),
+	errors: ["not_found", "invalid", "conflict"],
+});
+
+export const renameTab = defineOperation({
+	name: "sheets.rename_tab",
+	summary: "Give a tab of a sheet a new name",
+	description: [
+		"Gives a tab a new name. Each formula of the sheet that refers to the old name gets the new name, so its result stays the same.",
+		TAB_RULES,
+		"You need the editor role.",
+		IN_SPACE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/rename" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		tab_id: TabId,
+		name: TabName,
+		base_revision: BASE_REVISION,
+	}),
+	output: TabsOutput,
+	errors: ["not_found", "invalid", "conflict", "payload_too_large"],
+});
+
+export const moveTab = defineOperation({
+	name: "sheets.move_tab",
+	summary: "Move a tab of a sheet to a different position",
+	description: `Moves a tab to the position index: 0 is the first. An index after the last tab moves the tab to the end. You need the editor role. ${IN_SPACE}`,
+	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/move" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		tab_id: TabId,
+		index: z.number().int().min(0),
+		base_revision: BASE_REVISION,
+	}),
+	output: TabsOutput,
+	errors: ["not_found", "invalid", "conflict"],
+});
+
+export const duplicateTab = defineOperation({
+	name: "sheets.duplicate_tab",
+	summary: "Make a copy of a tab of a sheet",
+	description: [
+		'Makes a copy of a tab with each of its cells, directly after the tab. Without name, the copy gets the name "Copy of" and the name of the tab.',
+		TAB_RULES,
+		`A sheet has at most ${SHEET_LIMITS.tabs} tabs and ${SHEET_LIMITS.cells} cells with an input. You need the editor role.`,
+		IN_SPACE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/duplicate" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		tab_id: TabId,
+		name: TabName.optional(),
+		base_revision: BASE_REVISION,
+	}),
+	output: TabsOutput.extend({ tab_id: z.string().describe("The id of the copy.") }),
+	errors: ["not_found", "invalid", "conflict", "payload_too_large"],
+});
+
+export const deleteTab = defineOperation({
+	name: "sheets.delete_tab",
+	summary: "Delete a tab of a sheet",
+	description: [
+		"Deletes a tab and each of its cells. This cannot be undone. A sheet keeps at least one tab, so the last tab cannot be deleted.",
+		"A formula of a different tab that refers to the deleted tab gets #REF!. It keeps its text, so a new tab with the same name gives it a result again.",
+		"Set dry_run to true to get the count of cells that the delete removes and of formulas that get #REF!, without a change.",
+		"You need the editor role.",
+		IN_SPACE,
+	].join(" "),
+	http: { method: "DELETE", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		tab_id: TabId,
+		base_revision: BASE_REVISION,
+		dry_run: z.boolean().default(false),
+	}),
+	output: TabsOutput.extend({
+		/** The cells of the tab that have an input. */
+		cells: z.number().int(),
+		/** The formulas of other tabs that refer to the tab, and get #REF! after the delete. */
+		references: z.number().int(),
+		dry_run: z.boolean(),
+	}),
+	errors: ["not_found", "invalid", "conflict"],
+});
+
 export const sheetsOperations = {
 	"sheets.create": createSheet,
 	"sheets.get": getSheet,
 	"sheets.update_cells": updateCells,
+	"sheets.add_tab": addTab,
+	"sheets.rename_tab": renameTab,
+	"sheets.move_tab": moveTab,
+	"sheets.duplicate_tab": duplicateTab,
+	"sheets.delete_tab": deleteTab,
 } as const;

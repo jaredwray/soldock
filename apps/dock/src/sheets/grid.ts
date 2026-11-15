@@ -1,17 +1,50 @@
-import { type Cell, SHEET_LIMITS } from "@soldock/contracts";
-import { type CellPosition, ErrorValue, parseCellName, type Value } from "./formula.ts";
+import { type Cell, SHEET_LIMITS, type Tab } from "@soldock/contracts";
+import { type CellPosition, ErrorValue, parseCellName, type TabInputs, type Value } from "./formula.ts";
 
-// The stored form of a sheet and its output form. A sheet stores the input of each cell that is not
-// empty, by cell name. The results are never stored: each read calculates them.
+// The stored form of a sheet and its output form. A sheet has one or more tabs. Each tab stores the
+// input of each cell that is not empty, by cell name. The results are never stored: each read
+// calculates them.
 
-/** The inputs of a sheet from the stored JSON. A sheet that nobody wrote has no cells. */
-export function readInputs(content: string | null): Map<string, string> {
-	if (content === null) return new Map();
-	return new Map(Object.entries((JSON.parse(content) as { cells: Record<string, string> }).cells));
+/** A sheet in memory: its tabs in order, and the number of the next new tab id. */
+export interface Workbook {
+	tabs: TabInputs[];
+	nextTab: number;
 }
 
-export function storeInputs(inputs: ReadonlyMap<string, string>): string {
-	return JSON.stringify({ cells: Object.fromEntries(inputs) });
+/** The stored JSON. The first layer stored `{ cells }` with one grid: that is one tab, Sheet1. */
+type StoredSheet =
+	| { tabs: { id: string; name: string; cells: Record<string, string> }[]; next_tab: number }
+	| { cells: Record<string, string> };
+
+/** The name of the first tab of a new sheet. */
+export const FIRST_TAB_NAME = "Sheet1";
+
+function firstTab(cells: Record<string, string>): Workbook {
+	return { tabs: [{ id: "tab_1", name: FIRST_TAB_NAME, inputs: new Map(Object.entries(cells)) }], nextTab: 2 };
+}
+
+/** The sheet from the stored JSON. A sheet that nobody wrote has one empty tab. */
+export function readWorkbook(content: string | null): Workbook {
+	if (content === null) return firstTab({});
+	const stored = JSON.parse(content) as StoredSheet;
+	if (!("tabs" in stored)) return firstTab(stored.cells);
+	return {
+		tabs: stored.tabs.map((tab) => ({ id: tab.id, name: tab.name, inputs: new Map(Object.entries(tab.cells)) })),
+		nextTab: stored.next_tab,
+	};
+}
+
+export function storeWorkbook(book: Workbook): string {
+	const stored: StoredSheet = {
+		tabs: book.tabs.map((tab) => ({ id: tab.id, name: tab.name, cells: Object.fromEntries(tab.inputs) })),
+		next_tab: book.nextTab,
+	};
+	return JSON.stringify(stored);
+}
+
+/** The tabs for the output, in order, each with its extent. */
+export function toTabs(book: Workbook): Tab[] {
+	return book.tabs.map((tab) => ({ id: tab.id, name: tab.name, ...extent(tab.inputs) }));
 }
 
 /** The position of a cell name from a call. Throws the message for a name outside the grid. */
@@ -99,13 +132,15 @@ export function extent(inputs: ReadonlyMap<string, string>): { rows: number; col
 
 const MAX_TEXT_CHARS = 100_000;
 
-/** The texts of a sheet, for the search index of Drive. */
-export function sheetText(values: ReadonlyMap<string, Value>): string {
+/** The texts of each tab of a sheet, for the search index of Drive. */
+export function sheetText(values: ReadonlyMap<string, ReadonlyMap<string, Value>>): string {
 	let text = "";
-	for (const value of values.values()) {
-		if (typeof value !== "string" || value.trim() === "") continue;
-		text += `${value}\n`;
-		if (text.length > MAX_TEXT_CHARS) break;
+	for (const tab of values.values()) {
+		for (const value of tab.values()) {
+			if (typeof value !== "string" || value.trim() === "") continue;
+			text += `${value}\n`;
+			if (text.length > MAX_TEXT_CHARS) return text.slice(0, MAX_TEXT_CHARS);
+		}
 	}
-	return text.slice(0, MAX_TEXT_CHARS);
+	return text;
 }

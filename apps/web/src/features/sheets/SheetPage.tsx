@@ -1,14 +1,15 @@
 import "./sheets.css";
 import { ApiError } from "@soldock/contracts";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { DRIVE_PATH } from "../../routes.ts";
 import { DocumentHeader } from "../drive/DocumentHeader.tsx";
 import type { CellChange } from "./cells.ts";
-import { SheetEditor } from "./SheetEditor.tsx";
-import { SheetStore } from "./store.ts";
+import { newTabMemory, SheetEditor, type TabMemory } from "./SheetEditor.tsx";
+import { SheetTabs, tabElementId } from "./SheetTabs.tsx";
+import { SheetStore, type TabAction, type TabsData } from "./store.ts";
 
 export interface SheetPageProps {
 	/** The drive that holds the sheet. */
@@ -24,18 +25,36 @@ const REFRESH_MS = 15_000;
  */
 export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	const toast = useToast();
-	const store = useMemo(
-		() =>
-			new SheetStore({
-				get: () => api.call("sheets.get", { space_id: spaceId, item_id: itemId }),
-				update: (cells, baseRevision) =>
-					api.call("sheets.update_cells", { space_id: spaceId, item_id: itemId, cells, base_revision: baseRevision }),
-			}),
-		[spaceId, itemId],
-	);
+	const store = useMemo(() => {
+		const sheet = { space_id: spaceId, item_id: itemId };
+		const changeTab = (action: TabAction): Promise<TabsData> => {
+			switch (action.kind) {
+				case "add":
+					return api.call("sheets.add_tab", sheet);
+				case "rename":
+					return api.call("sheets.rename_tab", { ...sheet, tab_id: action.tabId, name: action.name });
+				case "move":
+					return api.call("sheets.move_tab", { ...sheet, tab_id: action.tabId, index: action.index });
+				case "duplicate":
+					return api.call("sheets.duplicate_tab", { ...sheet, tab_id: action.tabId });
+				case "delete":
+					return api.call("sheets.delete_tab", { ...sheet, tab_id: action.tabId });
+			}
+		};
+		return new SheetStore({
+			get: (tabId) => api.call("sheets.get", { ...sheet, tab_id: tabId }),
+			update: (cells, baseRevision, tabId) =>
+				api.call("sheets.update_cells", { ...sheet, tab_id: tabId, cells, base_revision: baseRevision }),
+			changeTab,
+		});
+	}, [spaceId, itemId]);
 	const sheet = useSyncExternalStore(store.subscribe, store.getSnapshot);
 	const [discarding, setDiscarding] = useState(false);
 	const name = sheet.item?.name ?? null;
+	const baseId = useId();
+	const panelId = useId();
+	/** The selection, Undo and Redo, and the scroll position of each tab. */
+	const memories = useRef(new Map<string, TabMemory>());
 
 	useEffect(() => {
 		void store.load();
@@ -68,8 +87,42 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 		return () => window.removeEventListener("beforeunload", warn);
 	}, [store]);
 
-	const inputOf = useCallback((cell: string) => store.inputOf(cell), [store]);
-	const commit = useCallback((changes: CellChange[]) => store.commit(changes), [store]);
+	const activeTab = sheet.activeTab;
+	const inputOf = useCallback((cell: string) => store.inputOf(cell, activeTab), [store, activeTab]);
+	const commit = useCallback((changes: CellChange[]) => store.commit(changes, activeTab), [store, activeTab]);
+	const changeTab = useCallback((action: TabAction) => store.changeTab(action), [store]);
+	/** The name of each tab in the last snapshot, to find a rename. */
+	const namesRef = useRef(new Map<string, string>());
+
+	useEffect(() => {
+		// The Undo steps of each tab hold tab names in their formulas. After a rename, of this page or of
+		// somebody else, Undo would write the old name back and give #REF!, so a rename clears them.
+		const before = namesRef.current;
+		if (sheet.tabs.some((tab) => before.has(tab.id) && before.get(tab.id) !== tab.name)) {
+			for (const memory of memories.current.values()) memory.history = { undo: [], redo: [] };
+		}
+		namesRef.current = new Map(sheet.tabs.map((tab) => [tab.id, tab.name]));
+		// The memory of a deleted tab is not needed again: a new tab never gets its id.
+		for (const id of memories.current.keys()) if (!namesRef.current.has(id)) memories.current.delete(id);
+	}, [sheet.tabs]);
+
+	function memoryOf(tabId: string): TabMemory {
+		let memory = memories.current.get(tabId);
+		if (!memory) {
+			memory = newTabMemory();
+			memories.current.set(tabId, memory);
+		}
+		return memory;
+	}
+
+	/** Shows the next tab or the tab before, from a keyboard shortcut in the grid. The grid of that tab gets the focus. */
+	function switchTab(step: 1 | -1) {
+		const index = sheet.tabs.findIndex((tab) => tab.id === activeTab);
+		const next = sheet.tabs[index + step];
+		if (!next) return;
+		memoryOf(next.id).focusOnOpen = true;
+		store.selectTab(next.id);
+	}
 
 	async function discard() {
 		setDiscarding(true);
@@ -144,7 +197,29 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 					</button>
 				</div>
 			)}
-			<SheetEditor name={sheet.item.name} cells={sheet.cells} readOnly={readOnly} inputOf={inputOf} onCommit={commit} />
+			<div role="tabpanel" id={panelId} aria-labelledby={tabElementId(baseId, activeTab)} className="sheet-panel">
+				<SheetEditor
+					// Each tab gets its own editor, with the selection and the Undo steps of that tab.
+					key={activeTab}
+					name={`${sheet.item.name}, ${sheet.tabs.find((tab) => tab.id === activeTab)?.name ?? ""}`}
+					cells={sheet.cells}
+					readOnly={readOnly}
+					loading={sheet.tabLoading}
+					memory={memoryOf(activeTab)}
+					onSwitchTab={switchTab}
+					inputOf={inputOf}
+					onCommit={commit}
+				/>
+			</div>
+			<SheetTabs
+				baseId={baseId}
+				panelId={panelId}
+				tabs={sheet.tabs}
+				activeTab={activeTab}
+				readOnly={readOnly}
+				onSelect={(tabId) => store.selectTab(tabId)}
+				onChange={changeTab}
+			/>
 		</main>
 	);
 }
