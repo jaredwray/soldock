@@ -223,6 +223,33 @@ describe("a failed send whose message the list has", () => {
 		expect(storedSends(sent, outbox([failed("k1", "Hello", null)]), ADA)).toEqual([]);
 	});
 
+	// A person writes the text of a failed send again. A pair with the failed send removes a message that the room does not have.
+	it("is the message of the send whose call runs, when that send has the text of an older failed send", () => {
+		const messages = [message(1), message(2, { text: "Ping" })];
+		const again = {
+			key: "k2",
+			text: "Ping",
+			created_at: "2026-01-01T09:11:00.000Z",
+			state: "sending" as const,
+			error: null,
+			uncertain: false,
+			afterSeq: 1,
+		};
+		const state = { pending: [failed("k1", "Ping", 1), again], keys: new Map<string, string>(), sendingKey: "k2" };
+		expect(storedSends(messages, state, ADA)).toEqual([]);
+		// The stored message is the row of the new send. The failed send stays, with its actions.
+		expect(
+			chatRows(messages, state, ADA, "rm_01JD0000000000000000000001").map((row) => [
+				row.key,
+				row.pending?.state ?? "stored",
+			]),
+		).toEqual([
+			["cmsg_1", "stored"],
+			["k2", "stored"],
+			["k1", "failed"],
+		]);
+	});
+
 	it("gives one stored message to one send, when two failed sends have the same text", () => {
 		const messages = [message(1), message(2, { text: "Ping" })];
 		expect(storedSends(messages, outbox([failed("k1", "Ping", 1), failed("k2", "Ping", 1)]), ADA)).toEqual([

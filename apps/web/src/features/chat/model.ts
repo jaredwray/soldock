@@ -58,6 +58,9 @@ export interface ChatRow {
  * Only a send whose call runs, or whose answers got lost, can have a stored message. A send that the
  * server refused has none. A call that started while no list showed the room has none: the list does
  * not know which messages came after its start.
+ *
+ * The send whose call runs comes first. A person can write the text of a failed send again. The
+ * message that arrives is then the message of the new send, and the failed send must stay.
  */
 function storedOf(
 	messages: readonly ChatMessage[],
@@ -65,10 +68,13 @@ function storedOf(
 	own: ChatMessage["author"],
 ): Map<string, PendingMessage> {
 	const stored = new Map<string, PendingMessage>();
-	for (const pending of outbox.pending) {
+	const sends = [
+		...outbox.pending.filter((pending) => pending.state === "sending"),
+		...outbox.pending.filter((pending) => pending.state === "failed" && pending.uncertain),
+	];
+	for (const pending of sends) {
 		const afterSeq = pending.afterSeq;
-		const open = pending.state === "sending" || (pending.state === "failed" && pending.uncertain);
-		if (!open || afterSeq === null) continue;
+		if (afterSeq === null) continue;
 		const message = messages.find(
 			(entry) =>
 				entry.seq > afterSeq &&
