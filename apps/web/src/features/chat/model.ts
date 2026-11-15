@@ -50,39 +50,81 @@ export interface ChatRow {
 }
 
 /**
+ * The stored message of each send whose answer did not arrive, by the id of the message. The socket,
+ * or a read, can bring the stored message before the answer of its send, and when each answer got
+ * lost. The message of a send is a message of `own` with the text of the send, that the outbox did
+ * not send before, and that came after the start of the call of the send.
+ *
+ * Only a send whose call runs, or whose answers got lost, can have a stored message. A send that the
+ * server refused has none. A call that started while no list showed the room has none: the list does
+ * not know which messages came after its start.
+ *
+ * The send whose call runs comes first. A person can write the text of a failed send again. The
+ * message that arrives is then the message of the new send, and the failed send must stay.
+ *
+ * Two failed sends with the same text get no stored message: the list cannot know which of them the
+ * server has. The two stay "Not sent". "Try again" then gives the correct answer for each one: the
+ * stored message for the send that the server has, and a new message for the other one.
+ */
+function storedOf(
+	messages: readonly ChatMessage[],
+	outbox: OutboxState,
+	own: ChatMessage["author"],
+): Map<string, PendingMessage> {
+	const stored = new Map<string, PendingMessage>();
+	const failed = outbox.pending.filter((pending) => pending.state === "failed" && pending.uncertain);
+	const sends = [
+		...outbox.pending.filter((pending) => pending.state === "sending"),
+		...failed.filter((pending) => failed.every((other) => other === pending || other.text !== pending.text)),
+	];
+	for (const pending of sends) {
+		const afterSeq = pending.afterSeq;
+		if (afterSeq === null) continue;
+		const message = messages.find(
+			(entry) =>
+				entry.seq > afterSeq &&
+				entry.author.principal_id === own.principal_id &&
+				entry.text === pending.text &&
+				!outbox.keys.has(entry.id) &&
+				!stored.has(entry.id),
+		);
+		if (message) stored.set(message.id, pending);
+	}
+	return stored;
+}
+
+/**
  * The rows of the list: the stored messages, then the messages that wait, in the order of the sends.
  *
  * - A stored message that the outbox sent has the key of its send.
  * - A message that waits shows as a message of `own`, after the last stored message.
- * - While a call runs, the socket can bring the stored message before the answer of the call. That
- *   message has no key yet, and the row of its send still shows. So a message of `own` without a key
- *   that came after the start of the call (`sendingAfterSeq`) stays out of the list until the call ends.
+ * - A send whose stored message the list has shows as that stored message, at the position that the
+ *   room gave it, with the key of the send. So the message shows one time, and it does not move when
+ *   the answer of the send arrives.
  */
 export function chatRows(
 	messages: readonly ChatMessage[],
 	outbox: OutboxState,
 	own: ChatMessage["author"],
 	roomId: string,
-	sendingAfterSeq: number,
 ): ChatRow[] {
-	const rows: ChatRow[] = [];
-	for (const message of messages) {
-		const key = outbox.keys.get(message.id);
-		const unclaimed =
-			key === undefined &&
-			outbox.sendingKey !== null &&
-			message.author.principal_id === own.principal_id &&
-			message.seq > sendingAfterSeq;
-		if (!unclaimed) rows.push({ key: key ?? message.id, message, pending: null });
-	}
-	const lastSeq = messages[messages.length - 1]?.seq ?? 0;
-	for (const [index, pending] of outbox.pending.entries()) {
+	const stored = storedOf(messages, outbox, own);
+	const rows: ChatRow[] = messages.map((message) => ({
+		key: stored.get(message.id)?.key ?? outbox.keys.get(message.id) ?? message.id,
+		message,
+		pending: null,
+	}));
+	const shown = new Set([...stored.values()].map((pending) => pending.key));
+	let seq = messages[messages.length - 1]?.seq ?? 0;
+	for (const pending of outbox.pending) {
+		if (shown.has(pending.key)) continue;
+		seq += 1;
 		rows.push({
 			key: pending.key,
 			message: {
 				id: pending.key,
 				room_id: roomId,
-				seq: lastSeq + index + 1,
+				seq,
 				author: own,
 				text: pending.text,
 				created_at: pending.created_at,
@@ -94,6 +136,21 @@ export function chatRows(
 		});
 	}
 	return rows;
+}
+
+/**
+ * The failed sends whose message the list has. The answers of such a send got lost, and the server
+ * stored the message. Give each pair to `settle` of the outbox: the send did not fail, and "Try again"
+ * and "Delete" must not show for a message that the room has.
+ */
+export function storedSends(
+	messages: readonly ChatMessage[],
+	outbox: OutboxState,
+	own: ChatMessage["author"],
+): { key: string; id: string }[] {
+	return [...storedOf(messages, outbox, own)]
+		.filter(([, pending]) => pending.state === "failed")
+		.map(([id, pending]) => ({ key: pending.key, id }));
 }
 
 const GROUP_MS = 5 * 60 * 1000;

@@ -22,6 +22,26 @@ export interface PendingMessage {
 	state: "waiting" | "sending" | "failed";
 	/** Why the send failed, for the person. Null while it did not fail. */
 	error: string | null;
+	/**
+	 * True for a failed message with an attempt whose answer did not arrive: the network failed, or
+	 * the server had a failure. The server can have the message. False when the server refused each
+	 * attempt: it does not have the message.
+	 */
+	uncertain: boolean;
+	/**
+	 * The seq of the last message of the list at the start of the call. A stored message of the person
+	 * with a higher seq can be the message of this send. Null before the call, and when no list with
+	 * its messages showed the room at that time.
+	 */
+	afterSeq: number | null;
+}
+
+/** The list that shows the room of an outbox. */
+export interface OutboxView {
+	/** Takes a stored message after its send. */
+	deliver(message: ChatMessage): void;
+	/** The seq of the last message of the list, or null while the list did not load. */
+	lastSeq(): number | null;
 }
 
 export interface OutboxState {
@@ -38,20 +58,32 @@ export interface OutboxOptions {
 	post(text: string, key: string): Promise<ChatMessage>;
 	/** The text of a failure for the person. */
 	describe(error: unknown): string;
+	/**
+	 * True while the person of this outbox is the person of the page. The page sends each call with
+	 * the session of its person, so an outbox of a different person must not send.
+	 */
+	active(): boolean;
 }
 
 export interface Outbox {
 	getState(): OutboxState;
 	/** Calls `listener` after each change of the state. Returns a function that removes the listener. */
 	subscribe(listener: () => void): () => void;
-	/** Where a stored message goes after its send. Null while no list shows the room. */
-	deliverTo(sink: ((message: ChatMessage) => void) | null): void;
+	/** The list that shows the room now. Null while no list shows it. */
+	attach(view: OutboxView | null): void;
 	/** Adds a message to the end of the line. */
 	send(text: string): void;
 	/** Sends a failed message again, with the same key. */
 	retry(key: string): void;
 	/** Removes a message that failed or that waits. A message whose call runs stays. */
 	discard(key: string): void;
+	/**
+	 * Records that the server has a failed message as the message `id`: the list got it, and the
+	 * answers of the send did not arrive. The stored message then has the key of the send.
+	 */
+	settle(key: string, id: string): void;
+	/** Stops each send and removes each message, for example when the person of the page changes. */
+	stop(): void;
 }
 
 /**
@@ -73,11 +105,14 @@ function canSucceedLater(error: unknown): boolean {
  * - A failure that can go away gets new attempts, after the waits of `RETRY_WAITS_MS`. Then the
  *   message is `failed`, and the next message goes. The person sends a failed message again, or removes it.
  * - A final refusal makes the message `failed` at once.
+ * - An outbox sends only while its person is the person of the page.
  */
 export function createOutbox(options: OutboxOptions): Outbox {
 	let state: OutboxState = { pending: [], keys: new Map(), sendingKey: null };
 	const listeners = new Set<() => void>();
-	let sink: ((message: ChatMessage) => void) | null = null;
+	let view: OutboxView | null = null;
+	let stopped = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	function change(next: Partial<OutboxState>): void {
 		state = { ...state, ...next };
@@ -88,26 +123,53 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		return state.pending.map((message) => (message.key === key ? { ...message, ...changes } : message));
 	}
 
-	function attempt(message: PendingMessage, attempts: number): void {
+	/** The keys with one more message. The oldest keys go when the map is full. */
+	function withKey(id: string, key: string): ReadonlyMap<string, string> {
+		const keys = new Map(state.keys).set(id, key);
+		for (const old of keys.keys()) {
+			if (keys.size <= MAX_KEYS) break;
+			keys.delete(old);
+		}
+		return keys;
+	}
+
+	function stop(): void {
+		stopped = true;
+		clearTimeout(timer);
+		change({ pending: [], sendingKey: null });
+	}
+
+	/** `lost` is true when the answer of an earlier attempt of this send did not arrive. */
+	function attempt(message: PendingMessage, attempts: number, lost: boolean): void {
+		if (stopped) return;
+		if (!options.active()) {
+			stop();
+			return;
+		}
 		options.post(message.text, message.key).then(
 			(stored) => {
-				const keys = new Map(state.keys).set(stored.id, message.key);
-				for (const id of keys.keys()) {
-					if (keys.size <= MAX_KEYS) break;
-					keys.delete(id);
-				}
-				change({ pending: state.pending.filter((entry) => entry.key !== message.key), keys, sendingKey: null });
-				sink?.(stored);
+				// An outbox that stopped shows nothing. The server has the message, and the next load of the room gets it.
+				if (stopped) return;
+				change({
+					pending: state.pending.filter((entry) => entry.key !== message.key),
+					keys: withKey(stored.id, message.key),
+					sendingKey: null,
+				});
+				view?.deliver(stored);
 				pump();
 			},
 			(error: unknown) => {
+				if (stopped) return;
+				// A refusal is an answer: that attempt stored nothing. The rate limit is a refusal too.
+				const refused = error instanceof ApiError && error.status < 500;
+				const uncertain = lost || !refused;
 				const wait = canSucceedLater(error) ? RETRY_WAITS_MS[attempts] : undefined;
 				if (wait !== undefined) {
-					setTimeout(() => attempt(message, attempts + 1), wait);
+					timer = setTimeout(() => attempt(message, attempts + 1, uncertain), wait);
 					return;
 				}
 				change({
-					pending: update(message.key, { state: "failed", error: options.describe(error) }),
+					pending: update(message.key, { state: "failed", error: options.describe(error), uncertain }),
 					sendingKey: null,
 				});
 				pump();
@@ -117,11 +179,14 @@ export function createOutbox(options: OutboxOptions): Outbox {
 
 	/** Starts the call of the first message that waits, when no call runs. */
 	function pump(): void {
-		if (state.sendingKey !== null) return;
+		if (stopped || state.sendingKey !== null) return;
 		const next = state.pending.find((message) => message.state === "waiting");
 		if (!next) return;
-		change({ pending: update(next.key, { state: "sending" }), sendingKey: next.key });
-		attempt(next, 0);
+		// A send that the person sends again keeps the start of its first call: the server can have
+		// its message from that call.
+		const afterSeq = next.afterSeq ?? view?.lastSeq() ?? null;
+		change({ pending: update(next.key, { state: "sending", afterSeq }), sendingKey: next.key });
+		attempt({ ...next, afterSeq }, 0, next.uncertain);
 	}
 
 	return {
@@ -132,16 +197,19 @@ export function createOutbox(options: OutboxOptions): Outbox {
 				listeners.delete(listener);
 			};
 		},
-		deliverTo(next) {
-			sink = next;
+		attach(next) {
+			view = next;
 		},
 		send(text) {
+			if (stopped) return;
 			const message: PendingMessage = {
 				key: crypto.randomUUID(),
 				text,
 				created_at: new Date().toISOString(),
 				state: "waiting",
 				error: null,
+				uncertain: false,
+				afterSeq: null,
 			};
 			change({ pending: [...state.pending, message] });
 			pump();
@@ -155,5 +223,10 @@ export function createOutbox(options: OutboxOptions): Outbox {
 			if (key === state.sendingKey) return;
 			change({ pending: state.pending.filter((message) => message.key !== key) });
 		},
+		settle(key, id) {
+			if (!state.pending.some((message) => message.key === key && message.state === "failed")) return;
+			change({ pending: state.pending.filter((message) => message.key !== key), keys: withKey(id, key) });
+		},
+		stop,
 	};
 }

@@ -590,9 +590,24 @@ MCP clients. The app has no UI-only path.
     reason, **Try again** and **Delete**, and the next message goes. A refusal that more attempts
     cannot change, for example for a person that is not a member now, shows "Not sent" at once.
   - The socket can bring the stored message before the answer of the send. The list then shows the
-    message one time: it leaves that message out until the answer arrives.
+    send as that stored message, at the position that the room gave it, with the key of the send.
+    So the message shows one time, and it does not move when the answer arrives.
+  - The stored message of a send is a message of the person with the text of the send, that came
+    after the start of the call. A send keeps the last message of the list at the start of its
+    first call for this. A call that starts while no list shows the room has no stored message.
+  - The server can store a message while the answer of its send gets lost. When the list gets that
+    message, the send did not fail: the "Not sent" row becomes the row of the stored message. This is
+    for a send with an attempt whose answer did not arrive. A send that the server refused each
+    time stays "Not sent".
+  - The send whose call runs gets a stored message before a failed send, so a failed send stays
+    when the person writes its text again. Two failed sends with the same text get no stored
+    message: the page cannot know which of them the server has. **Try again** gives the correct
+    answer for each one.
   - The messages that wait stay while the page stays, also when the person opens a different room.
     They go away on a reload of the page. A later change keeps them.
+  - The messages that wait are for one person. After a sign-out, or a sign-in as a different
+    person, the page removes them and sends nothing more: each later call has the session of the
+    new person (`lib/account.ts`).
   - A message shows an avatar with the initials of its author, then the name in bold and the time
     on one line, and the text below. The avatar of a person is a square with round corners. The
     avatar of an agent is a circle, and an agent has an "agent" mark next to its name.

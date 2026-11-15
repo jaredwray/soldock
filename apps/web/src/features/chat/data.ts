@@ -1,5 +1,6 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom, chatSocketPath } from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { withChanges, withOlder } from "./model.ts";
 import { createOutbox, type Outbox } from "./outbox.ts";
@@ -103,26 +104,40 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 			post: async (text, key) =>
 				(await api.call("chat.post_message", { room_id: roomId, text, idempotency_key: key })).message,
 			describe: errorMessage,
+			active: () => currentAccount() === ownId,
 		});
 		outboxes.set(name, outbox);
 	}
 	return outbox;
 }
 
+// The page sends each call with the session of its person. After a sign-out, or a sign-in as a
+// different person, a message that waits must not go out: it would be a message of the new person.
+onAccountChange(() => {
+	for (const outbox of outboxes.values()) outbox.stop();
+	outboxes.clear();
+});
+
 /**
  * The messages of one room that wait for the server, with the calls to send, to send again and to
- * remove one. `onSent` gets each stored message after its send, while the room shows.
+ * remove one. `onSent` gets each stored message after its send, while the room shows. `lastSeq` is
+ * the seq of the last message of the list, or null while the list did not load.
  */
-export function useOutbox(roomId: string, ownId: string, onSent: (message: ChatMessage) => void) {
+export function useOutbox(
+	roomId: string,
+	ownId: string,
+	lastSeq: number | null,
+	onSent: (message: ChatMessage) => void,
+) {
 	const outbox = useMemo(() => outboxOf(ownId, roomId), [ownId, roomId]);
 	const state = useSyncExternalStore(outbox.subscribe, outbox.getState);
-	const sent = useRef(onSent);
-	sent.current = onSent;
+	const view = useRef({ onSent, lastSeq });
+	view.current = { onSent, lastSeq };
 	useEffect(() => {
-		outbox.deliverTo((message) => sent.current(message));
-		return () => outbox.deliverTo(null);
+		outbox.attach({ deliver: (message) => view.current.onSent(message), lastSeq: () => view.current.lastSeq });
+		return () => outbox.attach(null);
 	}, [outbox]);
-	return { state, send: outbox.send, retry: outbox.retry, discard: outbox.discard };
+	return { state, send: outbox.send, retry: outbox.retry, discard: outbox.discard, settle: outbox.settle };
 }
 
 export interface RoomState {
