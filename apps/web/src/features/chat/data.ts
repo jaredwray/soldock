@@ -2,9 +2,9 @@ import { CHAT_LIMITS, type ChatMessage, type ChatRoom, chatSocketPath } from "@s
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
-import { withChanges, withOlder } from "./model.ts";
 import { createOutbox, type Outbox } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
+import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
@@ -216,17 +216,27 @@ export function useOutbox(
 		outbox.attach({ deliver: (message) => view.current.onSent(message), lastSeq: () => view.current.lastSeq });
 		return () => outbox.attach(null);
 	}, [outbox]);
-	return { state, send: outbox.send, retry: outbox.retry, discard: outbox.discard, settle: outbox.settle };
+	return {
+		state,
+		send: outbox.send,
+		retry: outbox.retry,
+		discard: outbox.discard,
+		settle: outbox.settle,
+		pause: outbox.pause,
+		resume: outbox.resume,
+	};
 }
 
-export interface RoomState {
+/**
+ * The state of one open room. `messages` is a part of the history of the room, oldest first, without
+ * a gap (`history.ts`). `hasOlder` and `hasNewer` tell that the room has messages before the first
+ * message, and after the last message, of the list. With `hasNewer`, the list is not live. `paging` is
+ * the direction of the page read that runs.
+ */
+export interface RoomState extends PagerState {
 	status: "loading" | "ready" | "error";
 	/** The room as the room itself gave it, at the time of the load. */
 	room: ChatRoom | null;
-	messages: ChatMessage[];
-	/** True when the room has messages before the first message of the list. */
-	hasOlder: boolean;
-	loadingOlder: boolean;
 	error: string | null;
 }
 
@@ -235,7 +245,8 @@ const ROOM_LOADING: RoomState = {
 	room: null,
 	messages: [],
 	hasOlder: false,
-	loadingOlder: false,
+	hasNewer: false,
+	paging: null,
 	error: null,
 };
 
@@ -249,26 +260,41 @@ const ROOM_LOADING: RoomState = {
  * `listed` is the version of the room in the room list, with the `tick` of that list. After each list,
  * the hook gets the changes when the room is ahead of the page. So the page is also current while the
  * socket is not connected.
+ *
+ * The list has 300 messages at most (`history.ts`). `loadOlder` and `loadNewer` move it through the
+ * history of the room, and `toLatest` puts it at the newest messages again. While the list is not at
+ * the newest messages (`hasNewer`), a new message does not go into it. `pager.ts` has the page reads.
  */
 export function useRoom(roomId: string, listed: { version: number | null; tick: number }, onRoomChanged: () => void) {
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
 	const alive = useRef(true);
 	const loads = useRef(0);
+	const shown = useRef(state);
+	shown.current = state;
 	const roomChanged = useRef(onRoomChanged);
 	roomChanged.current = onRoomChanged;
 
-	const sync = useMemo(
-		() =>
-			createRoomSync(
-				(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
-				(changes) =>
-					setState((current) => ({
-						...current,
-						messages: withChanges(current.messages, changes, current.hasOlder),
-					})),
-			),
-		[roomId],
-	);
+	const { sync, pager } = useMemo(() => {
+		// The sync gives its changes to the pager, and the pager starts and rewinds the sync.
+		const pages: { pager: RoomPager | null } = { pager: null };
+		const sync = createRoomSync(
+			(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
+			(changes) => pages.pager?.apply(changes),
+		);
+		const pager = createRoomPager({
+			read: (range) => api.call("chat.list_messages", { room_id: roomId, ...range }),
+			sync,
+			state: () => shown.current,
+			update: (change) =>
+				setState((current) => {
+					const next = change(current);
+					return next === current ? current : { ...current, ...next };
+				}),
+			alive: () => alive.current,
+		});
+		pages.pager = pager;
+		return { sync, pager };
+	}, [roomId]);
 
 	const load = useCallback(async () => {
 		// Two loads can run at the same time, for example after a reload. Only the last one applies, so
@@ -280,22 +306,15 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
-			if (page) sync.start(page.version);
-			setState({
-				status: "ready",
-				room,
-				messages: page?.messages ?? [],
-				hasOlder: page?.has_more ?? false,
-				loadingOlder: false,
-				error: null,
-			});
+			// The load replaces the list. The pager starts the sync at the version of the list.
+			setState({ status: "ready", room, ...pager.replace(page), error: null });
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
 		} catch (caught) {
 			if (current()) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
-	}, [roomId, sync]);
+	}, [roomId, sync, pager]);
 
 	useEffect(() => {
 		alive.current = true;
@@ -339,24 +358,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		};
 	}, [member, roomId, sync]);
 
-	const loadOlder = useCallback(async () => {
-		const first = state.messages[0];
-		if (!first || state.loadingOlder) return;
-		setState((current) => ({ ...current, loadingOlder: true }));
-		try {
-			const page = await api.call("chat.list_messages", { room_id: roomId, before: first.seq });
-			if (!alive.current) return;
-			setState((current) => ({
-				...current,
-				messages: withOlder(current.messages, page.messages),
-				hasOlder: page.has_more,
-				loadingOlder: false,
-			}));
-		} catch (caught) {
-			if (alive.current) setState((current) => ({ ...current, loadingOlder: false }));
-			throw caught;
-		}
-	}, [roomId, state.messages, state.loadingOlder]);
+	const loadOlder = useCallback(() => pager.readPage("older"), [pager]);
+	const loadNewer = useCallback(() => pager.readPage("newer"), [pager]);
 
 	/**
 	 * Puts a message that an operation returned into the list. The socket brings the same message. The
@@ -364,5 +367,14 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	 */
 	const apply = useCallback((message: ChatMessage) => sync.push(message), [sync]);
 
-	return { ...state, reload: load, sync: sync.run, loadOlder, apply };
+	return {
+		...state,
+		reload: load,
+		sync: sync.run,
+		loadOlder,
+		loadNewer,
+		toLatest: pager.toLatest,
+		follow: pager.follow,
+		apply,
+	};
 }

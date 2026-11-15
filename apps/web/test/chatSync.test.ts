@@ -120,6 +120,47 @@ describe("the sync of an open room", () => {
 		expect(applied).toEqual([11, 12, 13]);
 	});
 
+	// A page of older messages has the messages as they were at its version. The sync dropped each
+	// later change to them, because the list did not have them then.
+	it("reads the changes again from the version of a page that is older than its own version", async () => {
+		const room = fakeRoom([10, 11, 12, 13].map((version) => message(version, version)));
+		const applied: number[] = [];
+		const sync = createRoomSync(room.read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(13);
+		sync.rewind(13);
+		sync.rewind(14);
+		await sync.run();
+		expect(room.calls).toEqual([13]);
+		sync.rewind(11);
+		// The rewind starts the read itself.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(room.calls).toEqual([13, 11]);
+		expect(applied).toEqual([12, 13]);
+	});
+
+	it("drops a page that it read before a rewind, and reads again from the older version", async () => {
+		const changes = [10, 11, 12, 13].map((version) => message(version, version));
+		const calls: number[] = [];
+		let releaseFirst = () => {};
+		const firstRead = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const read = async (changedAfter: number): Promise<ChangePage> => {
+			calls.push(changedAfter);
+			if (calls.length === 1) await firstRead;
+			return { messages: changes.filter((change) => change.version > changedAfter), version: 13, has_more: false };
+		};
+		const applied: number[] = [];
+		const sync = createRoomSync(read, (messages) => applied.push(...messages.map((entry) => entry.seq)));
+		sync.start(12);
+		const running = sync.run();
+		sync.rewind(10);
+		releaseFirst();
+		await running;
+		expect(calls).toEqual([12, 10]);
+		expect(applied).toEqual([11, 12, 13]);
+	});
+
 	// React runs the cleanup of an effect and then the effect again, on the same sync, in development.
 	it("works again when it starts after a stop", async () => {
 		const room = fakeRoom([message(1, 1), message(2, 2)]);

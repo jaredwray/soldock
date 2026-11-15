@@ -95,8 +95,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message
   gets that number as its own `version`.
 - `chat.list_messages` has two modes:
-  - Without `changed_after`, it returns a page of the history, oldest first: the newest page, or
-    the page before the message `before`.
+  - Without `changed_after`, it returns a page of the history, oldest first: the newest page, the
+    page before the message `before`, or the page after the message `after`. One call has one of
+    `before`, `after` and `changed_after` at most.
   - With `changed_after`, it returns each message with a higher `version`, in the order of the
     changes. A client that has version `n` asks for the changes after `n`, and gets each new,
     changed and deleted message one time.

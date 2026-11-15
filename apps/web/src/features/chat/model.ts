@@ -9,37 +9,6 @@ export function roomTitle(room: Pick<ChatRoom, "kind" | "name" | "peer">): strin
 	return room.name ?? "Room";
 }
 
-function merged(current: readonly ChatMessage[], incoming: readonly ChatMessage[]): ChatMessage[] {
-	const byId = new Map(current.map((message) => [message.id, message]));
-	for (const message of incoming) {
-		const known = byId.get(message.id);
-		// An answer can arrive after a newer one. The message with the higher version is the current one.
-		if (!known || message.version >= known.version) byId.set(message.id, message);
-	}
-	return [...byId.values()].sort((a, b) => a.seq - b.seq);
-}
-
-/** The list with a page of older messages before it. */
-export function withOlder(current: readonly ChatMessage[], page: readonly ChatMessage[]): ChatMessage[] {
-	return merged(current, page);
-}
-
-/**
- * The list with the changes of a sync: a new message goes to the end, and a changed or deleted message
- * replaces the old one. `hasOlder` is true while the room has messages before the first message of the
- * list. Then a change to a message before the first one is dropped: the list has no gap, so "load
- * older" continues from its first message. Without older messages, the list has the start of the room,
- * and each change goes in.
- */
-export function withChanges(
-	current: readonly ChatMessage[],
-	changes: readonly ChatMessage[],
-	hasOlder: boolean,
-): ChatMessage[] {
-	const first = current[0];
-	return merged(current, hasOlder && first ? changes.filter((message) => message.seq >= first.seq) : changes);
-}
-
 /** One row of the message list: a stored message, or a message that waits for the server. */
 export interface ChatRow {
 	/** The key of the row. A message keeps it from its send to its stored form, so the row stays the same. */
