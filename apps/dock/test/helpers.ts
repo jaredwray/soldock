@@ -648,7 +648,7 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 	return { ...reader, version: hello.version };
 }
 
-/** Calls the Worker with some bindings replaced, for example a D1 binding that fails or races. */
+/** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 export function withEnv(
 	overrides: { SETUP_TOKEN?: string | undefined; DIRECTORY?: D1Database },
 	path: string,

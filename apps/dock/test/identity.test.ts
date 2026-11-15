@@ -46,7 +46,6 @@ function setup(token: string, body: unknown, origin?: string) {
 	});
 }
 
-/** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 const OWNER = {
 	mail_domain: "dock.test",
 	display_name: "Olive Owner",

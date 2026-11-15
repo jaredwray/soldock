@@ -756,15 +756,34 @@ describe("OAuth scope changes", () => {
 		expect(again.structuredContent).toMatchObject({ grant: { scopes: added.grant.scopes } });
 	});
 
-	// Two people can add scopes at the same time. The second write must not remove the scope of the first.
-	it("refuses an add when the connection changed during the call, and keeps the other change", async () => {
+	// A change that lands during the call must win. Else a parallel add loses its scope, a revoked
+	// connection gets wider, or a restore gives an archived agent more than a person approved.
+	it.each([
+		{
+			change: "another add",
+			sql: `UPDATE oauth_grants SET scopes = '["account.read","mail.read","mail.send","chat.read"]' WHERE id = ?`,
+			on: "grant",
+			scopes: ["account.read", "mail.read", "mail.send", "chat.read"],
+		},
+		{
+			change: "a revoke",
+			sql: "UPDATE oauth_grants SET revoked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+			on: "grant",
+			scopes: ["account.read", "mail.read", "chat.read"],
+		},
+		{
+			change: "an archive of the agent",
+			sql: "UPDATE principals SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+			on: "agent",
+			scopes: ["account.read", "mail.read", "chat.read"],
+		},
+	])("refuses an add when $change lands during the call", async ({ sql, on, scopes }) => {
 		const owner = await setupOwner();
 		const { agent } = await connectNewAgent(owner);
 		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
 		const grantId = grant?.id ?? "";
-		const other = `UPDATE oauth_grants SET scopes = '["account.read","mail.read","mail.send","chat.read"]' WHERE id = ?`;
 		const res = await withEnv(
-			{ DIRECTORY: racing(other, grantId, "UPDATE oauth_grants SET scopes") },
+			{ DIRECTORY: racing(sql, on === "grant" ? grantId : agent.id, "UPDATE oauth_grants SET scopes") },
 			`/api/v1/oauth/grants/${grantId}/scopes`,
 			{
 				method: "POST",
@@ -773,41 +792,69 @@ describe("OAuth scope changes", () => {
 			},
 		);
 		expect(res.status).toBe(409);
-		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([
-			"account.read",
-			"mail.read",
-			"mail.send",
-			"chat.read",
-		]);
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual(scopes);
 	});
 
-	// An agent cannot change its own access. A person adds only scopes that they hold, to an agent that they manage.
+	// An agent cannot change its own access. A person adds only scopes that they hold, to a live
+	// connection of an active agent that they manage: as its sponsor, or as an owner or an admin.
 	it("lets only a person who manages the agent add a scope that they hold, to a live connection", async () => {
-		const { owner, ada } = await seedOrg();
-		const { agent, tokens } = await connectNewAgent(owner);
-		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
-		const input = { grant_id: grant?.id ?? "", scopes: ["mail.send" as const] };
+		const { owner, ada, bot } = await seedOrg();
+		const grace = await createActor(owner, {
+			kind: "human",
+			display_name: "Grace Hopper",
+			address: "grace@dock.test",
+			password: PASSWORD,
+		});
+		// Ada sponsors the bot, and she connects an app to it. She is a member, not an admin.
+		const clientId = await registerClient();
+		const { requestId, verifier } = await startAuthorization(clientId);
+		const { redirect_to } = await ada.call("oauth.approve_authorization", {
+			request_id: requestId,
+			agent_id: bot.id,
+			scopes: ["account.read", "mail.read"],
+		});
+		const tokens = (await (await exchange(clientId, redirect_to, verifier)).json()) as Tokens;
+		const [grant] = (await ada.call("oauth.list_grants", { principal_id: bot.id })).grants;
+		const grantId = grant?.id ?? "";
+		const add = (caller: (typeof ada)["call"], scopes: ("mail.send" | "mail.webhooks" | "chat.read")[]) =>
+			caller("oauth.add_grant_scopes", { grant_id: grantId, scopes });
 
-		expect(await codeOf(api(tokens.access_token)("oauth.add_grant_scopes", input))).toBe("forbidden");
-		// Ada does not sponsor the agent, and she is not an admin.
-		expect(await codeOf(ada.call("oauth.add_grant_scopes", input))).toBe("forbidden");
-		const { api_key } = await owner.call("account.create_api_key", {
+		expect(await codeOf(add(api(tokens.access_token), ["mail.send"]))).toBe("forbidden");
+		expect(await codeOf(add(bot.call, ["mail.send"]))).toBe("forbidden");
+		// Grace is a member who does not sponsor the bot.
+		expect(await codeOf(add(grace.call, ["mail.send"]))).toBe("forbidden");
+		const { api_key } = await ada.call("account.create_api_key", {
 			label: "narrow",
 			scopes: ["account.keys", "mail.read"],
 		});
-		expect(await codeOf(api(api_key.secret)("oauth.add_grant_scopes", input))).toBe("forbidden");
-		const keys = owner.call("oauth.add_grant_scopes", { ...input, scopes: ["account.keys" as "mail.read"] });
+		expect(await codeOf(add(api(api_key.secret), ["mail.send"]))).toBe("forbidden");
+		const keys = ada.call("oauth.add_grant_scopes", { grant_id: grantId, scopes: ["account.keys" as "mail.read"] });
 		expect(await codeOf(keys)).toBe("invalid");
-		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([
+
+		// The sponsor, and an admin who does not sponsor the bot.
+		expect((await add(ada.call, ["mail.send"])).grant.scopes).toEqual(["account.read", "mail.read", "mail.send"]);
+		expect((await add(owner.call, ["mail.webhooks"])).grant.scopes).toEqual([
 			"account.read",
 			"mail.read",
-			"chat.read",
+			"mail.send",
+			"mail.webhooks",
 		]);
 
-		// A revoked connection stays revoked. The app must connect again, and a person approves it again.
-		await owner.call("oauth.revoke_grant", { grant_id: input.grant_id });
-		expect(await codeOf(owner.call("oauth.add_grant_scopes", input))).toBe("conflict");
-		const unknown = owner.call("oauth.add_grant_scopes", { ...input, grant_id: `grt_${"0".repeat(26)}` });
+		// An archived agent gets nothing more until a restore, as in oauth.approve_authorization.
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		expect(await codeOf(add(ada.call, ["chat.read"]))).toBe("invalid");
+		await owner.call("directory.restore_principal", { principal_id: bot.id });
+
+		// An expired or revoked connection stays ended. The app must connect again, and a person approves it again.
+		const past = new Date(Date.now() - 1000).toISOString();
+		await env.DIRECTORY.prepare("UPDATE oauth_grants SET refresh_expires_at = ? WHERE id = ?")
+			.bind(past, grantId)
+			.run();
+		const ended = { code: "conflict", message: expect.stringContaining("revoked or expired") };
+		await expect(add(ada.call, ["chat.read"])).rejects.toMatchObject(ended);
+		await ada.call("oauth.revoke_grant", { grant_id: grantId });
+		await expect(add(ada.call, ["chat.read"])).rejects.toMatchObject(ended);
+		const unknown = ada.call("oauth.add_grant_scopes", { grant_id: `grt_${"0".repeat(26)}`, scopes: ["chat.read"] });
 		expect(await codeOf(unknown)).toBe("not_found");
 	});
 });

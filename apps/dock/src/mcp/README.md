@@ -80,7 +80,8 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   tools (`missingScopes` of `identity`). They also tell how to get the scope:
   - An OAuth connection: the sponsor, an owner or an admin adds the scope in Admin › Agents
     (`oauth.add_grant_scopes`). The connection stays.
-  - An API key: its scopes do not change, so the key holder needs a new key.
+  - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
+    sponsor, an owner or an admin creates the key.
 
   `account_whoami` names the tools of each missing scope (`missing_scopes`). A credential that
   holds each scope of its kind gets no such sentence.

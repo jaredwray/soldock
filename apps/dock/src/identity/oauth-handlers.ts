@@ -185,16 +185,24 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		const grant = await getGrant(call.env.DIRECTORY, input.grant_id);
 		if (!grant) throw new OperationError("not_found", "No OAuth connection has that id.");
 		const principal = await credentialOwner(call, grant.principal_id);
+		// The rule of oauth.approve_authorization: a restore must not give more than a person approved
+		// while the agent was active.
+		if (principal.archived_at !== null) {
+			throw new OperationError("invalid", "This agent is archived. Restore it first.");
+		}
 		const requested = grantableScopes(call.caller, principal, input.scopes);
 		if (grant.revoked_at !== null || Date.parse(grant.refresh_expires_at) <= Date.now()) {
 			throw new OperationError("conflict", ENDED);
 		}
 		const added = requested.filter((scope) => !grant.scopes.includes(scope));
 		if (added.length === 0) return { grant: toGrantOutput(grant) };
-		// The order of the ceiling, so each grant lists its scopes in the same order.
-		const scopes = scopeCeiling(principal.kind).filter(
-			(scope) => grant.scopes.includes(scope) || added.includes(scope),
-		);
+		// The order of the ceiling, so each grant lists its scopes in the same order. A stored scope outside
+		// the ceiling stays at the end: this operation never removes a scope, and authenticate ignores it.
+		const ceiling = scopeCeiling(principal.kind);
+		const scopes = [
+			...ceiling.filter((scope) => grant.scopes.includes(scope) || added.includes(scope)),
+			...grant.scopes.filter((scope) => !ceiling.includes(scope)),
+		];
 		if (!(await setGrantScopes(call.env.DIRECTORY, grant.id, grant.scopes, scopes))) {
 			throw new OperationError("conflict", "The connection changed or ended. Load it again, then try again.");
 		}

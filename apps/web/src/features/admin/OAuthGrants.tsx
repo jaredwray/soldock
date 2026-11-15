@@ -129,6 +129,7 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 						toast({ message: `Scopes added to the connection of “${adding.client_name}”.` });
 						await load();
 					}}
+					onFailed={load}
 				/>
 			)}
 			{revoking && (
@@ -159,10 +160,12 @@ interface AddScopesDialogProps {
 	offered: readonly Scope[];
 	onClose: () => void;
 	onAdded: () => Promise<void>;
+	/** Loads the list again, for example after somebody revoked the connection during the dialog. */
+	onFailed: () => Promise<void>;
 }
 
 /** Adds scopes to a live connection. A person removes a scope with a revoke and a new approval. */
-function AddScopesDialog({ grant, offered, onClose, onAdded }: AddScopesDialogProps) {
+function AddScopesDialog({ grant, offered, onClose, onAdded, onFailed }: AddScopesDialogProps) {
 	const [selected, setSelected] = useState<ReadonlySet<Scope>>(() => new Set());
 
 	function toggle(scope: Scope) {
@@ -182,13 +185,19 @@ function AddScopesDialog({ grant, offered, onClose, onAdded }: AddScopesDialogPr
 			onClose={onClose}
 			onConfirm={async () => {
 				const scopes = offered.filter((scope) => selected.has(scope));
-				await api.call("oauth.add_grant_scopes", { grant_id: grant.id, scopes });
+				try {
+					await api.call("oauth.add_grant_scopes", { grant_id: grant.id, scopes });
+				} catch (caught) {
+					void onFailed();
+					throw caught;
+				}
 				await onAdded();
 			}}
 		>
 			<p>
-				<strong>{grant.client_name}</strong> gets the tools of the new scopes at its next call, without a new approval.
-				Some apps read the tool list only when they connect. In such an app, start a new conversation.
+				<strong>{grant.client_name}</strong> gets the tools of the new scopes without a new approval. An app can keep
+				its old tool list for up to 5 minutes. Some apps read it only when they connect: in such an app, start a new
+				conversation.
 			</p>
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes to add</legend>

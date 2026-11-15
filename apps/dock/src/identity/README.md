@@ -303,10 +303,15 @@ with `account.keys`.
   grant of a principal deletes its grants that were revoked or expired 30 days before.
 - `oauth.add_grant_scopes` adds agent scopes to a live grant, for example a scope that a new release
   added. The principals that can revoke the grant can call it, and `grantableScopes` applies.
+  - An archived agent gets `invalid`, as in `oauth.approve_authorization`. So a restore never gives
+    more than a person approved while the agent was active.
   - The next request of the access token uses the new scopes, because `authenticate` reads them from
-    the grant. The client needs no refresh and no new approval.
-  - The update writes the new list only while the grant still holds the list that the call read. So a
-    parallel change is never lost: the second call gets `conflict`.
+    the grant. The client needs no refresh and no new approval. A modern client can keep its tool list
+    for the `ttlMs` of `tools/list` (5 minutes).
+  - The update writes the new list only while the grant still holds the list that the call read, the
+    grant is live, and the agent is not archived. So a parallel change, revoke or archive is never
+    lost: the call gets `conflict`.
+  - A stored scope outside the ceiling stays in the list, at the end. `authenticate` ignores it.
   - A scope that the grant holds already changes nothing.
   - The operation cannot remove a scope. A removal must also stop the open sockets and webhooks that
     need the scope, and they do not check scopes again. A revoke stops all of them. So a person
