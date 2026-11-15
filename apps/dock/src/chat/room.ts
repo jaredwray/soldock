@@ -219,6 +219,11 @@ const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
 const NO_MESSAGE = "No message has that id in this room.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+/**
+ * The most message allowances that a room keeps in memory. A room has `membersPerRoom` members at
+ * most. The rest is for the members that left a short time before.
+ */
+const MAX_ALLOWANCES = 2 * CHAT_LIMITS.membersPerRoom;
 const TOO_MANY_SOCKETS = `One member can have ${CHAT_LIMITS.socketsPerMember} sockets to a room at most.`;
 
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
@@ -631,41 +636,37 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * empty. A member starts with `CHAT_LIMITS.messageBurst` messages, and gets one more in each
 	 * `CHAT_LIMITS.messageRefillSeconds`, up to that number. Each new and each changed message uses one:
 	 * the room sends the two to each socket.
+	 *
+	 * The room keeps the allowance of a member that leaves, so a member cannot leave and join again to
+	 * get a full allowance. It keeps `MAX_ALLOWANCES` at most. At that number, it removes each allowance
+	 * that is full again, which is the same as no allowance. If no allowance is full, it refuses a
+	 * caller that has none, until one is. Only principals that join, send and leave in large numbers in
+	 * some seconds can cause that.
 	 */
 	private spendAllowance(call: RoomCall, now: number): Refusal | null {
 		const refillMs = CHAT_LIMITS.messageRefillSeconds * 1000;
+		const fullMs = CHAT_LIMITS.messageBurst * refillMs;
+		const limited = (seconds: number, reason: string): Refusal => {
+			log("info", "chat message rate limited", { roomId: call.roomId, principalId: call.actor.principal_id });
+			return refuse("rate_limited", `${reason} Try again in ${seconds === 1 ? "1 second" : `${seconds} seconds`}.`);
+		};
 		const earlier = this.allowances.get(call.actor.principal_id);
+		if (!earlier && this.allowances.size >= MAX_ALLOWANCES) {
+			for (const [principalId, allowance] of this.allowances) {
+				if (now - allowance.at >= fullMs) this.allowances.delete(principalId);
+			}
+			if (this.allowances.size >= MAX_ALLOWANCES) {
+				return limited(fullMs / 1000, "Too many people and agents sent messages to this room in a short time.");
+			}
+		}
 		const messages = earlier
 			? Math.min(CHAT_LIMITS.messageBurst, earlier.messages + Math.max(0, now - earlier.at) / refillMs)
 			: CHAT_LIMITS.messageBurst;
 		if (messages < 1) {
 			this.allowances.set(call.actor.principal_id, { messages, at: now });
-			const seconds = Math.ceil(((1 - messages) * refillMs) / 1000);
-			log("info", "chat message rate limited", { roomId: call.roomId, principalId: call.actor.principal_id });
-			return refuse(
-				"rate_limited",
-				`You sent too many messages to this room. Try again in ${seconds === 1 ? "1 second" : `${seconds} seconds`}.`,
-			);
+			return limited(Math.ceil(((1 - messages) * refillMs) / 1000), "You sent too many messages to this room.");
 		}
 		this.allowances.set(call.actor.principal_id, { messages: messages - 1, at: now });
-		// A room has `membersPerRoom` members at most, so more entries are from members that left. An
-		// entry that is old enough has a full allowance again, which is the same as no entry. If that is
-		// not sufficient, the entries of principals that are not members go. So the entries are never
-		// more than the members after this step.
-		if (this.allowances.size > CHAT_LIMITS.membersPerRoom) {
-			const full = CHAT_LIMITS.messageBurst * refillMs;
-			for (const [principalId, allowance] of this.allowances) {
-				if (now - allowance.at >= full) this.allowances.delete(principalId);
-			}
-		}
-		if (this.allowances.size > CHAT_LIMITS.membersPerRoom) {
-			const members = new Set(
-				this.all<{ principal_id: string }>("SELECT principal_id FROM members").map((row) => row.principal_id),
-			);
-			for (const principalId of this.allowances.keys()) {
-				if (!members.has(principalId)) this.allowances.delete(principalId);
-			}
-		}
 		return null;
 	}
 
