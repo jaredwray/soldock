@@ -5,6 +5,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { createOutbox, type Outbox } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
+import { createRoomCache } from "./roomCache.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
@@ -191,6 +192,7 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 // different person, a message that waits must not go out: it would be a message of the new person.
 onAccountChange(() => {
 	accountChanges += 1;
+	roomCache.clear();
 	for (const outbox of outboxes.values()) outbox.stop();
 	outboxes.clear();
 	restores.clear();
@@ -237,6 +239,11 @@ export interface RoomState extends PagerState {
 	status: "loading" | "ready" | "error";
 	/** The room as the room itself gave it, at the time of the load. */
 	room: ChatRoom | null;
+	/**
+	 * True after the load of this view. Before it, a room that the page showed before has its last
+	 * list from the cache: the list can be behind the room, and it gets no changes.
+	 */
+	fresh: boolean;
 	error: string | null;
 }
 
@@ -247,8 +254,15 @@ const ROOM_LOADING: RoomState = {
 	hasOlder: false,
 	hasNewer: false,
 	paging: null,
+	fresh: false,
 	error: null,
 };
+
+/**
+ * The last list of each room that this page showed. A room that opens again shows it at once, and the
+ * load of the room replaces it.
+ */
+const roomCache = createRoomCache();
 
 /**
  * One open room: the room and its messages. Use one hook for each room (a `key` on the component).
@@ -264,9 +278,17 @@ const ROOM_LOADING: RoomState = {
  * The list has 300 messages at most (`history.ts`). `loadOlder` and `loadNewer` move it through the
  * history of the room, and `toLatest` puts it at the newest messages again. While the list is not at
  * the newest messages (`hasNewer`), a new message does not go into it. `pager.ts` has the page reads.
+ *
+ * A room that the page showed before starts with its last list (`roomCache.ts`), with `fresh: false`.
+ * The load of the room then replaces it.
  */
 export function useRoom(roomId: string, listed: { version: number | null; tick: number }, onRoomChanged: () => void) {
-	const [state, setState] = useState<RoomState>(ROOM_LOADING);
+	// The person of the page when the room opens. The cache gives and takes a list only for that person.
+	const owner = useRef(currentAccount()).current;
+	const [state, setState] = useState<RoomState>(() => {
+		const cached = owner === null ? null : roomCache.get(owner, roomId);
+		return cached ? { ...ROOM_LOADING, status: "ready", ...cached } : ROOM_LOADING;
+	});
 	const alive = useRef(true);
 	const loads = useRef(0);
 	const shown = useRef(state);
@@ -307,7 +329,7 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
 			// The load replaces the list. The pager starts the sync at the version of the list.
-			setState({ status: "ready", room, ...pager.replace(page), error: null });
+			setState({ status: "ready", room, ...pager.replace(page), fresh: true, error: null });
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
@@ -324,6 +346,18 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 			sync.stop();
 		};
 	}, [load, sync]);
+
+	// The newest messages of a room of a member go into the cache, for the next time that the room
+	// opens. A list that is not at the newest messages is not the list to show then.
+	useEffect(() => {
+		const { status, fresh, room, messages, hasOlder, hasNewer } = state;
+		if (owner === null || currentAccount() !== owner) return;
+		// A room that did not load, and a room that the person is not a member of, must not show an old
+		// list the next time.
+		if (status === "error" || (status === "ready" && fresh && room?.role === null)) roomCache.remove(owner, roomId);
+		if (status !== "ready" || !fresh || !room || room.role === null || hasNewer) return;
+		roomCache.put(owner, roomId, { room, messages, hasOlder });
+	}, [state, owner, roomId]);
 
 	// Each room list is a new chance to sync: `tick` changes also when the version is the same, so a
 	// sync that failed runs again.
