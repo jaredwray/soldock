@@ -51,7 +51,7 @@ export interface SheetSnapshot {
 	tabs: readonly Tab[];
 	/** The id of the tab that the grid shows. */
 	activeTab: string;
-	/** True while the cells of the active tab did not arrive. */
+	/** True while the cells of the active tab did not arrive, or are older than a rename of a tab. */
 	tabLoading: boolean;
 	/** The cells of the active tab for the grid, with the changes that wait on top. */
 	cells: ReadonlyMap<string, ViewCell>;
@@ -91,6 +91,12 @@ export class SheetStore {
 	 * the server refuses it when the tab is not complete. The store then gets the tab again.
 	 */
 	private server = new Map<string, TabCells>();
+	/**
+	 * The tabs whose cells are older than a rename, with the revision of the rename. A rename changes
+	 * the formulas of each tab that refers to the old name, so these cells show the old name. The grid
+	 * shows them without edits until a read of the tab at that revision or later.
+	 */
+	private staleUntil = new Map<string, number>();
 	/** The changes that no request has yet, by tab. */
 	private waiting = new Map<string, Map<string, string>>();
 	/** The changes of the request that is in progress. */
@@ -148,7 +154,8 @@ export class SheetStore {
 	 * Nobody can change a tab whose cells did not arrive, because the old inputs are not known.
 	 */
 	commit(changes: readonly CellChange[], tab: string = this.active): void {
-		if (!this.canEdit() || !this.tabs.some((entry) => entry.id === tab) || !this.server.has(tab)) return;
+		const known = this.server.has(tab) && !this.staleUntil.has(tab);
+		if (!this.canEdit() || !this.tabs.some((entry) => entry.id === tab) || !known) return;
 		let changed = false;
 		for (const { cell, input } of changes) {
 			if (this.inputOf(cell, tab) === input) continue;
@@ -197,6 +204,7 @@ export class SheetStore {
 				this.item = answer.item;
 				this.setTabs(answer.tabs, answer.revision);
 				if (answer.tab_id) this.active = answer.tab_id;
+				if (action.kind === "rename") for (const id of this.server.keys()) this.staleUntil.set(id, answer.revision);
 				this.prune();
 				// The page sees the new tabs at once, also when the next read fails.
 				this.emit();
@@ -325,6 +333,8 @@ export class SheetStore {
 			this.server.set(data.tab_id, { revision: data.revision, cells: toCellMap(data.cells) });
 			if (data.tab_id === this.active) this.view = null;
 		}
+		const until = this.staleUntil.get(data.tab_id);
+		if (until !== undefined && data.revision >= until) this.staleUntil.delete(data.tab_id);
 		this.prune();
 	}
 
@@ -335,6 +345,7 @@ export class SheetStore {
 			if (ids.has(id)) continue;
 			this.server.delete(id);
 			this.waiting.delete(id);
+			this.staleUntil.delete(id);
 		}
 		if (!ids.has(this.active) && this.tabs[0]) {
 			this.active = this.tabs[0].id;
@@ -440,7 +451,7 @@ export class SheetStore {
 			revision: cached?.revision ?? 0,
 			tabs: this.tabs,
 			activeTab: this.active,
-			tabLoading: this.status === "ready" && !cached,
+			tabLoading: this.status === "ready" && (!cached || this.staleUntil.has(this.active)),
 			cells: this.view,
 			saveState: this.saveState,
 			saveError: this.saveError,

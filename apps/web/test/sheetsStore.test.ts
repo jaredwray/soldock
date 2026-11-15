@@ -326,14 +326,25 @@ describe("the tabs of a sheet", () => {
 		expect(store.inputOf("A1")).toBe("=Costs!B1");
 	});
 
-	// The page clears its Undo steps when a tab name changes. It must see the rename also when the read fails.
-	it("shows the new tabs when the read after a change of the tabs fails", async () => {
-		const { store, api } = await openStore();
+	// The page clears its Undo steps when a tab name changes, so it must see the rename also when the read
+	// fails. The cells still show the old name in their formulas, so they take no edit until a new read.
+	it("shows the new tabs when the read after a rename fails, and locks the old cells until a new read", async () => {
+		const { store, api, calls } = await openStore();
+		const get = api.get;
 		api.get = async () => {
 			throw new TypeError("offline");
 		};
 		await expect(store.changeTab({ kind: "rename", tabId: "tab_1", name: "Costs" })).rejects.toThrow("offline");
-		expect(store.getSnapshot().tabs[0]?.name).toBe("Costs");
+		expect(store.getSnapshot()).toMatchObject({ tabs: [{ name: "Costs" }], tabLoading: true });
+		store.commit([{ cell: "A1", input: "=Sheet1!B1" }]);
+		await settle();
+		expect(calls).toHaveLength(0);
+		api.get = get;
+		await store.refresh();
+		expect(store.getSnapshot().tabLoading).toBe(false);
+		store.commit([{ cell: "A1", input: "=Costs!B1" }]);
+		await settle();
+		expect(calls).toHaveLength(1);
 	});
 
 	// Without the cells of the tab, an edit starts from an empty input, and a save then deletes the real input.

@@ -455,6 +455,9 @@ MCP clients. The app has no UI-only path.
     name in the snapshot changes.
   - While the cells of a tab did not arrive, the grid takes no edit, and the store refuses a change
     to that tab. An edit then would start from an empty input and delete the real input.
+  - A rename changes the formulas of each tab that refers to the old name. The cells that the page
+    read before the rename still show the old name, so the grid shows them without edits until a
+    new read of that tab.
   - The store keeps the cells of each tab that the page read. A new tab shows these cells at once,
     and the store gets the tab again. Each write names the revision of the cells of its tab, so the
     server refuses it when a write to a different tab came after the read. The store then gets the
