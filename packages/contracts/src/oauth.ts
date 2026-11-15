@@ -163,10 +163,30 @@ export const revokeGrant = defineOperation({
 	errors: ["not_found"],
 });
 
+export const addGrantScopes = defineOperation({
+	name: "oauth.add_grant_scopes",
+	summary: "Add scopes to an OAuth connection",
+	description: [
+		"Adds scopes to a live OAuth connection of an agent, without a new approval. The next request of its access token uses the new scopes.",
+		"A client can keep its old tool list for up to 5 minutes, or until it connects again.",
+		"Use it when a new scope comes out, or when the agent needs more access.",
+		"The same principals that can revoke the connection can add scopes. A credential cannot give a scope that it does not hold. The agent must not be archived.",
+		"A scope that the connection holds already changes nothing. To remove a scope, revoke the connection, and connect the app again.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/oauth/grants/{grant_id}/scopes" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ grant_id: GrantId, scopes: z.array(AgentScope).min(1) }),
+	output: z.object({ grant: OAuthGrant }),
+	errors: ["conflict", "not_found"],
+});
+
 export const oauthOperations = {
 	"oauth.get_authorization": getAuthorization,
 	"oauth.approve_authorization": approveAuthorization,
 	"oauth.deny_authorization": denyAuthorization,
 	"oauth.list_grants": listGrants,
 	"oauth.revoke_grant": revokeGrant,
+	"oauth.add_grant_scopes": addGrantScopes,
 } as const;

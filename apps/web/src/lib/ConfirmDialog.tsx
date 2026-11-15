@@ -7,12 +7,22 @@ interface ConfirmDialogProps {
 	children: ReactNode;
 	confirmLabel: string;
 	danger?: boolean;
+	/** True while the action cannot run, for example before the person selects something. */
+	confirmDisabled?: boolean;
 	/** Runs the action. The dialog stays open and shows the error if it throws. */
 	onConfirm: () => Promise<void>;
 	onClose: () => void;
 }
 
-export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm, onClose }: ConfirmDialogProps) {
+export function ConfirmDialog({
+	title,
+	children,
+	confirmLabel,
+	danger,
+	confirmDisabled,
+	onConfirm,
+	onClose,
+}: ConfirmDialogProps) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +61,7 @@ export function ConfirmDialog({ title, children, confirmLabel, danger, onConfirm
 					type="button"
 					className={danger ? "button button-danger" : "button button-primary"}
 					onClick={confirm}
-					disabled={busy}
+					disabled={busy || confirmDisabled}
 					data-autofocus={danger ? undefined : true}
 				>
 					{busy ? "Working…" : confirmLabel}

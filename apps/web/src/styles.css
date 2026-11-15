@@ -2359,6 +2359,10 @@ fieldset {
 	margin-top: 8px;
 }
 
+.dialog-body .scope-list {
+	margin: 12px 0 8px;
+}
+
 .dialog-body .form-error,
 .dialog > .form-error {
 	margin: 8px 24px 0;
@@ -3150,13 +3154,15 @@ fieldset {
 /* A check box keeps its size next to long text, and a legend starts at the left edge of its fields. */
 .panel-form .check-row input,
 .connect-form .check-row input,
-.admin-card-form .check-row input {
+.admin-card-form .check-row input,
+.dialog-body .check-row input {
 	flex: none;
 }
 
 .panel-form legend,
 .connect-form legend,
-.admin-card-form legend {
+.admin-card-form legend,
+.dialog-body legend {
 	padding: 0;
 }
 
