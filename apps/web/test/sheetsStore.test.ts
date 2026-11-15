@@ -1,6 +1,7 @@
 import { ApiError, type Cell, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import type { CellChange } from "../src/features/sheets/cells.ts";
+import { applyFormatChanges, type FormatChange, formatsOf } from "../src/features/sheets/formats.ts";
 import { type SheetApi, type SheetData, SheetStore, type TabAction } from "../src/features/sheets/store.ts";
 
 function item(role: DriveItem["role"] = "owner"): DriveItem {
@@ -53,8 +54,8 @@ interface FakeSheet {
 
 /**
  * A server with one sheet. Each `update` call waits until the test answers it, so a test can make
- * changes while a request is in progress. `get` and `changeTab` answer at once. `log` has the order
- * of the calls that change the sheet.
+ * changes while a request is in progress. `get`, `format` and `changeTab` answer at once. `log` has
+ * the order of the calls that change the sheet.
  */
 function fakeServer(role: DriveItem["role"] = "owner") {
 	const sheet: FakeSheet = {
@@ -77,6 +78,28 @@ function fakeServer(role: DriveItem["role"] = "owner") {
 			return new Promise<SheetData>((resolve, reject) => {
 				calls.push({ cells, baseRevision, tabId, resolve, reject });
 			});
+		},
+		format: async (changes: FormatChange[], baseRevision, tabId) => {
+			log.push(`format ${tabId} ${baseRevision}`);
+			const before = new Map((sheet.cells[tabId] ?? []).map((cell) => [cell.cell, cell]));
+			const formats = applyFormatChanges(formatsOf(before), changes);
+			const changed: Cell[] = [];
+			for (const name of new Set([...before.keys(), ...formats.keys()])) {
+				const { format: old, ...cell } = before.get(name) ?? {
+					cell: name,
+					input: "",
+					value: null,
+					type: "empty" as const,
+				};
+				const format = formats.get(name);
+				if (JSON.stringify(old) !== JSON.stringify(format)) changed.push(format ? { ...cell, format } : cell);
+			}
+			sheet.cells[tabId] = [
+				...[...before.values()].filter((cell) => !changed.some((change) => change.cell === cell.cell)),
+				...changed.filter((cell) => cell.input !== "" || cell.format),
+			];
+			sheet.revision++;
+			return { ...read(tabId), cells: changed };
 		},
 		changeTab: async (action: TabAction) => {
 			log.push(action.kind);
@@ -444,5 +467,49 @@ describe("the tabs of a sheet", () => {
 		store.retry();
 		await settle();
 		expect(store.getSnapshot().saveState).toBe("saved");
+	});
+});
+
+describe("the formats of a sheet", () => {
+	// A click on Bold must show at once, and the request must not go before the inputs that wait, or it
+	// would name an old revision and get a conflict.
+	it("shows a format at once, sends it after the inputs that wait, and keeps the formats of the answer", async () => {
+		const { store, log, accept, sheet } = await openStore();
+		sheet.cells.tab_1 = [{ cell: "C1", input: "1", value: 1, type: "number" }];
+		sheet.revision++;
+		await store.refresh();
+		store.commit([{ cell: "A1", input: "1" }]);
+		store.format([{ range: "A1:B1", format: { bold: true, fill: "#fef9c3" } }]);
+		expect(store.getSnapshot().formats.get("B1")).toEqual({ bold: true, fill: "#fef9c3" });
+		await settle();
+		expect(log).toEqual(["update tab_1"]);
+		accept();
+		await settle();
+		expect(log).toEqual(["update tab_1", "format tab_1 3"]);
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
+		expect(store.getSnapshot().formats.get("A1")).toEqual({ bold: true, fill: "#fef9c3" });
+		expect(store.getSnapshot().formats.get("B1")).toEqual({ bold: true, fill: "#fef9c3" });
+		// A number shows the text of its format, also while the change waits.
+		store.format([{ range: "C1", format: { number_format: "currency" } }]);
+		expect(store.getSnapshot().cells.get("C1")?.text).toBe("$1.00");
+	});
+
+	it("keeps a format change when it fails, and sends it again on a retry", async () => {
+		const { store, api, log } = await openStore();
+		const format = api.format;
+		api.format = async () => {
+			throw new ApiError(500, { code: "internal", detail: "No." });
+		};
+		store.format([{ range: "C3", format: { italic: true } }]);
+		await settle();
+		expect(store.getSnapshot()).toMatchObject({ saveState: "error" });
+		expect(store.getSnapshot().formats.get("C3")).toEqual({ italic: true });
+		expect(store.hasUnsaved()).toBe(true);
+		api.format = format;
+		store.retry();
+		await settle();
+		expect(log).toEqual(["format tab_1 1"]);
+		expect(store.getSnapshot()).toMatchObject({ saveState: "saved" });
+		expect(store.getSnapshot().formats.get("C3")).toEqual({ italic: true });
 	});
 });

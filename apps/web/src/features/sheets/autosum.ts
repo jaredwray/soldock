@@ -1,4 +1,4 @@
-import { type CellPos, cellName } from "./a1.ts";
+import { type CellPos, cellName, rangeName } from "./a1.ts";
 import type { CellChange, ViewCell } from "./cells.ts";
 import { type GridSize, isOneCell, type Range } from "./selection.ts";
 
@@ -19,13 +19,6 @@ export type AutoSum =
 	| { kind: "write"; changes: CellChange[]; range: Range }
 	/** No formula. `message` tells the person why. */
 	| { kind: "refused"; message: string };
-
-/** A range in A1 form: B2 for one cell, B2:B9 for more. */
-function rangeName(range: Range): string {
-	const first = cellName({ row: range.top, col: range.left });
-	if (isOneCell(range)) return first;
-	return `${first}:${cellName({ row: range.bottom, col: range.right })}`;
-}
 
 /**
  * The numbers next to a cell: the cells with a number directly above it, up to the first cell

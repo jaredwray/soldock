@@ -322,7 +322,7 @@ describe("tabs", () => {
 
 	// Each tab write goes through one write loop that checks the editor role. A write that leaves the
 	// loop must not lose the check, for a person, for an agent, or for a key with fewer scopes.
-	it("lets an editor change the tabs, also an agent, and refuses a stranger, a viewer and a read-only key", async () => {
+	it("lets an editor change the tabs and the formats, also an agent, and refuses a stranger, a viewer and a read-only key", async () => {
 		const { item } = await ada.call("sheets.create", { name: "Year" });
 		await ada.call("sheets.add_tab", { item_id: item.id, name: "Two" });
 		const space = { space_id: ada.id, item_id: item.id };
@@ -331,6 +331,7 @@ describe("tabs", () => {
 			["sheets.rename_tab", { ...space, tab_id: "tab_2", name: "Second" }],
 			["sheets.move_tab", { ...space, tab_id: "tab_2", index: 0 }],
 			["sheets.duplicate_tab", { ...space, tab_id: "tab_2" }],
+			["sheets.format_cells", { ...space, tab_id: "tab_2", formats: [{ range: "A1", format: { bold: true } }] }],
 			["sheets.delete_tab", { ...space, tab_id: "tab_1" }],
 		];
 		const send = (call: Actor["call"], [name, input]: [string, Record<string, unknown>]) =>
@@ -346,6 +347,9 @@ describe("tabs", () => {
 		}
 		const { tabs } = await ada.call("sheets.get", { item_id: item.id });
 		expect(names(tabs)).toEqual(["Second", "Copy of Second", "Three"]);
+		expect((await ada.call("sheets.get", { item_id: item.id, tab_id: "tab_2" })).cells).toEqual([
+			{ cell: "A1", input: "", value: null, type: "empty", format: { bold: true } },
+		]);
 	});
 
 	it("counts the cells and the references of a tab in a dry run of a delete, and changes nothing", async () => {
@@ -447,5 +451,115 @@ describe("tabs", () => {
 		const added = await ada.call("sheets.add_tab", { item_id: item.id });
 		expect(added).toMatchObject({ tab_id: "tab_2", tabs: [{ id: "tab_1" }, { id: "tab_2", name: "Sheet2" }] });
 		expect((await ada.call("sheets.get", { item_id: item.id, range: "A2" })).cells[0]?.value).toBe(6);
+	});
+});
+
+describe("formats", () => {
+	it("formats ranges, keeps a format through a change of the input, and returns the text of a number", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
+		const id = { item_id: item.id };
+		const formatted = await ada.call("sheets.format_cells", {
+			...id,
+			formats: [
+				{ range: "A1:B1", format: { bold: true, fill: "#FEF9C3" } },
+				{ range: "B2:B4", format: { number_format: "currency" } },
+				{ range: "B4", format: { decimals: 0, color: "#B91C1C", align: "center" } },
+				{ range: "C9", format: { italic: true } },
+			],
+		});
+		const header = { bold: true, fill: "#fef9c3" };
+		const total = { number_format: "currency", decimals: 0, color: "#b91c1c", align: "center" };
+		expect(formatted).toMatchObject({ revision: 2, tab_id: "tab_1", rows: 4, columns: 2 });
+		expect(formatted.cells).toEqual([
+			{ cell: "A1", input: "Item", value: "Item", type: "text", format: header },
+			{ cell: "B1", input: "Cost", value: "Cost", type: "text", format: header },
+			{ cell: "B2", input: "120", value: 120, type: "number", format: { number_format: "currency" }, text: "$120.00" },
+			{ cell: "B3", input: "30.5", value: 30.5, type: "number", format: { number_format: "currency" }, text: "$30.50" },
+			{ cell: "B4", input: "=SUM(B2:B3)", value: 150.5, type: "number", format: total, text: "$151" },
+			// A cell without an input keeps its format, so a later input gets it.
+			{ cell: "C9", input: "", value: null, type: "empty", format: { italic: true } },
+		]);
+		expect((await ada.call("sheets.get", { ...id, range: "C9" })).cells).toEqual([formatted.cells[5]]);
+
+		// A new input keeps the format, and the cells that read it get their new text.
+		const changed = await ada.call("sheets.update_cells", {
+			...id,
+			cells: [
+				{ cell: "B2", input: "-1234.5" },
+				{ cell: "B3", input: "" },
+			],
+		});
+		expect(changed.cells).toEqual([
+			{
+				cell: "B2",
+				input: "-1234.5",
+				value: -1234.5,
+				type: "number",
+				format: { number_format: "currency" },
+				text: "-$1,234.50",
+			},
+			{ cell: "B3", input: "", value: null, type: "empty", format: { number_format: "currency" } },
+			{ cell: "B4", input: "=SUM(B2:B3)", value: -1234.5, type: "number", format: total, text: "-$1,235" },
+		]);
+
+		// Percent, a field that a later change removes, and the same change again, which makes no revision.
+		const percent = await ada.call("sheets.format_cells", {
+			...id,
+			formats: [
+				{ range: "B2", format: { number_format: "percent", decimals: 1 } },
+				{ range: "A1:B1", format: { bold: false, fill: null } },
+			],
+		});
+		expect(percent.revision).toBe(4);
+		expect(percent.cells).toEqual([
+			{ cell: "A1", input: "Item", value: "Item", type: "text" },
+			{ cell: "B1", input: "Cost", value: "Cost", type: "text" },
+			{
+				cell: "B2",
+				input: "-1234.5",
+				value: -1234.5,
+				type: "number",
+				format: { number_format: "percent", decimals: 1 },
+				text: "-123,450.0%",
+			},
+		]);
+		const again = await ada.call("sheets.format_cells", {
+			...id,
+			formats: [{ range: "B2", format: { number_format: "percent", decimals: 1 } }],
+		});
+		expect(again).toMatchObject({ revision: 4, cells: [] });
+
+		// A copy of the tab has the formats too.
+		const copy = await ada.call("sheets.duplicate_tab", { ...id, tab_id: "tab_1" });
+		expect((await ada.call("sheets.get", { ...id, tab_id: copy.tab_id, range: "B4" })).cells[0]).toMatchObject({
+			format: total,
+			text: "-$1,235",
+		});
+	});
+
+	it("refuses a color that is not #rrggbb, a cell outside the grid, and more formats than the limit", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
+		// The input is not valid on purpose, so the call goes around the types of the client.
+		const format = (formats: unknown) =>
+			(ada.call as (name: string, input: unknown) => Promise<unknown>)("sheets.format_cells", {
+				item_id: item.id,
+				formats,
+			});
+		expect(await codeOf(format([{ range: "A1", format: { color: "red" } }]))).toBe("invalid");
+		expect(await codeOf(format([{ range: "A1:BA1", format: { bold: true } }]))).toBe("invalid");
+		// One call formats at most each cell of a tab once.
+		expect(
+			await codeOf(
+				format([
+					{ range: "A1:AZ1000", format: { bold: false } },
+					{ range: "A1", format: { bold: false } },
+				]),
+			),
+		).toBe("invalid");
+		const over = Math.ceil(SHEET_LIMITS.formats / SHEET_LIMITS.columns) + 1;
+		expect(await codeOf(format([{ range: `A1:AZ${over}`, format: { bold: true } }]))).toBe("payload_too_large");
+		const { revision, cells } = await ada.call("sheets.get", { item_id: item.id });
+		expect(revision).toBe(1);
+		expect(cells.some((cell) => cell.format)).toBe(false);
 	});
 });

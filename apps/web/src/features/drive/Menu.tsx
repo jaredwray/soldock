@@ -5,6 +5,8 @@ export interface MenuItem {
 	key: string;
 	label: string;
 	icon?: IconName;
+	/** A color to show before the label, for a menu of colors. */
+	swatch?: string;
 	danger?: boolean;
 	onSelect: () => void;
 }
@@ -183,6 +185,9 @@ export function Menu({
 							}}
 						>
 							{item.icon && <Icon name={item.icon} size={18} />}
+							{item.swatch !== undefined && (
+								<span className="drive-menu-swatch" style={{ background: item.swatch }} aria-hidden="true" />
+							)}
 							{item.label}
 						</button>
 					))}

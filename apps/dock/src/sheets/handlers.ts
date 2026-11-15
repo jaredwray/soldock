@@ -11,13 +11,15 @@ import {
 } from "../drive/index.ts";
 import type { CallContext } from "../identity/index.ts";
 import { type HandlerMap, newId, OperationError } from "../platform/index.ts";
-import { evaluateWorkbook, refersToTab, renameTabInInput, type TabInputs, tabKey, type Value } from "./formula.ts";
+import { evaluateWorkbook, refersToTab, renameTabInInput, tabKey, type Value } from "./formula.ts";
 import {
 	applyChanges,
+	applyFormats,
 	changedCells,
 	extent,
-	positionOf,
+	parseRange,
 	readWorkbook,
+	type SheetTab,
 	sheetText,
 	storeWorkbook,
 	toCells,
@@ -30,35 +32,50 @@ type SheetsOperation = Extract<OperationName, `sheets.${string}`>;
 /** The stored form of a sheet. Refuses a sheet over its limits. */
 function checked(book: Workbook): string {
 	let cells = 0;
-	for (const tab of book.tabs) cells += tab.inputs.size;
+	let formats = 0;
+	for (const tab of book.tabs) {
+		cells += tab.inputs.size;
+		formats += tab.formats.size;
+	}
 	if (cells > SHEET_LIMITS.cells) {
 		throw new OperationError(
 			"payload_too_large",
 			`A sheet can have at most ${SHEET_LIMITS.cells} cells with an input.`,
 		);
 	}
+	if (formats > SHEET_LIMITS.formats) {
+		throw new OperationError(
+			"payload_too_large",
+			`A sheet can have at most ${SHEET_LIMITS.formats} cells with a format.`,
+		);
+	}
 	const content = storeWorkbook(book);
 	if (new TextEncoder().encode(content).byteLength > SHEET_LIMITS.contentBytes) {
 		throw new OperationError(
 			"payload_too_large",
-			`The inputs of a sheet can be at most ${SHEET_LIMITS.contentBytes} bytes.`,
+			`The inputs and formats of a sheet can be at most ${SHEET_LIMITS.contentBytes} bytes.`,
 		);
 	}
 	return content;
 }
 
-/** The inputs of a tab after the changes of a call. Refuses a cell outside the grid. */
-function changedInputs(inputs: ReadonlyMap<string, string>, changes: readonly { cell: string; input: string }[]) {
+/** The result of `run`. A RangeError, for a cell outside the grid, becomes an invalid call. */
+function inGrid<T>(run: () => T): T {
 	try {
-		return applyChanges(inputs, changes);
+		return run();
 	} catch (error) {
 		if (error instanceof RangeError) throw new OperationError("invalid", error.message);
 		throw error;
 	}
 }
 
+/** The inputs of a tab after the changes of a call. Refuses a cell outside the grid. */
+function changedInputs(inputs: ReadonlyMap<string, string>, changes: readonly { cell: string; input: string }[]) {
+	return inGrid(() => applyChanges(inputs, changes));
+}
+
 /** The tab with the id, or the first tab without an id. */
-function tabOf(book: Workbook, tabId: string | undefined): TabInputs {
+function tabOf(book: Workbook, tabId: string | undefined): SheetTab {
 	const tab = tabId === undefined ? book.tabs[0] : book.tabs.find((entry) => entry.id === tabId);
 	if (!tab) throw new OperationError("not_found", `The sheet has no tab ${tabId}. Read the tabs with sheets.get.`);
 	return tab;
@@ -104,12 +121,12 @@ function freeName(book: Workbook, candidate: (n: number) => string): string {
 	}
 }
 
-function withTabs(book: Workbook, tabs: TabInputs[]): Workbook {
+function withTabs(book: Workbook, tabs: SheetTab[]): Workbook {
 	return { tabs, nextTab: book.nextTab };
 }
 
 /** A new tab with the next id of the sheet, at the position `index`. */
-function insertTab(book: Workbook, tab: Omit<TabInputs, "id">, index: number): { book: Workbook; id: string } {
+function insertTab(book: Workbook, tab: Omit<SheetTab, "id">, index: number): { book: Workbook; id: string } {
 	const id = `tab_${book.nextTab}`;
 	const tabs = [...book.tabs];
 	tabs.splice(Math.min(index, tabs.length), 0, { id, ...tab });
@@ -121,19 +138,7 @@ async function itemOf(call: CallContext, opened: OpenSpace, itemId: string) {
 }
 
 function rangeOf(range: string | undefined) {
-	if (range === undefined) return undefined;
-	try {
-		const [first, last = first] = range.split(":") as [string, string?];
-		const a = positionOf(first);
-		const b = positionOf(last);
-		return {
-			from: { col: Math.min(a.col, b.col), row: Math.min(a.row, b.row) },
-			to: { col: Math.max(a.col, b.col), row: Math.max(a.row, b.row) },
-		};
-	} catch (error) {
-		if (error instanceof RangeError) throw new OperationError("invalid", error.message);
-		throw error;
-	}
+	return range === undefined ? undefined : inGrid(() => parseRange(range));
 }
 
 /** The most times that one call calculates its change again, when other writers change the sheet at the same time. */
@@ -206,12 +211,27 @@ function tabsOutput(written: Awaited<ReturnType<typeof changeSheet>>) {
 
 const NO_VALUES: ReadonlyMap<string, Value> = new Map();
 
+/** The output of an operation that changes the cells of one tab: each cell whose input, result or format changed. */
+function cellsOutput(written: Awaited<ReturnType<typeof changeSheet<string>>>) {
+	const tabId = written.result;
+	const after = tabOf(written.after, tabId);
+	return {
+		...tabsOutput(written),
+		tab_id: tabId,
+		...extent(after.inputs),
+		cells: changedCells(
+			{ tab: tabOf(written.before, tabId), values: evaluateWorkbook(written.before.tabs).get(tabId) ?? NO_VALUES },
+			{ tab: after, values: written.values.get(tabId) ?? NO_VALUES },
+		),
+	};
+}
+
 export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 	async "sheets.create"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		// Refuse cells that are not valid before the item exists.
 		const empty = readWorkbook(null);
-		const [firstTab] = empty.tabs as [TabInputs];
+		const [firstTab] = empty.tabs as [SheetTab];
 		const inputs = changedInputs(firstTab.inputs, input.cells);
 		const first = withTabs(empty, [{ ...firstTab, inputs }]);
 		const content = checked(first);
@@ -248,7 +268,7 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 			tabs: toTabs(book),
 			tab_id: tab.id,
 			...extent(tab.inputs),
-			cells: toCells(tab.inputs, evaluateWorkbook(book.tabs).get(tab.id) ?? NO_VALUES, range),
+			cells: toCells(tab, evaluateWorkbook(book.tabs).get(tab.id) ?? NO_VALUES, range),
 		};
 	},
 
@@ -264,19 +284,22 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 				result: tab.id,
 			};
 		});
-		const tabId = written.result;
-		const before = tabOf(written.before, tabId);
-		const after = tabOf(written.after, tabId);
-		const old = evaluateWorkbook(written.before.tabs).get(tabId) ?? NO_VALUES;
-		return {
-			...tabsOutput(written),
-			tab_id: tabId,
-			...extent(after.inputs),
-			cells: changedCells(
-				{ inputs: before.inputs, values: old },
-				{ inputs: after.inputs, values: written.values.get(tabId) ?? NO_VALUES },
-			),
-		};
+		return cellsOutput(written);
+	},
+
+	async "sheets.format_cells"(call, input) {
+		const written = await changeSheet(call, input, "sheets.format_cells", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			const formats = inGrid(() => applyFormats(tab.formats, input.formats));
+			return {
+				book: withTabs(
+					book,
+					book.tabs.map((entry) => (entry === tab ? { ...tab, formats } : entry)),
+				),
+				result: tab.id,
+			};
+		});
+		return cellsOutput(written);
 	},
 
 	async "sheets.add_tab"(call, input) {
@@ -284,7 +307,7 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 			checkTabCount(book);
 			const name =
 				input.name === undefined ? freeName(book, (n) => `Sheet${book.tabs.length + n}`) : freeNameOf(book, input.name);
-			const added = insertTab(book, { name, inputs: new Map() }, input.index ?? book.tabs.length);
+			const added = insertTab(book, { name, inputs: new Map(), formats: new Map() }, input.index ?? book.tabs.length);
 			return { book: added.book, result: added.id };
 		});
 		return { ...tabsOutput(written), tab_id: written.result };
@@ -332,7 +355,11 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 				input.name === undefined
 					? freeName(book, (n) => (n === 1 ? `Copy of ${tab.name}` : `Copy ${n} of ${tab.name}`))
 					: freeNameOf(book, input.name);
-			const added = insertTab(book, { name, inputs: new Map(tab.inputs) }, book.tabs.indexOf(tab) + 1);
+			const added = insertTab(
+				book,
+				{ name, inputs: new Map(tab.inputs), formats: new Map(tab.formats) },
+				book.tabs.indexOf(tab) + 1,
+			);
 			return { book: added.book, result: added.id };
 		});
 		return { ...tabsOutput(written), tab_id: written.result };

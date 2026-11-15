@@ -38,10 +38,34 @@
 	min-height: 0;
 }
 
-/* The toolbar has the shared .editor-toolbar rules. The Σ of the functions menu is text, because
-   Iconoir has no icon for it. */
-.sheet-function-button {
-	font: 500 18px / 1 var(--font);
+/* The toolbar has the shared .editor-toolbar rules. $, %, .0, .00 and Σ are text, because Iconoir
+   has no icon for them. */
+.sheet-glyph-button {
+	font: 500 15px / 1 var(--font);
+	white-space: nowrap;
+}
+
+.sheet-sigma-button {
+	font-size: 18px;
+}
+
+/* A color menu shows a glyph with a bar of the color of the active cell under it. */
+.sheet-color-icon {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+}
+
+.sheet-color-letter {
+	font: 600 15px / 1 var(--font);
+}
+
+.sheet-color-bar {
+	width: 16px;
+	height: 3px;
+	border-radius: 1px;
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 15%, transparent);
 }
 
 /* The formula bar */
@@ -223,6 +247,24 @@
 	text-align: center;
 }
 
+/* The format of a cell. SheetRow gives its colors as --cell-color and --cell-fill. An error and an
+   input that waits for its result keep their own color, so a format cannot hide them. */
+.sheet-cell-colored {
+	color: var(--cell-color);
+}
+
+.sheet-cell-filled {
+	background: var(--cell-fill);
+}
+
+.sheet-cell-bold {
+	font-weight: 600;
+}
+
+.sheet-cell-italic {
+	font-style: italic;
+}
+
 .sheet-cell-error {
 	color: var(--negative);
 	text-align: center;
@@ -233,13 +275,40 @@
 	color: var(--muted-foreground);
 }
 
+/* An alignment of the format goes before the alignment of the type. */
+.sheet-cell-align-left {
+	text-align: left;
+}
+
+.sheet-cell-align-center {
+	text-align: center;
+}
+
+.sheet-cell-align-right {
+	text-align: right;
+}
+
 .sheet-cell-selected {
 	background: var(--selected);
+}
+
+/* A selected cell with a fill keeps its fill under a tint of the selection. */
+.sheet-cell-filled.sheet-cell-selected {
+	background:
+		linear-gradient(
+			color-mix(in srgb, var(--focus) 22%, transparent),
+			color-mix(in srgb, var(--focus) 22%, transparent)
+		),
+		var(--cell-fill);
 }
 
 .sheet-cell-active {
 	background: var(--background);
 	box-shadow: inset 0 0 0 2px var(--muted-foreground);
+}
+
+.sheet-cell-filled.sheet-cell-active {
+	background: var(--cell-fill);
 }
 
 .sheet-grid:focus .sheet-cell-active {

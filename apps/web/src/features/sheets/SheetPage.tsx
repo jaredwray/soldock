@@ -7,6 +7,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { DRIVE_PATH } from "../../routes.ts";
 import { DocumentHeader } from "../drive/DocumentHeader.tsx";
 import type { CellChange } from "./cells.ts";
+import type { FormatChange } from "./formats.ts";
 import { newTabMemory, SheetEditor, type TabMemory } from "./SheetEditor.tsx";
 import { SheetTabs, tabElementId } from "./SheetTabs.tsx";
 import { SheetStore, type TabAction, type TabsData } from "./store.ts";
@@ -45,6 +46,8 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 			get: (tabId) => api.call("sheets.get", { ...sheet, tab_id: tabId }),
 			update: (cells, baseRevision, tabId) =>
 				api.call("sheets.update_cells", { ...sheet, tab_id: tabId, cells, base_revision: baseRevision }),
+			format: (formats, baseRevision, tabId) =>
+				api.call("sheets.format_cells", { ...sheet, tab_id: tabId, formats, base_revision: baseRevision }),
 			changeTab,
 		});
 	}, [spaceId, itemId]);
@@ -92,6 +95,7 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	const activeTab = sheet.activeTab;
 	const inputOf = useCallback((cell: string) => store.inputOf(cell, activeTab), [store, activeTab]);
 	const commit = useCallback((changes: CellChange[]) => store.commit(changes, activeTab), [store, activeTab]);
+	const format = useCallback((changes: FormatChange[]) => store.format(changes, activeTab), [store, activeTab]);
 	const changeTab = useCallback((action: TabAction) => store.changeTab(action), [store]);
 	/** The name of each tab in the last snapshot, to find a rename. */
 	const namesRef = useRef(new Map<string, string>());
@@ -206,12 +210,14 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 					key={activeTab}
 					name={`${sheet.item.name}, ${sheet.tabs.find((tab) => tab.id === activeTab)?.name ?? ""}`}
 					cells={sheet.cells}
+					formats={sheet.formats}
 					readOnly={readOnly}
 					loading={sheet.tabLoading}
 					memory={memoryOf(activeTab)}
 					onSwitchTab={switchTab}
 					inputOf={inputOf}
 					onCommit={commit}
+					onFormat={format}
 				/>
 			</div>
 			<SheetTabs

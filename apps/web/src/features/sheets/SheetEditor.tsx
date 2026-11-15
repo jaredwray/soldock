@@ -1,4 +1,4 @@
-import { SHEET_LIMITS } from "@soldock/contracts";
+import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@soldock/contracts";
 import {
 	type ClipboardEvent,
 	type CSSProperties,
@@ -15,10 +15,11 @@ import {
 	useState,
 } from "react";
 import { useToast } from "../../lib/toast.tsx";
-import { type CellPos, cellName, columnNames, parseCell } from "./a1.ts";
+import { type CellPos, cellName, columnNames, parseCell, rangeName } from "./a1.ts";
 import { autoSum, type SumFunction } from "./autosum.ts";
 import { type CellChange, clearChanges, pasteChanges, rangeInputs, tooLong, usedSize, type ViewCell } from "./cells.ts";
 import { formatTsv, parseTsv } from "./clipboard.ts";
+import { CLEAR_FORMAT, changesFormats, decimalsShown, type FormatChange, restoreFormats } from "./formats.ts";
 import { ColumnHeads, cellId, SheetRow } from "./SheetRow.tsx";
 import { SheetToolbar } from "./SheetToolbar.tsx";
 import {
@@ -58,11 +59,10 @@ interface Edit {
 	select?: readonly [number, number];
 }
 
-/** One change of the person, for Undo and Redo. */
-interface Step {
-	before: CellChange[];
-	after: CellChange[];
-}
+/** One change of the person, for Undo and Redo: of inputs, or of formats. */
+type Step =
+	| { kind: "cells"; before: CellChange[]; after: CellChange[] }
+	| { kind: "formats"; before: FormatChange[]; after: FormatChange[] };
 
 /**
  * What the editor of one tab keeps while a different tab is open: the selection, Undo and Redo,
@@ -111,6 +111,8 @@ interface SheetEditorProps {
 	/** The name of the sheet and of the tab, for the accessible name of the grid. */
 	name: string;
 	cells: ReadonlyMap<string, ViewCell>;
+	/** The format of each cell that has one, also of a cell without an input. */
+	formats: ReadonlyMap<string, CellFormat>;
 	/** True for a viewer: selection and copy work, and no edit. */
 	readOnly: boolean;
 	/** True while the cells of the tab did not arrive. The grid then takes no edit, as for a viewer. */
@@ -124,6 +126,7 @@ interface SheetEditorProps {
 	 */
 	inputOf: (cell: string) => string;
 	onCommit: (changes: CellChange[]) => void;
+	onFormat: (changes: FormatChange[]) => void;
 }
 
 /**
@@ -133,12 +136,14 @@ interface SheetEditorProps {
 export function SheetEditor({
 	name,
 	cells,
+	formats,
 	readOnly,
 	loading,
 	memory,
 	onSwitchTab,
 	inputOf: inputAt,
 	onCommit,
+	onFormat,
 }: SheetEditorProps) {
 	const toast = useToast();
 	const gridId = useId();
@@ -202,16 +207,34 @@ export function SheetEditor({
 		}
 		const after = changes.filter((change) => inputAt(change.cell) !== change.input);
 		if (after.length === 0) return true;
-		const history = memory.history;
-		history.undo.push({ before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })), after });
-		if (history.undo.length > UNDO_STEPS) history.undo.shift();
-		history.redo = [];
-		redraw();
+		remember({
+			kind: "cells",
+			before: after.map((change) => ({ cell: change.cell, input: inputAt(change.cell) })),
+			after,
+		});
 		onCommit(after);
 		return true;
 	}
 
-	/** Undo sends the inputs from before a step. Redo sends the inputs of the step again. */
+	/** Keeps a step for Undo. A new step clears Redo. */
+	function remember(step: Step) {
+		const history = memory.history;
+		history.undo.push(step);
+		if (history.undo.length > UNDO_STEPS) history.undo.shift();
+		history.redo = [];
+		redraw();
+	}
+
+	/** Changes the format of each selected cell, in one Undo step. A change that changes nothing makes no step. */
+	function applyFormat(format: FormatPatch) {
+		if (locked) return;
+		const changes = [{ range: rangeName(range), format }];
+		if (!changesFormats(formats, changes)) return;
+		remember({ kind: "formats", before: restoreFormats(formats, changes), after: changes });
+		onFormat(changes);
+	}
+
+	/** Undo sends the inputs or the formats from before a step. Redo sends those of the step again. */
 	function replay(from: "undo" | "redo") {
 		if (locked) return;
 		const history = memory.history;
@@ -219,6 +242,10 @@ export function SheetEditor({
 		if (!entry) return;
 		history[from === "undo" ? "redo" : "undo"].push(entry);
 		redraw();
+		if (entry.kind === "formats") {
+			onFormat(from === "undo" ? entry.before : entry.after);
+			return;
+		}
 		const changes = from === "undo" ? entry.before : entry.after;
 		onCommit(changes);
 		const first = parseCell(changes[0]?.cell ?? "");
@@ -453,6 +480,12 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
+				} else if (command && key === "b") {
+					applyFormat({ bold: activeFormat?.bold !== true });
+				} else if (command && key === "i") {
+					applyFormat({ italic: activeFormat?.italic !== true });
+				} else if (command && key === "\\") {
+					applyFormat(CLEAR_FORMAT);
 				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠" || event.code === "Equal")) {
 					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠, or a different
 					// character on some layouts, so the key of = also counts.
@@ -530,6 +563,7 @@ export function SheetEditor({
 	const rows: number[] = [];
 	for (let row = first; row <= last; row++) rows.push(row);
 	const activeDrawn = active.row >= first && active.row <= last;
+	const activeFormat = formats.get(activeName);
 	const barValue = edit ? edit.value : inputAt(activeName);
 
 	return (
@@ -540,6 +574,8 @@ export function SheetEditor({
 					disabled={loading}
 					canUndo={memory.history.undo.length > 0}
 					canRedo={memory.history.redo.length > 0}
+					format={activeFormat}
+					decimals={decimalsShown(cells.get(activeName)?.text ?? "", activeFormat)}
 					onUndo={() => {
 						replay("undo");
 						gridRef.current?.focus();
@@ -548,6 +584,7 @@ export function SheetEditor({
 						replay("redo");
 						gridRef.current?.focus();
 					}}
+					onFormat={applyFormat}
 					onFunction={insertFunction}
 				/>
 			)}
@@ -640,6 +677,7 @@ export function SheetEditor({
 										row={row}
 										names={names}
 										cells={cells}
+										formats={formats}
 										left={selected ? range.left : -1}
 										right={selected ? range.right : -1}
 										activeCol={row === active.row ? active.col : -1}
