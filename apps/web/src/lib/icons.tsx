@@ -11,6 +11,8 @@ interface IconPath {
 	cap?: false;
 	/** False when the file gives the path no round line joins. */
 	join?: false;
+	/** The stroke width when the file gives the path its own, and not the 1.5 of the icon. */
+	width?: string;
 }
 
 const PATHS = {
@@ -455,6 +457,19 @@ const PATHS = {
 		},
 	],
 	arrowUp: [{ d: "M12 21L12 3M12 3L20.5 11.5M12 3L3.5 11.5" }],
+	fill: [
+		{
+			d: "M2.63596 10.2927L9.70703 3.22168L18.1923 11.707L11.1212 18.778C10.3402 19.5591 9.07387 19.5591 8.29282 18.778L2.63596 13.1212C1.85492 12.3401 1.85492 11.0738 2.63596 10.2927Z",
+		},
+		{ d: "M8.29297 1.80762L9.70718 3.22183" },
+		{
+			d: "M19.9991 15C19.9991 15 22.9991 17.9934 22.9994 19.8865C22.9997 21.5422 21.6552 22.8865 19.9997 22.8865C18.3442 22.8865 17.012 21.5422 17 19.8865C17.0098 17.9924 19.9991 15 19.9991 15Z",
+			width: "1.49993",
+		},
+	],
+	alignLeft: [{ d: "M3 10L17 10" }, { d: "M3 6H21" }, { d: "M3 18L17 18" }, { d: "M3 14H21" }],
+	alignCenter: [{ d: "M3 6H21" }, { d: "M3 14H21" }, { d: "M6 10L18 10" }, { d: "M6 18L18 18" }],
+	alignRight: [{ d: "M7 10L21 10" }, { d: "M3 6H21" }, { d: "M7 18L21 18" }, { d: "M3 14H21" }],
 } as const satisfies Record<string, readonly IconPath[]>;
 
 /** The solid star of Iconoir (`iconoir/solid/star.svg`). A set star shows it. */
@@ -496,6 +511,7 @@ export function Icon({ name, size = 20, filled = false, className }: IconProps) 
 					fill={path.fill ? "currentColor" : undefined}
 					strokeLinecap={path.cap === false ? undefined : "round"}
 					strokeLinejoin={path.join === false ? undefined : "round"}
+					strokeWidth={path.width}
 				/>
 			))}
 		</svg>

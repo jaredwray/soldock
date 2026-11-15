@@ -69,51 +69,6 @@
 	min-height: 0;
 }
 
-/* The toolbar is a row below the header. Its buttons are quiet: an icon with no box. */
-.doc-toolbar {
-	display: flex;
-	flex: none;
-	align-items: center;
-	gap: 2px;
-	min-height: 44px;
-	padding: 5px 16px;
-	border-bottom: 1px solid var(--border);
-	background: var(--background);
-	overflow-x: auto;
-	scrollbar-width: thin;
-}
-
-.doc-toolbar .format-button {
-	border-radius: 7px;
-}
-
-.doc-toolbar .format-button[aria-disabled="true"] {
-	opacity: 0.4;
-	cursor: default;
-}
-
-.doc-toolbar .format-button[aria-disabled="true"]:hover {
-	background: transparent;
-	color: var(--muted-foreground);
-}
-
-/* A line before each group of buttons. */
-.doc-toolbar .format-group-start:not(:first-child) {
-	position: relative;
-	margin-left: 13px;
-	overflow: visible;
-}
-
-.doc-toolbar .format-group-start:not(:first-child)::before {
-	position: absolute;
-	top: 7px;
-	bottom: 7px;
-	left: -7px;
-	width: 1px;
-	background: var(--border);
-	content: "";
-}
-
 .doc-block-type {
 	flex: none;
 	width: 132px;
@@ -284,10 +239,6 @@
 		padding: 8px 16px;
 	}
 
-	.doc-toolbar {
-		padding: 5px 8px;
-	}
-
 	.doc-scroll {
 		padding: 0 0 32px;
 	}
@@ -300,27 +251,13 @@
 }
 
 @media print {
-	.doc-toolbar,
 	.doc-notice {
 		display: none;
 	}
 }
 
-/* Touch: the toolbar is one row that scrolls, with 44px buttons. */
+/* Touch: the text style control has the height of the toolbar buttons. */
 @media (max-width: 900px), (pointer: coarse) {
-	.doc-toolbar {
-		flex-wrap: nowrap;
-		overflow-x: auto;
-		overscroll-behavior-x: contain;
-		scrollbar-width: none;
-	}
-
-	.doc-toolbar .format-button {
-		flex: none;
-		width: 44px;
-		height: 44px;
-	}
-
 	.doc-block-type {
 		height: 44px;
 		font-size: 16px;

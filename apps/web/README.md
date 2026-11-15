@@ -440,8 +440,8 @@ MCP clients. The app has no UI-only path.
   - The editor does not make blocks deeper than `DOC_LIMITS.depth` minus 2, because the server
     refuses a doc that is too deep.
   - The editor is a separate chunk. A person who uses only Mail does not load it.
-- **Sheets** (`/sheets/<prn_id>/<itm_id>`). The editor of one sheet: the document header, a formula
-  bar, a grid with the columns A to AZ and the rows 1 to 1000, and the tab bar under the grid.
+- **Sheets** (`/sheets/<prn_id>/<itm_id>`). The editor of one sheet: the document header, a toolbar,
+  a formula bar, a grid with the columns A to AZ and the rows 1 to 1000, and the tab bar under the grid.
   - The server calculates each formula. The page sends the inputs that change
     (`sheets.update_cells`) and shows the results that come back. The page never calculates.
   - The grid shows A to Z and 50 rows at least. It grows to 5 columns and 20 rows after the last
@@ -468,6 +468,40 @@ MCP clients. The app has no UI-only path.
     each formula. Cut also clears the range. Paste writes a block from the first cell of the range
     and stops at the last row and column. One pasted value fills a range of more than one cell.
   - `Ctrl+Z` undoes the last change of this page, and `Ctrl+Y` or `Ctrl+Shift+Z` does it again.
+  - The toolbar is a row below the header, with the rules of the Docs toolbar: one tab stop, quiet
+    icon buttons, and one row that scrolls sideways on a touch screen. A viewer gets no toolbar.
+    While the cells of the tab did not arrive, its buttons do nothing.
+  - The groups of the toolbar: Undo and Redo; currency (`$`), percent (`%`), fewer and more decimals;
+    bold and italic; text color and fill color; align left, center and right; Clear formatting; and
+    the Σ menu. `$`, `%`, `.0`, `.00` and `Σ` are text, because Iconoir has no icon for them.
+  - Undo and Redo do the same as their shortcuts. A click on a toolbar button ends an open edit and
+    keeps its input first.
+  - A format button shows the format of the active cell (`aria-pressed`), and a click changes each
+    selected cell with `sheets.format_cells`. A toggle that is on removes its field. The decimal
+    buttons start from the digits that the active cell shows. `Ctrl+B`, `Ctrl+I` and `Ctrl+\`
+    (`⌘` on a Mac) in the grid do bold, italic and Clear formatting.
+  - The color menus have nine colors and Automatic, or No fill. The text colors are easy to read on
+    the light and the dark background. The fills are light. Text on a fill without its own color is
+    near black, or white on a dark fill, also in the dark appearance.
+  - A format shows at once. The store sends it after the inputs that wait, with the same queue, so a
+    failed format change gets the same notice and **Try again**. The page uses the rules of the
+    contracts (`patchFormat`, `formatCellNumber`), so a number shows the text of its format, for
+    example `$1,234.50`, before the answer arrives.
+  - A format change is one Undo step. Undo sends the exact formats of before for each cell of the
+    range. A change that changes nothing, such as Bold on a bold cell, makes no step.
+  - Copy, cut and paste move inputs only. A pasted cell keeps the format that it has.
+  - A selected cell with a fill keeps the fill under a tint of the selection. An error and an input
+    that waits for its result keep their own color over a text color.
+  - The Σ menu has `SUM`, `AVERAGE`, `COUNT`, `MAX` and `MIN`. `Alt+=` (`⌥=` on a Mac) in the grid
+    does `SUM`. The page writes only the formula. The server calculates it.
+  - With one empty cell selected, an edit of that cell starts with the function of the numbers directly
+    above the cell, for example `=SUM(B2:B8)`. When the cell above has no number, the function reads
+    the numbers to the left. The edit selects the range, so a typed range replaces it. Enter saves.
+  - With a range selected, the formulas go after the range in one change, so one Undo removes them.
+    A range with more than one row gets one formula below each column. A range of one row gets one
+    formula to the right. The selection then moves to the new cells.
+  - A formula never replaces an input. When the selected cell, or a cell for a result of a range,
+    is not empty, or is outside the sheet, a message tells why, and nothing changes.
   - The grid is one tab stop (`role="grid"` with `aria-activedescendant`). Escape and then Tab
     leave the grid.
   - The tab bar shows each tab of the sheet. A click shows a tab. The tabs are a `tablist`: the
@@ -645,7 +679,8 @@ The icons are from [Iconoir](https://iconoir.com) 7.12.1 (MIT): a 24px grid and 
 - To add an icon: copy its file from the `iconoir` package of the same version, add its paths to
   `icons.tsx`, and add its name to the table in the test.
 - Iconoir has no icon for some actions. Reply all uses `reply-to-message`, Move uses `drag`, and
-  Inbox uses `mail-in`.
+  Inbox uses `mail-in`. The number formats and the functions menu of Sheets show text: `$`, `%`,
+  `.0`, `.00` and `Σ`.
 
 ### Layout
 
@@ -713,12 +748,12 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
-| [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text and the cells of the grid |
+| [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text and save queue, the message list rules and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 

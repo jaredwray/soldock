@@ -80,7 +80,8 @@ save gets a conflict, and the editor shows it.
 
 Sheets calculates formulas on the server, with functions such as `SUM`, `AVERAGE`, `IF` and `COUNT`.
 Thus a person and an agent always read the same result. A sheet has tabs, and a formula can read a
-different tab, for example `=SUM(Costs!B2:B9)`.
+different tab, for example `=SUM(Costs!B2:B9)`. The toolbar formats cells: currency, percent,
+decimals, bold, italic, colors and alignment. An agent sets the same formats.
 
 ![A sheet with a fee tracker. The formula bar shows the SUM formula of the selected cell](docs/screenshots/sheets.png)
 

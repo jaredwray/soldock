@@ -1,6 +1,7 @@
-import { ApiError, type Cell, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
+import { ApiError, type Cell, type CellFormat, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
 import type { SaveState } from "../drive/DocumentHeader.tsx";
 import { applyCells, type CellChange, toCellMap, type ViewCell, viewCells } from "./cells.ts";
+import { applyFormatChanges, cellCount, type FormatChange, formatsOf } from "./formats.ts";
 
 // The state of one open sheet: its tabs, the cells of each tab from the server, the changes that
 // wait for the server, and the save queue. The store has no DOM use. The page gives it the calls that
@@ -37,6 +38,8 @@ export interface SheetApi {
 	get(tabId?: string): Promise<SheetData>;
 	/** `sheets.update_cells`: the answer has each cell of the tab whose input or result changed. */
 	update(cells: CellChange[], baseRevision: number, tabId: string): Promise<SheetData>;
+	/** `sheets.format_cells`: the answer has each cell of the tab whose format changed. */
+	format(changes: FormatChange[], baseRevision: number, tabId: string): Promise<SheetData>;
 	/** `sheets.add_tab`, `sheets.rename_tab`, `sheets.move_tab`, `sheets.duplicate_tab` or `sheets.delete_tab`. */
 	changeTab(action: TabAction): Promise<TabsData>;
 }
@@ -55,6 +58,8 @@ export interface SheetSnapshot {
 	tabLoading: boolean;
 	/** The cells of the active tab for the grid, with the changes that wait on top. */
 	cells: ReadonlyMap<string, ViewCell>;
+	/** The format of each cell of the active tab that has one, also of a cell without an input, with the changes that wait on top. */
+	formats: ReadonlyMap<string, CellFormat>;
 	saveState: SaveState;
 	/** The error of the last save, while `saveState` is `error` or `conflict`. */
 	saveError: unknown;
@@ -68,6 +73,34 @@ function isNotFound(error: unknown): boolean {
 	return error instanceof ApiError && error.code === "not_found";
 }
 
+/** True for an error that the same request gets again: the server refused the change itself. */
+function isRefused(error: unknown): boolean {
+	return error instanceof ApiError && (error.code === "invalid" || error.code === "payload_too_large");
+}
+
+/**
+ * The parts of format changes for the requests, in order: each part has at most cellsPerUpdate
+ * changes and formatCellsPerCall cells.
+ */
+function formatParts(changes: readonly FormatChange[]): FormatChange[][] {
+	const parts: FormatChange[][] = [];
+	let part: FormatChange[] = [];
+	let cells = 0;
+	for (const change of changes) {
+		const count = cellCount(change.range);
+		const full = part.length >= SHEET_LIMITS.cellsPerUpdate || cells + count > SHEET_LIMITS.formatCellsPerCall;
+		if (part.length > 0 && full) {
+			parts.push(part);
+			part = [];
+			cells = 0;
+		}
+		part.push(change);
+		cells += count;
+	}
+	if (part.length > 0) parts.push(part);
+	return parts;
+}
+
 /** The cells of a tab from the server, and the revision of the sheet that they are complete for. */
 interface TabCells {
 	revision: number;
@@ -75,6 +108,12 @@ interface TabCells {
 }
 
 const NO_CHANGES: ReadonlyMap<string, string> = new Map();
+
+/** Format changes of one tab, in order. */
+interface FormatJob {
+	tab: string;
+	changes: FormatChange[];
+}
 
 export class SheetStore {
 	private readonly api: SheetApi;
@@ -101,14 +140,18 @@ export class SheetStore {
 	private waiting = new Map<string, Map<string, string>>();
 	/** The changes of the request that is in progress. */
 	private sending: { tab: string; cells: Map<string, string> } | null = null;
+	/** The format changes that no request has yet, in order. */
+	private formatWaiting: FormatJob[] = [];
+	/** The format changes of the request that is in progress. */
+	private formatSending: FormatJob | null = null;
 	private saveState: SaveState = "saved";
 	private saveError: unknown = null;
 	/** The save or the change of the tabs that is in progress. One runs at a time. */
 	private running: Promise<void> | null = null;
 	/** Grows with each local change. An answer to a refresh that started before the change is dropped. */
 	private epoch = 0;
-	/** The cells for the grid. Null after a change to the cells: the next snapshot makes them again. */
-	private view: Map<string, ViewCell> | null = null;
+	/** The cells and the formats for the grid. Null after a change: the next snapshot makes them again. */
+	private view: { cells: Map<string, ViewCell>; formats: Map<string, CellFormat> } | null = null;
 	private snapshot: SheetSnapshot;
 
 	constructor(api: SheetApi) {
@@ -175,6 +218,22 @@ export class SheetStore {
 		void this.flush();
 	}
 
+	/**
+	 * Changes the formats of cells of a tab. The grid shows the new formats at once, and the store
+	 * sends them after the changes of cells that wait. A viewer cannot change formats, and nobody can
+	 * change a tab whose cells did not arrive.
+	 */
+	format(changes: readonly FormatChange[], tab: string = this.active): void {
+		const known = this.server.has(tab) && !this.staleUntil.has(tab);
+		if (!this.canEdit() || !this.tabs.some((entry) => entry.id === tab) || !known || changes.length === 0) return;
+		this.formatWaiting.push({ tab, changes: [...changes] });
+		this.view = null;
+		this.epoch++;
+		if (!this.running) this.saveState = "unsaved";
+		this.emit();
+		void this.flush();
+	}
+
 	/** Shows a different tab. The grid shows the cells that the page has, and the store gets the tab again. */
 	selectTab(tab: string): void {
 		if (tab === this.active || !this.tabs.some((entry) => entry.id === tab)) return;
@@ -196,7 +255,8 @@ export class SheetStore {
 		try {
 			await this.exclusive(async () => {
 				const saved = await this.sendWaiting();
-				const onlyDeleted = [...this.waiting.keys()].every((tab) => action.kind === "delete" && tab === action.tabId);
+				const unsaved = [...this.waiting.keys(), ...this.formatWaiting.map((job) => job.tab)];
+				const onlyDeleted = unsaved.every((tab) => action.kind === "delete" && tab === action.tabId);
 				if (!saved && !onlyDeleted) {
 					throw new Error("Your last changes are not saved. Try again or discard them, then change the tabs.");
 				}
@@ -231,6 +291,7 @@ export class SheetStore {
 		const data = await this.fetchTab(this.active);
 		if (epoch !== this.epoch || this.running) return;
 		this.waiting.clear();
+		this.formatWaiting = [];
 		this.server.delete(data.tab_id);
 		this.take(data, null);
 		this.saveState = "saved";
@@ -275,7 +336,7 @@ export class SheetStore {
 
 	/** The count of the changes that no request has yet. */
 	private pending(): number {
-		let count = 0;
+		let count = this.formatWaiting.length;
 		for (const list of this.waiting.values()) count += list.size;
 		return count;
 	}
@@ -348,6 +409,7 @@ export class SheetStore {
 			this.waiting.delete(id);
 			this.staleUntil.delete(id);
 		}
+		this.formatWaiting = this.formatWaiting.filter((job) => ids.has(job.tab));
 		if (!ids.has(this.active) && this.tabs[0]) {
 			this.active = this.tabs[0].id;
 			this.view = null;
@@ -375,6 +437,18 @@ export class SheetStore {
 
 	/** Sends each waiting change. Returns false when a save failed: the changes then wait again. */
 	private async sendWaiting(): Promise<boolean> {
+		// A change can arrive during each request, also during a format request, so the loop runs until
+		// both queues are empty.
+		while (this.pending() > 0) {
+			if (!(await this.sendCells()) || !(await this.sendFormatJobs())) return false;
+		}
+		this.saveState = "saved";
+		this.emit();
+		return true;
+	}
+
+	/** Sends the waiting changes of cells. Returns false when a save failed: the changes then wait again. */
+	private async sendCells(): Promise<boolean> {
 		for (let batch = this.nextBatch(); batch; batch = this.nextBatch()) {
 			this.sending = batch;
 			this.view = null;
@@ -399,9 +473,56 @@ export class SheetStore {
 			this.sending = null;
 			this.view = null;
 		}
-		this.saveState = "saved";
-		this.emit();
 		return true;
+	}
+
+	/**
+	 * Sends the waiting format changes. Returns false when a save failed. A change that the server
+	 * refuses, for example over the limit of formats, goes away: the same request would get the same
+	 * answer. Other changes wait again.
+	 */
+	private async sendFormatJobs(): Promise<boolean> {
+		for (let job = this.formatWaiting.shift(); job; job = this.formatWaiting.shift()) {
+			this.formatSending = job;
+			this.saveState = "saving";
+			this.saveError = null;
+			this.emit();
+			try {
+				await this.sendFormats(job);
+			} catch (error) {
+				if (isNotFound(error)) await this.readTabs();
+				// The changes wait again, first, while their tab exists. A part that the server has gets
+				// the same formats again, because the changes apply in order.
+				if (!isRefused(error) && this.tabs.some((tab) => tab.id === job.tab)) this.formatWaiting.unshift(job);
+				this.formatSending = null;
+				this.view = null;
+				this.saveState = isConflict(error) ? "conflict" : "error";
+				this.saveError = error;
+				this.emit();
+				return false;
+			}
+			this.formatSending = null;
+			this.view = null;
+		}
+		return true;
+	}
+
+	/** Sends format changes in parts, in order. */
+	private async sendFormats(job: FormatJob): Promise<void> {
+		for (const part of formatParts(job.changes)) {
+			let answer: SheetData;
+			try {
+				answer = await this.api.format(part, this.server.get(job.tab)?.revision ?? 0, job.tab);
+			} catch (error) {
+				if (!isConflict(error)) throw error;
+				// Somebody changed the sheet after this page read the tab. A format change does not depend
+				// on the other cells, so it goes again on top of the new cells.
+				this.take(await this.api.get(job.tab), null);
+				this.emit();
+				answer = await this.api.format(part, this.server.get(job.tab)?.revision ?? 0, job.tab);
+			}
+			this.keepAnswer(job.tab, answer);
+		}
 	}
 
 	/** Gets the tabs again after a save to a tab that does not exist now. */
@@ -426,6 +547,11 @@ export class SheetStore {
 			this.emit();
 			answer = await this.api.update(cells, this.server.get(tab)?.revision ?? 0, tab);
 		}
+		this.keepAnswer(tab, answer);
+	}
+
+	/** Keeps the answer of a write to a tab: the item, the tabs, and the cells that changed. */
+	private keepAnswer(tab: string, answer: SheetData): void {
 		this.item = answer.item;
 		this.setTabs(answer.tabs, answer.revision);
 		// The answer has the changed cells only. They complete the cells of the revision that the write
@@ -438,13 +564,36 @@ export class SheetStore {
 		if (tab === this.active) this.view = null;
 	}
 
-	private makeSnapshot(): SheetSnapshot {
-		const cached = this.server.get(this.active);
-		this.view ??= viewCells(
-			cached?.cells ?? new Map(),
+	/** The cells and the formats of the active tab for the grid: the server state with the changes that wait on top. */
+	private makeView(): { cells: Map<string, ViewCell>; formats: Map<string, CellFormat> } {
+		const server = this.server.get(this.active)?.cells ?? new Map<string, Cell>();
+		const jobs = [this.formatSending, ...this.formatWaiting].filter((job) => job?.tab === this.active);
+		const formats = applyFormatChanges(
+			formatsOf(server),
+			jobs.flatMap((job) => job?.changes ?? []),
+		);
+		// The cells from the server get the formats that wait, so a number shows its new format at once.
+		let shown: ReadonlyMap<string, Cell> = server;
+		if (jobs.length > 0) {
+			const copy = new Map<string, Cell>();
+			for (const [name, cell] of server) {
+				const { format: _old, ...plain } = cell;
+				const format = formats.get(name);
+				copy.set(name, format ? { ...plain, format } : plain);
+			}
+			shown = copy;
+		}
+		const cells = viewCells(
+			shown,
 			this.sending?.tab === this.active ? this.sending.cells : NO_CHANGES,
 			this.waiting.get(this.active) ?? NO_CHANGES,
 		);
+		return { cells, formats };
+	}
+
+	private makeSnapshot(): SheetSnapshot {
+		const cached = this.server.get(this.active);
+		this.view ??= this.makeView();
 		return {
 			status: this.status,
 			loadError: this.loadError,
@@ -453,7 +602,8 @@ export class SheetStore {
 			tabs: this.tabs,
 			activeTab: this.active,
 			tabLoading: this.status === "ready" && (!cached || this.staleUntil.has(this.active)),
-			cells: this.view,
+			cells: this.view.cells,
+			formats: this.view.formats,
 			saveState: this.saveState,
 			saveError: this.saveError,
 		};

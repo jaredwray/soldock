@@ -349,7 +349,7 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 					role="toolbar"
 					aria-label="Formatting"
 					aria-controls={editorId}
-					className="doc-toolbar"
+					className="editor-toolbar"
 					onKeyDown={onToolbarKeyDown}
 				>
 					<select

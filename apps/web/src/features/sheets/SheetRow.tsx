@@ -1,5 +1,7 @@
-import { memo } from "react";
+import type { CellFormat } from "@soldock/contracts";
+import { type CSSProperties, memo } from "react";
 import type { ViewCell } from "./cells.ts";
+import { textColorOn } from "./formats.ts";
 
 // The rows of the grid. The grid is a table with the role `grid`, so each `tr` is a row, each `th`
 // is a column or row header and each `td` is a gridcell. Each row is a memo component, so a move of
@@ -44,6 +46,8 @@ interface SheetRowProps {
 	row: number;
 	names: readonly string[];
 	cells: ReadonlyMap<string, ViewCell>;
+	/** The format of each cell that has one, also of a cell without an input. */
+	formats: ReadonlyMap<string, CellFormat>;
 	/** The first and the last selected column of this row, or -1 when the row has no selected cell. */
 	left: number;
 	right: number;
@@ -51,16 +55,47 @@ interface SheetRowProps {
 	activeCol: number;
 }
 
-function cellClass(cell: ViewCell | undefined, selected: boolean, active: boolean): string {
+function cellClass(
+	cell: ViewCell | undefined,
+	format: CellFormat | undefined,
+	selected: boolean,
+	active: boolean,
+): string {
 	let name = "sheet-cell";
 	if (cell) name += ` sheet-cell-${cell.type}`;
+	if (format?.bold) name += " sheet-cell-bold";
+	if (format?.italic) name += " sheet-cell-italic";
+	if (format?.align) name += ` sheet-cell-align-${format.align}`;
+	if (format?.fill) name += " sheet-cell-filled";
+	if (format?.color || format?.fill) name += " sheet-cell-colored";
 	if (cell?.pending) name += " sheet-cell-pending";
 	if (selected) name += " sheet-cell-selected";
 	if (active) name += " sheet-cell-active";
 	return name;
 }
 
-export const SheetRow = memo(function SheetRow({ gridId, row, names, cells, left, right, activeCol }: SheetRowProps) {
+/**
+ * The colors of a cell, as custom properties for the style sheet. Text on a fill without its own
+ * color gets a color that is easy to read on the fill, also in the dark appearance.
+ */
+function colorStyle(format: CellFormat | undefined): CSSProperties | undefined {
+	if (!format?.color && !format?.fill) return undefined;
+	return {
+		"--cell-fill": format.fill,
+		"--cell-color": format.color ?? (format.fill ? textColorOn(format.fill) : undefined),
+	} as CSSProperties;
+}
+
+export const SheetRow = memo(function SheetRow({
+	gridId,
+	row,
+	names,
+	cells,
+	formats,
+	left,
+	right,
+	activeCol,
+}: SheetRowProps) {
 	const number = row + 1;
 	return (
 		<tr aria-rowindex={row + 2} className="sheet-row">
@@ -75,6 +110,7 @@ export const SheetRow = memo(function SheetRow({ gridId, row, names, cells, left
 			{names.map((column, col) => {
 				const name = `${column}${number}`;
 				const cell = cells.get(name);
+				const format = formats.get(name);
 				const selected = col >= left && col <= right;
 				return (
 					// biome-ignore lint/a11y/useAriaPropsSupportedByRole: a td in a table with the role grid is a gridcell, which has aria-selected.
@@ -83,7 +119,8 @@ export const SheetRow = memo(function SheetRow({ gridId, row, names, cells, left
 						id={cellId(gridId, name)}
 						aria-colindex={col + 2}
 						aria-selected={selected}
-						className={cellClass(cell, selected, col === activeCol)}
+						className={cellClass(cell, format, selected, col === activeCol)}
+						style={colorStyle(format)}
 						// The full input of an error cell, so a person can read the formula that failed.
 						title={cell?.type === "error" ? `${cell.text}: ${cell.input}` : undefined}
 						data-row={row}

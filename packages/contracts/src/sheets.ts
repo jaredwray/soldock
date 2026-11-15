@@ -16,6 +16,12 @@ export const SHEET_LIMITS = {
 	tabs: 50,
 	/** The characters of a tab name. Excel has the same limit, so an export to XLSX keeps each name. */
 	tabNameChars: 31,
+	/** The cells of one sheet that have a format, in all tabs. */
+	formats: 20_000,
+	/** The cells that one sheets.format_cells changes, as the sum of its ranges: each cell of a tab once. */
+	formatCellsPerCall: 52_000,
+	/** The digits after the decimal point that a number format can show. */
+	decimals: 10,
 } as const;
 
 /** The error values of a cell. A formula that uses an error cell gets the same error. */
@@ -37,6 +43,13 @@ const CellRef = z
 	.trim()
 	.toUpperCase()
 	.regex(/^[A-Z]{1,2}[1-9][0-9]{0,3}$/, "must be a cell such as B2, from A1 to AZ1000");
+
+/** A cell or a range of cells in A1 form, for example B2 or A1:D20. */
+const RangeRef = z
+	.string()
+	.trim()
+	.toUpperCase()
+	.regex(/^[A-Z]{1,2}[1-9][0-9]{0,3}(?::[A-Z]{1,2}[1-9][0-9]{0,3})?$/, "must be a cell or a range such as A1:D20");
 
 const CellInput = z.strictObject({
 	cell: CellRef,
@@ -78,13 +91,95 @@ export const Tab = z.object({
 });
 export type Tab = z.infer<typeof Tab>;
 
+/** The number formats of a cell. Without one, a number shows with at most 10 significant digits. */
+export const NUMBER_FORMATS = ["currency", "percent"] as const;
+/** The horizontal alignments of a cell. Without one, a number goes right, text left, and TRUE and FALSE in the center. */
+export const CELL_ALIGNS = ["left", "center", "right"] as const;
+
+/** The format of a cell. Each field is optional: a cell without a field has the default for it. */
+export const CellFormat = z.object({
+	/** currency shows $1,234.50. percent shows 0.125 as 12.50%. */
+	number_format: z.enum(NUMBER_FORMATS).optional(),
+	/** The digits after the decimal point. The default is 2 with a number format. */
+	decimals: z.number().int().optional(),
+	bold: z.boolean().optional(),
+	italic: z.boolean().optional(),
+	/** The color of the text, as #rrggbb. */
+	color: z.string().optional(),
+	/** The fill color of the cell, as #rrggbb. */
+	fill: z.string().optional(),
+	align: z.enum(CELL_ALIGNS).optional(),
+});
+export type CellFormat = z.infer<typeof CellFormat>;
+
+const Color = z
+	.string()
+	.regex(/^#[0-9a-fA-F]{6}$/, "must be a color such as #1d4ed8")
+	.transform((color) => color.toLowerCase());
+
+/** A change to the formats of a range. A field that is not given stays. null, or false, removes a field. */
+const FormatPatch = z.strictObject({
+	number_format: z.enum(NUMBER_FORMATS).nullable().optional(),
+	decimals: z.number().int().min(0).max(SHEET_LIMITS.decimals).nullable().optional(),
+	bold: z.boolean().optional(),
+	italic: z.boolean().optional(),
+	color: Color.nullable().optional(),
+	fill: Color.nullable().optional(),
+	align: z.enum(CELL_ALIGNS).nullable().optional(),
+});
+export type FormatPatch = z.output<typeof FormatPatch>;
+
+/** The fields of a format, in the order that the stored form and the output have them. */
+export const FORMAT_KEYS = ["number_format", "decimals", "bold", "italic", "color", "fill", "align"] as const;
+
+/**
+ * The format after a patch. A field that the patch does not give stays. null and false remove a
+ * field. The result is undefined when no field is left. The server and the web app use it, so both
+ * give a cell the same format.
+ */
+export function patchFormat(format: CellFormat | undefined, patch: FormatPatch): CellFormat | undefined {
+	const next: Record<string, unknown> = {};
+	for (const key of FORMAT_KEYS) {
+		const value = patch[key] === undefined ? format?.[key] : patch[key];
+		if (value !== null && value !== undefined && value !== false) next[key] = value;
+	}
+	return Object.keys(next).length > 0 ? (next as CellFormat) : undefined;
+}
+
+const numberFormats = new Map<number, Intl.NumberFormat>();
+
+/**
+ * The text of a number with the number format of a cell, for example $1,234.50 or 12.50%. Null when
+ * the format has no number format and no decimals: the number then shows as it is.
+ */
+export function formatCellNumber(value: number, format: CellFormat | undefined): string | null {
+	if (format?.number_format === undefined && format?.decimals === undefined) return null;
+	const digits = format.decimals ?? 2;
+	let style = numberFormats.get(digits);
+	if (!style) {
+		style = new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+		numberFormats.set(digits, style);
+	}
+	const scaled = format.number_format === "percent" ? value * 100 : value;
+	let text = style.format(scaled);
+	// A small negative number that rounds to zero shows as zero, without a minus.
+	if (/^-[0.,]+$/.test(text)) text = text.slice(1);
+	if (format.number_format === "percent") return `${text}%`;
+	if (format.number_format === "currency") return text.startsWith("-") ? `-$${text.slice(1)}` : `$${text}`;
+	return text;
+}
+
 export const Cell = z.object({
 	cell: z.string(),
-	/** The input of the cell, for example =SUM(A1:A3). Empty for a cell that the change cleared. */
+	/** The input of the cell, for example =SUM(A1:A3). Empty for a cell that the change cleared, or for a cell with only a format. */
 	input: z.string(),
 	/** The result: a number, a text, true or false, an error such as #DIV/0!, or null for an empty cell. */
 	value: z.union([z.number(), z.string(), z.boolean(), z.null()]),
 	type: z.enum(["number", "text", "boolean", "error", "empty"]),
+	/** The format of the cell. Only a cell that has a format has it. */
+	format: CellFormat.optional(),
+	/** The number as the grid shows it with the number format, for example $1,234.50. Only a number cell with a number format or decimals has it. */
+	text: z.string().optional(),
 });
 export type Cell = z.infer<typeof Cell>;
 
@@ -133,7 +228,7 @@ export const createSheet = defineOperation({
 export const getSheet = defineOperation({
 	name: "sheets.get",
 	summary: "Get the cells of a sheet",
-	description: `Returns each cell of one tab that has an input, with the input and the result of its formula. rows and columns give the last row and the last column of the tab that have a cell. Set range (for example A1:D20) to get only the cells in that range. ${TAB_NOTE} Set tab_id to read a different tab than the first. ${IN_SPACE}`,
+	description: `Returns each cell of one tab that has an input or a format, with the input, the result of its formula and the format. rows and columns give the last row and the last column of the tab that have a cell with an input. Set range (for example A1:D20) to get only the cells in that range. ${TAB_NOTE} Set tab_id to read a different tab than the first. ${IN_SPACE}`,
 	http: { method: "GET", path: "/api/v1/sheets/{item_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent"],
@@ -142,12 +237,7 @@ export const getSheet = defineOperation({
 		space_id: SpaceParam,
 		item_id: ItemId,
 		tab_id: TAB_PARAM,
-		range: z
-			.string()
-			.trim()
-			.toUpperCase()
-			.regex(/^[A-Z]{1,2}[1-9][0-9]{0,3}(?::[A-Z]{1,2}[1-9][0-9]{0,3})?$/, "must be a range such as A1:D20")
-			.optional(),
+		range: RangeRef.optional(),
 	}),
 	output: z.object({
 		item: DriveItem,
@@ -183,6 +273,45 @@ export const updateCells = defineOperation({
 		tab_id: TAB_PARAM,
 		cells: z.array(CellInput).min(1).max(SHEET_LIMITS.cellsPerUpdate),
 		base_revision: z.number().int().min(0).optional(),
+	}),
+	output: z.object({
+		item: DriveItem,
+		revision: z.number().int(),
+		tabs: z.array(Tab),
+		/** The tab of `cells`. */
+		tab_id: z.string(),
+		rows: z.number().int(),
+		columns: z.number().int(),
+		cells: z.array(Cell),
+	}),
+	errors: ["not_found", "invalid", "conflict", "payload_too_large"],
+});
+
+export const formatCells = defineOperation({
+	name: "sheets.format_cells",
+	summary: "Change the format of cells of a sheet",
+	description: [
+		"Changes the format of each cell in the given ranges of one tab: the number format, the decimals, bold, italic, the text color, the fill color and the alignment. You need the editor role.",
+		"Each change has a range (B2 or A1:D20) and the fields to change. A field that is not given stays. null, or false for bold and italic, removes the field. The changes apply in order.",
+		"number_format currency shows $1,234.50, and percent shows 0.125 as 12.50%. decimals is the count of digits after the decimal point: the default is 2 with a number format. Colors are #rrggbb.",
+		`A cell keeps its format when its input changes or is cleared. A sheet can have at most ${SHEET_LIMITS.formats} cells with a format, and one call can change at most ${SHEET_LIMITS.formatCellsPerCall} cells, counted as the sum of its ranges.`,
+		"The result has each cell of the tab whose format changed, with its format, and with text when a number format changes how its number shows.",
+		"Set tab_id to change a different tab than the first. Set base_revision to the revision that you read.",
+		IN_SPACE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/sheets/{item_id}/formats" },
+	scopes: ["drive.write"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		space_id: SpaceParam,
+		item_id: ItemId,
+		tab_id: TAB_PARAM,
+		formats: z
+			.array(z.strictObject({ range: RangeRef, format: FormatPatch }))
+			.min(1)
+			.max(SHEET_LIMITS.cellsPerUpdate),
+		base_revision: BASE_REVISION,
 	}),
 	output: z.object({
 		item: DriveItem,
@@ -326,6 +455,7 @@ export const sheetsOperations = {
 	"sheets.create": createSheet,
 	"sheets.get": getSheet,
 	"sheets.update_cells": updateCells,
+	"sheets.format_cells": formatCells,
 	"sheets.add_tab": addTab,
 	"sheets.rename_tab": renameTab,
 	"sheets.move_tab": moveTab,
