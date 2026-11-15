@@ -1,4 +1,4 @@
-import type { Scope } from "@soldock/contracts";
+import { operationList, SCOPES, type Scope } from "@soldock/contracts";
 import { audit, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
@@ -55,6 +55,31 @@ export function grantableScopes(
 		);
 	}
 	return [...new Set(requested)];
+}
+
+/** A scope that the credential does not hold, and the operations of the caller kind that need it. */
+export interface MissingScope {
+	scope: Scope;
+	description: string;
+	operations: string[];
+}
+
+/**
+ * The scopes that a credential of this kind can hold and this credential does not hold. Each one names
+ * the operations of the caller kind that need it. A scope that no such operation needs is left out. MCP
+ * lists only the tools that a credential can call, so this tells an agent which tools it cannot see.
+ */
+export function missingScopes(caller: AuthContext): MissingScope[] {
+	return scopeCeiling(caller.kind)
+		.filter((scope) => !caller.scopes.has(scope))
+		.map((scope) => ({
+			scope,
+			description: SCOPES[scope],
+			operations: operationList
+				.filter((operation) => operation.callers.includes(caller.kind) && operation.scopes.includes(scope))
+				.map((operation) => operation.name),
+		}))
+		.filter((missing) => missing.operations.length > 0);
 }
 
 export function auditOk(call: CallContext, op: string, target: string): void {

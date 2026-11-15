@@ -31,20 +31,37 @@ describe("the MCP endpoint", () => {
 	});
 
 	it("negotiates the protocol version and names the principal in its instructions", async () => {
-		const { bot } = await seedOrg();
-		const known = await mcp(bot.key, "initialize", {
-			protocolVersion: "2025-06-18",
-			capabilities: {},
-			clientInfo: { name: "t", version: "1" },
-		});
+		const { ada, bot } = await seedOrg();
+		const initialize = (key: string) =>
+			mcp(key, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "t", version: "1" },
+			});
+		const instructionsOf = (body: Record<string, unknown> | null) =>
+			((body?.result ?? {}) as { instructions?: string }).instructions ?? "";
+		const known = await initialize(bot.key);
 		expect(known.body?.result).toMatchObject({
 			protocolVersion: "2025-06-18",
 			capabilities: { tools: {} },
 			serverInfo: { name: "soldock" },
 		});
-		expect(((known.body?.result ?? {}) as { instructions?: string }).instructions).toContain("bot@dock.test");
+		expect(instructionsOf(known.body)).toContain("bot@dock.test");
+		// The key holds each agent scope, so no tool is hidden from it.
+		expect(instructionsOf(known.body)).not.toContain("does not hold");
 		const unknown = await mcp(bot.key, "initialize", { protocolVersion: "1999-01-01" });
 		expect(((unknown.body?.result ?? {}) as { protocolVersion?: string }).protocolVersion).toBe("2025-11-25");
+
+		// A narrow key learns which scopes it does not hold. The scopes of a key never change: it needs a new key.
+		const { api_key } = await ada.call("account.create_api_key", {
+			principal_id: bot.id,
+			label: "narrow",
+			scopes: ["account.read", "mail.read"],
+		});
+		const narrow = instructionsOf((await initialize(api_key.secret)).body);
+		expect(narrow).toContain("mail.send (1 tool)");
+		expect(narrow).toContain("can create a key with more scopes");
+		expect(narrow).not.toContain("account.keys");
 	});
 
 	// An agent must not see tools that would only refuse it, such as its own policy.
@@ -52,7 +69,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(91);
+		expect(all).toHaveLength(92);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
