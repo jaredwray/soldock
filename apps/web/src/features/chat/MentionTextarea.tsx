@@ -9,13 +9,14 @@ import {
 	useState,
 } from "react";
 import { initials, plural } from "../../lib/format.ts";
-import { recipientKeyAction } from "../mail/compose.ts";
 import {
 	insertMention,
+	liveMention,
 	type MentionDirectory,
 	type MentionSuggestion,
 	type MentionToken,
 	mentionAt,
+	mentionKeyAction,
 	mentionSuggestions,
 } from "./mentions.ts";
 
@@ -61,9 +62,7 @@ export function MentionTextarea({
 	const pendingCaret = useRef<number | null>(null);
 
 	const { directory, memberIds, ownId } = mentions;
-	// The parent can replace the text without a key in the field, for example after a send. A mention
-	// that is not in the text now has no list.
-	const live = token && value[token.start] === "@" && token.end <= value.length ? token : null;
+	const live = liveMention(value, token);
 	const suggestions = useMemo(
 		() => (live ? mentionSuggestions(directory, live.query, { memberIds, ownId }) : []),
 		[live, directory, memberIds, ownId],
@@ -92,22 +91,31 @@ export function MentionTextarea({
 		setToken(null);
 		// The field keeps its limit: a mention that does not fit is not inserted.
 		if (maxLength !== undefined && next.value.length > maxLength) return;
+		if (next.value === value) {
+			// The text stays the same, so React writes no new value and the layout effect does not run.
+			fieldRef.current?.setSelectionRange(next.caret, next.caret);
+			return;
+		}
 		pendingCaret.current = next.caret;
 		onValueChange(next.value);
 	}
 
 	function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-		// A key during text composition belongs to the input method.
-		if (!event.nativeEvent.isComposing) {
-			const action = recipientKeyAction(event.key, event.shiftKey, { open, active, count: suggestions.length });
-			// Tab takes a suggestion and keeps the focus in the field, so the person can write on.
-			if (action.preventDefault || action.kind === "take") event.preventDefault();
-			if (action.kind === "select") setSelected({ query: live?.query ?? "", index: action.index });
-			else if (action.kind === "take") choose(suggestions[action.index] as MentionSuggestion);
-			else if (action.kind === "close") setToken(null);
-			if (action.kind !== "none") return;
+		// Safari gives the key that ends a text composition the code 229, without `isComposing`.
+		const composing = event.nativeEvent.isComposing || event.keyCode === 229;
+		const action = mentionKeyAction(event.key, event.shiftKey, composing, {
+			open,
+			active,
+			count: suggestions.length,
+		});
+		if (action.kind === "none") {
+			onKeyDown?.(event);
+			return;
 		}
-		onKeyDown?.(event);
+		event.preventDefault();
+		if (action.kind === "select") setSelected({ query: live?.query ?? "", index: action.index });
+		else if (action.kind === "take") choose(suggestions[action.index] as MentionSuggestion);
+		else setToken(null);
 	}
 
 	return (
@@ -139,7 +147,9 @@ export function MentionTextarea({
 				}}
 			/>
 			<span className="visually-hidden" role="status">
-				{open ? `${plural(suggestions.length, "suggestion")}. Use the arrow keys, and Enter to take one.` : ""}
+				{open
+					? `${plural(suggestions.length, "suggestion")}. Use the arrow keys, Enter to take one, and Escape to close the list.`
+					: ""}
 			</span>
 			{open && (
 				<div

@@ -272,6 +272,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	const [state, setState] = useState<RoomState>(ROOM_LOADING);
 	const alive = useRef(true);
 	const loads = useRef(0);
+	/** The number of reads of the members. Only the last read applies. A load of the room counts as a read. */
+	const memberReads = useRef(0);
 	const shown = useRef(state);
 	shown.current = state;
 	const roomChanged = useRef(onRoomChanged);
@@ -303,6 +305,7 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		// Two loads can run at the same time, for example after a reload. Only the last one applies, so
 		// an older answer never replaces newer messages or moves the version of the sync back.
 		const request = ++loads.current;
+		memberReads.current += 1;
 		const current = () => alive.current && request === loads.current;
 		try {
 			const { room, members } = await api.call("chat.get_room", { room_id: roomId });
@@ -337,9 +340,11 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 
 	/** Gets the members again after the socket told that they changed. */
 	const loadMembers = useCallback(async () => {
+		const request = ++memberReads.current;
 		try {
 			const { members } = await api.call("chat.get_room", { room_id: roomId });
-			if (alive.current) setState((current) => (current.status === "ready" ? { ...current, members } : current));
+			if (!alive.current || request !== memberReads.current) return;
+			setState((current) => (current.status === "ready" ? { ...current, members } : current));
 		} catch {
 			// The members are only for the suggestions of a mention. The next load of the room gets them.
 		}

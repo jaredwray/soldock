@@ -327,9 +327,9 @@ app uses.
   - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Write.** `chat_post_message` takes plain text. Set `idempotency_key`, so a retry does not post
   the text two times. `chat_mark_read` sets what you read.
-- **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the part of
-  the address before the `@`, for example `@ada` for `ada@example.com`. When two principals have the
-  same part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
+- **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the local
+  part of the address, for example `@ada` for `ada@example.com`. When two principals have the same
+  local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
   gives the addresses. The web app shows a mention as a link to the profile. A mention is text only:
   it sends no notification.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each

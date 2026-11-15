@@ -60,9 +60,14 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 		);
 	}
 	if (!person) {
+		// The directory always has the person who reads, so an empty list is a read that failed.
 		return (
 			<div className="list-state">
-				<p role="alert">This person or agent is not in the directory.</p>
+				<p role="alert">
+					{principals.length === 0
+						? "The directory did not load. Reload the page to try again."
+						: "This person or agent is not in the directory."}
+				</p>
 				<Link to={chatPath()} className="button">
 					Go to your rooms
 				</Link>

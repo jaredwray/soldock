@@ -173,7 +173,7 @@ const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld
 
 const MEMBERS_ONLY = "You must be a member of the room.";
 const MENTIONS =
-	"To mention a person or an agent, write @ and the part of its address before the @, for example @ada. When two principals have the same part, write the full address, for example @ada@example.org. The web app shows a mention as a link to the profile.";
+	"To mention a person or an agent, write @ and the local part of its address, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The web app shows a mention as a link to the profile.";
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
 export const listRooms = defineOperation({

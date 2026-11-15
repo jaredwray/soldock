@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	insertMention,
+	liveMention,
 	type MentionPerson,
 	mentionAt,
 	mentionDirectory,
+	mentionKeyAction,
 	mentionSuggestions,
 	textParts,
 } from "../src/features/chat/mentions.ts";
@@ -60,6 +62,7 @@ describe("the mentions in the text of a message", () => {
 		for (const text of [
 			"mail captain@example.com",
 			"https://example.com/@captain",
+			"https://example.com/?u=@captain",
 			"@captainx",
 			"@ada",
 			"@captain@other.example",
@@ -70,13 +73,13 @@ describe("the mentions in the text of a message", () => {
 });
 
 describe("the mention that the person types", () => {
-	it("starts at an @ after a space or at the start, and ends at the end of its word", () => {
+	it("starts at an @ after a space or at the start, and ends at the caret", () => {
 		expect(mentionAt("@", 1)).toEqual({ start: 0, end: 1, query: "" });
 		expect(mentionAt("hi @cap", 7)).toEqual({ start: 3, end: 7, query: "cap" });
 		expect(mentionAt("hi @Élo", 7)).toEqual({ start: 3, end: 7, query: "Élo" });
 		expect(mentionAt("hi @ada@ex", 10)).toEqual({ start: 3, end: 10, query: "ada@ex" });
-		// The caret in the middle of a mention: the full word is replaced.
-		expect(mentionAt("hi @captain now", 6)).toEqual({ start: 3, end: 11, query: "ca" });
+		// The text after the caret is not part of the mention, so a suggestion keeps it.
+		expect(mentionAt("@capthanks", 4)).toEqual({ start: 0, end: 4, query: "cap" });
 	});
 
 	it("is null in an address, after a space, and before the @", () => {
@@ -108,18 +111,70 @@ describe("the suggestions for a mention", () => {
 			["ada@example.org", false],
 			["captain", false],
 		]);
-		expect(mentionSuggestions(DIRECTORY, "", { memberIds: new Set(), ownId: ADA.id, limit: 1 })).toHaveLength(1);
+	});
+
+	it("shows eight suggestions at most", () => {
+		const many = mentionDirectory(
+			Array.from({ length: 10 }, (_, index) => person(`p${index}`, `Person ${index}`, `p${index}@example.com`)),
+		);
+		expect(mentionSuggestions(many, "", { memberIds: new Set(), ownId: ADA.id })).toHaveLength(8);
 	});
 });
 
 describe("a suggestion that the person takes", () => {
-	it("replaces the typed text with the handle and one space, and puts the caret after the space", () => {
+	function take(text: string, caret: number) {
+		const token = mentionAt(text, caret);
+		if (!token) throw new Error(`no mention in ${text}`);
+		return insertMention(text, token, "captain");
+	}
+
+	// The text after the caret must stay: a person often puts a mention before text that exists.
+	it("replaces only the typed text, and puts one space and the caret after the mention", () => {
+		expect(take("hi @cap", 7)).toEqual({ value: "hi @captain ", caret: 12 });
+		expect(take("@capthanks for the help", 4)).toEqual({ value: "@captain thanks for the help", caret: 9 });
+		expect(take("hi @cap@ada", 7)).toEqual({ value: "hi @captain @ada", caret: 12 });
+		// A space after the mention stays, and gets no second one. The caret goes after it.
+		expect(take("hi @cap now", 7)).toEqual({ value: "hi @captain now", caret: 12 });
+		// A mark that ends a word gets no space before it. The caret goes before the mark.
+		expect(take("hi @cap.", 7)).toEqual({ value: "hi @captain.", caret: 11 });
+		expect(take("(@cap)", 5)).toEqual({ value: "(@captain)", caret: 9 });
+	});
+});
+
+describe("the keys of the field", () => {
+	const open = { open: true, active: 1, count: 3 };
+
+	// Enter must take a suggestion and not send, and Escape must close the list and not the edit box.
+	it("gives the keys to the list while it is open, and to the field otherwise", () => {
+		const cases: [string, boolean, boolean, typeof open, ReturnType<typeof mentionKeyAction>][] = [
+			["Enter", false, false, open, { kind: "take", index: 1 }],
+			["Tab", false, false, open, { kind: "take", index: 1 }],
+			["Escape", false, false, open, { kind: "close" }],
+			["ArrowDown", false, false, open, { kind: "select", index: 2 }],
+			["ArrowUp", false, false, { ...open, active: 0 }, { kind: "select", index: 2 }],
+			// The list is closed: Enter sends, and Escape closes the edit box.
+			["Enter", false, false, { ...open, open: false }, { kind: "none" }],
+			["Escape", false, false, { ...open, open: false }, { kind: "none" }],
+			// A key during text composition belongs to the input method.
+			["Enter", false, true, open, { kind: "none" }],
+			["Tab", true, false, open, { kind: "none" }],
+			["a", false, false, open, { kind: "none" }],
+		];
+		for (const [key, shift, composing, list, action] of cases) {
+			expect([key, composing, list, mentionKeyAction(key, shift, composing, list)]).toEqual([
+				key,
+				composing,
+				list,
+				action,
+			]);
+		}
+	});
+
+	// After a send, the parent empties the field without a key in it. The list must close.
+	it("closes the list when the text no longer has the mention", () => {
 		const token = mentionAt("hi @cap", 7);
-		if (!token) throw new Error("no mention");
-		expect(insertMention("hi @cap", token, "captain")).toEqual({ value: "hi @captain ", caret: 12 });
-		// The text after the mention keeps its space, and gets no second one.
-		const inside = mentionAt("hi @cap now", 7);
-		if (!inside) throw new Error("no mention");
-		expect(insertMention("hi @cap now", inside, "captain")).toEqual({ value: "hi @captain now", caret: 12 });
+		expect(liveMention("hi @cap", token)).toBe(token);
+		expect(liveMention("", token)).toBeNull();
+		expect(liveMention("hi cap", token)).toBeNull();
 	});
 });

@@ -1,4 +1,5 @@
 import type { Principal } from "@soldock/contracts";
+import { recipientKeyAction } from "../mail/compose.ts";
 
 // The pure rules of mentions in Chat. They have no DOM and no network, so apps/web/test checks them.
 //
@@ -25,14 +26,17 @@ const DOMAIN = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-
 const HANDLE = new RegExp(`^${LOCAL}(?:@${DOMAIN})?$`, "i");
 /**
  * The "@" of a mention cannot come after a letter, a digit, a part of an address or a "/". So an
- * address such as ada@example.com and a link such as https://example.com/@ada have no mention.
+ * address such as ada@example.com has no mention. `inLink` removes the mentions in a link.
  */
 const NOT_AFTER = "(?<![\\p{L}\\p{N}_.+\\-/@])";
 const MENTION = new RegExp(`${NOT_AFTER}@(${LOCAL})(?:@(${DOMAIN}))?`, "giu");
 /** The text from the "@" to the caret, while the person types a mention. A name can have each letter. */
 const TYPED = new RegExp(`${NOT_AFTER}@([\\p{L}\\p{N}._+\\-]*(?:@[\\p{L}\\p{N}.\\-]*)?)$`, "u");
-/** The rest of the mention after the caret. */
-const TAIL = /^[\p{L}\p{N}._+\-@]*/u;
+/**
+ * The text after a mention that needs no space between: a space, or a mark that ends a word. A "."
+ * ends a word only when no letter or digit follows it.
+ */
+const ENDS_WORD = /^(?:[\s,;:!?)\]}'"’”]|\.(?![\p{L}\p{N}]))/u;
 
 function localPart(address: string): string {
 	return address.slice(0, address.lastIndexOf("@"));
@@ -72,9 +76,17 @@ export interface TextPart<P extends MentionPerson = MentionPerson> {
 	person: P | null;
 }
 
+/** True when the character at `at` is in a word with "://": a link, such as https://example.com/?u=@ada. */
+function inLink(text: string, at: number): boolean {
+	let start = at;
+	while (start > 0 && !/\s/.test(text.charAt(start - 1))) start -= 1;
+	return text.slice(start, at).includes("://");
+}
+
 /**
  * The text of a message in parts: plain text, and the mentions of principals in the directory. A
- * handle that the directory does not have stays plain text. The parts together are the full text.
+ * handle that the directory does not have stays plain text, as does a mention in a link. The parts
+ * together are the full text.
  */
 export function textParts<P extends MentionPerson>(text: string, directory: MentionDirectory<P>): TextPart<P>[] {
 	const parts: TextPart<P>[] = [];
@@ -83,7 +95,7 @@ export function textParts<P extends MentionPerson>(text: string, directory: Ment
 		const whole = match[0];
 		const [, local = "", domain] = match;
 		const person = directory.byHandle.get((domain ? `${local}@${domain}` : local).toLowerCase());
-		if (!person) continue;
+		if (!person || inLink(text, match.index)) continue;
 		if (match.index > last) parts.push({ text: text.slice(last, match.index), person: null });
 		parts.push({ text: whole, person });
 		last = match.index + whole.length;
@@ -92,19 +104,29 @@ export function textParts<P extends MentionPerson>(text: string, directory: Ment
 	return parts;
 }
 
-/** The mention that the person types: from its "@" (`start`) to its end (`end`), and the text before the caret. */
+/**
+ * The mention that the person types: from its "@" (`start`) to the caret (`end`), and the text
+ * between. A suggestion replaces this text only, so the text after the caret stays.
+ */
 export interface MentionToken {
 	start: number;
 	end: number;
 	query: string;
 }
 
-/** The mention at the caret, or null when the caret is not in a mention. */
+/** The mention before the caret, or null when the caret is not at the end of a typed mention. */
 export function mentionAt(text: string, caret: number): MentionToken | null {
 	const match = TYPED.exec(text.slice(0, caret));
 	if (!match) return null;
-	const tail = TAIL.exec(text.slice(caret))?.[0] ?? "";
-	return { start: match.index, end: caret + tail.length, query: match[1] ?? "" };
+	return { start: match.index, end: caret, query: match[1] ?? "" };
+}
+
+/**
+ * The token while the text still has it, or null. The parent of the field can replace the text
+ * without a key in the field, for example after a send. The list then closes.
+ */
+export function liveMention(text: string, token: MentionToken | null): MentionToken | null {
+	return token && text.charAt(token.start) === "@" && token.end <= text.length ? token : null;
 }
 
 /** Lowercase, without accents, so "e" finds "É". */
@@ -136,7 +158,7 @@ export interface MentionSuggestion<P extends MentionPerson = MentionPerson> {
 }
 
 /** The suggestions that the list shows at most. */
-export const MENTION_SUGGESTIONS = 8;
+const MENTION_SUGGESTIONS = 8;
 
 /**
  * The principals for a typed mention. A match at the start of a handle, an address or a word of the
@@ -146,7 +168,7 @@ export const MENTION_SUGGESTIONS = 8;
 export function mentionSuggestions<P extends MentionPerson>(
 	directory: MentionDirectory<P>,
 	query: string,
-	options: { memberIds: ReadonlySet<string>; ownId: string; limit?: number },
+	options: { memberIds: ReadonlySet<string>; ownId: string },
 ): MentionSuggestion<P>[] {
 	const typed = fold(query);
 	const found: (MentionSuggestion<P> & { rank: number })[] = [];
@@ -162,7 +184,7 @@ export function mentionSuggestions<P extends MentionPerson>(
 			Number(b.member) - Number(a.member) ||
 			a.person.display_name.localeCompare(b.person.display_name),
 	);
-	return found.slice(0, options.limit ?? MENTION_SUGGESTIONS).map(({ person, handle, member }) => ({
+	return found.slice(0, MENTION_SUGGESTIONS).map(({ person, handle, member }) => ({
 		person,
 		handle,
 		member,
@@ -170,15 +192,49 @@ export function mentionSuggestions<P extends MentionPerson>(
 }
 
 /**
- * The text after the person takes a suggestion: the mention replaces the typed text, with one space
- * after it. `caret` is the position after that space.
+ * The text after the person takes a suggestion. The mention replaces the typed text. A space goes
+ * after it, unless the text after it starts with a space or with a mark that ends a word. `caret` is
+ * the position after the mention and its space.
  */
 export function insertMention(text: string, token: MentionToken, handle: string): { value: string; caret: number } {
 	const after = text.slice(token.end);
-	const space = /^\s/.test(after) ? "" : " ";
 	const mention = `@${handle}`;
-	return {
-		value: `${text.slice(0, token.start)}${mention}${space}${after}`,
-		caret: token.start + mention.length + 1,
-	};
+	const ends = ENDS_WORD.exec(after)?.[0];
+	const space = ends === undefined ? " " : "";
+	const caret = token.start + mention.length + (ends === undefined || /^\s$/.test(ends) ? 1 : 0);
+	return { value: `${text.slice(0, token.start)}${mention}${space}${after}`, caret };
+}
+
+/** What a key does in a field with the list of suggestions. */
+export type MentionKeyAction =
+	| { kind: "none" }
+	| { kind: "select"; index: number }
+	| { kind: "take"; index: number }
+	| { kind: "close" };
+
+/**
+ * The action of a key in the field. The keys of the list are the keys of the address list of the
+ * Mail composer, with one change: Tab takes a suggestion and keeps the focus in the field.
+ *
+ * Each action other than "none" replaces the usual action of the key. So Enter does not send and
+ * Escape does not close the edit box while the list is open. A key during text composition belongs
+ * to the input method.
+ */
+export function mentionKeyAction(
+	key: string,
+	shiftKey: boolean,
+	composing: boolean,
+	list: { open: boolean; active: number; count: number },
+): MentionKeyAction {
+	if (composing) return { kind: "none" };
+	const action = recipientKeyAction(key, shiftKey, list);
+	switch (action.kind) {
+		case "select":
+		case "take":
+			return { kind: action.kind, index: action.index };
+		case "close":
+			return { kind: "close" };
+		default:
+			return { kind: "none" };
+	}
 }

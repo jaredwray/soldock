@@ -651,26 +651,33 @@ MCP clients. The app has no UI-only path.
     `@ada@example.org`. The room stores only the text. `mentions.ts` has the rules.
     - In a message, a mention of a principal in the directory is a link to the profile of that
       principal. A mention of the person who reads has a yellow fill. A handle that the directory
-      does not have stays text. An address (`ada@example.com`) and a link
-      (`https://example.com/@ada`) have no mention.
+      does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
+      is a link, and its mentions stay text.
     - The box for a new message and the edit box of a message suggest people and agents while the
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
     - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
       closes the list. While the list is open, Enter does not send, and Escape does not close the
-      edit box. The mention gets one space after it.
+      edit box. So a send after a full handle needs a second Enter.
+    - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
+      space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
+      follows it.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
     - The page reads the directory one time (`directory.list_principals`). The members of the
       room come from `chat.get_room`, and again after the socket tells that the room changed.
-    - Known limit: a mention is text, so it does not follow a change of an address. A handle of a
-      deleted principal can later be the handle of a new principal.
+    - Known limit: a mention is text, and each client finds its principal in the directory of
+      that time. So a mention does not follow a change of an address. When a second principal
+      gets the same local part, each old mention of the short handle stays text. A handle of a
+      deleted principal can later be the handle of a new principal. Server-side mentions are
+      part of layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
   - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
     place of a room: the avatar, the name, the handle, the address, the role in the organization
     or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
     direct message with that principal (`chat.open_dm`). An archived principal and the own profile
     have no such button. A mention, the name of an author and the sponsor of an agent link here.
+    When the directory does not load, the profile tells so.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of

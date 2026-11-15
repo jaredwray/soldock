@@ -95,7 +95,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   read mentions. It stores no mention, counts none and sends no notification. A client finds the
   principal of a handle in the directory: the web app shows a link to the profile
   ([`apps/web`](../../../web/README.md)). The description of `chat.post_message` tells agents the
-  form.
+  form. A later layer stores the principals of the mentions with the message and returns them in
+  the output: layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message
