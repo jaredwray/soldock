@@ -51,8 +51,9 @@ function numbersNextTo(pos: CellPos, cellAt: (name: string) => ViewCell | undefi
  * - A range with more than one row: one formula below each column of the range.
  * - A range with one row: one formula to the right of the range.
  *
- * A formula never replaces an input: when a cell for a result is not empty, or is outside the
- * sheet, nothing changes.
+ * For a range, a formula never replaces an input: when a cell for a result is not empty, or is
+ * outside the sheet, nothing changes. For one cell, the edit replaces the input only when the
+ * person saves it, as a typed input does.
  */
 export function autoSum(
 	fn: SumFunction,

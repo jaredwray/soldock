@@ -453,8 +453,9 @@ export function SheetEditor({
 					replay(event.shiftKey ? "redo" : "undo");
 				} else if (command && key === "y") {
 					replay("redo");
-				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠")) {
-					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠.
+				} else if (event.altKey && !command && (event.key === "=" || event.key === "≠" || event.code === "Equal")) {
+					// Alt+= adds a SUM, as in other spreadsheets. On a Mac, ⌥= types ≠, or a different
+					// character on some layouts, so the key of = also counts.
 					insertFunction("SUM");
 				} else if (!command && !event.altKey && event.key.length === 1 && !locked) {
 					// A typed character starts an edit that replaces the input of the cell.
@@ -673,7 +674,7 @@ export function SheetEditor({
 			<p id={hintId} className="visually-hidden">
 				{readOnly
 					? "Use the arrow keys to move. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."
-					: "Use the arrow keys to move. Press Enter to change a cell. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."}
+					: "Use the arrow keys to move. Press Enter to change a cell. Press Alt with = to add a SUM. Press Alt with the up or down arrow to go to a different tab. Press Escape, then Tab, to leave the grid."}
 			</p>
 		</div>
 	);

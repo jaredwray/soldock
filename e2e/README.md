@@ -25,6 +25,9 @@ The first flows to cover, because they are tested by hand only:
   file, the share dialog with a second person, a new doc with text and formats that stays after a
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.
+  The Sheets toolbar: Undo and Redo and their state, each Σ function on one cell, on a range of rows
+  and on one row, a refusal over an input, `Alt+=`, the keys of the toolbar and its open menu, no
+  toolbar for a viewer, and the 44px buttons on a touch screen.
 
 - Admin: each section of the side navigation, a deep link to a section, `/admin` as an owner and
   as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
