@@ -110,6 +110,11 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 		});
 		outboxes.set(name, outbox);
 		keepSaved(outbox, ownId, roomId);
+		// The messages from before a reload must go first. The outbox waits for them.
+		if (!restored.has(ownId)) {
+			outbox.pause();
+			void restoreOutboxes(ownId);
+		}
 	}
 	return outbox;
 }
@@ -128,21 +133,37 @@ function keepSaved(outbox: Outbox, ownId: string, roomId: string): void {
 	});
 }
 
-/** The people whose messages from before the reload are in the outboxes of this page. */
+/** The longest wait for the store of the browser. After it, the outboxes send without the saved messages. */
+const RESTORE_WAIT_MS = 2000;
+
+/** The read of the saved messages of each person of this page. It runs one time for each person. */
+const restores = new Map<string, Promise<void>>();
+/** The people whose saved messages are in the outboxes. */
 const restored = new Set<string>();
 
 /**
  * Puts the messages of the person that waited before a reload of the page into the outbox of each
  * room. Each one goes out again with its key, also for a room that the person does not open.
+ *
+ * Until the read ends, each outbox of the person starts no call. So a message that the person sends
+ * in that time goes out after the messages from before the reload.
  */
-export async function restoreOutboxes(ownId: string): Promise<void> {
-	if (restored.has(ownId)) return;
-	restored.add(ownId);
-	const byRoom = new Map<string, Awaited<ReturnType<typeof loadSaved>>>();
-	for (const record of await loadSaved(ownId))
-		byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
-	if (currentAccount() !== ownId) return;
-	for (const [roomId, records] of byRoom) outboxOf(ownId, roomId).restore(fromSaved(records, Date.now()));
+export function restoreOutboxes(ownId: string): Promise<void> {
+	let restore = restores.get(ownId);
+	if (!restore) {
+		restore = (async () => {
+			const wait = new Promise<[]>((resolve) => setTimeout(() => resolve([]), RESTORE_WAIT_MS));
+			const records = await Promise.race([loadSaved(ownId), wait]);
+			if (currentAccount() !== ownId) return;
+			restored.add(ownId);
+			const byRoom = new Map<string, typeof records>();
+			for (const record of records) byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
+			for (const [roomId, saved] of byRoom) outboxOf(ownId, roomId).restore(fromSaved(saved, Date.now()));
+			for (const [name, outbox] of outboxes) if (name.startsWith(`${ownId}/`)) outbox.resume();
+		})();
+		restores.set(ownId, restore);
+	}
+	return restore;
 }
 
 // The page sends each call with the session of its person. After a sign-out, or a sign-in as a
@@ -150,6 +171,7 @@ export async function restoreOutboxes(ownId: string): Promise<void> {
 onAccountChange(() => {
 	for (const outbox of outboxes.values()) outbox.stop();
 	outboxes.clear();
+	restores.clear();
 	restored.clear();
 });
 

@@ -606,7 +606,9 @@ MCP clients. The app has no UI-only path.
   - The messages that wait stay when the person opens a different room, and after a reload of the
     page. The page keeps them in IndexedDB ([Data inventory](#data-inventory)).
   - After a reload, the Chat page puts each message back in the line of its room, before the
-    messages that the person writes after the reload. A message that waited, or whose call ran,
+    messages that the person writes after the reload. The read of the store takes a moment. Until
+    it ends, at most 2 seconds, no outbox of the person starts a call, so a message that the person
+    writes in that time goes out after the messages from before. A message that waited, or whose call ran,
     goes out again with the same key, also for a room that the person does not open. A failed
     message shows "Not sent" again.
   - A message that waited more than 12 hours does not go out by itself. It shows "Not sent", and

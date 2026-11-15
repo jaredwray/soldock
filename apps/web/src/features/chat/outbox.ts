@@ -79,6 +79,14 @@ export interface Outbox {
 	 * outbox has is not added a second time.
 	 */
 	restore(messages: readonly PendingMessage[]): void;
+	/**
+	 * Starts no new call until `resume`. The page reads the messages from before a reload from the
+	 * store of the browser, which takes a moment. A message that the person sends in that time must
+	 * go out after them.
+	 */
+	pause(): void;
+	/** Starts the calls again after `pause`. */
+	resume(): void;
 	/** Sends a failed message again, with the same key. */
 	retry(key: string): void;
 	/** Removes a message that failed or that waits. A message whose call runs stays. */
@@ -118,6 +126,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
 	const listeners = new Set<() => void>();
 	let view: OutboxView | null = null;
 	let stopped = false;
+	let paused = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	function change(next: Partial<OutboxState>): void {
@@ -185,7 +194,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
 
 	/** Starts the call of the first message that waits, when no call runs. */
 	function pump(): void {
-		if (stopped || state.sendingKey !== null) return;
+		if (stopped || paused || state.sendingKey !== null) return;
 		const next = state.pending.find((message) => message.state === "waiting");
 		if (!next) return;
 		// A send that the person sends again keeps the start of its first call: the server can have
@@ -226,6 +235,13 @@ export function createOutbox(options: OutboxOptions): Outbox {
 			const added = messages.filter((message) => !known.has(message.key));
 			if (added.length === 0) return;
 			change({ pending: [...added, ...state.pending] });
+			pump();
+		},
+		pause() {
+			paused = true;
+		},
+		resume() {
+			paused = false;
 			pump();
 		},
 		retry(key) {

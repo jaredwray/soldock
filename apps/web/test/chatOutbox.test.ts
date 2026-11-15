@@ -276,4 +276,32 @@ describe("the outbox of a room", () => {
 		expect(room.pending()).toEqual([["Not sent before", "failed"]]);
 		expect(room.calls).toHaveLength(2);
 	});
+
+	// The read of the store takes a moment. A message that the person sends in that time must not go out first.
+	it("starts no call while it waits for the messages from before a reload, and sends them first", async () => {
+		const room = fakeRoom();
+		room.outbox.pause();
+		room.outbox.send("Written during the read of the store");
+		expect(room.calls).toHaveLength(0);
+		expect(room.pending()).toEqual([["Written during the read of the store", "waiting"]]);
+		room.outbox.restore([
+			{
+				key: "old-1",
+				text: "Waited before the reload",
+				created_at: "2026-01-01T08:00:00.000Z",
+				state: "waiting",
+				error: null,
+				uncertain: false,
+				afterSeq: null,
+			},
+		]);
+		expect(room.calls).toHaveLength(0);
+		room.outbox.resume();
+		expect(room.calls.map((call) => call.text)).toEqual(["Waited before the reload"]);
+		await room.calls[0]?.succeed();
+		expect(room.calls.map((call) => call.text)).toEqual([
+			"Waited before the reload",
+			"Written during the read of the store",
+		]);
+	});
 });
