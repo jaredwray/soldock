@@ -176,6 +176,22 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
 }
 
 /**
+ * The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets
+ * always win. The contract refuses a custom header with a reserved name in any case.
+ */
+async function postHeaders(row: WebhookRow, id: string, timestamp: string, body: string): Promise<Headers> {
+	const headers = new Headers();
+	if (row.header_name !== null && row.header_value !== null) headers.set(row.header_name, row.header_value);
+	if (row.auth_key !== null) headers.set("authorization", `Bearer ${row.auth_key}`);
+	headers.set("content-type", "application/json");
+	headers.set("user-agent", "Soldock-Webhooks/1");
+	headers.set("webhook-id", id);
+	headers.set("webhook-timestamp", timestamp);
+	headers.set("webhook-signature", await webhookSignature(row.secret, id, timestamp, body));
+	return headers;
+}
+
+/**
  * Sends the signed POST. `ok` for a 2xx answer, `gone` for 410, and otherwise the code of the failure. The
  * POST never follows a redirect, and the response body is never read.
  */
@@ -188,13 +204,7 @@ async function post(row: WebhookRow, job: WebhookDeliveryJob): Promise<"ok" | "g
 	try {
 		response = await fetch(row.url, {
 			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"user-agent": "Soldock-Webhooks/1",
-				"webhook-id": id,
-				"webhook-timestamp": timestamp,
-				"webhook-signature": await webhookSignature(row.secret, id, timestamp, body),
-			},
+			headers: await postHeaders(row, id, timestamp, body),
 			body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(WEBHOOK_LIMITS.timeoutMs),

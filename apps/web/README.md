@@ -298,6 +298,11 @@ MCP clients. The app has no UI-only path.
   unless the person selects them.
   - A new webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
     once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
+  - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
+    custom header (a name and a value). Both are password fields, and the list shows only that a key
+    is set and the name of the header.
+  - **Edit** shows on the webhooks that you created (`mail.update_webhook`). It changes the label, and
+    keeps, replaces or removes the auth key and the header.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
     at the right. A key shows its label above its scopes. A webhook shows its label above its URL.

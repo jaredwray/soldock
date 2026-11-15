@@ -160,8 +160,11 @@ protocol version and on REST.
    { "url": "https://hooks.example.com/soldock", "label": "support bot" }
    ```
 
-   Set `mailbox_id` to watch a team mailbox that you are a member of.
-3. Keep the `secret` of the result (`whsec_…`) on your server. Soldock shows it only once.
+   Set `mailbox_id` to watch a team mailbox that you are a member of. If your server checks a token,
+   set `auth_key`: Soldock sends it as `Authorization: Bearer <key>`. To send one more header, set
+   `header`, for example `{ "name": "X-Api-Key", "value": "…" }`.
+3. Keep the `secret` of the result (`whsec_…`) on your server. Soldock shows it only once. The auth
+   key and the header value are never shown again either: replace them with `mail_update_webhook`.
 4. Read the inbox one time with `mail_list_threads`. Mail that arrived before the webhook existed
    sends no POST.
 5. On each POST, verify the signature, then read the inbox with `mail_list_threads`.
