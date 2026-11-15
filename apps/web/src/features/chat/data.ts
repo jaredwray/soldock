@@ -133,7 +133,10 @@ function keepSaved(outbox: Outbox, ownId: string, roomId: string): void {
 	});
 }
 
-/** The longest wait for the store of the browser. After it, the outboxes send without the saved messages. */
+/**
+ * The longest time that the outboxes wait for the store of the browser. After it, they send, and the
+ * saved messages go into the lines when the read ends.
+ */
 const RESTORE_WAIT_MS = 2000;
 
 /** The read of the saved messages of each person of this page. It runs one time for each person. */
@@ -155,15 +158,28 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 	if (!restore) {
 		restore = (async () => {
 			const started = accountChanges;
-			const wait = new Promise<[]>((resolve) => setTimeout(() => resolve([]), RESTORE_WAIT_MS));
-			const records = await Promise.race([loadSaved(ownId), wait]);
 			// The person signed out during the read. A sign-out removes the saved messages, so the records
 			// of this read must not go out, also when the same person signed in again.
-			if (accountChanges !== started || currentAccount() !== ownId) return;
+			const current = () => accountChanges === started && currentAccount() === ownId;
+			const add = (records: Awaited<ReturnType<typeof loadSaved>>) => {
+				const byRoom = new Map<string, typeof records>();
+				for (const record of records) byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
+				for (const [roomId, saved] of byRoom) outboxOf(ownId, roomId).restore(fromSaved(saved, Date.now()));
+			};
+			const loading = loadSaved(ownId);
+			const wait = new Promise<null>((resolve) => setTimeout(() => resolve(null), RESTORE_WAIT_MS));
+			const records = await Promise.race([loading, wait]);
+			if (!current()) return;
 			restored.add(ownId);
-			const byRoom = new Map<string, typeof records>();
-			for (const record of records) byRoom.set(record.roomId, [...(byRoom.get(record.roomId) ?? []), record]);
-			for (const [roomId, saved] of byRoom) outboxOf(ownId, roomId).restore(fromSaved(saved, Date.now()));
+			if (records) {
+				add(records);
+			} else {
+				// The store is slow. The outboxes send now, and the saved messages go into the lines when
+				// the read ends: a message from before the reload must not stay out of the page.
+				void loading.then((late) => {
+					if (current()) add(late);
+				});
+			}
 			for (const [name, outbox] of outboxes) if (name.startsWith(`${ownId}/`)) outbox.resume();
 		})();
 		restores.set(ownId, restore);

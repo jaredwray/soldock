@@ -608,7 +608,8 @@ MCP clients. The app has no UI-only path.
   - After a reload, the Chat page puts each message back in the line of its room, before the
     messages that the person writes after the reload. The read of the store takes a moment. Until
     it ends, at most 2 seconds, no outbox of the person starts a call, so a message that the person
-    writes in that time goes out after the messages from before. A message that waited, or whose call ran,
+    writes in that time goes out after the messages from before. When the read takes longer, the
+    outboxes send, and the saved messages go into the lines when the read ends. A message that waited, or whose call ran,
     goes out again with the same key, also for a room that the person does not open. A failed
     message shows "Not sent" again.
   - A message that waited more than 12 hours does not go out by itself. It shows "Not sent", and
