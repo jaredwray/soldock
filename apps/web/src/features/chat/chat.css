@@ -323,6 +323,22 @@
 	color: var(--muted-foreground);
 }
 
+/* A message that the server does not have yet shows lighter. A message whose send failed shows a
+   line with the reason, and the actions to send it again or to remove it. */
+.chat-message-pending .chat-text {
+	color: var(--muted-foreground);
+}
+
+.chat-send-failed {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	align-items: baseline;
+	margin: 2px 0 0;
+	color: var(--negative);
+	font-size: 13px;
+}
+
 .chat-edited {
 	font-size: 12px;
 }
