@@ -73,6 +73,12 @@ export interface Outbox {
 	attach(view: OutboxView | null): void;
 	/** Adds a message to the end of the line. */
 	send(text: string): void;
+	/**
+	 * Puts the messages from before a reload of the page at the start of the line, in their order.
+	 * They are older than each message that the person sent after the reload. A message that the
+	 * outbox has is not added a second time.
+	 */
+	restore(messages: readonly PendingMessage[]): void;
 	/** Sends a failed message again, with the same key. */
 	retry(key: string): void;
 	/** Removes a message that failed or that waits. A message whose call runs stays. */
@@ -212,6 +218,14 @@ export function createOutbox(options: OutboxOptions): Outbox {
 				afterSeq: null,
 			};
 			change({ pending: [...state.pending, message] });
+			pump();
+		},
+		restore(messages) {
+			if (stopped) return;
+			const known = new Set(state.pending.map((message) => message.key));
+			const added = messages.filter((message) => !known.has(message.key));
+			if (added.length === 0) return;
+			change({ pending: [...added, ...state.pending] });
 			pump();
 		},
 		retry(key) {

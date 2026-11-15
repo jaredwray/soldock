@@ -9,7 +9,7 @@ import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
-import { type RoomsState, useRooms } from "./data.ts";
+import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { RoomView } from "./RoomView.tsx";
@@ -28,6 +28,12 @@ type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
 	const [dialog, setDialog] = useState<ChatDialog>(null);
+	const ownId = useSession().whoami.principal.id;
+
+	// The messages that waited for the server before a reload of the page go out again.
+	useEffect(() => {
+		void restoreOutboxes(ownId);
+	}, [ownId]);
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {

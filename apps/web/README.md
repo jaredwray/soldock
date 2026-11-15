@@ -603,8 +603,17 @@ MCP clients. The app has no UI-only path.
     when the person writes its text again. Two failed sends with the same text get no stored
     message: the page cannot know which of them the server has. **Try again** gives the correct
     answer for each one.
-  - The messages that wait stay while the page stays, also when the person opens a different room.
-    They go away on a reload of the page. A later change keeps them.
+  - The messages that wait stay when the person opens a different room, and after a reload of the
+    page. The page keeps them in IndexedDB ([Data inventory](#data-inventory)).
+  - After a reload, the Chat page puts each message back in the line of its room, before the
+    messages that the person writes after the reload. A message that waited, or whose call ran,
+    goes out again with the same key, also for a room that the person does not open. A failed
+    message shows "Not sent" again.
+  - A message that waited more than 12 hours does not go out by itself. It shows "Not sent", and
+    the person decides. The room keeps an idempotency key for 24 hours, so an attempt after that
+    time can make a second message.
+  - Two tabs of the same person can send the same message after a reload. The two attempts have
+    the same key, so the room has the message one time.
   - The messages that wait are for one person. After a sign-out, or a sign-in as a different
     person, the page removes them and sends nothing more: each later call has the session of the
     new person (`lib/account.ts`).
@@ -861,6 +870,16 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 | Where | Key | What |
 | --- | --- | --- |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
+| IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
+
+- The store has the messages of one person at most. A sign-out, the end of the session, and a
+  sign-in as a different person remove the records of the person from before. This runs also when
+  the Chat page did not load.
+- Known limit: when a session ends while no tab is open, the records stay in the browser until the
+  next sign-in. A sign-in as the same person shows them again. A sign-in as a different person
+  removes them.
+- A browser without IndexedDB, or that refuses it, keeps the messages in the memory of the page
+  only, as before.
 
 The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
 from the operations.

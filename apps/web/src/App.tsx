@@ -3,11 +3,16 @@ import { endSession } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
+import { forgetOthers } from "./features/chat/outboxStore.ts";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
-import { setAccount } from "./lib/account.ts";
+import { currentAccount, onAccountChange, setAccount } from "./lib/account.ts";
 import { api, onUnauthenticated } from "./lib/api.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
+
+// The browser keeps the chat messages of a person that wait for the server. They go away when the
+// person signs out, and when a different person signs in. This runs also when the Chat page did not load.
+onAccountChange(() => void forgetOthers(currentAccount()));
 
 /**
  * Boot checks setup before session authentication. A setup token also permits a fresh start.
