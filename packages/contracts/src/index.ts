@@ -37,6 +37,11 @@ export {
 	type ItemKind,
 	PathEntry,
 	Permission,
+	SHARED_DRIVE_LIMITS,
+	SHARED_DRIVE_ROLES,
+	SharedDrive,
+	SharedDriveMember,
+	type SharedDriveRole,
 } from "./drive.ts";
 export { ERRORS, type ErrorCode, isErrorCode } from "./errors.ts";
 export {

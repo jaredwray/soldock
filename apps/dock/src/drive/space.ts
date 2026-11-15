@@ -1,5 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import { DRIVE_LIMITS, type DriveRole, type ItemKind } from "@soldock/contracts";
+import {
+	DRIVE_LIMITS,
+	type DriveRole,
+	type ItemKind,
+	SHARED_DRIVE_LIMITS,
+	type SharedDriveRole,
+} from "@soldock/contracts";
 import { log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -17,9 +23,55 @@ export interface ActorRecord {
  * the caller can do with each item, because the grants are in its database.
  */
 export interface SpaceCall {
-	/** The id of this drive: the id of the principal that owns it. */
+	/** The id of this drive: the id of the principal that owns it, or the id of a shared drive. */
 	spaceId: string;
 	actor: ActorRecord;
+	/**
+	 * True when the caller is a person with the owner or the admin role of the organization. It lets the
+	 * caller manage the members and the name of a shared drive. It gives no access to an item.
+	 */
+	admin?: boolean;
+}
+
+/** True for the id of a shared drive. A personal drive has the id of its owner. */
+export function isSharedDriveId(spaceId: string): boolean {
+	return spaceId.startsWith("drv_");
+}
+
+/** One member of a shared drive. Times are in milliseconds. */
+export interface MemberRecord {
+	principal_id: string;
+	role: SharedDriveRole;
+	added_by: ActorRecord | null;
+	created_at: number;
+}
+
+/** A shared drive with its members, as the object returns it. */
+export interface SharedDriveRecord {
+	id: string;
+	name: string;
+	created_at: number;
+	/** The member role of the caller, or null for an admin who is not a member. */
+	role: SharedDriveRole | null;
+	members: MemberRecord[];
+}
+
+/** A new member, or a new role for a member. The Worker reads the kind from the directory. */
+export interface MemberInput {
+	principalId: string;
+	kind: "human" | "agent";
+	role: SharedDriveRole;
+}
+
+/** The totals of a drive, with the role of the caller for it. */
+export interface AboutRecord {
+	kind: "personal" | "shared";
+	name: string | null;
+	role: DriveRole;
+	used_bytes: number;
+	items_total: number;
+	trash_total: number;
+	version: number;
 }
 
 /** An item as the object returns it. Times are in milliseconds. */
@@ -141,6 +193,21 @@ interface OutboxRow extends Row {
 	next_attempt_at: number;
 }
 
+/** A row of the index in D1 that is behind this drive: `drive`, or `member:<principal id>`. */
+interface IndexRow extends Row {
+	target: string;
+	gen: number;
+	attempts: number;
+}
+
+/** The stored facts of a shared drive, in the `drive` row of `meta`. */
+interface DriveFacts {
+	name: string;
+	created_at: number;
+	created_by: ActorRecord;
+	deleted_at: number | null;
+}
+
 /** What a caller can do with one item, and if the caller can read the folder that holds it. */
 interface Access {
 	role: DriveRole;
@@ -224,6 +291,23 @@ const MIGRATIONS: string[][] = [
 			created_at INTEGER NOT NULL
 		)`,
 	],
+	[
+		// The members of a shared drive. A personal drive has no rows here.
+		`CREATE TABLE members (
+			principal_id TEXT PRIMARY KEY,
+			role TEXT NOT NULL CHECK (role IN ('manager', 'editor', 'viewer')),
+			added_by_json TEXT,
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		// The rows of the index in D1 that are behind this shared drive: `drive`, or `member:<principal id>`.
+		`CREATE TABLE index_outbox (
+			target TEXT PRIMARY KEY,
+			gen INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT
+		) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -233,7 +317,16 @@ const MAX_INDEXED_CHARS = 100_000;
 /** The most folders that an ancestor walk reads. The depth limit keeps real trees far below this. */
 const WALK_LIMIT = 64;
 
-const RANK: Record<DriveRole, number> = { viewer: 1, editor: 2, owner: 3 };
+const INDEX_BATCH = 100;
+/** The most passes of one write to the index. The next write continues. */
+const INDEX_ROUNDS = 10;
+/**
+ * The time that the object can be without an alarm after a change, if it stops during the write to the
+ * index. The end of each write moves this alarm.
+ */
+const ALARM_GUARD_MS = 30_000;
+
+const RANK: Record<DriveRole, number> = { viewer: 1, editor: 2, manager: 3, owner: 4 };
 
 const ITEM_COLUMNS = `i.seq, i.id, i.parent_id, i.kind, i.name, i.name_key, i.mime_type, i.size, i.head_version_id,
 	i.content_revision, i.created_at, i.modified_at, i.modified_by_json, i.trashed_at, i.trash_root,
@@ -256,6 +349,9 @@ const DOWN = `WITH RECURSIVE down (id, depth) AS (
 const NOT_FOUND = "No item has that id, or you have no access to it.";
 const OWN_DRIVE_ONLY = "Only the owner of a drive can do this, in their own drive.";
 const IN_TRASH = "The item is in the trash. Restore it first.";
+const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
+const LAST_MANAGER =
+	"A shared drive needs at least one manager who is a person. Give a different person the manager role first.";
 
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 	return { error: { code, message } };
@@ -310,7 +406,9 @@ function ftsQuery(text: string): string | null {
 }
 
 /**
- * One drive, keyed by the id of the principal that owns it. It holds the item tree, the versions of
+ * One drive, keyed by the id of the principal that owns it, or by the id of a shared drive (`drv_…`).
+ * A shared drive has members with roles in place of an owner, and it writes its name and its members
+ * to an index in D1 for the lists. It holds the item tree, the versions of
  * each file, the grants, the trash and the search index in its SQLite database. File bytes stay in R2.
  * It also holds the state of its owner as a user: the stars, and the index of the items that others
  * shared. Effects on other objects (the shared index of a different drive, R2 deletes, the content of
@@ -319,6 +417,8 @@ function ftsQuery(text: string): string | null {
 export class DriveSpaceDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private drainTask: Promise<void> | null = null;
+	/** The end of the line of index writes. Each write starts after the one before it ends. */
+	private flushed: Promise<void> = Promise.resolve();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -327,7 +427,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			this.migrate();
 			// A change sets the alarm after its transaction commits. If the object stopped between the
 			// two, the outbox has rows and no alarm: set one now.
-			const pending = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0;
+			const pending =
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0) +
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n ?? 0);
 			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
 	}
@@ -375,6 +477,36 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return call.actor.principal_id === call.spaceId;
 	}
 
+	/** The role of a principal as a member of this shared drive, or null. A personal drive has no member. */
+	private memberRole(principalId: string): SharedDriveRole | null {
+		return (
+			this.one<{ role: SharedDriveRole }>("SELECT role FROM members WHERE principal_id = ?", principalId)?.role ?? null
+		);
+	}
+
+	/** The highest role of this drive: the owner of a personal drive, a manager of a shared drive. */
+	private top(call: SpaceCall): "owner" | "manager" {
+		return isSharedDriveId(call.spaceId) ? "manager" : "owner";
+	}
+
+	/**
+	 * The refusal for a caller that cannot do an action on the drive as a whole, or null. A personal
+	 * drive lets only its owner do it. A shared drive lets a member with the `need` role do it. A grant
+	 * on an item does not count here.
+	 */
+	private gate(call: SpaceCall, need: SharedDriveRole): Refusal | null {
+		if (!isSharedDriveId(call.spaceId)) return this.isOwner(call) ? null : refuse("forbidden", OWN_DRIVE_ONLY);
+		const role = this.memberRole(call.actor.principal_id);
+		if (role === null) return refuse("not_found", NO_DRIVE);
+		if (RANK[role] < RANK[need]) {
+			return refuse(
+				"forbidden",
+				`You have the ${role} role in this shared drive. This needs the ${need} role. Ask a manager of the drive.`,
+			);
+		}
+		return null;
+	}
+
 	private row(itemId: string): ItemRow | null {
 		return this.one<ItemRow>(`SELECT ${ITEM_COLUMNS} FROM items i WHERE i.id = ?`, itemId);
 	}
@@ -383,15 +515,30 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * What the caller can do with an item, or null when the caller has no access. The owner of the
 	 * drive is the owner of each item. Each other caller gets the highest role from the grants on the
 	 * item and on the folders above it. An item in the trash exists for its owner only.
+	 *
+	 * A shared drive has no owner. A member gets the higher of its member role and its grants. An item in
+	 * the trash exists for the members with the editor or the manager role only.
 	 */
 	private access(call: SpaceCall, item: ItemRow): Access | null {
 		if (this.isOwner(call)) return { role: "owner", parentVisible: true, visibleDepth: WALK_LIMIT };
+		const member = isSharedDriveId(call.spaceId) ? this.memberRole(call.actor.principal_id) : null;
+		if (member === "manager" || member === "editor") {
+			return { role: member, parentVisible: true, visibleDepth: WALK_LIMIT };
+		}
 		if (item.trash_root !== null) return null;
 		const grants = this.all<{ role: "editor" | "viewer"; depth: number }>(
 			`${UP} SELECT p.role AS role, up.depth AS depth FROM up JOIN permissions p ON p.item_id = up.id WHERE p.principal_id = ?2`,
 			item.id,
 			call.actor.principal_id,
 		);
+		// A member with the viewer role reads each item. A grant can make that member an editor of one item.
+		if (member !== null) {
+			return {
+				role: grants.some((grant) => grant.role === "editor") ? "editor" : "viewer",
+				parentVisible: true,
+				visibleDepth: WALK_LIMIT,
+			};
+		}
 		if (grants.length === 0) return null;
 		const visibleDepth = Math.max(...grants.map((grant) => grant.depth));
 		return {
@@ -411,7 +558,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				"forbidden",
 				need === "owner"
 					? "Only the owner of this item can do this."
-					: `You have the ${access.role} role for this item. This needs the ${need} role. Ask the owner of the item.`,
+					: need === "manager"
+						? "Only a manager of this shared drive can do this."
+						: `You have the ${access.role} role for this item. This needs the ${need} role. Ask the owner of the item.`,
 			);
 		}
 		return { item, access };
@@ -480,9 +629,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	// --- Read -----------------------------------------------------------------------------------
 
-	about(call: SpaceCall): { used_bytes: number; items_total: number; trash_total: number; version: number } | Refusal {
+	about(call: SpaceCall): AboutRecord | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "viewer");
+		if (refused) return refused;
+		const shared = isSharedDriveId(call.spaceId);
 		const versions = this.one<{ n: number }>("SELECT COALESCE(SUM(size), 0) AS n FROM versions")?.n ?? 0;
 		const native =
 			this.one<{ n: number }>("SELECT COALESCE(SUM(size), 0) AS n FROM items WHERE kind IN ('doc', 'sheet')")?.n ?? 0;
@@ -490,6 +641,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			"SELECT COUNT(*) FILTER (WHERE trash_root IS NULL) AS live, COUNT(*) FILTER (WHERE trash_root IS NOT NULL) AS trash FROM items",
 		);
 		return {
+			kind: shared ? "shared" : "personal",
+			name: shared ? (this.facts()?.name ?? null) : null,
+			role: shared ? (this.memberRole(call.actor.principal_id) as SharedDriveRole) : "owner",
 			used_bytes: versions + native,
 			items_total: counts?.live ?? 0,
 			trash_total: counts?.trash ?? 0,
@@ -510,7 +664,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	): Page<ItemRecord> | Refusal {
 		this.enter(call);
 		if (input.parentId === null) {
-			if (!this.isOwner(call)) {
+			if (isSharedDriveId(call.spaceId)) {
+				const refused = this.gate(call, "viewer");
+				if (refused) return refused;
+			} else if (!this.isOwner(call)) {
 				return refuse("forbidden", "You can list the root of your own drive only. Use the shared view.");
 			}
 		} else {
@@ -562,7 +719,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { items: this.records(call, page), nextCursor };
 	}
 
-	/** The views of the own drive that are not a folder: the newest changes, the trash, and a search. */
+	/**
+	 * The views of a drive that are not a folder: the newest changes, the trash, and a search. A personal
+	 * drive has them for its owner. A shared drive has the search for each member, and the trash for the
+	 * members with the editor or the manager role.
+	 */
 	listView(
 		call: SpaceCall,
 		input: {
@@ -574,7 +735,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		},
 	): Page<ItemRecord> | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		if (isSharedDriveId(call.spaceId) && input.view === "recent") {
+			return refuse("invalid", "A shared drive has no recent view.");
+		}
+		const refused = this.gate(call, input.view === "trash" ? "editor" : "viewer");
+		if (refused) return refused;
 		const params: SqlStorageValue[] = [];
 		const where: string[] = [];
 		let from = "items i";
@@ -706,6 +871,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	checkCreate(call: SpaceCall, parentId: string | null): { depth: number } | Refusal {
 		this.enter(call);
 		if (parentId === null) {
+			if (isSharedDriveId(call.spaceId)) return this.gate(call, "editor") ?? { depth: 1 };
 			if (!this.isOwner(call)) return refuse("forbidden", "You can create an item at the root of your own drive only.");
 			return { depth: 1 };
 		}
@@ -836,6 +1002,38 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	private async schedule(): Promise<void> {
 		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n) await this.ctx.storage.setAlarm(Date.now());
+	}
+
+	/**
+	 * Stores the id of something that a call with an idempotency key creates outside this drive, for
+	 * example a shared drive. A second call with the same key and the same request gets the first id.
+	 * The key is in the own drive of the caller, with the keys of the items.
+	 */
+	reserveId(call: SpaceCall, key: string, requestHash: string, id: string): { id: string } | Refusal {
+		this.enter(call);
+		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const now = Date.now();
+		const row = this.one<{ request_hash: string; item_id: string }>(
+			"SELECT request_hash, item_id FROM idempotency WHERE key = ? AND created_at > ?",
+			key,
+			now - IDEMPOTENCY_TTL_MS,
+		);
+		if (row) {
+			return row.request_hash === requestHash
+				? { id: row.item_id }
+				: refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
+			this.sql.exec(
+				"INSERT OR REPLACE INTO idempotency (key, request_hash, item_id, created_at) VALUES (?, ?, ?, ?)",
+				key,
+				requestHash,
+				id,
+				now,
+			);
+		});
+		return { id };
 	}
 
 	/** Creates a folder, a file with its first version, a doc or a sheet. */
@@ -999,7 +1197,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Moves items into a folder, or to the root. The call moves each item or no item. */
 	move(call: SpaceCall, itemIds: string[], parentId: string | null): ItemRecord[] | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "editor");
+		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		const target = this.checkCreate(call, parentId);
 		if ("error" in target) return target;
@@ -1073,7 +1272,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Puts items in the trash. A folder hides all that it holds. Nothing is deleted. */
 	trash(call: SpaceCall, itemIds: string[], dryRun: boolean): { items_changed: number } | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "editor");
+		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		const rows: ItemRow[] = [];
 		for (const id of ids) {
@@ -1108,7 +1308,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Takes items out of the trash. An item whose folder is gone or in the trash goes to the root. */
 	restore(call: SpaceCall, itemIds: string[]): { items_changed: number } | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "editor");
+		if (refused) return refused;
 		const rows: ItemRow[] = [];
 		const wanted = new Set(itemIds);
 		for (const id of wanted) {
@@ -1142,7 +1343,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Deletes items that are in the trash, with all that a folder holds. This cannot be undone. */
 	async remove(call: SpaceCall, itemIds: string[], dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "manager");
+		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		for (const id of ids) {
 			const item = this.row(id);
@@ -1162,7 +1364,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	async emptyTrash(call: SpaceCall, dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		const refused = this.gate(call, "manager");
+		if (refused) return refused;
 		const ids = this.all<{ id: string }>("SELECT id FROM items WHERE trash_root = id").map((row) => row.id);
 		if (dryRun || ids.length === 0) return { items_changed: ids.length };
 		return this.remove(call, ids, false);
@@ -1207,7 +1410,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		role: "editor" | "viewer",
 	): Promise<PermissionRecord | Refusal> {
 		this.enter(call);
-		const found = this.open(call, itemId, "owner");
+		const found = this.open(call, itemId, this.top(call));
 		if ("error" in found) return found;
 		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
 		if (principalId === call.spaceId) return refuse("invalid", "You own this item. It needs no grant for you.");
@@ -1241,11 +1444,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		};
 	}
 
-	/** Removes a grant from an item. The owner removes each grant. A principal removes its own grant. */
+	/**
+	 * Removes a grant from an item. The owner of a personal drive, or a manager of a shared drive, removes
+	 * each grant. A principal removes its own grant.
+	 */
 	async unshare(call: SpaceCall, itemId: string, principalId: string): Promise<{ removed: boolean } | Refusal> {
 		this.enter(call);
 		const self = call.actor.principal_id === principalId;
-		const found = this.open(call, itemId, self ? "viewer" : "owner");
+		const found = this.open(call, itemId, self ? "viewer" : this.top(call));
 		if ("error" in found) return found;
 		let removed = false;
 		this.ctx.storage.transactionSync(() => {
@@ -1258,6 +1464,393 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		});
 		await this.schedule();
 		return { removed };
+	}
+
+	// --- Shared drive ---------------------------------------------------------------------------
+
+	private facts(): DriveFacts | null {
+		const json = this.meta("drive");
+		return json === null ? null : (JSON.parse(json) as DriveFacts);
+	}
+
+	private memberRows(): MemberRecord[] {
+		return this.all<{ principal_id: string; role: SharedDriveRole; added_by_json: string | null; created_at: number }>(
+			"SELECT principal_id, role, added_by_json, created_at FROM members ORDER BY created_at, principal_id",
+		).map((row) => ({
+			principal_id: row.principal_id,
+			role: row.role,
+			added_by: parseActor(row.added_by_json),
+			created_at: row.created_at,
+		}));
+	}
+
+	private driveRecord(call: SpaceCall, facts: DriveFacts): SharedDriveRecord {
+		return {
+			id: call.spaceId,
+			name: facts.name,
+			created_at: facts.created_at,
+			role: this.memberRole(call.actor.principal_id),
+			members: this.memberRows(),
+		};
+	}
+
+	/**
+	 * The facts of this shared drive, when the caller can do an action on its members or its name. `need`
+	 * is the least that the caller must be: a member, a manager, or an admin of the organization. An
+	 * admin always passes. A caller that is not a member and not an admin gets `not_found`.
+	 */
+	private manage(call: SpaceCall, need: "member" | "manager" | "admin"): DriveFacts | Refusal {
+		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
+		if (!facts || facts.deleted_at !== null) return refuse("not_found", NO_DRIVE);
+		if (call.admin === true) return facts;
+		const role = this.memberRole(call.actor.principal_id);
+		if (role === null) return refuse("not_found", NO_DRIVE);
+		if (need === "admin") return refuse("forbidden", "Only owners and admins of the organization can do this.");
+		if (need === "manager" && role !== "manager") {
+			return refuse("forbidden", "Only a manager of this shared drive, an owner or an admin can do this.");
+		}
+		return facts;
+	}
+
+	/** The refusal for a list of members that the rules do not allow, or null. */
+	private badMembers(members: MemberInput[]): Refusal | null {
+		if (new Set(members.map((member) => member.principalId)).size !== members.length) {
+			return refuse("invalid", "members names a person or an agent two times.");
+		}
+		if (members.some((member) => member.kind === "agent" && member.role === "manager")) {
+			return refuse(
+				"invalid",
+				"An agent cannot be a manager of a shared drive. Give it the editor or the viewer role.",
+			);
+		}
+		return null;
+	}
+
+	/**
+	 * The managers of this drive that the directory does not have now. They do not count for the rule
+	 * that a drive keeps one manager. The read of the directory is not in the step of the change, so a
+	 * manager that a call adds during the read counts as a manager.
+	 */
+	private async goneManagers(): Promise<Set<string>> {
+		const managers = this.all<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'manager'").map(
+			(row) => row.principal_id,
+		);
+		if (managers.length === 0) return new Set();
+		const { results } = await this.env.DIRECTORY.prepare(
+			"SELECT p.id FROM principals p JOIN json_each(?) wanted ON wanted.value = p.id WHERE p.deleted_at IS NULL",
+		)
+			.bind(JSON.stringify(managers))
+			.all<{ id: string }>();
+		const live = new Set(results.map((row) => row.id));
+		return new Set(managers.filter((id) => !live.has(id)));
+	}
+
+	/** True when the drive has a manager that is not in `gone`. */
+	private hasManager(gone: Set<string>): boolean {
+		return this.all<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'manager'").some(
+			(row) => !gone.has(row.principal_id),
+		);
+	}
+
+	private putMember(member: MemberInput, actor: string, now: number): void {
+		const changed = this.sql.exec(
+			`INSERT INTO members (principal_id, role, added_by_json, created_at) VALUES (?1, ?2, ?3, ?4)
+			ON CONFLICT (principal_id) DO UPDATE SET role = excluded.role WHERE role != excluded.role`,
+			member.principalId,
+			member.role,
+			actor,
+			now,
+		).rowsWritten;
+		if (changed > 0) this.touch(`member:${member.principalId}`);
+	}
+
+	/**
+	 * Makes this object a shared drive, with its first members. Only an owner or an admin of the
+	 * organization can do this. A second call for the same drive changes nothing and returns the drive
+	 * as it is now, so a retry of the Worker is safe.
+	 */
+	async createSharedDrive(
+		call: SpaceCall,
+		input: { name: string; members: MemberInput[] },
+	): Promise<{ drive: SharedDriveRecord; duplicate: boolean } | Refusal> {
+		if (!isSharedDriveId(call.spaceId)) throw new Error("the id is not the id of a shared drive");
+		if (call.admin !== true) {
+			return refuse("forbidden", "Only owners and admins of the organization can create a shared drive.");
+		}
+		this.enter(call);
+		const earlier = this.facts();
+		if (earlier) {
+			if (earlier.deleted_at !== null) return refuse("conflict", "The shared drive of this call does not exist now.");
+			// The first call can stop before the write to the index. The retry does that write.
+			await this.flush();
+			return { drive: this.driveRecord(call, earlier), duplicate: true };
+		}
+		const bad = this.badMembers(input.members);
+		if (bad) return bad;
+		if (!input.members.some((member) => member.role === "manager")) {
+			return refuse("invalid", "members must have at least one person with the manager role.");
+		}
+		if (input.members.length > SHARED_DRIVE_LIMITS.members) {
+			return refuse("invalid", `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.`);
+		}
+		const now = Date.now();
+		const facts: DriveFacts = { name: input.name, created_at: now, created_by: call.actor, deleted_at: null };
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta("drive", JSON.stringify(facts));
+			const actor = JSON.stringify(call.actor);
+			for (const member of input.members) this.putMember(member, actor, now);
+			this.touch("drive");
+			this.bump();
+		});
+		await this.flush();
+		return { drive: this.driveRecord(call, facts), duplicate: false };
+	}
+
+	/** The shared drive and its members, for a member, an owner or an admin. */
+	sharedDrive(call: SpaceCall): SharedDriveRecord | Refusal {
+		this.enter(call);
+		const facts = this.manage(call, "member");
+		return "error" in facts ? facts : this.driveRecord(call, facts);
+	}
+
+	async renameSharedDrive(call: SpaceCall, name: string): Promise<SharedDriveRecord | Refusal> {
+		this.enter(call);
+		const facts = this.manage(call, "manager");
+		if ("error" in facts) return facts;
+		if (facts.name === name) return this.driveRecord(call, facts);
+		const renamed = { ...facts, name };
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta("drive", JSON.stringify(renamed));
+			this.touch("drive");
+			this.bump();
+		});
+		await this.flush();
+		return this.driveRecord(call, renamed);
+	}
+
+	/**
+	 * Gives each principal of the list a role. A principal that is a member gets the new role. The call
+	 * makes each change or no change. `changed` has the principals whose role is new.
+	 */
+	async setMembers(
+		call: SpaceCall,
+		members: MemberInput[],
+	): Promise<{ drive: SharedDriveRecord; changed: MemberInput[] } | Refusal> {
+		this.enter(call);
+		const allowed = this.manage(call, "manager");
+		if ("error" in allowed) return allowed;
+		const bad = this.badMembers(members);
+		if (bad) return bad;
+		const demotes = members.some(
+			(member) => member.role !== "manager" && this.memberRole(member.principalId) === "manager",
+		);
+		const gone = demotes ? await this.goneManagers() : new Set<string>();
+		// The read of the directory let other calls in. Each check from here is in one step with the change.
+		const facts = this.manage(call, "manager");
+		if ("error" in facts) return facts;
+		const changed = members.filter((member) => this.memberRole(member.principalId) !== member.role);
+		const added = changed.filter((member) => this.memberRole(member.principalId) === null).length;
+		const count = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM members")?.n ?? 0;
+		if (count + added > SHARED_DRIVE_LIMITS.members) {
+			return refuse("invalid", `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.`);
+		}
+		// The managers after the change: a new manager counts, and a manager with a lower role does not.
+		const demoted = new Set(changed.filter((member) => member.role !== "manager").map((member) => member.principalId));
+		if (!changed.some((member) => member.role === "manager") && !this.hasManager(new Set([...gone, ...demoted]))) {
+			return refuse("invalid", LAST_MANAGER);
+		}
+		if (changed.length > 0) {
+			this.ctx.storage.transactionSync(() => {
+				const actor = JSON.stringify(call.actor);
+				const now = Date.now();
+				for (const member of changed) this.putMember(member, actor, now);
+				this.touch("drive");
+				this.bump();
+			});
+		}
+		await this.flush();
+		return { drive: this.driveRecord(call, facts), changed };
+	}
+
+	/**
+	 * Removes a member. A manager, an owner or an admin removes each member. A member removes itself.
+	 * The last manager stays.
+	 */
+	async removeMember(call: SpaceCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
+		this.enter(call);
+		const self = call.actor.principal_id === principalId;
+		const allowed = this.manage(call, self ? "member" : "manager");
+		if ("error" in allowed) return allowed;
+		const gone = this.memberRole(principalId) === "manager" ? await this.goneManagers() : new Set<string>();
+		const facts = this.manage(call, self ? "member" : "manager");
+		if ("error" in facts) return facts;
+		const role = this.memberRole(principalId);
+		if (role === null) return { removed: false };
+		if (role === "manager" && !this.hasManager(new Set([...gone, principalId]))) {
+			return refuse("invalid", LAST_MANAGER);
+		}
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+			this.touch(`member:${principalId}`);
+			this.touch("drive");
+			this.bump();
+		});
+		await this.flush();
+		return { removed: true };
+	}
+
+	/**
+	 * Deletes this shared drive. Only an owner or an admin of the organization can do this, and only
+	 * when the drive holds no item, also in its trash. The members go, and the index gets `deleted_at`.
+	 * A second call changes nothing.
+	 */
+	async deleteSharedDrive(call: SpaceCall): Promise<{ deleted: boolean } | Refusal> {
+		this.enter(call);
+		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
+		if (!facts) return refuse("not_found", NO_DRIVE);
+		if (call.admin !== true) {
+			return refuse("forbidden", "Only owners and admins of the organization can delete a shared drive.");
+		}
+		if (facts.deleted_at !== null) {
+			await this.flush();
+			return { deleted: false };
+		}
+		if ((this.one<{ n: number }>("SELECT COUNT(*) AS n FROM items")?.n ?? 0) > 0) {
+			return refuse(
+				"invalid",
+				"The shared drive holds items. Move them to a different drive, or delete them permanently, also the items in its trash.",
+			);
+		}
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta("drive", JSON.stringify({ ...facts, deleted_at: Date.now() }));
+			for (const member of this.memberRows()) this.touch(`member:${member.principal_id}`);
+			this.sql.exec("DELETE FROM members");
+			this.touch("drive");
+			this.bump();
+		});
+		await this.flush();
+		return { deleted: true };
+	}
+
+	// --- The index in D1 ------------------------------------------------------------------------
+
+	/** Records that a row of the index is behind. `gen` shows a change that came during a write. */
+	private touch(target: string): void {
+		this.sql.exec(
+			`INSERT INTO index_outbox (target, gen, next_attempt_at) VALUES (?, 1, ?)
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
+			target,
+			Date.now(),
+		);
+	}
+
+	/** Moves the alarm to the first row of the index that waits, when that is before the alarm. */
+	private async scheduleIndex(): Promise<void> {
+		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM index_outbox")?.at ?? null;
+		if (next === null) return;
+		const set = await this.ctx.storage.getAlarm();
+		if (set === null || set > next) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+	}
+
+	/**
+	 * Writes the rows that are behind to the index, after each write that started before. The caller
+	 * waits for it, so a list that comes after a change has that change. A failure does not fail the
+	 * change: the alarm tries the write again.
+	 */
+	private async flush(): Promise<void> {
+		// The alarm comes first. If the object stops during the write, the alarm does the write later.
+		const set = await this.ctx.storage.getAlarm();
+		const guard = Date.now() + ALARM_GUARD_MS;
+		if (set === null || set > guard) await this.ctx.storage.setAlarm(guard);
+		const run = this.flushed.then(() => this.writeIndex());
+		this.flushed = run.catch((error: unknown) => {
+			log("error", "drive index write failed", { error: error instanceof Error ? error.message : String(error) });
+		});
+		return this.flushed;
+	}
+
+	/**
+	 * Each write holds the state at the time of the write, not at the time of the change. So a write is
+	 * safe to run two times, the order of two writes does not matter, and a row never goes out of use:
+	 * a write that fails is tried again until it succeeds (1 minute, doubled, at most 1 hour).
+	 */
+	private async writeIndex(): Promise<void> {
+		for (let round = 0; round < INDEX_ROUNDS; round++) {
+			const facts = this.facts();
+			const spaceId = this.meta("space_id");
+			if (!facts || spaceId === null) return;
+			const rows = this.all<IndexRow>(
+				"SELECT target, gen, attempts FROM index_outbox WHERE next_attempt_at <= ? ORDER BY target LIMIT ?",
+				Date.now(),
+				INDEX_BATCH,
+			);
+			if (rows.length === 0) break;
+			try {
+				await this.env.DIRECTORY.batch(rows.map((row) => this.indexStatement(spaceId, facts, row.target)));
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log("warn", "drive index write failed", { rows: rows.length, error: message });
+				for (const row of rows) {
+					const attempts = row.attempts + 1;
+					this.sql.exec(
+						"UPDATE index_outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE target = ? AND gen = ?",
+						attempts,
+						Date.now() + backoff(attempts),
+						message.slice(0, 500),
+						row.target,
+						row.gen,
+					);
+				}
+				break;
+			}
+			// A row that changed during the write has a new gen. It stays, and the next pass writes it.
+			for (const row of rows) {
+				this.sql.exec("DELETE FROM index_outbox WHERE target = ? AND gen = ?", row.target, row.gen);
+			}
+		}
+		await this.scheduleIndex();
+	}
+
+	/**
+	 * The statement that brings one row of the index to the current state. A row is written only while
+	 * the directory has its principal: the creator for the drive, the member for a member. After a
+	 * fresh start of the directory, the drives from before have no such principal, so they stay out of
+	 * the new index.
+	 */
+	private indexStatement(spaceId: string, facts: DriveFacts, target: string): D1PreparedStatement {
+		const db = this.env.DIRECTORY;
+		if (target === "drive") {
+			return db
+				.prepare(
+					`INSERT INTO shared_drives (id, name, name_key, created_by, created_at, member_count, deleted_at)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?4)
+					ON CONFLICT (id) DO UPDATE SET name = excluded.name, name_key = excluded.name_key,
+						member_count = excluded.member_count, deleted_at = excluded.deleted_at`,
+				)
+				.bind(
+					spaceId,
+					facts.name,
+					nameKey(facts.name),
+					facts.created_by.principal_id,
+					facts.created_at,
+					this.one<{ n: number }>("SELECT COUNT(*) AS n FROM members")?.n ?? 0,
+					facts.deleted_at,
+				);
+		}
+		const principalId = target.slice("member:".length);
+		const role = this.memberRole(principalId);
+		if (role === null) {
+			return db
+				.prepare("DELETE FROM shared_drive_members WHERE drive_id = ? AND principal_id = ?")
+				.bind(spaceId, principalId);
+		}
+		return db
+			.prepare(
+				`INSERT INTO shared_drive_members (drive_id, principal_id, role)
+				SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?2)
+				ON CONFLICT (drive_id, principal_id) DO UPDATE SET role = excluded.role`,
+			)
+			.bind(spaceId, principalId, role);
 	}
 
 	// --- Calls from other objects ---------------------------------------------------------------
@@ -1322,12 +1915,19 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	override async alarm(): Promise<void> {
 		// The runtime can fire an alarm while one runs. One drain at a time keeps the order.
 		if (this.drainTask) return this.drainTask;
-		this.drainTask = this.drain();
+		this.drainTask = this.runAlarm();
 		try {
 			await this.drainTask;
 		} finally {
 			this.drainTask = null;
 		}
+	}
+
+	/** The work of one alarm: the writes to the index in D1, then the outbox. */
+	private async runAlarm(): Promise<void> {
+		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n) await this.flush();
+		await this.drain();
+		await this.scheduleIndex();
 	}
 
 	/**

@@ -63,13 +63,13 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, and the webhooks of Mail |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, and the webhooks of Mail |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of the mailboxes, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
-| `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal |
+| `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal, and one for each shared drive |
 | `DOCUMENT` | Durable Object `DocumentDO` (SQLite) | The content of each doc and each sheet |
 | `CHAT_ROOM` | Durable Object `ChatRoomDO` (SQLite) | One room or one direct message of Chat |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
@@ -110,7 +110,8 @@ with injected inbound mail.
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
 | Webhooks (URL, signing secret, creator, credential, delivery state) | [`mail`](src/mail/README.md#webhooks) | D1 `DIRECTORY`, table `webhooks` |
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
-| Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
+| Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
+| The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>` |
 | The content of each doc and each sheet, with its revision | [`collab`](src/collab/README.md) | `DocumentDO` SQLite |
 | Rooms and direct messages (members, read markers, messages, outbox, idempotency keys) | [`chat`](src/chat/README.md) | `ChatRoomDO` SQLite |

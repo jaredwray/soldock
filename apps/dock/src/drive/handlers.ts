@@ -1,5 +1,5 @@
-import { DRIVE_LIMITS, type OperationName } from "@soldock/contracts";
-import { type CallContext, unknownPrincipalIds } from "../identity/index.ts";
+import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@soldock/contracts";
+import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import {
 	accept,
@@ -9,13 +9,21 @@ import {
 	type OpenSpace,
 	openSpace,
 	readDocument,
-	spaceStub,
-	toItem,
+	spaceOf,
 	toItems,
 	toOneItem,
+	unknownSpaceIds,
 	writeDocument,
 } from "./access.ts";
-import type { ItemRecord, ItemRef, VersionRecord } from "./space.ts";
+import { listSharedDriveRows, sharedDriveState } from "./shared-index.ts";
+import {
+	type ItemRecord,
+	type ItemRef,
+	isSharedDriveId,
+	type MemberInput,
+	type SharedDriveRecord,
+	type VersionRecord,
+} from "./space.ts";
 
 type DriveOperation = Extract<OperationName, `drive.${string}`>;
 
@@ -43,15 +51,14 @@ function decode(content: string): Uint8Array {
 async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]> {
 	const bySpace = new Map<string, string[]>();
 	for (const ref of refs) bySpace.set(ref.spaceId, [...(bySpace.get(ref.spaceId) ?? []), ref.itemId]);
-	// The drive of a deleted principal stays in storage, but openSpace refuses it. Its items leave the lists too.
-	for (const spaceId of await unknownPrincipalIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
-	const actor = (await openSpace(call, undefined)).ctx.actor;
+	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
+	// them. Their items leave the lists too.
+	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
-			const records = await spaceStub(call.env, spaceId).getItems({ spaceId, actor }, itemIds, {
-				includeTrashed: false,
-			});
+			const opened = spaceOf(call, spaceId);
+			const records = await opened.space.getItems(opened.ctx, itemIds, { includeTrashed: false });
 			for (const record of records) found.set(`${spaceId}/${record.id}`, record);
 		}),
 	);
@@ -95,9 +102,83 @@ async function ownSpace(call: CallContext): Promise<OpenSpace> {
 	return openSpace(call, undefined);
 }
 
+/** A cursor of the list of shared drives: base64url of the UTF-8 bytes of JSON, with the name key and the id. */
+function encodeDriveCursor(nameKey: string, id: string): string {
+	const bytes = new TextEncoder().encode(JSON.stringify([nameKey, id]));
+	return btoa(String.fromCharCode(...bytes))
+		.replaceAll("+", "-")
+		.replaceAll("/", "_")
+		.replace(/=+$/, "");
+}
+
+function decodeDriveCursor(cursor: string): [string, string] {
+	try {
+		const binary = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
+		const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+		const values: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes));
+		if (Array.isArray(values) && values.length === 2 && values.every((value) => typeof value === "string")) {
+			return values as [string, string];
+		}
+	} catch {
+		// The text is not a cursor.
+	}
+	throw new OperationError("invalid", "The cursor is not valid. Use next_cursor from the last page of the same list.");
+}
+
+/**
+ * A shared drive and its members for the output. The members that the directory deleted are left out,
+ * and they do not count.
+ */
+async function toSharedDrive(
+	call: CallContext,
+	record: SharedDriveRecord,
+): Promise<{ shared_drive: SharedDrive; members: SharedDriveMember[] }> {
+	const gone = new Set(
+		await unknownPrincipalIds(
+			call.env.DIRECTORY,
+			record.members.map((member) => member.principal_id),
+		),
+	);
+	const members = record.members
+		.filter((member) => !gone.has(member.principal_id))
+		.map((member) => ({ ...member, created_at: new Date(member.created_at).toISOString() }));
+	return {
+		shared_drive: {
+			id: record.id,
+			name: record.name,
+			role: record.role,
+			member_count: members.length,
+			created_at: new Date(record.created_at).toISOString(),
+		},
+		members,
+	};
+}
+
+/**
+ * The members of an input, with the kind of each principal from the directory. The object of the drive
+ * needs the kind, because an agent cannot be a manager.
+ */
+async function memberInputs(
+	call: CallContext,
+	members: { principal_id: string; role: MemberInput["role"] }[],
+): Promise<MemberInput[]> {
+	const ids = members.map((member) => member.principal_id);
+	if ((await unknownPrincipalIds(call.env.DIRECTORY, ids)).length > 0) {
+		throw new OperationError("not_found", "No person or agent has one of the ids in members.");
+	}
+	const kinds = new Map(
+		(await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => [principal.id, principal.kind]),
+	);
+	return members.map((member) => ({
+		principalId: member.principal_id,
+		kind: kinds.get(member.principal_id) ?? "agent",
+		role: member.role,
+	}));
+}
+
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
-	async "drive.get_about"(call) {
-		const own = await ownSpace(call);
+	async "drive.get_about"(call, input) {
+		const own = await openSpace(call, input.space_id);
 		const about = accept(await own.space.about(own.ctx));
 		return {
 			space_id: own.spaceId,
@@ -123,16 +204,18 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			);
 			return { items: await toItems(call, page.items), next_cursor: page.nextCursor };
 		}
-		const own = await ownSpace(call);
 		if (input.view === "starred" || input.view === "shared") {
+			const own = await ownSpace(call);
 			const page = accept(await own.space.listRefs(own.ctx, { list: input.view, cursor, limit }));
 			const records = (await hydrate(call, page.items)).filter((record) => kind === null || record.kind === kind);
 			return { items: await toItems(call, records), next_cursor: page.nextCursor };
 		}
+		// The search and the trash are for the own drive, or for a shared drive. The recent view has no space_id.
+		const opened = await openSpace(call, input.space_id);
 		const page = accept(
-			await own.space.listView(own.ctx, { view: input.view, query: input.query ?? null, kind, cursor, limit }),
+			await opened.space.listView(opened.ctx, { view: input.view, query: input.query ?? null, kind, cursor, limit }),
 		);
-		return { items: page.items.map(toItem), next_cursor: page.nextCursor };
+		return { items: await toItems(call, page.items), next_cursor: page.nextCursor };
 	},
 
 	async "drive.get_item"(call, input) {
@@ -248,15 +331,31 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	},
 
 	async "drive.move_items"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		const items = accept(await own.space.move(own.ctx, input.item_ids, input.parent_id ?? null));
 		auditOk(call, own, "drive.move_items", input.item_ids.join(","));
-		return { items: items.map(toItem) };
+		return { items: await toItems(call, items) };
+	},
+
+	// The move between drives comes in a later change. The contract is complete.
+	async "drive.move_to_drive"() {
+		throw new OperationError("invalid", "Moves between drives are not built yet.");
 	},
 
 	async "drive.copy_item"(call, input) {
 		const source = await openSpace(call, input.space_id);
-		const own = await ownSpace(call);
+		// The drive that gets the copy: the own drive of the caller, or a shared drive.
+		if (
+			input.target_space_id !== undefined &&
+			!isSharedDriveId(input.target_space_id) &&
+			input.target_space_id !== call.caller.id
+		) {
+			throw new OperationError(
+				"invalid",
+				"target_space_id must be your own drive or a shared drive. A copy cannot go into the drive of a different person.",
+			);
+		}
+		const own = await openSpace(call, input.target_space_id);
 		const idempotency = await idempotencyOf(call, "drive.copy_item", input);
 		const original = accept(
 			await source.space.checkItem(source.ctx, input.item_id, "viewer", ["file", "doc", "sheet"]),
@@ -267,7 +366,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				const copy = accept(earlier);
 				// The first call can stop after the item and before the content. The retry then writes the content.
 				if (copy.kind !== "file") await fillCopy(call, own, input.item_id, copy.id);
-				return { item: toItem(accept(await own.space.checkItem(own.ctx, copy.id, "viewer", [copy.kind]))) };
+				return {
+					item: await toOneItem(call, accept(await own.space.checkItem(own.ctx, copy.id, "viewer", [copy.kind]))),
+				};
 			}
 		}
 		accept(await own.space.checkCreate(own.ctx, input.parent_id ?? null));
@@ -296,7 +397,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			if ("error" in answer || answer.duplicate) await call.env.BLOBS.delete(blobKey);
 			const created = accept(answer);
 			if (!created.duplicate) auditOk(call, own, "drive.copy_item", created.item.id);
-			return { item: toItem(created.item) };
+			return { item: await toOneItem(call, created.item) };
 		}
 		const created = accept(
 			await own.space.createItem(own.ctx, { id: itemId, parentId, kind: original.kind, name, idempotency }),
@@ -304,7 +405,10 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		await fillCopy(call, own, input.item_id, created.item.id);
 		if (!created.duplicate) auditOk(call, own, "drive.copy_item", created.item.id);
 		return {
-			item: toItem(accept(await own.space.checkItem(own.ctx, created.item.id, "viewer", [original.kind]))),
+			item: await toOneItem(
+				call,
+				accept(await own.space.checkItem(own.ctx, created.item.id, "viewer", [original.kind])),
+			),
 		};
 	},
 
@@ -326,28 +430,28 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	},
 
 	async "drive.trash_items"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		const result = accept(await own.space.trash(own.ctx, input.item_ids, input.dry_run));
 		if (!input.dry_run) auditOk(call, own, "drive.trash_items", input.item_ids.join(","));
 		return { ...result, dry_run: input.dry_run };
 	},
 
 	async "drive.restore_items"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		const result = accept(await own.space.restore(own.ctx, input.item_ids));
 		auditOk(call, own, "drive.restore_items", input.item_ids.join(","));
 		return result;
 	},
 
 	async "drive.delete_items"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		const result = accept(await own.space.remove(own.ctx, input.item_ids, input.dry_run));
 		if (!input.dry_run) auditOk(call, own, "drive.delete_items", input.item_ids.join(","));
 		return { ...result, dry_run: input.dry_run };
 	},
 
 	async "drive.empty_trash"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		const result = accept(await own.space.emptyTrash(own.ctx, input.dry_run));
 		if (!input.dry_run) auditOk(call, own, "drive.empty_trash", own.spaceId);
 		return { ...result, dry_run: input.dry_run };
@@ -366,7 +470,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	},
 
 	async "drive.share_item"(call, input) {
-		const own = await ownSpace(call);
+		const own = await openSpace(call, input.space_id);
 		if ((await unknownPrincipalIds(call.env.DIRECTORY, [input.principal_id])).length > 0) {
 			throw new OperationError("not_found", "No person or agent has the id in principal_id.");
 		}
@@ -379,6 +483,99 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const opened = await openSpace(call, input.space_id);
 		const result = accept(await opened.space.unshare(opened.ctx, input.item_id, input.principal_id));
 		if (result.removed) auditOk(call, opened, "drive.unshare_item", `${input.item_id}:${input.principal_id}`);
+		return result;
+	},
+
+	async "drive.create_shared_drive"(call, input) {
+		if (!isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins of the organization can create a shared drive.");
+		}
+		const members = await memberInputs(call, input.members);
+		// The key of a retry is in the own drive of the caller. It gives the id of the first call, and the
+		// object of that id creates the drive one time only.
+		const idempotency = await idempotencyOf(call, "drive.create_shared_drive", input);
+		let driveId = newId("drv");
+		if (idempotency) {
+			const own = await ownSpace(call);
+			driveId = accept(await own.space.reserveId(own.ctx, idempotency.key, idempotency.requestHash, driveId)).id;
+		}
+		const opened = spaceOf(call, driveId);
+		const created = accept(await opened.space.createSharedDrive(opened.ctx, { name: input.name, members }));
+		if (!created.duplicate) {
+			auditOk(call, opened, "drive.create_shared_drive", driveId);
+			for (const member of members) {
+				auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
+			}
+		}
+		return toSharedDrive(call, created.drive);
+	},
+
+	async "drive.list_shared_drives"(call, input) {
+		const all = input.all === "true";
+		if (all && !isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins of the organization can list each shared drive.");
+		}
+		const limit = input.limit ?? DEFAULT_PAGE;
+		const rows = await listSharedDriveRows(call.env.DIRECTORY, call.caller.id, {
+			all,
+			after: input.cursor === undefined ? null : decodeDriveCursor(input.cursor),
+			limit: limit + 1,
+		});
+		const page = rows.slice(0, limit);
+		const last = page[page.length - 1];
+		return {
+			shared_drives: page.map((row) => ({
+				id: row.id,
+				name: row.name,
+				role: row.role,
+				member_count: row.member_count,
+				created_at: new Date(row.created_at).toISOString(),
+			})),
+			next_cursor: rows.length > limit && last ? encodeDriveCursor(last.name_key, last.id) : null,
+		};
+	},
+
+	async "drive.get_shared_drive"(call, input) {
+		const opened = await openSpace(call, input.drive_id);
+		return toSharedDrive(call, accept(await opened.space.sharedDrive(opened.ctx)));
+	},
+
+	async "drive.update_shared_drive"(call, input) {
+		const opened = await openSpace(call, input.drive_id);
+		const drive = accept(await opened.space.renameSharedDrive(opened.ctx, input.name));
+		auditOk(call, opened, "drive.update_shared_drive", input.drive_id);
+		return { shared_drive: (await toSharedDrive(call, drive)).shared_drive };
+	},
+
+	async "drive.add_shared_drive_members"(call, input) {
+		const opened = await openSpace(call, input.drive_id);
+		const members = await memberInputs(call, input.members);
+		const result = accept(await opened.space.setMembers(opened.ctx, members));
+		// One line for each change, so the audit log shows an admin who adds themselves.
+		for (const member of result.changed) {
+			auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
+		}
+		return toSharedDrive(call, result.drive);
+	},
+
+	async "drive.remove_shared_drive_member"(call, input) {
+		const opened = await openSpace(call, input.drive_id);
+		const result = accept(await opened.space.removeMember(opened.ctx, input.principal_id));
+		if (result.removed) auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
+		return result;
+	},
+
+	async "drive.delete_shared_drive"(call, input) {
+		if (!isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins of the organization can delete a shared drive.");
+		}
+		const state = await sharedDriveState(call.env.DIRECTORY, input.drive_id);
+		if (state === null) throw new OperationError("not_found", "No shared drive has that id.");
+		// The index has the delete only after the object did it. A second call has nothing to do.
+		if (state === "deleted") return { deleted: false };
+		const opened = spaceOf(call, input.drive_id);
+		const result = accept(await opened.space.deleteSharedDrive(opened.ctx));
+		if (result.deleted) auditOk(call, opened, "drive.delete_shared_drive", input.drive_id);
 		return result;
 	},
 };

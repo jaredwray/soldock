@@ -9,6 +9,7 @@ export {
 	credentialBinding,
 	credentialRef,
 	credentialState,
+	isAdmin,
 	type MissingScope,
 	missingScopes,
 } from "./access.ts";
