@@ -573,9 +573,23 @@ MCP clients. The app has no UI-only path.
     higher than the version of the page, the page calls `chat.list_messages` with `changed_after`.
     So the open room is current also while its socket is not connected.
   - A sync that fails runs again after the next room list, also when the version did not change.
-  - An open room is read: the page calls `chat.mark_read` with the `seq` of the last message that
-    it shows, one time for each new message, only while the tab is visible. The open room has no
-    dot in the sidebar, because its marker reaches the room list a few seconds later.
+  - An open room is read while the person looks at its newest messages: the tab shows, the list
+    is at its end, and the list is at the newest messages of the room. The page then calls
+    `chat.mark_read` with the `seq` of the last message, one time for each new message. A message
+    below the part of the list that shows is not read. The open room has no dot in the sidebar:
+    the button to the newest messages tells about its new messages.
+  - **New messages** is a line before the first message that the person did not see (`Reading`,
+    `nextReading` and `startsNew` in `model.ts`).
+    - When a room opens, the line is after the read marker of the person, if the room has a
+      message of a different author after it.
+    - The line stays while the person reads. When a message of a different author comes while
+      the person does not look, the line moves before that message.
+    - A send of the person removes the line.
+    - The list shows no line before its first message while the room has older messages to read.
+  - A round button over the end of the list goes to the newest messages. It shows when the list
+    is not at its end, or not at the newest messages. It has the number of new messages below
+    the part that shows. For a list that is not at the newest messages, it has "New messages"
+    when the room list tells that the room is unread.
   - The box for a new message has a border with round corners. Its empty text is "Message #room",
     or "Message" and the name of the other member. The round send button is at its bottom right.
   - Enter sends the message. Shift+Enter makes a new line.
@@ -658,7 +672,8 @@ MCP clients. The app has no UI-only path.
     make the page slow. The list is a part of the history without a gap.
     - When a page of older messages makes the list too long, the newest messages go out. The list
       is then not at the newest messages. It shows **Show newer messages**, which gets the page
-      after the last message (`chat.list_messages` with `after`), and **Go to the newest messages**.
+      after the last message (`chat.list_messages` with `after`). The button to the newest
+      messages gets the newest messages again.
     - While the list is not at the newest messages, a new message of the room does not go into
       it. A change and a delete of a message that shows still go in. A message that waits for the
       server does not show.
