@@ -139,8 +139,9 @@ MCP clients. The app has no UI-only path.
     sent mail to (`mail.suggest_recipients`, 8 at most). The part that matches the typed text is
     bold. The address can be in any position of the field, not only the last one. In the form
     `Name <address`, the list uses the text after the angle bracket.
-  - The arrow keys select an address in the list. Enter takes it and does not send. Tab takes it,
-    and the focus moves on. A click takes it. Escape closes the list and keeps the composer open.
+  - The arrow keys select an address in the list, and the list scrolls to show it. A new character
+    clears that selection. Enter takes the selected address and does not send. Tab takes it, and the
+    focus moves on. A click takes it. Escape closes the list and keeps the composer open.
   - After a completion at the end of the field, a comma and a space follow the address, so the next
     address can start at once.
   - The first address of the list is selected. When the typed text is a full address that is not in

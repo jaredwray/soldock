@@ -61,7 +61,7 @@ export function RecipientInput({
 	const [token, setToken] = useState<AddressToken | null>(null);
 	// The last answer of the server. Its key is the mailbox and the query in lowercase.
 	const [answer, setAnswer] = useState<{ key: string; addresses: string[] } | null>(null);
-	// The option that the person selected with the arrow keys or the pointer, for one list of options.
+	// The option that the person selected with the arrow keys or the pointer, for one typed text and one list.
 	const [selected, setSelected] = useState<{ list: string; index: number | null } | null>(null);
 	const cache = useRef(new Map<string, string[]>());
 	const pendingCaret = useRef<number | null>(null);
@@ -117,11 +117,19 @@ export function RecipientInput({
 	const matching = query === "" || !answer ? [] : answer.addresses.filter((a) => a.toLowerCase().includes(query));
 	const fresh = answer?.key === answerKey;
 	const { options, active: firstActive } = recipientOptions(token?.text ?? "", matching, present);
-	const list = options.join("\n");
+	// A new typed text clears the selection, also when the list stays the same. Otherwise a selection
+	// for "bo" could replace the full address that the person types after it.
+	const list = [query, ...options].join("\n");
 	const active = selected?.list === list ? selected.index : fresh ? firstActive : null;
 	const open = token !== null && !disabled && options.length > 0;
 	const listId = `${id}-suggestions`;
 	const optionId = (index: number) => `${id}-suggestion-${index}`;
+
+	// The focus stays in the field, so the list scrolls to show the selected option.
+	useEffect(() => {
+		if (open && active !== null)
+			document.getElementById(`${id}-suggestion-${active}`)?.scrollIntoView({ block: "nearest" });
+	}, [open, active, id]);
 
 	function choose(address: string) {
 		if (!token) return;
