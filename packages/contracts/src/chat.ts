@@ -16,6 +16,10 @@ export const CHAT_LIMITS = {
 	queryChars: 100,
 	/** The live sockets of one member in one room, with the feeds of its MCP streams. */
 	socketsPerMember: 8,
+	/** The new and changed messages that one member can send to one room without a wait. */
+	messageBurst: 20,
+	/** After that, the member can send one new or changed message to that room in each of these seconds. */
+	messageRefillSeconds: 1,
 } as const;
 
 /**
@@ -168,6 +172,7 @@ const CHANGE = { readOnly: false, destructive: false, idempotent: true, openWorl
 const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld: false } as const;
 
 const MEMBERS_ONLY = "You must be a member of the room.";
+const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
 export const listRooms = defineOperation({
 	name: "chat.list_rooms",
@@ -353,28 +358,27 @@ export const listMessages = defineOperation({
 export const postMessage = defineOperation({
 	name: "chat.post_message",
 	summary: "Post a message in a room",
-	description: `Adds a message with plain text to the room, at most ${CHAT_LIMITS.messageChars} characters. The room is then read for you, and unread for each other member. ${MEMBERS_ONLY}`,
+	description: `Adds a message with plain text to the room, at most ${CHAT_LIMITS.messageChars} characters. The room is then read for you, and unread for each other member. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CREATE,
 	input: z.strictObject({ room_id: RoomId, text: MessageText, idempotency_key: IdempotencyKey }),
 	output: z.object({ message: ChatMessage }),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "conflict", "rate_limited"],
 });
 
 export const editMessage = defineOperation({
 	name: "chat.edit_message",
 	summary: "Change the text of your message",
-	description:
-		"Replaces the text of a message that you wrote. The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change.",
+	description: `Replaces the text of a message that you wrote. The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edit" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, text: MessageText }),
 	output: z.object({ message: ChatMessage }),
-	errors: ["not_found", "invalid"],
+	errors: ["not_found", "invalid", "rate_limited"],
 });
 
 export const deleteMessage = defineOperation({

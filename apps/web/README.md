@@ -578,8 +578,21 @@ MCP clients. The app has no UI-only path.
     dot in the sidebar, because its marker reaches the room list a few seconds later.
   - The box for a new message has a border with round corners. Its empty text is "Message #room",
     or "Message" and the name of the other member. The round send button is at its bottom right.
-  - Enter sends the message. Shift+Enter makes a new line. A send has an `idempotency_key`, so a
-    retry after a lost answer does not post the text two times.
+  - Enter sends the message. Shift+Enter makes a new line.
+  - A message shows in the list at once, in a lighter color, and the box for the message is empty
+    again. The page sends the messages of one room one at a time, in the order of the sends, so the
+    room has them in that order. The person can write the next message during a send.
+  - Each send has an `idempotency_key`, and each new attempt of that send has the same key. So a
+    lost answer does not post the text two times. The key is also the key of the row, from the send
+    to the stored message, so the row stays the same row.
+  - A send that fails because of the network, a failure of the server or the rate limit of the room
+    gets three more attempts, after 1, 2 and 4 seconds. Then the message shows "Not sent" with the
+    reason, **Try again** and **Delete**, and the next message goes. A refusal that more attempts
+    cannot change, for example for a person that is not a member now, shows "Not sent" at once.
+  - The socket can bring the stored message before the answer of the send. The list then shows the
+    message one time: it leaves that message out until the answer arrives.
+  - The messages that wait stay while the page stays, also when the person opens a different room.
+    They go away on a reload of the page. A later change keeps them.
   - A message shows an avatar with the initials of its author, then the name in bold and the time
     on one line, and the text below. The avatar of a person is a square with round corners. The
     avatar of an agent is a circle, and an agent has an "agent" mark next to its name.

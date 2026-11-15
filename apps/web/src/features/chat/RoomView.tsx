@@ -1,5 +1,5 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
-import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -8,9 +8,10 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
-import { usePageVisible, useRoom } from "./data.ts";
+import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
-import { dayLabel, draftPlaceholder, roomTitle, startsDay, startsGroup, timeLabel } from "./model.ts";
+import { chatRows, dayLabel, draftPlaceholder, roomTitle, startsDay, startsGroup, timeLabel } from "./model.ts";
+import type { PendingMessage } from "./outbox.ts";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -31,19 +32,23 @@ const STICK_PX = 80;
 
 /** One room: its header, its messages and the box for a new message. */
 export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }: RoomViewProps) {
-	const ownId = useSession().whoami.principal.id;
+	const self = useSession().whoami.principal;
+	const ownId = self.id;
 	const toast = useToast();
 	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
+	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
+	const outbox = useOutbox(roomId, ownId, (message) => {
+		view.apply(message);
+		void onRoomsChanged();
+	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
 	const [draft, setDraft] = useState("");
-	const [sending, setSending] = useState(false);
 	const [joining, setJoining] = useState(false);
 	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stick = useRef(true);
 	const heightBefore = useRef<number | null>(null);
-	const sendKey = useRef<string | null>(null);
 	const markedSeq = useRef(0);
 	const draftId = useId();
 
@@ -82,18 +87,32 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		});
 	}, [view.status, visible, unreadSeq, roomId, listTick]);
 
+	// The seq of the last message of the list at the start of the call that runs now. A message of the
+	// person that comes after it, before the answer of the call, is the message of that call.
+	const lastSeq = messages[messages.length - 1]?.seq ?? 0;
+	const [sendingAfter, setSendingAfter] = useState({ key: outbox.state.sendingKey, seq: lastSeq });
+	if (sendingAfter.key !== outbox.state.sendingKey) setSendingAfter({ key: outbox.state.sendingKey, seq: lastSeq });
+	const own = useMemo(
+		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
+		[ownId, self.kind, self.display_name],
+	);
+	const rows = useMemo(
+		() => chatRows(messages, outbox.state, own, roomId, sendingAfter.seq),
+		[messages, outbox.state, own, roomId, sendingAfter.seq],
+	);
+
 	// After older messages come in, the list stays at the same message. After a new message, it moves
 	// to the end, if it was at the end.
 	useLayoutEffect(() => {
 		const list = scrollRef.current;
-		if (!list || messages.length === 0) return;
+		if (!list || rows.length === 0) return;
 		if (heightBefore.current !== null) {
 			list.scrollTop += list.scrollHeight - heightBefore.current;
 			heightBefore.current = null;
 		} else if (stick.current) {
 			list.scrollTop = list.scrollHeight;
 		}
-	}, [messages]);
+	}, [rows]);
 
 	function onScroll() {
 		const list = scrollRef.current;
@@ -110,35 +129,19 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		}
 	}
 
-	async function send() {
-		if (!draft.trim() || sending) return;
-		const text = draft;
-		setSending(true);
-		// One key for one text, so a retry after a lost answer does not post the text two times.
-		sendKey.current ??= crypto.randomUUID();
-		try {
-			const { message } = await api.call("chat.post_message", {
-				room_id: roomId,
-				text,
-				idempotency_key: sendKey.current,
-			});
-			sendKey.current = null;
-			// The person can type during the send. Only the text that went out goes away.
-			setDraft((current) => (current === text ? "" : current));
-			stick.current = true;
-			view.apply(message);
-			void onRoomsChanged();
-		} catch (caught) {
-			fail(caught);
-		}
-		setSending(false);
+	function send() {
+		if (!draft.trim()) return;
+		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
+		outbox.send(draft);
+		setDraft("");
+		stick.current = true;
 	}
 
 	function onDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
 		// Enter sends. Shift+Enter makes a new line. Enter during text composition belongs to the input method.
 		if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
 		event.preventDefault();
-		void send();
+		send();
 	}
 
 	async function saveEdit() {
@@ -244,7 +247,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 								</button>
 							</p>
 						)}
-						{messages.length === 0 && (
+						{rows.length === 0 && (
 							<div className="chat-empty">
 								<span className="chat-empty-tile" aria-hidden="true">
 									<Icon name={room.kind === "dm" ? "chat" : room.kind === "private" ? "lock" : "hash"} size={24} />
@@ -258,9 +261,9 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 							</div>
 						)}
 						<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
-							{messages.map((message, index) => (
-								<Fragment key={message.id}>
-									{startsDay(messages[index - 1], message) && (
+							{rows.map(({ key, message, pending }, index) => (
+								<Fragment key={key}>
+									{startsDay(rows[index - 1]?.message, message) && (
 										<li className="chat-day">
 											<h2 className="chat-day-heading">
 												<time dateTime={message.created_at}>{dayLabel(message.created_at)}</time>
@@ -269,7 +272,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 									)}
 									<MessageItem
 										message={message}
-										head={startsGroup(messages[index - 1], message)}
+										pending={pending}
+										head={startsGroup(rows[index - 1]?.message, message)}
 										own={message.author.principal_id === ownId}
 										canDelete={message.author.principal_id === ownId || room.role === "owner"}
 										editing={editing?.id === message.id ? editing.text : null}
@@ -278,6 +282,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 										onEditSave={() => void saveEdit()}
 										onEditCancel={() => setEditing(null)}
 										onDelete={() => setDialog({ type: "delete", message })}
+										onSendAgain={() => outbox.retry(key)}
+										onSendCancel={() => outbox.discard(key)}
 									/>
 								</Fragment>
 							))}
@@ -287,7 +293,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 						className="chat-composer"
 						onSubmit={(event) => {
 							event.preventDefault();
-							void send();
+							send();
 						}}
 					>
 						<label htmlFor={draftId} className="visually-hidden">
@@ -301,10 +307,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 								placeholder={draftPlaceholder(room)}
 								value={draft}
 								maxLength={CHAT_LIMITS.messageChars}
-								onChange={(event) => {
-									sendKey.current = null;
-									setDraft(event.target.value);
-								}}
+								onChange={(event) => setDraft(event.target.value)}
 								onKeyDown={onDraftKeyDown}
 							/>
 							<span className="chat-composer-bar">
@@ -313,7 +316,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 									className="chat-send"
 									aria-label="Send the message"
 									title="Send (Enter)"
-									disabled={sending || !draft.trim()}
+									disabled={!draft.trim()}
 								>
 									<Icon name="arrowUp" size={18} />
 								</button>
@@ -377,6 +380,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 interface MessageItemProps {
 	message: ChatMessage;
 	/** True when the message shows its author and its time. */
+	/** The state of the send, for a message that the server does not have yet. */
+	pending: PendingMessage | null;
 	head: boolean;
 	own: boolean;
 	canDelete: boolean;
@@ -387,10 +392,15 @@ interface MessageItemProps {
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
+	/** Sends a message again after its send failed. */
+	onSendAgain: () => void;
+	/** Removes a message whose send failed. */
+	onSendCancel: () => void;
 }
 
 function MessageItem({
 	message,
+	pending,
 	head,
 	own,
 	canDelete,
@@ -400,14 +410,26 @@ function MessageItem({
 	onEditSave,
 	onEditCancel,
 	onDelete,
+	onSendAgain,
+	onSendCancel,
 }: MessageItemProps) {
 	const editId = useId();
 	const author = message.author.display_name;
+	const failed = pending?.state === "failed";
+	// A message that the server does not have yet cannot change, and it has no id to delete.
+	const hasActions = pending === null && !message.deleted && editing === null && (own || canDelete);
 	return (
 		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
 		<li
-			className={head ? "chat-message chat-message-head" : "chat-message"}
-			tabIndex={!message.deleted && editing === null && (own || canDelete) ? -1 : undefined}
+			className={[
+				"chat-message",
+				head ? "chat-message-head" : "",
+				pending ? (failed ? "chat-message-failed" : "chat-message-pending") : "",
+			]
+				.filter(Boolean)
+				.join(" ")}
+			tabIndex={hasActions ? -1 : undefined}
+			aria-busy={pending !== null && !failed ? true : undefined}
 		>
 			{/* The avatar of a person is a square with round corners. The avatar of an agent is a circle. */}
 			{head && (
@@ -472,8 +494,19 @@ function MessageItem({
 						)}
 					</p>
 				)}
+				{failed && (
+					<p className="chat-send-failed" role="alert">
+						<span>Not sent. {pending.error}</span>
+						<button type="button" className="link-button" onClick={onSendAgain}>
+							Try again
+						</button>
+						<button type="button" className="link-button" onClick={onSendCancel}>
+							Delete
+						</button>
+					</p>
+				)}
 			</div>
-			{!message.deleted && editing === null && (own || canDelete) && (
+			{hasActions && (
 				<span className="chat-message-actions">
 					{own && (
 						<button

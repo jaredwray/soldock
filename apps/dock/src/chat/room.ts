@@ -12,7 +12,9 @@ import { type CredentialCheck, type CredentialRef, checkCredentials } from "../i
 import { log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
-export type Refusal = { error: { code: "invalid" | "not_found" | "conflict" | "forbidden"; message: string } };
+export type Refusal = {
+	error: { code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited"; message: string };
+};
 
 /** The person or agent of a change, with the name at that time. */
 export interface ActorRecord {
@@ -217,6 +219,11 @@ const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
 const NO_MESSAGE = "No message has that id in this room.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+/**
+ * The most message allowances that a room keeps in memory. A room has `membersPerRoom` members at
+ * most. The rest is for the members that left a short time before.
+ */
+const MAX_ALLOWANCES = 2 * CHAT_LIMITS.membersPerRoom;
 const TOO_MANY_SOCKETS = `One member can have ${CHAT_LIMITS.socketsPerMember} sockets to a room at most.`;
 
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
@@ -278,6 +285,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private hasTables: boolean;
 	/** The end of the line of index writes. Each write starts after the one before it ends. */
 	private flushed: Promise<void> = Promise.resolve();
+	/**
+	 * The message allowance of each member, by principal id: the messages that the member can send now,
+	 * and the time of that count. It is in memory only. A room that sleeps has no member that sends
+	 * messages, so a new start with full allowances gives nothing away.
+	 */
+	private readonly allowances = new Map<string, { messages: number; at: number }>();
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
 
@@ -618,6 +631,45 @@ export class ChatRoomDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * Takes one message from the allowance of the caller, or refuses the call when the allowance is
+	 * empty. A member starts with `CHAT_LIMITS.messageBurst` messages, and gets one more in each
+	 * `CHAT_LIMITS.messageRefillSeconds`, up to that number. Each new and each changed message uses one:
+	 * the room sends the two to each socket.
+	 *
+	 * The room keeps the allowance of a member that leaves, so a member cannot leave and join again to
+	 * get a full allowance. It keeps `MAX_ALLOWANCES` at most. At that number, it removes each allowance
+	 * that is full again, which is the same as no allowance. If no allowance is full, it refuses a
+	 * caller that has none, until one is. Only principals that join, send and leave in large numbers in
+	 * some seconds can cause that.
+	 */
+	private spendAllowance(call: RoomCall, now: number): Refusal | null {
+		const refillMs = CHAT_LIMITS.messageRefillSeconds * 1000;
+		const fullMs = CHAT_LIMITS.messageBurst * refillMs;
+		const limited = (seconds: number, reason: string): Refusal => {
+			log("info", "chat message rate limited", { roomId: call.roomId, principalId: call.actor.principal_id });
+			return refuse("rate_limited", `${reason} Try again in ${seconds === 1 ? "1 second" : `${seconds} seconds`}.`);
+		};
+		const earlier = this.allowances.get(call.actor.principal_id);
+		if (!earlier && this.allowances.size >= MAX_ALLOWANCES) {
+			for (const [principalId, allowance] of this.allowances) {
+				if (now - allowance.at >= fullMs) this.allowances.delete(principalId);
+			}
+			if (this.allowances.size >= MAX_ALLOWANCES) {
+				return limited(fullMs / 1000, "Too many people and agents sent messages to this room in a short time.");
+			}
+		}
+		const messages = earlier
+			? Math.min(CHAT_LIMITS.messageBurst, earlier.messages + Math.max(0, now - earlier.at) / refillMs)
+			: CHAT_LIMITS.messageBurst;
+		if (messages < 1) {
+			this.allowances.set(call.actor.principal_id, { messages, at: now });
+			return limited(Math.ceil(((1 - messages) * refillMs) / 1000), "You sent too many messages to this room.");
+		}
+		this.allowances.set(call.actor.principal_id, { messages: messages - 1, at: now });
+		return null;
+	}
+
 	private message(messageId: string): MessageRow | null {
 		return this.one<MessageRow>("SELECT * FROM messages WHERE id = ?", messageId);
 	}
@@ -644,6 +696,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return { message: toMessage(opened.room.room_id, row), duplicate: true };
 			}
 		}
+		// A retry with the same key returned above: it adds no message, so it uses no allowance.
+		const limited = this.spendAllowance(call, now);
+		if (limited) return limited;
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			const seq = this.one<{ seq: number }>(
@@ -691,6 +746,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
 		if (row.text === text) return { message: toMessage(opened.room.room_id, row), changed: false };
+		const limited = this.spendAllowance(call, Date.now());
+		if (limited) return limited;
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(

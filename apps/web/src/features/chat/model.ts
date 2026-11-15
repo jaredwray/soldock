@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatRoom } from "@soldock/contracts";
+import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
 
@@ -37,6 +38,62 @@ export function withChanges(
 ): ChatMessage[] {
 	const first = current[0];
 	return merged(current, hasOlder && first ? changes.filter((message) => message.seq >= first.seq) : changes);
+}
+
+/** One row of the message list: a stored message, or a message that waits for the server. */
+export interface ChatRow {
+	/** The key of the row. A message keeps it from its send to its stored form, so the row stays the same. */
+	key: string;
+	message: ChatMessage;
+	/** The state of the send, for a message that the server does not have yet. */
+	pending: PendingMessage | null;
+}
+
+/**
+ * The rows of the list: the stored messages, then the messages that wait, in the order of the sends.
+ *
+ * - A stored message that the outbox sent has the key of its send.
+ * - A message that waits shows as a message of `own`, after the last stored message.
+ * - While a call runs, the socket can bring the stored message before the answer of the call. That
+ *   message has no key yet, and the row of its send still shows. So a message of `own` without a key
+ *   that came after the start of the call (`sendingAfterSeq`) stays out of the list until the call ends.
+ */
+export function chatRows(
+	messages: readonly ChatMessage[],
+	outbox: OutboxState,
+	own: ChatMessage["author"],
+	roomId: string,
+	sendingAfterSeq: number,
+): ChatRow[] {
+	const rows: ChatRow[] = [];
+	for (const message of messages) {
+		const key = outbox.keys.get(message.id);
+		const unclaimed =
+			key === undefined &&
+			outbox.sendingKey !== null &&
+			message.author.principal_id === own.principal_id &&
+			message.seq > sendingAfterSeq;
+		if (!unclaimed) rows.push({ key: key ?? message.id, message, pending: null });
+	}
+	const lastSeq = messages[messages.length - 1]?.seq ?? 0;
+	for (const [index, pending] of outbox.pending.entries()) {
+		rows.push({
+			key: pending.key,
+			message: {
+				id: pending.key,
+				room_id: roomId,
+				seq: lastSeq + index + 1,
+				author: own,
+				text: pending.text,
+				created_at: pending.created_at,
+				edited_at: null,
+				deleted: false,
+				version: 0,
+			},
+			pending,
+		});
+	}
+	return rows;
 }
 
 const GROUP_MS = 5 * 60 * 1000;
