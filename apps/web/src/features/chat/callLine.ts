@@ -7,7 +7,7 @@
  *
  * A call that waits can start after the page left the room, and after a sign-out. The page sends
  * each call with the session of its person at that time. So a call does not start while `active()`
- * is false: it would be a change by a different person.
+ * is false: it would be a change in a different session, and possibly by a different person.
  */
 export function createCallLine(active: () => boolean): (id: string, call: () => Promise<void>) => void {
 	const ends = new Map<string, Promise<void>>();

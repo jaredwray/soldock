@@ -2,11 +2,20 @@
 // apps/web/test checks it.
 
 let account: string | null = null;
+let changes = 0;
 const listeners = new Set<() => void>();
 
 /** The id of the signed-in person, or null while nobody is signed in. */
 export function currentAccount(): string | null {
 	return account;
+}
+
+/**
+ * The number of changes of the signed-in person, also to nobody. Work that keeps this number knows
+ * later if a sign-out or a sign-in came after its start, also when the same person signed in again.
+ */
+export function accountChangeCount(): number {
+	return changes;
 }
 
 /**
@@ -16,6 +25,7 @@ export function currentAccount(): string | null {
 export function setAccount(next: string | null): void {
 	if (next === account) return;
 	account = next;
+	changes += 1;
 	for (const listener of listeners) listener();
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentAccount, onAccountChange, setAccount } from "../src/lib/account.ts";
+import { accountChangeCount, currentAccount, onAccountChange, setAccount } from "../src/lib/account.ts";
 
 describe("the person of the page", () => {
 	// Work that waits for one person stops on each change. A call for no change would stop it for the same person.
@@ -15,5 +15,16 @@ describe("the person of the page", () => {
 		remove();
 		setAccount(null);
 		expect(seen).toHaveLength(3);
+	});
+
+	// A person signs out and signs in again. Work from before the sign-out must know that.
+	it("counts each change, so the same person after a sign-out is not the same sign-in", () => {
+		setAccount("prn_ada");
+		const signedIn = accountChangeCount();
+		setAccount("prn_ada");
+		expect(accountChangeCount()).toBe(signedIn);
+		setAccount(null);
+		setAccount("prn_ada");
+		expect(accountChangeCount()).toBe(signedIn + 2);
 	});
 });

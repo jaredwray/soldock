@@ -1,6 +1,6 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
 import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { currentAccount } from "../../lib/account.ts";
+import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -109,8 +109,12 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	const latest = useRef(new Map<string, LocalChange>());
 	const [changes, setChanges] = useState<ReadonlyMap<string, LocalChange>>(() => new Map());
 	// The calls for one message run one at a time, in the order of the changes, so the room gets the
-	// newest change last. A call that waits does not start after a sign-out, or for a different person.
-	const afterEarlierCalls = useMemo(() => createCallLine(() => currentAccount() === ownId), [ownId]);
+	// newest change last. A call that waits does not start after a sign-out: the next sign-in is a
+	// different session, also for the same person.
+	const afterEarlierCalls = useMemo(() => {
+		const signedIn = accountChangeCount();
+		return createCallLine(() => accountChangeCount() === signedIn);
+	}, []);
 	const rows = useMemo(
 		() => chatRows(messages, outbox.state, own, roomId, changes),
 		[messages, outbox.state, own, roomId, changes],
