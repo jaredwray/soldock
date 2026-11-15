@@ -77,8 +77,16 @@ function write(storage: DraftStorage | null, owner: string, drafts: Map<string, 
 		// The browser has no storage, refused the write, or the storage is full. The changes stay in the
 		// memory of the page, so the text does not go away when the person opens a different room.
 		const changes = inMemory.get(owner) ?? new Map<string, Draft | null>();
-		for (const roomId of changed) changes.set(roomId, drafts.get(roomId) ?? null);
-		inMemory.set(owner, changes);
+		const inStorage = stored(storage, owner);
+		for (const roomId of changed) {
+			const draft = drafts.get(roomId) ?? null;
+			// A draft that went away needs a mark only while the storage has that draft. Without this
+			// rule, the page keeps a mark for each room that the person wrote in.
+			if (draft === null && !inStorage.has(roomId)) changes.delete(roomId);
+			else changes.set(roomId, draft);
+		}
+		if (changes.size === 0) inMemory.delete(owner);
+		else inMemory.set(owner, changes);
 	}
 }
 
