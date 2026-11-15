@@ -1,4 +1,4 @@
-import { type CreatedWebhook, WEBHOOK_LIMITS, type Webhook } from "@soldock/contracts";
+import { type CreatedWebhook, WEBHOOK_LIMITS, type Webhook, webhookHeaderNameProblem } from "@soldock/contracts";
 import {
 	type CallContext,
 	type CredentialBinding,
@@ -20,7 +20,10 @@ import { webhookHostAllowed, webhookUrlProblem } from "./webhook-url.ts";
 
 export type DisabledReason = NonNullable<Webhook["disabled_reason"]>;
 
-/** A webhook as the directory stores it. The secret and the credential never leave this module. */
+/**
+ * A webhook as the directory stores it. The secret, the auth key, the header value and the credential
+ * never leave this module, except in the POST to the receiver.
+ */
 export interface WebhookRow {
 	id: string;
 	mailbox_id: string;
@@ -39,12 +42,15 @@ export interface WebhookRow {
 	last_delivery_at: string | null;
 	last_failure_at: string | null;
 	last_error: string | null;
+	auth_key: string | null;
+	header_name: string | null;
+	header_value: string | null;
 	created_at: string;
 }
 
 const WEBHOOK_COLUMNS = `id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, status,
 	disabled_reason, consecutive_failures, last_failed_event_id, retry_until, retry_event_id, last_delivery_at, last_failure_at,
-	last_error, created_at`;
+	last_error, auth_key, header_name, header_value, created_at`;
 
 function toWebhook(row: WebhookRow): Webhook {
 	return {
@@ -59,6 +65,8 @@ function toWebhook(row: WebhookRow): Webhook {
 		last_delivery_at: row.last_delivery_at,
 		last_failure_at: row.last_failure_at,
 		last_error: row.last_error,
+		has_auth_key: row.auth_key !== null,
+		header_name: row.header_name,
 		created_at: row.created_at,
 	};
 }
@@ -129,7 +137,13 @@ async function managesAgentMailbox(call: CallContext, mailboxId: string): Promis
 	return target?.kind === "agent" && canManageCredentialsOf(call.caller, target);
 }
 
-function auditWebhook(call: CallContext, op: string, row: Pick<WebhookRow, "id" | "mailbox_id">): void {
+function auditWebhook(
+	call: CallContext,
+	op: string,
+	row: Pick<WebhookRow, "id" | "mailbox_id">,
+	/** The names of the changed fields, never their values. */
+	code?: string,
+): void {
 	audit({
 		op,
 		actor: call.caller.id,
@@ -139,10 +153,11 @@ function auditWebhook(call: CallContext, op: string, row: Pick<WebhookRow, "id" 
 		...(row.mailbox_id === call.caller.id ? {} : { mailbox: row.mailbox_id }),
 		result: "ok",
 		requestId: call.requestId,
+		...(code ? { code } : {}),
 	});
 }
 
-type WebhookOperation = "mail.create_webhook" | "mail.list_webhooks" | "mail.delete_webhook";
+type WebhookOperation = "mail.create_webhook" | "mail.list_webhooks" | "mail.update_webhook" | "mail.delete_webhook";
 
 export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = {
 	async "mail.create_webhook"(call, input) {
@@ -178,13 +193,17 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 			last_delivery_at: null,
 			last_failure_at: null,
 			last_error: null,
+			auth_key: input.auth_key ?? null,
+			header_name: input.header?.name ?? null,
+			header_value: input.header?.value ?? null,
 			created_at: new Date().toISOString(),
 		};
 		// The limits are part of the insert, so two parallel creates cannot both pass them. The limit of a
 		// mailbox counts only active webhooks, so a disabled webhook of another member cannot block it.
 		const result = await call.env.DIRECTORY.prepare(
-			`INSERT INTO webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at)
-			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+			`INSERT INTO webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at,
+				auth_key, header_name, header_value)
+			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12, ?13, ?14
 			WHERE (SELECT COUNT(*) FROM webhooks WHERE created_by = ?3) < ?10
 			AND (SELECT COUNT(*) FROM webhooks WHERE mailbox_id = ?2 AND status = 'active') < ?11`,
 		)
@@ -200,6 +219,9 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 				row.created_at,
 				WEBHOOK_LIMITS.perCreator,
 				WEBHOOK_LIMITS.perMailbox,
+				row.auth_key,
+				row.header_name,
+				row.header_value,
 			)
 			.run();
 		if (result.meta.changes !== 1) {
@@ -234,6 +256,59 @@ export const webhookHandlers: Pick<HandlerMap<CallContext>, WebhookOperation> = 
 		}
 		const { results } = await statement.all<WebhookRow>();
 		return { webhooks: results.map(toWebhook) };
+	},
+
+	async "mail.update_webhook"(call, input) {
+		const row = await getWebhook(call.env.DIRECTORY, input.webhook_id);
+		// Only the creator changes a webhook. Another caller learns nothing about the id.
+		if (row?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
+		const authorizationConflict =
+			"The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.";
+		// A first check gives a clear error. The update checks the rule again, against the row as it is then.
+		const keyAfter = input.auth_key === undefined ? row.auth_key : input.auth_key;
+		const headerAfter = input.header === undefined ? row.header_name : (input.header?.name ?? null);
+		if (headerAfter !== null) {
+			const problem = webhookHeaderNameProblem(headerAfter, keyAfter !== null);
+			if (problem) throw new OperationError("invalid", problem);
+		}
+		const label = input.label === undefined ? null : input.label || new URL(row.url).hostname;
+		const setKey = input.auth_key !== undefined;
+		const setHeader = input.header !== undefined;
+		// Only the fields of the request change, so two updates at the same time do not undo each other.
+		const updated = await call.env.DIRECTORY.prepare(
+			`UPDATE webhooks SET label = COALESCE(?1, label),
+				auth_key = CASE WHEN ?2 THEN ?3 ELSE auth_key END,
+				header_name = CASE WHEN ?4 THEN ?5 ELSE header_name END,
+				header_value = CASE WHEN ?4 THEN ?6 ELSE header_value END
+			WHERE id = ?7 AND created_by = ?8
+			AND NOT ((CASE WHEN ?2 THEN ?3 ELSE auth_key END) IS NOT NULL
+				AND lower(COALESCE(CASE WHEN ?4 THEN ?5 ELSE header_name END, '')) = 'authorization')
+			RETURNING ${WEBHOOK_COLUMNS}`,
+		)
+			.bind(
+				label,
+				setKey ? 1 : 0,
+				input.auth_key ?? null,
+				setHeader ? 1 : 0,
+				input.header?.name ?? null,
+				input.header?.value ?? null,
+				row.id,
+				call.caller.id,
+			)
+			.first<WebhookRow>();
+		if (!updated) {
+			// The webhook went away, or a parallel update gave it the other half of the Authorization pair.
+			const current = await getWebhook(call.env.DIRECTORY, input.webhook_id);
+			if (current?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
+			throw new OperationError("invalid", authorizationConflict);
+		}
+		const changed = [
+			...(input.label !== undefined ? ["label"] : []),
+			...(setKey ? [input.auth_key === null ? "auth_key_removed" : "auth_key"] : []),
+			...(setHeader ? [input.header === null ? "header_removed" : "header"] : []),
+		];
+		auditWebhook(call, "mail.update_webhook", row, changed.join(","));
+		return { webhook: toWebhook(updated) };
 	},
 
 	async "mail.delete_webhook"(call, input) {

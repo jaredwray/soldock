@@ -427,6 +427,135 @@ describe("delivery", () => {
 	});
 });
 
+describe("the auth key and the custom header", () => {
+	const KEY = "tok_live_0123456789";
+	const HEADER = { name: "X-Api-Key", value: "header-secret-42" };
+
+	it("sends the auth key and the custom header on each POST, and never returns them", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK, auth_key: KEY, header: HEADER });
+		expect(webhook).toMatchObject({ has_auth_key: true, header_name: "X-Api-Key" });
+		const { secret: _secret, ...shown } = webhook;
+		const listed = await ada.call("mail.list_webhooks");
+		for (const output of [JSON.stringify(shown), JSON.stringify(listed)]) {
+			expect(output).not.toContain(KEY);
+			expect(output).not.toContain(HEADER.value);
+		}
+
+		const posts = receiveWebhooks();
+		await consumeWebhooks([deliveryJob(webhook)]);
+		const post = posts[0] as (typeof posts)[number];
+		expect(post.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+		expect(post.headers.get("x-api-key")).toBe(HEADER.value);
+		expect(post.headers.get("webhook-signature")).toMatch(/^v1,/);
+	});
+
+	// A custom header must never replace a header that Soldock sets, or split into a second header.
+	it("refuses a reserved header name, a value that is not printable ASCII, and two Authorization headers", async () => {
+		for (const name of ["webhook-signature", "Content-Type", "Host", "cf-connecting-ip", "X-Forwarded-For", "X Api"]) {
+			const refused = ada.call("mail.create_webhook", { url: HOOK, header: { name, value: "x" } });
+			expect(await codeOf(refused), name).toBe("invalid");
+		}
+		const split = ada.call("mail.create_webhook", {
+			url: HOOK,
+			header: { name: "X-Api-Key", value: "a\r\nX-Evil: 1" },
+		});
+		expect(await codeOf(split)).toBe("invalid");
+		expect(await codeOf(ada.call("mail.create_webhook", { url: HOOK, auth_key: "two words" }))).toBe("invalid");
+		const both = ada.call("mail.create_webhook", {
+			url: HOOK,
+			auth_key: KEY,
+			header: { name: "Authorization", value: "Basic YTpi" },
+		});
+		expect(await codeOf(both)).toBe("invalid");
+		// Without an auth key, a receiver with another scheme can get its own Authorization header.
+		const basic = await ada.call("mail.create_webhook", {
+			url: HOOK,
+			header: { name: "Authorization", value: "Basic YTpi" },
+		});
+		expect(basic.webhook.header_name).toBe("Authorization");
+	});
+
+	it("lets only the creator replace and remove the auth key and the custom header", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK, auth_key: KEY, header: HEADER });
+		expect(await codeOf(owner.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: "other" }))).toBe(
+			"not_found",
+		);
+		const conflict = ada.call("mail.update_webhook", {
+			webhook_id: webhook.id,
+			header: { name: "Authorization", value: "Basic YTpi" },
+		});
+		expect(await codeOf(conflict)).toBe("invalid");
+
+		const replaced = await ada.call("mail.update_webhook", {
+			webhook_id: webhook.id,
+			auth_key: "tok_new",
+			label: "Bot",
+		});
+		expect(replaced.webhook).toMatchObject({ label: "Bot", has_auth_key: true, header_name: "X-Api-Key" });
+		const posts = receiveWebhooks();
+		await consumeWebhooks([deliveryJob(webhook, eventId(1))]);
+		expect(posts[0]?.headers.get("authorization")).toBe("Bearer tok_new");
+		expect(posts[0]?.headers.get("x-api-key")).toBe(HEADER.value);
+
+		const removed = await ada.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: null, header: null });
+		expect(removed.webhook).toMatchObject({ has_auth_key: false, header_name: null });
+		await consumeWebhooks([deliveryJob(webhook, eventId(2))]);
+		expect(posts[1]?.headers.get("authorization")).toBeNull();
+		expect(posts[1]?.headers.get("x-api-key")).toBeNull();
+	});
+
+	// Each update changes only its own fields, so two updates at the same time keep both changes.
+	it("keeps both changes of two updates at the same time", async () => {
+		const { webhook } = await ada.call("mail.create_webhook", { url: HOOK, auth_key: KEY });
+		await Promise.all([
+			ada.call("mail.update_webhook", { webhook_id: webhook.id, label: "Renamed" }),
+			ada.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: "tok_rotated" }),
+		]);
+		expect(await webhookOf(ada, webhook.id)).toMatchObject({ label: "Renamed", has_auth_key: true });
+		const posts = receiveWebhooks();
+		await consumeWebhooks([deliveryJob(webhook)]);
+		expect(posts[0]?.headers.get("authorization")).toBe("Bearer tok_rotated");
+	});
+
+	// The Authorization rule holds against the stored half of the pair, and a key alone needs no header.
+	it("adds and keeps an auth key without a header, and refuses a key next to a stored Authorization header", async () => {
+		const plain = (await ada.call("mail.create_webhook", { url: HOOK })).webhook;
+		const added = await ada.call("mail.update_webhook", { webhook_id: plain.id, auth_key: KEY });
+		expect(added.webhook).toMatchObject({ has_auth_key: true, header_name: null });
+		const renamed = await ada.call("mail.update_webhook", { webhook_id: plain.id, label: "Only the label" });
+		expect(renamed.webhook).toMatchObject({ label: "Only the label", has_auth_key: true });
+
+		const basic = (
+			await ada.call("mail.create_webhook", { url: HOOK, header: { name: "Authorization", value: "Basic YTpi" } })
+		).webhook;
+		expect(await codeOf(ada.call("mail.update_webhook", { webhook_id: basic.id, auth_key: KEY }))).toBe("invalid");
+	});
+
+	it("refuses an update from each caller except the creator, and from a credential without the scope", async () => {
+		const team = await teamMailbox([ada.id, cy.id]);
+		const { webhook } = await ada.call("mail.create_webhook", { mailbox_id: team, url: HOOK });
+		// The owner and the other member can see or delete it, but not change it.
+		for (const caller of [owner, cy]) {
+			expect(await codeOf(caller.call("mail.update_webhook", { webhook_id: webhook.id, label: "x" }))).toBe(
+				"not_found",
+			);
+		}
+		const { api_key } = await ada.call("account.create_api_key", { label: "read only", scopes: ["mail.read"] });
+		const narrow = api(api_key.secret)("mail.update_webhook", { webhook_id: webhook.id, label: "x" });
+		expect(await codeOf(narrow)).toBe("forbidden");
+	});
+
+	// A sponsor manages the webhooks of its agent, but the secrets of a webhook belong to its creator.
+	it("does not let the sponsor change a webhook that the agent created", async () => {
+		await allowAnyHost();
+		const { webhook } = await bot.call("mail.create_webhook", { url: HOOK, auth_key: KEY });
+		expect(await codeOf(ada.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: null }))).toBe("not_found");
+		expect(
+			(await bot.call("mail.update_webhook", { webhook_id: webhook.id, auth_key: null })).webhook.has_auth_key,
+		).toBe(false);
+	});
+});
+
 describe("access checks before each POST", () => {
 	it("stops a webhook when the API key that created it is revoked", async () => {
 		await allowAnyHost();

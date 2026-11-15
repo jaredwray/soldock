@@ -47,6 +47,7 @@ type MailOperation =
 	| "mail.get_attachment"
 	| "mail.create_webhook"
 	| "mail.list_webhooks"
+	| "mail.update_webhook"
 	| "mail.delete_webhook";
 
 const DEFAULT_QUERY = "in:inbox";

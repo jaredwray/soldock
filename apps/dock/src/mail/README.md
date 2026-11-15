@@ -11,7 +11,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys); raw MIME in R2 `blobs`; the D1 table `webhooks` in the directory database. |
 | **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.delete_webhook` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.update_webhook`, `mail.delete_webhook` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -311,6 +311,27 @@ on a server, a REST client or an MCP client of an older protocol.
 - Mail that arrives before `mail.create_webhook` returns can send no POST, as for the
   acknowledgment of `subscriptions/listen`. Read the inbox one time after the create.
 
+### Auth key and custom header
+
+Some receivers accept a POST only with a token, for example n8n, Zapier or the endpoint of a bot.
+
+- `auth_key`: Soldock sends it on each POST as `Authorization: Bearer <key>`. Printable ASCII
+  without spaces, at most 1,024 characters.
+- `header`: one more header, `{ "name", "value" }`, for example `X-Api-Key`. The value is printable
+  ASCII, at most 2,048 characters, so it cannot add a line break or a second header.
+- The header cannot use a name that Soldock or the HTTP layer sets (`content-type`, `host`,
+  `user-agent`, the encodings and the hop-by-hop headers), a name that claims a client address
+  (`x-real-ip`, `true-client-ip`, `via` and others) or another method (`x-http-method-override`),
+  or the prefixes `webhook-`, `cf-`, `proxy-`, `sec-` and `x-forwarded-` (`WEBHOOK_RESERVED_HEADERS`
+  in the contracts). With an auth key, the header cannot
+  be `Authorization`. Without one, a receiver with another scheme, such as `Basic`, can get its own
+  `Authorization` header.
+- The key and the header value are write-only. A result shows `has_auth_key` and `header_name` only.
+  D1 keeps them in clear text (migration `0010`), because each POST needs them, as the signing
+  secret. No log line or audit line holds them.
+- The headers that Soldock sets go after the custom header, so they always win.
+- The signature does not cover these headers: Standard Webhooks signs the id, the time and the body.
+
 ### Delivery
 
 1. In the transaction of a message that is not spam, `deliver()` adds a row to `event_outbox` when
@@ -383,6 +404,12 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
 - `mail.delete_webhook`: the creator; an owner or an admin in a team mailbox; and the sponsor, an
   owner or an admin in the mailbox of an agent. Another caller gets `not_found`. So an owner or an
   admin can remove the webhook of a member who blocks the limit of a team mailbox.
+- `mail.update_webhook`: only the creator. It changes the label, and replaces or removes the auth key
+  (`null` removes it) and the custom header (`null` removes it). It does not restart a disabled
+  webhook. Another caller gets `not_found`. Each change writes an audit line with the names of the
+  changed fields in `code`, never the values. Each field changes only when the request names it, in
+  one statement that also checks the Authorization rule, so two updates at the same time keep both
+  changes.
 - The events of a mailbox stay on after its last webhook goes. An event with no webhook costs one
   queue message. So a create and a delete at the same time cannot turn off the events of a new webhook.
 
@@ -421,7 +448,7 @@ with its creator. A disabled webhook stays disabled. Delete it and create a new 
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
-| Webhooks | D1 `directory`, table `webhooks` (migration `0009`) | The mailbox, the creator, the credential kind and id, the URL, the label, the signing secret in clear text, the status and the delivery state (failures, the last failed event, the end of a waiting retry). `directory.delete_principal` deletes the rows of the principal. A fresh start drops the table |
+| Webhooks | D1 `directory`, table `webhooks` (migrations `0009` and `0010`) | The mailbox, the creator, the credential kind and id, the URL, the label, the signing secret, the auth key and the custom header (name and value), the secrets in clear text, the status and the delivery state (failures, the last failed event, the end of a waiting retry). `directory.delete_principal` deletes the rows of the principal. A fresh start drops the table |
 | Webhook events | `MailboxDO` table `event_outbox`, and table `meta` keys `webhook_mailbox_id`, `webhook_last_event_at` | At most one row. It holds the event id and the time, never message content. The meta key turns events on. A directory reset deletes them |
 | Webhook jobs | Queue `soldock-webhooks`, dead letters in `soldock-webhooks-dlq` | Jobs hold ids and times, never message content or secrets |
 
