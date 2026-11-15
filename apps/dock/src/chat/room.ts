@@ -648,6 +648,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 			);
 		}
 		this.allowances.set(call.actor.principal_id, { messages: messages - 1, at: now });
+		// A room has `membersPerRoom` members at most, so more entries are from members that left. An
+		// entry that is old enough has a full allowance again, which is the same as no entry.
+		if (this.allowances.size > CHAT_LIMITS.membersPerRoom) {
+			const full = CHAT_LIMITS.messageBurst * refillMs;
+			for (const [principalId, allowance] of this.allowances) {
+				if (now - allowance.at >= full) this.allowances.delete(principalId);
+			}
+		}
 		return null;
 	}
 
