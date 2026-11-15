@@ -33,15 +33,15 @@ interface WebhookManagerProps {
 	mailboxId?: string;
 	/** True when the form to create a webhook shows. In the mailbox of an agent, only its sponsor can create one. */
 	canCreate: boolean;
-	/** False inside a dialog, whose title is the heading: the section has no visible heading. */
-	framed?: boolean;
+	/** More text after the standard note, for example who creates the webhooks of a team mailbox. */
+	note?: string;
 }
 
 /**
  * Lists, creates, changes and deletes webhooks: a POST to a URL outside Soldock when new mail arrives.
  * Only the creator of a webhook can change its label, its auth key and its custom header.
  */
-export function WebhookManager({ heading, mailboxId, canCreate, framed = true }: WebhookManagerProps) {
+export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookManagerProps) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const [webhooks, setWebhooks] = useState<Webhook[] | null>(null);
@@ -88,10 +88,17 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 		return mailbox ? mailbox.address : id;
 	};
 
-	const note =
-		"A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the receiver reads the inbox with its own key.";
-	const content = (
-		<>
+	return (
+		<section className="panel" aria-labelledby={headingId}>
+			<header className="panel-heading">
+				<h2 id={headingId} className="panel-title">
+					{heading}
+				</h2>
+				<p className="panel-note">
+					A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the
+					receiver reads the inbox with its own key.{note && ` ${note}`}
+				</p>
+			</header>
 			{error && (
 				<p className="form-error" role="alert">
 					The webhooks did not load. {error}
@@ -214,27 +221,6 @@ export function WebhookManager({ heading, mailboxId, canCreate, framed = true }:
 					</p>
 				</ConfirmDialog>
 			)}
-		</>
-	);
-
-	// Inside a dialog, the title of the dialog is the heading.
-	if (!framed) {
-		return (
-			<div className="webhooks">
-				<p className="panel-note">{note}</p>
-				{content}
-			</div>
-		);
-	}
-	return (
-		<section className="panel" aria-labelledby={headingId}>
-			<header className="panel-heading">
-				<h2 id={headingId} className="panel-title">
-					{heading}
-				</h2>
-				<p className="panel-note">{note}</p>
-			</header>
-			{content}
 		</section>
 	);
 }
