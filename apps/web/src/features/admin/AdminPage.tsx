@@ -135,7 +135,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 								change its own policy.
 							</p>
 							{agents.length === 0 && <p className="panel-card panel-empty">There are no agents yet.</p>}
-							<div className="agent-list">
+							<div className="admin-card-list">
 								{agents.map((agent) => (
 									<AgentPanel
 										key={agent.id}

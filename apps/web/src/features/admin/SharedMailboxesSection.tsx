@@ -1,44 +1,22 @@
-import { EmailAddress, type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@soldock/contracts";
+import { EmailAddress, type Principal, type TeamMailbox } from "@soldock/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { WebhookManager } from "../settings/Webhooks.tsx";
-import { EditSharedMailboxDialog } from "./EditSharedMailboxDialog.tsx";
-import { RowButton } from "./RowButton.tsx";
+import { byName, SharedMailboxPanel } from "./SharedMailboxPanel.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
-
-function byName(a: Principal, b: Principal): number {
-	return a.display_name.localeCompare(b.display_name);
-}
-
-function describe(principal: Principal): string {
-	return `${principal.display_name} (${principal.address})${principal.kind === "agent" ? ", agent" : ""}`;
-}
-
-/** The names of the first members, for the list. */
-function memberNames(members: readonly Principal[]): string {
-	const names = members.slice(0, 3).map((member) => member.display_name);
-	return members.length > 3 ? `${names.join(", ")} and ${members.length - 3} more` : names.join(", ");
-}
-
-type Action = { kind: "create" } | { kind: "edit" | "members" | "webhooks"; mailboxId: string };
 
 /**
  * Owners and admins create shared mailboxes, change them and decide who can use each one. A shared
  * mailbox has its own address: each member, a person or an agent, reads it and sends from its address.
- * The section is a list. "New shared mailbox", and Edit, Members and Webhooks in each row, open dialogs.
+ * "New shared mailbox" opens a dialog. Each shared mailbox is a card, as an agent is in Agents.
  */
 export function SharedMailboxesSection({ principals }: { principals: readonly Principal[] }) {
-	const toast = useToast();
 	const [mailboxes, setMailboxes] = useState<TeamMailbox[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [action, setAction] = useState<Action | null>(null);
-	const byId = new Map(principals.map((principal) => [principal.id, principal]));
-	const membersOf = (mailbox: TeamMailbox) => mailbox.member_ids.flatMap((id) => byId.get(id) ?? []);
+	const [creating, setCreating] = useState(false);
 
 	const load = useCallback(async () => {
 		setError(null);
@@ -62,9 +40,6 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 		);
 	}
 
-	const open =
-		action && action.kind !== "create" ? mailboxes?.find((mailbox) => mailbox.id === action.mailboxId) : undefined;
-
 	return (
 		<section className="panel">
 			<div className="panel-head">
@@ -75,7 +50,7 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 				<button
 					type="button"
 					className="button button-primary"
-					onClick={() => setAction({ kind: "create" })}
+					onClick={() => setCreating(true)}
 					disabled={mailboxes === null}
 				>
 					<Icon name="plus" size={18} />
@@ -99,274 +74,23 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 				<p className="panel-card panel-empty">There are no shared mailboxes yet.</p>
 			)}
 			{mailboxes !== null && mailboxes.length > 0 && (
-				<div className="panel-card panel-card-list table-scroll">
-					<table className="table table-rows">
-						<caption className="visually-hidden">Shared mailboxes of the organization</caption>
-						<thead>
-							<tr>
-								<th scope="col">Name</th>
-								<th scope="col">Members</th>
-								<th scope="col" className="cell-actions">
-									<span className="visually-hidden">Actions</span>
-								</th>
-							</tr>
-						</thead>
-						<tbody>
-							{mailboxes.map((mailbox) => {
-								const members = membersOf(mailbox);
-								return (
-									<tr key={mailbox.id}>
-										<td className="member-cell">
-											<div className="member">
-												<span className="avatar member-avatar" aria-hidden="true">
-													<Icon name="inbox" size={18} />
-												</span>
-												<div className="member-text">
-													<div className="member-name">{mailbox.display_name}</div>
-													<div className="row-note">{mailbox.address}</div>
-												</div>
-											</div>
-										</td>
-										<td>
-											<div>{members.length === 1 ? "1 member" : `${members.length} members`}</div>
-											{members.length > 0 && <div className="row-note">{memberNames(members)}</div>}
-										</td>
-										<td className="cell-actions">
-											<div className="row-actions">
-												<RowButton
-													icon="pencil"
-													label={`Edit ${mailbox.display_name}`}
-													onClick={() => setAction({ kind: "edit", mailboxId: mailbox.id })}
-												/>
-												<RowButton
-													icon="team"
-													label={`Members of ${mailbox.display_name}`}
-													onClick={() => setAction({ kind: "members", mailboxId: mailbox.id })}
-												/>
-												<RowButton
-													icon="link"
-													label={`Webhooks of ${mailbox.display_name}`}
-													onClick={() => setAction({ kind: "webhooks", mailboxId: mailbox.id })}
-												/>
-											</div>
-										</td>
-									</tr>
-								);
-							})}
-						</tbody>
-					</table>
+				<div className="admin-card-list">
+					{mailboxes.map((mailbox) => (
+						<SharedMailboxPanel key={mailbox.id} mailbox={mailbox} principals={principals} onChanged={save} />
+					))}
 				</div>
 			)}
-			{action?.kind === "create" && (
+			{creating && (
 				<CreateSharedMailboxDialog
 					principals={principals}
-					onClose={() => setAction(null)}
+					onClose={() => setCreating(false)}
 					onCreated={(mailbox) => {
 						save(mailbox);
-						setAction(null);
+						setCreating(false);
 					}}
 				/>
-			)}
-			{open && action?.kind === "edit" && (
-				<EditSharedMailboxDialog
-					mailbox={open}
-					onClose={() => setAction(null)}
-					onSaved={(mailbox) => {
-						save(mailbox);
-						setAction(null);
-						toast({ message: `${mailbox.display_name} saved.` });
-					}}
-				/>
-			)}
-			{open && action?.kind === "members" && (
-				<MembersDialog mailbox={open} principals={principals} onChanged={save} onClose={() => setAction(null)} />
-			)}
-			{open && action?.kind === "webhooks" && (
-				<Dialog
-					title={`Webhooks of ${open.display_name}`}
-					description={`${open.address}. Members create webhooks. You can delete one, for example when the mailbox reaches its limit.`}
-					onClose={() => setAction(null)}
-				>
-					<div className="dialog-body">
-						<WebhookManager
-							heading={`Webhooks of ${open.display_name}`}
-							mailboxId={open.id}
-							canCreate={false}
-							framed={false}
-						/>
-					</div>
-					<div className="dialog-actions">
-						<button type="button" className="button" onClick={() => setAction(null)}>
-							Done
-						</button>
-					</div>
-				</Dialog>
 			)}
 		</section>
-	);
-}
-
-interface MembersDialogProps {
-	mailbox: TeamMailbox;
-	principals: readonly Principal[];
-	onChanged: (mailbox: TeamMailbox) => void;
-	onClose: () => void;
-}
-
-/** The members of one shared mailbox, with a control to add one and a button to remove each one. */
-function MembersDialog({ mailbox, principals, onChanged, onClose }: MembersDialogProps) {
-	const toast = useToast();
-	const [candidateId, setCandidateId] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [removing, setRemoving] = useState<Principal | null>(null);
-	const selectId = useId();
-	const hintId = useId();
-	const members = mailbox.member_ids.flatMap((id) => principals.filter((principal) => principal.id === id));
-	// An archived account cannot use a mailbox, so the list does not offer it.
-	const candidates = principals
-		.filter((principal) => !mailbox.member_ids.includes(principal.id) && principal.archived_at === null)
-		.sort(byName);
-	const full = mailbox.member_ids.length >= TEAM_MAILBOX_LIMITS.members;
-
-	async function add(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		const principal = candidates.find((candidate) => candidate.id === candidateId);
-		if (!principal) return setError("Select a person or an agent.");
-		setBusy(true);
-		setError(null);
-		try {
-			const result = await api.call("directory.add_team_mailbox_member", {
-				mailbox_id: mailbox.id,
-				principal_id: principal.id,
-			});
-			setCandidateId("");
-			onChanged(result.team_mailbox);
-			toast({ message: `${principal.display_name} can now use ${mailbox.display_name}.` });
-		} catch (caught) {
-			setError(errorMessage(caught));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	async function remove(principal: Principal) {
-		const result = await api.call("directory.remove_team_mailbox_member", {
-			mailbox_id: mailbox.id,
-			principal_id: principal.id,
-		});
-		onChanged(result.team_mailbox);
-		toast({ message: `${principal.display_name} can no longer use ${mailbox.display_name}.` });
-	}
-
-	return (
-		<Dialog
-			title={`Members of ${mailbox.display_name}`}
-			description={mailbox.address}
-			onClose={() => !busy && onClose()}
-		>
-			<div className="dialog-body">
-				{members.length === 0 ? (
-					<p className="muted">Nobody can use this mailbox yet. Mail to its address still arrives.</p>
-				) : (
-					<div className="table-scroll">
-						<table className="table table-rows">
-							<caption className="visually-hidden">Members of {mailbox.display_name}</caption>
-							<thead>
-								<tr>
-									<th scope="col">Name</th>
-									<th scope="col">Kind</th>
-									<th scope="col" className="cell-actions">
-										<span className="visually-hidden">Actions</span>
-									</th>
-								</tr>
-							</thead>
-							<tbody>
-								{members.map((member) => (
-									<tr key={member.id} className={member.archived_at !== null ? "row-muted" : undefined}>
-										<td>
-											<div className="member-name">
-												{member.display_name}
-												{member.archived_at !== null && <span className="chip chip-small">Archived</span>}
-											</div>
-											<div className="row-note">{member.address}</div>
-										</td>
-										<td>
-											<span className={`kind kind-${member.kind}`}>{member.kind === "agent" ? "Agent" : "Person"}</span>
-										</td>
-										<td className="cell-actions">
-											<button
-												type="button"
-												className="button button-small"
-												aria-label={`Remove ${member.display_name} from ${mailbox.display_name}`}
-												onClick={() => setRemoving(member)}
-												disabled={busy}
-											>
-												Remove
-											</button>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
-				<form className="panel-form panel-form-divided" onSubmit={add} noValidate>
-					<div className="field">
-						<label htmlFor={selectId} className="field-label">
-							Add a member
-						</label>
-						<select
-							id={selectId}
-							className="input"
-							value={candidateId}
-							onChange={(event) => setCandidateId(event.target.value)}
-							aria-describedby={hintId}
-							disabled={busy || full || candidates.length === 0}
-						>
-							<option value="">Select a person or an agent</option>
-							{candidates.map((candidate) => (
-								<option key={candidate.id} value={candidate.id}>
-									{describe(candidate)}
-								</option>
-							))}
-						</select>
-						<p id={hintId} className="field-hint">
-							{full
-								? `A shared mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`
-								: "An agent sends from this mailbox only to the recipients that its own policy allows."}
-						</p>
-					</div>
-					{error && (
-						<p className="form-error" role="alert">
-							{error}
-						</p>
-					)}
-					<button type="submit" className="button button-primary" disabled={busy || full || candidates.length === 0}>
-						{busy ? "Please wait…" : "Add member"}
-					</button>
-				</form>
-			</div>
-			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose} disabled={busy}>
-					Done
-				</button>
-			</div>
-			{removing && (
-				<ConfirmDialog
-					title="Remove member?"
-					confirmLabel="Remove member"
-					danger
-					onClose={() => setRemoving(null)}
-					onConfirm={() => remove(removing)}
-				>
-					<p>
-						Remove {removing.display_name} from {mailbox.display_name}? The access ends at once. The mail stays in the
-						shared mailbox.
-					</p>
-				</ConfirmDialog>
-			)}
-		</Dialog>
 	);
 }
 
