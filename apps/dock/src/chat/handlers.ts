@@ -191,6 +191,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const page = accept(
 			await opened.room.listMessages(opened.ctx, {
 				before: input.before ?? null,
+				after: input.after ?? null,
 				changedAfter: input.changed_after ?? null,
 				limit: input.limit ?? DEFAULT_PAGE,
 			}),

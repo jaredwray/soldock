@@ -1,5 +1,15 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
-import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	type KeyboardEvent,
+	useCallback,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -22,6 +32,7 @@ import {
 	startsGroup,
 	storedSends,
 	timeLabel,
+	unseenSendsNote,
 } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 
@@ -49,19 +60,32 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	const toast = useToast();
 	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
 	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
+	// A list that is not at the newest messages does not know the last message of the room.
 	const loaded = view.messages[view.messages.length - 1];
-	const outbox = useOutbox(roomId, ownId, view.status === "ready" ? (loaded?.seq ?? 0) : null, (message) => {
+	const lastSeq = view.status === "ready" && !view.hasNewer ? (loaded?.seq ?? 0) : null;
+	/** The number of messages that the room stored for the person while the list was not at the newest messages. */
+	const [sentUnseen, setSentUnseen] = useState(0);
+	const outbox = useOutbox(roomId, ownId, lastSeq, (message) => {
 		view.apply(message);
+		// The list does not take the message now. A line below the list tells that the room has it.
+		if (view.hasNewer) setSentUnseen((count) => count + 1);
 		void onRoomsChanged();
 	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
 	const [draft, setDraft] = useState("");
 	const [joining, setJoining] = useState(false);
+	/** True while a read of the newest messages runs for this view. */
+	const [goingToLatest, setGoingToLatest] = useState(false);
+	/** True while the outbox waits for the newest messages of the room: a send from a list that was not there. */
+	const holding = useRef(false);
+	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
+	const refocus = useRef(false);
 	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stick = useRef(true);
-	const heightBefore = useRef<number | null>(null);
+	/** The first row that shows, with its distance from the top of the list, before the rows change. */
+	const place = useRef<{ key: string; top: number } | null>(null);
 	const markedSeq = useRef(0);
 	const draftId = useId();
 
@@ -115,10 +139,15 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		const signedIn = accountChangeCount();
 		return createCallLine(() => accountChangeCount() === signedIn);
 	}, []);
-	const rows = useMemo(
-		() => chatRows(messages, outbox.state, own, roomId, changes),
-		[messages, outbox.state, own, roomId, changes],
-	);
+	// A message that waits for the server goes after the newest message of the room. A list that is
+	// not at the newest messages does not show it.
+	const hasNewer = view.hasNewer;
+	const rows = useMemo(() => {
+		const all = chatRows(messages, outbox.state, own, roomId, changes);
+		return hasNewer ? all.filter((row) => row.pending === null) : all;
+	}, [messages, outbox.state, own, roomId, changes, hasNewer]);
+
+	const unseenNote = hasNewer ? unseenSendsNote(outbox.state, sentUnseen) : null;
 
 	// The answers of a send can fail after the server stored the message. When the list has that
 	// message, the send did not fail: the row of the send becomes the row of the stored message.
@@ -127,40 +156,146 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		for (const { key, id } of storedSends(messages, outbox.state, own)) settle(key, id);
 	}, [messages, outbox.state, own, settle]);
 
-	// After older messages come in, the list stays at the same message. After a new message, it moves
-	// to the end, if it was at the end.
-	useLayoutEffect(() => {
+	/** Keeps the first row that shows, and its distance from the top of the list, for the next change of the rows. */
+	function keepPlace() {
 		const list = scrollRef.current;
-		if (!list || rows.length === 0) return;
-		if (heightBefore.current !== null) {
-			list.scrollTop += list.scrollHeight - heightBefore.current;
-			heightBefore.current = null;
-		} else if (stick.current) {
-			list.scrollTop = list.scrollHeight;
+		if (!list) return;
+		const top = list.getBoundingClientRect().top;
+		for (const row of list.querySelectorAll<HTMLElement>("[data-row]")) {
+			const box = row.getBoundingClientRect();
+			if (box.bottom > top) {
+				place.current = { key: row.dataset.row ?? "", top: box.top - top };
+				return;
+			}
 		}
-	}, [rows]);
+		place.current = null;
+	}
+
+	/** Puts the list at its end, if it was there, or at the row and the distance that `keepPlace` kept. */
+	function holdPlace() {
+		const list = scrollRef.current;
+		if (!list) return;
+		const kept = place.current;
+		if (stick.current) {
+			list.scrollTop = list.scrollHeight;
+		} else if (kept) {
+			for (const row of list.querySelectorAll<HTMLElement>("[data-row]")) {
+				if (row.dataset.row !== kept.key) continue;
+				list.scrollTop += row.getBoundingClientRect().top - list.getBoundingClientRect().top - kept.top;
+				break;
+			}
+		}
+		keepPlace();
+	}
+
+	// After a new message, the list moves to its end, if it was at the end. After each other change of
+	// the rows, the list stays at the same message: the rows above it can come in, go out and change.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
+	useLayoutEffect(() => {
+		if (rows.length > 0) holdPlace();
+	}, [rows, view.hasOlder, hasNewer]);
+
+	// The list also stays at the same message when its size changes: the window gets a different
+	// width, or the keyboard of a phone opens.
+	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
+	useEffect(() => {
+		const list = scrollRef.current;
+		if (!isMember || !list || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => holdPlace());
+		observer.observe(list);
+		return () => observer.disconnect();
+	}, [isMember]);
+
+	// A button of the list goes away when the list has no more messages in its direction. The focus
+	// then goes to the list, so a person with a keyboard keeps the place.
+	useLayoutEffect(() => {
+		if (!refocus.current || document.activeElement !== document.body) return;
+		refocus.current = false;
+		scrollRef.current?.focus();
+	});
+
+	/** Sets if the list is at its end. The room then also knows which messages a full list can drop. */
+	const follow = view.follow;
+	function setStick(atEnd: boolean) {
+		stick.current = atEnd;
+		follow(atEnd);
+	}
 
 	function onScroll() {
 		const list = scrollRef.current;
-		if (list) stick.current = list.scrollHeight - list.scrollTop - list.clientHeight < STICK_PX;
+		if (!list) return;
+		setStick(list.scrollHeight - list.scrollTop - list.clientHeight < STICK_PX);
+		keepPlace();
 	}
 
-	async function loadOlder() {
-		heightBefore.current = scrollRef.current?.scrollHeight ?? null;
+	function loadOlder() {
+		refocus.current = true;
+		view.loadOlder().catch(fail);
+	}
+
+	function loadNewer() {
+		refocus.current = true;
+		// The new rows come in after the last row. The list must not move to its new end.
+		setStick(false);
+		view.loadNewer().catch(fail);
+	}
+
+	/** Puts the list at the newest messages of the room. False when a different read replaced this one. */
+	async function toLatest(): Promise<boolean> {
+		setStick(true);
+		setGoingToLatest(true);
 		try {
-			await view.loadOlder();
+			return await view.toLatest();
 		} catch (caught) {
-			heightBefore.current = null;
-			fail(caught);
+			// The list stays where it is. It is at its end only when the person sees that end.
+			onScroll();
+			throw caught;
+		} finally {
+			setGoingToLatest(false);
 		}
 	}
 
+	// A send from a list that is not at the newest messages: the outbox has the message, and starts
+	// no call until the list is there. The call then knows the last message of the room, so the list
+	// finds the stored message of the send.
+	const resumeOutbox = outbox.resume;
+	const release = useCallback(() => {
+		if (!holding.current) return;
+		holding.current = false;
+		resumeOutbox();
+	}, [resumeOutbox]);
+	useEffect(() => {
+		if (hasNewer) return;
+		release();
+		setSentUnseen(0);
+	}, [hasNewer, release]);
+	// The page leaves the room. The message still goes out.
+	useEffect(() => release, [release]);
+
 	function send() {
 		if (!draft.trim()) return;
+		// A new message goes after the newest message of the room. When the list is not there, it goes
+		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
+		// after a reload and after a different room opens.
+		if (hasNewer && !holding.current) {
+			holding.current = true;
+			outbox.pause();
+			toLatest().then(
+				(applied) => {
+					if (!applied) release();
+				},
+				(caught) => {
+					// The list did not get to the newest messages. The message goes out all the same.
+					release();
+					fail(caught);
+				},
+			);
+		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
 		outbox.send(draft);
 		setDraft("");
-		stick.current = true;
+		setStick(true);
 	}
 
 	function onDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -259,7 +394,6 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		);
 	}
 
-	const isMember = room.role !== null;
 	return (
 		<>
 			<header className="chat-header">
@@ -303,16 +437,16 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 			{isMember ? (
 				<>
-					<div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
+					<div className="chat-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1}>
 						{view.hasOlder && (
 							<p className="chat-more">
 								<button
 									type="button"
 									className="button button-small"
-									disabled={view.loadingOlder}
-									onClick={() => void loadOlder()}
+									disabled={view.paging !== null}
+									onClick={loadOlder}
 								>
-									{view.loadingOlder ? "Loading…" : "Show older messages"}
+									{view.paging === "older" ? "Loading…" : "Show older messages"}
 								</button>
 							</p>
 						)}
@@ -340,6 +474,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 										</li>
 									)}
 									<MessageItem
+										rowKey={key}
 										message={message}
 										pending={pending}
 										head={startsGroup(rows[index - 1]?.message, message)}
@@ -357,6 +492,34 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 								</Fragment>
 							))}
 						</ol>
+						{view.hasNewer && (
+							<p className="chat-more">
+								<button
+									type="button"
+									className="button button-small"
+									disabled={view.paging !== null}
+									onClick={loadNewer}
+								>
+									{view.paging === "newer" ? "Loading…" : "Show newer messages"}
+								</button>
+								<button
+									type="button"
+									className="button button-small"
+									disabled={goingToLatest}
+									onClick={() => {
+										refocus.current = true;
+										toLatest().catch(fail);
+									}}
+								>
+									{goingToLatest ? "Loading…" : "Go to the newest messages"}
+								</button>
+							</p>
+						)}
+						{unseenNote !== null && (
+							<p className="chat-more-note" role="status">
+								{unseenNote}
+							</p>
+						)}
 					</div>
 					<form
 						className="chat-composer"
@@ -445,6 +608,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 interface MessageItemProps {
 	message: ChatMessage;
+	/** The key of the row. The list finds the row with it, to stay at the same message. */
+	rowKey: string;
 	/** The state of the send, for a message that the server does not have yet. */
 	pending: PendingMessage | null;
 	/** True when the message shows its author and its time. */
@@ -465,6 +630,7 @@ interface MessageItemProps {
 }
 
 function MessageItem({
+	rowKey,
 	message,
 	pending,
 	head,
@@ -494,6 +660,7 @@ function MessageItem({
 			]
 				.filter(Boolean)
 				.join(" ")}
+			data-row={rowKey}
 			tabIndex={hasActions ? -1 : undefined}
 			aria-busy={pending !== null && !failed ? true : undefined}
 		>

@@ -9,37 +9,6 @@ export function roomTitle(room: Pick<ChatRoom, "kind" | "name" | "peer">): strin
 	return room.name ?? "Room";
 }
 
-function merged(current: readonly ChatMessage[], incoming: readonly ChatMessage[]): ChatMessage[] {
-	const byId = new Map(current.map((message) => [message.id, message]));
-	for (const message of incoming) {
-		const known = byId.get(message.id);
-		// An answer can arrive after a newer one. The message with the higher version is the current one.
-		if (!known || message.version >= known.version) byId.set(message.id, message);
-	}
-	return [...byId.values()].sort((a, b) => a.seq - b.seq);
-}
-
-/** The list with a page of older messages before it. */
-export function withOlder(current: readonly ChatMessage[], page: readonly ChatMessage[]): ChatMessage[] {
-	return merged(current, page);
-}
-
-/**
- * The list with the changes of a sync: a new message goes to the end, and a changed or deleted message
- * replaces the old one. `hasOlder` is true while the room has messages before the first message of the
- * list. Then a change to a message before the first one is dropped: the list has no gap, so "load
- * older" continues from its first message. Without older messages, the list has the start of the room,
- * and each change goes in.
- */
-export function withChanges(
-	current: readonly ChatMessage[],
-	changes: readonly ChatMessage[],
-	hasOlder: boolean,
-): ChatMessage[] {
-	const first = current[0];
-	return merged(current, hasOlder && first ? changes.filter((message) => message.seq >= first.seq) : changes);
-}
-
 /** One row of the message list: a stored message, or a message that waits for the server. */
 export interface ChatRow {
 	/** The key of the row. A message keeps it from its send to its stored form, so the row stays the same. */
@@ -154,6 +123,29 @@ export function storedSends(
 	return [...storedOf(messages, outbox, own)]
 		.filter(([, pending]) => pending.state === "failed")
 		.map(([id, pending]) => ({ key: pending.key, id }));
+}
+
+/**
+ * The line below a list that is not at the newest messages, about the messages of the person that
+ * the list does not show: the messages that wait for the server, and `sent`, the number of messages
+ * that the room stored since the list left the newest messages. Without the line, the person sees
+ * nothing of a send, and can send the message a second time. Null when the list hides no such message.
+ *
+ * A send can fail without an answer of the server. The room possibly has that message, and a list
+ * that is not at the newest messages cannot find it. So the line does not tell that the message was
+ * not sent. "Try again" on the row is safe: the send keeps its key, and the room stores it one time.
+ */
+export function unseenSendsNote(outbox: OutboxState, sent: number): string | null {
+	const failed = outbox.pending.filter((pending) => pending.state === "failed");
+	if (failed.some((pending) => !pending.uncertain)) {
+		return "A message was not sent. Go to the newest messages to send it again.";
+	}
+	if (failed.length > 0) {
+		return "The page got no answer for a message. Go to the newest messages to see if the room has it.";
+	}
+	if (outbox.pending.length > 0) return "Your new messages wait. They show after the newest messages.";
+	if (sent > 0) return "The room has your new messages. They show after the newest messages.";
+	return null;
 }
 
 /**

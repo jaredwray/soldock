@@ -199,6 +199,25 @@ describe("messages", () => {
 		expect(older.has_more).toBe(false);
 	});
 
+	it("come back in pages after a message, oldest first, up to the newest", async () => {
+		const room = await createRoom(ada, "public", "Launch");
+		for (const text of ["one", "two", "three", "four", "five"]) await post(ada, room.id, text);
+		const next = await ada.call("chat.list_messages", { room_id: room.id, limit: 2, after: 1 });
+		expect(next.messages.map((message) => [message.seq, message.text])).toEqual([
+			[2, "two"],
+			[3, "three"],
+		]);
+		expect(next.has_more).toBe(true);
+		const last = await ada.call("chat.list_messages", { room_id: room.id, limit: 2, after: 3 });
+		expect(last.messages.map((message) => message.text)).toEqual(["four", "five"]);
+		expect(last.has_more).toBe(false);
+		expect((await ada.call("chat.list_messages", { room_id: room.id, after: 5 })).messages).toEqual([]);
+		// One call reads in one direction.
+		expect(await codeOf(ada.call("chat.list_messages", { room_id: room.id, after: 1, before: 4 }))).toBe("invalid");
+		const mixed = ada.call("chat.list_messages", { room_id: room.id, after: 1, changed_after: 0 });
+		expect(await codeOf(mixed)).toBe("invalid");
+	});
+
 	it("report each new, changed and deleted message after a version, in the order of the changes", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		const first = await post(ada, room.id, "Frist");

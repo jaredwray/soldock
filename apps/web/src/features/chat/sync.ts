@@ -28,6 +28,12 @@ export interface RoomSync {
 	 * runs. When it is later than that, the page did not get a change, and a sync gets it.
 	 */
 	push(message: ChatMessage): void;
+	/**
+	 * Tells the sync that the page got messages as they were at `version` of the room, for example a
+	 * page of older messages. When the sync is after that version, it reads the changes after that
+	 * version again: the page did not keep a change to a message that it did not have at that time.
+	 */
+	rewind(version: number): void;
 	/** Stops the sync until the next `start`. A page of changes that arrives before that is dropped. */
 	stop(): void;
 }
@@ -37,8 +43,8 @@ export interface RoomSync {
  * `apply`. `apply` can get the same message two times: from `push` and from a read. One sync runs at
  * a time. A call during a sync makes the sync run one more time. After a failed read, the version
  * stays, so the next sync asks for the same changes again. A page that was read before a new `start`
- * is dropped, and the sync reads again from the new version: that page was for the list from before
- * the load.
+ * or a `rewind` is dropped, and the sync reads again from the new version: that page was for the
+ * version from before.
  */
 export function createRoomSync(
 	read: (changedAfter: number) => Promise<ChangePage>,
@@ -48,7 +54,7 @@ export function createRoomSync(
 	let running = false;
 	let again = false;
 	let stopped = false;
-	/** The number of starts. A read knows from it that a load replaced the list during the read. */
+	/** The number of starts and rewinds. A read knows from it that the version changed during the read. */
 	let starts = 0;
 
 	async function run(): Promise<void> {
@@ -100,6 +106,13 @@ export function createRoomSync(
 			// A sync that runs read the room before this message, or reads it now. It must run again.
 			if (!running && message.version === version + 1) version = message.version;
 			else void run();
+		},
+		rewind(to) {
+			if (version === null || stopped || to >= version) return;
+			version = to;
+			// A read that runs now is for the later version. The sync drops it, and reads from this one.
+			starts += 1;
+			void run();
 		},
 		stop() {
 			stopped = true;

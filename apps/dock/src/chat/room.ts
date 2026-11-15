@@ -596,12 +596,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	// --- Messages -------------------------------------------------------------------------------
 
 	/**
-	 * A page of the history (newest page, or the page before a seq), or the messages that changed after
-	 * a version of the room. The messages of the history are oldest first.
+	 * A page of the history (the newest page, the page before a seq, or the page after a seq), or the
+	 * messages that changed after a version of the room. The messages of the history are oldest first.
 	 */
 	listMessages(
 		call: RoomCall,
-		input: { before: number | null; changedAfter: number | null; limit: number },
+		input: { before: number | null; after: number | null; changedAfter: number | null; limit: number },
 	): { messages: MessageRecord[]; version: number; hasMore: boolean } | Refusal {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
@@ -610,6 +610,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 			rows = this.all<MessageRow>(
 				"SELECT * FROM messages WHERE version > ? ORDER BY version LIMIT ?",
 				input.changedAfter,
+				input.limit + 1,
+			);
+		} else if (input.after !== null) {
+			rows = this.all<MessageRow>(
+				"SELECT * FROM messages WHERE seq > ? ORDER BY seq LIMIT ?",
+				input.after,
 				input.limit + 1,
 			);
 		} else if (input.before !== null) {
@@ -623,7 +629,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		const hasMore = rows.length > input.limit;
 		const page = rows.slice(0, input.limit);
-		if (input.changedAfter === null) page.reverse();
+		// A page of the newest messages, and a page before a message, come newest first from the table.
+		if (input.changedAfter === null && input.after === null) page.reverse();
 		return {
 			messages: page.map((row) => toMessage(opened.room.room_id, row)),
 			version: opened.room.version,

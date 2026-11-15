@@ -6,9 +6,8 @@ import {
 	startsDay,
 	startsGroup,
 	storedSends,
-	withChanges,
+	unseenSendsNote,
 	withLocalChanges,
-	withOlder,
 } from "../src/features/chat/model.ts";
 
 const ADA = { principal_id: "prn_01JD0000000000000000000ADA", kind: "human", display_name: "Ada Lovelace" } as const;
@@ -28,51 +27,6 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		...change,
 	};
 }
-
-const seqs = (messages: readonly ChatMessage[]) => messages.map((entry) => entry.seq);
-
-describe("the message list of a room", () => {
-	it("puts a new message at the end, and replaces a changed or deleted message", () => {
-		const list = [message(3), message(4)];
-		const next = withChanges(
-			list,
-			[
-				message(4, { text: "changed", version: 6 }),
-				message(5, { version: 5 }),
-				message(3, { text: "", deleted: true, version: 7 }),
-			],
-			true,
-		);
-		expect(next.map((entry) => [entry.seq, entry.text, entry.deleted])).toEqual([
-			[3, "", true],
-			[4, "changed", false],
-			[5, "message 5", false],
-		]);
-	});
-
-	// "Show older messages" continues from the first message. A message before it would make a gap.
-	it("drops a change to a message that is older than the first message, while older messages are not loaded", () => {
-		const next = withChanges([message(3), message(4)], [message(1, { text: "old edit", version: 9 })], true);
-		expect(seqs(next)).toEqual([3, 4]);
-	});
-
-	// A room loads empty. A different member posts message 1, then the person posts message 2, and the
-	// answer of that post shows first. The sync must still add message 1.
-	it("keeps a message from before the first message when the list has the start of the room", () => {
-		const afterOwnPost = withChanges([], [message(2)], false);
-		expect(seqs(withChanges(afterOwnPost, [message(1), message(2)], false))).toEqual([1, 2]);
-	});
-
-	// The answer of an edit can arrive after a sync that has a newer change of the same message.
-	it("keeps the newer version of a message when an older answer arrives later", () => {
-		const list = withChanges([message(3)], [message(3, { text: "second edit", version: 8 })], true);
-		expect(withChanges(list, [message(3, { text: "first edit", version: 6 })], true)[0]?.text).toBe("second edit");
-	});
-
-	it("puts a page of older messages before the list, without a message two times", () => {
-		expect(seqs(withOlder([message(3), message(4)], [message(1), message(2), message(3)]))).toEqual([1, 2, 3, 4]);
-	});
-});
 
 describe("the look of a room", () => {
 	it("shows the author again after a different author, and after five minutes", () => {
@@ -352,5 +306,41 @@ describe("the messages with the changes that wait for the server", () => {
 		const messages = [message(1)];
 		expect(withLocalChanges(messages, new Map())).toBe(messages);
 		expect(withLocalChanges(messages, new Map([["cmsg_9", { kind: "delete" }]]))).toEqual(messages);
+	});
+});
+
+describe("the line about the sends that a list does not show", () => {
+	type SendState = "waiting" | "sending" | "failed" | "no answer";
+	const pending = (state: SendState) => ({
+		key: `k_${state}`,
+		text: "Hello",
+		created_at: "2026-01-01T09:10:00.000Z",
+		state: state === "no answer" ? ("failed" as const) : state,
+		error: state === "failed" || state === "no answer" ? "No connection." : null,
+		uncertain: state === "no answer",
+		afterSeq: null,
+	});
+	const outbox = (...states: SendState[]) => ({
+		pending: states.map(pending),
+		keys: new Map<string, string>(),
+		sendingKey: null,
+	});
+
+	// The list is not at the newest messages, and the room stored the message of the person. Without
+	// the line, the person sees nothing of the send, and can send the message a second time.
+	it("tells that the room has a message of the person, also after the send ended", () => {
+		expect(unseenSendsNote(outbox(), 0)).toBeNull();
+		expect(unseenSendsNote(outbox(), 1)).toMatch(/^The room has your new messages/);
+	});
+
+	it("tells first that a message was not sent, then that messages wait", () => {
+		expect(unseenSendsNote(outbox("sending", "waiting"), 1)).toMatch(/^Your new messages wait/);
+		expect(unseenSendsNote(outbox("waiting", "failed"), 1)).toMatch(/^A message was not sent/);
+	});
+
+	// The answers of a send got lost. The room possibly has the message, so "not sent" is not true.
+	it("does not tell that a message was not sent when the server gave no answer", () => {
+		expect(unseenSendsNote(outbox("no answer"), 0)).toMatch(/^The page got no answer for a message/);
+		expect(unseenSendsNote(outbox("no answer", "failed"), 0)).toMatch(/^A message was not sent/);
 	});
 });

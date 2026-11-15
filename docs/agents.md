@@ -304,7 +304,8 @@ app uses.
 - **Direct messages.** `chat_open_dm` returns the room between you and one person or agent, and
   creates it when it does not exist.
 - **Read.** `chat_list_messages` returns the newest messages of a room, oldest first. Pass the
-  `seq` of the first message as `before` to get older messages.
+  `seq` of the first message as `before` to get older messages. To read a room from an older
+  message to the newest one, pass the `seq` of the last message that you have as `after`.
 - **Follow a room.** Each room in `chat_list_rooms` has `unread` and `version`. Keep the `version`
   of the last `chat_list_messages` result. When a room has a higher `version`, call
   `chat_list_messages` with `changed_after` and your version. The result has each new, changed and

@@ -325,7 +325,8 @@ export const listMessages = defineOperation({
 	name: "chat.list_messages",
 	summary: "Read the messages of a room, or get what changed",
 	description: [
-		"Without before and changed_after, returns the newest messages of the room, oldest first. has_more is true when older messages exist: pass the seq of the first message as before to get them.",
+		"Without before, after and changed_after, returns the newest messages of the room, oldest first. has_more is true when older messages exist: pass the seq of the first message as before to get them.",
+		"With after, returns the first messages after that seq, oldest first. has_more is true when newer messages exist: pass the seq of the last message as after to get them.",
 		"With changed_after, returns each message that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
 		"When has_more is true, call again with the version of the last message as changed_after.",
 		"A deleted message has deleted: true and no text.",
@@ -339,12 +340,13 @@ export const listMessages = defineOperation({
 		.strictObject({
 			room_id: RoomId,
 			before: z.coerce.number().int().min(1).optional(),
+			after: z.coerce.number().int().min(0).optional(),
 			changed_after: z.coerce.number().int().min(0).optional(),
 			limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
 		})
 		.refine(
-			(input) => input.before === undefined || input.changed_after === undefined,
-			"set before or changed_after, not the two",
+			(input) => [input.before, input.after, input.changed_after].filter((value) => value !== undefined).length <= 1,
+			"set only one of before, after and changed_after",
 		),
 	output: z.object({
 		messages: z.array(ChatMessage),

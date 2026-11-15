@@ -654,6 +654,39 @@ MCP clients. The app has no UI-only path.
     send the deleted message.
   - **Show older messages** gets the page before the first message, and the list stays at the same
     message. A new message moves the list to its end only when the list was at its end.
+  - The page keeps 300 messages of a room at most (`history.ts`), so a long history does not
+    make the page slow. The list is a part of the history without a gap.
+    - When a page of older messages makes the list too long, the newest messages go out. The list
+      is then not at the newest messages. It shows **Show newer messages**, which gets the page
+      after the last message (`chat.list_messages` with `after`), and **Go to the newest messages**.
+    - While the list is not at the newest messages, a new message of the room does not go into
+      it. A change and a delete of a message that shows still go in. A message that waits for the
+      server does not show.
+    - A send from such a list goes to the outbox at once, with the text of that moment, and the
+      list goes to the newest messages. The outbox starts no call until the list is there, so the
+      list finds the stored message of the send. The message also goes out when the list does not
+      get there, and when the person opens a different room.
+    - While the list is not at the newest messages, a line below the list tells about the
+      messages of the person that the list does not show: that a message was not sent, that
+      the page got no answer for a message, that messages wait, or that the room has the new
+      messages (`unseenSendsNote` in `model.ts`). So the person does not send a message a second
+      time.
+    - Known limit: such a list cannot find the stored message of a send whose answers got lost.
+      The line then tells that the page got no answer. At the newest messages, the row shows
+      "Not sent", and **Try again** gets the stored message: the send keeps its key.
+    - A full list at its end drops its oldest messages when a new message comes in. When the
+      person reads older messages in a full list, they stay: the new message does not go in, and
+      the list shows **Show newer messages**.
+    - A page has the messages as they were at its version of the room. After each page, the sync
+      reads the changes after that version again (`pager.ts`, `rewind` in `sync.ts`), so the page
+      does not keep an old text, and a list at the end of the room has each message.
+    - The list stays at the same message when rows above it come in, go out or change, and when
+      the size of the list changes. The page does this itself (`keepPlace` and `holdPlace` in
+      `RoomView.tsx`), with `overflow-anchor: none`, so each browser does the same.
+    - Known limit: the list does not stay at the same message when the height of a row changes
+      without a change of the rows, for example when a picture loads. Messages have no pictures
+      now.
+    - When a button of the list goes away, the focus goes to the list.
   - The header shows the icon of the room, the name and the topic on one line. At 600px and below,
     the topic is under the name. A private room has
     a lock. A direct message has the avatar of the other member. A button at the right shows the
@@ -821,7 +854,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
