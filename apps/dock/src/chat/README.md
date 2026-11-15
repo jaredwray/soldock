@@ -203,17 +203,19 @@ A socket stays open after its request. It must not outlive the access that opene
 
 - The room closes the sockets of a member in the same step as it removes the member. No later event
   reaches them.
-- A socket keeps a reference to its credential: the SHA-256 of the session cookie, or the id of the
-  API key or of the OAuth grant. It keeps no secret.
+- A socket keeps a reference to its credential: the SHA-256 of the session cookie, the id of the
+  API key, or the SHA-256 of the OAuth access token. It keeps no secret.
 - Before an event, the room checks each credential whose last check is 60 seconds old or more
   (`SOCKET_RECHECK_MS`). `liveCredentials` of `identity` reads all of them with one D1 query. A
   socket whose credential stopped closes, and does not get the event.
 - So these stop a socket: a sign-out, the end of a session, a revoked key, a revoked OAuth
-  connection, and a principal that is archived or deleted.
+  connection, the expiry or the refresh of an OAuth access token, and a principal that is archived or
+  deleted. An OAuth client opens a new socket with its new token.
 - If the check fails, those sockets close with the code `reconnect`. The Worker then authenticates
   each new socket.
-- A socket lives one hour at most (`SOCKET_MAX_MS`), because an OAuth access token lasts one hour.
-  The room closes it at the next event after that time.
+- A socket lives one hour at most (`SOCKET_MAX_MS`). The room closes it at the next event after
+  that time, and the Worker authenticates the new socket. This is the longest life of an MCP
+  `subscriptions/listen` stream too.
 - Known limit: a socket of a credential that stopped can get events for at most 60 seconds after
   its last check. This is the limit of MCP `subscriptions/listen`. The planned `PrincipalDO` will
   close such a socket at once.

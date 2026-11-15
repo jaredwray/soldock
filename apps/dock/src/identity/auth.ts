@@ -1,5 +1,5 @@
 import { ALL_SCOPES, type Scope } from "@soldock/contracts";
-import type { Caller } from "../platform/index.ts";
+import { type Caller, sha256Hex } from "../platform/index.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";
 
@@ -17,6 +17,8 @@ export interface AuthContext extends Caller {
 	grantId: string | null;
 	/** The SHA-256 of the session cookie, for a session. A change can end the other sessions and keep this one. */
 	sessionHash: string | null;
+	/** The SHA-256 of the access token, for an `oauth` credential. A refresh of the grant replaces the token. */
+	accessHash: string | null;
 	scopes: ReadonlySet<Scope>;
 }
 
@@ -70,6 +72,7 @@ export async function authenticate(
 				keyId: null,
 				grantId: granted.grant.id,
 				sessionHash: null,
+				accessHash: await sha256Hex(match[1]),
 				scopes: new Set(granted.grant.scopes.filter((scope) => ceiling.has(scope))),
 			};
 		}
@@ -86,6 +89,7 @@ export async function authenticate(
 			keyId: found.key.id,
 			grantId: null,
 			sessionHash: null,
+			accessHash: null,
 			scopes: new Set(found.key.scopes.filter((scope) => ceiling.has(scope))),
 		};
 	}
@@ -103,6 +107,7 @@ export async function authenticate(
 		keyId: null,
 		grantId: null,
 		sessionHash: session.tokenHash,
+		accessHash: null,
 		scopes: new Set<Scope>(ALL_SCOPES),
 	};
 }

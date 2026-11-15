@@ -82,7 +82,7 @@ export const SOCKET_HEADER = "x-soldock-chat-socket";
 export const SOCKET_RECHECK_MS = 60_000;
 /**
  * The longest life of one socket. Then the room closes it, and the client opens a new one, which the
- * Worker authenticates again. An OAuth access token lasts one hour.
+ * Worker authenticates again with all of its checks.
  */
 export const SOCKET_MAX_MS = 60 * 60_000;
 

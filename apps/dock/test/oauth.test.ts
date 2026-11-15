@@ -601,15 +601,20 @@ describe("OAuth tokens", () => {
 		expect((await mcp(renewed.access_token, "tools/list")).status).toBe(200);
 	});
 
-	// A room socket stays open after its request. It must not outlive the connection that opened it.
-	it("closes the room socket of a token when the sponsor revokes the connection", async () => {
+	// A room socket stays open after its request. It must not outlive the token that opened it.
+	it("closes the room socket of a token when the client replaces the token, and when the sponsor revokes the connection", async () => {
 		const owner = await setupOwner();
-		const { agent, tokens } = await connectNewAgent(owner);
+		const { clientId, agent, tokens: firstTokens } = await connectNewAgent(owner);
 		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
 		// Only the clock is fake: the room checks a credential again when its last check is old.
 		vi.useFakeTimers({ toFake: ["Date"] });
+		// A refresh replaces the access token. A copy of the old token must not keep a socket open.
+		const replaced = await connectRoomSocket(room.id, bearer(firstTokens.access_token));
+		const tokens = (await (await refresh(clientId, firstTokens.refresh_token)).json()) as Tokens;
 		const socket = await connectRoomSocket(room.id, bearer(tokens.access_token));
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
 		const first = (await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." })).message;
+		expect(await replaced.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
 		expect(await socket.next()).toEqual({ type: "message", message: first });
 
 		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
