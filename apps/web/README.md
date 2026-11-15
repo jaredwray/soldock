@@ -250,8 +250,9 @@ MCP clients. The app has no UI-only path.
       tells the admin to give them a different sponsor first.
   - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
     page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
-    Each agent is one card, which opens on a click and shows the parts of the agent with a line
-    between them. For each agent, the page sets the outbound policy (mail recipients and webhook
+    Each agent is one card (`AdminCard`), which opens on a click and shows the parts of the agent
+    with a line between them. The parts load their data, so the card renders them at the first open
+    only. For each agent, the page sets the outbound policy (mail recipients and webhook
     hosts), lists the apps that connected as it with OAuth (with a Revoke button, `oauth.list_grants`,
     `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
     button), and manages the API keys. Only the sponsor sees the form that creates a webhook for the
@@ -259,21 +260,19 @@ MCP clients. The app has no UI-only path.
     For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
     A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
     The **New person or agent** dialog also shows the banner when Agent is selected.
-  - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see a
-    table of the shared mailboxes: the name and the address, and the number and the first names of
-    the members. At 600px and below, a row has two lines, as in Members.
-    - **New shared mailbox**, above the table, opens a dialog with a name, an address and the first
+  - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
+    one card for each shared mailbox, as each agent has one in **Agents**. The card shows the name,
+    the address and the number of members. A click opens the card and shows three parts:
+    - **Display name**, a form that changes the name (`directory.update_team_mailbox`). The address
+      cannot change. **Save name** is off while the name is the same.
+    - **Members of …**, a list of the members with a **Remove** button for each member, with a
+      confirmation (`directory.remove_team_mailbox_member`). A control below the list adds a member
+      (`directory.add_team_mailbox_member`).
+    - **Webhooks of …**, each webhook of the shared mailbox with a Delete button (`mail.list_webhooks`,
+      `mail.delete_webhook`). Members create webhooks in Settings. An owner or an admin can delete
+      one, for example when the mailbox reaches its limit of active webhooks.
+    - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
-    - **Edit** (a pencil icon) in a row opens a dialog that changes the name
-      (`directory.update_team_mailbox`). The address cannot change, so the dialog shows it under
-      the title.
-    - **Webhooks** (a link icon) in a row opens a dialog with each webhook of the shared mailbox and a
-      Delete button (`mail.list_webhooks`, `mail.delete_webhook`). Members create webhooks in Settings.
-      An owner or an admin can delete one, for example when the mailbox reaches its limit of active
-      webhooks.
-    - **Members** (a people icon) in a row opens a dialog with the members, a control to add a member
-      and a button to remove each member, with a confirmation (`directory.add_team_mailbox_member`,
-      `directory.remove_team_mailbox_member`).
     - The lists of new members do not offer an archived account.
   - **Email domains** (`domains`) lists the saved domains and provides Add and Remove controls.
     Changes take effect without a new deployment. A confirmation precedes removal.

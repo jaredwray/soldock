@@ -8,6 +8,7 @@ import { viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { WebhookManager } from "../settings/Webhooks.tsx";
+import { AdminCard } from "./AdminCard.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist, policySummary } from "./policy.ts";
 
@@ -28,50 +29,44 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
 	return (
-		<details className="agent">
-			<summary className="agent-summary">
-				<span className="avatar member-avatar" aria-hidden="true">
-					<Icon name="bot" size={18} />
-				</span>
-				<span className="agent-text">
-					<span className="agent-name">{agent.display_name}</span>
-					<span className="agent-address">{agent.address}</span>
-				</span>
-				<span className="agent-chips">
+		<AdminCard
+			icon="bot"
+			name={agent.display_name}
+			address={agent.address}
+			chips={
+				<>
 					{agent.archived_at !== null && <span className="chip">Archived</span>}
 					<span className="chip">{policySummary(policy)}</span>
-				</span>
-				<Icon name="chevronDown" className="agent-chevron" />
-			</summary>
-			<div className="agent-body">
-				<div className="agent-meta">
-					<div>
-						<p>Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
-						{canReadMail && (
-							<p className="field-hint">Read only. The audit log records the conversations that you open.</p>
-						)}
-					</div>
+				</>
+			}
+		>
+			<div className="admin-card-meta">
+				<div>
+					<p>Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
 					{canReadMail && (
-						<Link to={viewPath({ kind: "system", view: "inbox" }, agent.id)} className="button button-small">
-							<Icon name="mail" size={16} />
-							Read the mail of {agent.display_name}
-						</Link>
+						<p className="field-hint">Read only. The audit log records the conversations that you open.</p>
 					)}
 				</div>
-				<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
-				<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
-				<WebhookManager
-					heading={`Webhooks of ${agent.display_name}`}
-					mailboxId={agent.id}
-					canCreate={agent.sponsor_id === whoami.principal.id}
-				/>
-				<ApiKeyManager
-					principalId={agent.id}
-					allowedScopes={AGENT_SCOPES}
-					heading={`API keys of ${agent.display_name}`}
-				/>
+				{canReadMail && (
+					<Link to={viewPath({ kind: "system", view: "inbox" }, agent.id)} className="button button-small">
+						<Icon name="mail" size={16} />
+						Read the mail of {agent.display_name}
+					</Link>
+				)}
 			</div>
-		</details>
+			<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
+			<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
+			<WebhookManager
+				heading={`Webhooks of ${agent.display_name}`}
+				mailboxId={agent.id}
+				canCreate={agent.sponsor_id === whoami.principal.id}
+			/>
+			<ApiKeyManager
+				principalId={agent.id}
+				allowedScopes={AGENT_SCOPES}
+				heading={`API keys of ${agent.display_name}`}
+			/>
+		</AdminCard>
 	);
 }
 
@@ -107,7 +102,7 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 	}
 
 	return (
-		<form className="policy-form" onSubmit={submit} noValidate>
+		<form className="admin-card-form" onSubmit={submit} noValidate>
 			<fieldset>
 				<legend className="subpanel-title">Outbound policy</legend>
 				{POLICY_MODES.map((option) => (

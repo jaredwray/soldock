@@ -2983,13 +2983,6 @@ fieldset {
 	margin-top: 8px;
 }
 
-/* The webhooks of a mailbox inside a dialog: the note, then the card with the list. */
-.webhooks {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-
 /* A card with a list: each row has its own space above and below. */
 .panel-card-list {
 	padding: 4px 20px;
@@ -3037,13 +3030,13 @@ fieldset {
 /* A check box keeps its size next to long text, and a legend starts at the left edge of its fields. */
 .panel-form .check-row input,
 .connect-form .check-row input,
-.policy-form .check-row input {
+.admin-card-form .check-row input {
 	flex: none;
 }
 
 .panel-form legend,
 .connect-form legend,
-.policy-form legend {
+.admin-card-form legend {
 	padding: 0;
 }
 
@@ -3351,20 +3344,20 @@ fieldset {
 	border-radius: 9px;
 }
 
-/* The Agents section: one card for each agent. The card opens and shows the settings of the agent. */
-.agent-list {
+/* The Agents and Shared mailboxes sections: one card for each item. The card opens and shows its settings. */
+.admin-card-list {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
 }
 
-.agent {
+.admin-card {
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--surface);
 }
 
-.agent-summary {
+.admin-card-summary {
 	display: flex;
 	align-items: center;
 	gap: 12px;
@@ -3374,93 +3367,93 @@ fieldset {
 	list-style: none;
 }
 
-.agent-summary:hover {
+.admin-card-summary:hover {
 	background: var(--hover);
 }
 
-.agent[open] > .agent-summary {
+.admin-card[open] > .admin-card-summary {
 	border-radius: var(--radius) var(--radius) 0 0;
 }
 
-.agent-summary::-webkit-details-marker {
+.admin-card-summary::-webkit-details-marker {
 	display: none;
 }
 
-.agent-summary:focus-visible {
+.admin-card-summary:focus-visible {
 	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 }
 
-.agent-text {
+.admin-card-text {
 	flex: 1;
 	min-width: 0;
 }
 
-.agent-name {
+.admin-card-name {
 	display: block;
 	font-weight: 600;
 	overflow-wrap: anywhere;
 }
 
-.agent-address {
+.admin-card-address {
 	display: block;
 	color: var(--muted-foreground);
 	font-size: 13px;
 	overflow-wrap: anywhere;
 }
 
-.agent-chips {
+.admin-card-chips {
 	display: flex;
 	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: 6px;
 }
 
-.agent-chips .chip {
+.admin-card-chips .chip {
 	background: var(--background);
 }
 
-.agent-chevron {
+.admin-card-chevron {
 	color: var(--muted-foreground);
 	transition: transform 0.15s ease;
 }
 
-.agent[open] .agent-chevron {
+.admin-card[open] .admin-card-chevron {
 	transform: rotate(180deg);
 }
 
-/* The parts of an open agent, with a line above each part. */
-.agent-body {
+/* The parts of an open card, with a line above each part. */
+.admin-card-body {
 	display: flex;
 	flex-direction: column;
 	padding: 0 20px;
 }
 
-.agent-body > * {
+.admin-card-body > * {
 	padding: 20px 0;
 	border-top: 1px solid var(--border);
 }
 
-/* In an agent, a panel has no card of its own: the agent is the card. */
-.agent-body .panel-card {
+/* In an open card, a panel has no card of its own. */
+.admin-card-body .panel-card {
 	padding: 0;
 	border: 0;
 	border-radius: 0;
 	background: none;
 }
 
-.agent-body .panel-title,
+.admin-card-body .panel-title,
 .subpanel-title {
 	margin-bottom: 4px;
 	font-size: 15px;
 	font-weight: 600;
 }
 
-.agent-body .panel-form-divided {
+.admin-card-body .panel-form-divided {
 	padding-bottom: 0;
 }
 
-.agent-meta {
+.admin-card-meta {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
@@ -3468,28 +3461,28 @@ fieldset {
 	gap: 12px 24px;
 }
 
-.agent-meta .field-hint {
+.admin-card-meta .field-hint {
 	margin: 2px 0 0;
 }
 
-.policy-form {
+.admin-card-form {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 12px;
 }
 
-.policy-form legend {
+.admin-card-form legend {
 	margin-bottom: 8px;
 }
 
-.policy-form .field {
+.admin-card-form .field {
 	width: 100%;
 	max-width: 480px;
 }
 
-.policy-form .field-hint,
-.policy-form .form-error {
+.admin-card-form .field-hint,
+.admin-card-form .form-error {
 	margin: 0;
 }
 
@@ -3852,16 +3845,16 @@ fieldset {
 		padding: 2px 14px;
 	}
 
-	.agent-summary {
+	.admin-card-summary {
 		flex-wrap: wrap;
 		padding: 12px 14px;
 	}
 
-	.agent-body {
+	.admin-card-body {
 		padding: 0 14px;
 	}
 
-	.agent-body .panel-card {
+	.admin-card-body .panel-card {
 		padding: 0;
 	}
 
