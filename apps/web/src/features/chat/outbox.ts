@@ -23,8 +23,9 @@ export interface PendingMessage {
 	/** Why the send failed, for the person. Null while it did not fail. */
 	error: string | null;
 	/**
-	 * True for a failed message whose answers did not arrive: the network failed, or the server had a
-	 * failure. The server can have the message. False after a refusal: the server does not have it.
+	 * True for a failed message with an attempt whose answer did not arrive: the network failed, or
+	 * the server had a failure. The server can have the message. False when the server refused each
+	 * attempt: it does not have the message.
 	 */
 	uncertain: boolean;
 	/**
@@ -138,7 +139,8 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		change({ pending: [], sendingKey: null });
 	}
 
-	function attempt(message: PendingMessage, attempts: number): void {
+	/** `lost` is true when the answer of an earlier attempt of this send did not arrive. */
+	function attempt(message: PendingMessage, attempts: number, lost: boolean): void {
 		if (stopped) return;
 		if (!options.active()) {
 			stop();
@@ -158,16 +160,16 @@ export function createOutbox(options: OutboxOptions): Outbox {
 			},
 			(error: unknown) => {
 				if (stopped) return;
-				const later = canSucceedLater(error);
-				const wait = later ? RETRY_WAITS_MS[attempts] : undefined;
+				// A refusal is an answer: that attempt stored nothing. The rate limit is a refusal too.
+				const refused = error instanceof ApiError && error.status < 500;
+				const uncertain = lost || !refused;
+				const wait = canSucceedLater(error) ? RETRY_WAITS_MS[attempts] : undefined;
 				if (wait !== undefined) {
-					timer = setTimeout(() => attempt(message, attempts + 1), wait);
+					timer = setTimeout(() => attempt(message, attempts + 1, uncertain), wait);
 					return;
 				}
-				// The rate limit is a refusal: the server does not have the message.
-				const refused = error instanceof ApiError && error.status < 500;
 				change({
-					pending: update(message.key, { state: "failed", error: options.describe(error), uncertain: !refused }),
+					pending: update(message.key, { state: "failed", error: options.describe(error), uncertain }),
 					sendingKey: null,
 				});
 				pump();
@@ -180,9 +182,11 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		if (stopped || state.sendingKey !== null) return;
 		const next = state.pending.find((message) => message.state === "waiting");
 		if (!next) return;
-		const afterSeq = view?.lastSeq() ?? null;
+		// A send that the person sends again keeps the start of its first call: the server can have
+		// its message from that call.
+		const afterSeq = next.afterSeq ?? view?.lastSeq() ?? null;
 		change({ pending: update(next.key, { state: "sending", afterSeq }), sendingKey: next.key });
-		attempt({ ...next, afterSeq }, 0);
+		attempt({ ...next, afterSeq }, 0, next.uncertain);
 	}
 
 	return {
@@ -212,7 +216,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		},
 		retry(key) {
 			if (!state.pending.some((message) => message.key === key && message.state === "failed")) return;
-			change({ pending: update(key, { state: "waiting", error: null, uncertain: false }) });
+			change({ pending: update(key, { state: "waiting", error: null }) });
 			pump();
 		},
 		discard(key) {

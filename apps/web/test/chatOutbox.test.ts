@@ -229,4 +229,22 @@ describe("the outbox of a room", () => {
 		expect(stopped.pending()).toEqual([]);
 		expect(stopped.calls).toHaveLength(1);
 	});
+
+	// The server stored the message, the answer got lost, and the room then removed the person. The refusal of
+	// the next attempt says nothing about the first attempt.
+	it("keeps a failed message uncertain when an earlier answer got lost, also after a refusal and a new send", async () => {
+		const room = fakeRoom();
+		room.outbox.send("Stored before the room removed me");
+		await room.calls[0]?.fail(new TypeError("fetch failed"));
+		vi.advanceTimersByTime(RETRY_WAITS_MS[0] as number);
+		await room.calls[1]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true, afterSeq: 10 }]);
+
+		// The person sends it again. The send keeps the start of its first call, where its message can be.
+		room.view.lastSeq = 30;
+		room.outbox.retry(room.outbox.getState().pending[0]?.key as string);
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "sending", uncertain: true, afterSeq: 10 }]);
+		await room.calls[2]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true, afterSeq: 10 }]);
+	});
 });

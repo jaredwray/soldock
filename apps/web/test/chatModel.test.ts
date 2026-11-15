@@ -129,33 +129,54 @@ describe("the rows of the message list", () => {
 	});
 
 	// The socket can bring the stored message before the answer of the call. The list must not show the message two times.
-	it("leaves out the stored message of the call that runs until the call ends", () => {
+	it("shows a send as its stored message, at the position of the room, when the list has that message", () => {
+		// A different member posted after the message of the person, before the answer of the send.
 		const messages = [message(1), message(2, { author: BOT }), message(3), message(4, { author: BOT })];
 		const sending = (afterSeq: number | null) => ({
-			pending: [waiting("k3", "message 3", "sending", afterSeq)],
+			pending: [waiting("k3", "message 3", "sending", afterSeq), waiting("k5", "fifth")],
 			keys: new Map<string, string>(),
 			sendingKey: "k3",
 		});
-		// The message of a different member shows. The older message of the person shows.
-		expect(keysOf(chatRows(messages, sending(2), ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "cmsg_4", "k3"]);
-
-		const after = { pending: [], keys: new Map([["cmsg_3", "k3"]]), sendingKey: null };
-		expect(keysOf(chatRows(messages, after, ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "k3", "cmsg_4"]);
-		// With no call, a message of the person from a different tab shows at once.
-		const idle = { pending: [], keys: new Map<string, string>(), sendingKey: null };
-		expect(keysOf(chatRows(messages, idle, ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "cmsg_3", "cmsg_4"]);
+		const during = chatRows(messages, sending(2), ADA, ROOM);
+		// The row of the send is the stored message, before the later message. It is not a second row at the end.
+		expect(keysOf(during)).toEqual(["cmsg_1", "cmsg_2", "k3", "cmsg_4", "k5"]);
+		expect(during[2]).toMatchObject({ pending: null, message: { id: "cmsg_3", seq: 3 } });
+		// The answer of the send arrives: each row keeps its key and its position.
+		const after = {
+			pending: [waiting("k5", "fifth", "sending", 4)],
+			keys: new Map([["cmsg_3", "k3"]]),
+			sendingKey: "k5",
+		};
+		expect(keysOf(chatRows(messages, after, ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "k3", "cmsg_4", "k5"]);
 	});
 
-	// The person opens a different room during a send, and comes back. The list loads again from nothing.
-	it("shows each stored message for a call that started while no list showed the room", () => {
-		const messages = [message(1), message(2), message(3, { author: BOT })];
-		const rows = chatRows(
-			messages,
-			{ pending: [waiting("k4", "fourth", "sending", null)], keys: new Map(), sendingKey: "k4" },
-			ADA,
-			ROOM,
-		);
-		expect(keysOf(rows)).toEqual(["cmsg_1", "cmsg_2", "cmsg_3", "k4"]);
+	// A wrong pair shows a message of a different tab as the message of this send, and hides the send.
+	it("shows a send at the end while the list has no message of the person with its text after the start of its call", () => {
+		const messages = [
+			message(1, { text: "Hello" }),
+			message(2, { author: BOT, text: "Hello" }),
+			message(3, { text: "Other" }),
+		];
+		const sending = (afterSeq: number | null) => ({
+			pending: [waiting("k4", "Hello", "sending", afterSeq)],
+			keys: new Map<string, string>(),
+			sendingKey: "k4",
+		});
+		// Message 1 is from before the call, message 2 is of a different member, and message 3 has a different text.
+		expect(keysOf(chatRows(messages, sending(1), ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "cmsg_3", "k4"]);
+		// The person opened a different room during the send, and came back: the list does not know the start of the call.
+		expect(keysOf(chatRows(messages, sending(null), ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "cmsg_3", "k4"]);
+	});
+
+	// "Not sent" next to the stored message tells the person to send a message that the room has.
+	it("shows a failed send as its stored message when the answers of the send got lost", () => {
+		const messages = [message(1), message(2, { text: "Lost answers" })];
+		const lost = { ...waiting("k2", "Lost answers", "failed", 1), uncertain: true };
+		const refused = { ...waiting("k2", "Lost answers", "failed", 1), uncertain: false };
+		const state = (pending: typeof lost) => ({ pending: [pending], keys: new Map<string, string>(), sendingKey: null });
+		expect(keysOf(chatRows(messages, state(lost), ADA, ROOM))).toEqual(["cmsg_1", "k2"]);
+		// The server refused each attempt, so the message with the same text is a different message.
+		expect(keysOf(chatRows(messages, state(refused), ADA, ROOM))).toEqual(["cmsg_1", "cmsg_2", "k2"]);
 	});
 });
 
