@@ -101,15 +101,18 @@ function storedOf(
  * - A send whose stored message the list has shows as that stored message, at the position that the
  *   room gave it, with the key of the send. So the message shows one time, and it does not move when
  *   the answer of the send arrives.
+ * - A stored message shows with its change that waits for the server (`changes`). The list finds the
+ *   stored message of a send with the text that the room has, not with the text of a change.
  */
 export function chatRows(
 	messages: readonly ChatMessage[],
 	outbox: OutboxState,
 	own: ChatMessage["author"],
 	roomId: string,
+	changes: ReadonlyMap<string, LocalChange> = NO_CHANGES,
 ): ChatRow[] {
 	const stored = storedOf(messages, outbox, own);
-	const rows: ChatRow[] = messages.map((message) => ({
+	const rows: ChatRow[] = withLocalChanges(messages, changes).map((message) => ({
 		key: stored.get(message.id)?.key ?? outbox.keys.get(message.id) ?? message.id,
 		message,
 		pending: null,
@@ -151,6 +154,37 @@ export function storedSends(
 	return [...storedOf(messages, outbox, own)]
 		.filter(([, pending]) => pending.state === "failed")
 		.map(([id, pending]) => ({ key: pending.key, id }));
+}
+
+/**
+ * A change of a stored message that the page shows before the answer of the server: a new text, or
+ * a delete. `at` is the time of the edit on the device.
+ */
+export type LocalChange = { kind: "edit"; text: string; at: string } | { kind: "delete" };
+
+const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
+
+/**
+ * The messages as the person sees them: each message with its change that waits for the server. So
+ * an edit and a delete show at once.
+ *
+ * - An edit shows the new text, with the edited mark.
+ * - A delete shows the message as deleted, without its text.
+ * - A message that the room deleted stays deleted: an edit of it shows nothing.
+ *
+ * Without a change, the result is the same list, so a list that did not change makes no new rows.
+ */
+export function withLocalChanges(
+	messages: readonly ChatMessage[],
+	changes: ReadonlyMap<string, LocalChange>,
+): readonly ChatMessage[] {
+	if (changes.size === 0) return messages;
+	return messages.map((message) => {
+		const change = changes.get(message.id);
+		if (!change || message.deleted) return message;
+		if (change.kind === "delete") return { ...message, text: "", deleted: true };
+		return { ...message, text: change.text, edited_at: change.at };
+	});
 }
 
 const GROUP_MS = 5 * 60 * 1000;

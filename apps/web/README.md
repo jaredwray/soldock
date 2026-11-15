@@ -636,6 +636,22 @@ MCP clients. The app has no UI-only path.
     each row, as on a desktop.
   - The person changes their own message in place, and deletes it after a confirmation. The owner
     of a room can delete each message. A deleted message shows "This message was deleted."
+  - A change and a delete show at once, before the answer of the server. The new text shows with
+    the edited mark. A deleted message shows as deleted, and the confirmation closes.
+  - After a refusal, the message shows as before, with a notice of the reason. For a change, the
+    edit box opens again with the new text, so the person does not write it again.
+  - A change or a delete has one attempt. It does not wait in an outbox, and it does not stay
+    after a reload of the page.
+  - The calls for one message run one at a time, in the order of the changes. When the person
+    saves a second change during the call of the first one, only the newest change goes after it.
+    So the room has the last text that the person saved, also when that is the first text again.
+  - A refusal of an older change does not open the edit box when a newer change of the message
+    waits.
+  - A call that waits for an earlier call does not start after a sign-out, also when the same
+    person signs in again. The page sends each call with the session of its person at that time
+    (`callLine.ts`, `accountChangeCount` in `lib/account.ts`).
+  - A deleted message shows as deleted from the confirmation on. It does not wait for the room to
+    send the deleted message.
   - **Show older messages** gets the page before the first message, and the list stays at the same
     message. A new message moves the list to its end only when the list was at its end.
   - The header shows the icon of the room, the name and the topic on one line. At 600px and below,

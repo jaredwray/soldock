@@ -1,5 +1,6 @@
 import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
 import { Fragment, type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -8,12 +9,14 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
+import { createCallLine } from "./callLine.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import {
 	chatRows,
 	dayLabel,
 	draftPlaceholder,
+	type LocalChange,
 	roomTitle,
 	startsDay,
 	startsGroup,
@@ -101,7 +104,21 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
 		[ownId, self.kind, self.display_name],
 	);
-	const rows = useMemo(() => chatRows(messages, outbox.state, own, roomId), [messages, outbox.state, own, roomId]);
+	// An edit and a delete show at once, before the answer of the server. `latest` has the newest
+	// change of each message at each moment. `changes` is its copy for the list.
+	const latest = useRef(new Map<string, LocalChange>());
+	const [changes, setChanges] = useState<ReadonlyMap<string, LocalChange>>(() => new Map());
+	// The calls for one message run one at a time, in the order of the changes, so the room gets the
+	// newest change last. A call that waits does not start after a sign-out: the next sign-in is a
+	// different session, also for the same person.
+	const afterEarlierCalls = useMemo(() => {
+		const signedIn = accountChangeCount();
+		return createCallLine(() => accountChangeCount() === signedIn);
+	}, []);
+	const rows = useMemo(
+		() => chatRows(messages, outbox.state, own, roomId, changes),
+		[messages, outbox.state, own, roomId, changes],
+	);
 
 	// The answers of a send can fail after the server stored the message. When the list has that
 	// message, the send did not fail: the row of the send becomes the row of the stored message.
@@ -153,19 +170,62 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		send();
 	}
 
-	async function saveEdit() {
+	/** Shows a change of a message before the answer of the server. */
+	function showChange(id: string, change: LocalChange) {
+		latest.current.set(id, change);
+		setChanges(new Map(latest.current));
+	}
+
+	/** Removes a change after its call failed or ended. False when a newer change of the message replaced it. */
+	function endChange(id: string, change: LocalChange): boolean {
+		if (latest.current.get(id) !== change) return false;
+		latest.current.delete(id);
+		setChanges(new Map(latest.current));
+		return true;
+	}
+
+	function saveEdit() {
 		if (!editing?.text.trim()) return;
-		try {
-			const { message } = await api.call("chat.edit_message", {
-				room_id: roomId,
-				message_id: editing.id,
-				text: editing.text,
-			});
-			setEditing(null);
-			view.apply(message);
-		} catch (caught) {
-			fail(caught);
-		}
+		const { id, text } = editing;
+		setEditing(null);
+		// The text that shows: the text of an edit that waits, or the text that the room has.
+		const waiting = latest.current.get(id);
+		const shown = waiting?.kind === "edit" ? waiting.text : messages.find((message) => message.id === id)?.text;
+		if (shown === text) return;
+		// The new text shows at once.
+		const change: LocalChange = { kind: "edit", text, at: new Date().toISOString() };
+		showChange(id, change);
+		afterEarlierCalls(id, async () => {
+			// A newer change replaced this one before its call started. Only the newest change goes.
+			if (latest.current.get(id) !== change) return;
+			try {
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, text });
+				view.apply(message);
+				endChange(id, change);
+			} catch (caught) {
+				// After a refusal, the old text shows again, and the edit box opens with the new text, so the
+				// person does not write it again. A newer change of the message stays as it is.
+				if (!endChange(id, change)) return;
+				setEditing((current) => current ?? { id, text });
+				fail(caught);
+			}
+		});
+	}
+
+	function deleteMessage(id: string) {
+		// The message shows as deleted at once. After a refusal, it shows again.
+		const change: LocalChange = { kind: "delete" };
+		showChange(id, change);
+		afterEarlierCalls(id, async () => {
+			try {
+				await api.call("chat.delete_message", { room_id: roomId, message_id: id });
+				// The answer has no message. The change stays: the message shows as deleted also while the
+				// list does not have the deleted message from the room.
+				void view.sync();
+			} catch (caught) {
+				if (endChange(id, change)) fail(caught);
+			}
+		});
 	}
 
 	async function join() {
@@ -288,7 +348,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 										editing={editing?.id === message.id ? editing.text : null}
 										onEditStart={() => setEditing({ id: message.id, text: message.text })}
 										onEditChange={(text) => setEditing({ id: message.id, text })}
-										onEditSave={() => void saveEdit()}
+										onEditSave={saveEdit}
 										onEditCancel={() => setEditing(null)}
 										onDelete={() => setDialog({ type: "delete", message })}
 										onSendAgain={() => outbox.retry(key)}
@@ -374,10 +434,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 					confirmLabel="Delete"
 					danger
 					onClose={() => setDialog(null)}
-					onConfirm={async () => {
-						await api.call("chat.delete_message", { room_id: roomId, message_id: dialog.message.id });
-						await view.sync();
-					}}
+					onConfirm={async () => deleteMessage(dialog.message.id)}
 				>
 					<p>The text of the message is deleted for each member. This cannot be undone.</p>
 				</ConfirmDialog>
@@ -388,9 +445,9 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 
 interface MessageItemProps {
 	message: ChatMessage;
-	/** True when the message shows its author and its time. */
 	/** The state of the send, for a message that the server does not have yet. */
 	pending: PendingMessage | null;
+	/** True when the message shows its author and its time. */
 	head: boolean;
 	own: boolean;
 	canDelete: boolean;
