@@ -665,8 +665,11 @@ MCP clients. The app has no UI-only path.
     - A send from such a list goes to the outbox at once, with the text of that moment, and the
       list goes to the newest messages. The outbox starts no call until the list is there, so the
       list finds the stored message of the send. The message also goes out when the list does not
-      get there, and when the person opens a different room. While messages wait and the list is
-      not at the newest messages, a line below the list tells that they show there.
+      get there, and when the person opens a different room.
+    - While the list is not at the newest messages, a line below the list tells about the
+      messages of the person that the list does not show: that a message was not sent, that
+      messages wait, or that the room has the new messages (`unseenSendsNote` in `model.ts`). So
+      the person does not send a message a second time.
     - A full list at its end drops its oldest messages when a new message comes in. When the
       person reads older messages in a full list, they stay: the new message does not go in, and
       the list shows **Show newer messages**.

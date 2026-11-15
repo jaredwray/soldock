@@ -32,6 +32,7 @@ import {
 	startsGroup,
 	storedSends,
 	timeLabel,
+	unseenSendsNote,
 } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 
@@ -62,8 +63,12 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	// A list that is not at the newest messages does not know the last message of the room.
 	const loaded = view.messages[view.messages.length - 1];
 	const lastSeq = view.status === "ready" && !view.hasNewer ? (loaded?.seq ?? 0) : null;
+	/** The number of messages that the room stored for the person while the list was not at the newest messages. */
+	const [sentUnseen, setSentUnseen] = useState(0);
 	const outbox = useOutbox(roomId, ownId, lastSeq, (message) => {
 		view.apply(message);
+		// The list does not take the message now. A line below the list tells that the room has it.
+		if (view.hasNewer) setSentUnseen((count) => count + 1);
 		void onRoomsChanged();
 	});
 	const visible = usePageVisible();
@@ -141,6 +146,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		const all = chatRows(messages, outbox.state, own, roomId, changes);
 		return hasNewer ? all.filter((row) => row.pending === null) : all;
 	}, [messages, outbox.state, own, roomId, changes, hasNewer]);
+
+	const unseenNote = hasNewer ? unseenSendsNote(outbox.state, sentUnseen) : null;
 
 	// The answers of a send can fail after the server stored the message. When the list has that
 	// message, the send did not fail: the row of the send becomes the row of the stored message.
@@ -259,7 +266,9 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		resumeOutbox();
 	}, [resumeOutbox]);
 	useEffect(() => {
-		if (!hasNewer) release();
+		if (hasNewer) return;
+		release();
+		setSentUnseen(0);
 	}, [hasNewer, release]);
 	// The page leaves the room. The message still goes out.
 	useEffect(() => release, [release]);
@@ -506,9 +515,9 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 								</button>
 							</p>
 						)}
-						{view.hasNewer && outbox.state.pending.length > 0 && (
+						{unseenNote !== null && (
 							<p className="chat-more-note" role="status">
-								Your messages that wait show after the newest messages.
+								{unseenNote}
 							</p>
 						)}
 					</div>

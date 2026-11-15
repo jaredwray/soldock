@@ -126,6 +126,21 @@ export function storedSends(
 }
 
 /**
+ * The line below a list that is not at the newest messages, about the messages of the person that
+ * the list does not show: the messages that wait for the server, and `sent`, the number of messages
+ * that the room stored since the list left the newest messages. Without the line, the person sees
+ * nothing of a send, and can send the message a second time. Null when the list hides no such message.
+ */
+export function unseenSendsNote(outbox: OutboxState, sent: number): string | null {
+	if (outbox.pending.some((pending) => pending.state === "failed")) {
+		return "A message was not sent. Go to the newest messages to send it again.";
+	}
+	if (outbox.pending.length > 0) return "Your new messages wait. They show after the newest messages.";
+	if (sent > 0) return "The room has your new messages. They show after the newest messages.";
+	return null;
+}
+
+/**
  * A change of a stored message that the page shows before the answer of the server: a new text, or
  * a delete. `at` is the time of the edit on the device.
  */

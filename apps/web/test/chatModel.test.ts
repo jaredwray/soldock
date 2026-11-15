@@ -6,6 +6,7 @@ import {
 	startsDay,
 	startsGroup,
 	storedSends,
+	unseenSendsNote,
 	withLocalChanges,
 } from "../src/features/chat/model.ts";
 
@@ -305,5 +306,34 @@ describe("the messages with the changes that wait for the server", () => {
 		const messages = [message(1)];
 		expect(withLocalChanges(messages, new Map())).toBe(messages);
 		expect(withLocalChanges(messages, new Map([["cmsg_9", { kind: "delete" }]]))).toEqual(messages);
+	});
+});
+
+describe("the line about the sends that a list does not show", () => {
+	const pending = (state: "waiting" | "sending" | "failed") => ({
+		key: `k_${state}`,
+		text: "Hello",
+		created_at: "2026-01-01T09:10:00.000Z",
+		state,
+		error: state === "failed" ? "No connection." : null,
+		uncertain: false,
+		afterSeq: null,
+	});
+	const outbox = (...states: ("waiting" | "sending" | "failed")[]) => ({
+		pending: states.map(pending),
+		keys: new Map<string, string>(),
+		sendingKey: null,
+	});
+
+	// The list is not at the newest messages, and the room stored the message of the person. Without
+	// the line, the person sees nothing of the send, and can send the message a second time.
+	it("tells that the room has a message of the person, also after the send ended", () => {
+		expect(unseenSendsNote(outbox(), 0)).toBeNull();
+		expect(unseenSendsNote(outbox(), 1)).toMatch(/^The room has your new messages/);
+	});
+
+	it("tells first that a message was not sent, then that messages wait", () => {
+		expect(unseenSendsNote(outbox("sending", "waiting"), 1)).toMatch(/^Your new messages wait/);
+		expect(unseenSendsNote(outbox("waiting", "failed"), 1)).toMatch(/^A message was not sent/);
 	});
 });
