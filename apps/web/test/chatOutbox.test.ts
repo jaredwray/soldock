@@ -13,8 +13,11 @@ interface Call {
 function fakeRoom() {
 	const calls: Call[] = [];
 	const sent: ChatMessage[] = [];
+	const view = { lastSeq: 10 as number | null };
+	const page = { account: "ada" };
 	let seq = 0;
 	const outbox = createOutbox({
+		active: () => page.account === "ada",
 		post: (text, key) =>
 			new Promise<ChatMessage>((resolve, reject) => {
 				// The answers go through the promise, as the answers of fetch do.
@@ -48,9 +51,9 @@ function fakeRoom() {
 			}),
 		describe: (error) => (error instanceof ApiError ? error.message : "No connection."),
 	});
-	outbox.deliverTo((message) => sent.push(message));
+	outbox.attach({ deliver: (message) => void sent.push(message), lastSeq: () => view.lastSeq });
 	const pending = () => outbox.getState().pending.map((message) => [message.text, message.state]);
-	return { outbox, calls, sent, pending };
+	return { outbox, calls, sent, pending, view, page };
 }
 
 const refusal = (status: number, code: string, detail: string) => new ApiError(status, { code, detail });
@@ -115,8 +118,9 @@ describe("the outbox of a room", () => {
 		}
 		await room.calls[room.calls.length - 1]?.fail(new TypeError("fetch failed"));
 		expect(room.calls).toHaveLength(RETRY_WAITS_MS.length + 2);
+		// The answers did not arrive, so the server can have the message.
 		expect(room.outbox.getState().pending).toMatchObject([
-			{ text: "Offline", state: "failed", error: "No connection." },
+			{ text: "Offline", state: "failed", error: "No connection.", uncertain: true },
 			{ text: "Next", state: "sending", error: null },
 		]);
 		await room.calls[room.calls.length - 1]?.succeed();
@@ -141,8 +145,9 @@ describe("the outbox of a room", () => {
 		await room.calls[0]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
 		vi.advanceTimersByTime(60_000);
 		expect(room.calls).toHaveLength(1);
+		// A refusal is an answer: the server does not have the message.
 		expect(room.outbox.getState().pending).toMatchObject([
-			{ state: "failed", error: "You are not a member of this room." },
+			{ state: "failed", error: "You are not a member of this room.", uncertain: false },
 		]);
 		room.outbox.discard(key);
 		expect(room.pending()).toEqual([]);
@@ -155,8 +160,10 @@ describe("the outbox of a room", () => {
 		const remove = room.outbox.subscribe(() => {
 			changes += 1;
 		});
-		room.outbox.deliverTo(null);
+		room.outbox.attach(null);
 		room.outbox.send("Sent from a room that the person left");
+		// No list showed the room at the start of the call, so the call has no limit for the stored message.
+		expect(room.outbox.getState().pending[0]?.afterSeq).toBeNull();
 		expect(changes).toBeGreaterThan(0);
 		await room.calls[0]?.succeed();
 		expect(room.sent).toEqual([]);
@@ -165,5 +172,61 @@ describe("the outbox of a room", () => {
 		const before = changes;
 		room.outbox.send("After the list went away");
 		expect(changes).toBe(before);
+	});
+
+	// The list leaves out the stored message of a call until the call ends. It needs the last message at the start of the call.
+	it("records the last message of the list at the start of each call", async () => {
+		const room = fakeRoom();
+		room.outbox.send("First");
+		room.outbox.send("Second");
+		expect(room.outbox.getState().pending.map((message) => message.afterSeq)).toEqual([10, null]);
+		// The list got more messages before the second call starts.
+		room.view.lastSeq = 14;
+		await room.calls[0]?.succeed();
+		expect(room.outbox.getState().pending.map((message) => message.afterSeq)).toEqual([14]);
+	});
+
+	// The server stored the message, and each answer got lost. The list has the message, so the send did not fail.
+	it("takes a failed message as sent when the list has its stored message", async () => {
+		const room = fakeRoom();
+		room.outbox.send("Stored, with lost answers");
+		const key = room.outbox.getState().pending[0]?.key as string;
+		// A message whose call runs cannot settle: its answer gives the stored message.
+		room.outbox.settle(key, "cmsg_77");
+		expect(room.pending()).toEqual([["Stored, with lost answers", "sending"]]);
+		for (const wait of [...RETRY_WAITS_MS, 0]) {
+			await room.calls[room.calls.length - 1]?.fail(new TypeError("fetch failed"));
+			vi.advanceTimersByTime(wait);
+		}
+		expect(room.pending()).toEqual([["Stored, with lost answers", "failed"]]);
+		room.outbox.settle(key, "cmsg_77");
+		expect(room.pending()).toEqual([]);
+		expect(room.outbox.getState().keys.get("cmsg_77")).toBe(key);
+	});
+
+	// The page sends each call with the session of its person. A message of the person from before must not go out.
+	it("sends nothing after the person of the page changes, and nothing after a stop", async () => {
+		const room = fakeRoom();
+		room.outbox.send("From Ada");
+		room.outbox.send("Also from Ada");
+		await room.calls[0]?.fail(new TypeError("fetch failed"));
+		// Ada signs out during the wait, and a different person signs in.
+		room.page.account = "bob";
+		vi.advanceTimersByTime(RETRY_WAITS_MS[0] as number);
+		expect(room.calls).toHaveLength(1);
+		expect(room.pending()).toEqual([]);
+		room.outbox.send("Too late");
+		expect(room.calls).toHaveLength(1);
+		expect(room.pending()).toEqual([]);
+
+		const stopped = fakeRoom();
+		stopped.outbox.send("In flight at the sign-out");
+		stopped.outbox.stop();
+		// The answer of the call that ran arrives: the list of the new person gets nothing.
+		await stopped.calls[0]?.succeed();
+		vi.advanceTimersByTime(60_000);
+		expect(stopped.sent).toEqual([]);
+		expect(stopped.pending()).toEqual([]);
+		expect(stopped.calls).toHaveLength(1);
 	});
 });

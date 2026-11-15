@@ -4,6 +4,7 @@ import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
+import { setAccount } from "./lib/account.ts";
 import { api, onUnauthenticated } from "./lib/api.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
@@ -14,9 +15,21 @@ import { Shell } from "./shell/Shell.tsx";
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 
-	const load = useCallback(async (showSetup = true) => {
-		setState(await loadSession(showSetup));
+	/**
+	 * Shows a new state. Code outside the signed-in app learns in the same step who the person is now,
+	 * so work that waits for the person from before stops before the page can call as the new person.
+	 */
+	const show = useCallback((next: SessionState) => {
+		setAccount(next.status === "signed-in" ? next.whoami.principal.id : null);
+		setState(next);
 	}, []);
+
+	const load = useCallback(
+		async (showSetup = true) => {
+			show(await loadSession(showSetup));
+		},
+		[show],
+	);
 
 	useEffect(() => {
 		void load();
@@ -25,17 +38,18 @@ export function App() {
 	// Any 401 from an operation call ends the session in the UI.
 	useEffect(
 		() =>
-			onUnauthenticated(() =>
-				setState((current) => (current.status === "signed-in" ? { status: "signed-out", expired: true } : current)),
-			),
+			onUnauthenticated(() => {
+				setAccount(null);
+				setState((current) => (current.status === "signed-in" ? { status: "signed-out", expired: true } : current));
+			}),
 		[],
 	);
 
 	// The UI shows signed-out only after the server ended the session. A failure throws to the caller.
 	const signOut = useCallback(async () => {
 		await endSession();
-		setState({ status: "signed-out", expired: false });
-	}, []);
+		show({ status: "signed-out", expired: false });
+	}, [show]);
 
 	// After a change to the account, for example two-step verification, so each page shows the new value. A
 	// late answer applies only to the same person: after a sign-out and a sign-in as somebody else, it is dropped.

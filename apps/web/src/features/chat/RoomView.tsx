@@ -10,7 +10,16 @@ import { chatPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
-import { chatRows, dayLabel, draftPlaceholder, roomTitle, startsDay, startsGroup, timeLabel } from "./model.ts";
+import {
+	chatRows,
+	dayLabel,
+	draftPlaceholder,
+	roomTitle,
+	startsDay,
+	startsGroup,
+	storedSends,
+	timeLabel,
+} from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 
 export interface RoomViewProps {
@@ -37,7 +46,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	const toast = useToast();
 	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
 	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
-	const outbox = useOutbox(roomId, ownId, (message) => {
+	const loaded = view.messages[view.messages.length - 1];
+	const outbox = useOutbox(roomId, ownId, view.status === "ready" ? (loaded?.seq ?? 0) : null, (message) => {
 		view.apply(message);
 		void onRoomsChanged();
 	});
@@ -87,19 +97,18 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		});
 	}, [view.status, visible, unreadSeq, roomId, listTick]);
 
-	// The seq of the last message of the list at the start of the call that runs now. A message of the
-	// person that comes after it, before the answer of the call, is the message of that call.
-	const lastSeq = messages[messages.length - 1]?.seq ?? 0;
-	const [sendingAfter, setSendingAfter] = useState({ key: outbox.state.sendingKey, seq: lastSeq });
-	if (sendingAfter.key !== outbox.state.sendingKey) setSendingAfter({ key: outbox.state.sendingKey, seq: lastSeq });
 	const own = useMemo(
 		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
 		[ownId, self.kind, self.display_name],
 	);
-	const rows = useMemo(
-		() => chatRows(messages, outbox.state, own, roomId, sendingAfter.seq),
-		[messages, outbox.state, own, roomId, sendingAfter.seq],
-	);
+	const rows = useMemo(() => chatRows(messages, outbox.state, own, roomId), [messages, outbox.state, own, roomId]);
+
+	// The answers of a send can fail after the server stored the message. When the list has that
+	// message, the send did not fail: the row of the send becomes the row of the stored message.
+	const settle = outbox.settle;
+	useLayoutEffect(() => {
+		for (const { key, id } of storedSends(messages, outbox.state, own)) settle(key, id);
+	}, [messages, outbox.state, own, settle]);
 
 	// After older messages come in, the list stays at the same message. After a new message, it moves
 	// to the end, if it was at the end.
