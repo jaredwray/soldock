@@ -761,8 +761,9 @@ function MessageItem({
 			<div className="chat-message-body">
 				{/* A message that continues a group keeps its author and time for a screen reader. */}
 				<p className={head ? "chat-message-meta" : "visually-hidden"}>
-					{/* A hidden link would be a stop for the Tab key that nobody sees. */}
-					{head ? (
+					{/* A hidden link would be a stop for the Tab key that nobody sees. A principal that is not in
+					    the directory, for example a deleted one, has no profile. */}
+					{head && mentions.directory.byId.has(message.author.principal_id) ? (
 						<Link to={profilePath(message.author.principal_id)} className="chat-author">
 							{author}
 						</Link>

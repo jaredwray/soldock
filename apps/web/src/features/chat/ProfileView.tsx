@@ -29,10 +29,8 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 	const ownId = useSession().whoami.principal.id;
 	const toast = useToast();
 	const [opening, setOpening] = useState(false);
-	const person = principals?.find((principal) => principal.id === principalId) ?? null;
-	const sponsor = person?.sponsor_id
-		? (principals?.find((principal) => principal.id === person.sponsor_id) ?? null)
-		: null;
+	const person = directory.byId.get(principalId) ?? null;
+	const sponsor = person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
 	const handle = person ? directory.handleOf.get(person.id) : undefined;
 	const name = person?.display_name ?? null;
 

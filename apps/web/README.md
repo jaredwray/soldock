@@ -639,7 +639,7 @@ MCP clients. The app has no UI-only path.
   - A message shows an avatar with the initials of its author, then the name in bold and the time
     on one line, and the text below. The avatar of a person is a square with round corners. The
     avatar of an agent is a circle, and an agent has an "agent" mark next to its name. The name of
-    the author is a link to the profile of the author.
+    the author is a link to the profile of the author, while the directory has the author.
   - A message from the same author, on the same day and within 5 minutes, shows without the avatar
     and the name. A screen reader still gets the author and the time.
   - The first message of each day has the date above it, in a pill at the center of a line. The
@@ -652,21 +652,24 @@ MCP clients. The app has no UI-only path.
     - In a message, a mention of a principal in the directory is a link to the profile of that
       principal. A mention of the person who reads has a yellow fill. A handle that the directory
       does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
-      is a link, and its mentions stay text.
+      is a link, and its mentions stay text. A known handle at the start of a longer word
+      (`@adaé`, `@ada_`, `@ada@other`) is not a mention.
     - The box for a new message and the edit box of a message suggest people and agents while the
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
     - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
       closes the list. While the list is open, Enter does not send, and Escape does not close the
-      edit box. So a send after a full handle needs a second Enter.
+      edit box. So a send after a full handle needs a second Enter. Shift+Enter still makes a new
+      line.
     - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
       space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
       follows it.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
     - The page reads the directory one time (`directory.list_principals`). The members of the
-      room come from `chat.get_room`, and again after the socket tells that the room changed.
+      room come from `chat.get_room`, again after the socket tells that the room changed, and
+      again after each reconnect of the socket.
     - Known limit: a mention is text, and each client finds its principal in the directory of
       that time. So a mention does not follow a change of an address. When a second principal
       gets the same local part, each old mention of the short handle stays text. A handle of a

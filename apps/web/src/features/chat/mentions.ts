@@ -18,6 +18,8 @@ export interface MentionDirectory<P extends MentionPerson = MentionPerson> {
 	byHandle: ReadonlyMap<string, P>;
 	/** The handle that a new mention of a principal uses, by the id of the principal. */
 	handleOf: ReadonlyMap<string, string>;
+	/** Each principal of the directory, by its id. A principal without a handle is here too. */
+	byId: ReadonlyMap<string, P>;
 	people: readonly P[];
 }
 
@@ -29,7 +31,12 @@ const HANDLE = new RegExp(`^${LOCAL}(?:@${DOMAIN})?$`, "i");
  * address such as ada@example.com has no mention. `inLink` removes the mentions in a link.
  */
 const NOT_AFTER = "(?<![\\p{L}\\p{N}_.+\\-/@])";
-const MENTION = new RegExp(`${NOT_AFTER}@(${LOCAL})(?:@(${DOMAIN}))?`, "giu");
+/**
+ * The end of a mention: no letter, digit, "_" or "@" follows it, and no mark of an address before
+ * one of them. So "@ada." is a mention, and "@adaé", "@ada_" and "@ada@other" are not.
+ */
+const NOT_BEFORE = "(?![\\p{L}\\p{N}_@]|[._+\\-][\\p{L}\\p{N}_@])";
+const MENTION = new RegExp(`${NOT_AFTER}@(${LOCAL})(?:@(${DOMAIN}))?${NOT_BEFORE}`, "giu");
 /** The text from the "@" to the caret, while the person types a mention. A name can have each letter. */
 const TYPED = new RegExp(`${NOT_AFTER}@([\\p{L}\\p{N}._+\\-]*(?:@[\\p{L}\\p{N}.\\-]*)?)$`, "u");
 /**
@@ -54,6 +61,7 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 	}
 	const byHandle = new Map<string, P>();
 	const handleOf = new Map<string, string>();
+	const byId = new Map(people.map((person) => [person.id, person]));
 	for (const person of people) {
 		const address = person.address.toLowerCase();
 		const local = localPart(address);
@@ -66,7 +74,7 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 			handleOf.set(person.id, address);
 		}
 	}
-	return { byHandle, handleOf, people };
+	return { byHandle, handleOf, byId, people };
 }
 
 /** One part of the text of a message: plain text, or a mention with its principal. */
@@ -214,7 +222,8 @@ export type MentionKeyAction =
 
 /**
  * The action of a key in the field. The keys of the list are the keys of the address list of the
- * Mail composer, with one change: Tab takes a suggestion and keeps the focus in the field.
+ * Mail composer, with two changes: Tab takes a suggestion and keeps the focus in the field, and
+ * Shift+Enter keeps its usual action, a new line.
  *
  * Each action other than "none" replaces the usual action of the key. So Enter does not send and
  * Escape does not close the edit box while the list is open. A key during text composition belongs
@@ -226,7 +235,7 @@ export function mentionKeyAction(
 	composing: boolean,
 	list: { open: boolean; active: number; count: number },
 ): MentionKeyAction {
-	if (composing) return { kind: "none" };
+	if (composing || (key === "Enter" && shiftKey)) return { kind: "none" };
 	const action = recipientKeyAction(key, shiftKey, list);
 	switch (action.kind) {
 		case "select":

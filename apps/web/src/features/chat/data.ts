@@ -354,12 +354,17 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
 	useEffect(() => {
 		if (!member) return;
+		/** The number of `hello` events. The load of the room has the members of the first connect. */
+		let connects = 0;
 		const socket = createRoomSocket({
 			connect: (handlers) => connectRoom(roomId, handlers),
 			onEvent(event) {
 				// `hello` has the version of the room: the sync gets what changed while no socket was open.
-				if (event.type === "hello") void sync.notice(event.version);
-				else if (event.type === "message") sync.push(event.message);
+				// After a reconnect, the members can be different too.
+				if (event.type === "hello") {
+					void sync.notice(event.version);
+					if (connects++ > 0) void loadMembers();
+				} else if (event.type === "message") sync.push(event.message);
 				else {
 					roomChanged.current();
 					void loadMembers();

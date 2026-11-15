@@ -33,8 +33,9 @@ describe("the handle of a principal", () => {
 		expect(DIRECTORY.byHandle.has("ada")).toBe(false);
 		// The full address of each principal is a handle too.
 		expect(DIRECTORY.byHandle.get("captain@example.com")).toBe(CAPTAIN);
-		// An address that the mention syntax cannot hold gets no handle.
+		// An address that the mention syntax cannot hold gets no handle. The principal still has a profile.
 		expect(DIRECTORY.handleOf.has(ODD.id)).toBe(false);
+		expect(DIRECTORY.byId.get(ODD.id)).toBe(ODD);
 	});
 });
 
@@ -63,6 +64,11 @@ describe("the mentions in the text of a message", () => {
 			"mail captain@example.com",
 			"https://example.com/@captain",
 			"https://example.com/?u=@captain",
+			// A known handle at the start of a longer word is not a mention.
+			"@captainé",
+			"@captain_",
+			"@captain@other",
+			"@captain.x",
 			"@captainx",
 			"@ada",
 			"@captain@other.example",
@@ -158,6 +164,8 @@ describe("the keys of the field", () => {
 			// A key during text composition belongs to the input method.
 			["Enter", false, true, open, { kind: "none" }],
 			["Tab", true, false, open, { kind: "none" }],
+			// Shift+Enter makes a new line, also while the list is open.
+			["Enter", true, false, open, { kind: "none" }],
 			["a", false, false, open, { kind: "none" }],
 		];
 		for (const [key, shift, composing, list, action] of cases) {
