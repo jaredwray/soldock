@@ -22,6 +22,7 @@ import { useSession } from "../auth/session.tsx";
 import { createCallLine } from "./callLine.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
+import { createDraftStore, draftStorage } from "./drafts.ts";
 import {
 	chatRows,
 	dayLabel,
@@ -78,7 +79,13 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
-	const [draft, setDraft] = useState("");
+	// The text in the box stays for the room when the person opens a different room, and after a reload.
+	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
+	const [draft, setDraftText] = useState(() => drafts.get(roomId));
+	function setDraft(text: string) {
+		setDraftText(text);
+		drafts.set(roomId, text);
+	}
 	const [joining, setJoining] = useState(false);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
