@@ -79,7 +79,8 @@ save gets a conflict, and the editor shows it.
 ![The editor of Docs with the design brief of a library project](docs/screenshots/docs.png)
 
 Sheets calculates formulas on the server, with functions such as `SUM`, `AVERAGE`, `IF` and `COUNT`.
-Thus a person and an agent always read the same result.
+Thus a person and an agent always read the same result. A sheet has tabs, and a formula can read a
+different tab, for example `=SUM(Costs!B2:B9)`.
 
 ![A sheet with a fee tracker. The formula bar shows the SUM formula of the selected cell](docs/screenshots/sheets.png)
 

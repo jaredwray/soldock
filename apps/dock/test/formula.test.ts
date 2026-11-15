@@ -1,12 +1,36 @@
 import { SHEET_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { cellName, ErrorValue, evaluateSheet, parseCellName, WORK_BUDGET } from "../src/sheets/formula.ts";
+import {
+	cellName,
+	ErrorValue,
+	evaluateWorkbook,
+	parseCellName,
+	renameTabInInput,
+	type Value,
+	WORK_BUDGET,
+} from "../src/sheets/formula.ts";
 
-/** The results of a sheet, with each error as its code. */
-function run(cells: Record<string, string>, budget?: number): Record<string, unknown> {
-	const values = evaluateSheet(new Map(Object.entries(cells)), budget);
+function plain(values: ReadonlyMap<string, Value> | undefined): Record<string, unknown> {
 	return Object.fromEntries(
-		[...values].map(([name, value]) => [name, value instanceof ErrorValue ? value.code : value]),
+		[...(values ?? [])].map(([name, value]) => [name, value instanceof ErrorValue ? value.code : value]),
+	);
+}
+
+/** The results of each tab of a sheet, by tab name, with each error as its code. */
+function runTabs(tabs: Record<string, Record<string, string>>): Record<string, Record<string, unknown>> {
+	const inputs = Object.entries(tabs).map(([name, cells], index) => ({
+		id: `tab_${index + 1}`,
+		name,
+		inputs: new Map(Object.entries(cells)),
+	}));
+	const values = evaluateWorkbook(inputs);
+	return Object.fromEntries(inputs.map((tab) => [tab.name, plain(values.get(tab.id))]));
+}
+
+/** The results of a sheet with one tab, with each error as its code. */
+function run(cells: Record<string, string>, budget?: number): Record<string, unknown> {
+	return plain(
+		evaluateWorkbook([{ id: "tab_1", name: "Sheet1", inputs: new Map(Object.entries(cells)) }], budget).get("tab_1"),
 	);
 }
 
@@ -232,6 +256,97 @@ describe("the formula engine", () => {
 		expect(limited.A1).toBe(1);
 		expect(Object.values(limited)).toContain("#LIMIT!");
 		expect(Object.values(limited).filter((value) => value === 20100).length).toBeGreaterThan(0);
+	});
+});
+
+describe("tabs in formulas", () => {
+	const DATA_TAB = { A1: "10", A2: "20", A3: "30" };
+
+	it("reads the cells of a different tab by its name, in quotes or not, in upper or lower case", () => {
+		const result = runTabs({
+			Data: DATA_TAB,
+			"Q1 costs": { B2: "7" },
+			"Bob's": { A1: "bob" },
+			Données: { A1: "3" },
+			Summary: {
+				A1: "=SUM(Data!A1:A3)",
+				A2: "='Q1 costs'!B2*2",
+				A3: "=data!$a$2",
+				A4: "='Bob''s'!A1",
+				A5: "=Données!A1+'Data'!A1",
+				A6: "=Summary!A1+1",
+				A7: "=AVERAGE(Data!A1:C9)",
+				B1: "=A1",
+			},
+		});
+		expect(result.Summary).toEqual({ A1: 60, A2: 14, A3: 20, A4: "bob", A5: 13, A6: 61, A7: 20, B1: 60 });
+	});
+
+	it("gives #REF! for a tab that does not exist, and #ERROR! for a tab name without a cell", () => {
+		const result = runTabs({
+			Data: DATA_TAB,
+			Summary: {
+				A1: "=Nope!A1",
+				A2: "=SUM('No tab'!A1:A3)",
+				A3: "=Data!A1001",
+				A4: "=Data!",
+				A5: "=Data!SUM(A1)",
+				A6: "=Data!A1:Data!A2",
+				A7: "='Data!A1",
+			},
+		});
+		expect(result.Summary).toEqual({
+			A1: "#REF!",
+			A2: "#REF!",
+			A3: "#REF!",
+			A4: "#ERROR!",
+			A5: "#ERROR!",
+			A6: "#ERROR!",
+			A7: "#ERROR!",
+		});
+	});
+
+	// A1 of each tab has the same name. The engine must keep the cells of different tabs apart.
+	it("finds a circle through cells of different tabs, and keeps cells with one name apart", () => {
+		const result = runTabs({
+			One: { A1: "=Two!A1+1", B1: "=Two!B1" },
+			Two: { A1: "=One!A1", B1: "=A1" },
+			Three: { A1: "5", B1: "=One!B1" },
+		});
+		expect(result).toEqual({
+			One: { A1: "#CYCLE!", B1: "#CYCLE!" },
+			Two: { A1: "#CYCLE!", B1: "#CYCLE!" },
+			Three: { A1: 5, B1: "#CYCLE!" },
+		});
+	});
+
+	it("renames each reference to a tab, and keeps texts, other tabs and formulas that cannot be read", () => {
+		const table: [string, string, string][] = [
+			["=Data!A1+1", "Facts", "=Facts!A1+1"],
+			["=SUM(data!A1:A3) + DATA!B1", "Facts", "=SUM(Facts!A1:A3) + Facts!B1"],
+			["='Data'!A1", "Facts", "=Facts!A1"],
+			['="Data!A1"&Data!A1', "Facts", '="Data!A1"&Facts!A1'],
+			["=Data!A1", "Q1 costs", "='Q1 costs'!A1"],
+			["=Data!A1", "Bob's", "='Bob''s'!A1"],
+			["=Data!A1", "A1", "='A1'!A1"],
+			["=Data!A1", "2027", "='2027'!A1"],
+			["=Other!A1+DataX!A1", "Facts", "=Other!A1+DataX!A1"],
+			["Data!A1", "Facts", "Data!A1"],
+			["=Data!A1+#", "Facts", "=Data!A1+#"],
+		];
+		for (const [input, to, expected] of table) expect(renameTabInInput(input, "Data", to), input).toBe(expected);
+	});
+
+	// A rename writes the new name into each formula. The formula must read the same cells after it.
+	it("gives the same results after a rename to a name that needs quotes", () => {
+		const summary = { A1: "=SUM(Data!A1:A3)", A2: "=Data!A2&'Data'!A3" };
+		const before = runTabs({ Data: DATA_TAB, Summary: summary }).Summary;
+		for (const name of ["Q1 costs", "Bob's", "A1", "2027", "Données", "x.y_z", "a!b", "-", "(", '"']) {
+			const renamed = Object.fromEntries(
+				Object.entries(summary).map(([cell, input]) => [cell, renameTabInInput(input, "Data", name)]),
+			);
+			expect(runTabs({ [name]: DATA_TAB, Summary: renamed }).Summary, name).toEqual(before);
+		}
 	});
 });
 

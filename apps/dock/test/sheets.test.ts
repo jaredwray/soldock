@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { SHEET_LIMITS } from "@soldock/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, codeOf, seedOrg } from "./helpers.ts";
@@ -26,7 +27,13 @@ describe("sheets.create and sheets.get", () => {
 		const created = await ada.call("sheets.create", { name: "Budget", cells: BUDGET });
 		expect(created).toMatchObject({ revision: 1, item: { kind: "sheet", name: "Budget", mime_type: null } });
 		const sheet = await ada.call("sheets.get", { item_id: created.item.id });
-		expect(sheet).toMatchObject({ revision: 1, rows: 4, columns: 2 });
+		expect(sheet).toMatchObject({
+			revision: 1,
+			rows: 4,
+			columns: 2,
+			tab_id: "tab_1",
+			tabs: [{ id: "tab_1", name: "Sheet1", rows: 4, columns: 2 }],
+		});
 		expect(sheet.cells).toEqual([
 			{ cell: "A1", input: "Item", value: "Item", type: "text" },
 			{ cell: "B1", input: "Cost", value: "Cost", type: "text" },
@@ -193,6 +200,10 @@ describe("sheets and the drive", () => {
 		await ada.call("drive.share_item", { item_id: item.id, principal_id: bot.id, role: "editor" });
 		expect((await owner.call("sheets.get", space)).item.role).toBe("viewer");
 		expect(await codeOf(owner.call("sheets.update_cells", change))).toBe("forbidden");
+		expect(await codeOf(owner.call("sheets.add_tab", space))).toBe("forbidden");
+		expect(await codeOf(owner.call("sheets.rename_tab", { ...space, tab_id: "tab_1", name: "Mine" }))).toBe(
+			"forbidden",
+		);
 		expect((await bot.call("sheets.update_cells", change)).item.modified_by).toMatchObject({ principal_id: bot.id });
 		expect((await ada.call("sheets.get", { item_id: item.id, range: "B4" })).cells[0]?.value).toBe(31.5);
 	});
@@ -204,5 +215,153 @@ describe("sheets and the drive", () => {
 		await ada.call("sheets.update_cells", { item_id: copy.id, cells: [{ cell: "B2", input: "0" }] });
 		expect((await ada.call("sheets.get", { item_id: item.id, range: "B4" })).cells[0]?.value).toBe(150.5);
 		expect((await ada.call("sheets.get", { item_id: copy.id, range: "B4" })).cells[0]?.value).toBe(30.5);
+	});
+});
+
+describe("tabs", () => {
+	const names = (tabs: { name: string }[]) => tabs.map((tab) => tab.name);
+
+	it("adds, renames, moves, copies and deletes tabs, and keeps the cells of each tab apart", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Year", cells: BUDGET });
+		const added = await ada.call("sheets.add_tab", { item_id: item.id });
+		expect(added).toMatchObject({ revision: 2, tab_id: "tab_2" });
+		expect(names(added.tabs)).toEqual(["Sheet1", "Sheet2"]);
+		await ada.call("sheets.update_cells", { item_id: item.id, tab_id: "tab_2", cells: [{ cell: "B2", input: "9" }] });
+		const first = await ada.call("sheets.get", { item_id: item.id, range: "B2" });
+		const second = await ada.call("sheets.get", { item_id: item.id, tab_id: "tab_2" });
+		expect(first).toMatchObject({ tab_id: "tab_1", cells: [{ value: 120 }] });
+		expect(second).toMatchObject({ tab_id: "tab_2", rows: 2, columns: 2, cells: [{ cell: "B2", value: 9 }] });
+
+		const front = await ada.call("sheets.add_tab", { item_id: item.id, name: " Notes ", index: 0 });
+		expect(names(front.tabs)).toEqual(["Notes", "Sheet1", "Sheet2"]);
+		expect(names((await ada.call("sheets.move_tab", { item_id: item.id, tab_id: "tab_3", index: 9 })).tabs)).toEqual([
+			"Sheet1",
+			"Sheet2",
+			"Notes",
+		]);
+		const copy = await ada.call("sheets.duplicate_tab", { item_id: item.id, tab_id: "tab_1" });
+		expect(copy.tab_id).toBe("tab_4");
+		expect(names(copy.tabs)).toEqual(["Sheet1", "Copy of Sheet1", "Sheet2", "Notes"]);
+		// A copy goes directly after the tab that it came from.
+		expect(names((await ada.call("sheets.duplicate_tab", { item_id: item.id, tab_id: "tab_1" })).tabs)).toEqual([
+			"Sheet1",
+			"Copy 2 of Sheet1",
+			"Copy of Sheet1",
+			"Sheet2",
+			"Notes",
+		]);
+		// The copy has its own cells: a change to it does not change the tab that it came from.
+		await ada.call("sheets.update_cells", { item_id: item.id, tab_id: "tab_4", cells: [{ cell: "B2", input: "0" }] });
+		expect((await ada.call("sheets.get", { item_id: item.id, tab_id: "tab_4", range: "B4" })).cells[0]?.value).toBe(
+			30.5,
+		);
+		expect((await ada.call("sheets.get", { item_id: item.id, range: "B4" })).cells[0]?.value).toBe(150.5);
+
+		const renamed = await ada.call("sheets.rename_tab", { item_id: item.id, tab_id: "tab_1", name: "Costs" });
+		expect(renamed.tabs[0]).toEqual({ id: "tab_1", name: "Costs", rows: 4, columns: 2 });
+		// The same name again changes nothing and makes no revision.
+		const again = await ada.call("sheets.rename_tab", { item_id: item.id, tab_id: "tab_1", name: "Costs" });
+		expect(again.revision).toBe(renamed.revision);
+
+		const deleted = await ada.call("sheets.delete_tab", { item_id: item.id, tab_id: "tab_1" });
+		expect(deleted.tabs.map((tab) => tab.id)).not.toContain("tab_1");
+		// Without tab_id, a call reads the first tab. A deleted tab id is never used again.
+		expect((await ada.call("sheets.get", { item_id: item.id })).tab_id).toBe("tab_5");
+		expect((await ada.call("sheets.add_tab", { item_id: item.id })).tab_id).toBe("tab_6");
+		expect(await codeOf(ada.call("sheets.get", { item_id: item.id, tab_id: "tab_1" }))).toBe("not_found");
+	});
+
+	it("calculates formulas across tabs, keeps them on a rename, and gives #REF! after a delete", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Year", cells: BUDGET });
+		await ada.call("sheets.add_tab", { item_id: item.id, name: "Summary" });
+		const summary = await ada.call("sheets.update_cells", {
+			item_id: item.id,
+			tab_id: "tab_2",
+			cells: [{ cell: "A1", input: "=SUM(Sheet1!B2:B3)" }],
+		});
+		expect(summary.cells).toEqual([{ cell: "A1", input: "=SUM(Sheet1!B2:B3)", value: 150.5, type: "number" }]);
+		// A change in one tab gives new results in the formulas of the other tab.
+		await ada.call("sheets.update_cells", { item_id: item.id, cells: [{ cell: "B3", input: "80" }] });
+		const read = () => ada.call("sheets.get", { item_id: item.id, tab_id: "tab_2" });
+		expect((await read()).cells[0]).toMatchObject({ value: 200 });
+
+		await ada.call("sheets.rename_tab", { item_id: item.id, tab_id: "tab_1", name: "Q1 costs" });
+		expect((await read()).cells[0]).toMatchObject({ input: "=SUM('Q1 costs'!B2:B3)", value: 200 });
+		// The search index has the texts of each tab.
+		expect(
+			(await ada.call("drive.list_items", { view: "search", query: "hosting" })).items.map((entry) => entry.id),
+		).toEqual([item.id]);
+
+		await ada.call("sheets.delete_tab", { item_id: item.id, tab_id: "tab_1" });
+		expect((await read()).cells[0]).toMatchObject({ input: "=SUM('Q1 costs'!B2:B3)", value: "#REF!" });
+		// A new tab with the name gives the formula a result again.
+		const back = await ada.call("sheets.add_tab", { item_id: item.id, name: "q1 COSTS" });
+		await ada.call("sheets.update_cells", {
+			item_id: item.id,
+			tab_id: back.tab_id,
+			cells: [{ cell: "B2", input: "5" }],
+		});
+		expect((await read()).cells[0]).toMatchObject({ value: 5 });
+	});
+
+	it("refuses a name that a tab has, a name with a forbidden character, the last tab and a tab that does not exist", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Year" });
+		await ada.call("sheets.add_tab", { item_id: item.id, name: "Notes" });
+		const tab = { item_id: item.id, tab_id: "tab_1" };
+		expect(await codeOf(ada.call("sheets.add_tab", { item_id: item.id, name: "NOTES" }))).toBe("invalid");
+		expect(await codeOf(ada.call("sheets.rename_tab", { ...tab, name: "notes" }))).toBe("invalid");
+		expect(await codeOf(ada.call("sheets.duplicate_tab", { ...tab, name: "Notes" }))).toBe("invalid");
+		for (const name of ["a:b", "a/b", "[x]", "'quoted'", "", "x".repeat(SHEET_LIMITS.tabNameChars + 1)]) {
+			expect(await codeOf(ada.call("sheets.rename_tab", { ...tab, name })), name).toBe("invalid");
+		}
+		expect(await codeOf(ada.call("sheets.rename_tab", { item_id: item.id, tab_id: "tab_9", name: "x" }))).toBe(
+			"not_found",
+		);
+		await ada.call("sheets.delete_tab", { item_id: item.id, tab_id: "tab_2" });
+		expect(await codeOf(ada.call("sheets.delete_tab", tab))).toBe("invalid");
+		expect(
+			await codeOf(ada.call("sheets.update_cells", { ...tab, tab_id: "tab_2", cells: [{ cell: "A1", input: "1" }] })),
+		).toBe("not_found");
+	});
+
+	it("refuses more tabs than the limit, and adds tabs of calls at the same time", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Year" });
+		// Each call reads the tabs again before its write, so two new tabs never get the same id or name.
+		const at = await Promise.all([1, 2, 3].map(() => ada.call("sheets.add_tab", { item_id: item.id })));
+		expect(new Set(at.map((entry) => entry.tab_id)).size).toBe(3);
+		const { tabs } = await ada.call("sheets.get", { item_id: item.id });
+		expect(names(tabs).sort()).toEqual(["Sheet1", "Sheet2", "Sheet3", "Sheet4"]);
+		for (let count = tabs.length; count < SHEET_LIMITS.tabs; count++) {
+			await ada.call("sheets.add_tab", { item_id: item.id });
+		}
+		expect(await codeOf(ada.call("sheets.add_tab", { item_id: item.id }))).toBe("invalid");
+		expect(await codeOf(ada.call("sheets.duplicate_tab", { item_id: item.id, tab_id: "tab_1" }))).toBe("invalid");
+	});
+
+	// Sheets of the first layer stored { cells } with one grid. They must open as one tab.
+	it("reads a sheet that the first layer stored, as one tab Sheet1", async () => {
+		const { item } = await ada.call("sheets.create", { name: "Old" });
+		const author = { principal_id: ada.id, kind: "human" as const, display_name: "Ada" };
+		await env.DOCUMENT.get(env.DOCUMENT.idFromName(item.id)).write({
+			spaceId: ada.id,
+			itemId: item.id,
+			content: JSON.stringify({ cells: { A1: "2", A2: "=A1*3" } }),
+			text: "",
+			baseRevision: null,
+			author,
+		});
+		expect(await ada.call("sheets.get", { item_id: item.id })).toMatchObject({
+			revision: 1,
+			tab_id: "tab_1",
+			tabs: [{ id: "tab_1", name: "Sheet1", rows: 2, columns: 1 }],
+			cells: [{ cell: "A1" }, { cell: "A2", value: 6 }],
+		});
+		// The same input again changes nothing, also when the stored form is the old one.
+		expect(
+			(await ada.call("sheets.update_cells", { item_id: item.id, cells: [{ cell: "A1", input: "2" }] })).revision,
+		).toBe(1);
+		const added = await ada.call("sheets.add_tab", { item_id: item.id });
+		expect(added).toMatchObject({ tab_id: "tab_2", tabs: [{ id: "tab_1" }, { id: "tab_2", name: "Sheet2" }] });
+		expect((await ada.call("sheets.get", { item_id: item.id, range: "A2" })).cells[0]?.value).toBe(6);
 	});
 });

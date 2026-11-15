@@ -47,11 +47,12 @@ export function parseCellName(name: string): CellPosition | null {
 	return col <= SHEET_LIMITS.columns && row <= SHEET_LIMITS.rows ? { col, row } : null;
 }
 
+/** A cell or a range is in one tab: `tab` is the id of that tab. */
 type Node =
 	| { t: "value"; value: number | string | boolean }
 	| { t: "error"; code: SheetError }
-	| { t: "ref"; col: number; row: number }
-	| { t: "range"; col1: number; row1: number; col2: number; row2: number }
+	| { t: "ref"; tab: string; col: number; row: number }
+	| { t: "range"; tab: string; col1: number; row1: number; col2: number; row2: number }
 	| { t: "unary"; op: "-" | "+" | "%"; arg: Node }
 	| { t: "binary"; op: string; left: Node; right: Node }
 	| { t: "call"; name: string; args: Node[] };
@@ -59,30 +60,88 @@ type Node =
 type Tok =
 	| { t: "num"; value: number }
 	| { t: "str"; value: string }
+	| { t: "tab"; value: string }
 	| { t: "name"; value: string }
 	| { t: "op"; value: string };
 
+/**
+ * One token. Group 3 is the name of a tab before `!`: plain (`Costs!`) or in single quotes, with ''
+ * for a quote in the name (`'Bob''s costs'!`).
+ */
 const TOKEN =
-	/\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)|"((?:[^"]|"")*)"|(\$?[A-Za-z]+\$?\d+|[A-Za-z_][A-Za-z0-9_.]*)|(<=|>=|<>|[-+*/^&=<>%(),;:]))/y;
+	/\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)|"((?:[^"]|"")*)"|('(?:[^']|'')+'|[\p{L}_][\p{L}\p{N}_.]*)!|(\$?[A-Za-z]+\$?\d+|[A-Za-z_][A-Za-z0-9_.]*)|(<=|>=|<>|[-+*/^&=<>%(),;:]))/uy;
 
 class FormulaError extends Error {}
 
-function tokenizeFormula(source: string): Tok[] {
-	const tokens: Tok[] = [];
-	TOKEN.lastIndex = 0;
+/** The name of a tab from its form in a formula: without the quotes, and with one quote for each pair. */
+function tabNameOf(text: string): string {
+	return text.startsWith("'") ? text.slice(1, -1).replaceAll("''", "'") : text;
+}
+
+/**
+ * Each token of a formula, with the position after it. Throws FormulaError for text that is not a
+ * token.
+ */
+function* scanFormula(source: string): Generator<{ match: RegExpExecArray; end: number }> {
 	let position = 0;
 	while (position < source.length) {
-		if (/^\s*$/.test(source.slice(position))) break;
+		if (/^\s*$/.test(source.slice(position))) return;
 		TOKEN.lastIndex = position;
 		const match = TOKEN.exec(source);
 		if (!match) throw new FormulaError();
 		position = TOKEN.lastIndex;
+		yield { match, end: position };
+	}
+}
+
+function tokenizeFormula(source: string): Tok[] {
+	const tokens: Tok[] = [];
+	for (const { match } of scanFormula(source)) {
 		if (match[1] !== undefined) tokens.push({ t: "num", value: Number(match[1]) });
 		else if (match[2] !== undefined) tokens.push({ t: "str", value: match[2].replaceAll('""', '"') });
-		else if (match[3] !== undefined) tokens.push({ t: "name", value: match[3] });
-		else tokens.push({ t: "op", value: match[4] as string });
+		else if (match[3] !== undefined) tokens.push({ t: "tab", value: tabNameOf(match[3]) });
+		else if (match[4] !== undefined) tokens.push({ t: "name", value: match[4] });
+		else tokens.push({ t: "op", value: match[5] as string });
 	}
 	return tokens;
+}
+
+/** A tab name as a formula writes it. A name that is not one plain word, or that looks like a cell, gets quotes. */
+export function formatTabName(name: string): string {
+	const plain = /^[\p{L}_][\p{L}\p{N}_.]*$/u.test(name) && !/^[A-Za-z]{1,3}[0-9]+$/.test(name);
+	return plain ? name : `'${name.replaceAll("'", "''")}'`;
+}
+
+/**
+ * The input of a cell after a tab gets a new name. Each reference to the tab `from` in a formula
+ * gets the name `to`. The case of a name does not count. A formula that cannot be read stays as it is.
+ */
+export function renameTabInInput(raw: string, from: string, to: string): string {
+	if (!raw.startsWith("=")) return raw;
+	const source = raw.slice(1);
+	const old = from.toLowerCase();
+	let out = "";
+	let copied = 0;
+	try {
+		for (const { match, end } of scanFormula(source)) {
+			const text = match[3];
+			if (text === undefined || tabNameOf(text).toLowerCase() !== old) continue;
+			// The match ends with the name and then "!".
+			const start = end - text.length - 1;
+			out += source.slice(copied, start) + formatTabName(to);
+			copied = end - 1;
+		}
+	} catch (error) {
+		if (error instanceof FormulaError) return raw;
+		throw error;
+	}
+	return copied === 0 ? raw : `=${out}${source.slice(copied)}`;
+}
+
+/** How a formula finds its cells: the id of its own tab, and the id of a tab from its name. */
+export interface FormulaContext {
+	tab: string;
+	tabOf: (name: string) => string | null;
 }
 
 const MAX_FORMULA_DEPTH = 64;
@@ -92,9 +151,11 @@ class Parser {
 	private position = 0;
 	private depth = 0;
 	private readonly tokens: Tok[];
+	private readonly context: FormulaContext;
 
-	constructor(tokens: Tok[]) {
+	constructor(tokens: Tok[], context: FormulaContext) {
 		this.tokens = tokens;
+		this.context = context;
 	}
 
 	parse(): Node {
@@ -147,6 +208,13 @@ class Parser {
 		// A literal such as 1e309 is not a finite number.
 		if (token.t === "num" && !Number.isFinite(token.value)) return { t: "error", code: "#NUM!" };
 		if (token.t === "num" || token.t === "str") return { t: "value", value: token.value };
+		if (token.t === "tab") {
+			// A tab name comes before a cell or a range only. A tab that does not exist gives #REF!.
+			const cell = this.tokens[this.position];
+			if (cell?.t !== "name" || !/^\$?[A-Z]+\$?\d+$/i.test(cell.value)) throw new FormulaError();
+			this.position++;
+			return this.reference(cell.value.toUpperCase(), this.context.tabOf(token.value));
+		}
 		if (token.t === "op") {
 			if (token.value !== "(") throw new FormulaError();
 			if (++this.depth > MAX_FORMULA_DEPTH) throw new FormulaError();
@@ -169,14 +237,21 @@ class Parser {
 		}
 		if (name === "TRUE" || name === "FALSE") return { t: "value", value: name === "TRUE" };
 		if (!/^\$?[A-Z]+\$?\d+$/.test(name)) return { t: "error", code: "#NAME?" };
+		return this.reference(name, this.context.tab);
+	}
+
+	/** A cell, or a range when `:` follows, in the tab `tab`. Null for a tab that does not exist. */
+	private reference(name: string, tab: string | null): Node {
 		const start = parseCellName(name);
-		if (this.takeOp(":") === null) return start ? { t: "ref", ...start } : { t: "error", code: "#REF!" };
+		if (this.takeOp(":") === null)
+			return start && tab !== null ? { t: "ref", tab, ...start } : { t: "error", code: "#REF!" };
 		const endToken = this.tokens[this.position++];
 		if (endToken?.t !== "name") throw new FormulaError();
 		const end = parseCellName(endToken.value);
-		if (!start || !end) return { t: "error", code: "#REF!" };
+		if (!start || !end || tab === null) return { t: "error", code: "#REF!" };
 		return {
 			t: "range",
+			tab,
 			col1: Math.min(start.col, end.col),
 			row1: Math.min(start.row, end.row),
 			col2: Math.max(start.col, end.col),
@@ -191,10 +266,10 @@ type Input = { formula: Node } | { value: Value };
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /** Reads the input of a cell. A text that starts with = is a formula. A text that starts with ' is text. */
-export function parseInput(raw: string): Input {
+export function parseInput(raw: string, context: FormulaContext): Input {
 	if (raw.startsWith("=") && raw.length > 1) {
 		try {
-			return { formula: new Parser(tokenizeFormula(raw.slice(1))).parse() };
+			return { formula: new Parser(tokenizeFormula(raw.slice(1)), context).parse() };
 		} catch (error) {
 			if (error instanceof FormulaError) return { value: ERRORS["#ERROR!"] };
 			throw error;
@@ -422,17 +497,40 @@ export const WORK_BUDGET = 2_000_000;
 
 class BudgetError extends Error {}
 
+/** The inputs of one tab, as the engine calculates them. */
+export interface TabInputs {
+	id: string;
+	name: string;
+	/** The input of each cell that is not empty, by cell name. */
+	inputs: ReadonlyMap<string, string>;
+}
+
+/** The key of a cell in the whole sheet: the id of its tab, `!`, and its name. A tab id has no `!`. */
+function keyOf(tab: string, name: string): string {
+	return `${tab}!${name}`;
+}
+
 /**
- * Calculates each cell of a sheet. `inputs` has the input of each cell that is not empty, by cell
- * name. A cell that depends on itself, directly or through other cells, gets #CYCLE!.
+ * Calculates each cell of each tab of a sheet. A formula reads the cells of its own tab, and of a
+ * different tab with the name of that tab. A cell that depends on itself, directly or through other
+ * cells, gets #CYCLE!. The result has the results of each tab, by tab id and then by cell name.
  */
-export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: number = WORK_BUDGET): Map<string, Value> {
+export function evaluateWorkbook(
+	tabs: readonly TabInputs[],
+	budget: number = WORK_BUDGET,
+): Map<string, Map<string, Value>> {
 	const results = new Map<string, Value>();
 	const formulas = new Map<string, Node>();
-	for (const [name, raw] of inputs) {
-		const input = parseInput(raw);
-		if ("formula" in input) formulas.set(name, input.formula);
-		else results.set(name, input.value);
+	const ids = new Map(tabs.map((tab) => [tab.name.toLowerCase(), tab.id]));
+	const tabOf = (name: string) => ids.get(name.toLowerCase()) ?? null;
+	const inputsOf = new Map(tabs.map((tab) => [tab.id, tab.inputs]));
+	for (const tab of tabs) {
+		const context = { tab: tab.id, tabOf };
+		for (const [name, raw] of tab.inputs) {
+			const input = parseInput(raw, context);
+			if ("formula" in input) formulas.set(keyOf(tab.id, name), input.formula);
+			else results.set(keyOf(tab.id, name), input.value);
+		}
 	}
 	let work = 0;
 	const spend = (amount: number) => {
@@ -440,15 +538,16 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 		if (work > budget) throw new BudgetError();
 	};
 
-	/** The names of the cells in a range that have an input. It reads the smaller of the range and the sheet. */
+	/** The keys of the cells in a range that have an input. It reads the smaller of the range and the tab. */
 	function* cellsIn(range: Extract<Node, { t: "range" }>): Generator<string> {
+		const inputs = inputsOf.get(range.tab) ?? new Map<string, string>();
 		const area = (range.col2 - range.col1 + 1) * (range.row2 - range.row1 + 1);
 		if (area <= inputs.size) {
 			spend(area);
 			for (let row = range.row1; row <= range.row2; row++) {
 				for (let col = range.col1; col <= range.col2; col++) {
 					const name = cellName({ col, row });
-					if (inputs.has(name)) yield name;
+					if (inputs.has(name)) yield keyOf(range.tab, name);
 				}
 			}
 		} else {
@@ -462,7 +561,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 					cell.row >= range.row1 &&
 					cell.row <= range.row2
 				) {
-					yield name;
+					yield keyOf(range.tab, name);
 				}
 			}
 		}
@@ -472,8 +571,8 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 	function* dependencies(node: Node): Generator<string> {
 		switch (node.t) {
 			case "ref": {
-				const name = cellName(node);
-				if (formulas.has(name)) yield name;
+				const key = keyOf(node.tab, cellName(node));
+				if (formulas.has(key)) yield key;
 				return;
 			}
 			case "range":
@@ -517,7 +616,7 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 			case "error":
 				return ERRORS[node.code];
 			case "ref":
-				return charged(results.get(cellName(node)) ?? null);
+				return charged(results.get(keyOf(node.tab, cellName(node))) ?? null);
 			case "range":
 				// A range is a value only as an argument of a function.
 				return ERRORS["#VALUE!"];
@@ -624,5 +723,10 @@ export function evaluateSheet(inputs: ReadonlyMap<string, string>, budget: numbe
 		if (!(error instanceof BudgetError)) throw error;
 		for (const name of formulas.keys()) if (state.get(name) !== "done") results.set(name, ERRORS["#LIMIT!"]);
 	}
-	return results;
+	const byTab = new Map(tabs.map((tab) => [tab.id, new Map<string, Value>()]));
+	for (const [key, value] of results) {
+		const split = key.indexOf("!");
+		byTab.get(key.slice(0, split))?.set(key.slice(split + 1), value);
+	}
+	return byTab;
 }

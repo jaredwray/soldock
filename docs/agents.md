@@ -243,6 +243,11 @@ operations that the web app uses.
 - **Sheets.** `sheets_create` and `sheets_update_cells` take the input of each cell, for example
   `{"cell": "B4", "input": "=SUM(B2:B3)"}`. The server calculates. `sheets_get` returns each cell with
   its `input` and its `value`.
+- **Tabs.** A sheet has one or more tabs. `sheets_get` returns `tabs`, with the id and the name of
+  each tab. Pass `tab_id` to `sheets_get` and `sheets_update_cells` to use a different tab than the
+  first. `sheets_add_tab`, `sheets_rename_tab`, `sheets_move_tab`, `sheets_duplicate_tab` and
+  `sheets_delete_tab` change the tabs. A formula reads a different tab by its name, for example
+  `=SUM(Costs!B2:B9)` or `='Q1 costs'!B4`. A rename changes these formulas to the new name.
 - **Changes at the same time.** `docs_get` and `sheets_get` return a `revision`. Pass it as
   `base_revision` to `docs_update` or `sheets_update_cells`. When somebody changed the content after
   your read, the call fails with `conflict` and changes nothing: read again.

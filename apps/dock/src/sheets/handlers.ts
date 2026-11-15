@@ -11,34 +11,95 @@ import {
 } from "../drive/index.ts";
 import type { CallContext } from "../identity/index.ts";
 import { type HandlerMap, newId, OperationError } from "../platform/index.ts";
-import { evaluateSheet } from "./formula.ts";
-import { applyChanges, changedCells, extent, positionOf, readInputs, sheetText, storeInputs, toCells } from "./grid.ts";
+import { evaluateWorkbook, renameTabInInput, type TabInputs, type Value } from "./formula.ts";
+import {
+	applyChanges,
+	changedCells,
+	extent,
+	positionOf,
+	readWorkbook,
+	sheetText,
+	storeWorkbook,
+	toCells,
+	toTabs,
+	type Workbook,
+} from "./grid.ts";
 
 type SheetsOperation = Extract<OperationName, `sheets.${string}`>;
 
-/** The inputs after the changes of a call. Refuses a cell outside the grid and a sheet over its limits. */
-function changed(inputs: ReadonlyMap<string, string>, changes: readonly { cell: string; input: string }[]) {
-	let next: Map<string, string>;
-	try {
-		next = applyChanges(inputs, changes);
-	} catch (error) {
-		if (error instanceof RangeError) throw new OperationError("invalid", error.message);
-		throw error;
-	}
-	if (next.size > SHEET_LIMITS.cells) {
+/** The stored form of a sheet. Refuses a sheet over its limits. */
+function checked(book: Workbook): string {
+	let cells = 0;
+	for (const tab of book.tabs) cells += tab.inputs.size;
+	if (cells > SHEET_LIMITS.cells) {
 		throw new OperationError(
 			"payload_too_large",
 			`A sheet can have at most ${SHEET_LIMITS.cells} cells with an input.`,
 		);
 	}
-	const content = storeInputs(next);
+	const content = storeWorkbook(book);
 	if (new TextEncoder().encode(content).byteLength > SHEET_LIMITS.contentBytes) {
 		throw new OperationError(
 			"payload_too_large",
 			`The inputs of a sheet can be at most ${SHEET_LIMITS.contentBytes} bytes.`,
 		);
 	}
-	return { inputs: next, content };
+	return content;
+}
+
+/** The inputs of a tab after the changes of a call. Refuses a cell outside the grid. */
+function changedInputs(inputs: ReadonlyMap<string, string>, changes: readonly { cell: string; input: string }[]) {
+	try {
+		return applyChanges(inputs, changes);
+	} catch (error) {
+		if (error instanceof RangeError) throw new OperationError("invalid", error.message);
+		throw error;
+	}
+}
+
+/** The tab with the id, or the first tab without an id. */
+function tabOf(book: Workbook, tabId: string | undefined): TabInputs {
+	const tab = tabId === undefined ? book.tabs[0] : book.tabs.find((entry) => entry.id === tabId);
+	if (!tab) throw new OperationError("not_found", `The sheet has no tab ${tabId}. Read the tabs with sheets.get.`);
+	return tab;
+}
+
+/** Refuses a name that a different tab of the sheet has. The case of a name does not count. */
+function checkFreeName(book: Workbook, name: string, except?: string) {
+	const taken = book.tabs.some((tab) => tab.id !== except && tab.name.toLowerCase() === name.toLowerCase());
+	if (taken) throw new OperationError("invalid", `The sheet has a tab with the name ${name}. Use a different name.`);
+}
+
+function checkTabCount(book: Workbook) {
+	if (book.tabs.length >= SHEET_LIMITS.tabs) {
+		throw new OperationError("invalid", `A sheet can have at most ${SHEET_LIMITS.tabs} tabs.`);
+	}
+}
+
+/** A name for a new tab that is not too long, and that does not end with a space or a quote. */
+function fitName(name: string): string {
+	return name.slice(0, SHEET_LIMITS.tabNameChars).trimEnd().replace(/'+$/, "");
+}
+
+/** The first of the candidate names that no tab of the sheet has. */
+function freeName(book: Workbook, candidate: (n: number) => string): string {
+	const taken = new Set(book.tabs.map((tab) => tab.name.toLowerCase()));
+	for (let n = 1; ; n++) {
+		const name = fitName(candidate(n));
+		if (!taken.has(name.toLowerCase())) return name;
+	}
+}
+
+function withTabs(book: Workbook, tabs: TabInputs[]): Workbook {
+	return { tabs, nextTab: book.nextTab };
+}
+
+/** A new tab with the next id of the sheet, at the position `index`. */
+function insertTab(book: Workbook, tab: Omit<TabInputs, "id">, index: number): { book: Workbook; id: string } {
+	const id = `tab_${book.nextTab}`;
+	const tabs = [...book.tabs];
+	tabs.splice(Math.min(index, tabs.length), 0, { id, ...tab });
+	return { book: { tabs, nextTab: book.nextTab + 1 }, id };
 }
 
 async function itemOf(call: CallContext, opened: OpenSpace, itemId: string) {
@@ -64,11 +125,82 @@ function rangeOf(range: string | undefined) {
 /** The most times that one call calculates its change again, when other writers change the sheet at the same time. */
 const WRITE_ATTEMPTS = 3;
 
+interface SheetCall {
+	space_id?: string | undefined;
+	item_id: string;
+	base_revision?: number | undefined;
+}
+
+/**
+ * Reads a sheet, makes a change to it, and writes it. The change can refuse with an OperationError.
+ * Each write names the revision that the call read. When a different writer changed the sheet
+ * between the read and the write, the call reads and makes the change again, at most 3 times. Thus
+ * calls at the same time never lose changes of each other. A change that changes nothing makes no
+ * revision.
+ */
+async function changeSheet<T>(
+	call: CallContext,
+	input: SheetCall,
+	operation: SheetsOperation,
+	change: (book: Workbook) => { book: Workbook; result: T },
+) {
+	const opened = await openSpace(call, input.space_id);
+	accept(await opened.space.checkItem(opened.ctx, input.item_id, "editor", ["sheet"]));
+	for (let attempt = 1; ; attempt++) {
+		const state = await readDocument(call, input.item_id);
+		const revision = state?.revision ?? 0;
+		if (input.base_revision !== undefined && input.base_revision !== revision) {
+			throw new OperationError(
+				"conflict",
+				`The sheet changed: it is at revision ${revision}, not ${input.base_revision}. Read it again, then make the change again.`,
+			);
+		}
+		const before = readWorkbook(state?.content ?? null);
+		const { book: after, result } = change(before);
+		const content = checked(after);
+		const values = evaluateWorkbook(after.tabs);
+		let written = { revision, changed: false };
+		if (content !== storeWorkbook(before)) {
+			try {
+				written = await writeDocument(call, opened, input.item_id, {
+					content,
+					text: sheetText(values),
+					baseRevision: revision,
+				});
+			} catch (error) {
+				const retry = error instanceof OperationError && error.code === "conflict" && attempt < WRITE_ATTEMPTS;
+				if (retry) continue;
+				throw error;
+			}
+		}
+		if (written.changed) auditOk(call, opened, operation, input.item_id);
+		return {
+			item: await itemOf(call, opened, input.item_id),
+			revision: written.revision,
+			before,
+			after,
+			values,
+			result,
+		};
+	}
+}
+
+/** The output of an operation that changes the tabs. */
+function tabsOutput(written: Awaited<ReturnType<typeof changeSheet>>) {
+	return { item: written.item, revision: written.revision, tabs: toTabs(written.after) };
+}
+
+const NO_VALUES: ReadonlyMap<string, Value> = new Map();
+
 export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 	async "sheets.create"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		// Refuse cells that are not valid before the item exists.
-		const first = changed(new Map(), input.cells);
+		const empty = readWorkbook(null);
+		const [firstTab] = empty.tabs as [TabInputs];
+		const inputs = changedInputs(firstTab.inputs, input.cells);
+		const first = withTabs(empty, [{ ...firstTab, inputs }]);
+		const content = checked(first);
 		const created = accept(
 			await opened.space.createItem(opened.ctx, {
 				id: newId("itm"),
@@ -81,10 +213,9 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 		const itemId = created.item.id;
 		let revision = (await readDocument(call, itemId))?.revision ?? 0;
 		// A retry with the same key finds the item. When the first call stopped before the cells, the retry writes them.
-		if (first.inputs.size > 0 && revision === 0) {
-			const text = sheetText(evaluateSheet(first.inputs));
-			revision = (await writeDocument(call, opened, itemId, { content: first.content, text, baseRevision: 0 }))
-				.revision;
+		if (inputs.size > 0 && revision === 0) {
+			const text = sheetText(evaluateWorkbook(first.tabs));
+			revision = (await writeDocument(call, opened, itemId, { content, text, baseRevision: 0 })).revision;
 		}
 		if (!created.duplicate) auditOk(call, opened, "sheets.create", itemId);
 		return { item: await itemOf(call, opened, itemId), revision };
@@ -95,51 +226,116 @@ export const sheetsHandlers: Pick<HandlerMap<CallContext>, SheetsOperation> = {
 		const item = accept(await opened.space.checkItem(opened.ctx, input.item_id, "viewer", ["sheet"]));
 		const range = rangeOf(input.range);
 		const state = await readDocument(call, input.item_id);
-		const inputs = readInputs(state?.content ?? null);
+		const book = readWorkbook(state?.content ?? null);
+		const tab = tabOf(book, input.tab_id);
 		return {
 			item: await toOneItem(call, item),
 			revision: state?.revision ?? 0,
-			...extent(inputs),
-			cells: toCells(inputs, evaluateSheet(inputs), range),
+			tabs: toTabs(book),
+			tab_id: tab.id,
+			...extent(tab.inputs),
+			cells: toCells(tab.inputs, evaluateWorkbook(book.tabs).get(tab.id) ?? NO_VALUES, range),
 		};
 	},
 
 	async "sheets.update_cells"(call, input) {
-		const opened = await openSpace(call, input.space_id);
-		accept(await opened.space.checkItem(opened.ctx, input.item_id, "editor", ["sheet"]));
-		for (let attempt = 1; ; attempt++) {
-			const state = await readDocument(call, input.item_id);
-			const revision = state?.revision ?? 0;
-			if (input.base_revision !== undefined && input.base_revision !== revision) {
-				throw new OperationError(
-					"conflict",
-					`The sheet changed: it is at revision ${revision}, not ${input.base_revision}. Read it again, then make the change again.`,
-				);
-			}
-			const before = readInputs(state?.content ?? null);
-			const after = changed(before, input.cells);
-			const values = evaluateSheet(after.inputs);
-			let written: { revision: number; changed: boolean };
-			try {
-				// The write names the revision that this call read. Thus a change of a different writer between
-				// the read and the write is never lost: the write is refused, and the call calculates again.
-				written = await writeDocument(call, opened, input.item_id, {
-					content: after.content,
-					text: sheetText(values),
-					baseRevision: revision,
-				});
-			} catch (error) {
-				const retry = error instanceof OperationError && error.code === "conflict" && attempt < WRITE_ATTEMPTS;
-				if (retry) continue;
-				throw error;
-			}
-			if (written.changed) auditOk(call, opened, "sheets.update_cells", input.item_id);
+		const written = await changeSheet(call, input, "sheets.update_cells", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			const inputs = changedInputs(tab.inputs, input.cells);
 			return {
-				item: await itemOf(call, opened, input.item_id),
-				revision: written.revision,
-				...extent(after.inputs),
-				cells: changedCells({ inputs: before, values: evaluateSheet(before) }, { inputs: after.inputs, values }),
+				book: withTabs(
+					book,
+					book.tabs.map((entry) => (entry === tab ? { ...tab, inputs } : entry)),
+				),
+				result: tab.id,
 			};
-		}
+		});
+		const tabId = written.result;
+		const before = tabOf(written.before, tabId);
+		const after = tabOf(written.after, tabId);
+		const old = evaluateWorkbook(written.before.tabs).get(tabId) ?? NO_VALUES;
+		return {
+			...tabsOutput(written),
+			tab_id: tabId,
+			...extent(after.inputs),
+			cells: changedCells(
+				{ inputs: before.inputs, values: old },
+				{ inputs: after.inputs, values: written.values.get(tabId) ?? NO_VALUES },
+			),
+		};
+	},
+
+	async "sheets.add_tab"(call, input) {
+		const written = await changeSheet(call, input, "sheets.add_tab", (book) => {
+			checkTabCount(book);
+			if (input.name !== undefined) checkFreeName(book, input.name);
+			const name = input.name ?? freeName(book, (n) => `Sheet${book.tabs.length + n}`);
+			const added = insertTab(book, { name, inputs: new Map() }, input.index ?? book.tabs.length);
+			return { book: added.book, result: added.id };
+		});
+		return { ...tabsOutput(written), tab_id: written.result };
+	},
+
+	async "sheets.rename_tab"(call, input) {
+		const written = await changeSheet(call, input, "sheets.rename_tab", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			checkFreeName(book, input.name, tab.id);
+			// Each formula that refers to the old name gets the new name, so it still reads the same cells.
+			const tabs = book.tabs.map((entry) => {
+				const inputs = new Map<string, string>();
+				for (const [cell, raw] of entry.inputs) {
+					const next = renameTabInInput(raw, tab.name, input.name);
+					if (next.length > SHEET_LIMITS.inputChars) {
+						throw new OperationError(
+							"payload_too_large",
+							`With the new name, the input of ${entry.name}!${cell} has more than ${SHEET_LIMITS.inputChars} characters. Use a shorter name.`,
+						);
+					}
+					inputs.set(cell, next);
+				}
+				return { ...entry, name: entry === tab ? input.name : entry.name, inputs };
+			});
+			return { book: withTabs(book, tabs), result: null };
+		});
+		return tabsOutput(written);
+	},
+
+	async "sheets.move_tab"(call, input) {
+		const written = await changeSheet(call, input, "sheets.move_tab", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			const tabs = book.tabs.filter((entry) => entry !== tab);
+			tabs.splice(Math.min(input.index, tabs.length), 0, tab);
+			return { book: withTabs(book, tabs), result: null };
+		});
+		return tabsOutput(written);
+	},
+
+	async "sheets.duplicate_tab"(call, input) {
+		const written = await changeSheet(call, input, "sheets.duplicate_tab", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			checkTabCount(book);
+			if (input.name !== undefined) checkFreeName(book, input.name);
+			const name = input.name ?? freeName(book, (n) => (n === 1 ? `Copy of ${tab.name}` : `Copy ${n} of ${tab.name}`));
+			const added = insertTab(book, { name, inputs: new Map(tab.inputs) }, book.tabs.indexOf(tab) + 1);
+			return { book: added.book, result: added.id };
+		});
+		return { ...tabsOutput(written), tab_id: written.result };
+	},
+
+	async "sheets.delete_tab"(call, input) {
+		const written = await changeSheet(call, input, "sheets.delete_tab", (book) => {
+			const tab = tabOf(book, input.tab_id);
+			if (book.tabs.length === 1) {
+				throw new OperationError("invalid", "A sheet keeps at least one tab. Add a different tab first.");
+			}
+			return {
+				book: withTabs(
+					book,
+					book.tabs.filter((entry) => entry !== tab),
+				),
+				result: null,
+			};
+		});
+		return tabsOutput(written);
 	},
 };

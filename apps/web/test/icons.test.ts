@@ -66,6 +66,7 @@ const FILES: Record<IconName, string> = {
 	info: "info-circle",
 	check: "check",
 	chevronRight: "nav-arrow-right",
+	chevronLeft: "nav-arrow-left",
 	eye: "eye",
 	codeBlock: "code-brackets-square",
 	chat: "chat-lines",
