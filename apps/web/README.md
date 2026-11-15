@@ -634,6 +634,12 @@ MCP clients. The app has no UI-only path.
     each row, as on a desktop.
   - The person changes their own message in place, and deletes it after a confirmation. The owner
     of a room can delete each message. A deleted message shows "This message was deleted."
+  - A change and a delete show at once, before the answer of the server. The new text shows with
+    the edited mark. A deleted message shows as deleted, and the confirmation closes.
+  - After a refusal, the message shows as before, with a notice of the reason. For a change, the
+    edit box opens again with the new text, so the person does not write it again.
+  - A change or a delete has one attempt. It does not wait in an outbox, and it does not stay
+    after a reload of the page.
   - **Show older messages** gets the page before the first message, and the list stays at the same
     message. A new message moves the list to its end only when the list was at its end.
   - The header shows the icon of the room, the name and the topic on one line. At 600px and below,

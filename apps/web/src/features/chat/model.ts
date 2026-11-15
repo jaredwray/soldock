@@ -153,6 +153,35 @@ export function storedSends(
 		.map(([id, pending]) => ({ key: pending.key, id }));
 }
 
+/**
+ * A change of a stored message that the page shows before the answer of the server: a new text, or
+ * a delete. `at` is the time of the edit on the device.
+ */
+export type LocalChange = { kind: "edit"; text: string; at: string } | { kind: "delete" };
+
+/**
+ * The messages as the person sees them: each message with its change that waits for the server. So
+ * an edit and a delete show at once.
+ *
+ * - An edit shows the new text, with the edited mark.
+ * - A delete shows the message as deleted, without its text.
+ * - A message that the room deleted stays deleted: an edit of it shows nothing.
+ *
+ * Without a change, the result is the same list, so a list that did not change makes no new rows.
+ */
+export function withLocalChanges(
+	messages: readonly ChatMessage[],
+	changes: ReadonlyMap<string, LocalChange>,
+): readonly ChatMessage[] {
+	if (changes.size === 0) return messages;
+	return messages.map((message) => {
+		const change = changes.get(message.id);
+		if (!change || message.deleted) return message;
+		if (change.kind === "delete") return { ...message, text: "", deleted: true };
+		return { ...message, text: change.text, edited_at: change.at };
+	});
+}
+
 const GROUP_MS = 5 * 60 * 1000;
 
 /**
