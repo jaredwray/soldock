@@ -589,7 +589,7 @@ MCP clients. The app has no UI-only path.
       times when the load brings the stored message before the answer of the send.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
-      their list.
+      their list, also when the page left the room before the answer of the server.
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a

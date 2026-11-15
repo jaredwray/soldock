@@ -323,8 +323,15 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		// an older answer never replaces newer messages or moves the version of the sync back.
 		const request = ++loads.current;
 		const current = () => alive.current && request === loads.current;
+		// The answer of the server decides if the room keeps its list in the cache. This runs also when
+		// the page left the room before the answer: a room that does not load, and a room that the person
+		// is not a member of now, must not show an old list the next time.
+		const forget = () => {
+			if (owner !== null && currentAccount() === owner) roomCache.remove(owner, roomId);
+		};
 		try {
 			const { room } = await api.call("chat.get_room", { room_id: roomId });
+			if (room.role === null) forget();
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
@@ -334,9 +341,10 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
 		} catch (caught) {
+			forget();
 			if (current()) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
-	}, [roomId, sync, pager]);
+	}, [roomId, sync, pager, owner]);
 
 	useEffect(() => {
 		alive.current = true;
@@ -352,9 +360,6 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	useEffect(() => {
 		const { status, fresh, room, messages, hasOlder, hasNewer } = state;
 		if (owner === null || currentAccount() !== owner) return;
-		// A room that did not load, and a room that the person is not a member of, must not show an old
-		// list the next time.
-		if (status === "error" || (status === "ready" && fresh && room?.role === null)) roomCache.remove(owner, roomId);
 		if (status !== "ready" || !fresh || !room || room.role === null || hasNewer) return;
 		roomCache.put(owner, roomId, { room, messages, hasOlder });
 	}, [state, owner, roomId]);
