@@ -593,6 +593,10 @@ MCP clients. The app has no UI-only path.
   - The box for a new message has a border with round corners. Its empty text is "Message #room",
     or "Message" and the name of the other member. The round send button is at its bottom right.
   - Enter sends the message. Shift+Enter makes a new line.
+  - The text in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
+    different room, and after a reload of the page. A send, and an empty box, remove it. The page
+    keeps the drafts in `localStorage` ([Data inventory](#data-inventory)). The drafts are for
+    this browser only: a different device does not have them.
   - A message shows in the list at once, in a lighter color, and the box for the message is empty
     again. The page sends the messages of one room one at a time, in the order of the sends, so the
     room has them in that order. The person can write the next message during a send.
@@ -939,6 +943,7 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 | --- | --- | --- |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
+| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the text in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a
   sign-in as a different person remove the records of the person from before. This runs also when
@@ -948,6 +953,11 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   removes them.
 - A browser without IndexedDB, or that refuses it, keeps the messages in the memory of the page
   only, as before.
+- The drafts follow the same rule: a sign-out, the end of the session, and a sign-in as a
+  different person remove the drafts of the person from before. A browser that refuses
+  `localStorage`, or a write to it, keeps the drafts in the memory of the page only.
+- A session can end while the page is closed. The page then starts with nobody signed in, and
+  removes the messages that wait and the drafts at that time (`show` in `App.tsx`).
 
 The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
 from the operations.
