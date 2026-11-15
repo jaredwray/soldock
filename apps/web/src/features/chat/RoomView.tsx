@@ -305,20 +305,23 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		}
 	}
 
-	// A send from a list that is not at the newest messages: the outbox has the message, and starts
-	// no call until the list is there. The call then knows the last message of the room, so the list
-	// finds the stored message of the send.
+	// A send from a list that does not know the last message of the room: a list that is not at the
+	// newest messages, or a list from the cache before the load of the room. The outbox has the
+	// message, and starts no call until the list knows it. The call then has the last message of the
+	// room, so the list finds the stored message of the send, and the message does not show two times.
 	const resumeOutbox = outbox.resume;
 	const release = useCallback(() => {
 		if (!holding.current) return;
 		holding.current = false;
 		resumeOutbox();
 	}, [resumeOutbox]);
+	const listWaits = view.status === "ready" && (!view.fresh || hasNewer);
 	useEffect(() => {
-		if (hasNewer) return;
-		release();
-		setSentUnseen(0);
-	}, [hasNewer, release]);
+		if (!listWaits) release();
+	}, [listWaits, release]);
+	useEffect(() => {
+		if (!hasNewer) setSentUnseen(0);
+	}, [hasNewer]);
 	// The page leaves the room. The message still goes out.
 	useEffect(() => release, [release]);
 
@@ -327,19 +330,23 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
 		// after a reload and after a different room opens.
-		if (hasNewer && !holding.current) {
+		if (listWaits && !holding.current) {
 			holding.current = true;
 			outbox.pause();
-			toLatest().then(
-				(applied) => {
-					if (!applied) release();
-				},
-				(caught) => {
-					// The list did not get to the newest messages. The message goes out all the same.
-					release();
-					fail(caught);
-				},
-			);
+			// A list from the cache waits for the load of the room, which runs. A list at older messages
+			// must go to the newest messages.
+			if (hasNewer) {
+				toLatest().then(
+					(applied) => {
+						if (!applied) release();
+					},
+					(caught) => {
+						// The list did not get to the newest messages. The message goes out all the same.
+						release();
+						fail(caught);
+					},
+				);
+			}
 		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
 		outbox.send(draft);

@@ -584,6 +584,9 @@ MCP clients. The app has no UI-only path.
       room, not a list that was at older messages. A reload of the page has no cache.
     - Until the load, the list can be behind the room. The page then does not mark the room as
       read, shows no **New messages** line, and does not read older messages.
+    - A send before the load shows at once and waits in the outbox. Its call starts after the
+      load, as for a list that is not at the newest messages. So the message does not show two
+      times when the load brings the stored message before the answer of the send.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
       their list.
