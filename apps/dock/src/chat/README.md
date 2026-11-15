@@ -305,6 +305,11 @@ A sponsor can create a webhook for their agent with `principal_id`. Other caller
 
 `postMessage` stores a `chat_event` in `webhook_outbox`, in the same transaction as the new message.
 The event records the message id and the membership at that time, except the author.
+Each membership has a unique id. A rejoin gets a new id, even when the join times are equal.
+The object migration assigns ids to existing members.
+Before the message transaction, the room reads the last committed Chat subscription sequence from D1.
+The room holds other calls until that read and the message transaction finish. The event stores that sequence.
+Later subscriptions get no earlier event, even when their creation time equals the message time.
 A repeated idempotency key, an edit, a deletion and a read marker create no event.
 The alarm sends due events to `WEBHOOKS` and removes each row only after the queue accepts it.
 A failed queue send keeps the row and uses the existing backoff. A restart restores an alarm for pending events.
@@ -316,7 +321,8 @@ Each delivery checks current membership in the room object, so a stale D1 index 
 The [shared webhook module](../webhooks/README.md) defines signatures, retries and credential checks.
 
 Each new message with another member creates one queue event, also when that room has no webhook subscribers.
-This avoids a directory read in the message transaction and includes subscriptions for rooms joined later.
+Each message needs one directory read before its transaction to set the subscription boundary.
+Subscriptions cover rooms joined later without a separate subscription for each room.
 One event can create up to 20 delivery jobs per member. Queue batches have at most 100 jobs.
 Future notification levels and mention filters remain part of the roadmap.
 
@@ -354,11 +360,11 @@ Future notification levels and mention filters remain part of the roadmap.
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles and read markers | `ChatRoomDO` table `members` | With the name of each member at the time of the join |
+| Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
 | Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
-| Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership times, event times and queue retry state. No message text. Removed after queue acceptance |
+| Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `chat_webhooks`, owned by `webhooks` | See the [shared data inventory](../webhooks/README.md#subscriptions) |
 | Schema version | `ChatRoomDO` table `meta` | |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |

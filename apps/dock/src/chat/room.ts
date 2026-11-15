@@ -10,7 +10,7 @@ import {
 } from "@soldock/contracts";
 import { type CredentialCheck, type CredentialRef, checkCredentials } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
-import type { ChatWebhookEventJob } from "../webhooks/index.ts";
+import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -124,6 +124,7 @@ interface RoomRow extends Row {
 
 interface MemberRow extends Row {
 	principal_id: string;
+	membership_id: string;
 	actor_json: string;
 	role: RoomRole;
 	joined_at: number;
@@ -204,6 +205,10 @@ const MIGRATIONS: string[][] = [
    event_id TEXT PRIMARY KEY, job TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
    next_attempt_at INTEGER NOT NULL
   ) WITHOUT ROWID`,
+	],
+	[
+		"ALTER TABLE members ADD COLUMN membership_id TEXT NOT NULL DEFAULT ''",
+		"UPDATE members SET membership_id = lower(hex(randomblob(16)))",
 	],
 ];
 
@@ -413,12 +418,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	private insertMember(actor: ActorRecord, role: RoomRole, now: number, lastReadSeq: number): void {
 		this.sql.exec(
-			"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq) VALUES (?, ?, ?, ?, ?)",
+			"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq, membership_id) VALUES (?, ?, ?, ?, ?, ?)",
 			actor.principal_id,
 			JSON.stringify(actor),
 			role,
 			now,
 			lastReadSeq,
+			crypto.randomUUID(),
 		);
 		this.touch(`member:${actor.principal_id}`);
 	}
@@ -695,76 +701,84 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		input: { id: string; text: string; idempotency?: { key: string; requestHash: string } | undefined },
 	): Promise<{ message: MessageRecord; duplicate: boolean } | Refusal> {
-		const opened = this.openAsMember(call);
-		if ("error" in opened) return opened;
-		const now = Date.now();
-		if (input.idempotency) {
-			const earlier = this.one<{ request_hash: string; message_id: string }>(
-				"SELECT request_hash, message_id FROM idempotency WHERE key = ? AND created_at > ?",
-				input.idempotency.key,
-				now - IDEMPOTENCY_TTL_MS,
-			);
-			if (earlier) {
-				if (earlier.request_hash !== input.idempotency.requestHash) {
-					return refuse("conflict", "The idempotency key was used with a different request.");
-				}
-				const row = this.message(earlier.message_id) as MessageRow;
-				return { message: toMessage(opened.room.room_id, row), duplicate: true };
-			}
-		}
-		// A retry with the same key returned above: it adds no message, so it uses no allowance.
-		const limited = this.spendAllowance(call, now);
-		if (limited) return limited;
-		const version = opened.room.version + 1;
-		this.ctx.storage.transactionSync(() => {
-			const seq = this.one<{ seq: number }>(
-				`INSERT INTO messages (id, author_id, author_json, text, created_at, version)
-				VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
-				input.id,
-				call.actor.principal_id,
-				JSON.stringify(call.actor),
-				input.text,
-				now,
-				version,
-			)?.seq as number;
-			this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
-			this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
+		// Hold room calls until the subscription boundary and message commit agree on their order.
+		const posted = await this.ctx.blockConcurrencyWhile(async () => {
+			const opened = this.openAsMember(call);
+			if ("error" in opened) return opened;
+			const now = Date.now();
 			if (input.idempotency) {
-				this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
-				this.sql.exec(
-					"INSERT OR REPLACE INTO idempotency (key, request_hash, message_id, created_at) VALUES (?, ?, ?, ?)",
+				const earlier = this.one<{ request_hash: string; message_id: string }>(
+					"SELECT request_hash, message_id FROM idempotency WHERE key = ? AND created_at > ?",
 					input.idempotency.key,
-					input.idempotency.requestHash,
-					input.id,
-					now,
+					now - IDEMPOTENCY_TTL_MS,
 				);
+				if (earlier) {
+					if (earlier.request_hash !== input.idempotency.requestHash) {
+						return refuse("conflict", "The idempotency key was used with a different request.");
+					}
+					const row = this.message(earlier.message_id) as MessageRow;
+					return { message: toMessage(opened.room.room_id, row), duplicate: true };
+				}
 			}
-			const recipients = this.all<{ principal_id: string; joined_at: number }>(
-				"SELECT principal_id, joined_at FROM members WHERE principal_id != ?",
-				call.actor.principal_id,
-			).map((member) => ({ id: member.principal_id, joinedAt: member.joined_at }));
-			if (recipients.length > 0) {
-				const job: ChatWebhookEventJob = {
-					v: 1,
-					kind: "chat_event",
-					roomId: opened.room.room_id,
-					eventId: input.id,
-					occurredAt: now,
-					recipients,
-				};
-				this.sql.exec(
-					"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
+			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
+			// A retry with the same key returned above: it adds no message, so it uses no allowance.
+			const limited = this.spendAllowance(call, now);
+			if (limited) return limited;
+			const version = opened.room.version + 1;
+			this.ctx.storage.transactionSync(() => {
+				const seq = this.one<{ seq: number }>(
+					`INSERT INTO messages (id, author_id, author_json, text, created_at, version)
+				VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
-					JSON.stringify(job),
+					call.actor.principal_id,
+					JSON.stringify(call.actor),
+					input.text,
 					now,
-				);
-			}
-			this.touch("room");
-			this.touch(`member:${call.actor.principal_id}`);
+					version,
+				)?.seq as number;
+				this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
+				this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
+				if (input.idempotency) {
+					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
+					this.sql.exec(
+						"INSERT OR REPLACE INTO idempotency (key, request_hash, message_id, created_at) VALUES (?, ?, ?, ?)",
+						input.idempotency.key,
+						input.idempotency.requestHash,
+						input.id,
+						now,
+					);
+				}
+				const recipients = this.all<{ principal_id: string; membership_id: string }>(
+					"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
+					call.actor.principal_id,
+				).map((member) => ({ id: member.principal_id, membershipId: member.membership_id }));
+				if (recipients.length > 0) {
+					const job: ChatWebhookEventJob = {
+						v: 1,
+						kind: "chat_event",
+						roomId: opened.room.room_id,
+						eventId: input.id,
+						occurredAt: now,
+						subscriptionSequence,
+						recipients,
+					};
+					this.sql.exec(
+						"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
+						input.id,
+						JSON.stringify(job),
+						now,
+					);
+				}
+				this.touch("room");
+				this.touch(`member:${call.actor.principal_id}`);
+			});
+			const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
+			return { message, duplicate: false };
 		});
-		const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
-		await this.publish({ type: "message", message: messageOutput(message) });
-		return { message, duplicate: false };
+		if (!("error" in posted) && !posted.duplicate) {
+			await this.publish({ type: "message", message: messageOutput(posted.message) });
+		}
+		return posted;
 	}
 
 	/** Replaces the text of a message. Only its author can do this. */
@@ -1071,12 +1085,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/** Checks current access at the authoritative room before each webhook attempt. */
-	canNotifyWebhook(principalId: string, messageId: string, joinedAt: number): boolean {
+	canNotifyWebhook(principalId: string, messageId: string, membershipId: string): boolean {
 		if (!this.hasTables) return false;
 		const member = this.one<MemberRow>("SELECT * FROM members WHERE principal_id = ?", principalId);
 		const message = this.message(messageId);
 		return (
-			member?.joined_at === joinedAt &&
+			member?.membership_id === membershipId &&
 			message !== null &&
 			message.deleted_at === null &&
 			message.author_id !== principalId

@@ -345,6 +345,14 @@ export function createWebhookHandlers(
 
 // --- Delivery ------------------------------------------------------------------------------------
 
+/** The last committed Chat subscription. A message records this boundary before its room transaction. */
+export async function chatWebhookBoundary(db: D1Database): Promise<number> {
+	const row = await db
+		.prepare("SELECT COALESCE(MAX(sequence), 0) AS boundary FROM chat_webhooks")
+		.first<{ boundary: number }>();
+	return row?.boundary ?? 0;
+}
+
 export async function getWebhook(
 	db: D1Database,
 	id: string,

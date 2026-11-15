@@ -54,12 +54,13 @@ export interface ChatWebhookEventJob {
 	roomId: string;
 	eventId: string;
 	occurredAt: number;
-	recipients: { id: string; joinedAt: number }[];
+	subscriptionSequence: number;
+	recipients: { id: string; membershipId: string }[];
 }
 interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind"> {
 	kind: "chat_delivery";
 	roomId: string;
-	joinedAt: number;
+	membershipId: string;
 }
 export type WebhookJob = WebhookEventJob | WebhookDeliveryJob | ChatWebhookEventJob | ChatWebhookDeliveryJob;
 type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob;
@@ -85,6 +86,9 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 	if (job.kind === "chat_event")
 		return (
 			typeof job.roomId === "string" &&
+			typeof job.subscriptionSequence === "number" &&
+			Number.isSafeInteger(job.subscriptionSequence) &&
+			job.subscriptionSequence >= 0 &&
 			Array.isArray(job.recipients) &&
 			job.recipients.length <= CHAT_LIMITS.membersPerRoom &&
 			job.recipients.every(
@@ -93,9 +97,9 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 					r !== null &&
 					"id" in r &&
 					typeof r.id === "string" &&
-					"joinedAt" in r &&
-					typeof r.joinedAt === "number" &&
-					Number.isFinite(r.joinedAt),
+					"membershipId" in r &&
+					typeof r.membershipId === "string" &&
+					r.membershipId.length > 0,
 			)
 		);
 	if (typeof job.mailboxId !== "string") return false;
@@ -109,8 +113,8 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 		(job.kind === "delivery" ||
 			(job.kind === "chat_delivery" &&
 				typeof job.roomId === "string" &&
-				typeof job.joinedAt === "number" &&
-				Number.isFinite(job.joinedAt)))
+				typeof job.membershipId === "string" &&
+				job.membershipId.length > 0))
 	);
 }
 
@@ -172,12 +176,12 @@ async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
 async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 	for (let start = 0; start < job.recipients.length; start += 90) {
 		const recipients = job.recipients.slice(start, start + 90);
-		const joined = new Map(recipients.map((member) => [member.id, member.joinedAt]));
+		const memberships = new Map(recipients.map((member) => [member.id, member.membershipId]));
 		const { results } = await env.DIRECTORY.prepare(
-			`SELECT id, mailbox_id FROM chat_webhooks WHERE status = 'active' AND created_at <= ?
+			`SELECT id, mailbox_id FROM chat_webhooks WHERE status = 'active' AND sequence <= ?
     AND mailbox_id IN (${recipients.map(() => "?").join(",")})`,
 		)
-			.bind(new Date(job.occurredAt).toISOString(), ...recipients.map((member) => member.id))
+			.bind(job.subscriptionSequence, ...recipients.map((member) => member.id))
 			.all<{ id: string; mailbox_id: string }>();
 		for (let offset = 0; offset < results.length; offset += 100) {
 			await env.WEBHOOKS.sendBatch(
@@ -190,7 +194,7 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 						eventId: job.eventId,
 						occurredAt: job.occurredAt,
 						roomId: job.roomId,
-						joinedAt: joined.get(row.mailbox_id) as number,
+						membershipId: memberships.get(row.mailbox_id) as string,
 					} satisfies ChatWebhookDeliveryJob,
 				})),
 			);
@@ -219,7 +223,7 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	}
 	if (job.kind === "chat_delivery") {
 		const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
-		if (!(await room.canNotifyWebhook(row.mailbox_id, job.eventId, job.joinedAt))) return;
+		if (!(await room.canNotifyWebhook(row.mailbox_id, job.eventId, job.membershipId))) return;
 	}
 	const result = await post(row, job);
 	if (result === "ok") {

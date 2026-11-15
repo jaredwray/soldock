@@ -21,7 +21,10 @@ beforeEach(async () => {
 	({ owner, ada, bot } = await seedOrg());
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 it("lets a sponsor create a chat webhook for an agent through REST", async () => {
 	const response = await request("/api/v1/chat/webhooks", {
@@ -174,6 +177,9 @@ it("retries each chat separately and keeps the signed event id across retries", 
 });
 
 it("checks room membership again before each attempt, even with an old directory index", async () => {
+	// Keep both joins in the same millisecond. A wall-clock time cannot identify a membership.
+	vi.useFakeTimers({ toFake: ["Date"] });
+	const joinedAt = Date.now();
 	await watchBot();
 	const current = await room();
 	const queue = await capture(current.id);
@@ -192,9 +198,16 @@ it("checks room membership again before each attempt, even with an old directory
 	await consumeWebhooks(retry.sent);
 	expect(posts).toHaveLength(1);
 	// A rejoin has a new membership and must not revive an old delivery.
+	vi.setSystemTime(joinedAt);
 	await ada.call("chat.add_members", { room_id: current.id, principal_ids: [bot.id] });
 	await consumeWebhooks(retry.sent);
 	expect(posts).toHaveLength(1);
+	queue.events.splice(0);
+	const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "After rejoin" });
+	await queue.drain();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	expect(posts).toHaveLength(2);
+	expect(JSON.parse(posts[1]?.body ?? "{}").data.message_id).toBe(message.id);
 });
 
 it("retains the event after a queue failure, then sends it with the same id", async () => {
@@ -309,10 +322,22 @@ it.each(["credential", "policy", "sponsor", "archive", "delete", "webhook"] as c
 );
 
 it("does not replay events to a webhook created after the message", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	const occurredAt = Date.now();
+	const previous = await watchBot();
 	const current = await room();
 	const queue = await capture(current.id);
 	await ada.call("chat.post_message", { room_id: current.id, text: "Before webhook" });
 	await queue.drain();
+	await ada.call("chat.delete_webhook", { webhook_id: previous.id });
+	vi.setSystemTime(occurredAt);
 	await watchBot();
 	expect((await consumeWebhooks(queue.events)).sent).toEqual([]);
+	queue.events.splice(0);
+	const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "After webhook" });
+	await queue.drain();
+	const posts = receiveWebhooks();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	expect(posts).toHaveLength(1);
+	expect(JSON.parse(posts[0]?.body ?? "{}").data.message_id).toBe(message.id);
 });

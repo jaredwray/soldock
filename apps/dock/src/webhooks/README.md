@@ -21,6 +21,7 @@ Separate tables keep mail subscriptions and chat subscriptions independent, also
 
 Each table stores the receiver URL, label, creator, credential reference, signature secret, optional auth key and optional custom header.
 Each table also stores status, failure counts, retry state and the times of delivery and failure.
+Chat subscriptions also have an auto-increment sequence. A deleted subscription never returns its sequence for reuse.
 The secrets are plain text in D1 because the outbound request needs them. API results never show stored secret values.
 Migration `0011_chat_webhooks.sql` creates the Chat table. A principal deletion or a fresh directory reset removes the related records.
 Backups do not exist yet.
@@ -37,10 +38,13 @@ A revoked credential disables the webhook. An archived principal gets no deliver
 
 The queue accepts the existing version 1 mail jobs and the new `chat_event` and `chat_delivery` jobs.
 A chat event contains a message id, room id, time and the members at the time of the post, without its author.
-The consumer selects active subscriptions that existed at that time. D1 queries use at most 91 bound values.
+The room reads the last committed subscription sequence before it commits a message.
+The consumer selects active subscriptions at or below that boundary. Wall-clock times do not decide the order.
+D1 queries use at most 91 bound values.
 Each queue batch contains at most 100 delivery jobs.
 
-Before each Chat POST, the room checks its current membership and the time of that membership.
+Each room membership has a unique id. A rejoin gets a new id, even in the same millisecond.
+Before each Chat POST, the room compares the current membership id with the id in the event.
 A removed member, a member that left and rejoined, or a deleted message gets no POST.
 The POST contains ids and a resource URI, without message text. The receiver reads the message with its own credential.
 A removal after the final check cannot cancel an HTTP request that already started.

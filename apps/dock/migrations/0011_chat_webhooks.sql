@@ -1,5 +1,7 @@
 CREATE TABLE IF NOT EXISTS chat_webhooks (
-	id TEXT PRIMARY KEY,
+	-- The sequence records the order of committed subscriptions. Deletion never reuses a sequence.
+	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+	id TEXT NOT NULL UNIQUE,
 	-- The principal whose joined chats the webhook watches. The shared store uses the column name mailbox_id.
 	mailbox_id TEXT NOT NULL,
 	-- The principal that created the webhook. Before each POST, the Worker checks its access again.

@@ -6,4 +6,4 @@ export {
 	WEBHOOK_QUEUE,
 	type WebhookEventJob,
 } from "./delivery.ts";
-export { createWebhookHandlers } from "./subscriptions.ts";
+export { chatWebhookBoundary, createWebhookHandlers } from "./subscriptions.ts";

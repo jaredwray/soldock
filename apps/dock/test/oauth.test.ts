@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_SOCKET_CLOSE, SCOPES, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -892,8 +893,13 @@ describe("OAuth and webhooks", () => {
 		if (domain === "chat") {
 			const { room } = await owner.call("chat.create_room", { kind: "private", name: "OAuth", member_ids: [agent.id] });
 			const { message } = await owner.call("chat.post_message", { room_id: room.id, text: "Wake up" });
-			const { members } = await owner.call("chat.get_room", { room_id: room.id });
-			const joinedAt = Date.parse(members.find((member) => member.principal_id === agent.id)?.joined_at ?? "");
+			const membershipId = await runInDurableObject(
+				env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)),
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ membership_id: string }>("SELECT membership_id FROM members WHERE principal_id = ?", agent.id)
+						.one().membership_id,
+			);
 			job = {
 				v: 1,
 				kind: "chat_delivery",
@@ -902,7 +908,7 @@ describe("OAuth and webhooks", () => {
 				roomId: room.id,
 				eventId: message.id,
 				occurredAt: Date.now(),
-				joinedAt,
+				membershipId,
 			};
 		}
 		const posts = receiveWebhooks();
