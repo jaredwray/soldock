@@ -1,6 +1,6 @@
 import "./drive.css";
 import type { DriveItem } from "@soldock/contracts";
-import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -21,7 +21,11 @@ import {
 	type BulkAction,
 	breadcrumbs,
 	bulkActions,
+	type CreateTarget,
 	createTarget,
+	type DropZone,
+	dropZone,
+	folderRefusal,
 	type ItemAction,
 	type ItemOrder,
 	idBatches,
@@ -94,6 +98,34 @@ function navEntry(view: DriveView, foreign: boolean): NavEntry {
 	return view.kind === "search" ? null : view.kind;
 }
 
+/** One file of the upload queue, and the folder that gets it. */
+interface UploadJob {
+	file: File;
+	target: CreateTarget;
+	/** The name of the folder, for the toast. */
+	destination: string;
+}
+
+/** The files of a drop, and the names of its folders. Drive uploads only files. */
+function droppedFiles(data: DataTransfer): { files: File[]; folders: string[] } {
+	const files: File[] = [];
+	const folders: string[] = [];
+	for (const item of Array.from(data.items)) {
+		if (item.kind !== "file") continue;
+		const entry = item.webkitGetAsEntry();
+		const file = item.getAsFile();
+		if (entry?.isDirectory) folders.push(entry.name);
+		else if (file) files.push(file);
+	}
+	// A browser without `items` gives only the list of files.
+	if (files.length === 0 && folders.length === 0) files.push(...Array.from(data.files));
+	return { files, folders };
+}
+
+function sameZone(a: DropZone | null, b: DropZone | null): boolean {
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** `“Report.pdf”` for one item, and `3 items` for more. */
 function describe(items: readonly DriveItem[]): string {
 	const first = items[0];
@@ -113,10 +145,13 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [dialog, setDialog] = useState<DriveDialog>(null);
 	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
-	const [dragging, setDragging] = useState(false);
+	const [drop, setDrop] = useState<DropZone | null>(null);
+	const mainRef = useRef<HTMLElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const creatingRef = useRef(false);
 	const closeNavRef = useRef(onCloseNav);
+	const queueRef = useRef<UploadJob[]>([]);
+	const uploadingRef = useRef(false);
 
 	const viewKey = drivePath(view);
 	const foreign = isForeignFolder(view, ownId);
@@ -152,8 +187,10 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		void sync();
 	}, [refresh, sync]);
 
+	const changedRef = useRef(changed);
 	useEffect(() => {
 		closeNavRef.current = onCloseNav;
+		changedRef.current = changed;
 	});
 
 	useOnChange(viewKey, () => {
@@ -348,12 +385,28 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		}
 	}
 
-	/** Uploads files to the current folder, one at a time. A file over the limit is refused before it is read. */
-	async function uploadFiles(files: readonly File[]) {
-		if (target === null || files.length === 0 || upload !== null) return;
+	/**
+	 * Adds files to the upload queue. The queue uploads one file at a time, so the files of a drop
+	 * during an upload wait for their turn.
+	 */
+	function enqueueUploads(files: readonly File[], uploadTarget: CreateTarget, destination: string) {
+		if (files.length === 0) return;
+		queueRef.current.push(...files.map((file) => ({ file, target: uploadTarget, destination })));
+		if (uploadingRef.current) setUpload((current) => current && { ...current, total: current.total + files.length });
+		else void runUploads();
+	}
+
+	/** Uploads the queue, each file with an idempotency key. A file over the limit is refused before it is read. */
+	async function runUploads() {
+		uploadingRef.current = true;
+		const queue = queueRef.current;
+		// The name of each folder that got a file, by its target: two folders can have the same name.
+		const destinations = new Map<string, string>();
+		let done = 0;
 		let uploaded = 0;
-		for (const [index, file] of files.entries()) {
-			setUpload({ done: index, total: files.length, name: file.name, size: file.size });
+		for (let job = queue.shift(); job; job = queue.shift()) {
+			const { file } = job;
+			setUpload({ done, total: done + 1 + queue.length, name: file.name, size: file.size });
 			const refusal = uploadRefusal(file);
 			if (refusal) {
 				toast({ message: refusal, tone: "error" });
@@ -361,24 +414,32 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 				try {
 					const mimeType = uploadMimeType(file.type);
 					await api.call("drive.upload_file", {
-						...target,
+						...job.target,
 						name: file.name,
 						...(mimeType ? { mime_type: mimeType } : {}),
 						content_base64: await fileToBase64(file),
 						idempotency_key: crypto.randomUUID(),
 					});
 					uploaded += 1;
+					destinations.set(JSON.stringify(job.target), job.destination);
 				} catch (caught) {
 					toast({ message: `“${file.name}” did not upload. ${errorMessage(caught)}`, tone: "error" });
 				}
 			}
+			done += 1;
 		}
+		uploadingRef.current = false;
 		setUpload(null);
 		if (uploaded > 0) {
-			toast({ message: `Uploaded ${plural(uploaded, "file")}.` });
-			changed();
+			const [only] = destinations.values();
+			const files = plural(uploaded, "file");
+			toast({ message: destinations.size === 1 ? `Uploaded ${files} to ${only}.` : `Uploaded ${files}.` });
+			changedRef.current();
 		}
 	}
+
+	/** The folder that gets the files of New › File upload. */
+	const newDestination = view.kind === "folder" ? title : "My Drive";
 
 	const newItems: MenuItem[] =
 		target === null
@@ -406,27 +467,78 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					{ key: "sheet", label: "New sheet", icon: "sheet", onSelect: () => void createDocument("sheet") },
 				];
 
-	// A drop of files uploads them to the folder on screen, when the person can add items there.
-	const canDrop = target !== null && view.kind === "folder";
+	// The listeners of the window need the zone and the queue of the current render.
+	const zoneAtRef = useRef<(node: EventTarget | null) => DropZone | null>(() => null);
+	const acceptDropRef = useRef<(data: DataTransfer, zone: DropZone) => void>(() => {});
+	useEffect(() => {
+		zoneAtRef.current = (node) => {
+			const element = node instanceof Element ? node : node instanceof Node ? node.parentElement : null;
+			if (!element || !mainRef.current?.contains(element)) return null;
+			const rowId = element.closest<HTMLElement>("[data-item-id]")?.dataset.itemId;
+			const row = list.items.find((item) => item.id === rowId) ?? null;
+			return dropZone(view, target, title, row, ownId);
+		};
+		acceptDropRef.current = (data, zone) => {
+			const { files, folders } = droppedFiles(data);
+			if (folders.length > 0) toast({ message: folderRefusal(folders), tone: "error" });
+			enqueueUploads(files, zone.target, zone.name);
+		};
+	});
 
-	function onDragOver(event: DragEvent<HTMLElement>) {
-		if (!canDrop || !event.dataTransfer.types.includes("Files")) return;
-		event.preventDefault();
-		event.dataTransfer.dropEffect = "copy";
-		setDragging(true);
-	}
-
-	function onDragLeave(event: DragEvent<HTMLElement>) {
-		if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
-		setDragging(false);
-	}
-
-	function onDrop(event: DragEvent<HTMLElement>) {
-		if (!canDrop || !event.dataTransfer.types.includes("Files")) return;
-		event.preventDefault();
-		setDragging(false);
-		void uploadFiles([...event.dataTransfer.files]);
-	}
+	// Files that the person drags from the computer upload to the zone under the pointer. The listeners
+	// are on the window: a drop outside a zone then does nothing. Without them, the browser opens the
+	// file in place of the app.
+	useEffect(() => {
+		// The count of the elements that the drag is in. Safari gives no related target on dragleave.
+		let depth = 0;
+		// A browser sends dragover at least each 550 ms during a drag. After a longer time with no
+		// dragover, the drag is gone. This also clears a count that is too high: a node that the page
+		// removes during the drag gives no dragleave.
+		let idle = 0;
+		const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+		function reset() {
+			window.clearTimeout(idle);
+			depth = 0;
+			setDrop(null);
+		}
+		function onDragOver(event: DragEvent) {
+			if (!event.dataTransfer || !hasFiles(event)) return;
+			event.preventDefault();
+			window.clearTimeout(idle);
+			idle = window.setTimeout(reset, 1000);
+			const zone = zoneAtRef.current(event.target);
+			event.dataTransfer.dropEffect = zone ? "copy" : "none";
+			setDrop((current) => (sameZone(current, zone) ? current : zone));
+		}
+		function onDragEnter(event: DragEvent) {
+			if (!hasFiles(event)) return;
+			depth += 1;
+			onDragOver(event);
+		}
+		function onDragLeave(event: DragEvent) {
+			if (!hasFiles(event)) return;
+			depth = Math.max(0, depth - 1);
+			if (depth === 0) reset();
+		}
+		function onDrop(event: DragEvent) {
+			if (!event.dataTransfer || !hasFiles(event)) return;
+			event.preventDefault();
+			reset();
+			const zone = zoneAtRef.current(event.target);
+			if (zone) acceptDropRef.current(event.dataTransfer, zone);
+		}
+		window.addEventListener("dragenter", onDragEnter);
+		window.addEventListener("dragover", onDragOver);
+		window.addEventListener("dragleave", onDragLeave);
+		window.addEventListener("drop", onDrop);
+		return () => {
+			window.clearTimeout(idle);
+			window.removeEventListener("dragenter", onDragEnter);
+			window.removeEventListener("dragover", onDragOver);
+			window.removeEventListener("dragleave", onDragLeave);
+			window.removeEventListener("drop", onDrop);
+		};
+	}, []);
 
 	const selection = selectedItems.length === 0 ? "none" : selectedItems.length === list.items.length ? "all" : "some";
 	const allStarred = selectedItems.length > 0 && selectedItems.every((item) => item.starred);
@@ -445,11 +557,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			/>
 			<main
 				id="main"
-				className={dragging ? "drive-main drive-main-drop" : "drive-main"}
+				ref={mainRef}
+				className={drop && drop.rowId === null ? "drive-main drive-main-drop" : "drive-main"}
 				tabIndex={-1}
-				onDragOver={onDragOver}
-				onDragLeave={onDragLeave}
-				onDrop={onDrop}
 			>
 				<div className="drive-header">
 					<Icon name={viewIcon(view, foreign)} size={22} className="drive-header-icon" />
@@ -560,6 +670,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						names={names}
 						selected={selected}
 						order={order}
+						dropRowId={drop?.rowId ?? null}
 						onOrder={setOrder}
 						onToggleSelect={toggleSelect}
 						onToggleStar={(item) => void star([item], !item.starred)}
@@ -569,10 +680,12 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						onRetry={() => void list.retry()}
 					/>
 				</div>
-				{dragging && (
+				{drop && (
 					<div className="drive-drop" aria-hidden="true">
-						<Icon name="upload" size={32} />
-						Drop the files to upload them to {title}
+						<Icon name="upload" size={18} />
+						<span className="drive-drop-text">
+							Drop the files to upload them to <strong>{drop.name}</strong>
+						</span>
 					</div>
 				)}
 				<div className={upload ? "drive-upload" : "visually-hidden"} role="status">
@@ -597,7 +710,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					onChange={(event) => {
 						const files = [...(event.target.files ?? [])];
 						event.target.value = "";
-						void uploadFiles(files);
+						if (target !== null) enqueueUploads(files, target, newDestination);
 					}}
 				/>
 			</main>

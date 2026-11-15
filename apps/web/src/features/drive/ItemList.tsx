@@ -16,6 +16,8 @@ interface ItemListProps {
 	names: ReadonlyMap<string, string>;
 	selected: ReadonlySet<string>;
 	order: ItemOrder;
+	/** The folder row that gets the files of a drag, or null. */
+	dropRowId: string | null;
 	onOrder: (order: ItemOrder) => void;
 	onToggleSelect: (itemId: string) => void;
 	onToggleStar: (item: DriveItem) => void;
@@ -127,6 +129,7 @@ export function ItemList(props: ItemListProps) {
 							inTrash={inTrash}
 							owner={ownerName(item.space_id, props.ownSpaceId, props.names)}
 							selected={props.selected.has(item.id)}
+							dropTarget={props.dropRowId === item.id}
 							onToggleSelect={props.onToggleSelect}
 							onToggleStar={props.onToggleStar}
 							onOpenFile={props.onOpenFile}
@@ -170,6 +173,7 @@ interface ItemRowProps {
 	inTrash: boolean;
 	owner: string;
 	selected: boolean;
+	dropTarget: boolean;
 	onToggleSelect: (itemId: string) => void;
 	onToggleStar: (item: DriveItem) => void;
 	onOpenFile: (item: DriveItem) => void;
@@ -182,6 +186,7 @@ function ItemRow({
 	inTrash,
 	owner,
 	selected,
+	dropTarget,
 	onToggleSelect,
 	onToggleStar,
 	onOpenFile,
@@ -199,7 +204,11 @@ function ItemRow({
 		</>
 	);
 	return (
-		<tr className={selected ? "drive-row drive-row-selected" : "drive-row"}>
+		// The drop of files finds the row under the pointer by its `data-item-id`.
+		<tr
+			className={`drive-row${selected ? " drive-row-selected" : ""}${dropTarget ? " drive-row-drop" : ""}`}
+			data-item-id={item.id}
+		>
 			<td className="drive-col-check">
 				<label className="drive-check">
 					<input type="checkbox" className="checkbox" checked={selected} onChange={() => onToggleSelect(item.id)} />
