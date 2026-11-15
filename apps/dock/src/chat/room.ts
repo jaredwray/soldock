@@ -649,11 +649,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		this.allowances.set(call.actor.principal_id, { messages: messages - 1, at: now });
 		// A room has `membersPerRoom` members at most, so more entries are from members that left. An
-		// entry that is old enough has a full allowance again, which is the same as no entry.
+		// entry that is old enough has a full allowance again, which is the same as no entry. If that is
+		// not sufficient, the entries of principals that are not members go. So the entries are never
+		// more than the members after this step.
 		if (this.allowances.size > CHAT_LIMITS.membersPerRoom) {
 			const full = CHAT_LIMITS.messageBurst * refillMs;
 			for (const [principalId, allowance] of this.allowances) {
 				if (now - allowance.at >= full) this.allowances.delete(principalId);
+			}
+		}
+		if (this.allowances.size > CHAT_LIMITS.membersPerRoom) {
+			const members = new Set(
+				this.all<{ principal_id: string }>("SELECT principal_id FROM members").map((row) => row.principal_id),
+			);
+			for (const principalId of this.allowances.keys()) {
+				if (!members.has(principalId)) this.allowances.delete(principalId);
 			}
 		}
 		return null;

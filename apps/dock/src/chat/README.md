@@ -121,7 +121,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A retry with the same `idempotency_key` returns the first message and uses no allowance. An edit
   with the same text uses none.
 - `chat.delete_message` has no limit, so an owner can remove many messages.
-- The room keeps the allowances in memory, so the limit makes no write.
+- The room keeps the allowances in memory, so the limit makes no write. It keeps the allowance of
+  a member that leaves, so a member cannot leave and join again to get a full allowance. When the
+  room has more allowances than its member limit, it removes those that are full again, and then
+  those of principals that are not members. So the room never keeps more allowances than members.
 - Known limit: a room object that stops starts again with full allowances. A room stops when nobody
   uses it for some seconds, and after a deploy. So a member can get its 20 messages back sooner
   than one in each second.
