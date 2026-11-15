@@ -40,6 +40,8 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 	const refocusRef = useRef<string | null>(null);
 	const index = tabs.findIndex((tab) => tab.id === activeTab);
 	const active = tabs[index];
+	// Somebody else can delete the tab during its rename. The field then goes, with no rename.
+	const renamingTab = renaming === null ? undefined : tabs.find((tab) => tab.id === renaming);
 
 	// The active tab scrolls into view, for example a new tab at the end of a long bar.
 	useEffect(() => {
@@ -157,17 +159,16 @@ export function SheetTabs({ baseId, panelId, tabs, activeTab, readOnly, onSelect
 					</button>
 				))}
 			</div>
-			{renaming !== null && (
+			{renamingTab && (
 				<RenameField
-					key={renaming}
-					tab={tabs.find((tab) => tab.id === renaming) as Tab}
+					key={renamingTab.id}
+					tab={renamingTab}
 					bar={barRef.current}
-					tabElement={document.getElementById(tabElementId(baseId, renaming))}
+					tabElement={document.getElementById(tabElementId(baseId, renamingTab.id))}
 					onDone={(name, refocus) => {
-						const tab = tabs.find((entry) => entry.id === renaming);
-						if (refocus) refocusRef.current = renaming;
+						if (refocus) refocusRef.current = renamingTab.id;
 						setRenaming(null);
-						if (tab && name !== null && name !== tab.name) run({ kind: "rename", tabId: tab.id, name });
+						if (name !== null && name !== renamingTab.name) run({ kind: "rename", tabId: renamingTab.id, name });
 					}}
 				/>
 			)}
