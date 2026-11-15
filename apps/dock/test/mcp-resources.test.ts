@@ -6,6 +6,7 @@ import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.
 import {
 	bearer,
 	callTool,
+	drainOutbox,
 	inject,
 	mcp,
 	modern,
@@ -225,6 +226,8 @@ describe("MCP subscriptions/listen", () => {
 			"support@dock.test",
 		);
 		expect(await stream.next()).toEqual(updated(inbox(support.id)));
+		// The outbox of the sender delivers the mail a moment after the send.
+		await drainOutbox(bot.id);
 		expect((await ada.call("mail.list_threads")).threads.map((thread) => thread.subject)).toContain("Hi Ada");
 
 		// The client closes the stream: the mailboxes close their watch sockets.
