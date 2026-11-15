@@ -10,6 +10,7 @@ import {
 } from "@soldock/contracts";
 import { type CredentialCheck, type CredentialRef, checkCredentials } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
+import type { ChatWebhookEventJob } from "../webhooks/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -198,6 +199,12 @@ const MIGRATIONS: string[][] = [
 		)`,
 		"CREATE INDEX idempotency_created ON idempotency (created_at)",
 	],
+	[
+		`CREATE TABLE webhook_outbox (
+   event_id TEXT PRIMARY KEY, job TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+   next_attempt_at INTEGER NOT NULL
+  ) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -304,7 +311,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.migrate();
 				// A change sets the alarm after its transaction commits. If the object stopped between the
 				// two, the outbox has rows and no alarm: set one now.
-				const pending = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0;
+				const pending =
+					this.one<{ n: number }>("SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM webhook_outbox) AS n")
+						?.n ?? 0;
 				if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 			});
 		}
@@ -730,6 +739,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 					now,
 				);
 			}
+			const recipients = this.all<{ principal_id: string; joined_at: number }>(
+				"SELECT principal_id, joined_at FROM members WHERE principal_id != ?",
+				call.actor.principal_id,
+			).map((member) => ({ id: member.principal_id, joinedAt: member.joined_at }));
+			if (recipients.length > 0) {
+				const job: ChatWebhookEventJob = {
+					v: 1,
+					kind: "chat_event",
+					roomId: opened.room.room_id,
+					eventId: input.id,
+					occurredAt: now,
+					recipients,
+				};
+				this.sql.exec(
+					"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
+					input.id,
+					JSON.stringify(job),
+					now,
+				);
+			}
 			this.touch("room");
 			this.touch(`member:${call.actor.principal_id}`);
 		});
@@ -993,7 +1022,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** Sets the alarm to the first row of the outbox, or removes the alarm when the outbox is empty. */
 	private async schedule(): Promise<void> {
-		const next = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox")?.at ?? null;
+		const next =
+			this.one<{ at: number | null }>(
+				"SELECT MIN(next_attempt_at) AS at FROM (SELECT next_attempt_at FROM outbox UNION ALL SELECT next_attempt_at FROM webhook_outbox)",
+			)?.at ?? null;
 		if (next === null) await this.ctx.storage.deleteAlarm();
 		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
@@ -1015,6 +1047,40 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	override async alarm(): Promise<void> {
 		await this.flush();
+		const rows = this.all<{ event_id: string; job: string; attempts: number }>(
+			"SELECT event_id, job, attempts FROM webhook_outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?",
+			Date.now(),
+			OUTBOX_BATCH,
+		);
+		for (const row of rows) {
+			try {
+				await this.env.WEBHOOKS.send(JSON.parse(row.job) as ChatWebhookEventJob);
+				this.sql.exec("DELETE FROM webhook_outbox WHERE event_id = ?", row.event_id);
+			} catch {
+				const attempts = row.attempts + 1;
+				this.sql.exec(
+					"UPDATE webhook_outbox SET attempts = ?, next_attempt_at = ? WHERE event_id = ?",
+					attempts,
+					Date.now() + backoff(attempts),
+					row.event_id,
+				);
+				log("warn", "chat webhook queue send failed", { eventId: row.event_id, attempts });
+			}
+		}
+		await this.schedule();
+	}
+
+	/** Checks current access at the authoritative room before each webhook attempt. */
+	canNotifyWebhook(principalId: string, messageId: string, joinedAt: number): boolean {
+		if (!this.hasTables) return false;
+		const member = this.one<MemberRow>("SELECT * FROM members WHERE principal_id = ?", principalId);
+		const message = this.message(messageId);
+		return (
+			member?.joined_at === joinedAt &&
+			message !== null &&
+			message.deleted_at === null &&
+			message.author_id !== principalId
+		);
 	}
 
 	/**

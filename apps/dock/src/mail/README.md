@@ -9,8 +9,8 @@
 | | |
 | --- | --- |
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
-| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients); raw MIME in R2 `blobs`; the D1 table `webhooks` in the directory database. |
-| **Depends on** | `platform`, `identity`. Later: `drive` (attachments ↔ Drive). |
+| **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients); raw MIME in R2 `blobs`. The `webhooks` module owns the D1 subscriptions. |
+| **Depends on** | `platform`, `identity`, `webhooks`. Later: `drive` (attachments ↔ Drive). |
 | **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook`, `mail.list_webhooks`, `mail.update_webhook`, `mail.delete_webhook` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -25,9 +25,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
-| `webhooks.ts` | The webhook operations, the D1 rows of the webhooks, and the access check before each POST |
-| `webhook-url.ts` | The rules of a webhook URL, and the outbound policy of an agent for a host |
-| `webhook-delivery.ts` | The `soldock-webhooks` queue consumer: one job for each webhook, the signed POST, the retries |
+| `webhooks.ts` | The Mail adapter for the [shared webhook module](../webhooks/README.md) |
 | `search.ts` | Gmail-style query parser, and the compiler to SQL with bound values |
 | `sanitize.ts` | The HTML allowlist sanitizer on `HTMLRewriter` |
 | `threading.ts` | Subject normalization, snippets, and HTML to text for previews and the index |
@@ -313,6 +311,9 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 - A client that cannot keep a stream open uses a [webhook](#webhooks) instead.
 
 ## Webhooks
+
+Mail uses the [shared webhook module](../webhooks/README.md) for subscription storage, signatures and queue delivery.
+Chat has separate subscriptions and events. Existing mail subscriptions keep their behavior.
 
 A webhook sends a signed POST to a URL outside Soldock when new mail arrives in the inbox of a
 mailbox. It is for a client that cannot keep a `subscriptions/listen` stream open, for example a bot

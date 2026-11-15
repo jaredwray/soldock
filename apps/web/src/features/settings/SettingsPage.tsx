@@ -60,7 +60,8 @@ export function SettingsPage() {
 					note="A key lets a script or an MCP client act as you."
 					allowedScopes={ALL_SCOPES}
 				/>
-				<WebhookManager heading="Your webhooks" canCreate />
+				<WebhookManager heading="Your mail webhooks" canCreate />
+				<WebhookManager domain="chat" heading="Your chat webhooks" canCreate />
 				<section className="panel" aria-labelledby={ids.signOut}>
 					<h2 id={ids.signOut} className="panel-title">
 						Sign out

@@ -316,9 +316,13 @@ MCP clients. The app has no UI-only path.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write` or `mail.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks` or `chat.webhooks`
   unless the person selects them.
-  - A new webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
+  - **Your chat webhooks** manages notifications from all joined rooms and direct messages with the four `chat.*_webhook` operations.
+    The agent panel has the same controls with `principal_id`. Only the sponsor can create an agent's webhook.
+    Owners, admins and sponsors can list and delete the agent's webhooks. Only a creator can edit their webhook.
+    Both kinds share the URL, auth key, header and secret controls. Chat creates no browser storage.
+  - A new mail webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
     once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
   - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
