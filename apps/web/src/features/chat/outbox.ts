@@ -4,6 +4,9 @@ import { ApiError, type ChatMessage } from "@soldock/contracts";
 // and no network of its own, so apps/web/test checks it.
 
 /** The waits before a new attempt of a send that can succeed later. After the last one, the message is `failed`. */
+/** The most message keys that an outbox keeps. A row needs its key only while the list shows it. */
+const MAX_KEYS = 200;
+
 export const RETRY_WAITS_MS = [1000, 2000, 4000];
 
 /** A message that waits for the server. */
@@ -37,6 +40,12 @@ export interface OutboxView {
 export interface OutboxState {
 	/** The messages that wait, in the order of the sends. */
 	pending: readonly PendingMessage[];
+	/**
+	 * The key of each message that this outbox sent, by the id of the message. The row of a stored
+	 * message keeps the key of its send with it, so the row stays the same row. A message of a
+	 * different client of the person is not in it, also when it has a key that this outbox used.
+	 */
+	keys: ReadonlyMap<string, string>;
 	/** The key of the message whose call runs now, or null. */
 	sendingKey: string | null;
 }
@@ -80,10 +89,10 @@ export interface Outbox {
 	/** Removes a message that failed or that waits. A message whose call runs stays. */
 	discard(key: string): void;
 	/**
-	 * Records that the server has a failed message: the room has a message with the key of the send,
-	 * and the answers of the send did not arrive. The message goes out of the line.
+	 * Records that the server has a failed message as the message `id`: the room has a message with
+	 * the key of the send, and the answers of the send did not arrive. The message goes out of the line.
 	 */
-	settle(key: string): void;
+	settle(key: string, id: string): void;
 	/** Stops each send and removes each message, for example when the person of the page changes. */
 	stop(): void;
 }
@@ -110,7 +119,7 @@ function canSucceedLater(error: unknown): boolean {
  * - An outbox sends only while its person is the person of the page.
  */
 export function createOutbox(options: OutboxOptions): Outbox {
-	let state: OutboxState = { pending: [], sendingKey: null };
+	let state: OutboxState = { pending: [], keys: new Map(), sendingKey: null };
 	const listeners = new Set<() => void>();
 	let view: OutboxView | null = null;
 	let stopped = false;
@@ -124,6 +133,16 @@ export function createOutbox(options: OutboxOptions): Outbox {
 
 	function update(key: string, changes: Partial<PendingMessage>): readonly PendingMessage[] {
 		return state.pending.map((message) => (message.key === key ? { ...message, ...changes } : message));
+	}
+
+	/** The keys with one more message. The oldest keys go when the map is full. */
+	function withKey(id: string, key: string): ReadonlyMap<string, string> {
+		const keys = new Map(state.keys).set(id, key);
+		for (const old of keys.keys()) {
+			if (keys.size <= MAX_KEYS) break;
+			keys.delete(old);
+		}
+		return keys;
 	}
 
 	function stop(): void {
@@ -145,6 +164,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
 				if (stopped) return;
 				change({
 					pending: state.pending.filter((entry) => entry.key !== message.key),
+					keys: withKey(stored.id, message.key),
 					sendingKey: null,
 				});
 				view?.deliver(stored);
@@ -226,9 +246,9 @@ export function createOutbox(options: OutboxOptions): Outbox {
 			if (key === state.sendingKey) return;
 			change({ pending: state.pending.filter((message) => message.key !== key) });
 		},
-		settle(key) {
+		settle(key, id) {
 			if (!state.pending.some((message) => message.key === key && message.state === "failed")) return;
-			change({ pending: state.pending.filter((message) => message.key !== key) });
+			change({ pending: state.pending.filter((message) => message.key !== key), keys: withKey(id, key) });
 		},
 		stop,
 	};

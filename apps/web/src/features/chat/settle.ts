@@ -10,8 +10,8 @@ export interface SendSettlerOptions {
 	own: ChatMessage["author"];
 	/** The state of the outbox at this moment, not the state of the last render. */
 	state(): OutboxState;
-	/** Takes a failed send out of the outbox: the room has its message. */
-	settle(key: string): void;
+	/** Takes a failed send out of the outbox: the room has its message, `id`. */
+	settle(key: string, id: string): void;
 	/** Gets the number of sends that settled in one step. */
 	onSettled(count: number): void;
 }
@@ -45,7 +45,7 @@ export function createSendSettler(options: SendSettlerOptions): SendSettler {
 		const keys = pendingKeys();
 		reported = reported.filter((message) => keys.has(message.idempotency_key ?? ""));
 		const settled = storedSends([...list, ...reported], state(), own);
-		for (const key of settled) settle(key);
+		for (const { key, id } of settled) settle(key, id);
 		if (settled.length > 0) onSettled(settled.length);
 	}
 

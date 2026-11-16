@@ -50,8 +50,9 @@ function storedOf(
 /**
  * The rows of the list: the stored messages, then the messages that wait, in the order of the sends.
  *
- * - A stored message of `own` has the key of its send as its row key, so the row of a send stays the
- *   same row when the stored message comes. A message without a key has its id.
+ * - A stored message that this outbox sent has the key of its send as its row key (`outbox.keys`), so
+ *   the row of a send stays the same row when the stored message comes. Each other message has its
+ *   id. A row key never changes when a page of messages comes.
  * - A message that waits shows as a message of `own`, after the last stored message.
  * - A send whose stored message the list has shows as that stored message, at the position that the
  *   room gave it, with the key of the send. So the message shows one time, and it does not move when
@@ -66,15 +67,11 @@ export function chatRows(
 	changes: ReadonlyMap<string, LocalChange> = NO_CHANGES,
 ): ChatRow[] {
 	const stored = storedOf(messages, outbox, own);
-	// The room keeps a key for a day. After that, a client that is not this page can use the same key
-	// again, so two messages can have one key. The second one then has its id as its row key.
-	const used = new Set<string>();
-	const rows: ChatRow[] = withLocalChanges(messages, changes).map((message) => {
-		const sendKey = sendKeyOf(message, own);
-		const key = sendKey !== null && !used.has(sendKey) ? sendKey : message.id;
-		used.add(key);
-		return { key, message, pending: null };
-	});
+	const rows: ChatRow[] = withLocalChanges(messages, changes).map((message) => ({
+		key: stored.get(message.id)?.key ?? outbox.keys.get(message.id) ?? message.id,
+		message,
+		pending: null,
+	}));
 	const shown = new Set([...stored.values()].map((pending) => pending.key));
 	let seq = messages[messages.length - 1]?.seq ?? 0;
 	for (const pending of outbox.pending) {
@@ -101,20 +98,20 @@ export function chatRows(
 }
 
 /**
- * The keys of the failed sends whose message the room has: a message of `own` in `messages` has the
- * key of the send. The answers of such a send got lost, and the server stored the message. Give each
- * key to `settle` of the outbox: the send did not fail, and "Try again" and "Delete" must not show
- * for a message that the room has. `messages` can be messages that the list does not show, for
- * example a message from the socket while the list is at older messages.
+ * The failed sends whose message the room has: a message of `own` in `messages` has the key of the
+ * send. The answers of such a send got lost, and the server stored the message. Give each pair to
+ * `settle` of the outbox: the send did not fail, and "Try again" and "Delete" must not show for a
+ * message that the room has. `messages` can be messages that the list does not show, for example a
+ * message from the socket while the list is at older messages.
  */
 export function storedSends(
 	messages: readonly ChatMessage[],
 	outbox: OutboxState,
 	own: ChatMessage["author"],
-): string[] {
-	return [...storedOf(messages, outbox, own).values()]
-		.filter((pending) => pending.state === "failed")
-		.map((pending) => pending.key);
+): { key: string; id: string }[] {
+	return [...storedOf(messages, outbox, own)]
+		.filter(([, pending]) => pending.state === "failed")
+		.map(([id, pending]) => ({ key: pending.key, id }));
 }
 
 /**

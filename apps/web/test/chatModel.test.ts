@@ -65,8 +65,9 @@ describe("the rows of the message list", () => {
 		error: state === "failed" ? "No connection." : null,
 		uncertain: state === "failed",
 	});
-	const outbox = (pending: ReturnType<typeof waiting>[]) => ({
+	const outbox = (pending: ReturnType<typeof waiting>[], keys: [string, string][] = []) => ({
 		pending,
+		keys: new Map(keys),
 		sendingKey: pending.find((entry) => entry.state === "sending")?.key ?? null,
 	});
 	const keysOf = (rows: readonly { key: string }[]) => rows.map((row) => row.key);
@@ -75,7 +76,7 @@ describe("the rows of the message list", () => {
 	it("keeps the key of a send for the stored message, and puts the messages that wait at the end", () => {
 		const rows = chatRows(
 			[message(1, { author: BOT, idempotency_key: "bot-key" }), message(2, { idempotency_key: "k2" })],
-			outbox([waiting("k3", "third", "sending"), waiting("k4", "fourth")]),
+			outbox([waiting("k3", "third", "sending"), waiting("k4", "fourth")], [["cmsg_2", "k2"]]),
 			ADA,
 			ROOM,
 		);
@@ -109,7 +110,7 @@ describe("the rows of the message list", () => {
 		expect(keysOf(during)).toEqual(["cmsg_1", "cmsg_2", "k3", "cmsg_4", "k5"]);
 		expect(during[2]).toMatchObject({ pending: null, message: { id: "cmsg_3", seq: 3 } });
 		// The answer of the send arrives: each row keeps its key and its position.
-		const after = chatRows(messages, outbox([waiting("k5", "fifth", "sending")]), ADA, ROOM);
+		const after = chatRows(messages, outbox([waiting("k5", "fifth", "sending")], [["cmsg_3", "k3"]]), ADA, ROOM);
 		expect(keysOf(after)).toEqual(["cmsg_1", "cmsg_2", "k3", "cmsg_4", "k5"]);
 		// The answers got lost: the failed send shows one time, as its stored message.
 		const lost = chatRows(messages, outbox([waiting("k3", "message 3", "failed")]), ADA, ROOM);
@@ -128,15 +129,20 @@ describe("the rows of the message list", () => {
 		expect(rows.map((row) => [row.key, row.pending?.state ?? "stored"])).toEqual([
 			["cmsg_1", "stored"],
 			["cmsg_2", "stored"],
-			["other-tab", "stored"],
+			["cmsg_3", "stored"],
 			["k4", "sending"],
 		]);
 	});
 
-	// The room keeps a key for a day. A client that is not this page can use the same key after that.
-	it("gives the id as the row key to a second message of the person with the same key", () => {
-		const messages = [message(1, { idempotency_key: "daily" }), message(2, { idempotency_key: "daily" })];
-		expect(keysOf(chatRows(messages, outbox([]), ADA, ROOM))).toEqual(["daily", "cmsg_2"]);
+	// The room keeps a key for a day. A different client of the person can use the same key after that. A page
+	// of older messages then brings a message with the key of a row that shows. A row key that changes makes the
+	// list jump, and a focus in the row goes away.
+	it("keeps the row key of each message when a page brings an older message with the same key", () => {
+		const recent = message(5, { idempotency_key: "daily" });
+		const state = outbox([], [["cmsg_5", "daily"]]);
+		expect(keysOf(chatRows([recent], state, ADA, ROOM))).toEqual(["daily"]);
+		const withOlder = [message(1, { idempotency_key: "daily" }), recent];
+		expect(keysOf(chatRows(withOlder, state, ADA, ROOM))).toEqual(["cmsg_1", "daily"]);
 	});
 });
 
@@ -149,13 +155,17 @@ describe("a failed send whose message the room has", () => {
 		error: "No connection.",
 		uncertain,
 	});
-	const outbox = (pending: ReturnType<typeof failed>[]) => ({ pending, sendingKey: null });
+	const outbox = (pending: ReturnType<typeof failed>[]) => ({
+		pending,
+		keys: new Map<string, string>(),
+		sendingKey: null,
+	});
 
 	// The server stored the message and each answer got lost. Without the pair, the message shows two times, one
 	// time as "Not sent", and the person sends it again.
 	it("is the message of the person with the key of the send", () => {
 		const messages = [message(1, { text: "Hello" }), message(2, { text: "Hello", idempotency_key: "k1" })];
-		expect(storedSends(messages, outbox([failed("k1", "Hello")]), ADA)).toEqual(["k1"]);
+		expect(storedSends(messages, outbox([failed("k1", "Hello")]), ADA)).toEqual([{ key: "k1", id: "cmsg_2" }]);
 	});
 
 	// A wrong pair removes a message that the server does not have.
@@ -175,8 +185,11 @@ describe("a failed send whose message the room has", () => {
 			message(1, { text: "Ping", idempotency_key: "k2" }),
 			message(2, { text: "Ping", idempotency_key: "k1" }),
 		];
-		const keys = storedSends(messages, outbox([failed("k1", "Ping"), failed("k2", "Ping")]), ADA);
-		expect(keys.toSorted()).toEqual(["k1", "k2"]);
+		const pairs = storedSends(messages, outbox([failed("k1", "Ping"), failed("k2", "Ping")]), ADA);
+		expect(pairs.toSorted((a, b) => a.key.localeCompare(b.key))).toEqual([
+			{ key: "k1", id: "cmsg_2" },
+			{ key: "k2", id: "cmsg_1" },
+		]);
 	});
 });
 
@@ -198,6 +211,7 @@ describe("the messages with the changes that wait for the server", () => {
 					uncertain: false,
 				},
 			],
+			keys: new Map<string, string>(),
 			sendingKey: "k2",
 		};
 		const room = "rm_01JD0000000000000000000001";
@@ -265,6 +279,7 @@ describe("the line about the sends that a list does not show", () => {
 	});
 	const outbox = (...states: SendState[]) => ({
 		pending: states.map(pending),
+		keys: new Map<string, string>(),
 		sendingKey: null,
 	});
 

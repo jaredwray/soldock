@@ -84,6 +84,9 @@ describe("the outbox of a room", () => {
 		await room.calls[1]?.succeed();
 		expect(room.pending()).toEqual([]);
 		expect(room.sent.map((message) => message.text)).toEqual(["First", "Second"]);
+		// The stored message has the key of its send as its row key, so its row stays the same row.
+		const keys = room.outbox.getState().keys;
+		expect([keys.get("cmsg_1"), keys.get("cmsg_2")]).toEqual([room.calls[0]?.key, room.calls[1]?.key]);
 		expect(room.calls[0]?.key).not.toBe(room.calls[1]?.key);
 	});
 
@@ -175,15 +178,16 @@ describe("the outbox of a room", () => {
 		room.outbox.send("Stored, with lost answers");
 		const key = room.outbox.getState().pending[0]?.key as string;
 		// A message whose call runs cannot settle: its answer gives the stored message.
-		room.outbox.settle(key);
+		room.outbox.settle(key, "cmsg_77");
 		expect(room.pending()).toEqual([["Stored, with lost answers", "sending"]]);
 		for (const wait of [...RETRY_WAITS_MS, 0]) {
 			await room.calls[room.calls.length - 1]?.fail(new TypeError("fetch failed"));
 			vi.advanceTimersByTime(wait);
 		}
 		expect(room.pending()).toEqual([["Stored, with lost answers", "failed"]]);
-		room.outbox.settle(key);
+		room.outbox.settle(key, "cmsg_77");
 		expect(room.pending()).toEqual([]);
+		expect(room.outbox.getState().keys.get("cmsg_77")).toBe(key);
 	});
 
 	// The page sends each call with the session of its person. A message of the person from before must not go out.

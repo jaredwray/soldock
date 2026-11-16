@@ -645,9 +645,10 @@ MCP clients. The app has no UI-only path.
     that message, the send did not fail: the "Not sent" row becomes the row of the stored message.
     The room tells of it in a list, a sync or the socket, also while the list does not take the
     message, for example a list at older messages (`onChanges` of `useRoom`, `settle.ts`).
-  - A stored message of the person has the key of its send as its row key, so the row stays the
-    same row from the send to the stored message. A second message with the same key, from a
-    client that used the key again after a day, gets its id as its row key.
+  - A stored message that this page sent has the key of its send as its row key (`keys` of the
+    outbox), so the row stays the same row from the send to the stored message. Each other message
+    has its id. So a row key never changes when a page of messages comes, also when a different
+    client of the person used the same key again after a day.
   - The messages that wait stay when the person opens a different room, and after a reload of the
     page. The page keeps them in IndexedDB ([Data inventory](#data-inventory)).
   - After a reload, the Chat page puts each message back in the line of its room, before the

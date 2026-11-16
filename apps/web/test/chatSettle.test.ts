@@ -32,6 +32,7 @@ function room(keys: string[], state: PendingMessage["state"]) {
 			error: state === "failed" ? "No connection." : null,
 			uncertain: state === "failed",
 		})),
+		keys: new Map(),
 		sendingKey: null,
 	};
 	const counts: number[] = [];
