@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { WEBHOOK_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webhookMigration from "../migrations/0009_webhooks.sql?raw";
+import chatWebhookMigration from "../migrations/0011_chat_webhooks.sql?raw";
 import {
 	type Actor,
 	api,
@@ -612,6 +613,7 @@ describe("a fresh start", () => {
 	// The webhooks refer to the principals, so a fresh start must drop them before the principals.
 	it("deletes each webhook when the operator starts fresh", async () => {
 		await ada.call("mail.create_webhook", { url: HOOK });
+		await ada.call("chat.create_webhook", { url: HOOK, principal_id: bot.id });
 		const res = await request("/auth/setup", {
 			method: "POST",
 			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json" },
@@ -626,27 +628,33 @@ describe("a fresh start", () => {
 		expect(res.status).toBe(201);
 		const { api_key } = (await res.json()) as { api_key: { secret: string } };
 		expect((await api(api_key.secret)("mail.list_webhooks")).webhooks).toEqual([]);
+		expect((await api(api_key.secret)("chat.list_webhooks")).webhooks).toEqual([]);
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM chat_webhooks").first("n")).toBe(0);
+		expect((await api(api_key.secret)("chat.create_webhook", { url: HOOK })).webhook.status).toBe("active");
 	});
 });
 
 describe("the webhook migration", () => {
 	// Operations such as account.set_password need each human scope. A full key from before the new
 	// scope, such as the setup key of the owner, must stay full.
-	it("gives mail.webhooks to a live key of a person that held each other human scope", async () => {
+	it.each(["mail", "chat"] as const)("gives %s.webhooks only to full human keys", async (domain) => {
+		const scope = `${domain}.webhooks` as const;
 		const { api_key: narrow } = await ada.call("account.create_api_key", { label: "narrow", scopes: ["mail.read"] });
-		const withoutNewScope = `json_remove(scopes, (SELECT '$[' || key || ']' FROM json_each(scopes) WHERE value = 'mail.webhooks'))`;
+		const withoutNewScope = `json_remove(scopes, (SELECT '$[' || key || ']' FROM json_each(scopes) WHERE value = '${scope}'))`;
 		await env.DIRECTORY.prepare(`UPDATE api_keys SET scopes = ${withoutNewScope} WHERE principal_id IN (?, ?)`)
 			.bind(owner.id, bot.id)
 			.run();
-		expect(await codeOf(owner.call("mail.list_webhooks"))).toBe("forbidden");
+		expect(await codeOf(owner.call(`${domain}.list_webhooks`))).toBe("forbidden");
 
-		for (const statement of webhookMigration.split("--> statement-breakpoint")) {
+		for (const statement of (domain === "mail" ? webhookMigration : chatWebhookMigration).split(
+			"--> statement-breakpoint",
+		)) {
 			await env.DIRECTORY.prepare(statement).run();
 		}
-		expect((await owner.call("account.whoami")).scopes).toContain("mail.webhooks");
-		expect((await owner.call("mail.list_webhooks")).webhooks).toEqual([]);
+		expect((await owner.call("account.whoami")).scopes).toContain(scope);
+		expect((await owner.call(`${domain}.list_webhooks`)).webhooks).toEqual([]);
 		// An agent key and a narrow key keep their scopes.
-		expect((await bot.call("account.whoami")).scopes).not.toContain("mail.webhooks");
+		expect((await bot.call("account.whoami")).scopes).not.toContain(scope);
 		const stored = await env.DIRECTORY.prepare("SELECT scopes FROM api_keys WHERE id = ?")
 			.bind(narrow.id)
 			.first("scopes");

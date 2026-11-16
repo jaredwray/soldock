@@ -704,6 +704,18 @@ const WebhookLabel = z
 const WEBHOOK_MAILBOXES =
 	"Use your own mailbox (the default), a team mailbox that you are a member of, or, for a person, the mailbox of an agent that you sponsor.";
 
+export const WebhookCreateInput = z
+	.strictObject({
+		url: WebhookUrl,
+		label: WebhookLabel.optional(),
+		auth_key: WebhookAuthKey.optional(),
+		header: WebhookHeader.optional(),
+	})
+	.refine((input) => !authorizationConflict(input), {
+		message: "The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.",
+		path: ["header", "name"],
+	});
+
 export const createWebhook = defineOperation({
 	name: "mail.create_webhook",
 	summary: "Get a POST at a URL when new mail arrives",
@@ -723,21 +735,11 @@ export const createWebhook = defineOperation({
 	scopes: ["mail.webhooks"],
 	callers: ["human", "agent"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
-	input: z
-		.strictObject({
-			mailbox_id: MailboxId.optional().describe(
-				"The mailbox to watch: an id from mail.list_mailboxes, or the id of an agent that you sponsor. The default is your own mailbox.",
-			),
-			url: WebhookUrl,
-			label: WebhookLabel.optional(),
-			auth_key: WebhookAuthKey.optional(),
-			header: WebhookHeader.optional(),
-		})
-		.refine((input) => !authorizationConflict(input), {
-			message:
-				"The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.",
-			path: ["header", "name"],
-		}),
+	input: WebhookCreateInput.safeExtend({
+		mailbox_id: MailboxId.optional().describe(
+			"The mailbox to watch: an id from mail.list_mailboxes, or the id of an agent that you sponsor. The default is your own mailbox.",
+		),
+	}),
 	output: z.object({ webhook: CreatedWebhook }),
 	errors: ["not_found", "policy_denied", "conflict"],
 });
