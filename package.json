@@ -26,6 +26,7 @@
 		"budgets:check": "node tools/budgets/check.ts apps/dock",
 		"licenses:check": "node tools/licenses/check.ts",
 		"seed": "node tools/seed/seed.ts",
+		"e2e": "pnpm --filter @soldock/e2e test",
 		"deploy:check": "pnpm --filter @soldock/dock run deploy:check",
 		"spikes:build": "pnpm --filter \"./spikes/**\" --if-present build",
 		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm build && pnpm test && pnpm budgets:check && pnpm run deploy:check && pnpm spikes:build && pnpm licenses:check"
