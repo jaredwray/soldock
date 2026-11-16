@@ -1,4 +1,5 @@
 import {
+	type ChatWebhook,
 	type CreatedWebhook,
 	type InputOf,
 	type Mailbox,
@@ -20,11 +21,19 @@ const DISABLED_REASONS: Record<NonNullable<Webhook["disabled_reason"]>, string> 
 	failures: "too many deliveries failed",
 	gone: "the receiver answered 410 Gone",
 	credential_revoked: "the key or the connection that created it stopped",
-	access_lost: "its creator lost access to the mailbox",
+	access_lost: "its creator lost access",
 	policy_denied: "the outbound policy of the agent no longer allows the host",
 };
 
+type WebhookDomain = "mail" | "chat";
+
+function chatView<T extends ChatWebhook>(webhook: T) {
+	const { principal_id, ...rest } = webhook;
+	return { ...rest, mailbox_id: principal_id };
+}
+
 interface WebhookManagerProps {
+	domain?: WebhookDomain;
 	heading: string;
 	/**
 	 * A mailbox that the person manages: the mailbox of an agent, or a team mailbox for an owner or an
@@ -41,7 +50,7 @@ interface WebhookManagerProps {
  * Lists, creates, changes and deletes webhooks: a POST to a URL outside Soldock when new mail arrives.
  * Only the creator of a webhook can change its label, its auth key and its custom header.
  */
-export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookManagerProps) {
+export function WebhookManager({ heading, mailboxId, canCreate, note, domain = "mail" }: WebhookManagerProps) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const [webhooks, setWebhooks] = useState<Webhook[] | null>(null);
@@ -54,13 +63,16 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 
 	const load = useCallback(async () => {
 		try {
-			const result = await api.call("mail.list_webhooks", mailboxId ? { mailbox_id: mailboxId } : {});
-			setWebhooks(result.webhooks);
+			const webhooks =
+				domain === "mail"
+					? (await api.call("mail.list_webhooks", mailboxId ? { mailbox_id: mailboxId } : {})).webhooks
+					: (await api.call("chat.list_webhooks", mailboxId ? { principal_id: mailboxId } : {})).webhooks.map(chatView);
+			setWebhooks(webhooks);
 			setError(null);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		}
-	}, [mailboxId]);
+	}, [mailboxId, domain]);
 
 	useEffect(() => {
 		void load();
@@ -68,7 +80,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 
 	// Your own webhooks can watch your mailbox or a team mailbox. A managed mailbox is fixed.
 	useEffect(() => {
-		if (mailboxId) return;
+		if (mailboxId || domain === "chat") return;
 		let active = true;
 		api.call("mail.list_mailboxes").then(
 			(result) => {
@@ -81,11 +93,11 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 		return () => {
 			active = false;
 		};
-	}, [mailboxId]);
+	}, [mailboxId, domain]);
 
 	const mailboxName = (id: string) => {
 		const mailbox = mailboxes.find((candidate) => candidate.id === id);
-		return mailbox ? mailbox.address : id;
+		return mailbox ? mailbox.address : id === whoami.principal.id && domain === "chat" ? "Your chats" : id;
 	};
 
 	return (
@@ -95,8 +107,10 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 					{heading}
 				</h2>
 				<p className="panel-note">
-					A webhook sends a signed POST to a URL when new mail arrives in the inbox. The POST holds no mail content: the
-					receiver reads the inbox with its own key.{note && ` ${note}`}
+					{domain === "mail"
+						? "A webhook sends a signed POST when new mail arrives. The receiver reads the inbox with its own key."
+						: "A webhook sends a signed POST for new messages from others in all joined chats, including direct messages. The receiver reads each room with its own key."}
+					{note && ` ${note}`}
 				</p>
 			</header>
 			{error && (
@@ -116,7 +130,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 									<th scope="col">Webhook</th>
 									{!mailboxId && (
 										<th scope="col" className="col-optional">
-											Mailbox
+											{domain === "mail" ? "Mailbox" : "Principal"}
 										</th>
 									)}
 									<th scope="col">Last delivery</th>
@@ -183,6 +197,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 				)}
 				{canCreate && (
 					<CreateWebhookForm
+						domain={domain}
 						mailboxId={mailboxId}
 						mailboxes={mailboxes}
 						onCreated={(webhook) => {
@@ -195,6 +210,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 			{created && <WebhookSecretDialog webhook={created} onClose={() => setCreated(null)} />}
 			{editing && (
 				<EditWebhookDialog
+					domain={domain}
 					webhook={editing}
 					onClose={() => setEditing(null)}
 					onSaved={(webhook) => {
@@ -211,7 +227,9 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 					danger
 					onClose={() => setDeleting(null)}
 					onConfirm={async () => {
-						await api.call("mail.delete_webhook", { webhook_id: deleting.id });
+						await api.call(domain === "mail" ? "mail.delete_webhook" : "chat.delete_webhook", {
+							webhook_id: deleting.id,
+						});
 						toast({ message: `Webhook “${deleting.label}” deleted.` });
 						await load();
 					}}
@@ -226,10 +244,12 @@ export function WebhookManager({ heading, mailboxId, canCreate, note }: WebhookM
 }
 
 function CreateWebhookForm({
+	domain,
 	mailboxId: fixedMailboxId,
 	mailboxes,
 	onCreated,
 }: {
+	domain: WebhookDomain;
 	mailboxId: string | undefined;
 	mailboxes: readonly Mailbox[];
 	onCreated: (webhook: CreatedWebhook) => void;
@@ -258,17 +278,23 @@ function CreateWebhookForm({
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await api.call("mail.create_webhook", {
+			const fields = {
 				url: url.trim(),
 				...(label.trim() ? { label: label.trim() } : {}),
-				...(target ? { mailbox_id: target } : {}),
 				...(auth.key.trim() ? { auth_key: auth.key.trim() } : {}),
 				...(header ? { header } : {}),
-			});
+			};
+			const webhook =
+				domain === "mail"
+					? (await api.call("mail.create_webhook", { ...fields, ...(target ? { mailbox_id: target } : {}) })).webhook
+					: chatView(
+							(await api.call("chat.create_webhook", { ...fields, ...(target ? { principal_id: target } : {}) }))
+								.webhook,
+						);
 			setUrl("");
 			setLabel("");
 			setAuth(EMPTY_AUTH);
-			onCreated(result.webhook);
+			onCreated(webhook);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -477,10 +503,12 @@ type Change = "keep" | "replace" | "remove";
  * header value are write-only, so the dialog offers to keep, replace or remove each one.
  */
 function EditWebhookDialog({
+	domain,
 	webhook,
 	onClose,
 	onSaved,
 }: {
+	domain: WebhookDomain;
 	webhook: Webhook;
 	onClose: () => void;
 	onSaved: (webhook: Webhook) => void;
@@ -514,7 +542,11 @@ function EditWebhookDialog({
 		setBusy(true);
 		setError(null);
 		try {
-			onSaved((await api.call("mail.update_webhook", update)).webhook);
+			onSaved(
+				domain === "mail"
+					? (await api.call("mail.update_webhook", update)).webhook
+					: chatView((await api.call("chat.update_webhook", update)).webhook),
+			);
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);

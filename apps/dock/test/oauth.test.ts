@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_SOCKET_CLOSE, SCOPES, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -865,28 +866,51 @@ describe("OAuth and webhooks", () => {
 	});
 
 	// A webhook outlives the request that made it, so it must stop with the connection that made it.
-	it("stops a webhook that a connection created when the connection is revoked", async () => {
+	it.each(["mail", "chat"] as const)("stops a %s webhook when its OAuth connection is revoked", async (domain) => {
 		const owner = await setupOwner();
 		const clientId = await registerClient();
-		const { requestId, verifier } = await startAuthorization(clientId, "mail.read mail.webhooks");
+		const { requestId, verifier } = await startAuthorization(clientId, `${domain}.read ${domain}.webhooks`);
 		const approved = await owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			new_agent: { display_name: "Claude", address: "claude@dock.test" },
-			scopes: ["mail.read", "mail.webhooks"],
+			scopes: [`${domain}.read`, `${domain}.webhooks`],
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
 		const agent = approved.principal;
 		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
-		const created = await callTool(tokens.access_token, "mail_create_webhook", { url: "https://hooks.example.com/a" });
+		const created = await callTool(tokens.access_token, `${domain}_create_webhook`, {
+			url: "https://hooks.example.com/a",
+		});
 		const webhook = created.structuredContent?.webhook as { id: string; mailbox_id: string };
-		const job = {
+		let job: unknown = {
 			v: 1,
 			kind: "delivery",
 			webhookId: webhook.id,
-			mailboxId: webhook.mailbox_id,
+			mailboxId: agent.id,
 			eventId: "evt_01JC0000000000000000000000",
 			occurredAt: Date.now(),
 		};
+		if (domain === "chat") {
+			const { room } = await owner.call("chat.create_room", { kind: "private", name: "OAuth", member_ids: [agent.id] });
+			const { message } = await owner.call("chat.post_message", { room_id: room.id, text: "Wake up" });
+			const membershipId = await runInDurableObject(
+				env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)),
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ membership_id: string }>("SELECT membership_id FROM members WHERE principal_id = ?", agent.id)
+						.one().membership_id,
+			);
+			job = {
+				v: 1,
+				kind: "chat_delivery",
+				webhookId: webhook.id,
+				mailboxId: agent.id,
+				roomId: room.id,
+				eventId: message.id,
+				occurredAt: Date.now(),
+				membershipId,
+			};
+		}
 		const posts = receiveWebhooks();
 		await consumeWebhooks([job]);
 		expect(posts).toHaveLength(1);
@@ -895,8 +919,10 @@ describe("OAuth and webhooks", () => {
 		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
 		await consumeWebhooks([job]);
 		expect(posts).toHaveLength(1);
-		expect((await owner.call("mail.list_webhooks", { mailbox_id: agent.id })).webhooks).toMatchObject([
-			{ status: "disabled", disabled_reason: "credential_revoked" },
-		]);
+		expect(
+			domain === "mail"
+				? (await owner.call("mail.list_webhooks", { mailbox_id: agent.id })).webhooks
+				: (await owner.call("chat.list_webhooks", { principal_id: agent.id })).webhooks,
+		).toMatchObject([{ status: "disabled", disabled_reason: "credential_revoked" }]);
 	});
 });

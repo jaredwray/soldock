@@ -1,5 +1,6 @@
 import { prefixedId, Timestamp } from "./common.ts";
 import { Actor } from "./drive.ts";
+import { createWebhook, deleteWebhook, updateWebhook, Webhook, WebhookCreateInput } from "./mail.ts";
 import { defineOperation } from "./operation.ts";
 import { z } from "./zod.ts";
 
@@ -416,7 +417,68 @@ export const markRead = defineOperation({
 	errors: ["not_found"],
 });
 
+export const CHAT_WEBHOOK_EVENT_TYPE = "chat.message.created";
+export const ChatWebhook = Webhook.omit({ mailbox_id: true }).extend({ principal_id: prefixedId("prn") });
+export type ChatWebhook = z.infer<typeof ChatWebhook>;
+export const CreatedChatWebhook = ChatWebhook.extend({ secret: z.string() });
+export type CreatedChatWebhook = z.infer<typeof CreatedChatWebhook>;
+
+const createChatWebhook = defineOperation({
+	name: "chat.create_webhook",
+	summary: "Get a POST for new messages in all joined chats",
+	description: [
+		"Creates a webhook for your own chats, or the chats of an agent that you sponsor.",
+		"Each new message from another member sends a signed POST, including direct messages and rooms joined later.",
+		`The event type is ${CHAT_WEBHOOK_EVENT_TYPE}. The data has webhook_id, principal_id, room_id, message_id and uri.`,
+		"The POST has no message text. Read the room with chat.list_messages or the MCP resource at data.uri.",
+		"The URL, signature, auth_key, header, outbound policy and retry limits follow mail.create_webhook.",
+		"Each chat message keeps its own retries. The credential and room membership are checked before each POST.",
+		"The result shows the signature secret once. Read joined chats after creation to find messages that arrived before the webhook.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/webhooks" },
+	scopes: ["chat.webhooks"],
+	callers: ["human", "agent"],
+	annotations: createWebhook.annotations,
+	input: WebhookCreateInput.safeExtend({
+		principal_id: prefixedId("prn").optional(),
+	}),
+	output: z.object({ webhook: CreatedChatWebhook }),
+	errors: ["not_found", "policy_denied", "conflict"],
+});
+const updateChatWebhook = defineOperation({
+	...updateWebhook,
+	name: "chat.update_webhook",
+	description: "Changes the label, auth key or custom header of a chat webhook. Only its creator can change it.",
+	http: { method: "POST", path: "/api/v1/chat/webhooks/{webhook_id}" },
+	scopes: ["chat.webhooks"],
+	output: z.object({ webhook: ChatWebhook }),
+});
+const listChatWebhooks = defineOperation({
+	name: "chat.list_webhooks",
+	summary: "List chat webhooks",
+	description:
+		"Lists your chat webhooks. With principal_id, a sponsor, owner or admin can list the webhooks of that agent.",
+	http: { method: "GET", path: "/api/v1/chat/webhooks" },
+	scopes: ["chat.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: prefixedId("prn").optional() }),
+	output: z.object({ webhooks: z.array(ChatWebhook) }),
+	errors: ["not_found"],
+});
+const deleteChatWebhook = defineOperation({
+	...deleteWebhook,
+	name: "chat.delete_webhook",
+	description: "Deletes a chat webhook. Its creator, or a sponsor, owner or admin of its agent, can delete it.",
+	http: { method: "DELETE", path: "/api/v1/chat/webhooks/{webhook_id}" },
+	scopes: ["chat.webhooks"],
+});
+
 export const chatOperations = {
+	"chat.create_webhook": createChatWebhook,
+	"chat.update_webhook": updateChatWebhook,
+	"chat.list_webhooks": listChatWebhooks,
+	"chat.delete_webhook": deleteChatWebhook,
 	"chat.list_rooms": listRooms,
 	"chat.create_room": createRoom,
 	"chat.open_dm": openDm,

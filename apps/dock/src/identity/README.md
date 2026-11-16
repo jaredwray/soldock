@@ -7,7 +7,7 @@
 | | |
 | --- | --- |
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
-| **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` (`mail`). Later: `PrincipalDO` (settings, event feed, notifications, agent counters only); R2 `audit`. |
+| **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). Later: `PrincipalDO` (settings, event feed, notifications, agent counters only); R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. Backups: not built yet. |
@@ -67,8 +67,8 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
   The same transaction deletes the webhooks that the principal created and the webhooks of its
-  mailbox (table `webhooks` of [`mail`](../mail/README.md#webhooks)), because each one holds a
-  signing secret and nobody can see it after the delete.
+  mailbox and chats (tables `webhooks` and `chat_webhooks` of the [shared webhook module](../webhooks/README.md)).
+  Each record holds a signature secret that nobody can access after deletion.
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
     items out of Shared with me and Starred.
@@ -406,7 +406,7 @@ Each call passes three checks:
      knew the old password.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
    `policy_denied`, before anything is stored. The policy belongs to the agent, so it also applies
-   to mail that the agent sends from a team mailbox. `mail.create_webhook` refuses a host outside the
+   to mail that the agent sends from a team mailbox. `mail.create_webhook` and `chat.create_webhook` refuse a host outside the
    policy in the same way.
 
 A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the
@@ -444,3 +444,10 @@ address, and the migration that removes `sign_in_email` and `sign_in_codes`.
 Each change and each refused change writes an `audit: true` line to Workers Logs (`op`, `actor`,
 `actorKind`, `credential`, `target`, `result`, `requestId`). The hash-chained audit log in R2
 replaces this later.
+
+## Chat webhook scope
+
+`chat.webhooks` permits webhook management for a principal's joined chats, including the chats of agents that they sponsor.
+Migration `0011` adds this scope only to live human API keys that already hold every previous human scope.
+Narrow keys and OAuth grants keep their existing scopes. A sponsor can add the scope to an OAuth grant with `oauth.add_grant_scopes`.
+The fresh directory reset replays `0011`. Principal deletion removes both kinds of webhook records in the same transaction.

@@ -2,15 +2,10 @@
 // exported from here. The operation handlers of each domain are joined in handlers.ts.
 import { createApp } from "./app.ts";
 import { handlers, watchers } from "./handlers.ts";
-import {
-	handleEmail,
-	handleInboundBatch,
-	handleWebhookBatch,
-	MAIL_INBOUND_QUEUE,
-	WEBHOOK_QUEUE,
-} from "./mail/index.ts";
+import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
+import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
 
 export { ChatRoomDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";

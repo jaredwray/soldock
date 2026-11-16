@@ -2,16 +2,16 @@
 
 > Status: **started**. Two layers exist. The first layer has public and private rooms, direct
 > messages, messages with plain text, the read marker, and access for people and agents. The
-> second layer has the live socket of a room. Keep this README current as the module grows. It is
+> second layer has the live socket of a room. Outbound webhooks notify members of new messages. Keep this README current as the module grows. It is
 > the module's contract. The plan for the next layers is in
 > [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the lists). |
-| **Depends on** | `platform`, `identity` (the principals of new members, the credential of a request, the credential check of a socket). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read` |
+| **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket). |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read`, `chat.create_webhook`, `chat.list_webhooks`, `chat.update_webhook`, `chat.delete_webhook` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resource `chat.room`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -29,6 +29,7 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `room-index.ts` | The reads of the index in D1: the rooms of a principal, and the public rooms |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
 | `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
+| `webhooks.ts` | The Chat adapter for shared webhook operations |
 | `watch.ts` | The change feed of the `chat.room` resource, for MCP `subscriptions/listen` |
 
 ## Rooms
@@ -92,7 +93,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   have one character that is not a space. Clients show the text as text, never as HTML.
 - A mention is text: `@` and the handle of a principal. The handle is the part of the address
   before the `@`, or the full address when two principals have the same part. The room does not
-  read mentions. It stores no mention, counts none and sends no notification. A client finds the
+  read mentions. It stores no mention, counts none and sends no notification of its own. A
+  webhook for new messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about
+  each new message, with or without a mention. A client finds the
   principal of a handle in the directory: the web app shows a link to the profile
   ([`apps/web`](../../../web/README.md)). The description of `chat.post_message` tells agents the
   form. A later layer stores the principals of the mentions with the message and returns them in
@@ -302,6 +305,36 @@ The web app still does this each 4 seconds while its tab shows. The list gives t
 unread dots, and it keeps the open room current while its socket is not connected. The poll stops
 when the planned `PrincipalDO` gives each person one socket for the sidebar.
 
+## Webhooks for new messages
+
+A webhook notifies a principal about new messages from other members in all joined chats.
+This includes public rooms, private rooms, direct messages and rooms that the principal joins later.
+The four `chat.*_webhook` operations use the `chat.webhooks` scope. Agents can hold this scope.
+A sponsor can create a webhook for their agent with `principal_id`. Other callers can create one only for themselves.
+
+`postMessage` stores a `chat_event` in `webhook_outbox`, in the same transaction as the new message.
+The event records the message id and the membership at that time, except the author.
+Each membership has a unique id. A rejoin gets a new id, even when the join times are equal.
+The object migration assigns ids to existing members.
+Before the message transaction, the room reads the last committed Chat subscription sequence from D1.
+The room holds other calls until that read and the message transaction finish. The event stores that sequence.
+Later subscriptions get no earlier event, even when their creation time equals the message time.
+A repeated idempotency key, an edit, a deletion and a read marker create no event.
+The alarm sends due events to `WEBHOOKS` and removes each row only after the queue accepts it.
+A failed queue send keeps the row and uses the existing backoff. A restart restores an alarm for pending events.
+
+The event type is `chat.message.created`. Its data contains `webhook_id`, `principal_id`, `room_id`, `message_id` and `uri`.
+It contains no message text. The URI is `soldock://chat/<room_id>/messages`.
+The receiver reads the room through REST or MCP with its own credential.
+Each delivery checks current membership in the room object, so a stale D1 index gives no access.
+The [shared webhook module](../webhooks/README.md) defines signatures, retries and credential checks.
+
+Each new message with another member creates one queue event, also when that room has no webhook subscribers.
+Each message needs one directory read before its transaction to set the subscription boundary.
+Subscriptions cover rooms joined later without a separate subscription for each room.
+One event can create up to 20 delivery jobs per member. Queue batches have at most 100 jobs.
+Future notification levels and mention filters remain part of the roadmap.
+
 ## A fresh start of the directory
 
 - A fresh start (`POST /auth/setup` with `start_fresh`) drops `chat_rooms` and `chat_members` and
@@ -336,10 +369,12 @@ when the planned `PrincipalDO` gives each person one socket for the sidebar.
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles and read markers | `ChatRoomDO` table `members` | With the name of each member at the time of the join |
+| Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
 | Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
+| Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
+| Chat webhook subscriptions | D1 `chat_webhooks`, owned by `webhooks` | See the [shared data inventory](../webhooks/README.md#subscriptions) |
 | Schema version | `ChatRoomDO` table `meta` | |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql` |
@@ -348,6 +383,6 @@ when the planned `PrincipalDO` gives each person one socket for the sidebar.
 
 Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
 (through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
-notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
+browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.
