@@ -48,6 +48,11 @@ export interface RoomPager {
 	 * gets its newest messages.
 	 */
 	toMessage(seq: number): Promise<boolean>;
+	/**
+	 * Makes each read of `toLatest` and of `toMessage` that runs not apply. Use it when the person
+	 * goes to a different place of the room: the answer of the read from before must not move the list.
+	 */
+	cancel(): void;
 	/** Tells if the person looks at the end of the list. A full history then drops its oldest messages. */
 	follow(atEnd: boolean): void;
 }
@@ -132,6 +137,9 @@ export function createRoomPager(options: PagerOptions): RoomPager {
 			update(() => next);
 			void sync.run();
 			return true;
+		},
+		cancel() {
+			latestReads += 1;
 		},
 		follow(atEnd) {
 			following = atEnd;

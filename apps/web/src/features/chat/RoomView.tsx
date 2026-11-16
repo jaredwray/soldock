@@ -383,11 +383,16 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// A link to one message. The list goes there after the load of the room, one time for each link.
 	// A message that the list does not have comes with the page around it.
 	const toMessage = view.toMessage;
+	const cancelReads = view.cancelReads;
 	const canFocus = view.status === "ready" && view.fresh && isMember;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the view goes to a link one time, when the room is ready.
 	useEffect(() => {
-		if (focusSeq === null || !canFocus || wentTo.current === focusSeq) return;
+		if (!canFocus || wentTo.current === focusSeq) return;
+		// The path changed to a different message, or to the room without a message. A read for the
+		// link from before must not put the list at that message.
+		cancelReads();
 		wentTo.current = focusSeq;
+		if (focusSeq === null) return;
 		const show = () => {
 			setStick(false);
 			scrollTarget.current = focusSeq;
@@ -398,7 +403,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		if (messages.some((message) => message.seq === focusSeq)) show();
 		else {
 			toMessage(focusSeq).then((applied) => {
-				if (applied) show();
+				if (applied && wentTo.current === focusSeq) show();
 			}, fail);
 		}
 	}, [focusSeq, canFocus]);

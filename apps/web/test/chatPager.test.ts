@@ -227,6 +227,19 @@ describe("the page reads of an open room", () => {
 		expect(page.state().messages.find((message) => message.seq === 180)?.text).toBe("changed between the reads");
 	});
 
+	// The person opens a link, and goes to a different place before the answer. The answer must not
+	// move the list to the message of the link.
+	it("do not put the list at a message after the read was cancelled", async () => {
+		const page = openRoom(fakeRoom(420));
+		await page.load();
+		page.hold();
+		const going = page.pager.toMessage(200);
+		page.pager.cancel();
+		await page.answerAll();
+		expect(await going).toBe(false);
+		expect([page.seqs()[0], page.seqs().at(-1)]).toEqual([371, 420]);
+	});
+
 	it("keep the messages that the person reads in a full list, and take new messages again at its end", async () => {
 		const room = fakeRoom(420);
 		const page = openRoom(room);
