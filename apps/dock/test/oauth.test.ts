@@ -731,7 +731,7 @@ describe("OAuth scope changes", () => {
 		});
 		const before = await instructions(tokens.access_token);
 		expect(before).toContain("mail.webhooks (4 tools)");
-		expect(before).toContain("Admin › Agents");
+		expect(before).toContain("Admin › Members");
 		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).not.toContain("mail_create_webhook");
 
 		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;

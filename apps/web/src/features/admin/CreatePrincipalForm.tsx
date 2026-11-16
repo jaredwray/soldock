@@ -241,7 +241,8 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							))}
 						</fieldset>
 						<p className="field-hint form-grid-wide">
-							A new agent can send mail only inside this organization. Change its policy in Agents after you create it.
+							A new agent can send mail only inside this organization. Open the agent under Members to change its
+							policy.
 						</p>
 					</>
 				)}

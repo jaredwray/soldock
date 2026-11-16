@@ -26,8 +26,11 @@ export type DriveView =
 	/** A search in the own drive, or in the shared drive `spaceId`. */
 	| { kind: "search"; query: string; spaceId?: string };
 
-/** The sections of the admin page. Each has one path under `/admin`. */
-export const ADMIN_SECTIONS = ["members", "agents", "shared-mailboxes", "shared-drives", "domains"] as const;
+/**
+ * The sections of the admin page. Each has one path under `/admin`. People and agents share `members`.
+ * The old `/admin/agents` path redirects there.
+ */
+export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "domains"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
@@ -95,6 +98,8 @@ export function parseRoute(location: string): Route {
 	const [first, second, third, fourth] = parts;
 	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
 	if (first === "admin" && parts.length === 1) return { page: "admin", section: null };
+	if (first === "admin" && parts.length === 2 && second === "agents")
+		return { page: "redirect", to: adminPath("members") };
 	if (first === "admin" && parts.length === 2 && isAdminSection(second)) return { page: "admin", section: second };
 	if (first === "settings" && parts.length === 1) return { page: "settings" };
 	if (first === "connect" && parts.length === 2 && second?.startsWith("oar_"))

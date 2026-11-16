@@ -185,6 +185,8 @@ describe("routes", () => {
 		for (const section of ADMIN_SECTIONS) {
 			expect(parseRoute(adminPath(section))).toEqual({ page: "admin", section });
 		}
+		// People and agents share Members. The old Agents path opens that section.
+		expect(parseRoute("/admin/agents")).toEqual({ page: "redirect", to: "/admin/members" });
 	});
 
 	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
