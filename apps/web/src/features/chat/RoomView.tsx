@@ -66,15 +66,18 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
 	const toast = useToast();
-	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
-	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
-	// A list that is not at the newest messages does not know the last message of the room. A list
-	// from the cache can be behind the room, so it does not know it also.
-	const loaded = view.messages[view.messages.length - 1];
-	const lastSeq = view.status === "ready" && view.fresh && !view.hasNewer ? (loaded?.seq ?? 0) : null;
+	/** Takes each message from the socket and from a sync. It is set below, after the outbox. */
+	const onChanges = useRef<(messages: readonly ChatMessage[]) => void>(() => {});
+	const view = useRoom(
+		roomId,
+		{ version: listed?.version ?? null, tick: listTick },
+		onRoomsChanged,
+		useCallback((messages: readonly ChatMessage[]) => onChanges.current(messages), []),
+	);
 	/** The number of messages that the room stored for the person while the list was not at the newest messages. */
 	const [sentUnseen, setSentUnseen] = useState(0);
-	const outbox = useOutbox(roomId, ownId, lastSeq, (message) => {
+	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
+	const outbox = useOutbox(roomId, ownId, (message) => {
 		view.apply(message);
 		// The list does not take the message now. A line below the list tells that the room has it.
 		if (view.hasNewer) setSentUnseen((count) => count + 1);
@@ -92,8 +95,6 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [joining, setJoining] = useState(false);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
-	/** True while the outbox waits for the newest messages of the room: a send from a list that was not there. */
-	const holding = useRef(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
 	const refocus = useRef(false);
 	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
@@ -208,12 +209,41 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			? plural(newCount, "new message")
 			: null;
 
-	// The answers of a send can fail after the server stored the message. When the list has that
-	// message, the send did not fail: the row of the send becomes the row of the stored message.
+	// The answers of a send can fail after the server stored the message. When the room has a message
+	// with the key of the send, the send did not fail: the row of the send becomes the row of the
+	// stored message. The room can tell of the message through the socket or a sync while the list
+	// does not take it, for example a list at older messages. `reported` keeps those messages, for a
+	// send that fails after the message came.
 	const settle = outbox.settle;
+	const reported = useRef<ChatMessage[]>([]);
+	/** The keys of the sends that settled. Two calls before the next render can see the same failed send. */
+	const settledKeys = useRef(new Set<string>());
+	// A message of a send is always after the newest message of the room. While the list is not at
+	// the newest messages, the list does not show it, so the line below the list tells of it.
+	const settleStored = (candidates: readonly ChatMessage[]) => {
+		const keys = storedSends(candidates, outbox.state, own).filter((key) => !settledKeys.current.has(key));
+		for (const key of keys) {
+			settledKeys.current.add(key);
+			settle(key);
+		}
+		if (hasNewer && keys.length > 0) setSentUnseen((count) => count + keys.length);
+	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: settleStored reads the state of this render.
 	useLayoutEffect(() => {
-		for (const { key, id } of storedSends(messages, outbox.state, own)) settle(key, id);
+		settleStored([...messages, ...reported.current]);
 	}, [messages, outbox.state, own, settle]);
+	onChanges.current = (incoming) => {
+		const state = outbox.state;
+		const keys = new Set(state.pending.map((pending) => pending.key));
+		// Only a message of a send that waits is of use here, so the list stays small.
+		const ofSends = incoming.filter(
+			(message) =>
+				message.author.principal_id === ownId && message.idempotency_key !== null && keys.has(message.idempotency_key),
+		);
+		if (ofSends.length === 0) return;
+		reported.current = [...reported.current.filter((message) => keys.has(message.idempotency_key ?? "")), ...ofSends];
+		settleStored(ofSends);
+	};
 
 	/** Keeps the first row that shows, and its distance from the top of the list, for the next change of the rows. */
 	function keepPlace() {
@@ -329,49 +359,17 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		}
 	}
 
-	// A send from a list that does not know the last message of the room: a list that is not at the
-	// newest messages, or a list from the cache before the load of the room. The outbox has the
-	// message, and starts no call until the list knows it. The call then has the last message of the
-	// room, so the list finds the stored message of the send, and the message does not show two times.
-	const resumeOutbox = outbox.resume;
-	const release = useCallback(() => {
-		if (!holding.current) return;
-		holding.current = false;
-		resumeOutbox();
-	}, [resumeOutbox]);
-	const listWaits = view.status === "ready" && (!view.fresh || hasNewer);
-	useEffect(() => {
-		if (!listWaits) release();
-	}, [listWaits, release]);
 	useEffect(() => {
 		if (!hasNewer) setSentUnseen(0);
 	}, [hasNewer]);
-	// The page leaves the room. The message still goes out.
-	useEffect(() => release, [release]);
 
 	function send() {
 		if (!draft.trim()) return;
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
-		// after a reload and after a different room opens.
-		if (listWaits && !holding.current) {
-			holding.current = true;
-			outbox.pause();
-			// A list from the cache waits for the load of the room, which runs. A list at older messages
-			// must go to the newest messages.
-			if (hasNewer) {
-				toLatest().then(
-					(applied) => {
-						if (!applied) release();
-					},
-					(caught) => {
-						// The list did not get to the newest messages. The message goes out all the same.
-						release();
-						fail(caught);
-					},
-				);
-			}
-		}
+		// after a reload and after a different room opens. The message goes out at once: the room
+		// stores it with the key of the send, so the list finds it in each order of the answers.
+		if (hasNewer) toLatest().catch(fail);
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
 		outbox.send(draft);
 		setDraft("");

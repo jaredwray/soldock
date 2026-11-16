@@ -118,6 +118,13 @@ export const ChatMessage = z.object({
 	deleted: z.boolean(),
 	/** The version of the room at the last change of this message. */
 	version: z.number().int(),
+	/**
+	 * The `idempotency_key` of the call of `chat.post_message` that stored the message, or null. A
+	 * client finds the message of its own send with it, also when each answer of the send got lost.
+	 * Compare it with the author too: the key of a different author can have the same value. A reader
+	 * that gets no value takes null, so a client reads a message of a server from before this field.
+	 */
+	idempotency_key: z.string().nullable().default(null),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 

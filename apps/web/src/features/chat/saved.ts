@@ -64,7 +64,6 @@ export function fromSaved(saved: readonly SavedMessage[], now: number): PendingM
 				state: "waiting",
 				error: null,
 				uncertain: record.uncertain || record.state === "sending",
-				afterSeq: null,
 			};
 			if (record.state === "failed") return { ...message, state: "failed", error: record.error };
 			// A time in the future shows that the clock of the device went back. The age is then not known.

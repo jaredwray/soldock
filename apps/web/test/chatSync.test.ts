@@ -13,6 +13,7 @@ function message(seq: number, version: number): ChatMessage {
 		edited_at: null,
 		deleted: false,
 		version,
+		idempotency_key: null,
 	};
 }
 

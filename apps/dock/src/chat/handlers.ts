@@ -209,6 +209,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				id: newId("cmsg"),
 				text: input.text,
 				idempotency: await idempotencyOf(call, "chat.post_message", input),
+				clientKey: input.idempotency_key ?? null,
 			}),
 		);
 		if (!posted.duplicate) auditOk(call, "chat.post_message", `${input.room_id}:${posted.message.id}`);

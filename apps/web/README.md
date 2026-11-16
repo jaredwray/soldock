@@ -588,9 +588,9 @@ MCP clients. The app has no UI-only path.
       room, not a list that was at older messages. A reload of the page has no cache.
     - Until the load, the list can be behind the room. The page then does not mark the room as
       read, shows no **New messages** line, and does not read older messages.
-    - A send before the load shows at once and waits in the outbox. Its call starts after the
-      load, as for a list that is not at the newest messages. So the message does not show two
-      times when the load brings the stored message before the answer of the send.
+    - A send before the load shows at once and goes out at once. The stored message has the key
+      of the send, so the message shows one time also when the load brings it before the answer
+      of the send.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
       their list, also when the page left the room before the answer of the server.
@@ -638,17 +638,16 @@ MCP clients. The app has no UI-only path.
   - The socket can bring the stored message before the answer of the send. The list then shows the
     send as that stored message, at the position that the room gave it, with the key of the send.
     So the message shows one time, and it does not move when the answer arrives.
-  - The stored message of a send is a message of the person with the text of the send, that came
-    after the start of the call. A send keeps the last message of the list at the start of its
-    first call for this. A call that starts while no list shows the room has no stored message.
-  - The server can store a message while the answer of its send gets lost. When the list gets that
-    message, the send did not fail: the "Not sent" row becomes the row of the stored message. This is
-    for a send with an attempt whose answer did not arrive. A send that the server refused each
-    time stays "Not sent".
-  - The send whose call runs gets a stored message before a failed send, so a failed send stays
-    when the person writes its text again. Two failed sends with the same text get no stored
-    message: the page cannot know which of them the server has. **Try again** gives the correct
-    answer for each one.
+  - The stored message of a send is the message of the person whose `idempotency_key` is the key
+    of the send. The room stores each message with that key (`storedOf` in `model.ts`). A message
+    of a different author with the same key is not the message of a send of this page.
+  - The server can store a message while the answer of its send gets lost. When the room tells of
+    that message, the send did not fail: the "Not sent" row becomes the row of the stored message.
+    The room tells of it in a list, a sync or the socket, also while the list does not take the
+    message, for example a list at older messages (`onChanges` of `useRoom`).
+  - A stored message of the person has the key of its send as its row key, so the row stays the
+    same row from the send to the stored message. A second message with the same key, from a
+    client that used the key again after a day, gets its id as its row key.
   - The messages that wait stay when the person opens a different room, and after a reload of the
     page. The page keeps them in IndexedDB ([Data inventory](#data-inventory)).
   - After a reload, the Chat page puts each message back in the line of its room, before the
@@ -709,18 +708,18 @@ MCP clients. The app has no UI-only path.
     - While the list is not at the newest messages, a new message of the room does not go into
       it. A change and a delete of a message that shows still go in. A message that waits for the
       server does not show.
-    - A send from such a list goes to the outbox at once, with the text of that moment, and the
-      list goes to the newest messages. The outbox starts no call until the list is there, so the
-      list finds the stored message of the send. The message also goes out when the list does not
-      get there, and when the person opens a different room.
+    - A send from such a list goes to the outbox at once, with the text of that moment, and goes
+      out at once. The list goes to the newest messages. The message also goes out when the list
+      does not get there, and when the person opens a different room.
     - While the list is not at the newest messages, a line below the list tells about the
       messages of the person that the list does not show: that a message was not sent, that
       the page got no answer for a message, that messages wait, or that the room has the new
       messages (`unseenSendsNote` in `model.ts`). So the person does not send a message a second
       time.
-    - Known limit: such a list cannot find the stored message of a send whose answers got lost.
-      The line then tells that the page got no answer. At the newest messages, the row shows
-      "Not sent", and **Try again** gets the stored message: the send keeps its key.
+    - When the room tells of the stored message of a send whose answers got lost, the line tells
+      that the room has the new messages. Known limit: a message that the room stored before the
+      list loaded does not come in a sync. The line then tells that the page got no answer, and
+      **Try again** at the newest messages gets the stored message: the send keeps its key.
     - A full list at its end drops its oldest messages when a new message comes in. When the
       person reads older messages in a full list, they stay: the new message does not go in, and
       the list shows **Show newer messages**.

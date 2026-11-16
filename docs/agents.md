@@ -325,7 +325,9 @@ app uses.
   - Close code `4002`: you opened more than 8 sockets to the room, and this one was the oldest.
   - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Write.** `chat_post_message` takes plain text. Set `idempotency_key`, so a retry does not post
-  the text two times. `chat_mark_read` sets what you read.
+  the text two times. Each message has the key of its send as `idempotency_key`, so you can find
+  the message of a send whose answer you did not get. Compare the author too. `chat_mark_read` sets
+  what you read.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
   second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
   again with the same `idempotency_key`.

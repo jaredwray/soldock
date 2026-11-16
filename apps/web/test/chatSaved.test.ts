@@ -34,7 +34,6 @@ function pending(key: string, change: Partial<PendingMessage> = {}): PendingMess
 		state: "waiting",
 		error: null,
 		uncertain: false,
-		afterSeq: null,
 		...change,
 	};
 }
@@ -55,7 +54,7 @@ describe("the messages that wait, after a reload of the page", () => {
 	// The call of a message ran at the time of the reload. The server can have the message, and the page did not get the answer.
 	it("are uncertain when the call ran at the reload, and do not know the start of a call in the new list", () => {
 		const [message] = fromSaved([saved("k1", { state: "sending" })], NOW);
-		expect(message).toMatchObject({ state: "waiting", uncertain: true, afterSeq: null, error: null });
+		expect(message).toMatchObject({ state: "waiting", uncertain: true, error: null });
 		expect(fromSaved([saved("k2")], NOW)[0]).toMatchObject({ uncertain: false });
 	});
 
@@ -77,7 +76,7 @@ describe("the messages that wait, after a reload of the page", () => {
 	});
 
 	it("have the person and the room of the message in their record", () => {
-		expect(toSaved(pending("k1", { state: "sending", afterSeq: 12 }), "prn_ada", "rm_1")).toEqual({
+		expect(toSaved(pending("k1", { state: "sending" }), "prn_ada", "rm_1")).toEqual({
 			key: "k1",
 			owner: "prn_ada",
 			roomId: "rm_1",
@@ -100,12 +99,11 @@ describe("the changes of the store after a change of the messages that wait", ()
 
 	it("write a new message and a message with a new state, and no message that stayed the same", () => {
 		const first = pending("k1");
-		const sending = { ...first, state: "sending" as const, afterSeq: 4 };
+		const sending = { ...first, state: "sending" as const };
 		expect(savedChanges([], [first]).put).toEqual([first]);
 		expect(savedChanges([first], [sending, pending("k2")]).put.map((message) => message.key)).toEqual(["k1", "k2"]);
 		const failed = { ...sending, state: "failed" as const, error: "No connection.", uncertain: true };
 		expect(savedChanges([sending], [failed])).toEqual({ put: [failed], remove: [] });
-		// Only the position in the list changed. The record does not have it.
-		expect(savedChanges([sending], [{ ...sending, afterSeq: 9 }])).toEqual({ put: [], remove: [] });
+		expect(savedChanges([sending], [{ ...sending }])).toEqual({ put: [], remove: [] });
 	});
 });

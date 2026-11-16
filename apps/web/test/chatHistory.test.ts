@@ -13,6 +13,7 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		edited_at: null,
 		deleted: false,
 		version: seq,
+		idempotency_key: null,
 		...change,
 	};
 }

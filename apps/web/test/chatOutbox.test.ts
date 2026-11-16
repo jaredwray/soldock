@@ -13,7 +13,6 @@ interface Call {
 function fakeRoom() {
 	const calls: Call[] = [];
 	const sent: ChatMessage[] = [];
-	const view = { lastSeq: 10 as number | null };
 	const page = { account: "ada" };
 	let seq = 0;
 	const outbox = createOutbox({
@@ -40,6 +39,7 @@ function fakeRoom() {
 							edited_at: null,
 							deleted: false,
 							version: seq,
+							idempotency_key: key,
 						});
 						return settle();
 					},
@@ -51,9 +51,9 @@ function fakeRoom() {
 			}),
 		describe: (error) => (error instanceof ApiError ? error.message : "No connection."),
 	});
-	outbox.attach({ deliver: (message) => void sent.push(message), lastSeq: () => view.lastSeq });
+	outbox.attach({ deliver: (message) => void sent.push(message) });
 	const pending = () => outbox.getState().pending.map((message) => [message.text, message.state]);
-	return { outbox, calls, sent, pending, view, page };
+	return { outbox, calls, sent, pending, page };
 }
 
 const refusal = (status: number, code: string, detail: string) => new ApiError(status, { code, detail });
@@ -84,9 +84,6 @@ describe("the outbox of a room", () => {
 		await room.calls[1]?.succeed();
 		expect(room.pending()).toEqual([]);
 		expect(room.sent.map((message) => message.text)).toEqual(["First", "Second"]);
-		// The stored message has the key of its send, so its row stays the same row.
-		const keys = room.outbox.getState().keys;
-		expect([keys.get("cmsg_1"), keys.get("cmsg_2")]).toEqual([room.calls[0]?.key, room.calls[1]?.key]);
 		expect(room.calls[0]?.key).not.toBe(room.calls[1]?.key);
 	});
 
@@ -162,8 +159,6 @@ describe("the outbox of a room", () => {
 		});
 		room.outbox.attach(null);
 		room.outbox.send("Sent from a room that the person left");
-		// No list showed the room at the start of the call, so the call has no limit for the stored message.
-		expect(room.outbox.getState().pending[0]?.afterSeq).toBeNull();
 		expect(changes).toBeGreaterThan(0);
 		await room.calls[0]?.succeed();
 		expect(room.sent).toEqual([]);
@@ -174,34 +169,21 @@ describe("the outbox of a room", () => {
 		expect(changes).toBe(before);
 	});
 
-	// The list leaves out the stored message of a call until the call ends. It needs the last message at the start of the call.
-	it("records the last message of the list at the start of each call", async () => {
-		const room = fakeRoom();
-		room.outbox.send("First");
-		room.outbox.send("Second");
-		expect(room.outbox.getState().pending.map((message) => message.afterSeq)).toEqual([10, null]);
-		// The list got more messages before the second call starts.
-		room.view.lastSeq = 14;
-		await room.calls[0]?.succeed();
-		expect(room.outbox.getState().pending.map((message) => message.afterSeq)).toEqual([14]);
-	});
-
 	// The server stored the message, and each answer got lost. The list has the message, so the send did not fail.
 	it("takes a failed message as sent when the list has its stored message", async () => {
 		const room = fakeRoom();
 		room.outbox.send("Stored, with lost answers");
 		const key = room.outbox.getState().pending[0]?.key as string;
 		// A message whose call runs cannot settle: its answer gives the stored message.
-		room.outbox.settle(key, "cmsg_77");
+		room.outbox.settle(key);
 		expect(room.pending()).toEqual([["Stored, with lost answers", "sending"]]);
 		for (const wait of [...RETRY_WAITS_MS, 0]) {
 			await room.calls[room.calls.length - 1]?.fail(new TypeError("fetch failed"));
 			vi.advanceTimersByTime(wait);
 		}
 		expect(room.pending()).toEqual([["Stored, with lost answers", "failed"]]);
-		room.outbox.settle(key, "cmsg_77");
+		room.outbox.settle(key);
 		expect(room.pending()).toEqual([]);
-		expect(room.outbox.getState().keys.get("cmsg_77")).toBe(key);
 	});
 
 	// The page sends each call with the session of its person. A message of the person from before must not go out.
@@ -238,14 +220,15 @@ describe("the outbox of a room", () => {
 		await room.calls[0]?.fail(new TypeError("fetch failed"));
 		vi.advanceTimersByTime(RETRY_WAITS_MS[0] as number);
 		await room.calls[1]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
-		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true, afterSeq: 10 }]);
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true }]);
 
-		// The person sends it again. The send keeps the start of its first call, where its message can be.
-		room.view.lastSeq = 30;
-		room.outbox.retry(room.outbox.getState().pending[0]?.key as string);
-		expect(room.outbox.getState().pending).toMatchObject([{ state: "sending", uncertain: true, afterSeq: 10 }]);
+		// The person sends it again, with the same key.
+		const key = room.outbox.getState().pending[0]?.key as string;
+		room.outbox.retry(key);
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "sending", uncertain: true }]);
 		await room.calls[2]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
-		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true, afterSeq: 10 }]);
+		expect(room.outbox.getState().pending).toMatchObject([{ state: "failed", uncertain: true }]);
+		expect(room.calls.map((call) => call.key)).toEqual([key, key, key]);
 	});
 
 	// The messages from before a reload are older than the messages that the person wrote after it.
@@ -292,7 +275,6 @@ describe("the outbox of a room", () => {
 				state: "waiting",
 				error: null,
 				uncertain: false,
-				afterSeq: null,
 			},
 		]);
 		expect(room.calls).toHaveLength(0);
