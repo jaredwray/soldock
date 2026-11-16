@@ -70,7 +70,7 @@ MCP clients. The app has no UI-only path.
   - Each page starts with a header row: the title of the page at the left, and the search box and
     the controls of the page at the right.
   - The search box is in the header row of Mail and of Drive. In Drive, the search box finds items
-    (`/drive/search?q=<query>`). Chat has no search yet.
+    (`/drive/search?q=<query>`). In a shared drive, it finds the items of that drive. Chat has no search yet.
   - At 900px and below, the rail and the sidebar are a drawer. The menu button at the left of the
     header row opens the drawer (`aria-expanded`, `aria-controls`). When the drawer opens, the focus
     goes to the first item of the sidebar, or of the rail on a page with no sidebar. Escape, a click
@@ -233,7 +233,7 @@ MCP clients. The app has no UI-only path.
     sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
-  - Owners and admins see all four sections. A member who sponsors an agent sees only **Your agents**.
+  - Owners and admins see all five sections. A member who sponsors an agent sees only **Your agents**.
     A member who opens a section for owners and admins sees a notice and not the section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
@@ -296,6 +296,25 @@ MCP clients. The app has no UI-only path.
     - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - The lists of new members do not offer an archived account.
+  - **Shared drives** (`shared-drives`). Owners and admins see one card for each shared drive of the
+    organization (`drive.list_shared_drives` with `all: "true"`). The card shows the name, the role
+    of the person in the drive, and the number of members. A click opens the card and shows three parts:
+    - **Name**, a form that changes the name (`drive.update_shared_drive`).
+    - **Members of …**, a table of the members (`drive.get_shared_drive`). Each row has a role menu
+      (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
+      confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
+      agent with a role. The role menu of an agent has no Manager entry.
+    - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
+      this while the drive holds an item, and the dialog shows that error.
+    - The controls of the only manager are off, because a shared drive always keeps one manager. The
+      row shows that reason as text, and the controls refer to it (`aria-describedby`). The
+      server has the last word, and the table shows its error.
+    - **New shared drive**, above the cards, opens a dialog with a name and the first members, each
+      with a role (`drive.create_shared_drive`). The person who creates the drive starts as a
+      manager, and can clear that check box. The dialog refuses a list with no person as a manager.
+    - The lists of new members do not offer an archived account.
+    - The card and the Members dialog of Drive use the same parts
+      ([`SharedDriveMembers.tsx`](src/features/drive/SharedDriveMembers.tsx)).
   - **Email domains** (`domains`) lists the saved domains and provides Add and Remove controls.
     Changes take effect without a new deployment. A confirmation precedes removal.
     The server refuses removal of a domain with mailboxes.
@@ -391,8 +410,8 @@ MCP clients. The app has no UI-only path.
   - The toolbar is above the list. It shows the count of the selected items and acts on the
     selection: star, move and trash, or Restore and Delete forever in the trash view. "Move to trash" shows a toast with "Undo". Delete forever and "Empty trash" ask for
     a confirmation, with the first focus on Cancel.
-  - The move dialog shows the folders of the own drive, one level at a time. The server refuses a
-    move of a folder into itself, and the dialog shows that error.
+  - The move dialog shows the folders of a drive, one level at a time. The server refuses a
+    move of a folder into itself, and the dialog shows that error. See **Move to…** below.
   - The share dialog lists the owner and each grant (`drive.list_permissions`). The owner adds a
     person or an agent as a viewer or an editor, changes a role and removes a grant. A grant from a
     folder above shows as text. "Copy link" copies the address of the item, or of the folder of a
@@ -404,7 +423,78 @@ MCP clients. The app has no UI-only path.
     move between the entries.
   - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
     When the version changes, the list loads again without a loading state. A view that can show
-    items of other drives loads again on the same timer.
+    items of other drives loads again on the same timer. The timer also loads the list of the
+    shared drives again.
+- **Shared drives** (`/drive/shared-drives`). The sidebar of Drive has a **Shared drives** entry
+  below My Drive. Below that entry, the sidebar has a row for each shared drive of the person
+  (`drive.list_shared_drives`). The page of the entry lists the drives with the role of the person,
+  the number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
+  - The rows of the shared drives are collapsed by default. A chevron on the right of the entry
+    expands or collapses them: it points down when they are collapsed, and up when they are
+    expanded. The shell keeps this state while the page changes. A reload collapses the rows again
+    (`sharedDrivesNav` in [`model.ts`](src/features/drive/model.ts)).
+  - During a drag of items, the collapsed rows also show if a drive can get the items.
+  - A shared drive has its own paths: `/drive/shared-drives/<drv_id>` for its root, and `…/trash` and
+    `…/search?q=<query>` below that. A folder has the same form of path as in each other drive
+    (`/drive/folders/<drv_id>/<itm_id>`). A doc and a sheet of a shared drive open in their editors.
+  - In a shared drive, the row of that drive is the current page of the sidebar. When the rows are
+    collapsed, the Shared drives entry is the current page. The first entry of
+    the folder path is the name of the drive (`drive.get_about` with `space_id`). A chip shows the
+    role of the person: Manager, Editor or Viewer.
+  - The actions follow the role (`itemActions` in [`model.ts`](src/features/drive/model.ts)). An
+    editor and a manager use **New**, change names and content, move items in the drive and put them in
+    the trash. Only a manager shares an item with a person or an agent that is not a member. A
+    viewer opens, downloads and copies.
+  - A move, the trash, a restore and a copy next to the item need the member role of the person in
+    the drive (`memberRole`). The role of an item can come from a direct share, and the server does
+    not accept a direct share for these actions. The member roles come from
+    `drive.list_shared_drives`, and from `drive.get_about` for the drive on screen. Until a role
+    loads, the item has no action that needs it.
+  - A person with only a direct share of an item is not a member. In Shared with me, that person
+    gets "Remove from my list", and a copy goes to the root of the own drive.
+  - **Members**, above the list, opens a dialog with the members and their roles. A manager, an owner
+    and an admin change the name and the members there. Each other member sees the list, and can
+    leave the drive with **Leave**.
+  - **Trash**, above the list, opens the trash of the shared drive, for an editor and a manager. An
+    editor restores an item. Only a manager deletes an item forever and empties the trash.
+  - In a shared drive, the search box finds items of that drive only.
+  - A copy of an item goes next to the item when the person is an editor or a manager. For a viewer,
+    the copy goes to the root of the own drive.
+  - The share dialog of an item of a shared drive shows one row for the members of the drive, then
+    each direct share.
+  - The editors of Docs and Sheets go back to the folder of the item in the shared drive for a
+    member (`drive.get_about` with `space_id` gives the role only to a member). A person with only a
+    direct share goes back to Shared with me, also while the role loads.
+  - Known limit: `useSharedDriveAbout` gives no error to the header. When `drive.get_about` fails
+    for a member, the editor also goes back to Shared with me.
+- **Move to…** is in the More menu of an item and in the toolbar of a selection
+  ([`ItemDialogs.tsx`](src/features/drive/ItemDialogs.tsx)).
+  - The dialog starts in the drive that holds the items. **Drives** lists each drive that can get
+    them (`moveTargets`): My Drive, and each shared drive where the person is an editor or a manager.
+    An editor of a shared drive can move its items only in that drive, so the dialog has no Drives entry.
+    While the list of the shared drives loads, the dialog says so. When the list did not load, the
+    dialog shows the error with "Try again".
+  - In a drive, the dialog shows the folders of one level. A move in the same drive calls
+    `drive.move_items` with the `space_id` of the drive.
+  - A move to a different drive first calls `drive.move_to_drive` with `dry_run: true`. A
+    confirmation then tells the person who owns the items after the move, who gets or loses access,
+    how many items move with the folders, and how many people keep a direct share. A refusal of the
+    server shows in this dialog, with "Try again".
+  - After the confirmation, the call runs without `dry_run`. A toast says "Moved …" with an **Open**
+    action for the target. When the status is `moving`, the toast says "Moving …": the server
+    completes the move, and the list changes at the next poll.
+  - A move to a different drive is always one call, so the server moves each item or no item. The
+    app does not start such a move for more than `DRIVE_LIMITS.itemsPerCall` (100) selected items:
+    the dialog, and a toast for a drop, say "Select at most 100 items to move to a different drive."
+  - A move in the same drive of more than 100 items makes one call for each 100 items. When a call
+    fails after a different call moved items, the dialog says how many items moved, and the list
+    loads again.
+  - A person can also drag a row, or the selection that the row is part of, onto My Drive or a
+    shared drive in the sidebar. During the drag, each drive that can get the items has a line
+    around it. A drop on a different drive opens the same confirmation. A drop on the drive that
+    holds the items moves them to its root. A selection with items of two drives does not start a
+    drag. The drag is for a pointer only, and the drawer of a
+    narrow screen has no drag: Move to… does the same.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
     and the size. From 901px to 1100px, the Last change column is wider, for the name of the person.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
@@ -551,8 +641,9 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
-- **Chat** (`/chat`, `/chat/<room_id>`). A sidebar with the rooms and the direct messages of the
-  person, and one room with its messages and a box for a new message.
+- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/people/<principal_id>`). A sidebar with the rooms
+  and the direct messages of the person, and one room with its messages and a box for a new
+  message, or one profile.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
@@ -669,12 +760,49 @@ MCP clients. The app has no UI-only path.
     new person (`lib/account.ts`).
   - A message shows an avatar with the initials of its author, then the name in bold and the time
     on one line, and the text below. The avatar of a person is a square with round corners. The
-    avatar of an agent is a circle, and an agent has an "agent" mark next to its name.
+    avatar of an agent is a circle, and an agent has an "agent" mark next to its name. The name of
+    the author is a link to the profile of the author, while the directory has the author.
   - A message from the same author, on the same day and within 5 minutes, shows without the avatar
     and the name. A screen reader still gets the author and the time.
   - The first message of each day has the date above it, in a pill at the center of a line. The
     day is the day of the device.
   - The text of a message shows as plain text, with its line breaks.
+  - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
+    `@captain`. The handle is the part of the address before the `@`. When two principals have the
+    same part, on two mail domains, each of them has the full address as its handle, for example
+    `@ada@example.org`. The room stores only the text. `mentions.ts` has the rules.
+    - In a message, a mention of a principal in the directory is a link to the profile of that
+      principal. A mention of the person who reads has a yellow fill. A handle that the directory
+      does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
+      is a link, and its mentions stay text. A known handle at the start of a longer word
+      (`@adaé`, `@ada_`, `@ada@other`) is not a mention.
+    - The box for a new message and the edit box of a message suggest people and agents while the
+      person types `@` and a part of a name, a handle or an address. The members of the room come
+      first. A principal that is not a member shows "Not in this room". The list leaves out the
+      person who writes and each archived principal.
+    - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
+      closes the list. While the list is open, Enter does not send, and Escape does not close the
+      edit box. So a send after a full handle needs a second Enter. Shift+Enter still makes a new
+      line.
+    - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
+      space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
+      follows it.
+    - The list is above the box for a new message. Under the edit box, the list is part of the
+      message list, so the message list cannot cut it off.
+    - The page reads the directory one time (`directory.list_principals`). The members of the
+      room come from `chat.get_room`, again after the socket tells that the room changed, after
+      each reconnect of the socket, and when the room list has a different number of members.
+    - Known limit: a mention is text, and each client finds its principal in the directory of
+      that time. So a mention does not follow a change of an address. When a second principal
+      gets the same local part, each old mention of the short handle stays text. A handle of a
+      deleted principal can later be the handle of a new principal. Server-side mentions are
+      part of layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
+  - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
+    place of a room: the avatar, the name, the handle, the address, the role in the organization
+    or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
+    direct message with that principal (`chat.open_dm`). An archived principal and the own profile
+    have no such button. A mention, the name of an author and the sponsor of an agent link here.
+    When the directory does not load, the profile tells so.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of
@@ -880,6 +1008,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
+| `/chat/people/<prn_id>` | The profile of a person or an agent |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
@@ -902,11 +1031,11 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 
@@ -954,8 +1083,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
-- **A chat message is text.** The app puts the text of a message into a text node. It never makes
-  HTML or a link from it.
+- **A chat message is text.** The app puts the text of a message into text nodes. It never makes
+  HTML from it. The only link is a mention of a principal in the directory: the app makes the path
+  of the profile from the id of that principal, never from the text. A URL in a message stays text.
 - **External content is marked.** External mail shows the "External sender" notice. The server
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and

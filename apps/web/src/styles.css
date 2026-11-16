@@ -2321,6 +2321,10 @@ fieldset {
 	width: min(480px, calc(100vw - 32px));
 }
 
+.dialog-wide {
+	width: min(680px, calc(100vw - 32px));
+}
+
 .dialog-header {
 	display: flex;
 	align-items: flex-start;
@@ -3577,6 +3581,60 @@ fieldset {
 
 .admin-card-body .panel-form-divided {
 	padding-bottom: 0;
+}
+
+/* Shared drives: the members and the roles, in a card of Admin and in a dialog of Drive. */
+.shared-drive-role {
+	width: 116px;
+	min-height: 32px;
+	padding: 4px 8px;
+	font-size: 13px;
+}
+
+/* The person or the agent, and the role, in one row. */
+.shared-drive-add {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 12px;
+	width: 100%;
+}
+
+.shared-drive-add .field {
+	flex: 1 1 240px;
+	max-width: 400px;
+}
+
+.shared-drive-add .shared-drive-add-role {
+	flex: 0 0 140px;
+}
+
+/* The parts of the dialog of Drive, one under the other. */
+.shared-drive-dialog {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+/* A person or an agent of a new shared drive: the check box and the name, then the role. */
+.scope-list .shared-drive-pick {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	grid-column: 1 / -1;
+}
+
+.shared-drive-pick .check-row {
+	flex: 1;
+	min-width: 0;
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+	.shared-drive-role {
+		min-height: 44px;
+		font-size: 16px;
+	}
 }
 
 .admin-card-meta {

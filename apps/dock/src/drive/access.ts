@@ -1,8 +1,17 @@
 import type { DriveItem } from "@soldock/contracts";
 import { documentStub } from "../collab/index.ts";
-import { type CallContext, unknownPrincipalIds } from "../identity/index.ts";
+import { type CallContext, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { audit, OperationError, sha256Hex } from "../platform/index.ts";
-import type { ActorRecord, ItemRecord, ItemRef, Refusal, SpaceCall } from "./space.ts";
+import { unknownSharedDriveIds } from "./shared-index.ts";
+import {
+	type ActorRecord,
+	blobKeyFor,
+	type ItemRecord,
+	type ItemRef,
+	isSharedDriveId,
+	type Refusal,
+	type SpaceCall,
+} from "./space.ts";
 
 const NOT_FOUND = "No item has that id, or you have no access to it.";
 
@@ -10,10 +19,7 @@ export function spaceStub(env: Pick<Env, "DRIVE_SPACE">, spaceId: string) {
 	return env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));
 }
 
-/** The R2 key of one version of a file. Each object has one owner: the version in its key. */
-export function blobKeyFor(spaceId: string, itemId: string, versionId: string): string {
-	return `drive/${spaceId}/${itemId}/${versionId}`;
-}
+export { blobKeyFor };
 
 export function actorOf(call: CallContext): ActorRecord {
 	const { principal } = call.caller;
@@ -30,18 +36,51 @@ export interface OpenSpace {
 }
 
 /**
- * The drive of a call: the own drive of the caller by default, or the drive of a different principal.
- * The object of that drive decides what the caller can do with each item. The scopes of the
- * credential decide which operations the caller can call at all.
+ * The ids from the list that are not a drive that an operation can open: the id of a principal that
+ * the directory does not have, or the id of a shared drive that is not live in the index.
+ */
+export async function unknownSpaceIds(db: D1Database, ids: readonly string[]): Promise<string[]> {
+	const [principals, drives] = await Promise.all([
+		unknownPrincipalIds(
+			db,
+			ids.filter((id) => !isSharedDriveId(id)),
+		),
+		unknownSharedDriveIds(db, ids.filter(isSharedDriveId)),
+	]);
+	return [...principals, ...drives];
+}
+
+/**
+ * The caller for the object of a drive. `admin` is true for a person with the owner or the admin role
+ * of the organization. The object uses it for the members and the name of a shared drive only.
+ */
+export function spaceCall(call: CallContext, spaceId: string): SpaceCall {
+	return { spaceId, actor: actorOf(call), admin: call.caller.kind === "human" && isAdmin(call.caller) };
+}
+
+/** A drive by its id, without a check that the id is a drive. Use `openSpace` for an id from a caller. */
+export function spaceOf(call: CallContext, spaceId: string): OpenSpace {
+	return {
+		spaceId,
+		own: spaceId === call.caller.id,
+		space: spaceStub(call.env, spaceId),
+		ctx: spaceCall(call, spaceId),
+	};
+}
+
+/**
+ * The drive of a call: the own drive of the caller by default, the drive of a different principal, or
+ * a shared drive. The object of that drive decides what the caller can do with each item. The scopes
+ * of the credential decide which operations the caller can call at all.
  */
 export async function openSpace(call: CallContext, spaceId: string | undefined): Promise<OpenSpace> {
-	const own = spaceId === undefined || spaceId === call.caller.id;
-	const id = own ? call.caller.id : spaceId;
-	// A drive object exists for each name that somebody asks for. Only the id of a principal gets one.
-	if (!own && (await unknownPrincipalIds(call.env.DIRECTORY, [id])).length > 0) {
+	const id = spaceId ?? call.caller.id;
+	// A drive object exists for each name that somebody asks for. Only the id of a principal, or of a
+	// live shared drive in the index, gets one.
+	if (id !== call.caller.id && (await unknownSpaceIds(call.env.DIRECTORY, [id])).length > 0) {
 		throw new OperationError("not_found", NOT_FOUND);
 	}
-	return { spaceId: id, own, space: spaceStub(call.env, id), ctx: { spaceId: id, actor: actorOf(call) } };
+	return spaceOf(call, id);
 }
 
 /** Turns a refusal from an object into an OperationError, and returns any other result. */
@@ -67,8 +106,8 @@ export function toItem(record: ItemRecord): DriveItem {
 }
 
 /**
- * The items for the output of an operation. An item in the drive of somebody else has no star from
- * its drive: the stars of the caller are in the own drive of the caller.
+ * The items for the output of an operation. An item in the drive of somebody else, or in a shared
+ * drive, has no star from its drive: the stars of the caller are in the own drive of the caller.
  */
 export async function toItems(call: CallContext, records: ItemRecord[]): Promise<DriveItem[]> {
 	const foreign: ItemRef[] = records

@@ -29,6 +29,8 @@ function fakeSoldock(options: { ownerExists?: boolean } = {}) {
 	const addresses = new Set<string>();
 	const callers = new Map<string, { kind: "human" | "agent"; scopes: readonly Scope[] }>();
 	const subjects = new Set<string>();
+	/** The kind of each principal, by id. */
+	const kinds = new Map<string, "human" | "agent">();
 	let counter = 0;
 	const id = (prefix: string) => `${prefix}_${String(++counter).padStart(26, "0")}`;
 
@@ -36,7 +38,9 @@ function fakeSoldock(options: { ownerExists?: boolean } = {}) {
 		addresses.add(address);
 		const secret = `secret-${id("key")}`;
 		callers.set(secret, { kind, scopes: kind === "agent" ? AGENT_SCOPES : ALL_SCOPES });
-		return { principal: { id: id("prn") }, api_key: { secret } };
+		const principalId = id("prn");
+		kinds.set(principalId, kind);
+		return { principal: { id: principalId }, api_key: { secret } };
 	}
 
 	const outputs: Partial<Record<OperationName, (input: Record<string, unknown>) => unknown>> = {
@@ -58,6 +62,17 @@ function fakeSoldock(options: { ownerExists?: boolean } = {}) {
 		},
 		"chat.create_room": () => ({ room: { id: id("rm") } }),
 		"chat.open_dm": () => ({ room: { id: id("dm") } }),
+		// The rules of the server that the input schema cannot hold: a person is a manager, and an agent is not.
+		"drive.create_shared_drive": (input) => {
+			const members = input.members as { principal_id: string; role: string }[];
+			const managers = members.filter((member) => member.role === "manager").map((m) => kinds.get(m.principal_id));
+			if (!managers.includes("human")) problems.push("drive.create_shared_drive: no person is a manager");
+			if (managers.includes("agent")) problems.push("drive.create_shared_drive: an agent is a manager");
+			if (members.some((member) => !kinds.has(member.principal_id))) {
+				problems.push("drive.create_shared_drive: a member is not a principal that Soldock returned");
+			}
+			return { shared_drive: { id: id("drv") } };
+		},
 		"drive.create_folder": () => ({ item: { id: id("itm") } }),
 		"drive.upload_file": () => ({ item: { id: id("itm") } }),
 		"docs.create": () => ({ item: { id: id("itm") } }),
@@ -115,6 +130,7 @@ describe("runSeed", () => {
 				"chat.open_dm",
 				"chat.post_message",
 				"chat.mark_read",
+				"drive.create_shared_drive",
 				"drive.create_folder",
 				"drive.upload_file",
 				"drive.share_item",
@@ -122,6 +138,17 @@ describe("runSeed", () => {
 				"docs.create",
 				"sheets.create",
 			]),
+		);
+	});
+
+	// A member adds the items of a shared drive with the id of that drive. Without space_id, an item
+	// goes to the own drive of the member, and the shared drive stays empty.
+	it("puts a folder, a doc and a file in the shared drive that it creates", async () => {
+		const soldock = fakeSoldock();
+		await runSeed(soldock.api, noWait);
+		const inSharedDrive = soldock.calls.filter((call) => String(call.input.space_id).startsWith("drv_"));
+		expect(new Set(inSharedDrive.map((call) => call.name))).toEqual(
+			new Set(["drive.create_folder", "docs.create", "drive.upload_file"]),
 		);
 	});
 

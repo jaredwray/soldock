@@ -7,7 +7,7 @@ import { formatBytes, fullDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useSession } from "../auth/session.tsx";
 import { downloadFile } from "./data.ts";
-import { spaceInput, uploadMimeType, uploadRefusal } from "./model.ts";
+import { canEdit as roleCanEdit, spaceInput, uploadMimeType, uploadRefusal } from "./model.ts";
 
 /**
  * The versions of a file. Each person with access can get a version. An owner or an editor can
@@ -28,7 +28,7 @@ export function VersionsDialog({
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
-	const canEdit = item.role === "owner" || item.role === "editor";
+	const canEdit = roleCanEdit(item.role);
 	const space = spaceInput(item.space_id, ownId);
 
 	const load = useCallback(async () => {

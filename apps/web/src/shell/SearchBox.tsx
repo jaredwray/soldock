@@ -12,12 +12,19 @@ interface SearchBoxProps {
 	query: string;
 	/** A search from a team mailbox or an agent mailbox stays in that mailbox. Mail only. */
 	mailboxId?: string | null;
+	/** A search from a shared drive stays in that drive. Drive only. */
+	sharedDrive?: { id: string; name: string | null } | null;
 }
 
 /** The search box in the header of Mail and of Drive. */
-export function SearchBox({ product, query, mailboxId = null }: SearchBoxProps) {
+export function SearchBox({ product, query, mailboxId = null, sharedDrive = null }: SearchBoxProps) {
 	const [value, setValue] = useState(query);
-	const label = product === "drive" ? "Search in Drive" : "Search mail";
+	const label =
+		product === "mail"
+			? "Search mail"
+			: sharedDrive
+				? `Search in ${sharedDrive.name ?? "this drive"}`
+				: "Search in Drive";
 
 	useOnChange(query, () => setValue(query));
 
@@ -25,7 +32,15 @@ export function SearchBox({ product, query, mailboxId = null }: SearchBoxProps) 
 		event.preventDefault();
 		const next = value.trim();
 		if (product === "drive") {
-			navigate(drivePath(next ? { kind: "search", query: next } : { kind: "folder", spaceId: null, folderId: null }));
+			// The id of a shared drive stays in the path. An empty query goes back to the root of the drive.
+			const space = sharedDrive ? { spaceId: sharedDrive.id } : {};
+			navigate(
+				drivePath(
+					next
+						? { kind: "search", query: next, ...space }
+						: { kind: "folder", spaceId: sharedDrive?.id ?? null, folderId: null },
+				),
+			);
 		} else {
 			navigate(viewPath(next ? { kind: "search", query: next } : { kind: "system", view: "inbox" }, mailboxId));
 		}

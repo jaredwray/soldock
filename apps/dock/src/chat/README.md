@@ -8,7 +8,7 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mentions, files, search, browser notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the lists). |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket). |
 | **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read`, `chat.create_webhook`, `chat.list_webhooks`, `chat.update_webhook`, `chat.delete_webhook` |
@@ -91,6 +91,15 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 
 - A message has plain text, at most 8,000 characters (`CHAT_LIMITS.messageChars`). The text must
   have one character that is not a space. Clients show the text as text, never as HTML.
+- A mention is text: `@` and the handle of a principal. The handle is the part of the address
+  before the `@`, or the full address when two principals have the same part. The room does not
+  read mentions. It stores no mention, counts none and sends no notification of its own. A
+  webhook for new messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about
+  each new message, with or without a mention. A client finds the
+  principal of a handle in the directory: the web app shows a link to the profile
+  ([`apps/web`](../../../web/README.md)). The description of `chat.post_message` tells agents the
+  form. A later layer stores the principals of the mentions with the message and returns them in
+  the output: layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message
@@ -377,7 +386,7 @@ Future notification levels and mention filters remain part of the roadmap.
 
 ## Later layers
 
-Not built yet: threads, reactions, mentions, rich text, files in messages
+Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
 (through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has

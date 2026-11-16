@@ -1,20 +1,22 @@
-import { useEffect, useRef } from "react";
+import type { SharedDrive } from "@soldock/contracts";
+import { type DragEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
-import { type DriveView, drivePath } from "../../routes.ts";
+import { type DriveView, drivePath, sharedDrivePath } from "../../routes.ts";
 import { DRIVE_NAV_ID, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
 import type { About } from "./data.ts";
 import { Menu, type MenuItem } from "./Menu.tsx";
-import { MY_DRIVE } from "./model.ts";
+import { MY_DRIVE, SHARED_DRIVE_ICON, sharedDrivesNav } from "./model.ts";
 
 /** The entry of the navigation that the current view belongs to. */
-export type NavEntry = "my-drive" | "shared" | "recent" | "starred" | "trash" | null;
+export type NavEntry = "my-drive" | "shared-drives" | "shared" | "recent" | "starred" | "trash" | null;
 
 const NAV: readonly { entry: Exclude<NavEntry, null>; title: string; icon: IconName; view: DriveView }[] = [
 	{ entry: "my-drive", title: "My Drive", icon: "drive", view: MY_DRIVE },
+	{ entry: "shared-drives", title: "Shared drives", icon: SHARED_DRIVE_ICON, view: { kind: "shared-drives" } },
 	{ entry: "shared", title: "Shared with me", icon: "team", view: { kind: "shared" } },
 	{ entry: "recent", title: "Recent", icon: "clock", view: { kind: "recent" } },
 	{ entry: "starred", title: "Starred", icon: "star", view: { kind: "starred" } },
@@ -23,6 +25,17 @@ const NAV: readonly { entry: Exclude<NavEntry, null>; title: string; icon: IconN
 
 interface DriveSidebarProps {
 	active: NavEntry;
+	/** The shared drive on screen, or null. Its row is the current page, and not the Shared drives entry. */
+	activeDriveId: string | null;
+	/** The shared drives of the person. Null until the list loads. */
+	drives: readonly SharedDrive[] | null;
+	/** During a drag of items: the ids of the drives that can get them. Null with no drag. */
+	dropSpaces: ReadonlySet<string> | null;
+	/** Called with the id of the drive that the person dropped the items on. */
+	onDropItems: (spaceId: string) => void;
+	/** True when the person expanded the rows of the shared drives. The rows are collapsed by default. */
+	drivesExpanded: boolean;
+	onSetDrivesExpanded: (expanded: boolean) => void;
 	about: About | null;
 	open: boolean;
 	/** The entries of the New menu. Empty when the person cannot add items to the current folder. */
@@ -31,8 +44,23 @@ interface DriveSidebarProps {
 }
 
 /** The sidebar of Drive. At 900px and below it is part of the drawer that the menu button opens. */
-export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSidebarProps) {
+export function DriveSidebar({
+	active,
+	activeDriveId,
+	drives,
+	dropSpaces,
+	onDropItems,
+	drivesExpanded,
+	onSetDrivesExpanded,
+	about,
+	open,
+	newItems,
+	onClose,
+}: DriveSidebarProps) {
 	const { whoami } = useSession();
+	const ownId = whoami.principal.id;
+	const drivesNav = sharedDrivesNav(drives, activeDriveId, drivesExpanded, dropSpaces);
+	const drivesId = useId();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
 
@@ -73,18 +101,63 @@ export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSi
 					New
 				</Menu>
 				<ul className="nav-list">
-					{NAV.map((item) => (
-						<li key={item.entry}>
-							<Link
+					{NAV.map((item) => {
+						const drivesEntry = item.entry === "shared-drives";
+						const current = active === item.entry && !(drivesEntry && drivesNav.driveRowCurrent);
+						const link = (
+							<DropLink
 								to={drivePath(item.view)}
-								className={active === item.entry ? "nav-item nav-item-active" : "nav-item"}
-								aria-current={active === item.entry ? "page" : undefined}
+								current={current}
+								// Items that the person drops on My Drive move to the root of the own drive.
+								spaceId={item.entry === "my-drive" ? ownId : null}
+								dropSpaces={dropSpaces}
+								onDropItems={onDropItems}
 							>
 								<Icon name={item.icon} />
 								<span className="nav-name">{item.title}</span>
-							</Link>
-						</li>
-					))}
+							</DropLink>
+						);
+						if (!drivesEntry || !drivesNav.toggle) return <li key={item.entry}>{link}</li>;
+						return (
+							<li key={item.entry}>
+								{/* The chevron on the right expands or collapses the rows of the shared drives. */}
+								<div className="drive-nav-row">
+									{link}
+									<button
+										type="button"
+										className="icon-button icon-button-small drive-nav-toggle"
+										aria-label="List of shared drives"
+										title={drivesExpanded ? "Hide the shared drives" : "Show the shared drives"}
+										aria-expanded={drivesExpanded}
+										aria-controls={drivesId}
+										onClick={() => onSetDrivesExpanded(!drivesExpanded)}
+									>
+										<Icon name={drivesExpanded ? "chevronUp" : "chevronDown"} size={16} />
+									</button>
+								</div>
+								<ul
+									id={drivesId}
+									className="nav-list drive-nav-drives"
+									aria-label="Shared drives"
+									hidden={!drivesNav.listed}
+								>
+									{(drives ?? []).map((drive) => (
+										<li key={drive.id}>
+											<DropLink
+												to={sharedDrivePath(drive.id)}
+												current={drivesNav.driveRowCurrent && drive.id === activeDriveId}
+												spaceId={drive.id}
+												dropSpaces={dropSpaces}
+												onDropItems={onDropItems}
+											>
+												<span className="nav-name">{drive.name}</span>
+											</DropLink>
+										</li>
+									))}
+								</ul>
+							</li>
+						);
+					})}
 				</ul>
 				{about && (
 					<p className="drive-storage">
@@ -96,5 +169,53 @@ export function DriveSidebar({ active, about, open, newItems, onClose }: DriveSi
 				)}
 			</nav>
 		</>
+	);
+}
+
+interface DropLinkProps {
+	to: string;
+	current: boolean;
+	/** The drive that gets the items of a drop on this link. Null for a link that takes no items. */
+	spaceId: string | null;
+	dropSpaces: ReadonlySet<string> | null;
+	onDropItems: (spaceId: string) => void;
+	children: ReactNode;
+}
+
+/**
+ * A link of the navigation. During a drag of items, the link of a drive that can get them takes the
+ * drop: it gets a line around it, and a fill under the pointer. The drop is for a pointer only. The
+ * Move dialog does the same with the keyboard.
+ */
+function DropLink({ to, current, spaceId, dropSpaces, onDropItems, children }: DropLinkProps) {
+	const [over, setOver] = useState(false);
+	const accepts = spaceId !== null && dropSpaces?.has(spaceId) === true;
+	// A drag that ends in a different place gives no dragleave here.
+	if (!accepts && over) setOver(false);
+
+	function onDragOver(event: DragEvent<HTMLAnchorElement>) {
+		if (!accepts) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = "move";
+		setOver(true);
+	}
+
+	return (
+		<Link
+			to={to}
+			className={`nav-item${current ? " nav-item-active" : ""}${accepts ? " drive-nav-target" : ""}${accepts && over ? " drive-nav-over" : ""}`}
+			aria-current={current ? "page" : undefined}
+			onDragEnter={onDragOver}
+			onDragOver={onDragOver}
+			onDragLeave={() => setOver(false)}
+			onDrop={(event) => {
+				if (!accepts || spaceId === null) return;
+				event.preventDefault();
+				setOver(false);
+				onDropItems(spaceId);
+			}}
+		>
+			{children}
+		</Link>
 	);
 }

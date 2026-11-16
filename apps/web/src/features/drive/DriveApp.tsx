@@ -1,6 +1,6 @@
 import "./drive.css";
 import type { DriveItem } from "@soldock/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -9,12 +9,27 @@ import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type DriveView, drivePath, itemPath } from "../../routes.ts";
+import { type DriveView, drivePath, isSharedDriveId, itemPath, SHARED_DRIVES_PATH } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { DriveSidebar, type NavEntry } from "./DriveSidebar.tsx";
-import { downloadFile, useAboutPoll, useFolder, useItemList, usePrincipals } from "./data.ts";
-import { MoveDialog, NewFolderDialog, RenameDialog } from "./ItemDialogs.tsx";
+import {
+	downloadFile,
+	useAboutPoll,
+	useFolder,
+	useItemList,
+	usePrincipals,
+	useSharedDriveAbout,
+	useSharedDrives,
+} from "./data.ts";
+import {
+	describeItems as describe,
+	MoveAcrossDialog,
+	type MoveDestination,
+	MoveDialog,
+	NewFolderDialog,
+	RenameDialog,
+} from "./ItemDialogs.tsx";
 import { ItemList } from "./ItemList.tsx";
 import type { MenuItem } from "./Menu.tsx";
 import {
@@ -22,23 +37,37 @@ import {
 	breadcrumbs,
 	bulkActions,
 	type CreateTarget,
+	canEdit,
+	canMove,
+	copyInput,
 	createTarget,
 	type DropZone,
 	dropZone,
 	folderRefusal,
 	type ItemAction,
 	type ItemOrder,
-	idBatches,
 	isForeignFolder,
 	itemActions,
 	listInput,
+	type MoveTarget,
+	memberRoles,
+	moveAcrossRefusal,
+	moveItemsInput,
+	moveTargets,
+	SHARED_DRIVE_ICON,
+	sharedDriveOf,
+	spaceBatches,
 	spaceInput,
+	spacePath,
 	uploadMimeType,
 	uploadRefusal,
 	viewTitle,
 } from "./model.ts";
 import { PreviewDialog } from "./PreviewDialog.tsx";
 import { ShareDialog } from "./ShareDialog.tsx";
+import { SharedDriveList } from "./SharedDriveList.tsx";
+import { SharedDriveMembersDialog } from "./SharedDriveMembers.tsx";
+import { canManageDrive, ROLE_NAMES } from "./sharedDrives.ts";
 import { VersionsDialog } from "./VersionsDialog.tsx";
 
 export interface DriveAppProps {
@@ -46,12 +75,17 @@ export interface DriveAppProps {
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
+	/** True when the person expanded the shared drives in the sidebar, from the shell: the state stays when the page changes. */
+	drivesExpanded: boolean;
+	onSetDrivesExpanded: (expanded: boolean) => void;
 }
 
 type DriveDialog =
 	| { type: "new-folder" }
 	| { type: "rename"; item: DriveItem }
 	| { type: "move"; items: DriveItem[] }
+	| { type: "move-across"; items: DriveItem[]; source: MoveTarget; destination: MoveDestination }
+	| { type: "members" }
 	| { type: "share"; item: DriveItem }
 	| { type: "versions"; item: DriveItem }
 	| { type: "preview"; item: DriveItem }
@@ -64,7 +98,7 @@ const ACTION_MENU: Record<ItemAction, { label: string; icon: IconName; danger?: 
 	open: { label: "Open", icon: "eye" },
 	download: { label: "Download", icon: "download" },
 	rename: { label: "Rename", icon: "pencil" },
-	move: { label: "Move", icon: "folderMove" },
+	move: { label: "Move to…", icon: "folderMove" },
 	copy: { label: "Make a copy", icon: "copy" },
 	share: { label: "Share", icon: "share" },
 	access: { label: "See who has access", icon: "team" },
@@ -75,13 +109,16 @@ const ACTION_MENU: Record<ItemAction, { label: string; icon: IconName; danger?: 
 	delete: { label: "Delete forever", icon: "trash", danger: true },
 };
 
-/** The icon before the title of a view. The root of the own drive has the icon of its sidebar entry. */
+/** The icon before the title of a view. The root of a drive has the icon of its sidebar entry. */
 function viewIcon(view: DriveView, foreign: boolean): IconName {
 	switch (view.kind) {
 		case "folder":
-			return view.folderId === null && !foreign ? "drive" : "folder";
+			if (view.folderId !== null || foreign) return "folder";
+			return isSharedDriveId(view.spaceId) ? SHARED_DRIVE_ICON : "drive";
 		case "shared":
 			return "team";
+		case "shared-drives":
+			return SHARED_DRIVE_ICON;
 		case "recent":
 			return "clock";
 		case "starred":
@@ -94,6 +131,8 @@ function viewIcon(view: DriveView, foreign: boolean): IconName {
 }
 
 function navEntry(view: DriveView, foreign: boolean): NavEntry {
+	// Each view of a shared drive belongs to the Shared drives entry: its folders, its trash and its search.
+	if (sharedDriveOf(view) !== null) return "shared-drives";
 	if (view.kind === "folder") return foreign ? "shared" : "my-drive";
 	return view.kind === "search" ? null : view.kind;
 }
@@ -126,26 +165,23 @@ function sameZone(a: DropZone | null, b: DropZone | null): boolean {
 	return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** `“Report.pdf”` for one item, and `3 items` for more. */
-function describe(items: readonly DriveItem[]): string {
-	const first = items[0];
-	return items.length === 1 && first ? `“${first.name}”` : plural(items.length, "item");
-}
-
 /**
  * The Drive product: the navigation, the item list of the current view, and the dialogs. It owns the
  * data that each part shares: the poll of the own drive, the list, the folder of a folder view and
  * the selection. The list and the folder belong to one view, so a new view starts clean.
  */
-export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
+export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrivesExpanded }: DriveAppProps) {
 	const { whoami } = useSession();
 	const ownId = whoami.principal.id;
+	const orgAdmin = isOrgAdmin(whoami.principal);
 	const toast = useToast();
 	const [order, setOrder] = useState<ItemOrder>("name");
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [dialog, setDialog] = useState<DriveDialog>(null);
 	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
 	const [drop, setDrop] = useState<DropZone | null>(null);
+	// The items of a drag from the list, and the drives of the sidebar that can get them.
+	const [drag, setDrag] = useState<{ items: DriveItem[]; targets: MoveTarget[] } | null>(null);
 	const mainRef = useRef<HTMLElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const creatingRef = useRef(false);
@@ -162,22 +198,53 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		view.kind === "folder" ? view.folderId : null,
 	);
 	const principals = usePrincipals();
+	// The shared drive that the view is in, with its name and the role of the person in it.
+	const sharedId = sharedDriveOf(view);
+	const sharedDrives = useSharedDrives();
+	const sharedAbout = useSharedDriveAbout(sharedId);
+	const driveName =
+		sharedAbout.about?.name ?? sharedDrives.drives?.find((drive) => drive.id === sharedId)?.name ?? null;
+	const driveRole = sharedAbout.about?.role ?? null;
+	// The shared drives of the person, with the member role in each one. The drive on screen is in the
+	// list also while the list loads, and after the list did not load: its role then comes from
+	// `drive.get_about`. Until a role loads, the person gets no action that needs it.
+	const listedDrives = sharedDrives.drives;
+	const knownDrives = useMemo(() => {
+		const drives = listedDrives ?? [];
+		if (sharedId === null || driveRole === null || driveRole === "owner") return drives;
+		if (drives.some((drive) => drive.id === sharedId)) return drives;
+		return [...drives, { id: sharedId, name: driveName ?? "Shared drive", role: driveRole }];
+	}, [listedDrives, sharedId, driveRole, driveName]);
+	// The member role decides a move, the trash, a restore and the place of a copy. The role of an
+	// item (`item.role`) can come from a grant, and the server does not accept a grant for these.
+	const roles = useMemo(() => memberRoles(knownDrives), [knownDrives]);
+	const drivesStatus = listedDrives !== null ? "ready" : sharedDrives.error !== null ? "error" : "loading";
+	// The name of each principal and of each shared drive, by id: the owner of an item in a list.
 	const names = useMemo(
-		() => new Map((principals ?? []).map((principal) => [principal.id, principal.display_name])),
-		[principals],
+		() =>
+			new Map([
+				...(principals ?? []).map((principal) => [principal.id, principal.display_name] as const),
+				...(sharedDrives.drives ?? []).map((drive) => [drive.id, drive.name] as const),
+			]),
+		[principals, sharedDrives.drives],
 	);
 
 	const { refresh: refreshList } = list;
 	const { reload: reloadFolder } = folderState;
+	const { reload: reloadSharedDrives } = sharedDrives;
+	const { reload: reloadSharedAbout } = sharedAbout;
 	const refresh = useCallback(() => {
 		void refreshList();
 		void reloadFolder();
-	}, [refreshList, reloadFolder]);
+		void reloadSharedAbout();
+	}, [refreshList, reloadFolder, reloadSharedAbout]);
 
-	// The version of the own drive does not change for an item in the drive of somebody else. The views
-	// that can show such items get their list again on the timer.
-	const showsOtherDrives = foreign || view.kind === "shared" || view.kind === "starred";
+	// The version of the own drive does not change for an item in a different drive. The views that can
+	// show such items get their list again on the timer.
+	const showsOtherDrives = foreign || sharedId !== null || view.kind === "shared" || view.kind === "starred";
 	const { about, sync } = useAboutPoll(refresh, () => {
+		// A manager or an admin can change the shared drives of the person at each moment.
+		void reloadSharedDrives();
 		if (showsOtherDrives) refresh();
 	});
 
@@ -196,15 +263,18 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	useOnChange(viewKey, () => {
 		setSelected(new Set());
 		setDialog(null);
+		setDrag(null);
 	});
 
 	const folder = folderState.folder;
-	const title = viewTitle(view, folder?.item.name ?? null);
+	const title = viewTitle(view, folder?.item.name ?? null, driveName);
+	// The role of the person for the place on screen: for the folder, or for the shared drive at its root.
+	const placeRole = view.kind === "folder" && view.folderId === null ? driveRole : (folder?.item.role ?? null);
 	// A folder that did not load, for example after its owner removed the access, takes no new items.
-	const target = folderState.status === "error" ? null : createTarget(view, folder?.item.role ?? null, ownId);
+	const target = folderState.status === "error" ? null : createTarget(view, placeRole, ownId);
 	const inTrash = view.kind === "trash";
 	const selectedItems = list.items.filter((item) => selected.has(item.id));
-	const bulk = bulkActions(selectedItems);
+	const bulk = bulkActions(selectedItems, roles);
 
 	useEffect(() => {
 		document.title = `${title} – Soldock`;
@@ -233,13 +303,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	async function star(items: readonly DriveItem[], starred: boolean) {
 		const ids = items.map((item) => item.id);
 		list.patch(ids, (item) => (view.kind === "starred" && !starred ? null : { ...item, starred }));
-		const bySpace = new Map<string, string[]>();
-		for (const item of items) bySpace.set(item.space_id, [...(bySpace.get(item.space_id) ?? []), item.id]);
 		try {
-			for (const [spaceId, itemIds] of bySpace) {
-				for (const batch of idBatches(itemIds)) {
-					await api.call("drive.star_items", { ...spaceInput(spaceId, ownId), item_ids: batch, starred });
-				}
+			for (const { space, ids: batch } of spaceBatches(items, ownId)) {
+				await api.call("drive.star_items", { ...space, item_ids: batch, starred });
 			}
 		} catch (caught) {
 			fail(caught);
@@ -247,8 +313,11 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		}
 	}
 
-	async function restoreAll(ids: readonly string[]) {
-		for (const batch of idBatches(ids)) await api.call("drive.restore_items", { item_ids: batch });
+	/** The items can be in more than one drive: one call for each drive, with its `space_id`. */
+	async function restoreAll(items: readonly DriveItem[]) {
+		for (const { space, ids } of spaceBatches(items, ownId)) {
+			await api.call("drive.restore_items", { ...space, item_ids: ids });
+		}
 	}
 
 	async function trash(items: readonly DriveItem[]) {
@@ -256,13 +325,15 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		list.patch(ids, () => null);
 		clearSelection();
 		try {
-			for (const batch of idBatches(ids)) await api.call("drive.trash_items", { item_ids: batch });
+			for (const { space, ids: batch } of spaceBatches(items, ownId)) {
+				await api.call("drive.trash_items", { ...space, item_ids: batch });
+			}
 			toast({
 				message: `Moved ${describe(items)} to the trash.`,
 				action: {
 					label: "Undo",
 					run: () => {
-						restoreAll(ids).then(changed, fail);
+						restoreAll(items).then(changed, fail);
 					},
 				},
 			});
@@ -278,7 +349,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		list.patch(ids, () => null);
 		clearSelection();
 		try {
-			await restoreAll(ids);
+			await restoreAll(items);
 			toast({ message: `Restored ${describe(items)}.` });
 			changed();
 		} catch (caught) {
@@ -289,20 +360,95 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 
 	async function copy(item: DriveItem) {
 		try {
-			const result = await api.call("drive.copy_item", {
-				...spaceInput(item.space_id, ownId),
-				item_id: item.id,
-				// A copy of an own item goes next to it. A copy of an item of somebody else goes to the root of the own drive.
-				...(item.space_id === ownId && item.parent_id ? { parent_id: item.parent_id } : {}),
-				idempotency_key: crypto.randomUUID(),
-			});
+			const result = await api.call("drive.copy_item", copyInput(item, ownId, crypto.randomUUID(), roles));
 			toast({
 				message:
-					item.space_id === ownId ? `Created “${result.item.name}”.` : `Created “${result.item.name}” in your drive.`,
+					result.item.space_id === item.space_id
+						? `Created “${result.item.name}”.`
+						: `Created “${result.item.name}” in your drive.`,
 			});
 			changed();
 		} catch (caught) {
 			fail(caught);
+		}
+	}
+
+	/** The drive that holds the items, as a target of a move. */
+	function sourceOf(items: readonly DriveItem[], targets: readonly MoveTarget[]): MoveTarget {
+		const spaceId = items[0]?.space_id ?? ownId;
+		return (
+			targets.find((candidate) => candidate.spaceId === spaceId) ?? {
+				spaceId,
+				name: spaceId === ownId ? "My Drive" : (names.get(spaceId) ?? "Shared drive"),
+				shared: isSharedDriveId(spaceId),
+			}
+		);
+	}
+
+	/** Opens the dialog that selects the place of a move. The dialog gets the drives of each render. */
+	function startMove(items: DriveItem[]) {
+		setDialog({ type: "move", items });
+	}
+
+	/**
+	 * Starts a drag of a row. The selection moves with a row that is part of it. The handler cancels
+	 * the drag when no drive can get the items, for example a selection with items of two drives.
+	 */
+	function dragItem(item: DriveItem, event: ReactDragEvent<HTMLTableRowElement>) {
+		const items = selected.has(item.id) ? selectedItems : [item];
+		const targets = moveTargets(items, ownId, knownDrives);
+		if (targets.length === 0) {
+			event.preventDefault();
+			return;
+		}
+		// Without the list of the shared drives, the sidebar cannot show each drive that can get the items.
+		if (drivesStatus !== "ready") {
+			toast({
+				message:
+					drivesStatus === "error"
+						? `The shared drives did not load. ${sharedDrives.error} Use “Move to…” to try again.`
+						: "The shared drives still load. Try again in a moment.",
+				tone: drivesStatus === "error" ? "error" : "info",
+			});
+		}
+		event.dataTransfer.effectAllowed = "move";
+		event.dataTransfer.setData("text/plain", items.map((entry) => entry.name).join("\n"));
+		setDrag({ items, targets });
+	}
+
+	/**
+	 * A drop of the dragged items on a drive of the sidebar. The items go to the root of that drive. A
+	 * move to a different drive asks for a confirmation first.
+	 */
+	async function dropItems(spaceId: string) {
+		const current = drag;
+		setDrag(null);
+		const destination = current?.targets.find((candidate) => candidate.spaceId === spaceId);
+		if (!current || !destination) return;
+		const { items } = current;
+		const source = sourceOf(items, current.targets);
+		if (source.spaceId !== spaceId) {
+			// A move to a different drive is one call, so it takes at most 100 items.
+			const refusal = moveAcrossRefusal(items.length);
+			if (refusal !== null) return void toast({ message: refusal, tone: "error" });
+			setDialog({ type: "move-across", items, source, destination: { drive: destination, folder: null } });
+			return;
+		}
+		if (items.every((item) => item.parent_id === null)) {
+			toast({ message: `${describe(items)} ${items.length === 1 ? "is" : "are"} at the top of ${destination.name}.` });
+			return;
+		}
+		try {
+			for (const { ids } of spaceBatches(items, ownId)) {
+				await api.call("drive.move_items", moveItemsInput(spaceId, ownId, ids, null));
+			}
+			toast({ message: `Moved ${describe(items)} to ${destination.name}.` });
+			clearSelection();
+			changed();
+		} catch (caught) {
+			fail(caught);
+			// A call that follows a good call can fail. The list then shows the items that moved.
+			changed();
 		}
 	}
 
@@ -321,7 +467,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			case "rename":
 				return setDialog({ type: "rename", item });
 			case "move":
-				return setDialog({ type: "move", items: [item] });
+				return startMove([item]);
 			case "copy":
 				return void copy(item);
 			case "share":
@@ -341,7 +487,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	}
 
 	function menuItems(item: DriveItem): MenuItem[] {
-		return itemActions(item, { sharedView: view.kind === "shared" }).map((action) => ({
+		return itemActions(item, roles, { sharedView: view.kind === "shared" }).map((action) => ({
 			key: action,
 			...ACTION_MENU[action],
 			...(action === "open" && item.kind === "file" ? { label: "Preview" } : {}),
@@ -352,7 +498,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	function actBulk(action: BulkAction) {
 		switch (action) {
 			case "move":
-				return setDialog({ type: "move", items: selectedItems });
+				return startMove(selectedItems);
 			case "trash":
 				return void trash(selectedItems);
 			case "restore":
@@ -542,7 +688,12 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 
 	const selection = selectedItems.length === 0 ? "none" : selectedItems.length === list.items.length ? "all" : "some";
 	const allStarred = selectedItems.length > 0 && selectedItems.every((item) => item.starred);
-	const crumbs = view.kind === "folder" ? breadcrumbs(view, folder, ownId) : [];
+	const crumbs = breadcrumbs(view, folder, ownId, driveName);
+	const dropSpaces = useMemo(() => (drag ? new Set(drag.targets.map((entry) => entry.spaceId)) : null), [drag]);
+	// A manager, an owner and an admin change the members. Each other member sees the list.
+	const canManage = canManageDrive(driveRole, orgAdmin);
+	const showMembers = sharedId !== null && view.kind === "folder" && (sharedAbout.about !== null || orgAdmin);
+	const deletesForever = sharedId === null || driveRole === "manager";
 	// The folder above the folder on screen. While the folder loads, this is the root of the drive.
 	const upCrumb = crumbs.findLast((crumb) => crumb.to !== null);
 
@@ -550,6 +701,12 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		<div className="drive-layout">
 			<DriveSidebar
 				active={navEntry(view, foreign)}
+				activeDriveId={sharedId}
+				drives={sharedDrives.drives}
+				dropSpaces={dropSpaces}
+				onDropItems={(spaceId) => void dropItems(spaceId)}
+				drivesExpanded={drivesExpanded}
+				onSetDrivesExpanded={onSetDrivesExpanded}
 				about={about}
 				open={navOpen}
 				newItems={newItems}
@@ -574,7 +731,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 							<Icon name="back" />
 						</Link>
 					)}
-					{view.kind === "folder" ? (
+					{crumbs.length > 0 ? (
 						<nav aria-label="Folder path" className="drive-crumbs">
 							<ol>
 								{crumbs.map((crumb, index) => (
@@ -592,7 +749,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 										)}
 									</li>
 								))}
-								{view.folderId !== null && folderState.status === "loading" && (
+								{view.kind === "folder" && view.folderId !== null && folderState.status === "loading" && (
 									<li>
 										<Icon name="chevronRight" size={14} />
 										<h1 className="drive-crumb drive-crumb-current muted">…</h1>
@@ -606,79 +763,131 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					{foreign && folder && (
 						<span className="chip drive-chip">{folder.item.role === "viewer" ? "View only" : "You can edit"}</span>
 					)}
-					<span className="toolbar-spacer" />
-					<SearchBox product="drive" query={view.kind === "search" ? view.query : ""} />
-				</div>
-				<div className="toolbar">
-					<SelectAll
-						selection={selection}
-						disabled={list.status !== "ready" || list.items.length === 0}
-						onToggle={toggleAll}
-					/>
-					<span className={selectedItems.length > 0 ? "drive-selected-count" : "visually-hidden"} role="status">
-						{selectedItems.length > 0 ? `${selectedItems.length} selected` : ""}
-					</span>
-					{selectedItems.length === 0 ? (
-						<>
-							<button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={changed}>
-								<Icon name="refresh" />
-							</button>
-							{inTrash && list.status === "ready" && list.items.length > 0 && (
-								<button
-									type="button"
-									className="button button-small button-danger-outline"
-									onClick={() => setDialog({ type: "empty-trash" })}
-								>
-									<Icon name="trash" size={16} />
-									Empty trash
-								</button>
-							)}
-						</>
-					) : (
-						<div className="toolbar-actions">
-							{!inTrash && (
-								<button
-									type="button"
-									className={allStarred ? "icon-button icon-button-star" : "icon-button"}
-									aria-label={allStarred ? "Remove star" : "Star"}
-									title={allStarred ? "Remove star" : "Star"}
-									onClick={() => void star(selectedItems, !allStarred)}
-								>
-									<Icon name="star" filled={allStarred} />
-								</button>
-							)}
-							{bulk.includes("move") && <ToolButton icon="folderMove" label="Move" onClick={() => actBulk("move")} />}
-							{bulk.includes("trash") && (
-								<ToolButton icon="trash" label="Move to trash" onClick={() => actBulk("trash")} />
-							)}
-							{bulk.includes("restore") && (
-								<TextButton icon="restore" label="Restore" onClick={() => actBulk("restore")} />
-							)}
-							{bulk.includes("delete") && (
-								<TextButton icon="trash" label="Delete forever" danger onClick={() => actBulk("delete")} />
-							)}
-						</div>
+					{sharedId !== null && driveRole !== null && view.kind === "folder" && (
+						<span className="chip drive-chip">
+							<span className="visually-hidden">Your role: </span>
+							{ROLE_NAMES[driveRole]}
+						</span>
 					)}
-				</div>
-				{inTrash && <p className="drive-note">An item stays in the trash until you delete it forever.</p>}
-				<div className="drive-scroll">
-					<ItemList
-						view={view}
-						title={title}
-						list={list}
-						ownSpaceId={ownId}
-						names={names}
-						selected={selected}
-						order={order}
-						dropRowId={drop?.rowId ?? null}
-						onOrder={setOrder}
-						onToggleSelect={toggleSelect}
-						onToggleStar={(item) => void star([item], !item.starred)}
-						onOpenFile={open}
-						menuItems={menuItems}
-						onLoadMore={() => void list.loadMore().catch(fail)}
-						onRetry={() => void list.retry()}
+					<span className="toolbar-spacer" />
+					<SearchBox
+						product="drive"
+						query={view.kind === "search" ? view.query : ""}
+						sharedDrive={sharedId !== null ? { id: sharedId, name: driveName } : null}
 					/>
+				</div>
+				{view.kind === "shared-drives" ? (
+					<div className="toolbar">
+						<button
+							type="button"
+							className="icon-button"
+							aria-label="Refresh"
+							title="Refresh"
+							onClick={() => void reloadSharedDrives()}
+						>
+							<Icon name="refresh" />
+						</button>
+					</div>
+				) : (
+					<div className="toolbar">
+						<SelectAll
+							selection={selection}
+							disabled={list.status !== "ready" || list.items.length === 0}
+							onToggle={toggleAll}
+						/>
+						<span className={selectedItems.length > 0 ? "drive-selected-count" : "visually-hidden"} role="status">
+							{selectedItems.length > 0 ? `${selectedItems.length} selected` : ""}
+						</span>
+						{selectedItems.length === 0 ? (
+							<>
+								<button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={changed}>
+									<Icon name="refresh" />
+								</button>
+								{showMembers && (
+									<button type="button" className="button button-small" onClick={() => setDialog({ type: "members" })}>
+										<Icon name="team" size={16} />
+										Members
+									</button>
+								)}
+								{/* The trash of a shared drive is for its editors and its managers. */}
+								{sharedId !== null && view.kind === "folder" && canEdit(driveRole) && (
+									<Link to={drivePath({ kind: "trash", spaceId: sharedId })} className="button button-small">
+										<Icon name="trash" size={16} />
+										Trash
+									</Link>
+								)}
+								{inTrash && deletesForever && list.status === "ready" && list.items.length > 0 && (
+									<button
+										type="button"
+										className="button button-small button-danger-outline"
+										onClick={() => setDialog({ type: "empty-trash" })}
+									>
+										<Icon name="trash" size={16} />
+										Empty trash
+									</button>
+								)}
+							</>
+						) : (
+							<div className="toolbar-actions">
+								{!inTrash && (
+									<button
+										type="button"
+										className={allStarred ? "icon-button icon-button-star" : "icon-button"}
+										aria-label={allStarred ? "Remove star" : "Star"}
+										title={allStarred ? "Remove star" : "Star"}
+										onClick={() => void star(selectedItems, !allStarred)}
+									>
+										<Icon name="star" filled={allStarred} />
+									</button>
+								)}
+								{bulk.includes("move") && (
+									<ToolButton icon="folderMove" label="Move to…" onClick={() => actBulk("move")} />
+								)}
+								{bulk.includes("trash") && (
+									<ToolButton icon="trash" label="Move to trash" onClick={() => actBulk("trash")} />
+								)}
+								{bulk.includes("restore") && (
+									<TextButton icon="restore" label="Restore" onClick={() => actBulk("restore")} />
+								)}
+								{bulk.includes("delete") && (
+									<TextButton icon="trash" label="Delete forever" danger onClick={() => actBulk("delete")} />
+								)}
+							</div>
+						)}
+					</div>
+				)}
+				{inTrash && (
+					<p className="drive-note">
+						{sharedId === null
+							? "An item stays in the trash until you delete it forever."
+							: "An item stays in the trash until a manager of the shared drive deletes it forever."}
+					</p>
+				)}
+				<div className="drive-scroll">
+					{view.kind === "shared-drives" ? (
+						<SharedDriveList state={sharedDrives} orgAdmin={orgAdmin} />
+					) : (
+						<ItemList
+							view={view}
+							title={title}
+							list={list}
+							ownSpaceId={ownId}
+							names={names}
+							selected={selected}
+							order={order}
+							dropRowId={drop?.rowId ?? null}
+							onOrder={setOrder}
+							onToggleSelect={toggleSelect}
+							onToggleStar={(item) => void star([item], !item.starred)}
+							onOpenFile={open}
+							menuItems={menuItems}
+							canMove={(item) => canMove(item, roles)}
+							onDragItem={dragItem}
+							onDragEnd={() => setDrag(null)}
+							onLoadMore={() => void list.loadMore().catch(fail)}
+							onRetry={() => void list.retry()}
+						/>
+					)}
 				</div>
 				{drop && (
 					<div className="drive-drop" aria-hidden="true">
@@ -738,12 +947,65 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			{dialog?.type === "move" && (
 				<MoveDialog
 					items={dialog.items}
+					targets={moveTargets(dialog.items, ownId, knownDrives)}
+					drives={{ status: drivesStatus, error: sharedDrives.error, retry: () => void reloadSharedDrives() }}
+					onPartial={changed}
 					onClose={() => setDialog(null)}
 					onMoved={(destination) => {
 						toast({ message: `Moved ${describe(dialog.items)} to ${destination}.` });
 						setDialog(null);
 						clearSelection();
 						changed();
+					}}
+					onAcross={(destination) =>
+						setDialog({
+							type: "move-across",
+							items: dialog.items,
+							source: sourceOf(dialog.items, moveTargets(dialog.items, ownId, knownDrives)),
+							destination,
+						})
+					}
+				/>
+			)}
+			{dialog?.type === "move-across" && (
+				<MoveAcrossDialog
+					items={dialog.items}
+					source={dialog.source}
+					destination={dialog.destination}
+					onClose={() => setDialog(null)}
+					onMoved={(moving) => {
+						const { drive, folder: into } = dialog.destination;
+						toast({
+							// The server completes a large move after the call. The list then changes at the next poll.
+							message: moving
+								? `Moving ${describe(dialog.items)} to ${drive.name}…`
+								: `Moved ${describe(dialog.items)} to ${drive.name}.`,
+							action: {
+								label: `Open ${into?.name ?? drive.name}`,
+								run: () => navigate(spacePath(drive.spaceId, ownId, into?.id ?? null)),
+							},
+						});
+						setDialog(null);
+						clearSelection();
+						changed();
+					}}
+				/>
+			)}
+			{dialog?.type === "members" && sharedId !== null && (
+				<SharedDriveMembersDialog
+					drive={{ id: sharedId, name: driveName ?? "Shared drive" }}
+					selfId={ownId}
+					canManage={canManage}
+					onClose={() => setDialog(null)}
+					onChanged={() => {
+						void reloadSharedDrives();
+						void reloadSharedAbout();
+					}}
+					onLeft={() => {
+						setDialog(null);
+						void reloadSharedDrives();
+						// An owner or an admin who left can still manage the drive on the Admin page.
+						navigate(SHARED_DRIVES_PATH);
 					}}
 				/>
 			)}
@@ -761,8 +1023,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					danger
 					onClose={() => setDialog(null)}
 					onConfirm={async () => {
-						for (const batch of idBatches(dialog.items.map((item) => item.id))) {
-							await api.call("drive.delete_items", { item_ids: batch });
+						for (const { space, ids } of spaceBatches(dialog.items, ownId)) {
+							await api.call("drive.delete_items", { ...space, item_ids: ids });
 						}
 						toast({ message: `Deleted ${describe(dialog.items)}.` });
 						clearSelection();
@@ -782,7 +1044,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 					danger
 					onClose={() => setDialog(null)}
 					onConfirm={async () => {
-						await api.call("drive.empty_trash", {});
+						await api.call("drive.empty_trash", sharedId !== null ? { space_id: sharedId } : {});
 						toast({ message: "The trash is empty." });
 						clearSelection();
 						changed();
@@ -804,7 +1066,12 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 							principal_id: ownId,
 						});
 						if (!result.removed) {
-							throw new Error("Your access comes from a folder above this item. Only the owner can remove it.");
+							// An item of a shared drive has no owner. A manager of the drive changes its shares.
+							throw new Error(
+								isSharedDriveId(dialog.item.space_id)
+									? "Your access comes from a folder above this item. Only a manager of the shared drive can remove it."
+									: "Your access comes from a folder above this item. Only the owner can remove it.",
+							);
 						}
 						toast({ message: `Removed “${dialog.item.name}” from your list.` });
 						changed();
@@ -812,7 +1079,10 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 				>
 					<p>
 						Remove <strong>{dialog.item.name}</strong> from the items that are shared with you? You then have no access
-						to it. The owner can share it with you again.
+						to it.{" "}
+						{isSharedDriveId(dialog.item.space_id)
+							? "A manager of the shared drive can share it with you again."
+							: "The owner can share it with you again."}
 					</p>
 				</ConfirmDialog>
 			)}
