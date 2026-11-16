@@ -54,19 +54,25 @@ function fakeRoom(count: number) {
 /**
  * The pager and the sync of a page that shows `room`. The room answers a read with its state at the
  * time of the call. With `hold()`, the answers wait, and `answer()` gives the oldest one to the page.
+ * With `hold(true)`, the room reads its state when the answer goes to the page, as a slow server does.
  */
 function openRoom(room: ReturnType<typeof fakeRoom>) {
 	let state: PagerState = { messages: [], hasOlder: false, hasNewer: false, paging: null };
 	const waiting: (() => void)[] = [];
 	let held = false;
-	const answered = <T>(result: T): Promise<T> =>
-		held ? new Promise((resolve) => waiting.push(() => resolve(result))) : Promise.resolve(result);
+	let late = false;
+	const answered = <T>(read: () => T): Promise<T> => {
+		if (!held) return Promise.resolve(read());
+		if (late) return new Promise((resolve) => waiting.push(() => resolve(read())));
+		const result = read();
+		return new Promise((resolve) => waiting.push(() => resolve(result)));
+	};
 	const sync = createRoomSync(
-		(changedAfter) => answered(room.list({ changedAfter })),
+		(changedAfter) => answered(() => room.list({ changedAfter })),
 		(changes) => pager.apply(changes),
 	);
 	const pager = createRoomPager({
-		read: (range) => answered(room.list(range)),
+		read: (range) => answered(() => room.list(range)),
 		sync,
 		state: () => state,
 		update: (change) => {
@@ -85,8 +91,9 @@ function openRoom(room: ReturnType<typeof fakeRoom>) {
 			state = pager.replace(room.list({}));
 			await sync.run();
 		},
-		hold() {
+		hold(readLate = false) {
 			held = true;
+			late = readLate;
 		},
 		async answer() {
 			waiting.shift()?.();
@@ -95,6 +102,7 @@ function openRoom(room: ReturnType<typeof fakeRoom>) {
 		/** Gives each answer that waits, and each answer of a read that starts from them, to the page. */
 		async answerAll() {
 			held = false;
+			late = false;
 			while (waiting.length > 0) waiting.shift()?.();
 			await settle();
 		},
@@ -174,6 +182,62 @@ describe("the page reads of an open room", () => {
 		const second = page.pager.toLatest();
 		await page.answerAll();
 		expect([await first, await second]).toEqual([false, true]);
+	});
+
+	// A link to one message: the list has the message, the messages before it and the messages after it.
+	it("put the list at one message, with the page before it and the page after it", async () => {
+		const room = fakeRoom(420);
+		const page = openRoom(room);
+		await page.load();
+		expect(await page.pager.toMessage(200)).toBe(true);
+		expect([page.seqs()[0], page.seqs()[49], page.seqs()[50], page.seqs()[99], page.seqs().length]).toEqual([
+			151, 200, 201, 250, 100,
+		]);
+		expect(page.state()).toMatchObject({ hasOlder: true, hasNewer: true, paging: null });
+		// The list is a part of the history as each other one: it gets the changes of its messages,
+		// and its page reads continue from its ends.
+		page.sync.push(room.edit(200, "changed"));
+		expect(page.state().messages.find((message) => message.seq === 200)?.text).toBe("changed");
+		await page.pager.readPage("newer");
+		expect([page.seqs()[0], page.seqs().at(-1)]).toEqual([151, 300]);
+	});
+
+	it("put the list at the newest messages when the room does not have the message of a link", async () => {
+		const page = openRoom(fakeRoom(120));
+		await page.load();
+		expect(await page.pager.toMessage(5000)).toBe(true);
+		expect([page.seqs()[0], page.seqs().at(-1)]).toEqual([71, 120]);
+		expect(page.state()).toMatchObject({ hasOlder: true, hasNewer: false });
+	});
+
+	// The two reads of a link can be at different versions of the room. A change between them must
+	// not stay out of the list.
+	it("start the sync at the older version of the two reads of a link", async () => {
+		const room = fakeRoom(420);
+		const page = openRoom(room);
+		await page.load();
+		page.hold(true);
+		const going = page.pager.toMessage(200);
+		// The room reads the first page. Then a message of that page changes, and the room reads the
+		// second page at the new version.
+		await page.answer();
+		room.edit(180, "changed between the reads");
+		await page.answerAll();
+		expect(await going).toBe(true);
+		expect(page.state().messages.find((message) => message.seq === 180)?.text).toBe("changed between the reads");
+	});
+
+	// The person opens a link, and goes to a different place before the answer. The answer must not
+	// move the list to the message of the link.
+	it("do not put the list at a message after the read was cancelled", async () => {
+		const page = openRoom(fakeRoom(420));
+		await page.load();
+		page.hold();
+		const going = page.pager.toMessage(200);
+		page.pager.cancel();
+		await page.answerAll();
+		expect(await going).toBe(false);
+		expect([page.seqs()[0], page.seqs().at(-1)]).toEqual([371, 420]);
 	});
 
 	it("keep the messages that the person reads in a full list, and take new messages again at its end", async () => {

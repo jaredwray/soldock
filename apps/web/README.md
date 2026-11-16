@@ -672,9 +672,24 @@ MCP clients. The app has no UI-only path.
       room, not a list that was at older messages. A reload of the page has no cache.
     - Until the load, the list can be behind the room. The page then does not mark the room as
       read, shows no **New messages** line, and does not read older messages.
+    - A send before the load shows at once and waits in the outbox. Its call starts after the
+      load, as for a list that is not at the newest messages. So the message does not show two
+      times when the load brings the stored message before the answer of the send.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
-      their list.
+      their list, also when the page left the room before the answer of the server.
+  - A path with the seq of a message after the room, `/chat/{room}/{seq}`, is a link to that
+    message (`chatPath` in `routes.ts`).
+    - The list goes to the message after the load of the room, puts it in the middle, and marks
+      it with a color that goes away in some seconds.
+    - A message that the list does not have comes with the page of messages up to it and the
+      page after it: two calls of `chat.list_messages`, with `before` and with `after`
+      (`toMessage` in `pager.ts`). The list is then not at the newest messages.
+    - A room that does not have the message shows its newest messages.
+    - Each message that the room has, and that is not deleted, has the action **Copy a link**,
+      which puts the link on the clipboard.
+    - The link has no access of its own. The server gives the messages only to a member, as for
+      each other read.
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a

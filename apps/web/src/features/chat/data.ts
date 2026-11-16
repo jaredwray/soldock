@@ -291,6 +291,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	});
 	const alive = useRef(true);
 	const loads = useRef(0);
+	/** The mark of the last load of this view that gave the messages of the room. The cache keeps it with the list. */
+	const loadMark = useRef(0);
 	const shown = useRef(state);
 	shown.current = state;
 	const roomChanged = useRef(onRoomChanged);
@@ -323,20 +325,31 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		// an older answer never replaces newer messages or moves the version of the sync back.
 		const request = ++loads.current;
 		const current = () => alive.current && request === loads.current;
+		// The answer of the server decides if the room keeps its list in the cache. This runs also when
+		// the page left the room before the answer: a room that does not load, and a room that the person
+		// is not a member of now, must not show an old list the next time. A list from a load that
+		// started after this one stays: the answer of that load is the newer fact.
+		const started = roomCache.mark();
+		const forget = () => {
+			if (owner !== null && currentAccount() === owner) roomCache.remove(owner, roomId, started);
+		};
 		try {
 			const { room } = await api.call("chat.get_room", { room_id: roomId });
+			if (room.role === null) forget();
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
+			loadMark.current = started;
 			// The load replaces the list. The pager starts the sync at the version of the list.
 			setState({ status: "ready", room, ...pager.replace(page), fresh: true, error: null });
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
 		} catch (caught) {
+			forget();
 			if (current()) setState({ ...ROOM_LOADING, status: "error", error: errorMessage(caught) });
 		}
-	}, [roomId, sync, pager]);
+	}, [roomId, sync, pager, owner]);
 
 	useEffect(() => {
 		alive.current = true;
@@ -352,11 +365,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	useEffect(() => {
 		const { status, fresh, room, messages, hasOlder, hasNewer } = state;
 		if (owner === null || currentAccount() !== owner) return;
-		// A room that did not load, and a room that the person is not a member of, must not show an old
-		// list the next time.
-		if (status === "error" || (status === "ready" && fresh && room?.role === null)) roomCache.remove(owner, roomId);
 		if (status !== "ready" || !fresh || !room || room.role === null || hasNewer) return;
-		roomCache.put(owner, roomId, { room, messages, hasOlder });
+		roomCache.put(owner, roomId, { room, messages, hasOlder }, loadMark.current);
 	}, [state, owner, roomId]);
 
 	// Each room list is a new chance to sync: `tick` changes also when the version is the same, so a
@@ -408,6 +418,8 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		loadOlder,
 		loadNewer,
 		toLatest: pager.toLatest,
+		toMessage: pager.toMessage,
+		cancelReads: pager.cancel,
 		follow: pager.follow,
 		apply,
 	};
