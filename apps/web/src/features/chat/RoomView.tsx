@@ -170,6 +170,14 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 		[ownId, self.kind, self.display_name],
 	);
 	const members = view.members;
+	// The socket brings a change of the members. Without a socket, for example after the room replaced
+	// it, the room list shows the change: its number of members is not the number that the page has.
+	const listedCount = listed?.member_count;
+	const fresh = view.status === "ready" && view.fresh;
+	const loadMembers = view.loadMembers;
+	useEffect(() => {
+		if (fresh && listedCount !== undefined && listedCount !== members.length) void loadMembers();
+	}, [fresh, listedCount, members.length, loadMembers]);
 	const mentions = useMemo<MentionContext>(
 		() => ({ directory, memberIds: new Set(members.map((member) => member.principal_id)), ownId }),
 		[directory, members, ownId],

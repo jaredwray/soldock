@@ -685,8 +685,8 @@ MCP clients. The app has no UI-only path.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
     - The page reads the directory one time (`directory.list_principals`). The members of the
-      room come from `chat.get_room`, again after the socket tells that the room changed, and
-      again after each reconnect of the socket.
+      room come from `chat.get_room`, again after the socket tells that the room changed, after
+      each reconnect of the socket, and when the room list has a different number of members.
     - Known limit: a mention is text, and each client finds its principal in the directory of
       that time. So a mention does not follow a change of an address. When a second principal
       gets the same local part, each old mention of the short handle stays text. A handle of a

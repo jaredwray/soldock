@@ -436,5 +436,6 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 		toLatest: pager.toLatest,
 		follow: pager.follow,
 		apply,
+		loadMembers,
 	};
 }
