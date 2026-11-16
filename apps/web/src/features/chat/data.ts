@@ -1,4 +1,13 @@
-import { CHAT_LIMITS, type ChatMember, type ChatMessage, type ChatRoom, chatSocketPath } from "@soldock/contracts";
+import {
+	CHAT_LIMITS,
+	type ChatMember,
+	type ChatMessage,
+	type ChatRoom,
+	chatSocketPath,
+	EVENTS_SOCKET_PATH,
+	EVENTS_SOCKET_PROTOCOL,
+	PrincipalEvent,
+} from "@soldock/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -6,12 +15,21 @@ import { createOutbox, type Outbox } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
+import { type RoomChange, withChangesSince, withRoom } from "./roomList.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
-import { type Connection, createRoomSocket, type SocketHandlers } from "./socket.ts";
+import { type Connection, createLiveSocket, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
 
-/** The time between two reads of the room list. A read is one query of the index, not a call to each room. */
+/**
+ * The time between two reads of the room list while the events socket is not connected. A read is one
+ * call to the object of the person, not a call to each room.
+ */
 const POLL_MS = 4000;
+/**
+ * The time between two reads of the room list while the events socket is connected. The socket sends
+ * each change, so this read is a net for a change that the socket lost.
+ */
+const LIVE_POLL_MS = 60_000;
 
 function subscribeVisibility(callback: () => void): () => void {
 	document.addEventListener("visibilitychange", callback);
@@ -31,25 +49,53 @@ export interface RoomsState {
 	tick: number;
 }
 
+/** One connection to the events socket of the person. The session cookie authenticates it. */
+function connectEvents(handlers: SocketHandlers): Connection {
+	const url = new URL(EVENTS_SOCKET_PATH, window.location.href);
+	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+	const socket = new WebSocket(url);
+	socket.onmessage = (event) => handlers.message(event.data);
+	socket.onclose = (event) => handlers.close(event.code);
+	return { send: (data) => socket.send(data), close: () => socket.close(1000) };
+}
+
 /**
- * The rooms and the direct messages of the person, newest message first. The list comes again each
- * few seconds while the tab shows, and when the tab gets the focus. `refresh()` gets it at once, after
- * a change that this tab made. This first layer shows the first 100 rooms.
+ * The rooms and the direct messages of the person, newest message first. This first layer shows the
+ * first 100 rooms.
+ *
+ * - The events socket of the person sends each change of a room at once. After each connect
+ *   (`hello`), the list comes again, for the changes from the time without a socket.
+ * - While the socket is not connected, the list comes again each few seconds while the tab shows,
+ *   and when the tab gets the focus. While it is connected, the list comes again each minute.
+ * - When the server closes the socket for a sign-out, the next read of the list gets the refusal,
+ *   and the app shows the sign-in page.
+ * - `refresh()` gets the list at once, after a change that this tab made.
  */
 export function useRooms() {
 	const [state, setState] = useState<RoomsState>({ status: "loading", rooms: [], error: null, tick: 0 });
 	const started = useRef(0);
 	const applied = useRef(0);
+	/** True while the events socket is connected. Then the list polls each minute only. */
+	const live = useRef(false);
+	/** The time of the start of the last read of the list. */
+	const lastRead = useRef(0);
+	/** The number of the last event, and the last change of each room from the socket. */
+	const events = useRef(0);
+	const changes = useRef(new Map<string, RoomChange>());
 
 	const refresh = useCallback(async () => {
 		const request = ++started.current;
+		const since = events.current;
+		lastRead.current = Date.now();
 		try {
 			const result = await api.call("chat.list_rooms", { limit: CHAT_LIMITS.pageSize });
 			// An answer applies when it is newer than the one that shows. On a slow connection, the next
 			// poll starts before an answer arrives, and that answer must still show.
 			if (request < applied.current) return;
 			applied.current = request;
-			setState((current) => ({ status: "ready", rooms: result.rooms, error: null, tick: current.tick + 1 }));
+			// An event that came during the read is newer than the room in the answer.
+			const rooms = withChangesSince(result.rooms, changes.current, since);
+			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
 			setState((current) =>
@@ -62,16 +108,55 @@ export function useRooms() {
 
 	useEffect(() => {
 		void refresh();
-		const pollIfVisible = () => {
-			if (document.visibilityState === "visible") void refresh();
+		let stopped = false;
+		const socket = createLiveSocket<PrincipalEvent>({
+			connect: connectEvents,
+			parse: (value) => {
+				const event = PrincipalEvent.safeParse(value);
+				return event.success ? event.data : null;
+			},
+			protocol: EVENTS_SOCKET_PROTOCOL,
+			onLive: (next) => {
+				live.current = next;
+				// A socket that closes, for example after a sign-out, makes the list read at once.
+				if (!next) pollIfVisible();
+			},
+			onEvent: (event) => {
+				if (event.type === "hello") {
+					void refresh();
+					return;
+				}
+				const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
+				const room = event.type === "chat.room" ? event.room : null;
+				const at = ++events.current;
+				changes.current.set(roomId, { at, room });
+				setState((current) =>
+					current.status === "ready"
+						? { ...current, rooms: withRoom(current.rooms, roomId, room), tick: current.tick + 1 }
+						: current,
+				);
+			},
+		});
+		function pollIfVisible() {
+			if (stopped || document.visibilityState !== "visible") return;
+			if (live.current && Date.now() - lastRead.current < LIVE_POLL_MS) return;
+			void refresh();
+		}
+		const wake = () => {
+			if (document.visibilityState === "visible") socket.wake();
+			pollIfVisible();
 		};
 		const timer = window.setInterval(pollIfVisible, POLL_MS);
-		window.addEventListener("focus", pollIfVisible);
-		document.addEventListener("visibilitychange", pollIfVisible);
+		window.addEventListener("focus", wake);
+		window.addEventListener("online", wake);
+		document.addEventListener("visibilitychange", wake);
 		return () => {
+			stopped = true;
+			socket.close();
 			window.clearInterval(timer);
-			window.removeEventListener("focus", pollIfVisible);
-			document.removeEventListener("visibilitychange", pollIfVisible);
+			window.removeEventListener("focus", wake);
+			window.removeEventListener("online", wake);
+			document.removeEventListener("visibilitychange", wake);
 		};
 	}, [refresh]);
 

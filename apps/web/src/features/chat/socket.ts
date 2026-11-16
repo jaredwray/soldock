@@ -1,6 +1,8 @@
 import { CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, ChatSocketEvent } from "@soldock/contracts";
 
-// The live connection of one open room. It has no DOM and no network of its own, so apps/web/test checks it.
+// The live connections of the page: the socket of one open room, and the events socket of the person.
+// They have no DOM and no network of their own, so apps/web/test checks them. The two sockets use the
+// same close codes (`CHAT_SOCKET_CLOSE` and `EVENTS_SOCKET_CLOSE` have the same values).
 
 /** The first wait before a new connection after a failure. Each failure doubles it, up to `RETRY_MAX_MS`. */
 export const RETRY_MIN_MS = 500;
@@ -36,6 +38,22 @@ export interface RoomSocketOptions {
 	onEnd?(): void;
 }
 
+/** The options of a live socket, for each kind of event. The first event of a connection is `hello`. */
+export interface LiveSocketOptions<E extends { type: string }> {
+	/** Opens one connection. The browser gives a WebSocket, and a test gives a fake. */
+	connect(handlers: SocketHandlers): Connection;
+	/** The event of a parsed message, or null for an event that this page does not know. */
+	parse(value: unknown): E | null;
+	/** The protocol of the server that this page speaks. A `hello` with a different one ends the socket. */
+	protocol: number;
+	/** Each event, in the order of the server. */
+	onEvent(event: E): void;
+	/** The server ended the socket for good. */
+	onEnd?(): void;
+	/** True after each `hello`, false when that connection ends. While it is false, the page gets changes another way. */
+	onLive?(live: boolean): void;
+}
+
 export interface RoomSocket {
 	/** The tab shows again, or the network came back: connect now, or test the connection. */
 	wake(): void;
@@ -58,7 +76,26 @@ export interface RoomSocket {
  * version of the room, and the sync of the room gets what the page did not get.
  */
 export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
+	return createLiveSocket<ChatSocketEvent>({
+		...options,
+		parse: (value) => {
+			const event = ChatSocketEvent.safeParse(value);
+			return event.success ? event.data : null;
+		},
+		protocol: CHAT_SOCKET_PROTOCOL,
+	});
+}
+
+/** Keeps one live connection open. See `createRoomSocket` for the rules. */
+export function createLiveSocket<E extends { type: string }>(options: LiveSocketOptions<E>): RoomSocket {
 	let connection: Connection | null = null;
+	let live = false;
+
+	function setLive(next: boolean): void {
+		if (live === next) return;
+		live = next;
+		options.onLive?.(next);
+	}
 	let closed = false;
 	let failures = 0;
 	let retry: ReturnType<typeof setTimeout> | undefined;
@@ -96,6 +133,7 @@ export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
 	function drop(dropped: Connection, code: number): void {
 		if (connection !== dropped) return;
 		connection = null;
+		setLive(false);
 		clearTimers();
 		try {
 			dropped.close();
@@ -134,18 +172,19 @@ export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
 				} catch {
 					return;
 				}
-				const event = ChatSocketEvent.safeParse(parsed);
+				const event = options.parse(parsed);
 				// An event that this page does not know is from a newer server. The sync gets the changes.
-				if (!event.success) return;
-				if (event.data.type === "hello") {
-					if (event.data.protocol !== CHAT_SOCKET_PROTOCOL) {
+				if (event === null) return;
+				if (event.type === "hello") {
+					if ((event as { protocol?: unknown }).protocol !== options.protocol) {
 						closed = true;
 						drop(opened, 0);
 						return;
 					}
 					failures = 0;
+					setLive(true);
 				}
-				options.onEvent(event.data);
+				options.onEvent(event);
 			},
 			close: (code) => drop(opened, code),
 		});
