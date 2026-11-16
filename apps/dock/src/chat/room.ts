@@ -845,7 +845,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
-				"UPDATE messages SET text = '', deleted_at = ?, version = ? WHERE id = ?",
+				// The key goes with the text: an author can make a key from the content of the message.
+				"UPDATE messages SET text = '', idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
 				Date.now(),
 				version,
 				messageId,

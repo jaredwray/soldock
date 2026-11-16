@@ -123,9 +123,10 @@ export function storedSends(
  * that the room stored since the list left the newest messages. Without the line, the person sees
  * nothing of a send, and can send the message a second time. Null when the list hides no such message.
  *
- * A send can fail without an answer of the server. The room possibly has that message, and a list
- * that is not at the newest messages cannot find it. So the line does not tell that the message was
- * not sent. "Try again" on the row is safe: the send keeps its key, and the room stores it one time.
+ * A send can fail without an answer of the server. The room possibly has that message: the page
+ * settles the send when the room tells of it, but a message that the room stored before the list
+ * loaded does not come in a sync. So the line does not tell that the message was not sent. "Try
+ * again" on the row is safe: the send keeps its key, and the room stores it one time.
  */
 export function unseenSendsNote(outbox: OutboxState, sent: number): string | null {
 	const failed = outbox.pending.filter((pending) => pending.state === "failed");

@@ -588,9 +588,9 @@ MCP clients. The app has no UI-only path.
       room, not a list that was at older messages. A reload of the page has no cache.
     - Until the load, the list can be behind the room. The page then does not mark the room as
       read, shows no **New messages** line, and does not read older messages.
-    - A send before the load shows at once and goes out at once. The stored message has the key
-      of the send, so the message shows one time also when the load brings it before the answer
-      of the send.
+    - A send before the load shows at once and waits in the outbox. Its call starts after the
+      load, as for a list that is not at the newest messages: before the load, the list cannot
+      take the stored message, and the message would go away until the load.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
       their list, also when the page left the room before the answer of the server.
@@ -644,7 +644,7 @@ MCP clients. The app has no UI-only path.
   - The server can store a message while the answer of its send gets lost. When the room tells of
     that message, the send did not fail: the "Not sent" row becomes the row of the stored message.
     The room tells of it in a list, a sync or the socket, also while the list does not take the
-    message, for example a list at older messages (`onChanges` of `useRoom`).
+    message, for example a list at older messages (`onChanges` of `useRoom`, `settle.ts`).
   - A stored message of the person has the key of its send as its row key, so the row stays the
     same row from the send to the stored message. A second message with the same key, from a
     client that used the key again after a day, gets its id as its row key.
@@ -708,9 +708,10 @@ MCP clients. The app has no UI-only path.
     - While the list is not at the newest messages, a new message of the room does not go into
       it. A change and a delete of a message that shows still go in. A message that waits for the
       server does not show.
-    - A send from such a list goes to the outbox at once, with the text of that moment, and goes
-      out at once. The list goes to the newest messages. The message also goes out when the list
-      does not get there, and when the person opens a different room.
+    - A send from such a list goes to the outbox at once, with the text of that moment, and the
+      list goes to the newest messages. The outbox starts no call until the list is there, so the
+      list can take the stored message. The message also goes out when the list does not get
+      there, and when the person opens a different room.
     - While the list is not at the newest messages, a line below the list tells about the
       messages of the person that the list does not show: that a message was not sent, that
       the page got no answer for a message, that messages wait, or that the room has the new
@@ -900,7 +901,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |

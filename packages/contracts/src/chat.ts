@@ -67,7 +67,7 @@ const IdempotencyKey = z
 	.max(255)
 	.optional()
 	.describe(
-		"Makes a retry safe: a second call with the same key and the same input returns the first message and posts nothing.",
+		"Makes a retry safe: a second call with the same key and the same input returns the first message and posts nothing. Each member of the room sees the key on the message, so do not put private data in it. A random value is best.",
 	);
 
 export const ChatRoom = z.object({
@@ -121,6 +121,7 @@ export const ChatMessage = z.object({
 	/**
 	 * The `idempotency_key` of the call of `chat.post_message` that stored the message, or null. A
 	 * client finds the message of its own send with it, also when each answer of the send got lost.
+	 * A deleted message has null.
 	 * Compare it with the author too: the key of a different author can have the same value. A reader
 	 * that gets no value takes null, so a client reads a message of a server from before this field.
 	 */

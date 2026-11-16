@@ -36,11 +36,11 @@ import {
 	startsDay,
 	startsGroup,
 	startsNew,
-	storedSends,
 	timeLabel,
 	unseenSendsNote,
 } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
+import { createSendSettler } from "./settle.ts";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -211,39 +211,28 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	// The answers of a send can fail after the server stored the message. When the room has a message
 	// with the key of the send, the send did not fail: the row of the send becomes the row of the
-	// stored message. The room can tell of the message through the socket or a sync while the list
-	// does not take it, for example a list at older messages. `reported` keeps those messages, for a
-	// send that fails after the message came.
-	const settle = outbox.settle;
-	const reported = useRef<ChatMessage[]>([]);
-	/** The keys of the sends that settled. Two calls before the next render can see the same failed send. */
-	const settledKeys = useRef(new Set<string>());
-	// A message of a send is always after the newest message of the room. While the list is not at
-	// the newest messages, the list does not show it, so the line below the list tells of it.
-	const settleStored = (candidates: readonly ChatMessage[]) => {
-		const keys = storedSends(candidates, outbox.state, own).filter((key) => !settledKeys.current.has(key));
-		for (const key of keys) {
-			settledKeys.current.add(key);
-			settle(key);
-		}
-		if (hasNewer && keys.length > 0) setSentUnseen((count) => count + keys.length);
-	};
-	// biome-ignore lint/correctness/useExhaustiveDependencies: settleStored reads the state of this render.
+	// stored message (`settle.ts`). The room can tell of the message through the socket or a sync
+	// while the list does not take it, for example a list at older messages. A message of a send is
+	// always after the newest message of the room, so the line below such a list tells of it.
+	const listAtOlder = useRef(hasNewer);
+	listAtOlder.current = hasNewer;
+	const settler = useMemo(
+		() =>
+			createSendSettler({
+				own: { principal_id: ownId, kind: self.kind, display_name: self.display_name },
+				state: outbox.getState,
+				settle: outbox.settle,
+				onSettled: (count) => {
+					if (listAtOlder.current) setSentUnseen((unseen) => unseen + count);
+				},
+			}),
+		[ownId, self.kind, self.display_name, outbox.getState, outbox.settle],
+	);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a change of the outbox can make a send settle.
 	useLayoutEffect(() => {
-		settleStored([...messages, ...reported.current]);
-	}, [messages, outbox.state, own, settle]);
-	onChanges.current = (incoming) => {
-		const state = outbox.state;
-		const keys = new Set(state.pending.map((pending) => pending.key));
-		// Only a message of a send that waits is of use here, so the list stays small.
-		const ofSends = incoming.filter(
-			(message) =>
-				message.author.principal_id === ownId && message.idempotency_key !== null && keys.has(message.idempotency_key),
-		);
-		if (ofSends.length === 0) return;
-		reported.current = [...reported.current.filter((message) => keys.has(message.idempotency_key ?? "")), ...ofSends];
-		settleStored(ofSends);
-	};
+		settler.check(messages);
+	}, [messages, outbox.state, settler]);
+	onChanges.current = (incoming) => settler.fromRoom(incoming);
 
 	/** Keeps the first row that shows, and its distance from the top of the list, for the next change of the rows. */
 	function keepPlace() {
@@ -359,6 +348,23 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		}
 	}
 
+	// A send from a list that cannot take its stored message yet: a list from the cache before the load
+	// of the room (the sync has no version), or a list at older messages. The outbox has the message,
+	// and starts no call until the list can take it. Without the hold, the answer of the send can come
+	// first: the message leaves the outbox, the list drops it, and the person sees it go away.
+	const holding = useRef(false);
+	const resumeOutbox = outbox.resume;
+	const release = useCallback(() => {
+		if (!holding.current) return;
+		holding.current = false;
+		resumeOutbox();
+	}, [resumeOutbox]);
+	const listWaits = view.status === "ready" && (!view.fresh || hasNewer);
+	useEffect(() => {
+		if (!listWaits) release();
+	}, [listWaits, release]);
+	// The page leaves the room. The message still goes out.
+	useEffect(() => release, [release]);
 	useEffect(() => {
 		if (!hasNewer) setSentUnseen(0);
 	}, [hasNewer]);
@@ -367,9 +373,25 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		if (!draft.trim()) return;
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
-		// after a reload and after a different room opens. The message goes out at once: the room
-		// stores it with the key of the send, so the list finds it in each order of the answers.
-		if (hasNewer) toLatest().catch(fail);
+		// after a reload and after a different room opens.
+		if (listWaits && !holding.current) {
+			holding.current = true;
+			outbox.pause();
+			// A list from the cache waits for the load of the room, which runs. A list at older messages
+			// must go to the newest messages.
+			if (hasNewer) {
+				toLatest().then(
+					(applied) => {
+						if (!applied) release();
+					},
+					(caught) => {
+						// The list did not get to the newest messages. The message goes out all the same.
+						release();
+						fail(caught);
+					},
+				);
+			}
+		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
 		outbox.send(draft);
 		setDraft("");

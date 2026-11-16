@@ -52,7 +52,7 @@ describe("the messages that wait, after a reload of the page", () => {
 	});
 
 	// The call of a message ran at the time of the reload. The server can have the message, and the page did not get the answer.
-	it("are uncertain when the call ran at the reload, and do not know the start of a call in the new list", () => {
+	it("are uncertain when the call ran at the reload, and wait for a new call", () => {
 		const [message] = fromSaved([saved("k1", { state: "sending" })], NOW);
 		expect(message).toMatchObject({ state: "waiting", uncertain: true, error: null });
 		expect(fromSaved([saved("k2")], NOW)[0]).toMatchObject({ uncertain: false });

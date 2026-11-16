@@ -212,7 +212,16 @@ export function useOutbox(roomId: string, ownId: string, onSent: (message: ChatM
 		outbox.attach({ deliver: (message) => sent.current(message) });
 		return () => outbox.attach(null);
 	}, [outbox]);
-	return { state, send: outbox.send, retry: outbox.retry, discard: outbox.discard, settle: outbox.settle };
+	return {
+		state,
+		getState: outbox.getState,
+		send: outbox.send,
+		retry: outbox.retry,
+		discard: outbox.discard,
+		settle: outbox.settle,
+		pause: outbox.pause,
+		resume: outbox.resume,
+	};
 }
 
 /**
