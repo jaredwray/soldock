@@ -29,6 +29,7 @@ const VIEWS: readonly MailView[] = [
 
 const SPACE = "prn_01JD0000000000000000000000";
 const ITEM = "itm_01JD0000000000000000000000";
+const SHARED_DRIVE = "drv_01JD0000000000000000000000";
 
 const DRIVE_VIEWS: readonly DriveView[] = [
 	{ kind: "folder", spaceId: null, folderId: null },
@@ -39,6 +40,12 @@ const DRIVE_VIEWS: readonly DriveView[] = [
 	{ kind: "trash" },
 	{ kind: "search", query: "" },
 	{ kind: "search", query: "q3 report & plan #1 100%?" },
+	// A shared drive has its own paths, so a deep link and a reload stay in that drive.
+	{ kind: "shared-drives" },
+	{ kind: "folder", spaceId: SHARED_DRIVE, folderId: null },
+	{ kind: "folder", spaceId: SHARED_DRIVE, folderId: ITEM },
+	{ kind: "trash", spaceId: SHARED_DRIVE },
+	{ kind: "search", query: "a b", spaceId: SHARED_DRIVE },
 ];
 
 const THREAD = "thr_01JD0000000000000000000000";
@@ -113,6 +120,10 @@ describe("routes", () => {
 			expect(parseRoute(drivePath(view)), drivePath(view)).toEqual({ page: "drive", view });
 		expect(drivePath({ kind: "folder", spaceId: null, folderId: null })).toBe("/drive");
 		expect(drivePath({ kind: "search", query: "a b" })).toBe("/drive/search?q=a%20b");
+		expect(drivePath({ kind: "folder", spaceId: SHARED_DRIVE, folderId: null })).toBe(
+			`/drive/shared-drives/${SHARED_DRIVE}`,
+		);
+		expect(drivePath({ kind: "trash", spaceId: SHARED_DRIVE })).toBe(`/drive/shared-drives/${SHARED_DRIVE}/trash`);
 	});
 
 	// The path of an item has its drive, so one link works for the owner and for a person with access.
@@ -129,23 +140,40 @@ describe("routes", () => {
 			itemId: ITEM,
 		});
 		expect(itemPath({ ...item, kind: "file" })).toBeNull();
+		// The drive of an item can be a shared drive.
+		expect(parseRoute(itemPath({ space_id: SHARED_DRIVE, id: ITEM, kind: "doc" }) ?? "")).toEqual({
+			page: "doc",
+			spaceId: SHARED_DRIVE,
+			itemId: ITEM,
+		});
 	});
 
 	// A room and a direct message have different id prefixes. The two are rooms of Chat.
 	it("parses the path of Chat and of each room back to that room", () => {
-		expect(parseRoute(chatPath())).toEqual({ page: "chat", roomId: null });
+		expect(parseRoute(chatPath())).toEqual({ page: "chat", roomId: null, seq: null });
 		for (const roomId of ["rm_01JD0000000000000000000000", "dm_01JD0000000000000000000000"]) {
-			expect(parseRoute(chatPath(roomId))).toEqual({ page: "chat", roomId });
+			expect(parseRoute(chatPath(roomId))).toEqual({ page: "chat", roomId, seq: null });
+			// A link to one message has the seq of the message.
+			expect(chatPath(roomId, 42)).toBe(`${chatPath(roomId)}/42`);
+			expect(parseRoute(chatPath(roomId, 42))).toEqual({ page: "chat", roomId, seq: 42 });
 		}
 		for (const path of ["/chat/itm_01JD0000000000000000000000", "/chat/rm_1/extra"]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}
 	});
 
+	// The seq goes into a call to the server. A path with a different value is not a link to a message.
+	it("takes only a whole number from 1 as the message of a link", () => {
+		const room = chatPath("rm_01JD0000000000000000000000");
+		for (const seq of ["0", "-1", "1.5", "1e3", "abc", "12345678901234567890", "7/extra"]) {
+			expect(parseRoute(`${room}/${seq}`), seq).toEqual({ page: "not-found" });
+		}
+	});
+
 	// A mention in a message links to the profile, so the link must open that profile after a reload.
 	it("parses the path of a profile in Chat back to that principal", () => {
 		const profileId = "prn_01JD0000000000000000000000";
-		expect(parseRoute(profilePath(profileId))).toEqual({ page: "chat", roomId: null, profileId });
+		expect(parseRoute(profilePath(profileId))).toEqual({ page: "chat", roomId: null, seq: null, profileId });
 		for (const path of ["/chat/people", "/chat/people/rm_01JD0000000000000000000000", `/chat/people/${profileId}/x`]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}
@@ -174,6 +202,9 @@ describe("routes", () => {
 			`/drive/folders/${SPACE}`,
 			`/drive/folders/tmb_1/${ITEM}`,
 			`/drive/folders/${SPACE}/thr_1`,
+			`/drive/shared-drives/${SPACE}`,
+			`/drive/shared-drives/${SHARED_DRIVE}/outbox`,
+			`/drive/shared-drives/${SHARED_DRIVE}/trash/extra`,
 			`/docs/${SPACE}`,
 			`/docs/${SPACE}/${ITEM}/extra`,
 			`/sheets/${ITEM}/${SPACE}`,

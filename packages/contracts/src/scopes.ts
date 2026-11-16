@@ -17,10 +17,12 @@ export const SCOPES = {
 	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
 	"mail.webhooks":
 		"Create, list and delete webhooks that tell a URL outside Soldock when new mail arrives in your mailbox, your team mailboxes and the mailboxes of the agents that you sponsor",
-	"drive.read": "Read your drive and the items that others shared with you: folders, files, docs and sheets",
+	"drive.read":
+		"Read your drive, the items that others shared with you and the shared drives that you are a member of: folders, files, docs and sheets",
 	"drive.write":
-		"Create, change, move and delete the items of your drive, and change the items that others let you edit",
-	"drive.share": "Give and remove access to the items of your drive",
+		"Create, change, move and delete the items of your drive and of the shared drives where your role lets you, and change the items that others let you edit; owners and admins can also create, rename and delete shared drives",
+	"drive.share":
+		"Give and remove access to the items of your drive, and change the members of the shared drives that you manage",
 	"chat.read": "Read your rooms and direct messages, and find the public rooms",
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
 } as const;

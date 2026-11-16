@@ -171,8 +171,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
-  (`0001`, then `0003` to `0008`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0008` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  (`0001`, then `0003` to `0012`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0012` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.

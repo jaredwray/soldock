@@ -248,6 +248,30 @@
 	opacity: 0.6;
 }
 
+/* The message that a link goes to: a color that goes away in some seconds. */
+
+.chat-message-marked {
+	animation: chat-marked 4s ease-out 1;
+}
+
+@keyframes chat-marked {
+	from,
+	50% {
+		background: var(--warning-soft);
+	}
+
+	to {
+		background: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-message-marked {
+		animation: none;
+		background: var(--warning-soft);
+	}
+}
+
 /* The line before the first message that the person did not see. */
 
 .chat-new {

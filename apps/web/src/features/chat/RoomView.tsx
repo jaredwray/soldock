@@ -46,6 +46,8 @@ import type { PendingMessage } from "./outbox.ts";
 
 export interface RoomViewProps {
 	roomId: string;
+	/** The seq of the message that the path links to, or null. The list goes to that message and marks it. */
+	focusSeq: number | null;
 	/** The room in the room list of the person, or null when the list does not have it. */
 	listed: ChatRoom | null;
 	/** True after the room list loaded. */
@@ -64,7 +66,7 @@ type RoomDialog = { type: "members" } | { type: "settings" } | { type: "delete";
 const STICK_PX = 80;
 
 /** One room: its header, its messages and the box for a new message. */
-export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
+export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
 	const toast = useToast();
@@ -100,9 +102,18 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 	const refocus = useRef(false);
 	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const stick = useRef(true);
+	// A path with a message opens the list at that message, not at its end.
+	const stick = useRef(focusSeq === null);
 	/** True while the list is at its end. It is `stick` for the page: the read state and the button to the end use it. */
-	const [atEnd, setAtEnd] = useState(true);
+	const [atEnd, setAtEnd] = useState(focusSeq === null);
+	/** The seq of the message that a link marked, or null. */
+	const [marked, setMarked] = useState<number | null>(null);
+	/** The seq of the message that the list must go to at the next change of the rows, or null. */
+	const scrollTarget = useRef<number | null>(null);
+	/** The seq of the link that the view went to. A view goes to a link one time. */
+	const wentTo = useRef<number | null>(null);
+	/** The number of times that the view went to a link. The list moves to the message at each one. */
+	const [focusTick, setFocusTick] = useState(0);
 	/** What the person saw of the room, for the "New messages" line. Null until the room loads. */
 	const [reading, setReading] = useState<Reading | null>(null);
 	/** The first row that shows, with its distance from the top of the list, before the rows change. */
@@ -240,6 +251,19 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 	function holdPlace() {
 		const list = scrollRef.current;
 		if (!list) return;
+		// A link to a message: the message goes to the middle of the list. A room that does not have
+		// the message shows its newest messages.
+		const target = scrollTarget.current;
+		if (target !== null) {
+			scrollTarget.current = null;
+			const row = list.querySelector<HTMLElement>(`[data-seq="${target}"]`);
+			if (row) {
+				row.scrollIntoView({ block: "center" });
+				onScroll();
+				return;
+			}
+			setStick(!hasNewer);
+		}
 		const kept = place.current;
 		if (stick.current) {
 			list.scrollTop = list.scrollHeight;
@@ -258,7 +282,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
 	useLayoutEffect(() => {
 		if (rows.length > 0) holdPlace();
-	}, [rows, view.hasOlder, hasNewer, reading?.newAfter]);
+	}, [rows, view.hasOlder, hasNewer, reading?.newAfter, focusTick]);
 
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
@@ -322,20 +346,23 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 		}
 	}
 
-	// A send from a list that is not at the newest messages: the outbox has the message, and starts
-	// no call until the list is there. The call then knows the last message of the room, so the list
-	// finds the stored message of the send.
+	// A send from a list that does not know the last message of the room: a list that is not at the
+	// newest messages, or a list from the cache before the load of the room. The outbox has the
+	// message, and starts no call until the list knows it. The call then has the last message of the
+	// room, so the list finds the stored message of the send, and the message does not show two times.
 	const resumeOutbox = outbox.resume;
 	const release = useCallback(() => {
 		if (!holding.current) return;
 		holding.current = false;
 		resumeOutbox();
 	}, [resumeOutbox]);
+	const listWaits = view.status === "ready" && (!view.fresh || hasNewer);
 	useEffect(() => {
-		if (hasNewer) return;
-		release();
-		setSentUnseen(0);
-	}, [hasNewer, release]);
+		if (!listWaits) release();
+	}, [listWaits, release]);
+	useEffect(() => {
+		if (!hasNewer) setSentUnseen(0);
+	}, [hasNewer]);
 	// The page leaves the room. The message still goes out.
 	useEffect(() => release, [release]);
 
@@ -344,19 +371,23 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
 		// after a reload and after a different room opens.
-		if (hasNewer && !holding.current) {
+		if (listWaits && !holding.current) {
 			holding.current = true;
 			outbox.pause();
-			toLatest().then(
-				(applied) => {
-					if (!applied) release();
-				},
-				(caught) => {
-					// The list did not get to the newest messages. The message goes out all the same.
-					release();
-					fail(caught);
-				},
-			);
+			// A list from the cache waits for the load of the room, which runs. A list at older messages
+			// must go to the newest messages.
+			if (hasNewer) {
+				toLatest().then(
+					(applied) => {
+						if (!applied) release();
+					},
+					(caught) => {
+						// The list did not get to the newest messages. The message goes out all the same.
+						release();
+						fail(caught);
+					},
+				);
+			}
 		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
 		outbox.send(draft);
@@ -364,6 +395,43 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 		setStick(true);
 		// The person answers: the messages above are not new for the person now.
 		setReading((current) => current && { ...current, newAfter: null, lineSeen: false });
+	}
+
+	// A link to one message. The list goes there after the load of the room, one time for each link.
+	// A message that the list does not have comes with the page around it.
+	const toMessage = view.toMessage;
+	const cancelReads = view.cancelReads;
+	const canFocus = view.status === "ready" && view.fresh && isMember;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the view goes to a link one time, when the room is ready.
+	useEffect(() => {
+		if (!canFocus || wentTo.current === focusSeq) return;
+		// The path changed to a different message, or to the room without a message. A read for the
+		// link from before must not put the list at that message.
+		cancelReads();
+		wentTo.current = focusSeq;
+		if (focusSeq === null) return;
+		const show = () => {
+			setStick(false);
+			scrollTarget.current = focusSeq;
+			setMarked(focusSeq);
+			// The list goes to the message at the next change of this number, also when the rows are the same.
+			setFocusTick((tick) => tick + 1);
+		};
+		if (messages.some((message) => message.seq === focusSeq)) show();
+		else {
+			toMessage(focusSeq).then((applied) => {
+				if (applied && wentTo.current === focusSeq) show();
+			}, fail);
+		}
+	}, [focusSeq, canFocus]);
+
+	/** Puts a link to a message on the clipboard. */
+	function copyLink(seq: number) {
+		const link = new URL(chatPath(roomId, seq), window.location.origin).href;
+		navigator.clipboard.writeText(link).then(
+			() => toast({ message: "The link to the message is on the clipboard.", tone: "info" }),
+			() => toast({ message: "The browser did not permit a copy to the clipboard.", tone: "error" }),
+		);
 	}
 
 	/** Goes to the newest messages of the room: to the end of the list, or to a new list of the newest messages. */
@@ -566,6 +634,8 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged, 
 											)}
 											<MessageItem
 												rowKey={key}
+												marked={pending === null && message.seq === marked}
+												onCopyLink={() => copyLink(message.seq)}
 												message={message}
 												pending={pending}
 												mentions={mentions}
@@ -708,6 +778,10 @@ interface MessageItemProps {
 	message: ChatMessage;
 	/** The key of the row. The list finds the row with it, to stay at the same message. */
 	rowKey: string;
+	/** True for the message that a link marked. */
+	marked: boolean;
+	/** Puts a link to the message on the clipboard. */
+	onCopyLink: () => void;
 	/** The state of the send, for a message that the server does not have yet. */
 	pending: PendingMessage | null;
 	/** The handles for the mentions in the text, and the suggestions of the edit box. */
@@ -731,6 +805,8 @@ interface MessageItemProps {
 
 function MessageItem({
 	rowKey,
+	marked,
+	onCopyLink,
 	message,
 	pending,
 	mentions,
@@ -749,8 +825,8 @@ function MessageItem({
 	const editId = useId();
 	const author = message.author.display_name;
 	const failed = pending?.state === "failed";
-	// A message that the server does not have yet cannot change, and it has no id to delete.
-	const hasActions = pending === null && !message.deleted && editing === null && (own || canDelete);
+	// A message that the server does not have yet cannot change, and it has no id to delete or to link to.
+	const hasActions = pending === null && !message.deleted && editing === null;
 	const parts = useMemo(() => textParts(message.text, mentions.directory), [message.text, mentions.directory]);
 	return (
 		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
@@ -759,10 +835,12 @@ function MessageItem({
 				"chat-message",
 				head ? "chat-message-head" : "",
 				pending ? (failed ? "chat-message-failed" : "chat-message-pending") : "",
+				marked ? "chat-message-marked" : "",
 			]
 				.filter(Boolean)
 				.join(" ")}
 			data-row={rowKey}
+			data-seq={pending === null ? message.seq : undefined}
 			tabIndex={hasActions ? -1 : undefined}
 			aria-busy={pending !== null && !failed ? true : undefined}
 		>
@@ -869,6 +947,15 @@ function MessageItem({
 			</div>
 			{hasActions && (
 				<span className="chat-message-actions">
+					<button
+						type="button"
+						className="icon-button icon-button-small"
+						aria-label={`Copy a link to the message of ${author} from ${shortDate(message.created_at)}`}
+						title="Copy a link"
+						onClick={onCopyLink}
+					>
+						<Icon name="link" size={16} />
+					</button>
 					{own && (
 						<button
 							type="button"

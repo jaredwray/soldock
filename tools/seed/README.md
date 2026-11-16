@@ -40,6 +40,7 @@ that RFC 2606 reserves for examples.
 | Mail | Messages from outside senders, mail between the people, mail from the two agents, and a reply from the Support mailbox. Some threads have labels, a star, or the read state |
 | Chat | The public rooms General, Design, Site and Support, the private room Partners, and three direct messages |
 | Drive | Folders, docs, sheets with formulas and one CSV file, in the drives of four people and one agent, with shares between them |
+| Shared drive | Design, with Mei-Ling as the manager, Nadia, Chidi and the Research Agent as editors, and Rafael as a viewer. It has the folder "Bakery interiors" with a doc and a CSV file |
 
 The password of a person is the first part of the address and ` local password`, for example
 `nadia local password`.
@@ -60,6 +61,8 @@ The seed has no access to a database or to a Durable Object. It uses only the pu
 
 Each person and each agent acts with their own API key: `directory.create_principal` returns it.
 Thus a person sends their own mail, posts their own chat messages and owns their own drive items.
+The owner creates the shared drive, because only an owner or an admin can. A member with the editor
+role or the manager role adds its items, with the id of the shared drive as `space_id`.
 
 Each `mail.send`, each `chat.post_message` and each create call in Drive has a stable idempotency
 key. The seed tries a call again after a network error or a server error only if the call is a read

@@ -13,13 +13,21 @@ export const DRIVE_LISTS = ["shared", "recent", "starred", "trash"] as const;
 export type DriveList = (typeof DRIVE_LISTS)[number];
 
 export type DriveView =
-	/** A folder of a drive. `spaceId` and `folderId` are null for the root of the own drive of the person. */
+	/**
+	 * A folder of a drive. `spaceId` and `folderId` are null for the root of the own drive of the person.
+	 * The root of a shared drive has the id of the drive (`drv_`) and no folder.
+	 */
 	| { kind: "folder"; spaceId: string | null; folderId: string | null }
-	| { kind: DriveList }
-	| { kind: "search"; query: string };
+	| { kind: Exclude<DriveList, "trash"> }
+	/** The trash of the own drive, or of the shared drive `spaceId`. */
+	| { kind: "trash"; spaceId?: string }
+	/** The list of the shared drives of the person. */
+	| { kind: "shared-drives" }
+	/** A search in the own drive, or in the shared drive `spaceId`. */
+	| { kind: "search"; query: string; spaceId?: string };
 
 /** The sections of the admin page. Each has one path under `/admin`. */
-export const ADMIN_SECTIONS = ["members", "agents", "shared-mailboxes", "domains"] as const;
+export const ADMIN_SECTIONS = ["members", "agents", "shared-mailboxes", "shared-drives", "domains"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export type Route =
@@ -33,10 +41,10 @@ export type Route =
 	| { page: "doc"; spaceId: string; itemId: string }
 	| { page: "sheet"; spaceId: string; itemId: string }
 	/**
-	 * Chat. `roomId` is null for the page without an open room. `profileId` is the person or the agent
-	 * whose profile shows in the place of a room.
+	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
+	 * points to. `profileId` is the person or the agent whose profile shows in the place of a room.
 	 */
-	| { page: "chat"; roomId: string | null; profileId?: string }
+	| { page: "chat"; roomId: string | null; seq: number | null; profileId?: string }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -47,6 +55,7 @@ export type Route =
 
 export const INBOX_PATH = "/mail/inbox";
 export const DRIVE_PATH = "/drive";
+export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
 export const ADMIN_PATH = "/admin";
 
@@ -92,13 +101,18 @@ export function parseRoute(location: string): Route {
 		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
-		if (parts.length === 1) return { page: "chat", roomId: null };
+		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
 		if (second === "people") {
 			return parts.length === 3 && isPrincipalId(third)
-				? { page: "chat", roomId: null, profileId: third }
+				? { page: "chat", roomId: null, seq: null, profileId: third }
 				: { page: "not-found" };
 		}
-		return parts.length === 2 && isRoomId(second) ? { page: "chat", roomId: second } : { page: "not-found" };
+		if (!isRoomId(second)) return { page: "not-found" };
+		if (parts.length === 2) return { page: "chat", roomId: second, seq: null };
+		// A link to one message has the seq of the message after the room.
+		return parts.length === 3 && third !== undefined && MESSAGE_SEQ.test(third)
+			? { page: "chat", roomId: second, seq: Number(third) }
+			: { page: "not-found" };
 	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
@@ -127,9 +141,13 @@ function parseMailView(mailboxId: string | null, parts: string[], url: URL): Rou
 	return { page: "not-found" };
 }
 
-/** A drive belongs to one person or agent, and has the id of that principal. */
+/** True for the id of a shared drive. The drive of a person or of an agent has the id of its owner (`prn_`). */
+export function isSharedDriveId(value: string | null | undefined): value is string {
+	return value?.startsWith("drv_") === true;
+}
+
 function isSpaceId(value: string | undefined): value is string {
-	return isPrincipalId(value);
+	return isPrincipalId(value) || isSharedDriveId(value);
 }
 
 /** A person and an agent have an id that starts with `prn_`. */
@@ -165,21 +183,43 @@ function parseDriveView(parts: string[], url: URL): Route {
 	if (first === "folders" && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: "drive", view: { kind: "folder", spaceId: second, folderId: third } };
 	}
+	if (first !== "shared-drives") return { page: "not-found" };
+	if (second === undefined) return { page: "drive", view: { kind: "shared-drives" } };
+	if (!isSharedDriveId(second) || parts.length > 3) return { page: "not-found" };
+	if (third === undefined) return { page: "drive", view: { kind: "folder", spaceId: second, folderId: null } };
+	if (third === "trash") return { page: "drive", view: { kind: "trash", spaceId: second } };
+	if (third === "search") {
+		return { page: "drive", view: { kind: "search", query: url.searchParams.get("q") ?? "", spaceId: second } };
+	}
 	return { page: "not-found" };
 }
 
-/** The path of a view of Drive. */
+/**
+ * The path of a view of Drive. A shared drive has its own paths for its root, its trash and its
+ * search (`/drive/shared-drives/<drv_id>/…`). A folder of each drive has the same form of path.
+ */
 export function drivePath(view: DriveView): string {
+	const shared = "spaceId" in view && isSharedDriveId(view.spaceId) ? sharedDrivePath(view.spaceId) : null;
 	switch (view.kind) {
 		case "folder":
-			return view.spaceId && view.folderId
-				? `${DRIVE_PATH}/folders/${encodeURIComponent(view.spaceId)}/${encodeURIComponent(view.folderId)}`
-				: DRIVE_PATH;
+			if (view.spaceId && view.folderId) {
+				return `${DRIVE_PATH}/folders/${encodeURIComponent(view.spaceId)}/${encodeURIComponent(view.folderId)}`;
+			}
+			return shared ?? DRIVE_PATH;
 		case "search":
-			return `${DRIVE_PATH}/search?q=${encodeURIComponent(view.query)}`;
+			return `${shared ?? DRIVE_PATH}/search?q=${encodeURIComponent(view.query)}`;
+		case "trash":
+			return `${shared ?? DRIVE_PATH}/trash`;
+		case "shared-drives":
+			return SHARED_DRIVES_PATH;
 		default:
 			return `${DRIVE_PATH}/${view.kind}`;
 	}
+}
+
+/** The path of the root of a shared drive. */
+export function sharedDrivePath(driveId: string): string {
+	return `${SHARED_DRIVES_PATH}/${encodeURIComponent(driveId)}`;
 }
 
 /**
@@ -210,9 +250,17 @@ export function adminPath(section: AdminSection): string {
 	return `${ADMIN_PATH}/${section}`;
 }
 
-/** The path of a room of Chat, or of the Chat page without an open room. */
-export function chatPath(roomId: string | null = null): string {
-	return roomId ? `${CHAT_PATH}/${encodeURIComponent(roomId)}` : CHAT_PATH;
+/** The seq of a message in a path: a whole number from 1, in the range that a number keeps exactly. */
+const MESSAGE_SEQ = /^[1-9]\d{0,14}$/;
+
+/**
+ * The path of a room of Chat, or of the Chat page without an open room. With `seq`, the path is a link
+ * to one message of the room.
+ */
+export function chatPath(roomId: string | null = null, seq: number | null = null): string {
+	if (!roomId) return CHAT_PATH;
+	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
+	return seq === null ? room : `${room}/${seq}`;
 }
 
 /** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */

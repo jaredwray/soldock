@@ -72,6 +72,12 @@ are not built yet.
 Each person and each agent has a drive with folders, files, versions, stars, search and a trash. A
 file can be at most 10 MiB. Share an item with a person or an agent, as a viewer or as an editor.
 
+A shared drive belongs to a team. The drive owns its items, so the items stay when a person leaves.
+Each member, a person or an agent, is a manager, an editor or a viewer. An agent can be an editor or
+a viewer. Move items from your drive into a shared drive with **Move to…**, or drag them onto the
+drive in the sidebar. The shared drive then owns the items, and the direct shares of the items stay.
+Only a manager moves items out of a shared drive.
+
 ![A folder of Drive with a doc, a sheet and a CSV file](docs/screenshots/drive.png)
 
 Docs has an editor for rich text: headings, lists, quotes, links and code blocks. An agent reads and
@@ -103,8 +109,10 @@ never change its own policy, create accounts or manage keys. [Agents](docs/agent
 
 ### Admin
 
-Owners and admins create people and agents, shared mailboxes and email domains. They set a new
-password for a person, and they archive, restore or delete an account. A person signs in with an
+Owners and admins create people and agents, shared mailboxes, shared drives and email domains. They
+set a new password for a person, and they archive, restore or delete an account. **Admin › Shared
+drives** creates a shared drive, changes its name and its members, and deletes an empty shared drive.
+An owner or an admin gets access to the items of a shared drive only as a member. A person signs in with an
 address and a password, and can add two-step verification with an authenticator app.
 
 ### On a phone
