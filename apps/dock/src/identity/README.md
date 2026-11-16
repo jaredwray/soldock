@@ -71,6 +71,9 @@ contract of the socket.
 - Known limit: the limit of 20 sockets is for all credentials of the principal together. A key or an
   OAuth client of the principal can open 20 sockets, and so close the sockets of the browser tabs
   of its person. The room socket has the same rule for each member.
+- A new socket starts without a check of the object. Its first check starts at the accept, and an
+  event waits for it. So a sign-out or a revoke between the check of the Worker and the accept
+  closes the socket too, and only `hello` reaches it.
 - A sign-out, `account.revoke_api_key` and `oauth.revoke_grant` close the sockets of that
   credential at once with `4003` (`endEventSockets`). A tab learns of its sign-out this way, because
   it does not poll while its socket is live. If that call fails, the check closes the socket.

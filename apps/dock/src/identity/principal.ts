@@ -369,15 +369,18 @@ export class PrincipalDO extends DurableObject<Env> {
 
 		const { 0: client, 1: server } = new WebSocketPair();
 		this.ctx.acceptWebSocket(server);
-		const now = Date.now();
+		// The socket starts without a check. A sign-out or a revoke can come between the check of the
+		// Worker and this accept, and `endSockets` then did not see the socket. So an event waits for the
+		// first check of the object, which starts now.
 		server.serializeAttachment({
 			credential: open.credential,
-			openedAt: now,
-			checkedAt: now,
+			openedAt: Date.now(),
+			checkedAt: 0,
 		} satisfies EventsSocketState);
 		// The runtime answers a ping by itself, so a client can test its connection and the object stays asleep.
 		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
 		this.send(server, JSON.stringify({ type: "hello", protocol: EVENTS_SOCKET_PROTOCOL } satisfies PrincipalEvent));
+		this.ctx.waitUntil(this.enqueue([]));
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
@@ -440,6 +443,14 @@ export class PrincipalDO extends DurableObject<Env> {
 			log("error", "events socket event failed", { error: error instanceof Error ? error.message : String(error) });
 		}
 		if (texts.length === 0) return this.announced;
+		return this.enqueue(texts);
+	}
+
+	/**
+	 * Puts a send behind each send from before. An empty list sends nothing, and checks each socket whose
+	 * check is due, as for a send.
+	 */
+	private enqueue(texts: string[]): Promise<void> {
 		this.announced = this.announced
 			.then(() => this.deliver(texts))
 			.catch((error: unknown) => {
