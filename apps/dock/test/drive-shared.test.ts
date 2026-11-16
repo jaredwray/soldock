@@ -10,7 +10,10 @@ import {
 	drainDrive,
 	driveBlobKeys,
 	fromBase64,
+	ORIGIN,
 	PASSWORD,
+	request,
+	SETUP_TOKEN,
 	seedOrg,
 } from "./helpers.ts";
 
@@ -31,6 +34,28 @@ const person = (name: string) =>
 		address: `${name.toLowerCase()}@dock.test`,
 		password: PASSWORD,
 	});
+
+/** Makes each write of one drive object to the index in D1 fail, until `repair()`. */
+async function breakIndex(spaceId: string): Promise<() => Promise<void>> {
+	const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));
+	const real = await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const before = target.env;
+		const broken = new Proxy(before.DIRECTORY, {
+			get(directory, property) {
+				if (property === "batch") return () => Promise.reject(new Error("D1 is unavailable"));
+				const value = Reflect.get(directory, property);
+				return typeof value === "function" ? value.bind(directory) : value;
+			},
+		});
+		target.env = { ...before, DIRECTORY: broken };
+		return before;
+	});
+	return () =>
+		runInDurableObject(stub, (instance) => {
+			(instance as unknown as { env: Env }).env = real;
+		});
+}
 
 async function createDrive(name: string, members: { principal_id: string; role: "manager" | "editor" | "viewer" }[]) {
 	return (await owner.call("drive.create_shared_drive", { name, members })).shared_drive.id;
@@ -93,6 +118,15 @@ describe("drive.create_shared_drive", () => {
 		expect((await owner.call("drive.list_shared_drives", { all: "true" })).shared_drives).toHaveLength(1);
 	});
 
+	it("makes no drive object for a call that it refuses", async () => {
+		const before = (await listDurableObjectIds(env.DRIVE_SPACE)).length;
+		const create = (members: { principal_id: string; role: "manager" | "editor" | "viewer" }[]) =>
+			codeOf(owner.call("drive.create_shared_drive", { name: "Sales", members }));
+		expect(await create([{ principal_id: bot.id, role: "manager" }])).toBe("invalid");
+		expect(await create([{ principal_id: ada.id, role: "editor" }])).toBe("invalid");
+		expect(await listDurableObjectIds(env.DRIVE_SPACE)).toHaveLength(before);
+	});
+
 	it("returns the first drive for a second call with the same idempotency key", async () => {
 		const input = {
 			name: "Sales",
@@ -105,6 +139,44 @@ describe("drive.create_shared_drive", () => {
 		expect(await codeOf(owner.call("drive.create_shared_drive", { ...input, name: "Other" }))).toBe("conflict");
 		const all = (await owner.call("drive.list_shared_drives", { all: "true" })).shared_drives;
 		expect(all.map((drive) => drive.name)).toEqual(["Design", "Sales"]);
+	});
+
+	it("returns the first drive for a retry after a member of the first call was deleted", async () => {
+		const input = {
+			name: "Sales",
+			members: [
+				{ principal_id: ada.id, role: "manager" as const },
+				{ principal_id: nora.id, role: "viewer" as const },
+			],
+			idempotency_key: "sales-1",
+		};
+		const first = await owner.call("drive.create_shared_drive", input);
+		await owner.call("directory.delete_principal", { principal_id: nora.id });
+		const second = await owner.call("drive.create_shared_drive", input);
+		expect(second.shared_drive.id).toBe(first.shared_drive.id);
+		expect(second.members.map((member) => member.principal_id)).toEqual([ada.id]);
+		// A new call with a deleted member is still refused.
+		expect(await codeOf(owner.call("drive.create_shared_drive", { ...input, idempotency_key: "sales-2" }))).toBe(
+			"not_found",
+		);
+	});
+
+	it("writes the index again with a retry, when its rows wait for their next attempt", async () => {
+		const input = {
+			name: "Sales",
+			members: [{ principal_id: ada.id, role: "manager" as const }],
+			idempotency_key: "sales-1",
+		};
+		const { shared_drive: sales } = await owner.call("drive.create_shared_drive", input);
+		// A write to the index fails. Its row waits a minute for the next attempt.
+		const repair = await breakIndex(sales.id);
+		await ada.call("drive.update_shared_drive", { drive_id: sales.id, name: "Sales EU" });
+		await repair();
+		const listed = async () => (await ada.call("drive.list_shared_drives")).shared_drives.map((drive) => drive.name);
+		expect(await listed()).toEqual(["Design", "Sales"]);
+
+		expect((await owner.call("drive.create_shared_drive", input)).shared_drive.name).toBe("Sales EU");
+		expect(await listed()).toEqual(["Design", "Sales EU"]);
 	});
 });
 
@@ -166,6 +238,54 @@ describe("a principal that is not a member", () => {
 		expect(await codeOf(owner.call("drive.delete_shared_drive", { drive_id: random }))).toBe("not_found");
 		const objects = await listDurableObjectIds(env.DRIVE_SPACE);
 		expect(objects.some((id) => id.equals(env.DRIVE_SPACE.idFromName(random)))).toBe(false);
+	});
+});
+
+describe("the personal drive of a different principal", () => {
+	// The operations that take space_id for a shared drive must not open the drive of a person to others.
+	it("refuses each operation that only its owner can do, and changes nothing", async () => {
+		const own = async (name: string, extra: Record<string, unknown> = {}) =>
+			(await ada.call("drive.upload_file", { name, content_base64: base64("x"), ...extra })).item;
+		const shared = (await ada.call("drive.create_folder", { name: "Shared" })).item;
+		const inside = await own("inside.txt", { parent_id: shared.id });
+		const old = await own("old.txt");
+		await ada.call("drive.trash_items", { item_ids: [old.id] });
+		await ada.call("drive.share_item", { item_id: shared.id, principal_id: vic.id, role: "viewer" });
+		await ada.call("drive.share_item", { item_id: shared.id, principal_id: eve.id, role: "editor" });
+		await drainDrive(ada.id);
+		const before = await ada.call("drive.get_about");
+
+		const space = { space_id: ada.id };
+		const calls: [string, (actor: Actor) => Promise<unknown>][] = [
+			["get_about", (actor) => actor.call("drive.get_about", space)],
+			["move_items", (actor) => actor.call("drive.move_items", { ...space, item_ids: [inside.id] })],
+			["trash_items", (actor) => actor.call("drive.trash_items", { ...space, item_ids: [inside.id] })],
+			["restore_items", (actor) => actor.call("drive.restore_items", { ...space, item_ids: [old.id] })],
+			["delete_items", (actor) => actor.call("drive.delete_items", { ...space, item_ids: [old.id] })],
+			["empty_trash", (actor) => actor.call("drive.empty_trash", space)],
+			["search", (actor) => actor.call("drive.list_items", { ...space, view: "search", query: "inside" })],
+			["trash", (actor) => actor.call("drive.list_items", { ...space, view: "trash" })],
+		];
+		const share = (actor: Actor) =>
+			actor.call("drive.share_item", { ...space, item_id: inside.id, principal_id: nora.id, role: "viewer" });
+		// Nora has no grant, Vic is a viewer of the folder, Eve is an editor of it, and the bot is an agent.
+		for (const [who, actor, shareCode] of [
+			["stranger", nora, "not_found"],
+			["viewer", vic, "forbidden"],
+			["editor", eve, "forbidden"],
+			["agent", bot, "not_found"],
+		] as const) {
+			for (const [name, call] of calls) expect(await codeOf(call(actor)), `${name} by the ${who}`).toBe("forbidden");
+			expect(await codeOf(share(actor)), `share_item by the ${who}`).toBe(shareCode);
+		}
+
+		await drainDrive(ada.id);
+		expect(await ada.call("drive.get_about")).toEqual(before);
+		expect((await ada.call("drive.list_items", { parent_id: shared.id })).items.map((item) => item.id)).toEqual([
+			inside.id,
+		]);
+		expect((await ada.call("drive.list_permissions", { item_id: inside.id })).permissions).toHaveLength(2);
+		expect((await nora.call("drive.list_items", { view: "shared" })).items).toEqual([]);
 	});
 });
 
@@ -261,14 +381,20 @@ describe("the members of a shared drive", () => {
 	});
 
 	it("refuses a member over the limit of 100, and still changes the role of a member", async () => {
-		// 100 principals need 100 accounts. The test puts the rows of 96 more members in the object.
+		// 100 members need 100 accounts, and 96 calls are slow. The test puts the rows of 96 more people in
+		// the directory and in the object.
+		const filler = Array.from({ length: 96 }, (_, n) => `prn_01JD00000000000000000000${String(n).padStart(2, "0")}`);
+		await env.DIRECTORY.batch(
+			filler.map((id) =>
+				env.DIRECTORY.prepare(
+					"INSERT INTO principals (id, kind, display_name, org_role, created_at) VALUES (?, 'human', 'Filler', 'member', ?)",
+				).bind(id, new Date().toISOString()),
+			),
+		);
 		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
 		await runInDurableObject(stub, (_instance, state) => {
-			for (let n = 0; n < 96; n++) {
-				state.storage.sql.exec(
-					"INSERT INTO members (principal_id, role, created_at) VALUES (?, 'viewer', 0)",
-					`prn_01JD00000000000000000000${String(n).padStart(2, "0")}`,
-				);
+			for (const id of filler) {
+				state.storage.sql.exec("INSERT INTO members (principal_id, role, created_at) VALUES (?, 'viewer', 0)", id);
 			}
 		});
 		const add = (principal_id: string) =>
@@ -277,6 +403,13 @@ describe("the members of a shared drive", () => {
 		expect(await codeOf(nora.call("drive.get_about", { space_id: driveId }))).toBe("not_found");
 		await add(vic.id);
 		expect((await rolesOf(ada))[vic.id]).toBe("editor");
+
+		// A deleted principal is not in the list of the members, and does not count for the limit.
+		await env.DIRECTORY.prepare("UPDATE principals SET deleted_at = ? WHERE id = ?")
+			.bind(new Date().toISOString(), filler[0] as string)
+			.run();
+		expect((await add(nora.id)).shared_drive.member_count).toBe(100);
+		expect(await codeOf(add(owner.id))).toBe("invalid");
 	});
 
 	it("lets a member remove itself, and a manager remove each member", async () => {
@@ -572,19 +705,7 @@ describe("the index of the shared drives", () => {
 	// The index in D1 is a copy. A write that fails must not fail the change, and the alarm must repair the copy.
 	it("gets a change that the first write did not store, with the alarm", async () => {
 		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
-		const real = await runInDurableObject(stub, (instance) => {
-			const target = instance as unknown as { env: Env };
-			const before = target.env;
-			const broken = new Proxy(before.DIRECTORY, {
-				get(directory, property) {
-					if (property === "batch") return () => Promise.reject(new Error("D1 is unavailable"));
-					const value = Reflect.get(directory, property);
-					return typeof value === "function" ? value.bind(directory) : value;
-				},
-			});
-			target.env = { ...before, DIRECTORY: broken };
-			return before;
-		});
+		const repair = await breakIndex(driveId);
 		await ada.call("drive.update_shared_drive", { drive_id: driveId, name: "Studio" });
 		await ada.call("drive.remove_shared_drive_member", { drive_id: driveId, principal_id: vic.id });
 		// The object has the change. The lists have the state from before.
@@ -593,8 +714,14 @@ describe("the index of the shared drives", () => {
 		expect((await vic.call("drive.list_shared_drives")).shared_drives).toHaveLength(1);
 		expect(await codeOf(vic.call("drive.get_about", { space_id: driveId }))).toBe("not_found");
 
-		await runInDurableObject(stub, (instance, state) => {
-			(instance as unknown as { env: Env }).env = real;
+		// The alarm of the guard finds no row that is due. The next alarm is the next attempt, a minute after
+		// the failure. The object does not wake before that.
+		await runDurableObjectAlarm(stub);
+		const next = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+		expect(next).toBeGreaterThan(Date.now() + 45_000);
+
+		await repair();
+		await runInDurableObject(stub, (_instance, state) => {
 			// The next attempt is a minute later. Make it due now.
 			state.storage.sql.exec("UPDATE index_outbox SET next_attempt_at = 0");
 		});
@@ -603,5 +730,44 @@ describe("the index of the shared drives", () => {
 			{ name: "Studio", member_count: 3 },
 		]);
 		expect((await vic.call("drive.list_shared_drives")).shared_drives).toEqual([]);
+	});
+
+	it("stays out of the directory after a fresh start, also when it writes its rows again", async () => {
+		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
+		// A row of the index waits in the old drive, as after a write that failed before the fresh start.
+		const repair = await breakIndex(driveId);
+		await ada.call("drive.update_shared_drive", { drive_id: driveId, name: "Studio" });
+		await repair();
+		const res = await request("/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({
+				mail_domain: "dock.test",
+				display_name: "Nia New",
+				address: "nia@dock.test",
+				password: PASSWORD,
+				start_fresh: "DELETE DIRECTORY",
+			}),
+		});
+		expect(res.status).toBe(201);
+		const fresh = api(((await res.json()) as { api_key: { secret: string } }).api_key.secret);
+
+		// The old drive writes its rows again.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE index_outbox SET next_attempt_at = 0");
+		});
+		await runDurableObjectAlarm(stub);
+		const waiting = await runInDurableObject(
+			stub,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox").one().n,
+		);
+		expect(waiting).toBe(0);
+		for (const table of ["shared_drives", "shared_drive_members"]) {
+			expect((await env.DIRECTORY.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n).toBe(0);
+		}
+		// The new owner is an admin, and cannot see or open the old drive.
+		expect((await fresh("drive.list_shared_drives", { all: "true" })).shared_drives).toEqual([]);
+		expect(await codeOf(fresh("drive.get_shared_drive", { drive_id: driveId }))).toBe("not_found");
+		expect(await codeOf(fresh("drive.get_about", { space_id: driveId }))).toBe("not_found");
 	});
 });

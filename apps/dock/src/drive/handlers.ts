@@ -21,6 +21,7 @@ import {
 	type ItemRef,
 	isSharedDriveId,
 	type MemberInput,
+	memberRefusal,
 	type SharedDriveRecord,
 	type VersionRecord,
 } from "./space.ts";
@@ -364,8 +365,16 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				dryRun: input.dry_run,
 			}),
 		);
-		if (moved.status !== "dry_run") {
-			auditOk(call, source, "drive.move_to_drive", `${source.spaceId}>${target.spaceId}:${input.item_ids.join(",")}`);
+		// One line for one move: a call that joins a move writes no second line. With the status `moving`,
+		// the line records that the move started.
+		if (moved.status !== "dry_run" && !moved.joined) {
+			const state = moved.status === "moving" ? "started:" : "";
+			auditOk(
+				call,
+				source,
+				"drive.move_to_drive",
+				`${state}${source.spaceId}>${target.spaceId}:${input.item_ids.join(",")}`,
+			);
 		}
 		const items =
 			moved.status === "done" ? await target.space.getItems(target.ctx, moved.topIds, { includeTrashed: false }) : [];
@@ -526,13 +535,27 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		if (!isAdmin(call.caller)) {
 			throw new OperationError("forbidden", "Only owners and admins of the organization can create a shared drive.");
 		}
-		const members = await memberInputs(call, input.members);
 		// The key of a retry is in the own drive of the caller. It gives the id of the first call, and the
 		// object of that id creates the drive one time only.
 		const idempotency = await idempotencyOf(call, "drive.create_shared_drive", input);
+		const own = idempotency ? await ownSpace(call) : null;
+		if (own && idempotency) {
+			// A retry gets the drive of the first call, also when a member of that call is deleted now. So
+			// this comes before the check of the members.
+			const earlier = await own.space.reservedId(own.ctx, idempotency.key, idempotency.requestHash);
+			if (earlier !== null) {
+				const first = spaceOf(call, accept(earlier).id);
+				const drive = await first.space.createdSharedDrive(first.ctx);
+				if (drive !== null) return toSharedDrive(call, accept(drive));
+			}
+		}
+		const members = await memberInputs(call, input.members);
+		// The check of the members comes before the id and the object of a new drive, so a refused call
+		// leaves no object.
+		const bad = memberRefusal(members, true);
+		if (bad) accept(bad);
 		let driveId = newId("drv");
-		if (idempotency) {
-			const own = await ownSpace(call);
+		if (own && idempotency) {
 			driveId = accept(await own.space.reserveId(own.ctx, idempotency.key, idempotency.requestHash, driveId)).id;
 		}
 		const opened = spaceOf(call, driveId);

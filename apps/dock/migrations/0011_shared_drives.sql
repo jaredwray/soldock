@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS shared_drives (
 	-- The id of the owner or admin that created the drive.
 	created_by TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
-	member_count INTEGER NOT NULL,
 	-- Set when an owner or an admin deleted the drive. No operation opens the drive after that.
 	deleted_at INTEGER
 );

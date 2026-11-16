@@ -1,9 +1,10 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError, SHARED_DRIVE_LIMITS } from "@soldock/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
+	api,
 	base64,
 	codeOf,
 	createActor,
@@ -25,6 +26,12 @@ let bot: Actor;
 let driveId: string;
 
 const MOVING = "The item is moving to a different drive. Try again in a moment.";
+
+/**
+ * The object of a doc tells the drive in its alarm. A write sets that alarm to the current time, so the
+ * alarm can run before the test runs it. The test then waits for the result in the drive.
+ */
+const WAIT = { timeout: 5000, interval: 20 };
 
 const person = (name: string) =>
 	createActor(owner, {
@@ -87,18 +94,23 @@ const openMoves = (spaceId: string) =>
 
 /**
  * R2 is a boundary of the drive object. This makes each call of one R2 method by one drive fail until
- * `repair()`. Without `get`, a move stops in its copy step, after the target drive got the items of the
+ * `repair()`, after the first `allow` calls. Without `get`, a move stops in its copy step, after the target drive got the items of the
  * move. Without `delete`, the old objects stay and their deletes wait in the outbox.
  */
-async function breakR2(spaceId: string, method: "get" | "delete" = "get"): Promise<() => Promise<void>> {
+async function breakR2(spaceId: string, method: "get" | "delete" = "get", allow = 0): Promise<() => Promise<void>> {
 	const real = await runInDurableObject(stubOf(spaceId), (instance) => {
 		const target = instance as unknown as { env: Env };
 		const before = target.env;
+		let calls = 0;
 		const broken = new Proxy(before.BLOBS, {
 			get(blobs, property) {
-				if (property === method) return () => Promise.reject(new Error("R2 is not available"));
 				const value = Reflect.get(blobs, property);
-				return typeof value === "function" ? value.bind(blobs) : value;
+				if (property !== method) return typeof value === "function" ? value.bind(blobs) : value;
+				// The first `allow` calls work.
+				return (...args: unknown[]) =>
+					calls++ < allow
+						? (value as (...values: unknown[]) => unknown).apply(blobs, args)
+						: Promise.reject(new Error("R2 is not available"));
 			},
 		});
 		target.env = { ...before, BLOBS: broken };
@@ -108,6 +120,30 @@ async function breakR2(spaceId: string, method: "get" | "delete" = "get"): Promi
 		runInDurableObject(stubOf(spaceId), (instance) => {
 			(instance as unknown as { env: Env }).env = real;
 		});
+}
+
+/** Runs SQL in the storage of a drive, and returns the rows. */
+const sqlOf = <T extends Record<string, SqlStorageValue>>(
+	spaceId: string,
+	query: string,
+	...params: SqlStorageValue[]
+) => runInDurableObject(stubOf(spaceId), (_instance, state) => state.storage.sql.exec<T>(query, ...params).toArray());
+
+/** The parts of moves that a target drive holds and did not commit. */
+const stagedParts = async (spaceId: string) =>
+	(await sqlOf<{ n: number }>(spaceId, "SELECT COUNT(*) AS n FROM imports WHERE seq >= 0"))[0]?.n;
+
+/** The audit lines that the Worker wrote while `run` ran. */
+async function auditLines(run: () => Promise<unknown>): Promise<Record<string, unknown>[]> {
+	const spy = vi.spyOn(console, "log");
+	try {
+		await run();
+		return spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+	} finally {
+		spy.mockRestore();
+	}
 }
 
 /** Makes each waiting step of the moves of a drive due, and runs the alarm until no move is open. */
@@ -265,6 +301,62 @@ describe("drive.move_to_drive from My Drive to a shared drive", () => {
 		expect((await move(file.id)).status).toBe("done");
 	});
 
+	it("moves an item in the trash under a selected folder, and keeps it in the trash of the target", async () => {
+		const project = await folder(ada, "Project");
+		await upload(ada, "kept.txt", "a", { parent_id: project.id });
+		const old = await upload(ada, "old.txt", "b", { parent_id: project.id });
+		await ada.call("drive.trash_items", { item_ids: [old.id] });
+
+		const moved = await ada.call("drive.move_to_drive", { item_ids: [project.id], target_space_id: driveId });
+		expect(moved).toMatchObject({ status: "done", items_total: 3 });
+		expect(await names(eve, { space_id: driveId, parent_id: project.id })).toEqual(["kept.txt"]);
+		expect(await names(eve, { space_id: driveId, view: "trash" })).toEqual(["old.txt"]);
+		expect((await ada.call("drive.get_about")).trash_total).toBe(0);
+		// The item comes back to its folder in the target.
+		await eve.call("drive.restore_items", { space_id: driveId, item_ids: [old.id] });
+		expect(await names(eve, { space_id: driveId, parent_id: project.id })).toEqual(["kept.txt", "old.txt"]);
+	});
+
+	it("refuses a key without the drive.write scope", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		const { api_key: reader } = await ada.call("account.create_api_key", { label: "read", scopes: ["drive.read"] });
+		const input = { item_ids: [file.id], target_space_id: driveId };
+		expect(await codeOf(api(reader.secret)("drive.move_to_drive", input))).toBe("forbidden");
+		expect(await codeOf(api(reader.secret)("drive.move_to_drive", { ...input, dry_run: true }))).toBe("forbidden");
+		expect(await names(ada)).toEqual(["report.txt"]);
+	});
+
+	// A part of the staged items is one row in the target, and a row of a SQLite Durable Object has at
+	// most 2 MB. The text of a doc for the search index can have 100,000 characters. The test runtime does
+	// not apply the limit of 2 MB, so the test reads the size of the rows.
+	it("keeps each staged row small for docs with much text, and the search of the target finds them", async () => {
+		const box = await folder(ada, "Box");
+		for (let index = 0; index < 24; index++) {
+			await ada.call("docs.create", { name: `D${index}`, parent_id: box.id, markdown: "x" });
+		}
+		await upload(ada, "report.txt", "numbers", { parent_id: box.id });
+		await sqlOf(
+			ada.id,
+			"UPDATE items_fts SET content = ? WHERE rowid IN (SELECT seq FROM items WHERE kind = 'doc')",
+			`needle ${"word ".repeat(19_998)}`,
+		);
+		// The move stops in the copy step, after the target got each part.
+		const repair = await breakR2(ada.id);
+		expect((await ada.call("drive.move_to_drive", { item_ids: [box.id], target_space_id: driveId })).status).toBe(
+			"moving",
+		);
+		const rows = await sqlOf<{ bytes: number }>(
+			driveId,
+			"SELECT LENGTH(CAST(payload AS BLOB)) AS bytes FROM imports WHERE seq >= 0",
+		);
+		expect(rows.length).toBeGreaterThan(0);
+		expect(Math.max(...rows.map((row) => row.bytes))).toBeLessThan(1024 * 1024);
+
+		await repair();
+		await runMoves(ada.id);
+		expect(await names(vic, { space_id: driveId, view: "search", query: "needle" })).toHaveLength(24);
+	});
+
 	it("moves at most 1,000 items in one call", async () => {
 		const big = await folder(ada, "Big");
 		// The rows of the items go into the storage of the drive directly: 1,000 calls are too slow for a test.
@@ -404,6 +496,31 @@ describe("the grants and the stars of moved items", () => {
 		expect((await nora.call("drive.get_about")).version).toBe(before);
 		expect(await refs(nora, "starred")).toEqual([`${driveId}/q3.txt`]);
 	});
+	// The notice of the first move can wait in the outbox of the old drive, behind a row that fails.
+	it("keeps the star and the pointer of a grantee when the item comes back before the first notice", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: nora.id, role: "viewer" });
+		await nora.call("drive.star_items", { space_id: ada.id, item_ids: [file.id], starred: true });
+		await drainDrive(ada.id);
+
+		// A row at the head of the outbox of Ada waits for its next attempt. The notice waits behind it.
+		await sqlOf(
+			ada.id,
+			"INSERT INTO outbox (kind, target, payload, attempts, next_attempt_at) VALUES ('blob', 'drive/none', '{}', 1, ?)",
+			Date.now() + 3_600_000,
+		);
+		await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: driveId });
+		await drainDrive(driveId);
+		expect(await refs(nora, "shared")).toEqual([`${driveId}/report.txt`]);
+		// The item comes back, and the notice of the shared drive arrives. Then the outbox of Ada runs.
+		await ada.call("drive.move_to_drive", { space_id: driveId, item_ids: [file.id], target_space_id: ada.id });
+		await drainDrive(driveId);
+		await sqlOf(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		await drainDrive(ada.id);
+
+		expect(await refs(nora, "starred")).toEqual([`${ada.id}/report.txt`]);
+		expect(await refs(nora, "shared")).toEqual([`${ada.id}/report.txt`]);
+	});
 });
 
 describe("an item that moved away", () => {
@@ -514,6 +631,10 @@ describe("a move that does not complete in the call", () => {
 			author,
 		});
 		await runDurableObjectAlarm(docStub);
+		await vi.waitFor(
+			async () => expect(await names(ada, { view: "search", query: "midway" })).toEqual(["Brief"]),
+			WAIT,
+		);
 
 		// The same call again joins the move. It does not start a second one.
 		expect((await ada.call("drive.move_to_drive", input)).status).toBe("moving");
@@ -547,7 +668,11 @@ describe("a move that does not complete in the call", () => {
 			author: { principal_id: ada.id, kind: "human", display_name: "Ada Lovelace" },
 		});
 		await runDurableObjectAlarm(docStub);
-		expect(await names(vic, { space_id: driveId, view: "search", query: "afterward" })).toEqual(["Brief"]);
+		await vi.waitFor(
+			async () =>
+				expect(await names(vic, { space_id: driveId, view: "search", query: "afterward" })).toEqual(["Brief"]),
+			WAIT,
+		);
 	});
 
 	it("stops the move when the target refuses the items, and gives the items back to the source", async () => {
@@ -568,10 +693,118 @@ describe("a move that does not complete in the call", () => {
 		expect(await names(owner, { space_id: driveId })).toEqual([]);
 		expect((await ada.call("drive.rename_item", { item_id: report.id, name: "kept.txt" })).item.name).toBe("kept.txt");
 		expect(fromBase64((await ada.call("drive.download_file", { item_id: report.id })).content_base64)).toBe("numbers");
-		// The copy in the target has no owner. The outbox of the source deletes it.
+		// The copy in the target has no owner. The target deletes it through its own outbox, with the staged items.
 		await drainDrive(ada.id);
+		await drainDrive(driveId);
 		expect(await driveBlobKeys(driveId)).toEqual([]);
+		expect(await stagedParts(driveId)).toBe(0);
 		expect(await driveBlobKeys(ada.id)).toHaveLength(1);
+	});
+
+	it("stops a move after 8 failures of one step, and the target deletes what it got", async () => {
+		const first = await upload(ada, "first.txt", "one");
+		const second = await upload(ada, "second.txt", "two");
+		// The copy of one version works. Each later read of R2 fails.
+		await breakR2(ada.id, "get", 1);
+		const input = { item_ids: [first.id, second.id], target_space_id: driveId };
+		expect((await ada.call("drive.move_to_drive", input)).status).toBe("moving");
+		expect(await driveBlobKeys(driveId)).toHaveLength(1);
+		expect(await stagedParts(driveId)).toBe(1);
+
+		// The helper makes the step due and runs the alarm. The move stops with the eighth failure.
+		await runMoves(ada.id);
+		expect(await sqlOf(ada.id, "SELECT item_id FROM moved")).toEqual([]);
+		expect(await names(ada)).toEqual(["first.txt", "second.txt"]);
+		expect((await ada.call("drive.rename_item", { item_id: first.id, name: "kept.txt" })).item.name).toBe("kept.txt");
+		expect(await names(eve, { space_id: driveId })).toEqual([]);
+		// The source tells the target. The target deletes the staged items and the copy.
+		await drainDrive(ada.id);
+		await drainDrive(driveId);
+		expect(await stagedParts(driveId)).toBe(0);
+		expect(await driveBlobKeys(driveId)).toEqual([]);
+		expect(await driveBlobKeys(ada.id)).toHaveLength(2);
+	});
+
+	it("stops the move when the target does not have each staged item", async () => {
+		const box = await folder(ada, "Box");
+		for (let index = 0; index < 26; index++) await folder(ada, `F${index}`, { parent_id: box.id });
+		const file = await upload(ada, "report.txt", "numbers", { parent_id: box.id });
+		const repair = await breakR2(ada.id);
+		expect((await ada.call("drive.move_to_drive", { item_ids: [box.id], target_space_id: driveId })).status).toBe(
+			"moving",
+		);
+		// The 28 items are in two parts. The target loses the second part, as after 30 days.
+		expect(await stagedParts(driveId)).toBe(2);
+		await sqlOf(driveId, "DELETE FROM imports WHERE seq = (SELECT MAX(seq) FROM imports)");
+		await repair();
+		await runMoves(ada.id);
+
+		expect(await names(eve, { space_id: driveId })).toEqual([]);
+		expect(await names(ada, { parent_id: box.id })).toHaveLength(27);
+		expect(fromBase64((await ada.call("drive.download_file", { item_id: file.id })).content_base64)).toBe("numbers");
+	});
+
+	// One call uses at most 400 calls to R2 and to the target. A move of many versions needs more.
+	it("answers moving when the calls of one call are spent, and the alarm completes the move", async () => {
+		const file = await upload(ada, "big.txt", "v0");
+		// 220 uploads are too slow for a test. The rows of the versions go into the storage of the drive.
+		const extra = Array.from({ length: 220 }, (_, index) => `ver_fill${String(index).padStart(6, "0")}`);
+		await Promise.all(extra.map((id) => env.BLOBS.put(`drive/${ada.id}/${file.id}/${id}`, "bytes")));
+		await runInDurableObject(stubOf(ada.id), (_instance, state) => {
+			for (const id of extra) {
+				state.storage.sql.exec(
+					`INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at)
+					VALUES (?, ?, ?, 5, 'text/plain', '', 1)`,
+					id,
+					file.id,
+					`drive/${ada.id}/${file.id}/${id}`,
+				);
+			}
+		});
+		const counter = { calls: 0 };
+		await runInDurableObject(stubOf(ada.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const blobs = new Proxy(target.env.BLOBS, {
+				get(bucket, property) {
+					const value = Reflect.get(bucket, property);
+					if (property !== "get" && property !== "put") return typeof value === "function" ? value.bind(bucket) : value;
+					return (...args: unknown[]) => {
+						counter.calls++;
+						return (value as (...values: unknown[]) => unknown).apply(bucket, args);
+					};
+				},
+			});
+			target.env = { ...target.env, BLOBS: blobs };
+		});
+
+		const moved = await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: driveId });
+		expect(moved.status).toBe("moving");
+		expect(counter.calls).toBeLessThanOrEqual(400);
+		await runMoves(ada.id);
+		expect(await driveBlobKeys(driveId)).toHaveLength(221);
+		expect((await eve.call("drive.list_versions", { space_id: driveId, item_id: file.id })).versions).toHaveLength(221);
+	});
+
+	it("writes one audit line for one move, also when a second call joins the move", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		const input = { item_ids: [file.id], target_space_id: driveId };
+		const move = () => ada.call("drive.move_to_drive", input);
+		const repair = await breakR2(ada.id);
+		const started = await auditLines(move);
+		expect(started.map((line) => [line.op, line.target])).toEqual([
+			["drive.move_to_drive", `started:${ada.id}>${driveId}:${file.id}`],
+		]);
+		// The second call joins the move, and a dry run changes nothing.
+		expect(await auditLines(move)).toEqual([]);
+		expect(await auditLines(() => ada.call("drive.move_to_drive", { ...input, dry_run: true }))).toEqual([]);
+		await repair();
+		await runMoves(ada.id);
+
+		// A move that completes in the call has a line without the mark.
+		const back = await auditLines(() =>
+			ada.call("drive.move_to_drive", { space_id: driveId, item_ids: [file.id], target_space_id: ada.id }),
+		);
+		expect(back.map((line) => line.target)).toEqual([`${driveId}>${ada.id}:${file.id}`]);
 	});
 
 	// The source drive calls R2 and the target drive. An answer can get lost after the work is done, and
@@ -612,7 +845,7 @@ describe("a move that does not complete in the call", () => {
 					get(stub, property) {
 						const name = String(property);
 						const run = (...args: unknown[]) => (stub[name] as Calls[string])(...args);
-						return ["stageImport", "commitImport", "applyDocumentChange"].includes(name)
+						return ["stageImport", "commitImport", "refreshImport"].includes(name)
 							? (...args: unknown[]) => once(name, () => run(...args))
 							: run;
 					},
@@ -630,7 +863,7 @@ describe("a move that does not complete in the call", () => {
 		const moved = await ada.call("drive.move_to_drive", { item_ids: [project.id], target_space_id: driveId });
 		expect(moved.status).toBe("moving");
 		await runMoves(ada.id);
-		expect([...lost].sort()).toEqual(["applyDocumentChange", "commitImport", "put", "stageImport"]);
+		expect([...lost].sort()).toEqual(["commitImport", "put", "refreshImport", "stageImport"]);
 		await drainDrive(ada.id);
 		await drainDrive(driveId);
 
@@ -649,6 +882,107 @@ describe("a move that does not complete in the call", () => {
 		expect((await eve.call("docs.get", { space_id: driveId, item_id: brief.id })).markdown).toContain("Launch plan");
 		expect((await ada.call("drive.list_permissions", space)).permissions).toHaveLength(1);
 		expect(await refs(nora, "shared")).toEqual([`${driveId}/report.txt`]);
+	});
+});
+
+describe("the outbox of a drive during moves", () => {
+	// A move deletes rows of the outbox. The alarm can have such a row in delivery at that time.
+	it("keeps a new row when a move deletes the row that the alarm delivers", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		const other = await upload(ada, "other.txt", "bytes");
+		await drainDrive(ada.id);
+		// Each delete in R2 by the drive of Ada waits for `release`.
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await runInDurableObject(stubOf(ada.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const blobs = new Proxy(target.env.BLOBS, {
+				get(bucket, property) {
+					const value = Reflect.get(bucket, property);
+					if (property === "delete") return async (key: string) => (await gate) ?? bucket.delete(key);
+					return typeof value === "function" ? value.bind(bucket) : value;
+				},
+			});
+			target.env = { ...target.env, BLOBS: blobs };
+		});
+		const waiting = async (query: string, wanted: number) =>
+			vi.waitFor(async () => expect((await sqlOf<{ n: number }>(ada.id, query))[0]?.n).toBe(wanted), WAIT);
+
+		// The move leaves one row: the delete of the old object. The alarm starts its delivery.
+		expect((await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: driveId })).status).toBe(
+			"done",
+		);
+		const alarm = runDurableObjectAlarm(stubOf(ada.id));
+		await vi.waitFor(async () => {
+			const deletes = await runInDurableObject(
+				stubOf(ada.id),
+				(instance) => (instance as unknown as { deleting: Map<string, unknown> }).deleting.size,
+			);
+			expect(deletes).toBe(1);
+		}, WAIT);
+		// The item comes back. The drive of Ada deletes that row, and waits for the delete in progress.
+		const back = ada.call("drive.move_to_drive", { space_id: driveId, item_ids: [file.id], target_space_id: ada.id });
+		await waiting("SELECT COUNT(*) AS n FROM outbox", 0);
+		// A grant puts a new row in the outbox, before the alarm ends the delivery.
+		const share = ada.call("drive.share_item", { item_id: other.id, principal_id: nora.id, role: "viewer" });
+		await waiting("SELECT COUNT(*) AS n FROM outbox WHERE kind = 'share'", 1);
+		release();
+		await Promise.all([share, back, alarm]);
+		await drainDrive(ada.id);
+		await drainDrive(driveId);
+
+		expect(await refs(nora, "shared")).toEqual([`${ada.id}/other.txt`]);
+	});
+
+	// The source stops a move after the copy. The notice for the target waits in the outbox of the source,
+	// and the item goes to the target by a different way before the notice arrives.
+	it("keeps the bytes of an item that reached the target after a stopped move to that target", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		await owner.call("drive.add_shared_drive_members", {
+			drive_id: driveId,
+			members: [{ principal_id: owner.id, role: "manager" }],
+		});
+		const archive = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Archive",
+				members: [{ principal_id: ada.id, role: "manager" }],
+			})
+		).shared_drive.id;
+		// A row at the head of the outbox of Ada waits for its next attempt. Each later row waits behind it.
+		await sqlOf(
+			ada.id,
+			"INSERT INTO outbox (kind, target, payload, attempts, next_attempt_at) VALUES ('blob', 'drive/none', '{}', 1, ?)",
+			Date.now() + 3_600_000,
+		);
+
+		// The target refuses the commit, after the source copied the bytes.
+		const repair = await breakR2(ada.id);
+		expect((await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: driveId })).status).toBe(
+			"moving",
+		);
+		await owner.call("drive.remove_shared_drive_member", { drive_id: driveId, principal_id: ada.id });
+		await repair();
+		await runMoves(ada.id);
+		expect(await names(ada)).toEqual(["report.txt"]);
+
+		// The item goes to the archive, and from there to the first target.
+		await owner.call("drive.add_shared_drive_members", {
+			drive_id: driveId,
+			members: [{ principal_id: ada.id, role: "manager" }],
+		});
+		await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: archive });
+		await ada.call("drive.move_to_drive", { space_id: archive, item_ids: [file.id], target_space_id: driveId });
+
+		// The outbox of Ada runs now, with what the stopped move left in it.
+		await sqlOf(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		for (const spaceId of [ada.id, archive, driveId]) await drainDrive(spaceId);
+		const space = { space_id: driveId, item_id: file.id };
+		expect(fromBase64((await eve.call("drive.download_file", space)).content_base64)).toBe("numbers");
+		expect(await driveBlobKeys(driveId)).toHaveLength(1);
+		expect(await driveBlobKeys(ada.id)).toEqual([]);
+		expect(await driveBlobKeys(archive)).toEqual([]);
 	});
 });
 

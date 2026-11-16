@@ -201,7 +201,7 @@ export const getAbout = defineOperation({
 	name: "drive.get_about",
 	summary: "Get the totals of a drive",
 	description:
-		"Returns the id of your drive, the bytes that it uses (each version of each file counts), its item totals, the limits, and a version number. The version grows with each change in the drive, so compare it to find out if anything changed. Set space_id to the id of a shared drive that you are a member of to get its totals, its name and your role in it.",
+		"Returns the id of your drive, the bytes that it uses (each version of each file counts), its item totals, the limits, and a version number. The version grows with each change in the drive, so compare it to find out if anything changed. Set space_id to the id of a shared drive that you are a member of to get its totals, its name and your role in it. The personal drive of a different person or agent is refused.",
 	http: { method: "GET", path: "/api/v1/drive/about" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent"],
@@ -726,7 +726,7 @@ export const moveToDrive = defineOperation({
 		/** The selected items, as they are in the target. Empty unless the status is `done`. */
 		items: z.array(DriveItem),
 	}),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "invalid", "conflict"],
 });
 
 export const driveOperations = {

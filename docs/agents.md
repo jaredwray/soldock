@@ -304,8 +304,8 @@ operations that the web app uses.
   has the number of items, the bytes, and the principals that keep a direct share (`kept_shares`).
   The shared drive then owns the items, and each member gets access. The ids of the items do not
   change: use them with the new `space_id`. The status `done` means that the move is complete. The
-  status `moving` means that it continues: an item of the move answers `conflict` to a change until
-  the move is complete, so try again a moment later. A call with the old `space_id` gets
+  status `moving` means that the move continues after the answer. Until the move is complete, an
+  item of the move answers `conflict` to a change. Try again a moment later. A call with the old `space_id` gets
   `not_found`, and the message names the new drive. One call moves at most 1,000 items. Only a
   manager moves items out of a shared drive, so an agent cannot do that.
 - **Delete.** `drive_trash_items` deletes nothing. `drive_delete_items` and `drive_empty_trash`
