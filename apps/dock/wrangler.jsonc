@@ -88,13 +88,15 @@
 			{ "name": "MAILBOX", "class_name": "MailboxDO" },
 			{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
 			{ "name": "DOCUMENT", "class_name": "DocumentDO" },
-			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" }
+			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
+			{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] },
 		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] },
-		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] }
+		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] },
+		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] }
 	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
@@ -146,7 +148,8 @@
 					{ "name": "MAILBOX", "class_name": "MailboxDO" },
 					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
 					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
-					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" }
+					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
+					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
 				]
 			},
 			"vars": {

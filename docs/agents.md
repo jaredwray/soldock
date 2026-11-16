@@ -327,7 +327,9 @@ app uses.
 - **Read.** `chat_list_messages` returns the newest messages of a room, oldest first. Pass the
   `seq` of the first message as `before` to get older messages. To read a room from an older
   message to the newest one, pass the `seq` of the last message that you have as `after`.
-- **Follow a room.** Each room in `chat_list_rooms` has `unread` and `version`. Keep the `version`
+- **Follow a room.** Each room in `chat_list_rooms` has `unread`, `unread_count` and `version`.
+  `unread_count` is the number of messages of other members after your read marker, at most 100.
+  Call `chat_mark_read` after you read a room. Keep the `version`
   of the last `chat_list_messages` result. When a room has a higher `version`, call
   `chat_list_messages` with `changed_after` and your version. The result has each new, changed and
   deleted message one time.

@@ -1,8 +1,9 @@
 import type { ChatRoom, OperationName } from "@soldock/contracts";
 import { type CallContext, getPrincipals } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
+import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
-import { listJoinedRooms, listPublicRooms } from "./room-index.ts";
+import { listPublicRooms } from "./room-index.ts";
 
 import { chatWebhookHandlers } from "./webhooks.ts";
 
@@ -108,19 +109,23 @@ async function idempotencyOf(
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	async "chat.list_rooms"(call, input) {
-		const list = input.view === "public" ? listPublicRooms : listJoinedRooms;
-		const page = await list(call.env.DIRECTORY, call.caller.id, {
+		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
 			limit: input.limit ?? DEFAULT_PAGE,
-		});
+		};
+		const page =
+			input.view === "public"
+				? await listPublicRooms(call.env.DIRECTORY, call.caller.id, list)
+				: await listJoinedRooms(call.env, call.caller.id, list);
 		if (page === null) {
 			throw new OperationError(
 				"invalid",
 				"The cursor is not valid. Use next_cursor from the last page of the same list.",
 			);
 		}
-		return { rooms: page.rooms.map(toRoom), next_cursor: page.nextCursor };
+		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
+		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
 	},
 
 	async "chat.create_room"(call, input) {
