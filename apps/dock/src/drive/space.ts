@@ -488,8 +488,8 @@ const MOVE_MAX_ATTEMPTS = 8;
 /** The time that a drive keeps the new place of a moved item. */
 const MOVED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /**
- * The most drives that a `moved` notice follows from one drive to the next, and the most times that it
- * looks for an item that moved on again.
+ * The most drives that the delivery of one `moved` notice asks for the next drive of an item. The
+ * first search and each later look use the same count.
  */
 const MOVED_HOPS = 10;
 /** R2 holds the bytes of a file with a neutral type. Nothing serves them from R2 to a browser. */
@@ -2856,30 +2856,52 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	/**
 	 * From the outbox of a different drive: items left the drive `from`. Each entry of `moves` has the
-	 * drive that holds its items now. The stars and the shared pointers of the owner of this drive for
-	 * the items go from `from` to that drive. A pointer that is not at `from` does not change, so a
-	 * second call changes nothing.
+	 * `path` of its items: each drive that the items went to after `from`, in order. The last drive holds
+	 * the items now. The stars and the shared pointers of the owner of this drive for the items go along
+	 * the path, one drive at a time, in one transaction. Thus a pointer at a middle drive also goes to
+	 * the last drive, when the notice of that middle drive did not arrive. A pointer at a drive that is
+	 * not on the path does not change. A second call finds each pointer at the last drive, and changes
+	 * nothing.
 	 */
-	applyMoved(input: { principalId: string; from: string; moves: { to: string; itemIds: string[] }[] }): void {
+	applyMoved(input: { principalId: string; from: string; moves: { path: string[]; itemIds: string[] }[] }): void {
 		this.ctx.storage.transactionSync(() => {
-			let changed = 0;
+			const all = JSON.stringify(input.moves.flatMap((move) => move.itemIds));
+			// A path can end at a drive that it left before. The rows are then the same after the steps.
+			const rows = () =>
+				JSON.stringify([
+					this.all(
+						`SELECT space_id, item_id, created_at FROM stars
+						WHERE item_id IN (SELECT value FROM json_each(?)) ORDER BY space_id, item_id`,
+						all,
+					),
+					this.all(
+						`SELECT space_id, item_id, role, shared_at FROM shared_with_me
+						WHERE item_id IN (SELECT value FROM json_each(?)) ORDER BY space_id, item_id`,
+						all,
+					),
+				]);
+			const before = rows();
 			for (const move of input.moves) {
-				// The items are in the drive `from` again. Its pointers are correct.
-				if (move.to === input.from) continue;
 				const list = JSON.stringify(move.itemIds);
-				changed += this.repoint("stars", input.from, move.to, list);
-				if (move.to === input.principalId) {
-					// The items are in the own drive of this principal now. An own item has no shared pointer.
-					changed += this.sql.exec(
-						"DELETE FROM shared_with_me WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))",
-						input.from,
-						list,
-					).rowsWritten;
-				} else {
-					changed += this.repoint("shared_with_me", input.from, move.to, list);
+				let from = input.from;
+				for (const to of move.path) {
+					if (to !== from) {
+						this.repoint("stars", from, to, list);
+						if (to === input.principalId) {
+							// The items went to the own drive of this principal. An own item has no shared pointer.
+							this.sql.exec(
+								"DELETE FROM shared_with_me WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))",
+								from,
+								list,
+							);
+						} else {
+							this.repoint("shared_with_me", from, to, list);
+						}
+					}
+					from = to;
 				}
 			}
-			if (changed > 0) this.bump();
+			if (rows() !== before) this.bump();
 		});
 	}
 
@@ -2897,66 +2919,105 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * The drive that holds each item now, as a map from a drive to its items. The search starts at the
-	 * drive `start` and follows the `moved` records from one drive to the next. It stops at a drive that
-	 * holds the item or has no record of it, and after 10 drives.
+	 * The path of each item from the drive `start` to the drive that holds it now. Each entry of the
+	 * answer has one path and the items with that path. A path starts with `start`. The search follows
+	 * the `moved` records from one drive to the next. For an item, it stops at a drive that holds the
+	 * item or has no record of it.
+	 *
+	 * Each step asks the drives of that step for the next drive, and uses one of `budget.asks`. When no
+	 * ask is left, each path stops at the last drive that the search knows. The item is possibly not in
+	 * that drive.
 	 */
-	private async located(start: string, itemIds: string[]): Promise<Map<string, string[]>> {
+	private async located(
+		start: string,
+		itemIds: string[],
+		budget: { asks: number },
+	): Promise<{ path: string[]; itemIds: string[] }[]> {
 		const spaceId = this.meta("space_id") as string;
-		const found = new Map<string, string[]>();
-		let open = new Map([[start, itemIds]]);
-		for (let hop = 0; open.size > 0; hop++) {
-			const next = new Map<string, string[]>();
-			for (const [drive, ids] of open) {
+		const found: { path: string[]; itemIds: string[] }[] = [];
+		let open = [{ path: [start], itemIds }];
+		while (open.length > 0) {
+			const ask = budget.asks > 0;
+			if (ask) budget.asks--;
+			const next = new Map<string, { path: string[]; itemIds: string[] }>();
+			for (const group of open) {
+				const drive = group.path.at(-1) as string;
 				let on: Record<string, string> = {};
-				if (hop < MOVED_HOPS) {
+				if (ask) {
 					on =
 						drive === spaceId
-							? this.movedOn(ids)
-							: await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(drive)).movedOn(ids);
+							? this.movedOn(group.itemIds)
+							: await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(drive)).movedOn(group.itemIds);
 				}
-				for (const id of ids) {
+				const here: string[] = [];
+				for (const id of group.itemIds) {
 					const to = on[id];
-					const group = to === undefined ? found : next;
-					const key = to ?? drive;
-					group.set(key, [...(group.get(key) ?? []), id]);
+					if (to === undefined) {
+						here.push(id);
+						continue;
+					}
+					const path = [...group.path, to];
+					const key = JSON.stringify(path);
+					const onward = next.get(key) ?? { path, itemIds: [] };
+					onward.itemIds.push(id);
+					next.set(key, onward);
 				}
+				if (here.length > 0) found.push({ path: group.path, itemIds: here });
 			}
-			open = next;
+			open = [...next.values()];
 		}
 		return found;
 	}
 
 	/**
 	 * Delivers a `moved` notice: items left this drive for the drive `to`. The items can have moved on
-	 * before this notice goes out, so this drive first finds the drive that holds each item now, and
-	 * sends that drive. An item that is in this drive again needs no notice.
+	 * before this notice goes out, so this drive first finds the path of each item to the drive that
+	 * holds it now, and sends that path. The drive of the principal moves its pointers along the path
+	 * (`applyMoved`). Thus this notice also moves a pointer at a middle drive, when the outbox of that
+	 * drive dropped its notice. An item that is in this drive again has a path that ends at this drive.
+	 * That path brings a pointer at a middle drive back, and does not change a pointer at this drive.
 	 *
 	 * The orders of this notice and of the notice of a later move, for an item that went from this drive
 	 * to B and then to C:
 	 *
-	 * - This notice goes out before the item leaves B. It has B. B makes its notice after that, with C.
-	 *   If its notice arrives last, the pointer goes from this drive to B, and then to C.
-	 * - The notice of B arrives first, and finds no pointer at B. This notice then has C, because B made
-	 *   its record of the move before it sent its notice.
-	 * - This notice has B, and the notice of B arrives before it. The pointer then goes to B, where the
-	 *   item is not. Thus, after each delivery, this drive looks for the items again. For an item that
-	 *   left B, it sends the notice of B again, which is safe to repeat. B made its record before its
-	 *   notice, so this drive finds the record.
+	 * - This notice goes out before the item leaves B. Its path is B. B makes its notice after that, with
+	 *   C. If its notice arrives last, the pointer goes from this drive to B, and then to C.
+	 * - The notice of B arrives first, and moves each pointer at B to C. This notice then has the path
+	 *   B, C, because B made its record of the move before it sent its notice. It moves each pointer at
+	 *   this drive to C, and finds no pointer at B.
+	 * - The notice of B does not arrive. This notice has the path B, C, and moves the pointers at this
+	 *   drive and at B to C.
+	 * - This notice has the path B, and the notice of B arrives before it. The pointer then goes to B,
+	 *   where the item is not. Thus, after each delivery, this drive looks for the items again. For an
+	 *   item that left B, it sends a notice from B with the new path, which is safe to repeat. B made
+	 *   its record before its notice, so this drive finds the record.
 	 * - An item that leaves B after the last look has a notice of B that arrives after this notice.
+	 *
+	 * The delivery of one notice asks at most 10 drives (`MOVED_HOPS`). The first search and each later
+	 * look use the same count. When no ask is left, the notice sends the path to the last drive that it
+	 * knows, and does not look again. The pointers go to that drive, because that is the best record of
+	 * the place of the item: a pointer that stays here shows a drive that the item left 10 moves before.
+	 * Each drive on the path made a notice for its move, and that notice moves the pointer on. If that
+	 * notice arrived before, the pointer stays at a drive that the item left (a known limit).
 	 */
 	private async notifyMoved(principalId: string, to: string, itemIds: string[]): Promise<void> {
 		const stub = this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(principalId));
+		const budget = { asks: MOVED_HOPS };
 		let open = [{ from: this.meta("space_id") as string, at: to, itemIds }];
-		for (let round = 0; round < MOVED_HOPS && open.length > 0; round++) {
+		while (open.length > 0) {
 			const next: typeof open = [];
 			for (const step of open) {
-				const moves = [...(await this.located(step.at, step.itemIds))]
-					.map(([drive, ids]) => ({ to: drive, itemIds: ids }))
-					.filter((move) => move.to !== step.from);
+				// A look at the drive `from` gives paths that start with that drive.
+				const moves = (await this.located(step.at, step.itemIds, budget))
+					.map((move) => ({ path: step.at === step.from ? move.path.slice(1) : move.path, itemIds: move.itemIds }))
+					.filter((move) => move.path.length > 0);
 				if (moves.length === 0) continue;
 				await stub.applyMoved({ principalId, from: step.from, moves });
-				for (const move of moves) next.push({ from: move.to, at: move.to, itemIds: move.itemIds });
+				if (budget.asks === 0) continue;
+				for (const move of moves) {
+					const last = move.path.at(-1) as string;
+					next.push({ from: last, at: last, itemIds: move.itemIds });
+				}
 			}
 			open = next;
 		}

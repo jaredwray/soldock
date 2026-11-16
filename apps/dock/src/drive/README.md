@@ -326,11 +326,21 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
 - An item can move again while the `moved` notice of its first move waits in the outbox of the
   source. Thus the source does not send the target of the move. Before it sends the notice, it asks
   the target where each item is now (`movedOn`), and follows the `moved` rows from drive to drive.
-  It stops at a drive that holds the item or has no row for it, and after 10 drives. The notice
-  gives the pointers that drive. An item that is in the source again gets no notice.
-- After the delivery, the source asks again. For an item that left the drive of the notice in that
-  time, it sends the notice of that drive. Thus a notice of a later move that arrived first cannot
-  leave a pointer at a drive that the item left.
+  It stops at a drive that holds the item or has no row for it.
+- The notice has the path of each item: each drive that the item went to after the source, in
+  order. `applyMoved` moves the rows along the path, one drive at a time, in one transaction. Thus
+  the rows at the source and at each middle drive go to the last drive of the path. The notice of
+  a middle drive can fail 8 times, and its outbox then drops it. The notice of an earlier drive
+  repairs the rows at that middle drive.
+- The path of an item that is in the source again ends at the source. The rows at a middle drive
+  come back to the source. The rows at the source do not change.
+- After the delivery, the source asks again. For an item that left the last drive of its path in
+  that time, it sends a notice from that drive with the new path. Thus a notice of a later move
+  that arrived first cannot leave a pointer at a drive that the item left.
+- The delivery of one notice asks at most 10 drives (`MOVED_HOPS`). The first search and each
+  later look use the same count. When no ask is left, the notice sends the path to the last drive
+  that it knows, and does not ask again. That drive is the best record of the place of the item,
+  and the notice of that drive moves the rows on.
 - The key of an R2 object has the drive in it, so an item that comes back to a drive gets its old
   keys again. A `blob` row for such a key can still wait in the outbox of that drive. Each `blob`
   row of a drive has a key of that drive. The target deletes its rows for the keys of the items
@@ -352,8 +362,11 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
 - A `cancel` row that fails 8 times is dropped. The staged items and the copies of their bytes
   then stay in the target for 30 days. The target deletes them in its first alarm after that time.
   A drive with no later change has no alarm, and keeps them.
-- A `moved` notice follows an item through at most 10 drives, and only while each drive has its
-  `moved` row (30 days). After that, the pointers go to the last drive that the notice found.
+- The delivery of one `moved` notice asks at most 10 drives, and follows an item only while each
+  drive has its `moved` row (30 days). After that, the pointers go to the last drive that the
+  notice knows. The item is possibly not in that drive. The notice of that drive then moves the
+  pointers on. If that notice arrived before, or its outbox dropped it, the pointers stay at a
+  drive that the item left. Such a star gives no item.
 - One item with many thousands of grants can make a staged row larger than 2 MB. Such a move fails
   in the stage step and stops after 8 attempts. The items stay in the source.
 

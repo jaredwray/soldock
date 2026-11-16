@@ -516,7 +516,7 @@ describe("the grants and the stars of moved items", () => {
 		await stubOf(nora.id).applyMoved({
 			principalId: nora.id,
 			from: ada.id,
-			moves: [{ to: driveId, itemIds: [project.id, report.id] }],
+			moves: [{ path: [driveId], itemIds: [project.id, report.id] }],
 		});
 		expect((await nora.call("drive.get_about")).version).toBe(before);
 		expect(await refs(nora, "starred")).toEqual([`${driveId}/q3.txt`]);
@@ -620,6 +620,103 @@ describe("the grants and the stars of moved items", () => {
 
 		expect(await refs(nora, "starred")).toEqual([`${archive}/report.txt`]);
 		expect(await refs(nora, "shared")).toEqual([`${archive}/report.txt`]);
+	});
+
+	// The outbox of a drive drops a notice that fails 8 times. The notice of an earlier move repairs it.
+	it("moves a star that the grantee set at a middle drive, when the notice of that drive is lost", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: nora.id, role: "viewer" });
+		await drainDrive(ada.id);
+		const archive = await archiveOf(ada);
+
+		// A row at the head of the outbox of Ada waits for its next attempt. The notice waits behind it.
+		await blockOutbox(ada.id);
+		await ada.call("drive.move_to_drive", { item_ids: [file.id], target_space_id: driveId });
+		await drainDrive(driveId);
+		await nora.call("drive.star_items", { space_id: driveId, item_ids: [file.id], starred: true });
+		expect(await refs(nora, "starred")).toEqual([`${driveId}/report.txt`]);
+		// The item moves on. The outbox of the shared drive drops its notice for Nora.
+		await blockOutbox(driveId);
+		await ada.call("drive.move_to_drive", { space_id: driveId, item_ids: [file.id], target_space_id: archive });
+		const dropped = "DELETE FROM outbox WHERE kind = 'moved' AND target = ? RETURNING id";
+		expect(await sqlOf(driveId, dropped, nora.id)).toHaveLength(1);
+		await sqlOf(driveId, "UPDATE outbox SET next_attempt_at = 0");
+		await drainDrive(driveId);
+		await drainDrive(archive);
+		expect(await sqlOf(nora.id, "SELECT space_id FROM stars")).toEqual([{ space_id: driveId }]);
+		await sqlOf(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		await drainDrive(ada.id);
+
+		expect(await refs(nora, "starred")).toEqual([`${archive}/report.txt`]);
+		expect(await refs(nora, "shared")).toEqual([`${archive}/report.txt`]);
+		// No star and no pointer stays at a drive that the item left.
+		expect(await sqlOf(nora.id, "SELECT space_id FROM stars")).toEqual([{ space_id: archive }]);
+		expect(await sqlOf(nora.id, "SELECT space_id FROM shared_with_me")).toEqual([{ space_id: archive }]);
+	});
+
+	it("asks at most 10 drives for one notice, and gives the pointers the last drive that it knows", async () => {
+		const file = await upload(ada, "report.txt", "numbers");
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: nora.id, role: "viewer" });
+		await nora.call("drive.star_items", { space_id: ada.id, item_ids: [file.id], starred: true });
+		await drainDrive(ada.id);
+
+		// The item goes through 12 shared drives while the notice of Ada waits in her outbox.
+		await blockOutbox(ada.id);
+		const chain: string[] = [];
+		for (let step = 0; step < 12; step++) {
+			const next = (
+				await owner.call("drive.create_shared_drive", {
+					name: `Stop ${step + 1}`,
+					members: [{ principal_id: ada.id, role: "manager" }],
+				})
+			).shared_drive.id;
+			const from = chain.at(-1);
+			await ada.call("drive.move_to_drive", {
+				...(from === undefined ? {} : { space_id: from }),
+				item_ids: [file.id],
+				target_space_id: next,
+			});
+			if (from !== undefined) await drainDrive(from);
+			await drainDrive(next);
+			chain.push(next);
+		}
+		expect(await sqlOf(nora.id, "SELECT space_id FROM stars")).toEqual([{ space_id: ada.id }]);
+
+		// The test counts the drives that the drive of Ada asks for the next drive of the item.
+		const asked: string[] = [];
+		await runInDurableObject(stubOf(ada.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const before = target.env;
+			type Calls = Record<string, (...args: unknown[]) => Promise<unknown>>;
+			const drive = (id: DurableObjectId) =>
+				new Proxy(before.DRIVE_SPACE.get(id) as unknown as Calls, {
+					get(stub, property) {
+						const name = String(property);
+						return (...args: unknown[]) => {
+							if (name === "movedOn") asked.push(id.toString());
+							return (stub[name] as Calls[string])(...args);
+						};
+					},
+				});
+			target.env = {
+				...before,
+				DRIVE_SPACE: {
+					idFromName: (name: string) => before.DRIVE_SPACE.idFromName(name),
+					get: drive,
+				} as unknown as Env["DRIVE_SPACE"],
+			};
+		});
+		await sqlOf(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		await drainDrive(ada.id);
+
+		expect(asked).toEqual(chain.slice(0, 10).map((id) => env.DRIVE_SPACE.idFromName(id).toString()));
+		// Drive 10 gave drive 11. The notice did not ask drive 11, so the star and the old pointer are there.
+		// The pointer at drive 12 is from the grant in that drive.
+		expect(await sqlOf(nora.id, "SELECT space_id FROM stars")).toEqual([{ space_id: chain[10] as string }]);
+		expect(await sqlOf(nora.id, "SELECT space_id FROM shared_with_me ORDER BY shared_at, space_id")).toEqual(
+			[chain[10], chain[11]].sort().map((id) => ({ space_id: id as string })),
+		);
+		expect(await refs(nora, "shared")).toEqual([`${chain[11]}/report.txt`]);
 	});
 });
 
