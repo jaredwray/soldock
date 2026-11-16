@@ -152,18 +152,6 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						{item.name}, file {neighbors.position} of {neighbors.total}
 					</p>
 				)}
-				{previous && (
-					<button
-						ref={previousRef}
-						type="button"
-						className="icon-button drive-preview-nav drive-preview-previous"
-						aria-label={`Previous file: ${previous.name}`}
-						title="Previous file"
-						onClick={() => onShow(previous)}
-					>
-						<Icon name="chevronLeft" />
-					</button>
-				)}
 				{content.status === "loading" && (
 					<p className="drive-picker-state" role="status">
 						<span className="spinner spinner-small" aria-hidden="true" /> Loading the file…
@@ -194,18 +182,6 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						<p>This type of file has no preview.</p>
 					</div>
 				)}
-				{next && (
-					<button
-						ref={nextRef}
-						type="button"
-						className="icon-button drive-preview-nav drive-preview-next"
-						aria-label={`Next file: ${next.name}`}
-						title="Next file"
-						onClick={() => onShow(next)}
-					>
-						<Icon name="chevronRight" />
-					</button>
-				)}
 			</div>
 			<div className="drive-preview-footer">
 				<dl className="drive-details">
@@ -230,17 +206,45 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						{shownError}
 					</p>
 				)}
-				<button
-					ref={downloadRef}
-					type="button"
-					className="button button-primary"
-					onClick={() => void download()}
-					disabled={downloading}
-					data-autofocus
-				>
-					<Icon name="download" size={16} />
-					{downloading ? "Getting the file…" : "Download"}
-				</button>
+				{/* Previous, Download and Next. Above 600px, Previous and Next are at the left and right edges of the
+				    file. On a phone, the three buttons are in one row at the bottom, with Download in the center. */}
+				<div className="drive-preview-actions">
+					{previous && (
+						<button
+							ref={previousRef}
+							type="button"
+							className="icon-button drive-preview-nav drive-preview-previous"
+							aria-label={`Previous file: ${previous.name}`}
+							title="Previous file"
+							onClick={() => onShow(previous)}
+						>
+							<Icon name="chevronLeft" />
+						</button>
+					)}
+					<button
+						ref={downloadRef}
+						type="button"
+						className="button button-primary"
+						onClick={() => void download()}
+						disabled={downloading}
+						data-autofocus
+					>
+						<Icon name="download" size={16} />
+						{downloading ? "Getting the file…" : "Download"}
+					</button>
+					{next && (
+						<button
+							ref={nextRef}
+							type="button"
+							className="icon-button drive-preview-nav drive-preview-next"
+							aria-label={`Next file: ${next.name}`}
+							title="Next file"
+							onClick={() => onShow(next)}
+						>
+							<Icon name="chevronRight" />
+						</button>
+					)}
+				</div>
 			</div>
 		</Dialog>
 	);

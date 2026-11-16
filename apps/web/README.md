@@ -405,7 +405,8 @@ MCP clients. The app has no UI-only path.
     shows from a `blob:` URL, and text shows as plain text. Each other type shows a card with no
     preview. The content of a file never goes into the page as HTML.
     - Round Previous and Next buttons at the left and right edges show the other files of the list
-      in the same dialog. The Left and Right arrow keys do the same. The order is the order of the
+      in the same dialog. On a phone (600px and below), Previous, Download and Next are in one row at
+      the bottom, with Download in the center. The Left and Right arrow keys do the same. The order is the order of the
       list (`previewNeighbors` in [`model.ts`](src/features/drive/model.ts)). The preview skips
       folders, docs and sheets, because they open in their own pages. The first file has no
       Previous button, and the last file has no Next button.
