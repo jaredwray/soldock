@@ -180,6 +180,8 @@ export function Select<T extends string>({
 		const { key } = event;
 		const letter = key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
 		if (!open) {
+			// A closed list starts a new search, also when the user typed in it less than 500 ms ago.
+			typed.current = { text: "", time: 0 };
 			if (key === "ArrowDown" || key === "ArrowUp" || key === "Enter" || key === " ") {
 				event.preventDefault();
 				show(startIndex());
