@@ -53,3 +53,34 @@ jobs:
         run: pnpm spikes:build
       - name: Dependency license policy
         run: pnpm licenses:check
+
+  # The end-to-end tests run against the built Worker in `wrangler dev`, with no credentials
+  # (e2e/README.md). The harness starts the Worker with a new local state and the seed data.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
+          package-manager-cache: false
+      - run: sfw pnpm install --frozen-lockfile
+      - name: Build the SPA (apps/web)
+        run: pnpm build
+      - name: Install Chromium for Playwright
+        run: pnpm --filter @soldock/e2e exec playwright install --with-deps chromium
+      - name: End-to-end tests (Playwright, against the built Worker in wrangler dev)
+        run: pnpm e2e
