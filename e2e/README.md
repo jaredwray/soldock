@@ -51,7 +51,7 @@ The first flows to cover, because they are tested by hand only:
   `javascript:` link, and Enter applies the link and does not send), hostile pasted HTML, the reply
   quote, and the HTML and text bodies that `mail.get_thread` returns after the send.
 
-- Drive, Docs and Sheets: a new folder, an upload, the preview, a rename, a star, the versions of a
+- Drive, Docs and Sheets: a new folder, an upload, the preview with Previous, Next and the arrow keys, a rename, a star, the versions of a
   file, the share dialog with a second person, a new doc with text and formats that stays after a
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.
@@ -63,8 +63,8 @@ The first flows to cover, because they are tested by hand only:
 
 - Admin: each section of the side navigation, a deep link to a section, `/admin` as an owner and
   as a member who sponsors an agent, a section for owners and admins as a member, and the drawer
-  at 900px and below (open, Escape, a link). In Members: the New person or agent dialog, Edit (a name, a
-  role, a sponsor), Archive and Restore, Delete, and the sponsor notice. In Shared mailboxes: the New
+  at 900px and below (open, Escape, a link). In Members: the New person or agent dialog, an open card
+  (a name, a role, a sponsor, Reset sign-in), Archive and Restore, Delete, and the sponsor notice. In Shared mailboxes: the New
   shared mailbox dialog, and in an open card, the name, a new member and Remove.
 
 - OAuth for agents: the MCP endpoint banner and its copy button, a client that registers and opens

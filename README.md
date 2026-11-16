@@ -105,7 +105,7 @@ for new mail.
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
 
-![Admin, Agents: the MCP endpoint with a Copy button, and two agents with the Internal only policy](docs/screenshots/agents.png)
+![Admin, Members: the MCP endpoint with a Copy button, and people and agents in one list](docs/screenshots/members.png)
 
 ### Admin
 
@@ -130,7 +130,7 @@ November 2026.
 | | What you pay Cloudflare |
 |---|---|
 | **The account** | $5 a month for [Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/), for the full account. It includes 10 million requests and 30 million CPU milliseconds a month. Soldock needs Workers Paid to send mail to all recipients. |
-| **Mailboxes, drives, documents and rooms** | Durable Objects, in Workers Paid. A month includes 1 million requests, 50 million rows written and 5 GB stored. More storage is $0.20 for each GB-month. |
+| **Mailboxes, drives, documents and rooms** | Durable Objects, in Workers Paid. A month includes 1 million requests, 50 million rows written and 5 GB stored. More storage is $0.20 for each GB-month. Each person and each agent also has one object for its list of rooms. A new, changed or deleted message makes one request to the object of each member of the room. |
 | **The directory** | D1, in Workers Paid. A month includes 25 billion rows read, 50 million rows written and 5 GB. |
 | **Files and raw mail** | 10 GB free in [R2](https://developers.cloudflare.com/r2/pricing/), then $0.015 for each GB-month. Downloads have no egress charge. |
 | **Inbound mail** | Free, with [Email Routing](https://developers.cloudflare.com/email-routing/). |

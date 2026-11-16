@@ -229,12 +229,14 @@ MCP clients. The app has no UI-only path.
     changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
     mail. The server refuses each change and each send in the mailbox of an agent.
-  - **Admin › Agents** has a **Read the mail of …** link on each agent, for owners and admins only. A
-    sponsor who is a member does not see it.
+  - **Admin › Members** has a **Read the mail of …** link on each agent.
+    Only an owner or an admin sees the link. A sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
-  - Owners and admins see all five sections. A member who sponsors an agent sees only **Your agents**.
+  - Owners and admins see four sections. A member who sponsors an agent sees only **Your agents**.
+    **Your agents** is the Members section, and it lists only the agents of that member.
     A member who opens a section for owners and admins sees a notice and not the section.
+  - `/admin/agents` redirects to `/admin/members`. People and agents share that section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
   - The page loads the directory one time. The directory stays when the section changes. Each
@@ -242,48 +244,58 @@ MCP clients. The app has no UI-only path.
   - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
   - Each section is a column of 960px at most. A section starts with a muted line of text. Its lists
     and its forms are in cards on the surface (`.panel-card`). A table in a card shows as list rows.
-  - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
-    role, the sponsor and the agent policy of each person and agent. Each row starts with an avatar:
-    the initials of a person, or the agent icon. The kind and the role are chips. An archived account
-    has an **Archived** chip. At 1100px and below, the table shows only the name, the role and the
-    actions, and an agent gets its chip next to its name. At 600px and below, a row has two lines:
-    the name and the address, then the role and the buttons. At 500px and below, the rows have no
-    avatar.
-    - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
-      shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
-      form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`. For a
-      person, the app sends these scopes as `key_scopes`. A person also needs a first password, which
-      the admin gives to the person. An archived person cannot be a sponsor.
-    - Each row has round icon buttons, with the name in the accessible name: **Edit**, **Reset sign-in**
-      (people only), **Archive** or **Restore**, and **Delete**. The buttons follow the rules of the
-      server: the owner and you have no Reset sign-in, Archive or Delete, and only the owner edits the owner.
-    - **Edit** opens a dialog for the name, the role of a person (Member or Admin) or the sponsor of an
-      agent (`directory.update_principal`). It sends only the fields that changed. The role control is
-      off for you and for the owner.
-    - **Reset sign-in** opens a dialog that sets a new password (`account.set_password`) or turns off
-      two-step verification (`account.disable_totp`), after a confirmation.
-    - **Archive** asks for a confirmation, then calls `directory.archive_principal`. **Restore**
-      (`directory.restore_principal`) needs no confirmation.
-    - **Delete** asks for a confirmation that says that it cannot be undone, then calls
-      `directory.delete_principal`. For a person who sponsors agents, the dialog names the agents and
-      tells the admin to give them a different sponsor first.
-  - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
-    page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
-    Each agent is one card (`AdminCard`), which opens on a click and shows the parts of the agent
-    with a line between them. The parts load their data, so the card renders them at the first open
-    only. For each agent, the page sets the outbound policy (mail recipients and webhook
-    hosts), lists the apps that connected as it with OAuth (`oauth.list_grants`, with an **Add
-    scopes** button, `oauth.add_grant_scopes`, and a Revoke button, `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
-    button), and manages the API keys. Only the sponsor sees the form that creates a webhook for the
-    agent (`mail.create_webhook` with the id of the agent).
-    **Add scopes** shows on a live connection when the session can give one more agent scope. Its
-    dialog lists those scopes. The confirm button stays off until the person selects a scope. The
-    dialog does not offer a removal: it tells the person to revoke the connection and connect again.
-    For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
-    A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
-    The **New person or agent** dialog also shows the banner when Agent is selected.
+  - **Members** (`members`) lists each person and each agent as a card (`AdminCard`).
+    People come first, then agents. Each group is in name order.
+    A click opens the card and shows its parts, with a line between the parts.
+    The parts load their data, so the card renders them only after the first open.
+    The parts stay after the card closes, so a form keeps its text.
+    A person shows initials in the avatar. An agent shows the agent icon.
+    The chips show the role of a person, or **Agent** and the outbound policy.
+    An archived account has an **Archived** chip. Your name shows **(you)**.
+    A banner above the list shows the full URL of `/mcp`, with a copy button.
+    OAuth is the main way to add an agent. The client needs only this URL.
+    A member who sponsors an agent sees only those agents. The section title is then **Your agents**.
+    That member does not get the forms that change an account.
+    - **New person or agent**, above the list, opens a dialog for an owner or an admin.
+      The first API key of a new principal shows once, with a copy button.
+      A credential cannot grant a scope that it does not hold.
+      The form offers only the scopes of the session.
+      For an agent, the form also applies `AGENT_SCOPES`.
+      For a person, the app sends these scopes as `key_scopes`.
+      A person also needs a first password. The admin gives the password to the person.
+      An archived person cannot be a sponsor.
+      The dialog shows the banner when Agent is selected.
+    - **Name and role**, or **Name and sponsor**, is the first part of an open card.
+      It saves with `directory.update_principal` and sends only the fields that changed.
+      **Save** stays off while nothing changed.
+      The role control is off for you and for the owner.
+      An admin has no form for the owner.
+      The card says that only the owner can change that account.
+    - **Reset sign-in** is a part of the card of each other person.
+      It sets a new password (`account.set_password`).
+      It can also turn off two-step verification (`account.disable_totp`) after a confirmation.
+      The owner and you have no **Reset sign-in** part.
+    - **Account** is a part of each card except the owner and you.
+      **Archive** asks for a confirmation, then calls `directory.archive_principal`.
+      **Restore** calls `directory.restore_principal` and needs no confirmation.
+      **Delete** asks for a confirmation, then calls `directory.delete_principal`.
+      The confirmation says that delete cannot be undone.
+      For a person who sponsors agents, the dialog names the agents.
+      It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
+    - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
+      The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
+      **Apps connected as …** uses `oauth.list_grants`, **Add scopes** (`oauth.add_grant_scopes`) and Revoke (`oauth.revoke_grant`).
+      **Add scopes** shows on a live connection when the session can give one more agent scope.
+      Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
+      To remove a scope, revoke the connection and connect again.
+      Mail webhooks use `mail.list_webhooks`. Chat webhooks use `chat.list_webhooks`. Each has a Delete button.
+      Only the sponsor sees the form that creates a webhook for the agent.
+      The call is `mail.create_webhook` or `chat.create_webhook`, with the id of the agent.
+      An owner or an admin can delete a webhook.
+      An owner or an admin also gets **Read the mail of …**.
+      A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
-    one card for each shared mailbox, as each agent has one in **Agents**. The card shows the name,
+    one card for each shared mailbox, as each account has one in **Members**. The card shows the name,
     the address and the number of members. A click opens the card and shows three parts:
     - **Display name**, a form that changes the name (`directory.update_team_mailbox`). The address
       cannot change. **Save name** is off while the name is the same.
@@ -404,6 +416,15 @@ MCP clients. The app has no UI-only path.
     in the center, and the details and **Download** at the bottom. A PNG, JPEG, GIF or WebP image
     shows from a `blob:` URL, and text shows as plain text. Each other type shows a card with no
     preview. The content of a file never goes into the page as HTML.
+    - Round Previous and Next buttons at the left and right edges show the other files of the list
+      in the same dialog. On a phone (600px and below), Previous, Download and Next are in one row at
+      the bottom, with Download in the center. The Left and Right arrow keys do the same. The order is the order of the
+      list (`previewNeighbors` in [`model.ts`](src/features/drive/model.ts)). The preview skips
+      folders, docs and sheets, because they open in their own pages. The first file has no
+      Previous button, and the last file has no Next button.
+    - When the Previous or Next button that had the focus goes away, the focus goes to the other
+      button. A hidden status line gives the name and the position of the file, for example
+      "IMG_4942.jpg, file 3 of 8".
   - The More menu of an item follows the role. The owner can rename, move, copy, share, see the
     versions and move the item to the trash. An editor can rename, copy and upload a version. A
     viewer can open, download and copy. Each person can put a star on an item: the star is their own.
@@ -426,19 +447,13 @@ MCP clients. The app has no UI-only path.
     items of other drives loads again on the same timer. The timer also loads the list of the
     shared drives again.
 - **Shared drives** (`/drive/shared-drives`). The sidebar of Drive has a **Shared drives** entry
-  below My Drive. Below that entry, the sidebar has a row for each shared drive of the person
-  (`drive.list_shared_drives`). The page of the entry lists the drives with the role of the person,
-  the number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
-  - The rows of the shared drives are collapsed by default. A chevron on the right of the entry
-    expands or collapses them: it points down when they are collapsed, and up when they are
-    expanded. The shell keeps this state while the page changes. A reload collapses the rows again
-    (`sharedDrivesNav` in [`model.ts`](src/features/drive/model.ts)).
-  - During a drag of items, the collapsed rows also show if a drive can get the items.
+  below My Drive. The sidebar does not show a row for each shared drive. The page of the entry lists
+  the shared drives of the person (`drive.list_shared_drives`) with the role of the person, the
+  number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
   - A shared drive has its own paths: `/drive/shared-drives/<drv_id>` for its root, and `…/trash` and
     `…/search?q=<query>` below that. A folder has the same form of path as in each other drive
     (`/drive/folders/<drv_id>/<itm_id>`). A doc and a sheet of a shared drive open in their editors.
-  - In a shared drive, the row of that drive is the current page of the sidebar. When the rows are
-    collapsed, the Shared drives entry is the current page. The first entry of
+  - In a shared drive, the Shared drives entry is the current page of the sidebar. The first entry of
     the folder path is the name of the drive (`drive.get_about` with `space_id`). A chip shows the
     role of the person: Manager, Editor or Viewer.
   - The actions follow the role (`itemActions` in [`model.ts`](src/features/drive/model.ts)). An
@@ -489,12 +504,12 @@ MCP clients. The app has no UI-only path.
   - A move in the same drive of more than 100 items makes one call for each 100 items. When a call
     fails after a different call moved items, the dialog says how many items moved, and the list
     loads again.
-  - A person can also drag a row, or the selection that the row is part of, onto My Drive or a
-    shared drive in the sidebar. During the drag, each drive that can get the items has a line
-    around it. A drop on a different drive opens the same confirmation. A drop on the drive that
-    holds the items moves them to its root. A selection with items of two drives does not start a
-    drag. The drag is for a pointer only, and the drawer of a
-    narrow screen has no drag: Move to… does the same.
+  - A person can also drag a row, or the selection that the row is part of, onto My Drive in the
+    sidebar. During the drag, My Drive has a line around it. A drop of items from a shared drive
+    opens the same confirmation. A drop of items from My Drive moves them to its root. The app does
+    not start a drag when the items cannot move to My Drive. Examples: a selection with items of two
+    drives, or items of a shared drive for a person who is not a manager. The drag is for a pointer
+    only, and the drawer of a narrow screen has no drag: Move to… does the same.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
     and the size. From 901px to 1100px, the Last change column is wider, for the name of the person.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the

@@ -54,6 +54,7 @@ import {
 	moveAcrossRefusal,
 	moveItemsInput,
 	moveTargets,
+	previewNeighbors,
 	SHARED_DRIVE_ICON,
 	sharedDriveOf,
 	spaceBatches,
@@ -75,9 +76,6 @@ export interface DriveAppProps {
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
-	/** True when the person expanded the shared drives in the sidebar, from the shell: the state stays when the page changes. */
-	drivesExpanded: boolean;
-	onSetDrivesExpanded: (expanded: boolean) => void;
 }
 
 type DriveDialog =
@@ -170,7 +168,7 @@ function sameZone(a: DropZone | null, b: DropZone | null): boolean {
  * data that each part shares: the poll of the own drive, the list, the folder of a folder view and
  * the selection. The list and the folder belong to one view, so a new view starts clean.
  */
-export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrivesExpanded }: DriveAppProps) {
+export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const { whoami } = useSession();
 	const ownId = whoami.principal.id;
 	const orgAdmin = isOrgAdmin(whoami.principal);
@@ -180,7 +178,7 @@ export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrive
 	const [dialog, setDialog] = useState<DriveDialog>(null);
 	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
 	const [drop, setDrop] = useState<DropZone | null>(null);
-	// The items of a drag from the list, and the drives of the sidebar that can get them.
+	// The items of a drag from the list, and the drives that can get them.
 	const [drag, setDrag] = useState<{ items: DriveItem[]; targets: MoveTarget[] } | null>(null);
 	const mainRef = useRef<HTMLElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -391,25 +389,17 @@ export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrive
 	}
 
 	/**
-	 * Starts a drag of a row. The selection moves with a row that is part of it. The handler cancels
-	 * the drag when no drive can get the items, for example a selection with items of two drives.
+	 * Starts a drag of a row. The selection moves with a row that is part of it. My Drive in the sidebar
+	 * is the only place for a drop. The handler cancels the drag when the items cannot move to My Drive.
+	 * Examples: a selection with items of two drives, or items of a shared drive for a person who is
+	 * not a manager.
 	 */
 	function dragItem(item: DriveItem, event: ReactDragEvent<HTMLTableRowElement>) {
 		const items = selected.has(item.id) ? selectedItems : [item];
 		const targets = moveTargets(items, ownId, knownDrives);
-		if (targets.length === 0) {
+		if (!targets.some((target) => target.spaceId === ownId)) {
 			event.preventDefault();
 			return;
-		}
-		// Without the list of the shared drives, the sidebar cannot show each drive that can get the items.
-		if (drivesStatus !== "ready") {
-			toast({
-				message:
-					drivesStatus === "error"
-						? `The shared drives did not load. ${sharedDrives.error} Use “Move to…” to try again.`
-						: "The shared drives still load. Try again in a moment.",
-				tone: drivesStatus === "error" ? "error" : "info",
-			});
 		}
 		event.dataTransfer.effectAllowed = "move";
 		event.dataTransfer.setData("text/plain", items.map((entry) => entry.name).join("\n"));
@@ -417,8 +407,8 @@ export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrive
 	}
 
 	/**
-	 * A drop of the dragged items on a drive of the sidebar. The items go to the root of that drive. A
-	 * move to a different drive asks for a confirmation first.
+	 * A drop of the dragged items on My Drive in the sidebar. The items go to the root of the own drive.
+	 * A move from a different drive asks for a confirmation first.
 	 */
 	async function dropItems(spaceId: string) {
 		const current = drag;
@@ -701,12 +691,8 @@ export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrive
 		<div className="drive-layout">
 			<DriveSidebar
 				active={navEntry(view, foreign)}
-				activeDriveId={sharedId}
-				drives={sharedDrives.drives}
 				dropSpaces={dropSpaces}
 				onDropItems={(spaceId) => void dropItems(spaceId)}
-				drivesExpanded={drivesExpanded}
-				onSetDrivesExpanded={onSetDrivesExpanded}
 				about={about}
 				open={navOpen}
 				newItems={newItems}
@@ -1015,7 +1001,14 @@ export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrive
 			{dialog?.type === "versions" && (
 				<VersionsDialog item={dialog.item} onClose={() => setDialog(null)} onChanged={changed} />
 			)}
-			{dialog?.type === "preview" && <PreviewDialog item={dialog.item} onClose={() => setDialog(null)} />}
+			{dialog?.type === "preview" && (
+				<PreviewDialog
+					item={dialog.item}
+					neighbors={previewNeighbors(list.items, dialog.item.id)}
+					onShow={(item) => setDialog({ type: "preview", item })}
+					onClose={() => setDialog(null)}
+				/>
+			)}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete forever?"

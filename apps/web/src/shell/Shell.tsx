@@ -30,8 +30,6 @@ export function Shell() {
 	const mailboxes = useMailboxes(route.page);
 	// The mailboxes that the person expanded or collapsed in the mail sidebar. The state stays when the mailbox changes.
 	const [expandedMailboxes, setExpandedMailboxes] = useState<Readonly<Record<string, boolean>>>({});
-	// True when the person expanded the shared drives in the Drive sidebar. They are collapsed by default.
-	const [drivesExpanded, setDrivesExpanded] = useState(false);
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
 	// sign in again after the session ends. Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
@@ -128,15 +126,7 @@ export function Shell() {
 					/>
 				);
 			case "drive":
-				return (
-					<DriveApp
-						view={route.view}
-						navOpen={navOpen}
-						onCloseNav={() => setNavOpen(false)}
-						drivesExpanded={drivesExpanded}
-						onSetDrivesExpanded={setDrivesExpanded}
-					/>
-				);
+				return <DriveApp view={route.view} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "doc":
 				// The key gives each doc its own editor, so the text of one never shows in a different one.
 				return <DocPage key={route.itemId} spaceId={route.spaceId} itemId={route.itemId} />;

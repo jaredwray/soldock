@@ -898,11 +898,6 @@ fieldset {
 	.link-field {
 		min-height: 44px;
 	}
-
-	.row-button {
-		width: 44px;
-		height: 44px;
-	}
 }
 .brand-mark {
 	display: inline-grid;
@@ -3425,22 +3420,11 @@ fieldset {
 	white-space: nowrap;
 }
 
-/* The person, the agent or the mailbox of a row: an avatar, the name and the address. */
-.member {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-width: 0;
-}
-
+/* The avatar of a card, and the name of a person in a table row. */
 .member-avatar {
 	border: 1px solid var(--border);
 	background: var(--background);
 	color: var(--foreground);
-}
-
-.member-text {
-	min-width: 0;
 }
 
 .member-name {
@@ -3458,11 +3442,6 @@ fieldset {
 .member-you {
 	color: var(--muted-foreground);
 	font-weight: 400;
-}
-
-/* The chip of an agent next to its name. It shows only at 900px and below, where the Kind column hides. */
-.kind.kind-inline {
-	display: none;
 }
 
 /* The mailbox of a webhook under its URL. It shows only at 900px and below, where the Mailbox column hides. */
@@ -3496,17 +3475,10 @@ fieldset {
 	color: var(--foreground);
 }
 
-/* The icon buttons of a table row: edit, archive or restore, and delete. Each is a round button with a border. */
+/* The buttons of one row, for example the webhook actions. */
 .row-actions {
 	display: inline-flex;
 	gap: 6px;
-}
-
-.row-button {
-	border: 1px solid var(--border);
-	border-radius: 50%;
-	background: var(--background);
-	color: var(--foreground);
 }
 
 /* Fields one under the other, in a small dialog. */
@@ -3534,7 +3506,7 @@ fieldset {
 	border-color: var(--border);
 }
 
-/* The full URL of the MCP endpoint, at the top of the Agents section and in the agent form. */
+/* The full URL of the MCP endpoint, at the top of Members and in the new-agent form. */
 .mcp-banner {
 	display: flex;
 	flex-direction: column;
@@ -3781,6 +3753,10 @@ fieldset {
 	margin-bottom: 8px;
 }
 
+.admin-card-form .subpanel-title {
+	margin: 0;
+}
+
 .admin-card-form .field {
 	width: 100%;
 	max-width: 480px;
@@ -3789,6 +3765,21 @@ fieldset {
 .admin-card-form .field-hint,
 .admin-card-form .form-error {
 	margin: 0;
+}
+
+/* Archive, Restore and Delete, in a row under the account text. */
+.admin-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.admin-card-muted .admin-card-name {
+	color: var(--muted-foreground);
+}
+
+.admin-card-muted .member-avatar {
+	opacity: 0.6;
 }
 
 /* The OAuth approval page (/connect): one card in the center, on the surface. */
@@ -4174,17 +4165,9 @@ fieldset {
 		flex-basis: 100%;
 	}
 
-	/* The Members table keeps the name, the role and the actions on a phone. */
+	/* A table in Admin keeps the name and the actions on a phone. The other columns hide. */
 	.col-optional {
 		display: none;
-	}
-
-	.member-cell {
-		min-width: 140px;
-	}
-
-	.kind.kind-inline {
-		display: inline-block;
 	}
 
 	.row-note.row-note-inline {
@@ -4192,79 +4175,15 @@ fieldset {
 	}
 }
 
-/* A phone: a row of the Members table and of the Shared mailboxes table has two lines. The name
-   and the address are above the role, or the members, and the buttons. The header row stays for a
-   screen reader. */
-@media (max-width: 600px) {
-	.table-rows:has(.member-cell),
-	.table-rows:has(.member-cell) tbody {
-		display: block;
-	}
-
-	.table-rows:has(.member-cell) thead {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		overflow: hidden;
-		clip-path: inset(50%);
-	}
-
-	.table-rows:has(.member-cell) tbody tr {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 6px 12px;
-		padding: 12px 0;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.table-rows:has(.member-cell) tbody tr:last-child {
-		border-bottom: 0;
-	}
-
-	.table-rows:has(.member-cell) td {
-		display: block;
-		flex: 1 1 0;
-		min-width: 0;
-		padding: 0;
-		border-bottom: 0;
-	}
-
-	.table-rows:has(.member-cell) td.member-cell {
-		flex: 1 0 100%;
-	}
-
-	.table-rows:has(.member-cell) td.cell-actions {
-		flex: none;
-	}
-
-	.table-rows:has(.member-cell) td.col-optional {
-		display: none;
-	}
-}
-
-/* From 901px to 1100px, the Admin tables have the sidebar next to them. They keep the name, the role
-   and the actions, as at 900px and below. */
+/* From 901px to 1100px, the Admin tables have the sidebar next to them. They keep the name and the
+   actions, as at 900px and below. */
 @media (min-width: 901px) and (max-width: 1100px) {
 	.admin-layout .col-optional {
 		display: none;
 	}
-
-	.admin-layout .kind.kind-inline {
-		display: inline-block;
-	}
-
-	.admin-layout .member-cell {
-		min-width: 200px;
-	}
 }
 
-/* A narrow phone has no room for the avatar of a row. */
 @media (max-width: 500px) {
-	.table-rows .member-avatar {
-		display: none;
-	}
-
 	.table-rows th,
 	.table-rows td {
 		padding-right: 10px;

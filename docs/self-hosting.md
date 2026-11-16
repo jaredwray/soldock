@@ -251,14 +251,14 @@ migration. Do one of these steps:
     -d '{"password":"<a password of at least 12 characters>"}'
   ```
 
-Then sign in, and set passwords for the other people under **Admin › Members** (**Reset sign-in** in each row).
+Then sign in. Open each other person under **Admin › Members**, and set a password with **Reset sign-in**.
 Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an
-  admin. **Reset sign-in** in the row of the person under **Admin › Members** sets a new password or turns
-  off two-step verification.
+  admin. Open the person under **Admin › Members**. **Reset sign-in** sets a new password or turns off
+  two-step verification.
 - The owner uses the API key from setup: `account.set_password`, or `account.disable_totp`.
 - After 10 failed attempts, sign-in to that account stops for 15 minutes. API keys and existing
   sessions still work.

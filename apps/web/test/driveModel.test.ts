@@ -19,7 +19,7 @@ import {
 	moveTargets,
 	moveToDriveInput,
 	previewKind,
-	sharedDrivesNav,
+	previewNeighbors,
 	spaceBatches,
 	uploadMimeType,
 	uploadRefusal,
@@ -401,6 +401,32 @@ describe("previewKind", () => {
 	});
 });
 
+describe("previewNeighbors", () => {
+	const list = [
+		{ id: "folder", kind: "folder" },
+		{ id: "a", kind: "file" },
+		{ id: "doc", kind: "doc" },
+		{ id: "b", kind: "file" },
+		{ id: "sheet", kind: "sheet" },
+		{ id: "c", kind: "file" },
+	] as const;
+
+	// A folder, a doc and a sheet have no preview: Next must not open the preview of one.
+	it("goes to the files before and after, in the order of the list, and skips the other kinds", () => {
+		expect(previewNeighbors(list, "b")).toEqual({ previous: list[1], next: list[5], position: 2, total: 3 });
+	});
+
+	it("stops at the first and the last file", () => {
+		expect(previewNeighbors(list, "a")).toMatchObject({ previous: null, next: list[3], position: 1 });
+		expect(previewNeighbors(list, "c")).toMatchObject({ previous: list[3], next: null, position: 3 });
+	});
+
+	// A poll can remove the file on screen from the list. The preview then shows that file with no Previous and Next.
+	it("gives no neighbors for a file that is not in the list", () => {
+		expect(previewNeighbors(list, "gone")).toEqual({ previous: null, next: null, position: 0, total: 3 });
+	});
+});
+
 describe("breadcrumbs", () => {
 	const folder = { item: { id: ITEM, name: "Acme", space_id: ME }, path: [{ id: FOLDER, name: "Clients" }] };
 
@@ -443,36 +469,6 @@ describe("breadcrumbs", () => {
 			{ label: "Shared with me", to: "/drive/shared" },
 			{ label: "Assets", to: null },
 		]);
-	});
-});
-
-describe("sharedDrivesNav", () => {
-	const drives = [{ id: DESIGN }];
-
-	// The rows of the shared drives are collapsed until the person expands them.
-	it("collapses the rows by default, and makes the Shared drives entry the current page", () => {
-		expect(sharedDrivesNav(drives, DESIGN, false, null)).toEqual({
-			toggle: true,
-			listed: false,
-			driveRowCurrent: false,
-		});
-		expect(sharedDrivesNav(drives, DESIGN, true, null)).toEqual({ toggle: true, listed: true, driveRowCurrent: true });
-		// Until the list has the drive on screen, the Shared drives entry is the current page.
-		expect(sharedDrivesNav(drives, ITEM, true, null).driveRowCurrent).toBe(false);
-	});
-
-	it("shows no button without shared drives", () => {
-		const none = { toggle: false, listed: false, driveRowCurrent: false };
-		expect(sharedDrivesNav(null, null, true, null)).toEqual(none);
-		expect(sharedDrivesNav([], null, true, new Set([ME]))).toEqual(none);
-	});
-
-	// A drop on a row moves the items to that drive, so the rows show during the drag.
-	it("shows the collapsed rows during a drag only when a drive can get the items", () => {
-		expect(sharedDrivesNav(drives, null, false, new Set([ME, DESIGN])).listed).toBe(true);
-		expect(sharedDrivesNav(drives, null, false, new Set([ME])).listed).toBe(false);
-		// The person did not expand the rows, so the Shared drives entry stays the current page.
-		expect(sharedDrivesNav(drives, DESIGN, false, new Set([DESIGN])).driveRowCurrent).toBe(false);
 	});
 });
 

@@ -10,6 +10,7 @@ import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
 export { ChatRoomDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";
 export { DriveSpaceDO } from "./drive/index.ts";
+export { PrincipalDO } from "./identity/index.ts";
 export { MailboxDO } from "./mail/index.ts";
 
 const app = createApp(handlers, watchers);

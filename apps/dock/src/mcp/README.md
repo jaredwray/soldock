@@ -78,8 +78,8 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   to another tool gets JSON-RPC error `-32602`.
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). They also tell how to get the scope:
-  - An OAuth connection: the sponsor, an owner or an admin adds the scope in Admin › Agents
-    (`oauth.add_grant_scopes`). The connection stays.
+  - An OAuth connection: the sponsor, an owner or an admin opens the agent in Admin › Members
+    and adds the scope (`oauth.add_grant_scopes`). The connection stays.
   - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
     sponsor, an owner or an admin creates the key.
 

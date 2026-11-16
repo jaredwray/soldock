@@ -8,41 +8,32 @@ import { viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { WebhookManager } from "../settings/Webhooks.tsx";
-import { AdminCard } from "./AdminCard.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
-import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist, policySummary } from "./policy.ts";
+import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist } from "./policy.ts";
 
-interface AgentPanelProps {
+interface AgentDetailsProps {
 	agent: Principal;
 	sponsor: Principal | null;
 	/** True for an owner or an admin, who can read the mailbox of each agent. A sponsor cannot. */
 	canReadMail: boolean;
+	/** True when the card has no sponsor field. A sponsor then sees who is accountable. */
+	showSponsor: boolean;
 	onChanged: () => void;
 }
 
 /**
- * One agent: its outbound policy, the apps that connected as it with OAuth, its webhooks and its API keys.
- * For an owner or an admin, also a link to the mailbox of the agent, which they can read. Only the sponsor
- * can create a webhook for the agent. An owner or an admin can delete one.
+ * The tools of one agent: its outbound policy, the apps that connected as it with OAuth, its webhooks
+ * and its API keys. An owner or an admin also gets a link to the mailbox, which they can read. Only the
+ * sponsor can create a webhook for the agent. An owner or an admin can delete one.
  */
-export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPanelProps) {
+export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
 	return (
-		<AdminCard
-			icon="bot"
-			name={agent.display_name}
-			address={agent.address}
-			chips={
-				<>
-					{agent.archived_at !== null && <span className="chip">Archived</span>}
-					<span className="chip">{policySummary(policy)}</span>
-				</>
-			}
-		>
+		<>
 			<div className="admin-card-meta">
 				<div>
-					<p>Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>
+					{showSponsor && <p>Sponsor: {sponsor ? `${sponsor.display_name} (${sponsor.address})` : "none"}</p>}
 					{canReadMail && (
 						<p className="field-hint">Read only. The audit log records the conversations that you open.</p>
 					)}
@@ -72,7 +63,7 @@ export function AgentPanel({ agent, sponsor, canReadMail, onChanged }: AgentPane
 				allowedScopes={AGENT_SCOPES}
 				heading={`API keys of ${agent.display_name}`}
 			/>
-		</AdminCard>
+		</>
 	);
 }
 
