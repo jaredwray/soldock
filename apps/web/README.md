@@ -429,10 +429,16 @@ MCP clients. The app has no UI-only path.
   below My Drive. Below that entry, the sidebar has a row for each shared drive of the person
   (`drive.list_shared_drives`). The page of the entry lists the drives with the role of the person,
   the number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
+  - The rows of the shared drives are collapsed by default. A chevron on the right of the entry
+    expands or collapses them: it points down when they are collapsed, and up when they are
+    expanded. The shell keeps this state while the page changes. A reload collapses the rows again
+    (`sharedDrivesNav` in [`model.ts`](src/features/drive/model.ts)).
+  - During a drag of items, the collapsed rows also show if a drive can get the items.
   - A shared drive has its own paths: `/drive/shared-drives/<drv_id>` for its root, and `…/trash` and
     `…/search?q=<query>` below that. A folder has the same form of path as in each other drive
     (`/drive/folders/<drv_id>/<itm_id>`). A doc and a sheet of a shared drive open in their editors.
-  - In a shared drive, the row of that drive is the current page of the sidebar. The first entry of
+  - In a shared drive, the row of that drive is the current page of the sidebar. When the rows are
+    collapsed, the Shared drives entry is the current page. The first entry of
     the folder path is the name of the drive (`drive.get_about` with `space_id`). A chip shows the
     role of the person: Manager, Editor or Viewer.
   - The actions follow the role (`itemActions` in [`model.ts`](src/features/drive/model.ts)). An

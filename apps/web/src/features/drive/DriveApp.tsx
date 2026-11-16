@@ -75,6 +75,9 @@ export interface DriveAppProps {
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
+	/** True when the person expanded the shared drives in the sidebar, from the shell: the state stays when the page changes. */
+	drivesExpanded: boolean;
+	onSetDrivesExpanded: (expanded: boolean) => void;
 }
 
 type DriveDialog =
@@ -167,7 +170,7 @@ function sameZone(a: DropZone | null, b: DropZone | null): boolean {
  * data that each part shares: the poll of the own drive, the list, the folder of a folder view and
  * the selection. The list and the folder belong to one view, so a new view starts clean.
  */
-export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
+export function DriveApp({ view, navOpen, onCloseNav, drivesExpanded, onSetDrivesExpanded }: DriveAppProps) {
 	const { whoami } = useSession();
 	const ownId = whoami.principal.id;
 	const orgAdmin = isOrgAdmin(whoami.principal);
@@ -702,6 +705,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 				drives={sharedDrives.drives}
 				dropSpaces={dropSpaces}
 				onDropItems={(spaceId) => void dropItems(spaceId)}
+				drivesExpanded={drivesExpanded}
+				onSetDrivesExpanded={onSetDrivesExpanded}
 				about={about}
 				open={navOpen}
 				newItems={newItems}

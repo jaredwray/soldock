@@ -36,6 +36,7 @@ const FILES: Record<IconName, string> = {
 	copy: "copy",
 	signOut: "log-out",
 	chevronDown: "nav-arrow-down",
+	chevronUp: "nav-arrow-up",
 	external: "globe",
 	bold: "bold",
 	italic: "italic",

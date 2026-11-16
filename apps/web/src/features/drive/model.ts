@@ -30,6 +30,37 @@ export function spaceInput(spaceId: string | null, ownSpaceId: string): { space_
 /** The icon of a shared drive, and of the list of the shared drives. */
 export const SHARED_DRIVE_ICON: IconName = "allMail";
 
+/** The rows of the shared drives under the Shared drives entry of the sidebar. */
+export interface SharedDrivesNav {
+	/** True when the entry has the button that expands or collapses the rows. */
+	toggle: boolean;
+	/** True when the sidebar shows a row for each shared drive. */
+	listed: boolean;
+	/** True when the row of the drive on screen is the current page. Else the Shared drives entry is. */
+	driveRowCurrent: boolean;
+}
+
+/**
+ * The rows of the shared drives in the sidebar. The rows are collapsed until the person expands them.
+ * During a drag of items, the rows also show when they are collapsed, if a drive can get the items.
+ * The row of the drive on screen is the current page only when the person expanded the rows.
+ */
+export function sharedDrivesNav(
+	drives: readonly Pick<SharedDrive, "id">[] | null,
+	activeDriveId: string | null,
+	expanded: boolean,
+	dropSpaces: ReadonlySet<string> | null,
+): SharedDrivesNav {
+	const list = drives ?? [];
+	if (list.length === 0) return { toggle: false, listed: false, driveRowCurrent: false };
+	const dropTarget = dropSpaces !== null && list.some((drive) => dropSpaces.has(drive.id));
+	return {
+		toggle: true,
+		listed: expanded || dropTarget,
+		driveRowCurrent: expanded && list.some((drive) => drive.id === activeDriveId),
+	};
+}
+
 /** The shared drive that a view is in: its root, a folder, its trash or its search. Null for each other view. */
 export function sharedDriveOf(view: DriveView): string | null {
 	return "spaceId" in view && isSharedDriveId(view.spaceId) ? view.spaceId : null;
