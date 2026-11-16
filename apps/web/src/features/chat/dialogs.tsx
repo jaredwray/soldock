@@ -4,13 +4,10 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { usePrincipals } from "../../lib/usePrincipals.ts";
+import { Select } from "../../lib/Select.tsx";
+import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
-
-function principalLabel(principal: Principal): string {
-	return `${principal.display_name}${principal.kind === "agent" ? " (agent)" : ""} – ${principal.address}`;
-}
 
 /** Creates a public or a private room. The person becomes its owner. */
 export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (room: ChatRoom) => void }) {
@@ -444,20 +441,14 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 					<label htmlFor={personId} className="visually-hidden">
 						Person or agent to add
 					</label>
-					<select
+					<Select
 						id={personId}
-						className="input"
 						value={principalId}
-						onChange={(event) => setPrincipalId(event.target.value)}
+						options={candidates.map(principalOption)}
+						placeholder="Add a person or an agent…"
+						onChange={setPrincipalId}
 						disabled={busy || principals === null}
-					>
-						<option value="">Add a person or an agent…</option>
-						{candidates.map((principal) => (
-							<option key={principal.id} value={principal.id}>
-								{principalLabel(principal)}
-							</option>
-						))}
-					</select>
+					/>
 					<button type="submit" className="button button-primary" disabled={busy || !principalId}>
 						Add
 					</button>

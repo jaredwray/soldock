@@ -18,6 +18,7 @@ import {
 import { createPortal } from "react-dom";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon, type IconName } from "../../lib/icons.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { normalizeLink } from "../mail/richText.ts";
 import {
 	type BlockType,
@@ -149,6 +150,8 @@ const BLOCK_TYPES: readonly { value: BlockType; name: string; key: string; run: 
 	{ value: "heading-2", name: "Heading 2", key: "2", run: setHeading(2) },
 	{ value: "heading-3", name: "Heading 3", key: "3", run: setHeading(3) },
 ];
+
+const BLOCK_OPTIONS = BLOCK_TYPES.map((entry) => ({ value: entry.value, label: entry.name }));
 
 /** Shows the placeholder in the first paragraph while the document is empty. */
 function placeholderPlugin(text: string): Plugin {
@@ -316,8 +319,8 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 	}
 
 	function onToolbarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-		// The block type control is a select, which uses the arrow keys itself.
-		if (event.target instanceof HTMLSelectElement) return;
+		// The block type control is a select, which uses the arrow keys, Home and End itself.
+		if (event.target instanceof HTMLElement && event.target.getAttribute("role") === "combobox") return;
 		const last = TOOLS.length - 1;
 		const moves: Record<string, number> = {
 			ArrowRight: focusIndex === last ? 0 : focusIndex + 1,
@@ -352,24 +355,15 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 					className="editor-toolbar"
 					onKeyDown={onToolbarKeyDown}
 				>
-					<select
+					<Select
 						className="doc-block-type"
-						aria-label="Text style"
+						label="Text style"
 						title={`Text style (${MAC ? "⌥⌘0 to ⌥⌘3" : "Ctrl+Alt+0 to Ctrl+Alt+3"})`}
-						value={knownBlock && blockType ? blockType : "other"}
-						onChange={(event) => setBlock(event.target.value)}
-					>
-						{BLOCK_TYPES.map((entry) => (
-							<option key={entry.value} value={entry.value}>
-								{entry.name}
-							</option>
-						))}
-						{!knownBlock && (
-							<option value="other" disabled>
-								{blockType === "code_block" ? "Code block" : "More than one style"}
-							</option>
-						)}
-					</select>
+						value={knownBlock && blockType ? blockType : ""}
+						options={BLOCK_OPTIONS}
+						placeholder={blockType === "code_block" ? "Code block" : "More than one style"}
+						onChange={setBlock}
+					/>
 					{TOOLS.map((tool, index) => {
 						const enabled = isEnabled(tool);
 						return (

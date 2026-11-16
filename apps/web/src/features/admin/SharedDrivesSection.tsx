@@ -6,12 +6,13 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { sharedDrivePath } from "../../routes.ts";
 import { listSharedDrives } from "../drive/data.ts";
 import { SHARED_DRIVE_ICON } from "../drive/model.ts";
 import { SharedDriveMembersPart, SharedDriveNameForm } from "../drive/SharedDriveMembers.tsx";
-import { memberRoles, membersProblem, ROLE_HINT, ROLE_NAMES } from "../drive/sharedDrives.ts";
+import { memberRoles, membersProblem, ROLE_HINT, ROLE_NAMES, roleOptions } from "../drive/sharedDrives.ts";
 import { AdminCard } from "./AdminCard.tsx";
 import { byName } from "./SharedMailboxPanel.tsx";
 
@@ -289,19 +290,14 @@ function CreateSharedDriveDialog({ principals, selfId, onClose, onCreated }: Cre
 											</span>
 										</span>
 									</label>
-									<select
+									<Select
 										className="input shared-drive-role"
-										aria-label={`Role of ${principal.display_name}`}
+										label={`Role of ${principal.display_name}`}
 										value={role ?? "editor"}
+										options={roleOptions(memberRoles(principal.kind))}
 										disabled={busy || role === undefined}
-										onChange={(event) => setRole(principal.id, event.target.value as SharedDriveRole)}
-									>
-										{memberRoles(principal.kind).map((option) => (
-											<option key={option} value={option}>
-												{ROLE_NAMES[option]}
-											</option>
-										))}
-									</select>
+										onChange={(next) => setRole(principal.id, next)}
+									/>
 								</div>
 							);
 						})}

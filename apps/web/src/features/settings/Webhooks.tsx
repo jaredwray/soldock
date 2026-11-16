@@ -12,6 +12,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { WebhookSecretDialog } from "./SecretDialog.tsx";
@@ -341,19 +342,17 @@ function CreateWebhookForm({
 					<label htmlFor={ids.mailbox} className="field-label">
 						Mailbox
 					</label>
-					<select
+					<Select
 						id={ids.mailbox}
-						className="input"
 						value={mailboxId}
-						onChange={(event) => setMailboxId(event.target.value)}
+						options={mailboxes.map((mailbox) =>
+							mailbox.kind === "personal"
+								? { value: "", label: "Your mailbox", description: mailbox.address }
+								: { value: mailbox.id, label: mailbox.address },
+						)}
+						onChange={setMailboxId}
 						disabled={busy}
-					>
-						{mailboxes.map((mailbox) => (
-							<option key={mailbox.id} value={mailbox.kind === "personal" ? "" : mailbox.id}>
-								{mailbox.kind === "personal" ? `Your mailbox (${mailbox.address})` : mailbox.address}
-							</option>
-						))}
-					</select>
+					/>
 				</div>
 			)}
 			<KeyField value={auth.key} onChange={(key) => setAuth({ ...auth, key })} disabled={busy} />
@@ -616,6 +615,12 @@ function EditWebhookDialog({
 	);
 }
 
+const CHANGE_OPTIONS: readonly { value: Change; label: string }[] = [
+	{ value: "keep", label: "Keep the current value" },
+	{ value: "replace", label: "Replace it" },
+	{ value: "remove", label: "Remove it" },
+];
+
 /** Keep, replace or remove one write-only value. */
 function ChangeChoice({
 	label,
@@ -634,17 +639,7 @@ function ChangeChoice({
 			<label htmlFor={id} className="field-label">
 				{label}
 			</label>
-			<select
-				id={id}
-				className="input"
-				value={value}
-				onChange={(event) => onChange(event.target.value as Change)}
-				disabled={disabled}
-			>
-				<option value="keep">Keep the current value</option>
-				<option value="replace">Replace it</option>
-				<option value="remove">Remove it</option>
-			</select>
+			<Select id={id} value={value} options={CHANGE_OPTIONS} onChange={onChange} disabled={disabled} />
 		</div>
 	);
 }

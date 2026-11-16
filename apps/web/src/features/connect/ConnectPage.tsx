@@ -11,6 +11,7 @@ import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { INBOX_PATH } from "../../routes.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -302,19 +303,17 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 									<label htmlFor={ids.agent} className="field-label">
 										Agent
 									</label>
-									<select
+									<Select
 										id={ids.agent}
-										className="input"
 										value={agentId}
-										onChange={(event) => setAgentId(event.target.value)}
+										options={agents.map((agent) => ({
+											value: agent.id,
+											label: agent.display_name,
+											description: agent.address,
+										}))}
+										onChange={setAgentId}
 										disabled={busy}
-									>
-										{agents.map((agent) => (
-											<option key={agent.id} value={agent.id}>
-												{agent.display_name} ({agent.address})
-											</option>
-										))}
-									</select>
+									/>
 								</div>
 							)}
 							<fieldset className="scope-list form-grid-wide">

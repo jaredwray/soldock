@@ -71,20 +71,21 @@
 
 .doc-block-type {
 	flex: none;
+	gap: 4px;
 	width: 132px;
 	height: 32px;
 	margin-right: 4px;
-	padding: 0 6px;
+	padding: 0 6px 0 8px;
 	border: 1px solid transparent;
 	border-radius: 7px;
 	background: transparent;
 	color: var(--foreground);
 	font: inherit;
 	font-weight: 500;
-	cursor: pointer;
 }
 
-.doc-block-type:hover {
+.doc-block-type:hover,
+.doc-block-type[aria-expanded="true"] {
 	background: var(--hover);
 }
 
