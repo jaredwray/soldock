@@ -137,6 +137,7 @@ export function Shell() {
 					<ChatApp
 						roomId={route.roomId}
 						messageSeq={route.seq}
+						profileId={route.profileId ?? null}
 						navOpen={navOpen}
 						onCloseNav={() => setNavOpen(false)}
 					/>

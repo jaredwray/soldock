@@ -395,9 +395,35 @@
 
 .chat-author {
 	overflow: hidden;
+	color: inherit;
 	font-weight: 700;
+	text-decoration: none;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+a.chat-author:hover {
+	text-decoration: underline;
+}
+
+/* A mention in a message links to the profile of its principal. A mention of the reader stands out more. */
+.chat-mention {
+	padding: 0 2px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--link) 12%, transparent);
+	color: var(--link);
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.chat-mention:hover {
+	text-decoration: underline;
+}
+
+.chat-mention-own {
+	background: var(--warning-soft);
+	box-shadow: inset 0 0 0 1px var(--warning-border);
+	color: var(--foreground);
 }
 
 .chat-message-meta .kind {
@@ -540,6 +566,7 @@
 }
 
 .chat-composer-box {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	min-height: 108px;
@@ -571,6 +598,154 @@
 
 .chat-draft:focus-visible {
 	outline: none;
+}
+
+/* The suggestions of a mention: above the box for a new message, and under the edit box of a message.
+   Under the edit box, the list is part of the message list, so the list of messages cannot cut it off. */
+.mention-list {
+	position: absolute;
+	right: 0;
+	left: 0;
+	z-index: 20;
+	max-height: min(296px, 40dvh);
+	padding: 4px;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	color: var(--foreground);
+	box-shadow: var(--shadow-menu);
+}
+
+.mention-list-above {
+	bottom: calc(100% + 6px);
+}
+
+.mention-list-below {
+	position: static;
+}
+
+.mention-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 36px;
+	padding: 4px 8px;
+	border-radius: var(--radius-sm);
+	font-size: 14px;
+	cursor: pointer;
+}
+
+.mention-option[aria-selected="true"] {
+	background: var(--hover);
+}
+
+.mention-avatar {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 24px;
+	height: 24px;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	background: var(--hover);
+	font-size: 10px;
+	font-weight: 600;
+}
+
+.mention-avatar-agent {
+	border-radius: 50%;
+}
+
+.mention-name {
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.mention-option .kind {
+	flex: none;
+}
+
+.mention-handle,
+.mention-note {
+	flex: none;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.mention-handle {
+	flex: 0 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.mention-note {
+	margin-left: auto;
+	font-size: 12px;
+}
+
+/* The profile of a person or an agent, in the place of a room. */
+.chat-profile {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	min-height: 0;
+	padding: 40px 22px;
+	overflow-y: auto;
+	text-align: center;
+}
+
+.chat-profile-avatar {
+	display: grid;
+	place-items: center;
+	width: 72px;
+	height: 72px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--hover);
+	font-size: 24px;
+	font-weight: 600;
+	user-select: none;
+}
+
+.chat-profile-name {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	font-size: 22px;
+	font-weight: 650;
+	letter-spacing: -0.025em;
+}
+
+.chat-profile-handle,
+.chat-profile-note {
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+}
+
+.chat-profile .chat-start {
+	margin-top: 10px;
+}
+
+.chat-profile-details {
+	width: 100%;
+	max-width: 480px;
+	margin-top: 20px;
+	text-align: left;
+}
+
+.chat-profile-details dd {
+	overflow-wrap: anywhere;
 }
 
 .chat-draft::placeholder {
@@ -785,6 +960,10 @@
 	.chat-header-button {
 		width: 44px;
 		height: 44px;
+	}
+
+	.mention-option {
+		min-height: 44px;
 	}
 
 	.chat-header-button {

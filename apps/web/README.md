@@ -635,8 +635,9 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
-- **Chat** (`/chat`, `/chat/<room_id>`). A sidebar with the rooms and the direct messages of the
-  person, and one room with its messages and a box for a new message.
+- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/people/<principal_id>`). A sidebar with the rooms
+  and the direct messages of the person, and one room with its messages and a box for a new
+  message, or one profile.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
@@ -753,12 +754,49 @@ MCP clients. The app has no UI-only path.
     new person (`lib/account.ts`).
   - A message shows an avatar with the initials of its author, then the name in bold and the time
     on one line, and the text below. The avatar of a person is a square with round corners. The
-    avatar of an agent is a circle, and an agent has an "agent" mark next to its name.
+    avatar of an agent is a circle, and an agent has an "agent" mark next to its name. The name of
+    the author is a link to the profile of the author, while the directory has the author.
   - A message from the same author, on the same day and within 5 minutes, shows without the avatar
     and the name. A screen reader still gets the author and the time.
   - The first message of each day has the date above it, in a pill at the center of a line. The
     day is the day of the device.
   - The text of a message shows as plain text, with its line breaks.
+  - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
+    `@captain`. The handle is the part of the address before the `@`. When two principals have the
+    same part, on two mail domains, each of them has the full address as its handle, for example
+    `@ada@example.org`. The room stores only the text. `mentions.ts` has the rules.
+    - In a message, a mention of a principal in the directory is a link to the profile of that
+      principal. A mention of the person who reads has a yellow fill. A handle that the directory
+      does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
+      is a link, and its mentions stay text. A known handle at the start of a longer word
+      (`@adaé`, `@ada_`, `@ada@other`) is not a mention.
+    - The box for a new message and the edit box of a message suggest people and agents while the
+      person types `@` and a part of a name, a handle or an address. The members of the room come
+      first. A principal that is not a member shows "Not in this room". The list leaves out the
+      person who writes and each archived principal.
+    - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
+      closes the list. While the list is open, Enter does not send, and Escape does not close the
+      edit box. So a send after a full handle needs a second Enter. Shift+Enter still makes a new
+      line.
+    - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
+      space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
+      follows it.
+    - The list is above the box for a new message. Under the edit box, the list is part of the
+      message list, so the message list cannot cut it off.
+    - The page reads the directory one time (`directory.list_principals`). The members of the
+      room come from `chat.get_room`, again after the socket tells that the room changed, after
+      each reconnect of the socket, and when the room list has a different number of members.
+    - Known limit: a mention is text, and each client finds its principal in the directory of
+      that time. So a mention does not follow a change of an address. When a second principal
+      gets the same local part, each old mention of the short handle stays text. A handle of a
+      deleted principal can later be the handle of a new principal. Server-side mentions are
+      part of layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
+  - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
+    place of a room: the avatar, the name, the handle, the address, the role in the organization
+    or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
+    direct message with that principal (`chat.open_dm`). An archived principal and the own profile
+    have no such button. A mention, the name of an author and the sponsor of an agent link here.
+    When the directory does not load, the profile tells so.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of
@@ -963,6 +1001,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
+| `/chat/people/<prn_id>` | The profile of a person or an agent |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
@@ -985,11 +1024,11 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 
@@ -1037,8 +1076,9 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
-- **A chat message is text.** The app puts the text of a message into a text node. It never makes
-  HTML or a link from it.
+- **A chat message is text.** The app puts the text of a message into text nodes. It never makes
+  HTML from it. The only link is a mention of a principal in the directory: the app makes the path
+  of the profile from the id of that principal, never from the text. A URL in a message stays text.
 - **External content is marked.** External mail shows the "External sender" notice. The server
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and

@@ -40,8 +40,11 @@ export type Route =
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
 	| { page: "sheet"; spaceId: string; itemId: string }
-	/** Chat. `roomId` is null for the page without an open room. */
-	| { page: "chat"; roomId: string | null; seq: number | null }
+	/**
+	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
+	 * points to. `profileId` is the person or the agent whose profile shows in the place of a room.
+	 */
+	| { page: "chat"; roomId: string | null; seq: number | null; profileId?: string }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -99,6 +102,11 @@ export function parseRoute(location: string): Route {
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
+		if (second === "people") {
+			return parts.length === 3 && isPrincipalId(third)
+				? { page: "chat", roomId: null, seq: null, profileId: third }
+				: { page: "not-found" };
+		}
 		if (!isRoomId(second)) return { page: "not-found" };
 		if (parts.length === 2) return { page: "chat", roomId: second, seq: null };
 		// A link to one message has the seq of the message after the room.
@@ -139,7 +147,12 @@ export function isSharedDriveId(value: string | null | undefined): value is stri
 }
 
 function isSpaceId(value: string | undefined): value is string {
-	return value?.startsWith("prn_") === true || isSharedDriveId(value);
+	return isPrincipalId(value) || isSharedDriveId(value);
+}
+
+/** A person and an agent have an id that starts with `prn_`. */
+function isPrincipalId(value: string | undefined): value is string {
+	return value?.startsWith("prn_") === true;
 }
 
 function isItemId(value: string | undefined): value is string {
@@ -248,6 +261,11 @@ export function chatPath(roomId: string | null = null, seq: number | null = null
 	if (!roomId) return CHAT_PATH;
 	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
 	return seq === null ? room : `${room}/${seq}`;
+}
+
+/** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */
+export function profilePath(principalId: string): string {
+	return `${CHAT_PATH}/people/${encodeURIComponent(principalId)}`;
 }
 
 /** The path of the thread list of a view, in the own mailbox, in a team mailbox or in the mailbox of an agent. */
