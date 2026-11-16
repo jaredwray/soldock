@@ -541,8 +541,10 @@ describe("a room object", () => {
 		let directory: D1Database | undefined;
 		await runInDurableObject(stub, (instance) => {
 			const target = instance as unknown as { env: Env };
-			directory = target.env.DIRECTORY;
+			const readable = target.env.DIRECTORY;
+			directory = readable;
 			const failing = {
+				prepare: (query: string) => readable.prepare(query),
 				batch: async () => {
 					throw new Error("D1 is not available");
 				},

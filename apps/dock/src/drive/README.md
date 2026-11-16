@@ -436,7 +436,7 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | Moves to a different drive that are not complete | `DriveSpaceDO` tables `transfers` and `transfer_items`, in the source drive | The target, the folder, the actor, the totals, the next step, and each item of the move. Deleted when the move is complete or stopped |
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |
 | Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source, without the text for the search index. Deleted at the commit, at a refusal, when the source stops the move, or after 30 days. The record of a commit (`seq` -1) is kept 30 days |
-| Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0011_shared_drives.sql` |
+| Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0012_shared_drives.sql` |
 | File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key |
 
 Blob reference counts: each object has exactly one owner, the version row with its key. A copy

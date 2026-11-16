@@ -335,9 +335,13 @@ MCP clients. The app has no UI-only path.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write` or `mail.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks` or `chat.webhooks`
   unless the person selects them.
-  - A new webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
+  - **Your chat webhooks** manages notifications from all joined rooms and direct messages with the four `chat.*_webhook` operations.
+    The agent panel has the same controls with `principal_id`. Only the sponsor can create an agent's webhook.
+    Owners, admins and sponsors can list and delete the agent's webhooks. Only a creator can edit their webhook.
+    Both kinds share the URL, auth key, header and secret controls. Chat creates no browser storage.
+  - A new mail webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
     once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
   - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
@@ -662,6 +666,15 @@ MCP clients. The app has no UI-only path.
     `chat.mark_read` with the `seq` of the last message, one time for each new message. A message
     below the part of the list that shows is not read. The open room has no dot in the sidebar:
     the button to the newest messages tells about its new messages.
+  - A room that the page showed before opens with its last list at once (`roomCache.ts`). The
+    load of the room then replaces the list.
+    - The cache is in the memory of the page, for 20 rooms. It has the newest messages of each
+      room, not a list that was at older messages. A reload of the page has no cache.
+    - Until the load, the list can be behind the room. The page then does not mark the room as
+      read, shows no **New messages** line, and does not read older messages.
+    - A list is for one person. A sign-out, and a sign-in as a different person, remove each
+      list. A room that does not load, and a room that the person is not a member of now, lose
+      their list.
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a
@@ -677,6 +690,10 @@ MCP clients. The app has no UI-only path.
   - The box for a new message has a border with round corners. Its empty text is "Message #room",
     or "Message" and the name of the other member. The round send button is at its bottom right.
   - Enter sends the message. Shift+Enter makes a new line.
+  - The text in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
+    different room, and after a reload of the page. A send, and an empty box, remove it. The page
+    keeps the drafts in `localStorage` ([Data inventory](#data-inventory)). The drafts are for
+    this browser only: a different device does not have them.
   - A message shows in the list at once, in a lighter color, and the box for the message is empty
     again. The page sends the messages of one room one at a time, in the order of the sends, so the
     room has them in that order. The person can write the next message during a send.
@@ -953,7 +970,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
@@ -1023,6 +1040,7 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 | --- | --- | --- |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
+| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the text in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a
   sign-in as a different person remove the records of the person from before. This runs also when
@@ -1032,6 +1050,11 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   removes them.
 - A browser without IndexedDB, or that refuses it, keeps the messages in the memory of the page
   only, as before.
+- The drafts follow the same rule: a sign-out, the end of the session, and a sign-in as a
+  different person remove the drafts of the person from before. A browser that refuses
+  `localStorage`, or a write to it, keeps the drafts in the memory of the page only.
+- A session can end while the page is closed. The page then starts with nobody signed in, and
+  removes the messages that wait and the drafts at that time (`show` in `App.tsx`).
 
 The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
 from the operations.

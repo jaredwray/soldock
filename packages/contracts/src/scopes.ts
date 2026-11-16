@@ -3,6 +3,8 @@
  * only limit what a token can do: the owner's role and the resource still decide the rest.
  */
 export const SCOPES = {
+	"chat.webhooks":
+		"Create, change, list and delete webhooks for new messages in your joined chats or those of agents that you sponsor",
 	"account.read": "Read your own account",
 	"account.keys":
 		"Create, list and revoke API keys and OAuth connections for yourself and for the agents that you sponsor, approve OAuth requests, and change passwords and two-step verification",
@@ -35,6 +37,7 @@ export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
  * An agent is a member of rooms, as a person is.
  */
 export const AGENT_SCOPES: readonly Scope[] = [
+	"chat.webhooks",
 	"account.read",
 	"directory.read",
 	"mail.read",

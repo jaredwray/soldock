@@ -16,7 +16,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
-| `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
+| `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the four webhook operations, `ChatWebhook`, `CreatedChatWebhook`, `CHAT_WEBHOOK_EVENT_TYPE`, and the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |

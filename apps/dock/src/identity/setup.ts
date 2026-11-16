@@ -7,7 +7,8 @@ import oauthSchema from "../../migrations/0007_oauth.sql";
 import lifecycleSchema from "../../migrations/0008_principal_lifecycle.sql";
 import webhookSchema from "../../migrations/0009_webhooks.sql";
 import webhookAuthSchema from "../../migrations/0010_webhook_auth.sql";
-import sharedDriveSchema from "../../migrations/0011_shared_drives.sql";
+import chatWebhookSchema from "../../migrations/0011_chat_webhooks.sql";
+import sharedDriveSchema from "../../migrations/0012_shared_drives.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -80,6 +81,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS shared_drives",
 		// The webhooks act for the old principals.
 		"DROP TABLE IF EXISTS webhooks",
+		"DROP TABLE IF EXISTS chat_webhooks",
 		// The OAuth connections act as the old principals. The clients go too: each must register again.
 		"DROP TABLE IF EXISTS oauth_grants",
 		"DROP TABLE IF EXISTS oauth_requests",
@@ -102,6 +104,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...lifecycleSchema.split("--> statement-breakpoint"),
 		...webhookSchema.split("--> statement-breakpoint"),
 		...webhookAuthSchema.split("--> statement-breakpoint"),
+		...chatWebhookSchema.split("--> statement-breakpoint"),
 		...sharedDriveSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -124,5 +127,6 @@ const BUNDLED_MIGRATIONS = [
 	"0008_principal_lifecycle.sql",
 	"0009_webhooks.sql",
 	"0010_webhook_auth.sql",
-	"0011_shared_drives.sql",
+	"0011_chat_webhooks.sql",
+	"0012_shared_drives.sql",
 ] as const;

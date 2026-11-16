@@ -63,10 +63,10 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, and the webhooks of Mail |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, and the webhooks of Mail and Chat |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
-| `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of the mailboxes, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
+| `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal, and one for each shared drive |
