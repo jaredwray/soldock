@@ -1,6 +1,7 @@
 import type { ChatRoom } from "@soldock/contracts";
+import { CHAT_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { type RoomChange, withChangesSince, withRoom } from "../src/features/chat/roomList.ts";
+import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom } from "../src/features/chat/roomList.ts";
 
 function room(id: string, lastMessageAt: string | null, unread = 0): ChatRoom {
 	return {
@@ -51,5 +52,28 @@ describe("the room list with the events socket", () => {
 		expect(rooms[0]?.unread_count).toBe(2);
 		expect(rooms[1]?.last_message_at).toBe("2026-01-02T09:00:00.000Z");
 		expect(ids(withChangesSince([...answer, room("rm_c", null)], changes, 4))).toEqual(["rm_a", "rm_b"]);
+	});
+
+	// The sidebar shows the first page of chat.list_rooms. An event for an older room must not make it longer.
+	it("keeps the first page only when an event adds a room", () => {
+		const page = Array.from({ length: CHAT_LIMITS.pageSize }, (_, index) =>
+			room(`rm_${String(index).padStart(3, "0")}`, `2026-02-01T09:${String(index % 60).padStart(2, "0")}:00.000Z`),
+		);
+		const older = withRoom(page, "rm_old", room("rm_old", "2026-01-01T09:00:00.000Z", 1));
+		expect(older).toHaveLength(CHAT_LIMITS.pageSize);
+		expect(ids(older)).not.toContain("rm_old");
+		const newer = withRoom(page, "rm_new", room("rm_new", "2026-03-01T09:00:00.000Z", 1));
+		expect(newer).toHaveLength(CHAT_LIMITS.pageSize);
+		expect(newer[0]?.id).toBe("rm_new");
+	});
+
+	// A long-lived page gets changes of many rooms. It keeps only the changes that a read can still need.
+	it("forgets the changes that a read that applied covers", () => {
+		const changes = new Map<string, RoomChange>([
+			["rm_a", { at: 2, room: room("rm_a", null) }],
+			["rm_b", { at: 5, room: null }],
+		]);
+		forgetChangesUpTo(changes, 4);
+		expect([...changes.keys()]).toEqual(["rm_b"]);
 	});
 });

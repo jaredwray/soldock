@@ -15,7 +15,7 @@ import { createOutbox, type Outbox } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
-import { type RoomChange, withChangesSince, withRoom } from "./roomList.ts";
+import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom } from "./roomList.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createLiveSocket, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
@@ -95,6 +95,7 @@ export function useRooms() {
 			applied.current = request;
 			// An event that came during the read is newer than the room in the answer.
 			const rooms = withChangesSince(result.rooms, changes.current, since);
+			forgetChangesUpTo(changes.current, since);
 			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
