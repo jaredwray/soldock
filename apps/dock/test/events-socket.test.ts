@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,10 +75,51 @@ describe("the events socket", () => {
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
 		await principal.applyChatRoomStates([older as NonNullable<typeof older>]);
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
-		// The same state again changes nothing. The next event is the new message.
+		// The same state again changes nothing. A room that the agent never joined sends no
+		// chat.room_removed. The next event is the new message.
 		await principal.applyChatRoomStates([older as NonNullable<typeof older>]);
+		const other = await privateRoom(ada, "Ada only", []);
+		const never = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(other.id)).stateFor(bot.id);
+		await principal.applyChatRoomStates([never as NonNullable<typeof never>]);
 		const posted = (await ada.call("chat.post_message", { room_id: room.id, text: "Hello" })).message;
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: posted.seq } });
+	});
+
+	it("sends a direct message room as chat.list_rooms returns it, with its peer", async () => {
+		const { room } = await ada.call("chat.open_dm", { principal_id: bot.id });
+		const agent = await connect(bearer(bot.key));
+		await ada.call("chat.post_message", { room_id: room.id, text: "Hello" });
+		expect(await agent.next()).toEqual({ type: "chat.room", room: await listed(bot, room.id) });
+		expect(await listed(bot, room.id)).toMatchObject({ kind: "dm", peer: { principal_id: ada.id } });
+	});
+
+	it("answers a ping, and closes for each other message from the client", async () => {
+		const socket = await connect(bearer(ada.key));
+		socket.socket.send("ping");
+		expect(await socket.next()).toBe("pong");
+		socket.socket.send("hello");
+		expect(await socket.next()).toEqual({ closed: 1008 });
+	});
+
+	// A failed check must not let a socket get events without a check, and must not stop the others.
+	it("closes the sockets that wait for a check that fails, and sends to the other sockets", async () => {
+		const room = await privateRoom(bot, "Ops", [ada.id]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const waits = await connect(bearer(ada.key));
+		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
+		const fresh = await connect(bearer(ada.key));
+		await runInDurableObject(env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id)), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const failing = {
+				prepare: () => {
+					throw new Error("D1 is not available");
+				},
+			} as unknown as D1Database;
+			target.env = { ...target.env, DIRECTORY: failing };
+		});
+		await bot.call("chat.post_message", { room_id: room.id, text: "Disk is full." });
+		expect(await waits.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
+		expect(await fresh.next()).toMatchObject({ type: "chat.room", room: { unread_count: 1 } });
 	});
 
 	it("refuses each caller that cannot list the rooms", async () => {

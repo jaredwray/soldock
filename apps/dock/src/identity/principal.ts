@@ -178,11 +178,24 @@ export class PrincipalDO extends DurableObject<Env> {
 	/**
 	 * Keeps the state of each room in the list. A state whose stamp is not higher than the stamp of the
 	 * kept state changes nothing. So a second delivery, and an older state that arrives late, do no harm.
-	 * Each state that the object keeps goes to the events sockets, after the write.
+	 * Each state that the object keeps goes to the events sockets after the write. The call does not
+	 * wait for the sockets, so a change of a room never waits for the credential check of a socket.
 	 */
-	async applyChatRoomStates(states: readonly ChatRoomState[]): Promise<void> {
+	applyChatRoomStates(states: readonly ChatRoomState[]): void {
 		const kept: { room_id: string; joined: number }[] = [];
+		/** The rooms that were joined before this call. Only those get `chat.room_removed`. */
+		let joinedBefore = new Set<string>();
 		this.ctx.storage.transactionSync(() => {
+			joinedBefore = new Set(
+				this.sql
+					.exec<{ room_id: string }>(
+						`SELECT room_id FROM chat_rooms JOIN json_each(?1) wanted ON wanted.value = chat_rooms.room_id
+						WHERE joined = 1`,
+						JSON.stringify(states.map((state) => state.room_id)),
+					)
+					.toArray()
+					.map((row) => row.room_id),
+			);
 			for (const state of states) {
 				const view = state.view;
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
@@ -221,19 +234,23 @@ export class PrincipalDO extends DurableObject<Env> {
 			}
 		});
 		if (kept.length === 0 || this.ctx.getWebSockets().length === 0) return;
-		const joined = new Map(
-			this.chatRoomsOf(kept.filter((row) => row.joined === 1).map((row) => row.room_id)).rooms.map((entry) => [
-				entry.room_id,
-				entry,
-			]),
-		);
-		const events: PrincipalEvent[] = kept.map((row) => {
-			const entry = joined.get(row.room_id);
-			return entry
-				? { type: "chat.room", room: chatRoomOutput(entry) }
-				: { type: "chat.room_removed", room_id: row.room_id };
+		// The events come from the rows after this write. They go out after the events from before, in the
+		// order of the writes. A failure of the events never fails the write.
+		void this.publish(() => {
+			const joined = new Map(
+				this.chatRoomsOf(kept.filter((row) => row.joined === 1).map((row) => row.room_id)).rooms.map((entry) => [
+					entry.room_id,
+					entry,
+				]),
+			);
+			const events: PrincipalEvent[] = [];
+			for (const row of kept) {
+				const entry = joined.get(row.room_id);
+				if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
+				else if (joinedBefore.has(row.room_id)) events.push({ type: "chat.room_removed", room_id: row.room_id });
+			}
+			return events;
 		});
-		await this.publish(events);
 	}
 
 	/**
@@ -296,8 +313,8 @@ export class PrincipalDO extends DurableObject<Env> {
 	}
 
 	/** Keeps the states of a part of the first fill. `done` records that the fill is complete. */
-	async seedChat(states: readonly ChatRoomState[], done: boolean): Promise<void> {
-		await this.applyChatRoomStates(states);
+	seedChat(states: readonly ChatRoomState[], done: boolean): void {
+		this.applyChatRoomStates(states);
 		if (done) this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_seeded', '1')");
 	}
 
@@ -366,15 +383,24 @@ export class PrincipalDO extends DurableObject<Env> {
 		}
 	}
 
-	/** Sends events to the sockets, after each event that went out before. */
-	private async publish(events: PrincipalEvent[]): Promise<void> {
-		const texts = events.map((event) => JSON.stringify(event));
+	/**
+	 * Sends events to the sockets, after each event that went out before. `build` makes the events at
+	 * once, from the rows of the write that calls it.
+	 */
+	private publish(build: () => PrincipalEvent[]): Promise<void> {
+		let texts: string[] = [];
+		try {
+			texts = build().map((event) => JSON.stringify(event));
+		} catch (error) {
+			log("error", "events socket event failed", { error: error instanceof Error ? error.message : String(error) });
+		}
+		if (texts.length === 0) return this.announced;
 		this.announced = this.announced
 			.then(() => this.deliver(texts))
 			.catch((error: unknown) => {
 				log("error", "events socket send failed", { error: error instanceof Error ? error.message : String(error) });
 			});
-		await this.announced;
+		return this.announced;
 	}
 
 	/**

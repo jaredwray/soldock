@@ -28,8 +28,9 @@ to it, so a list of that state reads one object and not the directory.
   [`chat`](../chat/README.md#the-state-of-a-principal) module has the rules of the delivery.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.
-- The object has no operation of its own, and checks no access. Only the Worker and other objects
-  call it. A handler and the events socket call the object of their caller only.
+- The object has no operation of its own. Its methods check no access: only the Worker and other
+  objects call them. A handler and the events socket call the object of their caller only. The object
+  checks the credentials of its sockets (see below).
 - The data of the object stays when its principal is deleted. Nobody can read it, because only a
   credential of the principal reads it.
 - Later layers add the settings, the event feed, notifications and agent counters.
@@ -37,8 +38,8 @@ to it, so a list of that state reads one object and not the directory.
 ### The events socket
 
 A principal can open a WebSocket to its own object: `GET /ws/events` with an upgrade
-(`events-socket.ts`). The object sends each change of the state of the principal to its sockets at
-once. `EVENTS_SOCKET_PATH`, `PrincipalEvent` and `EVENTS_SOCKET_CLOSE` of the contracts are the
+(`events-socket.ts`). The object sends each change of the state of the principal to its sockets
+after the write. A socket whose credential check is due gets it after that check. `EVENTS_SOCKET_PATH`, `PrincipalEvent` and `EVENTS_SOCKET_CLOSE` of the contracts are the
 contract of the socket.
 
 | Event | When | Fields |
@@ -50,7 +51,10 @@ contract of the socket.
 - The socket carries events only. Each change is an operation, with REST and MCP. A message from a
   client closes the socket with code `1008`. The text `ping` is the exception: the runtime answers
   `pong`, and the object stays asleep.
-- A state that the object does not keep (the same stamp, or a lower one) sends no event.
+- A state that the object does not keep (the same stamp, or a lower one) sends no event. A state
+  without the room sends `chat.room_removed` only for a room that was joined before.
+- A write of a state does not wait for the sockets. So a change of a room never waits for the
+  credential check of a socket, and a failure of an event never fails the write.
 - The object accepts the socket with `acceptWebSocket`, so it can sleep while its sockets wait.
 - The Worker authenticates the request as REST does: a bearer token, or the session cookie. A
   session needs the `Origin` of this host. The credential must be able to call `chat.list_rooms`
@@ -61,8 +65,12 @@ contract of the socket.
 - The access rules after the open are the rules of the room socket
   ([`chat`](../chat/README.md#access-after-the-open)): a check of all credentials of the sockets
   with one D1 query, before an event, when the last check is 60 seconds old or more; `4003`
-  (`ended`) for a credential that stopped; `4001` (`reconnect`) after one hour, for an OAuth access
-  token that stopped while its connection works, and when the check fails.
+  (`ended`) for a credential that stopped; `4001` (`reconnect`) at the next event after one hour, for
+  an OAuth access token that stopped while its connection works, and when the check fails. A socket
+  without events stays open, and gets nothing.
+- Known limit: the limit of 20 sockets is for all credentials of the principal together. A key or an
+  OAuth client of the principal can open 20 sockets, and so close the sockets of the browser tabs
+  of its person. The room socket has the same rule for each member.
 - Known limit: a socket of a credential that stopped can get events for at most 60 seconds after
   its last check. A later pull request makes the sign-out and the removal of a key close the
   sockets at once ([jaredwray/soldock#72](https://github.com/jaredwray/soldock/issues/72)).
