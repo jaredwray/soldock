@@ -54,6 +54,7 @@ import {
 	moveAcrossRefusal,
 	moveItemsInput,
 	moveTargets,
+	previewNeighbors,
 	SHARED_DRIVE_ICON,
 	sharedDriveOf,
 	spaceBatches,
@@ -1000,7 +1001,14 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			{dialog?.type === "versions" && (
 				<VersionsDialog item={dialog.item} onClose={() => setDialog(null)} onChanged={changed} />
 			)}
-			{dialog?.type === "preview" && <PreviewDialog item={dialog.item} onClose={() => setDialog(null)} />}
+			{dialog?.type === "preview" && (
+				<PreviewDialog
+					item={dialog.item}
+					neighbors={previewNeighbors(list.items, dialog.item.id)}
+					onShow={(item) => setDialog({ type: "preview", item })}
+					onClose={() => setDialog(null)}
+				/>
+			)}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete forever?"

@@ -19,6 +19,7 @@ import {
 	moveTargets,
 	moveToDriveInput,
 	previewKind,
+	previewNeighbors,
 	spaceBatches,
 	uploadMimeType,
 	uploadRefusal,
@@ -397,6 +398,32 @@ describe("previewKind", () => {
 		expect(previewKind("application/json", 10)).toBe("text");
 		expect(previewKind("text/plain", 1024 * 1024 + 1)).toBe("none");
 		expect(previewKind("application/pdf", 10)).toBe("none");
+	});
+});
+
+describe("previewNeighbors", () => {
+	const list = [
+		{ id: "folder", kind: "folder" },
+		{ id: "a", kind: "file" },
+		{ id: "doc", kind: "doc" },
+		{ id: "b", kind: "file" },
+		{ id: "sheet", kind: "sheet" },
+		{ id: "c", kind: "file" },
+	] as const;
+
+	// A folder, a doc and a sheet have no preview: Next must not open the preview of one.
+	it("goes to the files before and after, in the order of the list, and skips the other kinds", () => {
+		expect(previewNeighbors(list, "b")).toEqual({ previous: list[1], next: list[5], position: 2, total: 3 });
+	});
+
+	it("stops at the first and the last file", () => {
+		expect(previewNeighbors(list, "a")).toMatchObject({ previous: null, next: list[3], position: 1 });
+		expect(previewNeighbors(list, "c")).toMatchObject({ previous: list[3], next: null, position: 3 });
+	});
+
+	// A poll can remove the file on screen from the list. The preview then shows that file with no Previous and Next.
+	it("gives no neighbors for a file that is not in the list", () => {
+		expect(previewNeighbors(list, "gone")).toEqual({ previous: null, next: null, position: 0, total: 3 });
 	});
 });
 
