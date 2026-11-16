@@ -11,6 +11,7 @@ import {
 	kindName,
 	type MoveSummary,
 	type MoveTarget,
+	moveAcrossRefusal,
 	moveConfirmText,
 	moveItemsInput,
 	moveSummary,
@@ -187,19 +188,27 @@ export interface MoveDestination {
  * A move in the same drive runs here (`drive.move_items`). The server refuses a move of a folder into
  * itself or into a folder under it, and the dialog shows that error. For a different drive, the
  * dialog calls `onAcross`: that move needs a confirmation.
+ *
+ * `drives` is the state of the list of the shared drives. While the list loads, and after it did not
+ * load, `targets` can be without some drives. The dialog then says so.
  */
 export function MoveDialog({
 	items,
 	targets,
+	drives,
 	onClose,
 	onMoved,
+	onPartial,
 	onAcross,
 }: {
 	items: readonly DriveItem[];
 	/** The drives that can get the items. The drive that holds them is one of these. */
 	targets: readonly MoveTarget[];
+	drives: { status: "loading" | "ready" | "error"; error: string | null; retry: () => void };
 	onClose: () => void;
 	onMoved: (destination: string) => void;
+	/** After a move that failed when a part of the items moved. The list on the page is then old. */
+	onPartial: () => void;
 	onAcross: (destination: MoveDestination) => void;
 }) {
 	const ownSpaceId = useSession().whoami.principal.id;
@@ -219,6 +228,8 @@ export function MoveDialog({
 	const moving = new Set(items.map((item) => item.id));
 	const across = driveId !== null && driveId !== sourceId;
 	const alreadyThere = !across && items.every((item) => (item.parent_id ?? null) === currentId);
+	// A move to a different drive is one call, so it takes at most 100 items.
+	const acrossRefusal = across ? moveAcrossRefusal(items.length) : null;
 	const destination = current?.name ?? drive?.name ?? "";
 
 	// Only the answer of the last request shows, so a slow answer for one folder cannot fill a different one.
@@ -267,13 +278,18 @@ export function MoveDialog({
 		if (across) return onAcross({ drive, folder: current });
 		setBusy(true);
 		setError(null);
+		let moved = 0;
 		try {
 			for (const batch of idBatches(items.map((item) => item.id))) {
 				await api.call("drive.move_items", moveItemsInput(sourceId, ownSpaceId, batch, currentId));
+				moved += batch.length;
 			}
 			onMoved(destination);
 		} catch (caught) {
-			setError(errorMessage(caught));
+			// Each call moves its items or none. A call that follows a good call can fail.
+			if (moved > 0) onPartial();
+			const message = errorMessage(caught);
+			setError(moved > 0 ? `${moved} of ${items.length} items moved to ${destination}. ${message}` : message);
 			setBusy(false);
 		}
 	}
@@ -309,6 +325,19 @@ export function MoveDialog({
 						</span>
 					))}
 				</nav>
+				{drives.status === "loading" && (
+					<p className="drive-picker-state" role="status">
+						<span className="spinner spinner-small" aria-hidden="true" /> Loading the shared drives…
+					</p>
+				)}
+				{drives.status === "error" && (
+					<p className="drive-picker-state" role="alert">
+						The shared drives did not load. {drives.error}{" "}
+						<button type="button" className="link-button" onClick={drives.retry}>
+							Try again
+						</button>
+					</p>
+				)}
 				<div className="drive-picker" aria-live="polite">
 					{drive === null && (
 						<ul className="drive-picker-list" aria-label="Drives">
@@ -380,6 +409,11 @@ export function MoveDialog({
 							: "After the move, you own the items."}
 					</p>
 				)}
+				{acrossRefusal && (
+					<p className="form-error" role="alert">
+						{acrossRefusal}
+					</p>
+				)}
 				{error && (
 					<p className="form-error" role="alert">
 						{error}
@@ -394,7 +428,7 @@ export function MoveDialog({
 					type="button"
 					className="button button-primary"
 					onClick={() => void move()}
-					disabled={busy || drive === null || alreadyThere}
+					disabled={busy || drive === null || alreadyThere || acrossRefusal !== null}
 					title={drive === null ? "Select a drive" : alreadyThere ? "The items are in this folder" : undefined}
 				>
 					{busy ? "Moving…" : drive === null ? "Move" : across ? `Move to ${destination}…` : `Move to ${destination}`}
@@ -407,12 +441,18 @@ export function MoveDialog({
 type AcrossState =
 	| { status: "checking" }
 	| { status: "ready"; summary: MoveSummary }
+	// The selection is too large for one call. A second try gives the same answer.
+	| { status: "refused"; error: string }
 	| { status: "error"; error: string };
 
 /**
  * The confirmation of a move to a different drive (`drive.move_to_drive`). The dialog first makes a
  * dry run: the server checks the move and gives the totals, and nothing changes. The dialog then
  * says who owns the items after the move and who keeps a direct share. "Move" makes the move.
+ *
+ * The move is one call with each selected id, so the server moves each item or no item. In one call,
+ * the server also counts an item only once when the selection has the item and a folder above it.
+ * A selection of more than 100 items does not start (`moveAcrossRefusal`).
  */
 export function MoveAcrossDialog({
 	items,
@@ -436,37 +476,32 @@ export function MoveAcrossDialog({
 	const { drive, folder } = destination;
 	const place = folder ? `${folder.name} in ${drive.name}` : drive.name;
 
-	/** One call for each 100 items. */
+	const refusal = moveAcrossRefusal(items.length);
+
 	const run = useCallback(
-		async (dryRun: boolean) => {
-			const results = [];
-			for (const batch of idBatches(items.map((item) => item.id))) {
-				results.push(
-					await api.call(
-						"drive.move_to_drive",
-						moveToDriveInput(
-							source.spaceId,
-							ownSpaceId,
-							batch,
-							{ spaceId: drive.spaceId, parentId: folder?.id ?? null },
-							dryRun,
-						),
-					),
-				);
-			}
-			return results;
-		},
+		(dryRun: boolean) =>
+			api.call(
+				"drive.move_to_drive",
+				moveToDriveInput(
+					source.spaceId,
+					ownSpaceId,
+					items.map((item) => item.id),
+					{ spaceId: drive.spaceId, parentId: folder?.id ?? null },
+					dryRun,
+				),
+			),
 		[items, source.spaceId, ownSpaceId, drive.spaceId, folder?.id],
 	);
 
 	const check = useCallback(async () => {
+		if (refusal !== null) return setState({ status: "refused", error: refusal });
 		setState({ status: "checking" });
 		try {
 			setState({ status: "ready", summary: moveSummary(await run(true)) });
 		} catch (caught) {
 			setState({ status: "error", error: errorMessage(caught) });
 		}
-	}, [run]);
+	}, [run, refusal]);
 
 	useEffect(() => {
 		void check();
@@ -476,8 +511,8 @@ export function MoveAcrossDialog({
 		setBusy(true);
 		setError(null);
 		try {
-			const results = await run(false);
-			onMoved(results.some((result) => result.status === "moving"));
+			const result = await run(false);
+			onMoved(result.status === "moving");
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);
@@ -502,6 +537,11 @@ export function MoveAcrossDialog({
 						<button type="button" className="link-button" onClick={() => void check()}>
 							Try again
 						</button>
+					</p>
+				)}
+				{state.status === "refused" && (
+					<p className="form-error" role="alert">
+						{state.error}
 					</p>
 				)}
 				{state.status === "ready" && <p>{moveConfirmText(items.length, source, drive, state.summary).join(" ")}</p>}

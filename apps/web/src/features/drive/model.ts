@@ -1,5 +1,12 @@
-import { DRIVE_LIMITS, type DriveItem, type InputOf, type PathEntry, type SharedDrive } from "@soldock/contracts";
-import { plural } from "../../lib/format.ts";
+import {
+	DRIVE_LIMITS,
+	type DriveItem,
+	type InputOf,
+	type OutputOf,
+	type PathEntry,
+	type SharedDrive,
+	type SharedDriveRole,
+} from "@soldock/contracts";
 import type { IconName } from "../../lib/icons.tsx";
 import { DRIVE_PATH, type DriveView, drivePath, isSharedDriveId, itemPath, sharedDrivePath } from "../../routes.ts";
 
@@ -295,11 +302,37 @@ export type ItemAction =
 	| "delete";
 
 /**
- * True when the person can move the item and put it in the trash. In the own drive, the owner can. In
- * a shared drive, a manager and an editor can.
+ * The member role of the person in each shared drive, by the id of the drive. A drive that is not
+ * in the map has no member role for the person: the person is not a member, or the list of the
+ * shared drives did not load yet.
  */
-export function canMove(item: Pick<DriveItem, "role" | "space_id">): boolean {
-	return item.role === "owner" || item.role === "manager" || (item.role === "editor" && isSharedDriveId(item.space_id));
+export type MemberRoles = ReadonlyMap<string, SharedDriveRole>;
+
+/** The member roles from the shared drives of the person. `role` is null where the person is not a member. */
+export function memberRoles(drives: readonly Pick<SharedDrive, "id" | "role">[]): MemberRoles {
+	return new Map(drives.flatMap((drive) => (drive.role ? [[drive.id, drive.role] as const] : [])));
+}
+
+/**
+ * The member role of the person in the shared drive of an item. Null for an item of each other
+ * drive, and for a person who is not a member.
+ *
+ * `item.role` is not the member role: it is the highest of the member role and the grants on the
+ * item. The server uses only the member role for a move, the trash, a restore and a copy into the
+ * drive. A grant gives at most the editor role, so the manager role always comes from the members.
+ */
+export function memberRole(item: Pick<DriveItem, "role" | "space_id">, roles: MemberRoles): SharedDriveRole | null {
+	if (!isSharedDriveId(item.space_id)) return null;
+	return roles.get(item.space_id) ?? (item.role === "manager" ? "manager" : null);
+}
+
+/**
+ * True when the person can move the item, put it in the trash and restore it. In the own drive, the
+ * owner can. In a shared drive, a member with the manager or the editor role can. A grant on the
+ * item is not sufficient.
+ */
+export function canMove(item: Pick<DriveItem, "role" | "space_id">, roles: MemberRoles): boolean {
+	return item.role === "owner" || canEdit(memberRole(item, roles));
 }
 
 /** True when the person can share the item and remove each grant: the owner, or a manager of a shared drive. */
@@ -310,26 +343,28 @@ export function canShare(item: Pick<DriveItem, "role">): boolean {
 /**
  * The actions that the More menu of an item offers. The role decides.
  * - The owner can do all. In a shared drive, a manager can do all.
- * - An editor can change the name and the content. In a shared drive, an editor can also move the
- *   item in the drive and put it in the trash.
+ * - An editor can change the name and the content. In a shared drive, a member with the editor role
+ *   can also move the item in the drive and put it in the trash.
  * - A viewer can read and copy.
  *
  * An item in the trash has Restore, and Delete forever for the owner or a manager. `sharedView` adds
- * "Remove from my list": there, each item has a grant of its own for the person.
+ * "Remove from my list" for an item that the person cannot put in the trash: there, each item has a
+ * grant of its own for the person. `roles` has the member role of the person in each shared drive.
  */
-export function itemActions(item: DriveItem, options: { sharedView?: boolean } = {}): ItemAction[] {
+export function itemActions(item: DriveItem, roles: MemberRoles, options: { sharedView?: boolean } = {}): ItemAction[] {
 	if (item.trashed) {
-		if (!canMove(item)) return [];
+		if (!canMove(item, roles)) return [];
 		return canShare(item) ? ["restore", "delete"] : ["restore"];
 	}
 	const actions: ItemAction[] = ["open"];
 	if (item.kind === "file") actions.push("download");
 	if (canEdit(item.role)) actions.push("rename");
-	if (canMove(item)) actions.push("move");
+	const movable = canMove(item, roles);
+	if (movable) actions.push("move");
 	if (item.kind !== "folder") actions.push("copy");
 	actions.push(canShare(item) ? "share" : "access");
 	if (item.kind === "file") actions.push("versions");
-	if (canMove(item)) actions.push("trash");
+	if (movable) actions.push("trash");
 	else if (options.sharedView) actions.push("leave");
 	return actions;
 }
@@ -365,8 +400,8 @@ export type BulkAction = "move" | "trash" | "restore" | "delete";
  * The actions that apply to each item of a selection. The rules are those of `itemActions`. A move
  * needs items of one drive, because the items go to one place.
  */
-export function bulkActions(items: readonly DriveItem[]): BulkAction[] {
-	if (items.length === 0 || items.some((item) => !canMove(item))) return [];
+export function bulkActions(items: readonly DriveItem[], roles: MemberRoles): BulkAction[] {
+	if (items.length === 0 || items.some((item) => !canMove(item, roles))) return [];
 	if (items.every((item) => item.trashed)) return items.every(canShare) ? ["restore", "delete"] : ["restore"];
 	if (items.some((item) => item.trashed)) return [];
 	return items.every((item) => item.space_id === items[0]?.space_id) ? ["move", "trash"] : ["trash"];
@@ -374,15 +409,16 @@ export function bulkActions(items: readonly DriveItem[]): BulkAction[] {
 
 /**
  * The input of `drive.copy_item`. A copy goes next to the item when the person can add items there:
- * in the own drive, and in a shared drive with the editor role. Each other copy goes to the root of
- * the own drive.
+ * in the own drive, and in a shared drive for a member with the editor or the manager role. Each
+ * other copy goes to the root of the own drive, also for a person with only a grant on the item.
  */
 export function copyInput(
 	item: Pick<DriveItem, "id" | "space_id" | "parent_id" | "role">,
 	ownSpaceId: string,
 	idempotencyKey: string,
+	roles: MemberRoles,
 ): InputOf<"drive.copy_item"> {
-	const inSharedDrive = isSharedDriveId(item.space_id) && canEdit(item.role);
+	const inSharedDrive = canEdit(memberRole(item, roles));
 	const nextToItem = item.space_id === ownSpaceId || inSharedDrive;
 	return {
 		...spaceInput(item.space_id, ownSpaceId),
@@ -406,18 +442,22 @@ export interface MoveTarget {
  * cannot move the items, or when the items are in more than one drive.
  * - From the own drive: My Drive, and each shared drive where the person is an editor or a manager.
  * - From a shared drive, a manager has the same choice. An editor moves items only in that drive.
+ *
+ * `drives` has the shared drives of the person, with the member role in each one. A grant on an
+ * item of a shared drive does not let the person move it.
  */
 export function moveTargets(
 	items: readonly Pick<DriveItem, "space_id" | "role">[],
 	ownSpaceId: string,
 	drives: readonly Pick<SharedDrive, "id" | "name" | "role">[],
 ): MoveTarget[] {
+	const roles = memberRoles(drives);
 	const sourceId = items[0]?.space_id;
-	if (sourceId === undefined || items.some((item) => item.space_id !== sourceId || !canMove(item))) return [];
+	if (sourceId === undefined || items.some((item) => item.space_id !== sourceId || !canMove(item, roles))) return [];
 	const shared = drives
 		.filter((drive) => drive.role === "manager" || drive.role === "editor")
 		.map((drive) => ({ spaceId: drive.id, name: drive.name, shared: true }));
-	const canMoveOut = sourceId === ownSpaceId || items.every((item) => item.role === "manager");
+	const canMoveOut = sourceId === ownSpaceId || items.every((item) => memberRole(item, roles) === "manager");
 	if (canMoveOut) return [{ spaceId: ownSpaceId, name: "My Drive", shared: false }, ...shared];
 	// The list of the shared drives can be behind. The drive of the items is always a target.
 	return shared.some((drive) => drive.spaceId === sourceId)
@@ -452,20 +492,29 @@ export function moveToDriveInput(
 	};
 }
 
-/** The totals of a move to a different drive, from the dry runs of its calls. */
+/**
+ * The reason why a selection cannot move to a different drive, or null. Such a move is one call of
+ * `drive.move_to_drive`, so that it moves each item or no item. One call takes at most
+ * `DRIVE_LIMITS.itemsPerCall` ids. In one call, the server also counts an item only once when the
+ * selection has the item and a folder above it.
+ */
+export function moveAcrossRefusal(selected: number): string | null {
+	return selected > DRIVE_LIMITS.itemsPerCall
+		? `Select at most ${DRIVE_LIMITS.itemsPerCall} items to move to a different drive.`
+		: null;
+}
+
+/** The totals of a move to a different drive, from its dry run. */
 export interface MoveSummary {
 	/** The selected items and all that their folders hold. */
 	itemsTotal: number;
 	/** The ids of the people and agents that keep a direct share. */
-	keptShares: string[];
+	keptShares: readonly string[];
 }
 
-/** One summary for the dry runs of a move. A move of more than 100 items makes more than one call. */
-export function moveSummary(runs: readonly { items_total: number; kept_shares: readonly string[] }[]): MoveSummary {
-	return {
-		itemsTotal: runs.reduce((total, run) => total + run.items_total, 0),
-		keptShares: [...new Set(runs.flatMap((run) => run.kept_shares))],
-	};
+/** The summary of the dry run of a move. */
+export function moveSummary(run: Pick<OutputOf<"drive.move_to_drive">, "items_total" | "kept_shares">): MoveSummary {
+	return { itemsTotal: run.items_total, keptShares: run.kept_shares };
 }
 
 /**
@@ -489,8 +538,9 @@ export function moveConfirmText(
 		lines.push(`The move takes ${summary.itemsTotal} items, with all that the folders hold.`);
 	}
 	const kept = summary.keptShares.length;
-	if (kept === 1) lines.push("1 person keeps a direct share.");
-	else if (kept > 1) lines.push(`${plural(kept, "person", "people")} keep their direct shares.`);
+	// A direct share can be for a person or for an agent. The ids do not tell which.
+	if (kept === 1) lines.push("1 person or agent keeps a direct share.");
+	else if (kept > 1) lines.push(`${kept} people or agents keep their direct shares.`);
 	return lines;
 }
 
@@ -511,11 +561,22 @@ export function linkPath(item: Pick<DriveItem, "kind" | "space_id" | "id" | "par
 }
 
 /**
- * The page to go back to from an editor: the folder of the item for its owner and in a shared drive,
- * the shared list for others.
+ * The page to go back to from an editor.
+ * - The owner goes to the folder of the item.
+ * - A member of a shared drive goes to the folder of the item in that drive, or to its root.
+ * - Each other person goes to the shared list. A person with only a grant on an item cannot open
+ *   the folder of the item, or the root of its shared drive.
+ *
+ * `member` is the member role of the person in the shared drive of the item (`memberRole`). It is
+ * null for a person who is not a member, and while the role loads.
  */
-export function backPath(item: Pick<DriveItem, "role" | "space_id" | "parent_id">): string {
-	if (isSharedDriveId(item.space_id)) return spacePath(item.space_id, "", item.parent_id);
+export function backPath(
+	item: Pick<DriveItem, "role" | "space_id" | "parent_id">,
+	member: SharedDriveRole | null,
+): string {
+	if (isSharedDriveId(item.space_id)) {
+		return member !== null ? spacePath(item.space_id, "", item.parent_id) : drivePath({ kind: "shared" });
+	}
 	if (item.role !== "owner") return drivePath({ kind: "shared" });
 	if (!item.parent_id) return DRIVE_PATH;
 	return itemPath({ kind: "folder", space_id: item.space_id, id: item.parent_id }) ?? DRIVE_PATH;

@@ -38,6 +38,7 @@ import {
 	bulkActions,
 	type CreateTarget,
 	canEdit,
+	canMove,
 	copyInput,
 	createTarget,
 	type DropZone,
@@ -49,6 +50,8 @@ import {
 	itemActions,
 	listInput,
 	type MoveTarget,
+	memberRoles,
+	moveAcrossRefusal,
 	moveItemsInput,
 	moveTargets,
 	SHARED_DRIVE_ICON,
@@ -77,7 +80,7 @@ export interface DriveAppProps {
 type DriveDialog =
 	| { type: "new-folder" }
 	| { type: "rename"; item: DriveItem }
-	| { type: "move"; items: DriveItem[]; targets: MoveTarget[] }
+	| { type: "move"; items: DriveItem[] }
 	| { type: "move-across"; items: DriveItem[]; source: MoveTarget; destination: MoveDestination }
 	| { type: "members" }
 	| { type: "share"; item: DriveItem }
@@ -199,6 +202,20 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const driveName =
 		sharedAbout.about?.name ?? sharedDrives.drives?.find((drive) => drive.id === sharedId)?.name ?? null;
 	const driveRole = sharedAbout.about?.role ?? null;
+	// The shared drives of the person, with the member role in each one. The drive on screen is in the
+	// list also while the list loads, and after the list did not load: its role then comes from
+	// `drive.get_about`. Until a role loads, the person gets no action that needs it.
+	const listedDrives = sharedDrives.drives;
+	const knownDrives = useMemo(() => {
+		const drives = listedDrives ?? [];
+		if (sharedId === null || driveRole === null || driveRole === "owner") return drives;
+		if (drives.some((drive) => drive.id === sharedId)) return drives;
+		return [...drives, { id: sharedId, name: driveName ?? "Shared drive", role: driveRole }];
+	}, [listedDrives, sharedId, driveRole, driveName]);
+	// The member role decides a move, the trash, a restore and the place of a copy. The role of an
+	// item (`item.role`) can come from a grant, and the server does not accept a grant for these.
+	const roles = useMemo(() => memberRoles(knownDrives), [knownDrives]);
+	const drivesStatus = listedDrives !== null ? "ready" : sharedDrives.error !== null ? "error" : "loading";
 	// The name of each principal and of each shared drive, by id: the owner of an item in a list.
 	const names = useMemo(
 		() =>
@@ -254,7 +271,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const target = folderState.status === "error" ? null : createTarget(view, placeRole, ownId);
 	const inTrash = view.kind === "trash";
 	const selectedItems = list.items.filter((item) => selected.has(item.id));
-	const bulk = bulkActions(selectedItems);
+	const bulk = bulkActions(selectedItems, roles);
 
 	useEffect(() => {
 		document.title = `${title} – Soldock`;
@@ -340,7 +357,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 
 	async function copy(item: DriveItem) {
 		try {
-			const result = await api.call("drive.copy_item", copyInput(item, ownId, crypto.randomUUID()));
+			const result = await api.call("drive.copy_item", copyInput(item, ownId, crypto.randomUUID(), roles));
 			toast({
 				message:
 					result.item.space_id === item.space_id
@@ -365,16 +382,32 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		);
 	}
 
-	/** Opens the dialog that selects the place of a move. */
+	/** Opens the dialog that selects the place of a move. The dialog gets the drives of each render. */
 	function startMove(items: DriveItem[]) {
-		setDialog({ type: "move", items, targets: moveTargets(items, ownId, sharedDrives.drives ?? []) });
+		setDialog({ type: "move", items });
 	}
 
-	/** Starts a drag of a row. The selection moves with a row that is part of it. */
+	/**
+	 * Starts a drag of a row. The selection moves with a row that is part of it. The handler cancels
+	 * the drag when no drive can get the items, for example a selection with items of two drives.
+	 */
 	function dragItem(item: DriveItem, event: ReactDragEvent<HTMLTableRowElement>) {
 		const items = selected.has(item.id) ? selectedItems : [item];
-		const targets = moveTargets(items, ownId, sharedDrives.drives ?? []);
-		if (targets.length === 0) return;
+		const targets = moveTargets(items, ownId, knownDrives);
+		if (targets.length === 0) {
+			event.preventDefault();
+			return;
+		}
+		// Without the list of the shared drives, the sidebar cannot show each drive that can get the items.
+		if (drivesStatus !== "ready") {
+			toast({
+				message:
+					drivesStatus === "error"
+						? `The shared drives did not load. ${sharedDrives.error} Use “Move to…” to try again.`
+						: "The shared drives still load. Try again in a moment.",
+				tone: drivesStatus === "error" ? "error" : "info",
+			});
+		}
 		event.dataTransfer.effectAllowed = "move";
 		event.dataTransfer.setData("text/plain", items.map((entry) => entry.name).join("\n"));
 		setDrag({ items, targets });
@@ -392,6 +425,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		const { items } = current;
 		const source = sourceOf(items, current.targets);
 		if (source.spaceId !== spaceId) {
+			// A move to a different drive is one call, so it takes at most 100 items.
+			const refusal = moveAcrossRefusal(items.length);
+			if (refusal !== null) return void toast({ message: refusal, tone: "error" });
 			setDialog({ type: "move-across", items, source, destination: { drive: destination, folder: null } });
 			return;
 		}
@@ -408,6 +444,8 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			changed();
 		} catch (caught) {
 			fail(caught);
+			// A call that follows a good call can fail. The list then shows the items that moved.
+			changed();
 		}
 	}
 
@@ -446,7 +484,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	}
 
 	function menuItems(item: DriveItem): MenuItem[] {
-		return itemActions(item, { sharedView: view.kind === "shared" }).map((action) => ({
+		return itemActions(item, roles, { sharedView: view.kind === "shared" }).map((action) => ({
 			key: action,
 			...ACTION_MENU[action],
 			...(action === "open" && item.kind === "file" ? { label: "Preview" } : {}),
@@ -721,7 +759,10 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						<span className="chip drive-chip">{folder.item.role === "viewer" ? "View only" : "You can edit"}</span>
 					)}
 					{sharedId !== null && driveRole !== null && view.kind === "folder" && (
-						<span className="chip drive-chip">{ROLE_NAMES[driveRole]}</span>
+						<span className="chip drive-chip">
+							<span className="visually-hidden">Your role: </span>
+							{ROLE_NAMES[driveRole]}
+						</span>
 					)}
 					<span className="toolbar-spacer" />
 					<SearchBox
@@ -835,6 +876,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 							onToggleStar={(item) => void star([item], !item.starred)}
 							onOpenFile={open}
 							menuItems={menuItems}
+							canMove={(item) => canMove(item, roles)}
 							onDragItem={dragItem}
 							onDragEnd={() => setDrag(null)}
 							onLoadMore={() => void list.loadMore().catch(fail)}
@@ -900,7 +942,9 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			{dialog?.type === "move" && (
 				<MoveDialog
 					items={dialog.items}
-					targets={dialog.targets}
+					targets={moveTargets(dialog.items, ownId, knownDrives)}
+					drives={{ status: drivesStatus, error: sharedDrives.error, retry: () => void reloadSharedDrives() }}
+					onPartial={changed}
 					onClose={() => setDialog(null)}
 					onMoved={(destination) => {
 						toast({ message: `Moved ${describe(dialog.items)} to ${destination}.` });
@@ -912,7 +956,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						setDialog({
 							type: "move-across",
 							items: dialog.items,
-							source: sourceOf(dialog.items, dialog.targets),
+							source: sourceOf(dialog.items, moveTargets(dialog.items, ownId, knownDrives)),
 							destination,
 						})
 					}
@@ -1017,7 +1061,12 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 							principal_id: ownId,
 						});
 						if (!result.removed) {
-							throw new Error("Your access comes from a folder above this item. Only the owner can remove it.");
+							// An item of a shared drive has no owner. A manager of the drive changes its shares.
+							throw new Error(
+								isSharedDriveId(dialog.item.space_id)
+									? "Your access comes from a folder above this item. Only a manager of the shared drive can remove it."
+									: "Your access comes from a folder above this item. Only the owner can remove it.",
+							);
 						}
 						toast({ message: `Removed “${dialog.item.name}” from your list.` });
 						changed();
@@ -1025,7 +1074,10 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 				>
 					<p>
 						Remove <strong>{dialog.item.name}</strong> from the items that are shared with you? You then have no access
-						to it. The owner can share it with you again.
+						to it.{" "}
+						{isSharedDriveId(dialog.item.space_id)
+							? "A manager of the shared drive can share it with you again."
+							: "The owner can share it with you again."}
 					</p>
 				</ConfirmDialog>
 			)}

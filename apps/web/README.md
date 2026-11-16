@@ -307,6 +307,7 @@ MCP clients. The app has no UI-only path.
     - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
       this while the drive holds an item, and the dialog shows that error.
     - The controls of the only manager are off, because a shared drive always keeps one manager. The
+      row shows that reason as text, and the controls refer to it (`aria-describedby`). The
       server has the last word, and the table shows its error.
     - **New shared drive**, above the cards, opens a dialog with a name and the first members, each
       with a role (`drive.create_shared_drive`). The person who creates the drive starts as a
@@ -416,6 +417,10 @@ MCP clients. The app has no UI-only path.
     owner or an editor can upload a new version and make an older version the current version.
   - The menus close on Escape, and the focus goes back to the button. The arrow keys, Home and End
     move between the entries.
+  - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
+    When the version changes, the list loads again without a loading state. A view that can show
+    items of other drives loads again on the same timer. The timer also loads the list of the
+    shared drives again.
 - **Shared drives** (`/drive/shared-drives`). The sidebar of Drive has a **Shared drives** entry
   below My Drive. Below that entry, the sidebar has a row for each shared drive of the person
   (`drive.list_shared_drives`). The page of the entry lists the drives with the role of the person,
@@ -430,6 +435,13 @@ MCP clients. The app has no UI-only path.
     editor and a manager use **New**, change names and content, move items in the drive and put them in
     the trash. Only a manager shares an item with a person or an agent that is not a member. A
     viewer opens, downloads and copies.
+  - A move, the trash, a restore and a copy next to the item need the member role of the person in
+    the drive (`memberRole`). The role of an item can come from a direct share, and the server does
+    not accept a direct share for these actions. The member roles come from
+    `drive.list_shared_drives`, and from `drive.get_about` for the drive on screen. Until a role
+    loads, the item has no action that needs it.
+  - A person with only a direct share of an item is not a member. In Shared with me, that person
+    gets "Remove from my list", and a copy goes to the root of the own drive.
   - **Members**, above the list, opens a dialog with the members and their roles. A manager, an owner
     and an admin change the name and the members there. Each other member sees the list, and can
     leave the drive with **Leave**.
@@ -440,14 +452,16 @@ MCP clients. The app has no UI-only path.
     the copy goes to the root of the own drive.
   - The share dialog of an item of a shared drive shows one row for the members of the drive, then
     each direct share.
-  - The editors of Docs and Sheets go back to the folder of the item in the shared drive.
-  - Known limit: a person with only a direct share of an item of a shared drive is not a member. For
-    that person, the links to the root of the drive show the error of the server.
+  - The editors of Docs and Sheets go back to the folder of the item in the shared drive for a
+    member (`drive.get_about` with `space_id` gives the role only to a member). A person with only a
+    direct share goes back to Shared with me, also while the role loads.
 - **Move to…** is in the More menu of an item and in the toolbar of a selection
   ([`ItemDialogs.tsx`](src/features/drive/ItemDialogs.tsx)).
   - The dialog starts in the drive that holds the items. **Drives** lists each drive that can get
     them (`moveTargets`): My Drive, and each shared drive where the person is an editor or a manager.
     An editor of a shared drive can move its items only in that drive, so the dialog has no Drives entry.
+    While the list of the shared drives loads, the dialog says so. When the list did not load, the
+    dialog shows the error with "Try again".
   - In a drive, the dialog shows the folders of one level. A move in the same drive calls
     `drive.move_items` with the `space_id` of the drive.
   - A move to a different drive first calls `drive.move_to_drive` with `dry_run: true`. A
@@ -457,15 +471,18 @@ MCP clients. The app has no UI-only path.
   - After the confirmation, the call runs without `dry_run`. A toast says "Moved …" with an **Open**
     action for the target. When the status is `moving`, the toast says "Moving …": the server
     completes the move, and the list changes at the next poll.
-  - A move of more than 100 items makes one call for each 100 items.
+  - A move to a different drive is always one call, so the server moves each item or no item. The
+    app does not start such a move for more than `DRIVE_LIMITS.itemsPerCall` (100) selected items:
+    the dialog, and a toast for a drop, say "Select at most 100 items to move to a different drive."
+  - A move in the same drive of more than 100 items makes one call for each 100 items. When a call
+    fails after a different call moved items, the dialog says how many items moved, and the list
+    loads again.
   - A person can also drag a row, or the selection that the row is part of, onto My Drive or a
     shared drive in the sidebar. During the drag, each drive that can get the items has a line
     around it. A drop on a different drive opens the same confirmation. A drop on the drive that
-    holds the items moves them to its root. The drag is for a pointer only, and the drawer of a
+    holds the items moves them to its root. A selection with items of two drives does not start a
+    drag. The drag is for a pointer only, and the drawer of a
     narrow screen has no drag: Move to… does the same.
-  - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
-    When the version changes, the list loads again without a loading state. A view that can show
-    items of other drives loads again on the same timer.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
     and the size. From 901px to 1100px, the Last change column is wider, for the name of the person.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the

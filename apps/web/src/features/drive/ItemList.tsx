@@ -6,7 +6,7 @@ import { Link } from "../../lib/router.tsx";
 import { type DriveView, itemPath } from "../../routes.ts";
 import type { ListState } from "./data.ts";
 import { Menu, type MenuItem } from "./Menu.tsx";
-import { canMove, emptyText, type ItemOrder, itemIcon, kindName, ownerName } from "./model.ts";
+import { emptyText, type ItemOrder, itemIcon, kindName, ownerName } from "./model.ts";
 
 interface ItemListProps {
 	view: DriveView;
@@ -24,9 +24,12 @@ interface ItemListProps {
 	onToggleStar: (item: DriveItem) => void;
 	onOpenFile: (item: DriveItem) => void;
 	menuItems: (item: DriveItem) => MenuItem[];
+	/** True for an item that the person can move. Only the row of such an item starts a drag. */
+	canMove: (item: DriveItem) => boolean;
 	/**
 	 * Starts a drag of the row, to move the item to a drive of the sidebar. The handler cancels the
-	 * drag of an item that the person cannot move.
+	 * drag (`event.preventDefault()`) when no drive can get the items, for example a selection with
+	 * items of two drives.
 	 */
 	onDragItem: (item: DriveItem, event: DragEvent<HTMLTableRowElement>) => void;
 	onDragEnd: () => void;
@@ -137,6 +140,7 @@ export function ItemList(props: ItemListProps) {
 							owner={ownerName(item.space_id, props.ownSpaceId, props.names)}
 							selected={props.selected.has(item.id)}
 							dropTarget={props.dropRowId === item.id}
+							draggable={!inTrash && props.canMove(item)}
 							onToggleSelect={props.onToggleSelect}
 							onToggleStar={props.onToggleStar}
 							onOpenFile={props.onOpenFile}
@@ -183,6 +187,7 @@ interface ItemRowProps {
 	owner: string;
 	selected: boolean;
 	dropTarget: boolean;
+	draggable: boolean;
 	onToggleSelect: (itemId: string) => void;
 	onToggleStar: (item: DriveItem) => void;
 	onOpenFile: (item: DriveItem) => void;
@@ -198,6 +203,7 @@ function ItemRow({
 	owner,
 	selected,
 	dropTarget,
+	draggable,
 	onToggleSelect,
 	onToggleStar,
 	onOpenFile,
@@ -222,7 +228,7 @@ function ItemRow({
 		<tr
 			className={`drive-row${selected ? " drive-row-selected" : ""}${dropTarget ? " drive-row-drop" : ""}`}
 			data-item-id={item.id}
-			draggable={!inTrash && canMove(item)}
+			draggable={draggable}
 			onDragStart={(event) => onDragItem(item, event)}
 			onDragEnd={onDragEnd}
 		>

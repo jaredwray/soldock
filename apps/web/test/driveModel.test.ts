@@ -11,6 +11,8 @@ import {
 	itemActions,
 	linkPath,
 	listInput,
+	memberRoles,
+	moveAcrossRefusal,
 	moveConfirmText,
 	moveItemsInput,
 	moveSummary,
@@ -174,58 +176,99 @@ describe("dropZone", () => {
 	});
 });
 
+// The member role of the person in each shared drive. Without a role, the person is not a member.
+const NO_ROLES = memberRoles([]);
+const rolesIn = (role: "manager" | "editor" | "viewer") => memberRoles([{ id: DESIGN, role }]);
+
 describe("itemActions", () => {
 	it("offers each action to the owner, by the kind of the item", () => {
-		expect(itemActions(item())).toEqual(["open", "download", "rename", "move", "copy", "share", "versions", "trash"]);
-		expect(itemActions(item({ kind: "folder" }))).toEqual(["open", "rename", "move", "share", "trash"]);
-		expect(itemActions(item({ kind: "doc" }))).toEqual(["open", "rename", "move", "copy", "share", "trash"]);
+		const all = ["open", "download", "rename", "move", "copy", "share", "versions", "trash"];
+		expect(itemActions(item(), NO_ROLES)).toEqual(all);
+		expect(itemActions(item({ kind: "folder" }), NO_ROLES)).toEqual(["open", "rename", "move", "share", "trash"]);
+		expect(itemActions(item({ kind: "doc" }), NO_ROLES)).toEqual(["open", "rename", "move", "copy", "share", "trash"]);
 	});
 
 	// In the drive of a different person, only the owner can move, share and trash an item.
 	it("keeps the owner actions from an editor and a viewer", () => {
-		const editor = itemActions(item({ space_id: BOB, role: "editor" }));
+		const editor = itemActions(item({ space_id: BOB, role: "editor" }), NO_ROLES);
 		expect(editor).toEqual(["open", "download", "rename", "copy", "access", "versions"]);
-		const viewer = itemActions(item({ space_id: BOB, role: "viewer" }), { sharedView: true });
+		const viewer = itemActions(item({ space_id: BOB, role: "viewer" }), NO_ROLES, { sharedView: true });
 		expect(viewer).toEqual(["open", "download", "copy", "access", "versions", "leave"]);
 	});
 
 	it("offers only restore and delete in the trash, to the owner", () => {
-		expect(itemActions(item({ trashed: true }))).toEqual(["restore", "delete"]);
-		expect(itemActions(item({ trashed: true, role: "editor" }))).toEqual([]);
+		expect(itemActions(item({ trashed: true }), NO_ROLES)).toEqual(["restore", "delete"]);
+		expect(itemActions(item({ trashed: true, role: "editor" }), NO_ROLES)).toEqual([]);
 	});
 
 	// The server refuses a share and a permanent deletion by an editor, and each change by a viewer.
 	it("follows the role of the member in a shared drive", () => {
-		const inDesign = (change: Partial<DriveItem>) => itemActions(item({ space_id: DESIGN, ...change }));
+		const inDesign = (role: "manager" | "editor" | "viewer", change: Partial<DriveItem> = {}) =>
+			itemActions(item({ space_id: DESIGN, role, ...change }), rolesIn(role));
 		const all = ["open", "download", "rename", "move", "copy", "share", "versions", "trash"];
-		expect(inDesign({ role: "manager" })).toEqual(all);
-		expect(inDesign({ role: "editor" })).toEqual(all.map((action) => (action === "share" ? "access" : action)));
-		expect(inDesign({ role: "viewer" })).toEqual(["open", "download", "copy", "access", "versions"]);
-		expect(inDesign({ role: "manager", trashed: true })).toEqual(["restore", "delete"]);
-		expect(inDesign({ role: "editor", trashed: true })).toEqual(["restore"]);
+		expect(inDesign("manager")).toEqual(all);
+		expect(inDesign("editor")).toEqual(all.map((action) => (action === "share" ? "access" : action)));
+		expect(inDesign("viewer")).toEqual(["open", "download", "copy", "access", "versions"]);
+		expect(inDesign("manager", { trashed: true })).toEqual(["restore", "delete"]);
+		expect(inDesign("editor", { trashed: true })).toEqual(["restore"]);
+	});
+
+	// The server accepts a move, the trash and a restore in a shared drive only from the member role.
+	// The role of the item is the highest of the member role and the grants on the item.
+	it("does not take an editor grant on an item of a shared drive for the editor role of the drive", () => {
+		const granted = item({ space_id: DESIGN, role: "editor" });
+		// A person who is not a member: the item shows in Shared with me.
+		expect(itemActions(granted, NO_ROLES, { sharedView: true })).toEqual([
+			"open",
+			"download",
+			"rename",
+			"copy",
+			"access",
+			"versions",
+			"leave",
+		]);
+		// A member with the viewer role and an editor grant on this item.
+		expect(itemActions(granted, rolesIn("viewer"))).toEqual([
+			"open",
+			"download",
+			"rename",
+			"copy",
+			"access",
+			"versions",
+		]);
+		expect(itemActions({ ...granted, trashed: true }, rolesIn("viewer"))).toEqual([]);
+		expect(itemActions({ ...granted, trashed: true }, NO_ROLES)).toEqual([]);
+		// Only a member can have the manager role, so that role needs no list of the shared drives.
+		expect(itemActions({ ...granted, role: "manager" }, NO_ROLES)).toContain("move");
 	});
 });
 
 describe("bulkActions", () => {
 	it("offers move and trash only when the person owns each item", () => {
-		expect(bulkActions([item(), item({ id: FOLDER, kind: "folder" })])).toEqual(["move", "trash"]);
-		expect(bulkActions([item(), item({ space_id: BOB, role: "editor" })])).toEqual([]);
-		expect(bulkActions([])).toEqual([]);
+		expect(bulkActions([item(), item({ id: FOLDER, kind: "folder" })], NO_ROLES)).toEqual(["move", "trash"]);
+		expect(bulkActions([item(), item({ space_id: BOB, role: "editor" })], NO_ROLES)).toEqual([]);
+		expect(bulkActions([], NO_ROLES)).toEqual([]);
 	});
 
 	it("offers restore and delete only when each item is in the trash", () => {
-		expect(bulkActions([item({ trashed: true })])).toEqual(["restore", "delete"]);
-		expect(bulkActions([item({ trashed: true }), item()])).toEqual([]);
+		expect(bulkActions([item({ trashed: true })], NO_ROLES)).toEqual(["restore", "delete"]);
+		expect(bulkActions([item({ trashed: true }), item()], NO_ROLES)).toEqual([]);
 	});
 
-	it("follows the role in a shared drive, and moves only items of one drive", () => {
+	it("follows the role of the member in a shared drive, and moves only items of one drive", () => {
 		const editor = item({ space_id: DESIGN, role: "editor" });
-		expect(bulkActions([editor, { ...editor, id: FOLDER }])).toEqual(["move", "trash"]);
-		expect(bulkActions([{ ...editor, trashed: true }])).toEqual(["restore"]);
-		expect(bulkActions([{ ...editor, role: "manager", trashed: true }])).toEqual(["restore", "delete"]);
-		expect(bulkActions([{ ...editor, role: "viewer" }])).toEqual([]);
+		expect(bulkActions([editor, { ...editor, id: FOLDER }], rolesIn("editor"))).toEqual(["move", "trash"]);
+		expect(bulkActions([{ ...editor, trashed: true }], rolesIn("editor"))).toEqual(["restore"]);
+		expect(bulkActions([{ ...editor, role: "manager", trashed: true }], rolesIn("manager"))).toEqual([
+			"restore",
+			"delete",
+		]);
+		expect(bulkActions([{ ...editor, role: "viewer" }], rolesIn("viewer"))).toEqual([]);
 		// A selection in Starred can have items of two drives. The items of a move go to one place.
-		expect(bulkActions([item(), editor])).toEqual(["trash"]);
+		expect(bulkActions([item(), editor], rolesIn("editor"))).toEqual(["trash"]);
+		// An editor grant on an item is not the editor role of the drive.
+		expect(bulkActions([editor], NO_ROLES)).toEqual([]);
+		expect(bulkActions([editor, { ...editor, id: FOLDER, trashed: true }], rolesIn("viewer"))).toEqual([]);
 	});
 
 	// Without the space_id of its drive, the server does not find an item of a shared drive.
@@ -240,16 +283,21 @@ describe("bulkActions", () => {
 
 describe("copyInput", () => {
 	it("puts a copy next to the item where the person can add items, and in the own drive in each other case", () => {
-		const copy = (change: Partial<DriveItem>) => copyInput(item({ parent_id: FOLDER, ...change }), ME, "k");
+		const copy = (change: Partial<DriveItem>, roles = NO_ROLES) =>
+			copyInput(item({ parent_id: FOLDER, ...change }), ME, "k", roles);
+		const toOwnDrive = { space_id: DESIGN, item_id: ITEM, idempotency_key: "k" };
 		const cases = [
 			[copy({}), { item_id: ITEM, parent_id: FOLDER, idempotency_key: "k" }],
 			[copy({ space_id: BOB, role: "editor" }), { space_id: BOB, item_id: ITEM, idempotency_key: "k" }],
 			[
-				copy({ space_id: DESIGN, role: "editor" }),
+				copy({ space_id: DESIGN, role: "editor" }, rolesIn("editor")),
 				{ space_id: DESIGN, item_id: ITEM, target_space_id: DESIGN, parent_id: FOLDER, idempotency_key: "k" },
 			],
 			// A viewer of a shared drive cannot add items to it.
-			[copy({ space_id: DESIGN, role: "viewer" }), { space_id: DESIGN, item_id: ITEM, idempotency_key: "k" }],
+			[copy({ space_id: DESIGN, role: "viewer" }, rolesIn("viewer")), toOwnDrive],
+			// The server refuses a copy into a shared drive from a person with only an editor grant on the item.
+			[copy({ space_id: DESIGN, role: "editor" }), toOwnDrive],
+			[copy({ space_id: DESIGN, role: "editor" }, rolesIn("viewer")), toOwnDrive],
 		] as const;
 		for (const [input, expected] of cases) {
 			expect(input).toEqual(expected);
@@ -277,10 +325,14 @@ describe("moves", () => {
 		expect(moveTargets([item({ space_id: SITE, role: "manager" })], ME, drives)).toEqual([myDrive, design, site]);
 		// An editor moves items only in the shared drive.
 		expect(moveTargets([item({ space_id: DESIGN, role: "editor" })], ME, drives)).toEqual([design]);
-		expect(moveTargets([item({ space_id: DESIGN, role: "viewer" })], ME, drives)).toEqual([]);
+		expect(moveTargets([item({ space_id: ARCHIVE, role: "viewer" })], ME, drives)).toEqual([]);
 		expect(moveTargets([item({ space_id: BOB, role: "editor" })], ME, drives)).toEqual([]);
 		expect(moveTargets([item(), item({ space_id: SITE, role: "manager" })], ME, drives)).toEqual([]);
 		expect(moveTargets([], ME, drives)).toEqual([]);
+		// An editor grant on an item does not move it: not for a viewer of the drive, and not for a
+		// person who is not a member.
+		expect(moveTargets([item({ space_id: ARCHIVE, role: "editor" })], ME, drives)).toEqual([]);
+		expect(moveTargets([item({ space_id: DESIGN, role: "editor" })], ME, [])).toEqual([]);
 	});
 
 	it("makes inputs that drive.move_items and drive.move_to_drive accept", () => {
@@ -300,19 +352,33 @@ describe("moves", () => {
 		for (const input of across) expect(operations["drive.move_to_drive"].input.safeParse(input).success).toBe(true);
 	});
 
+	// A move to a different drive is one call: the server then moves each item or no item. A second
+	// call for the same selection can fail after the first call moved a folder with the items of the
+	// second call.
+	it("does not start a move to a different drive that one call cannot take", () => {
+		const ids = (count: number) =>
+			Array.from({ length: count }, (_, index) => `itm_01JD${String(index).padStart(22, "0")}`);
+		const input = (count: number) => moveToDriveInput(ME, ME, ids(count), { spaceId: DESIGN, parentId: null }, false);
+		const { itemsPerCall } = DRIVE_LIMITS;
+		expect(moveAcrossRefusal(itemsPerCall)).toBeNull();
+		expect(operations["drive.move_to_drive"].input.safeParse(input(itemsPerCall)).success).toBe(true);
+		expect(moveAcrossRefusal(itemsPerCall + 1)).toBe(
+			`Select at most ${itemsPerCall} items to move to a different drive.`,
+		);
+		expect(operations["drive.move_to_drive"].input.safeParse(input(itemsPerCall + 1)).success).toBe(false);
+	});
+
 	// The person must know who owns the items after the move, and who can then read them.
 	it("tells the person who owns the items after the move, and who keeps a direct share", () => {
-		const summary = moveSummary([
-			{ items_total: 2, kept_shares: [BOB, "prn_2"] },
-			{ items_total: 1, kept_shares: [BOB] },
-		]);
+		const summary = moveSummary({ items_total: 3, kept_shares: [BOB, "prn_2"] });
 		expect(summary).toEqual({ itemsTotal: 3, keptShares: [BOB, "prn_2"] });
+		// A direct share can be for an agent, so the text does not say "people" only.
 		expect(moveConfirmText(3, myDrive, design, summary).join(" ")).toBe(
-			"Design will own them. Its members get access. 2 people keep their direct shares.",
+			"Design will own them. Its members get access. 2 people or agents keep their direct shares.",
 		);
 		expect(moveConfirmText(1, site, myDrive, { itemsTotal: 12, keptShares: [BOB] }).join(" ")).toBe(
 			"You will own it. The members of Site lose the access that their role gives. " +
-				"The move takes 12 items, with all that the folders hold. 1 person keeps a direct share.",
+				"The move takes 12 items, with all that the folders hold. 1 person or agent keeps a direct share.",
 		);
 	});
 });
@@ -388,16 +454,19 @@ describe("linkPath and backPath", () => {
 
 	// A person without the owner role cannot open the folder of the item in the drive of the owner.
 	it("goes back to the folder for the owner, and to the shared list for each other person", () => {
-		expect(backPath(item({ parent_id: FOLDER }))).toBe(`/drive/folders/${ME}/${FOLDER}`);
-		expect(backPath(item())).toBe("/drive");
-		expect(backPath(item({ space_id: BOB, role: "editor", parent_id: FOLDER }))).toBe("/drive/shared");
+		expect(backPath(item({ parent_id: FOLDER }), null)).toBe(`/drive/folders/${ME}/${FOLDER}`);
+		expect(backPath(item(), null)).toBe("/drive");
+		expect(backPath(item({ space_id: BOB, role: "editor", parent_id: FOLDER }), null)).toBe("/drive/shared");
 	});
 
-	// An item of a shared drive has no owner. Each member can open its folder.
-	it("goes back to the folder or to the root of a shared drive", () => {
+	// An item of a shared drive has no owner. Each member can open its folder. A person with only a
+	// direct share cannot open the folder or the root of the drive: the server answers `not_found`.
+	it("goes back to the folder or to the root of a shared drive for a member, and to the shared list for each other person", () => {
 		const doc = { space_id: DESIGN, role: "viewer" } as const;
-		expect(backPath(item({ ...doc, parent_id: FOLDER }))).toBe(`/drive/folders/${DESIGN}/${FOLDER}`);
-		expect(backPath(item(doc))).toBe(`/drive/shared-drives/${DESIGN}`);
+		expect(backPath(item({ ...doc, parent_id: FOLDER }), "viewer")).toBe(`/drive/folders/${DESIGN}/${FOLDER}`);
+		expect(backPath(item(doc), "viewer")).toBe(`/drive/shared-drives/${DESIGN}`);
+		expect(backPath(item({ ...doc, parent_id: FOLDER }), null)).toBe("/drive/shared");
+		expect(backPath(item({ ...doc, role: "editor" }), null)).toBe("/drive/shared");
 	});
 });
 

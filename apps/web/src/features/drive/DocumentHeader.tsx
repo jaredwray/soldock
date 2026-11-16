@@ -5,9 +5,10 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { isSharedDriveId } from "../../routes.ts";
+import { drivePath, isSharedDriveId } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
-import { backPath, canShare, itemIcon, canEdit as roleCanEdit, spaceInput } from "./model.ts";
+import { useSharedDriveAbout } from "./data.ts";
+import { backPath, canShare, itemIcon, memberRole, memberRoles, canEdit as roleCanEdit, spaceInput } from "./model.ts";
 import { ShareDialog } from "./ShareDialog.tsx";
 
 /** The state of the last save of an editor. */
@@ -51,6 +52,14 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 	const refocusRef = useRef(false);
 	const canEdit = roleCanEdit(item.role) && !item.trashed;
 	const space = spaceInput(item.space_id, ownId);
+	// The server gives the role in a shared drive only to a member. A person with only a grant on
+	// the item gets no answer, and goes back to the shared list.
+	const { about } = useSharedDriveAbout(isSharedDriveId(item.space_id) ? item.space_id : null);
+	const member = memberRole(
+		item,
+		memberRoles(about && about.role !== "owner" ? [{ id: item.space_id, role: about.role }] : []),
+	);
+	const back = backPath(item, member);
 	const failed = saveState === "error" || saveState === "conflict";
 	const stateText = saveState === null ? (item.trashed ? "In the trash" : "View only") : SAVE_TEXT[saveState];
 
@@ -105,12 +114,12 @@ export function DocumentHeader({ item, saveState, onItemChange, actions }: Docum
 	return (
 		<header className="document-header">
 			<Link
-				to={backPath(item)}
+				to={back}
 				className="icon-button"
 				aria-label={
-					item.role === "owner" || isSharedDriveId(item.space_id)
-						? "Back to the folder in Drive"
-						: "Back to the items that are shared with you"
+					back === drivePath({ kind: "shared" })
+						? "Back to the items that are shared with you"
+						: "Back to the folder in Drive"
 				}
 				title="Back to Drive"
 			>

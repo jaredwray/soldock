@@ -129,7 +129,7 @@ export function SharedDriveMembersPart({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
-	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId() };
+	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId(), lastManager: useId() };
 	const byId = useMemo(() => new Map(principals.map((principal) => [principal.id, principal])), [principals]);
 
 	const load = useCallback(async () => {
@@ -252,7 +252,7 @@ export function SharedDriveMembersPart({
 													<select
 														className="input shared-drive-role"
 														aria-label={`Role of ${name}`}
-														title={last ? "A shared drive keeps at least one manager" : undefined}
+														aria-describedby={last ? ids.lastManager : undefined}
 														value={member.role}
 														disabled={busy || last}
 														onChange={(event) =>
@@ -268,6 +268,12 @@ export function SharedDriveMembersPart({
 												) : (
 													ROLE_NAMES[member.role]
 												)}
+												{/* A disabled control shows no tooltip, so the reason is text on the page. */}
+												{last && (canManage || self) && (
+													<div id={ids.lastManager} className="row-note">
+														A shared drive keeps at least one manager.
+													</div>
+												)}
 											</td>
 											<td className="cell-actions">
 												{principal && (canManage || self) && (
@@ -275,7 +281,7 @@ export function SharedDriveMembersPart({
 														type="button"
 														className="button button-small"
 														aria-label={self ? `Leave ${driveName}` : `Remove ${name} from ${driveName}`}
-														title={last ? "A shared drive keeps at least one manager" : undefined}
+														aria-describedby={last ? ids.lastManager : undefined}
 														onClick={() => setRemoving(principal)}
 														disabled={busy || last}
 													>
