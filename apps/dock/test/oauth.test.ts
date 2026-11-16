@@ -708,6 +708,26 @@ describe("OAuth tokens", () => {
 	});
 });
 
+describe("OAuth and the state of Chat", () => {
+	// A token from OAuth acts as its agent. The lists must come from the object of that agent only.
+	it("lists the rooms and the unread counts of its own agent, and no room of a different principal", async () => {
+		const owner = await setupOwner();
+		const { agent, tokens } = await connectNewAgent(owner);
+		const { room: shared } = await owner.call("chat.create_room", {
+			kind: "private",
+			name: "With the agent",
+			member_ids: [agent.id],
+		});
+		await owner.call("chat.create_room", { kind: "private", name: "Owner only" });
+		await owner.call("chat.post_message", { room_id: shared.id, text: "Hello" });
+		const listed = await callTool(tokens.access_token, "chat_list_rooms");
+		// Only the room of the agent, with the count of the agent.
+		expect(listed.structuredContent?.rooms).toEqual([
+			expect.objectContaining({ id: shared.id, name: "With the agent", unread_count: 1 }),
+		]);
+	});
+});
+
 describe("OAuth scope changes", () => {
 	const instructions = async (token: string) => {
 		const { body } = await mcp(token, "initialize", {

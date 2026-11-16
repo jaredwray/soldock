@@ -176,16 +176,31 @@ export class PrincipalDO extends DurableObject<Env> {
 		return { seeded: this.chatSeeded(), rooms };
 	}
 
-	/** The joined rooms of the list that this object has. */
-	chatRoomsOf(roomIds: readonly string[]): ChatRoomEntry[] {
-		if (roomIds.length === 0) return [];
-		return this.sql
+	/** The joined rooms of the list that this object has. `seeded` is as for `listChatRooms`. */
+	chatRoomsOf(roomIds: readonly string[]): { seeded: boolean; rooms: ChatRoomEntry[] } {
+		const seeded = this.chatSeeded();
+		if (roomIds.length === 0) return { seeded, rooms: [] };
+		const rooms = this.sql
 			.exec<ChatRoomEntry & Row>(
 				`SELECT ${COLUMNS} FROM chat_rooms JOIN json_each(?1) wanted ON wanted.value = chat_rooms.room_id
 				WHERE joined = 1`,
 				JSON.stringify([...new Set(roomIds)]),
 			)
 			.toArray();
+		return { seeded, rooms };
+	}
+
+	/** The rooms of the list that this object has no row for: no state came from them. */
+	unknownChatRooms(roomIds: readonly string[]): string[] {
+		if (roomIds.length === 0) return [];
+		return this.sql
+			.exec<{ value: string }>(
+				`SELECT wanted.value FROM json_each(?1) wanted
+				WHERE NOT EXISTS (SELECT 1 FROM chat_rooms WHERE room_id = wanted.value)`,
+				JSON.stringify([...new Set(roomIds)]),
+			)
+			.toArray()
+			.map((row) => row.value);
 	}
 
 	/**
@@ -196,9 +211,9 @@ export class PrincipalDO extends DurableObject<Env> {
 		return this.sql.exec("SELECT 1 FROM meta WHERE key = 'chat_seeded'").toArray().length > 0;
 	}
 
-	/** Keeps the states of the first fill, and records that the fill is done. */
-	seedChat(states: readonly ChatRoomState[]): void {
+	/** Keeps the states of a part of the first fill. `done` records that the fill is complete. */
+	seedChat(states: readonly ChatRoomState[], done: boolean): void {
 		this.applyChatRoomStates(states);
-		this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_seeded', '1')");
+		if (done) this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_seeded', '1')");
 	}
 }

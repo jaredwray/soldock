@@ -161,8 +161,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - `chat.mark_read` sets the marker of the caller: to the newest message, or to `seq`. A lower
   `seq` makes the room unread again. Only the member sees its own marker.
 - The room object has the new marker at once (`chat.get_room`). The `PrincipalDO` of the member
-  gets it before the call returns. So the next list on each device of the member has it. See
-  [The lists](#the-lists).
+  gets it before the call returns. So the next list on each device of the member has it. When that
+  send fails, the list is behind until the alarm sends it again. See [The lists](#the-lists).
 
 ## The lists
 
@@ -196,14 +196,24 @@ role, `last_read_seq`, `unread_count` and the other member of a `dm` room.
   target stays in the outbox, and the alarm tries again (1 minute, doubled, at most 1 hour).
 - The list of a principal can be behind for that time. `chat.get_room` and `chat.list_messages`
   read the room object, so they are always current.
-- The first list of a principal fills its object (`seed`). A principal can have rooms from the time
-  before the object existed. Those rooms are in the index in D1 only. So the fill reads the rooms of
-  the principal in `chat_members`, and asks each room object for its state, 25 at a time. Then it
-  records that the fill is done. A state from a room that came first keeps its place, because of the
-  stamp.
+- The first list of a principal fills its object (`seed`), in the joined view and in the public
+  view. A principal can have rooms from the time before the object existed. Those rooms are in the
+  index in D1 only. So the fill reads the rooms of the principal in `chat_members`. Then it asks each
+  room that sent no state yet for its state:
+  1. 25 rooms at a time, and 200 rooms at most in one request. The next list continues.
+  2. It keeps the states of each part when the part ends.
+  3. A room that does not answer does not stop the fill. The next list asks it again.
+  4. When each room answered, the object records that the fill is complete.
+- A state from a room that came first keeps its place, because of the stamp.
 
 Known limits:
 
+- When the send to a removed member fails, its list keeps the room until the alarm sends the state
+  again: 1 minute, doubled, at most 1 hour. The list shows the name, the topic, the member count and
+  `last_seq` from the time of the removal. No later change reaches it, because a change makes only
+  the current members a target. The messages stay closed.
+- The fill does not see a room whose member row in D1 waits in the outbox of the room. Such a row
+  can be from before this layer. The room shows in the list after its next change.
 - A post in a room with 500 members makes 500 calls to `PrincipalDO`s, in passes of 100 targets.
   The post waits for them. The `/ws/events` layer will send a state only to a principal whose
   sidebar changes ([jaredwray/soldock#72](https://github.com/jaredwray/soldock/issues/72)).
@@ -234,8 +244,8 @@ The public view reads an index in D1 `DIRECTORY`:
 - The index is a copy for the public list, for the first fill of a `PrincipalDO`, and for the rooms
   of an MCP stream. It gives no access: each read of messages and each change goes to the room
   object, which checks the members in its own database.
-- Known limit: while a write waits, the public list can show a private room to a removed member.
-  This applies to its name and its topic. The messages stay closed.
+- Known limit: while a write waits, the public list can show an old `role` for a public room. The
+  state of the caller from its `PrincipalDO` replaces it when that object has the room.
 - Each post makes one D1 batch: the room row.
 
 ## The socket of a room
@@ -428,7 +438,7 @@ Future notification levels and mention filters remain part of the roadmap.
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `chat_webhooks`, owned by `webhooks` | See the [shared data inventory](../webhooks/README.md#subscriptions) |
-| Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `principal_stamp` grows with each state that the room sends |
+| Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql`. `chat_members.last_read_seq` has the marker at the time of the join only |

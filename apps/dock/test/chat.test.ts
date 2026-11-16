@@ -489,9 +489,33 @@ describe("the state of each principal", () => {
 		await post(ada, quiet.id, "One");
 		await post(ada, busy.id, "Two");
 		await post(ada, busy.id, "Three");
-		await runInDurableObject(principalStub(bot.id), (_instance, state) => {
-			state.storage.sql.exec("DELETE FROM chat_rooms");
-			state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+		const forget = () =>
+			runInDurableObject(principalStub(bot.id), (_instance, state) => {
+				state.storage.sql.exec("DELETE FROM chat_rooms");
+				state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+			});
+		await forget();
+		expect((await joined(bot)).map((room) => [room.name, room.unread_count])).toEqual([
+			["Busy", 2],
+			["Quiet", 1],
+		]);
+
+		// The public list fills the object too, so it has the state of the agent in each room that it joined.
+		await forget();
+		expect((await bot.call("chat.list_rooms", { view: "public" })).rooms).toMatchObject([
+			{ name: "Quiet", role: "member", unread_count: 1 },
+		]);
+
+		// A room that does not answer does not stop the fill. The next list asks it again.
+		await forget();
+		await runInDurableObject(roomStub(busy.id), (instance) => {
+			(instance as unknown as { room: () => never }).room = () => {
+				throw new Error("The room is not available");
+			};
+		});
+		expect((await joined(bot)).map((room) => room.name)).toEqual(["Quiet"]);
+		await runInDurableObject(roomStub(busy.id), (instance) => {
+			delete (instance as unknown as { room?: unknown }).room;
 		});
 		expect((await joined(bot)).map((room) => [room.name, room.unread_count])).toEqual([
 			["Busy", 2],

@@ -420,7 +420,7 @@ export const markRead = defineOperation({
 	name: "chat.mark_read",
 	summary: "Set what you read in a room",
 	description:
-		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room and chat.list_rooms have the new marker when the call returns, on each of your devices.",
+		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room has the new marker at once. chat.list_rooms has it on each of your devices when the call returns, or a moment later when the update of your list fails.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/read" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
