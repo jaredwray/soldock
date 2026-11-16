@@ -3,6 +3,7 @@ packages:
   - "packages/*"
   - "tools/*"
   - "spikes/*"
+  - "e2e"
 
 # Lifecycle scripts are blocked: pnpm fails the install when a package that is not in allowBuilds
 # has a build script. Each allowBuilds entry is a reviewed exception. Approve new entries only in
