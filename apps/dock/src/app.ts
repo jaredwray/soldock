@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { mountRestApi } from "./api/index.ts";
 import { mountChatSocket } from "./chat/index.ts";
-import { type CallContext, mountAuthRoutes, mountOAuthRoutes } from "./identity/index.ts";
+import { type CallContext, mountAuthRoutes, mountEventsSocket, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
 import {
 	type HandlerMap,
@@ -17,7 +17,7 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
- * `/.well-known/*`), REST, MCP and the room sockets of Chat (`/ws/chat/*`). The REST routes and the MCP tools
+ * `/.well-known/*`), REST, MCP, the room sockets of Chat (`/ws/chat/*`) and the events socket (`/ws/events`). The REST routes and the MCP tools
  * come from the operation registry, with the handlers that the composition root passes in. MCP
  * resource subscriptions use the change feeds that it passes in.
  */
@@ -33,6 +33,7 @@ export function createApp(handlers: HandlerMap<CallContext>, watchers: WatcherMa
 	mountRestApi(app, handlers);
 	mountMcp(app, handlers, watchers);
 	mountChatSocket(app);
+	mountEventsSocket(app);
 
 	app.notFound((c) => {
 		const { pathname } = new URL(c.req.url);

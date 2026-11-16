@@ -323,8 +323,8 @@ A socket stays open after its request. It must not outlive the access that opene
   that time, and the Worker authenticates the new socket. This is the longest life of an MCP
   `subscriptions/listen` stream too.
 - Known limit: a socket of a credential that stopped can get events for at most 60 seconds after
-  its last check. This is the limit of MCP `subscriptions/listen`. The planned `/ws/events` socket
-  of the `PrincipalDO` will close such a socket at once.
+  its last check. This is the limit of MCP `subscriptions/listen`. A later pull request makes the
+  sign-out and the removal of a key close such a socket at once.
 
 | Close code | Meaning | What the client does |
 | --- | --- | --- |
@@ -371,7 +371,9 @@ version that the client has, the client calls `chat.list_messages` with `changed
 
 The web app still does this each 4 seconds while its tab shows. The list gives the sidebar its
 unread dots, and it keeps the open room current while its socket is not connected. The poll stops
-when the planned `/ws/events` socket of the `PrincipalDO` gives each person one socket for the sidebar.
+when the web app uses the events socket of the `PrincipalDO` (`/ws/events`,
+[`identity`](../identity/README.md#the-events-socket)), which sends each change of the rooms of a
+principal.
 
 ## Webhooks for new messages
 
@@ -454,7 +456,7 @@ Future notification levels and mention filters remain part of the roadmap.
 ## Later layers
 
 Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
-(through Drive), search, the socket of a principal for the sidebar (`/ws/events`), presence, typing,
+(through Drive), search, the use of the events socket (`/ws/events`) in the web app, presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.
