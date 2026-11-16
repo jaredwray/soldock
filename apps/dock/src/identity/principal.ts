@@ -190,14 +190,14 @@ export class PrincipalDO extends DurableObject<Env> {
 		return { seeded, rooms };
 	}
 
-	/** The rooms of the list that this object has no row for: no state came from them. */
+	/** The rooms of the list that this object has no row for: no state came from them. In the order of the list. */
 	unknownChatRooms(roomIds: readonly string[]): string[] {
 		if (roomIds.length === 0) return [];
 		return this.sql
 			.exec<{ value: string }>(
 				`SELECT wanted.value FROM json_each(?1) wanted
-				WHERE NOT EXISTS (SELECT 1 FROM chat_rooms WHERE room_id = wanted.value)`,
-				JSON.stringify([...new Set(roomIds)]),
+				WHERE NOT EXISTS (SELECT 1 FROM chat_rooms WHERE room_id = wanted.value) ORDER BY wanted.key`,
+				JSON.stringify(roomIds),
 			)
 			.toArray()
 			.map((row) => row.value);

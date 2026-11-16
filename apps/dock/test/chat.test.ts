@@ -522,6 +522,31 @@ describe("the state of each principal", () => {
 			["Quiet", 1],
 		]);
 	});
+
+	// A fill asks 200 rooms at most in one request. The pages of the list must not skip a room that a
+	// later part of the fill adds.
+	it("lists each room one time in pages while the fill of the object takes more than one request", async () => {
+		const names = Array.from({ length: 205 }, (_, index) => `Room ${String(index).padStart(3, "0")}`);
+		for (let start = 0; start < names.length; start += 25) {
+			await Promise.all(names.slice(start, start + 25).map((name) => createRoom(ada, "private", name, [bot.id])));
+		}
+		await runInDurableObject(principalStub(bot.id), (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_rooms");
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+		});
+		const listed: string[] = [];
+		let cursor: string | null = null;
+		do {
+			const page: { rooms: { name: string | null }[]; next_cursor: string | null } = await bot.call(
+				"chat.list_rooms",
+				cursor === null ? { limit: 100 } : { limit: 100, cursor },
+			);
+			listed.push(...page.rooms.map((room) => room.name ?? ""));
+			cursor = page.next_cursor;
+		} while (cursor !== null);
+		expect(listed.length).toBe(names.length);
+		expect([...listed].sort()).toEqual(names);
+	}, 30_000);
 });
 
 describe("a direct message", () => {

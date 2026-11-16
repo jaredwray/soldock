@@ -201,6 +201,8 @@ role, `last_read_seq`, `unread_count` and the other member of a `dm` room.
   index in D1 only. So the fill reads the rooms of the principal in `chat_members`. Then it asks each
   room that sent no state yet for its state:
   1. 25 rooms at a time, and 200 rooms at most in one request. The next list continues.
+     It asks the rooms in the order of the joined list, the newest activity in the index first. So
+     the rooms of a later part come after the cursor of an earlier page, and no page skips them.
   2. It keeps the states of each part when the part ends.
   3. A room that does not answer does not stop the fill. The next list asks it again.
   4. When each room answered, the object records that the fill is complete.

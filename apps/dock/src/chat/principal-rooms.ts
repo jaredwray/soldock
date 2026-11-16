@@ -42,6 +42,9 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
  * - The fill asks only the rooms that sent no state to the object yet.
  * - It asks at most `SEED_MAX` rooms in one call, so one request has a limit of calls. The next list
  *   continues the fill.
+ * - It asks the rooms in the order of the joined list: the newest activity in the index first. So a
+ *   page of a fill that is not complete has the newest rooms, and the rooms of a later part come
+ *   after the cursor of that page.
  * - It keeps the states of each part when the part ends. A room that does not answer does not stop
  *   the fill. The next list asks it again.
  * - The fill is complete when each room answered. A room that sent a newer state first keeps it:
@@ -49,7 +52,10 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
  */
 async function seed(env: Env, principalId: string): Promise<void> {
 	const principal = principalStub(env, principalId);
-	const { results } = await env.DIRECTORY.prepare("SELECT room_id FROM chat_members WHERE principal_id = ?")
+	const { results } = await env.DIRECTORY.prepare(
+		`SELECT m.room_id FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
+		WHERE m.principal_id = ? ORDER BY r.activity_at DESC, r.id DESC`,
+	)
 		.bind(principalId)
 		.all<{ room_id: string }>();
 	const unknown = await principal.unknownChatRooms(results.map((row) => row.room_id));
