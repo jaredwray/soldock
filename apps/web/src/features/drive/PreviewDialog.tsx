@@ -41,8 +41,10 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 	const ownId = useSession().whoami.principal.id;
 	const kind = previewKind(item.mime_type, item.size);
 	const [content, setContent] = useState<Content>(() => initialContent(kind));
-	const [downloading, setDownloading] = useState(false);
-	const [downloadError, setDownloadError] = useState<string | null>(null);
+	// The person can go to a different file before a download ends. The state of a download keeps the id
+	// of its file, so the busy state and the error show only with that file.
+	const [downloadingId, setDownloadingId] = useState<string | null>(null);
+	const [downloadError, setDownloadError] = useState<{ itemId: string; message: string } | null>(null);
 	const [shownId, setShownId] = useState(item.id);
 	const previousRef = useRef<HTMLButtonElement>(null);
 	const nextRef = useRef<HTMLButtonElement>(null);
@@ -123,19 +125,24 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 			saveBytes(content.bytes, item.name);
 			return;
 		}
-		setDownloading(true);
+		// The person asked for this file, so the file saves also after a move to a different file.
+		const itemId = item.id;
+		setDownloadingId(itemId);
 		try {
 			const result = await api.call("drive.download_file", {
 				...spaceInput(item.space_id, ownId),
-				item_id: item.id,
+				item_id: itemId,
 			});
 			saveBytes(base64ToBytes(result.content_base64), result.name);
 		} catch (caught) {
-			setDownloadError(errorMessage(caught));
+			setDownloadError({ itemId, message: errorMessage(caught) });
 		} finally {
-			setDownloading(false);
+			setDownloadingId((current) => (current === itemId ? null : current));
 		}
 	}
+
+	const downloading = downloadingId === item.id;
+	const shownError = downloadError?.itemId === item.id ? downloadError.message : null;
 
 	return (
 		<Dialog title={item.name} onClose={onClose} className="drive-preview">
@@ -218,9 +225,9 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						</dd>
 					</div>
 				</dl>
-				{downloadError && (
+				{shownError && (
 					<p className="form-error" role="alert">
-						{downloadError}
+						{shownError}
 					</p>
 				)}
 				<button
