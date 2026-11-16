@@ -145,24 +145,43 @@ describe("the events socket", () => {
 		expect(await sockets[0]?.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.replaced });
 	});
 
-	// A socket that stays open must not outlive the credential that opened it.
-	it("closes when its credential stops, and after its longest life", async () => {
+	// A tab must learn of a sign-out at once: it does not poll while its socket is live.
+	it("closes the sockets of a session that signs out and of a revoked key at once, and no other socket", async () => {
 		const room = await privateRoom(owner, "Launch", [ada.id]);
 		const cookie = await signIn(ada.address);
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
-		// Only the clock is fake: the object checks the age of a socket and of its last check against Date.now().
-		vi.useFakeTimers({ toFake: ["Date"] });
 		const signedOut = await connect({ cookie, origin: ORIGIN });
+		const otherSession = await connect({ cookie: await signIn(ada.address), origin: ORIGIN });
 		const revoked = await connect(bearer(second.secret));
 		const steady = await connect(bearer(ada.key));
 
+		// No event and no time: the sign-out and the revoke close the sockets of their credential.
 		expect((await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } })).status).toBe(204);
+		expect(await signedOut.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		await ada.call("account.revoke_api_key", { key_id: second.id });
+		expect(await revoked.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
+		await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" });
+		expect(await otherSession.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
+		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
+	});
+
+	// A socket that stays open must not outlive the credential that opened it.
+	it("closes when its credential stops without a sign-out, and after its longest life", async () => {
+		const room = await privateRoom(owner, "Launch", [ada.id]);
+		const cookie = await signIn(ada.address);
+		// Only the clock is fake: the object checks the age of a socket and of its last check against Date.now().
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const expired = await connect({ cookie, origin: ORIGIN });
+		const steady = await connect(bearer(ada.key));
+
+		// The session reaches its end. Nothing tells the object, so the check finds it.
+		await env.DIRECTORY.prepare("UPDATE sessions SET expires_at = ? WHERE principal_id = ?")
+			.bind(new Date(Date.now() - 1000).toISOString(), ada.id)
+			.run();
 		// The next event after EVENTS_SOCKET_RECHECK_MS makes the object check each credential first.
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" });
-		expect(await signedOut.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
-		expect(await revoked.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
+		expect(await expired.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 
 		// A socket older than EVENTS_SOCKET_MAX_MS closes at the next event. The client then opens a new one.

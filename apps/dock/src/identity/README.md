@@ -71,9 +71,12 @@ contract of the socket.
 - Known limit: the limit of 20 sockets is for all credentials of the principal together. A key or an
   OAuth client of the principal can open 20 sockets, and so close the sockets of the browser tabs
   of its person. The room socket has the same rule for each member.
-- Known limit: a socket of a credential that stopped can get events for at most 60 seconds after
-  its last check. A later pull request makes the sign-out and the removal of a key close the
-  sockets at once ([jaredwray/soldock#72](https://github.com/jaredwray/soldock/issues/72)).
+- A sign-out, `account.revoke_api_key` and `oauth.revoke_grant` close the sockets of that
+  credential at once with `4003` (`endEventSockets`). A tab learns of its sign-out this way, because
+  it does not poll while its socket is live. If that call fails, the check closes the socket.
+- Known limit: other ends of a credential reach the socket only with the check, at most 60 seconds
+  after its last check: the expiry of a session, a new password that ends the other sessions, and
+  a principal that is archived or deleted. The room socket has this limit for each end.
 - The log line `events socket opened` has the principal and the kind of the credential.
 
 ## Principals

@@ -11,10 +11,19 @@ import {
 } from "@soldock/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
-import { audit, log, OperationError, type RequestIdVariables, readBodyText, sameSecret } from "../platform/index.ts";
+import {
+	audit,
+	log,
+	OperationError,
+	type RequestIdVariables,
+	readBodyText,
+	sameSecret,
+	sha256Hex,
+} from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
+import { endEventSockets } from "./principal.ts";
 import { prepareFreshDirectory } from "./setup.ts";
 import { signInWithPassword } from "./signin.ts";
 import {
@@ -216,7 +225,15 @@ export function mountAuthRoutes(app: AuthApp): void {
 	app.post("/auth/sign-out", async (c) => {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign out from the Soldock web app.");
 		const token = readCookie(c.req.raw, SESSION_COOKIE);
-		if (token) await deleteSession(c.env.DIRECTORY, token);
+		if (token) {
+			const hash = await sha256Hex(token);
+			const session = await c.env.DIRECTORY.prepare("SELECT principal_id FROM sessions WHERE token_hash = ?")
+				.bind(hash)
+				.first<{ principal_id: string }>();
+			await deleteSession(c.env.DIRECTORY, token);
+			// The events sockets of this session close at once, so each tab of the session learns of the sign-out.
+			if (session) await endEventSockets(c.env, session.principal_id, { kind: "session", id: hash });
+		}
 		return c.body(null, 204, { "set-cookie": sessionCookie("", 0), "cache-control": "no-store" });
 	});
 }

@@ -78,6 +78,27 @@ export interface EventsSocketOpen {
 
 export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
 
+/** A credential that stopped: a session or a key by its id, or each token of an OAuth connection. */
+export type EndedCredential = { kind: CredentialRef["kind"]; id: string } | { grantId: string };
+
+/**
+ * Tells the object of a principal that a credential stopped, so its events sockets close at once. A
+ * failure does not fail the caller: the check of each socket closes it within `EVENTS_SOCKET_RECHECK_MS`.
+ */
+export async function endEventSockets(
+	env: Pick<Env, "PRINCIPAL">,
+	principalId: string,
+	credential: EndedCredential,
+): Promise<void> {
+	try {
+		await env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId)).endSockets(credential);
+	} catch (error) {
+		log("warn", "events sockets: the close of a stopped credential failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 /** The object checks the credential of a socket again when its last check is this old. */
 export const EVENTS_SOCKET_RECHECK_MS = 60_000;
 /** The longest life of one socket. Then the object closes it, and the Worker authenticates the new one. */
@@ -355,6 +376,27 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
 		this.send(server, JSON.stringify({ type: "hello", protocol: EVENTS_SOCKET_PROTOCOL } satisfies PrincipalEvent));
 		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/**
+	 * Closes each socket of a credential that stopped, with `ended`: a session that signed out, a
+	 * revoked key, or each token of a revoked OAuth connection. Returns the number of closed sockets.
+	 */
+	endSockets(match: EndedCredential): number {
+		let ended = 0;
+		for (const socket of this.ctx.getWebSockets()) {
+			const credential = (socket.deserializeAttachment() as EventsSocketState | null)?.credential;
+			if (!credential) continue;
+			const hit =
+				"grantId" in match
+					? credential.grantId === match.grantId
+					: credential.kind === match.kind && credential.id === match.id;
+			if (!hit) continue;
+			this.end(socket, EVENTS_SOCKET_CLOSE.ended, "The credential stopped.");
+			ended += 1;
+		}
+		if (ended > 0) log("info", "events sockets closed: the credential stopped", { sockets: ended });
+		return ended;
 	}
 
 	/** A client sends nothing but pings, which the runtime answers. Each other message closes the socket. */
