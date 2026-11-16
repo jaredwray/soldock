@@ -66,9 +66,10 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	const toast = useToast();
 	const view = useRoom(roomId, { version: listed?.version ?? null, tick: listTick }, onRoomsChanged);
 	// A message shows in the list at once, and goes out behind it. The list then gets the stored message.
-	// A list that is not at the newest messages does not know the last message of the room.
+	// A list that is not at the newest messages does not know the last message of the room. A list
+	// from the cache can be behind the room, so it does not know it also.
 	const loaded = view.messages[view.messages.length - 1];
-	const lastSeq = view.status === "ready" && !view.hasNewer ? (loaded?.seq ?? 0) : null;
+	const lastSeq = view.status === "ready" && view.fresh && !view.hasNewer ? (loaded?.seq ?? 0) : null;
 	/** The number of messages that the room stored for the person while the list was not at the newest messages. */
 	const [sentUnseen, setSentUnseen] = useState(0);
 	const outbox = useOutbox(roomId, ownId, lastSeq, (message) => {
@@ -126,11 +127,12 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 	// The person looks at the newest messages when the tab shows, and the list is at the end of the
 	// newest messages of the room. A message below the part that shows is not read.
 	const messages = view.messages;
-	const looking = view.status === "ready" && visible && atEnd && !view.hasNewer;
+	// A list from the cache is not the room of now: the person reads the room after its load.
+	const looking = view.status === "ready" && view.fresh && visible && atEnd && !view.hasNewer;
 
 	// The room opens with the read marker of the person. The messages after it came while the person
 	// did not look, so the line goes before the first of them.
-	const loadedRoom = view.status === "ready" ? view.room : null;
+	const loadedRoom = view.status === "ready" && view.fresh ? view.room : null;
 	useEffect(() => {
 		if (!loadedRoom || loadedRoom.role === null) return;
 		setReading((current) => current ?? nextReading(startReading(loadedRoom.last_read_seq), messages, ownId, false));
@@ -505,7 +507,7 @@ export function RoomView({ roomId, listed, listReady, listTick, onRoomsChanged }
 									<button
 										type="button"
 										className="button button-small"
-										disabled={view.paging !== null}
+										disabled={view.paging !== null || !view.fresh}
 										onClick={loadOlder}
 									>
 										{view.paging === "older" ? "Loading…" : "Show older messages"}

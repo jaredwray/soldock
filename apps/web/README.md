@@ -582,6 +582,15 @@ MCP clients. The app has no UI-only path.
     `chat.mark_read` with the `seq` of the last message, one time for each new message. A message
     below the part of the list that shows is not read. The open room has no dot in the sidebar:
     the button to the newest messages tells about its new messages.
+  - A room that the page showed before opens with its last list at once (`roomCache.ts`). The
+    load of the room then replaces the list.
+    - The cache is in the memory of the page, for 20 rooms. It has the newest messages of each
+      room, not a list that was at older messages. A reload of the page has no cache.
+    - Until the load, the list can be behind the room. The page then does not mark the room as
+      read, shows no **New messages** line, and does not read older messages.
+    - A list is for one person. A sign-out, and a sign-in as a different person, remove each
+      list. A room that does not load, and a room that the person is not a member of now, lose
+      their list.
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a
@@ -877,7 +886,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the data hooks, the pure rules in `model.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
