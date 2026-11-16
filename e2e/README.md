@@ -21,7 +21,7 @@ The first flows to cover, because they are tested by hand only:
   `javascript:` link, and Enter applies the link and does not send), hostile pasted HTML, the reply
   quote, and the HTML and text bodies that `mail.get_thread` returns after the send.
 
-- Drive, Docs and Sheets: a new folder, an upload, the preview, a rename, a star, the versions of a
+- Drive, Docs and Sheets: a new folder, an upload, the preview with Previous, Next and the arrow keys, a rename, a star, the versions of a
   file, the share dialog with a second person, a new doc with text and formats that stays after a
   reload, a new sheet with a formula whose result comes from the server, search, the trash with
   Undo and Delete forever, the shared folder as the second person, and a page without access.

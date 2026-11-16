@@ -850,6 +850,7 @@ button.drive-name-link:hover .drive-name-text {
 }
 
 .drive-preview-body {
+	position: relative;
 	display: grid;
 	flex: 1;
 	grid-template-rows: minmax(0, 1fr);
@@ -857,6 +858,37 @@ button.drive-name-link:hover .drive-name-text {
 	place-items: center;
 	min-height: 0;
 	padding: 4px 22px;
+}
+
+/* With Previous and Next, the file keeps clear of the two buttons. */
+.drive-preview-body-nav {
+	padding: 4px 72px;
+}
+
+/* Previous and Next: round buttons at the left and right edges, in the vertical center, as Close. */
+.drive-preview-nav {
+	position: absolute;
+	top: 50%;
+	width: 36px;
+	height: 36px;
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--background);
+	color: var(--foreground);
+	transform: translateY(-50%);
+}
+
+.drive-preview-nav:hover {
+	background: var(--hover);
+}
+
+.drive-preview-previous {
+	left: 18px;
+}
+
+.drive-preview-next {
+	right: 18px;
 }
 
 .drive-preview-image {
@@ -1092,8 +1124,18 @@ button.drive-name-link:hover .drive-name-text {
 		grid-column: 1 / -1;
 	}
 
-	.drive-preview-body {
+	/* On a narrow screen, Previous and Next are over the edges of the file. */
+	.drive-preview-body,
+	.drive-preview-body-nav {
 		padding: 4px 8px;
+	}
+
+	.drive-preview-previous {
+		left: 8px;
+	}
+
+	.drive-preview-next {
+		right: 8px;
 	}
 
 	.document-header {
@@ -1162,7 +1204,8 @@ button.drive-name-link:hover .drive-name-text {
 		min-height: 44px;
 	}
 
-	.drive-preview .dialog-header .icon-button {
+	.drive-preview .dialog-header .icon-button,
+	.drive-preview-nav {
 		width: 44px;
 		height: 44px;
 	}

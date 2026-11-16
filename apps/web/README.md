@@ -404,6 +404,14 @@ MCP clients. The app has no UI-only path.
     in the center, and the details and **Download** at the bottom. A PNG, JPEG, GIF or WebP image
     shows from a `blob:` URL, and text shows as plain text. Each other type shows a card with no
     preview. The content of a file never goes into the page as HTML.
+    - Round Previous and Next buttons at the left and right edges show the other files of the list
+      in the same dialog. The Left and Right arrow keys do the same. The order is the order of the
+      list (`previewNeighbors` in [`model.ts`](src/features/drive/model.ts)). The preview skips
+      folders, docs and sheets, because they open in their own pages. The first file has no
+      Previous button, and the last file has no Next button.
+    - When the Previous or Next button that had the focus goes away, the focus goes to the other
+      button. A hidden status line gives the name and the position of the file, for example
+      "IMG_4942.jpg, file 3 of 8".
   - The More menu of an item follows the role. The owner can rename, move, copy, share, see the
     versions and move the item to the trash. An editor can rename, copy and upload a version. A
     viewer can open, download and copy. Each person can put a star on an item: the star is their own.

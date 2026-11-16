@@ -229,6 +229,36 @@ export const TEXT_PREVIEW_BYTES = 1024 * 1024;
 
 export type PreviewKind = "image" | "text" | "none";
 
+/** The place of a file among the files of a list, for Previous and Next in the preview dialog. */
+export interface PreviewNeighbors<T> {
+	previous: T | null;
+	next: T | null;
+	/** The position of the file, from 1. 0 when the list does not have the file. */
+	position: number;
+	/** The number of files in the list. */
+	total: number;
+}
+
+/**
+ * The files before and after a file in a list, in the order of the list. A folder, a doc and a sheet
+ * open in their own pages, so the preview skips them. The first file has no previous file, and the
+ * last file has no next file.
+ */
+export function previewNeighbors<T extends Pick<DriveItem, "id" | "kind">>(
+	items: readonly T[],
+	itemId: string,
+): PreviewNeighbors<T> {
+	const files = items.filter((item) => item.kind === "file");
+	const index = files.findIndex((item) => item.id === itemId);
+	if (index === -1) return { previous: null, next: null, position: 0, total: files.length };
+	return {
+		previous: files[index - 1] ?? null,
+		next: files[index + 1] ?? null,
+		position: index + 1,
+		total: files.length,
+	};
+}
+
 /**
  * What the preview dialog can show for a file. Only raster images go into an `<img>`: an SVG image
  * can hold a script. Text shows as plain text. Each other type gets a download only.
