@@ -256,22 +256,25 @@ export class PrincipalDO extends DurableObject<Env> {
 		});
 		if (kept.length === 0 || this.ctx.getWebSockets().length === 0) return;
 		// The events come from the rows after this write. They go out after the events from before, in the
-		// order of the writes. A failure of the events never fails the write.
-		void this.publish(() => {
-			const joined = new Map(
-				this.chatRoomsOf(kept.filter((row) => row.joined === 1).map((row) => row.room_id)).rooms.map((entry) => [
-					entry.room_id,
-					entry,
-				]),
-			);
-			const events: PrincipalEvent[] = [];
-			for (const row of kept) {
-				const entry = joined.get(row.room_id);
-				if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
-				else if (joinedBefore.has(row.room_id)) events.push({ type: "chat.room_removed", room_id: row.room_id });
-			}
-			return events;
-		});
+		// order of the writes. A failure of the events never fails the write. The object stays awake until
+		// the send ends.
+		this.ctx.waitUntil(
+			this.publish(() => {
+				const joined = new Map(
+					this.chatRoomsOf(kept.filter((row) => row.joined === 1).map((row) => row.room_id)).rooms.map((entry) => [
+						entry.room_id,
+						entry,
+					]),
+				);
+				const events: PrincipalEvent[] = [];
+				for (const row of kept) {
+					const entry = joined.get(row.room_id);
+					if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
+					else if (joinedBefore.has(row.room_id)) events.push({ type: "chat.room_removed", room_id: row.room_id });
+				}
+				return events;
+			}),
+		);
 	}
 
 	/**
