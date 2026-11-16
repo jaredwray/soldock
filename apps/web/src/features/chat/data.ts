@@ -201,25 +201,20 @@ onAccountChange(() => {
 
 /**
  * The messages of one room that wait for the server, with the calls to send, to send again and to
- * remove one. `onSent` gets each stored message after its send, while the room shows. `lastSeq` is
- * the seq of the last message of the list, or null while the list did not load.
+ * remove one. `onSent` gets each stored message after its send, while the room shows.
  */
-export function useOutbox(
-	roomId: string,
-	ownId: string,
-	lastSeq: number | null,
-	onSent: (message: ChatMessage) => void,
-) {
+export function useOutbox(roomId: string, ownId: string, onSent: (message: ChatMessage) => void) {
 	const outbox = useMemo(() => outboxOf(ownId, roomId), [ownId, roomId]);
 	const state = useSyncExternalStore(outbox.subscribe, outbox.getState);
-	const view = useRef({ onSent, lastSeq });
-	view.current = { onSent, lastSeq };
+	const sent = useRef(onSent);
+	sent.current = onSent;
 	useEffect(() => {
-		outbox.attach({ deliver: (message) => view.current.onSent(message), lastSeq: () => view.current.lastSeq });
+		outbox.attach({ deliver: (message) => sent.current(message) });
 		return () => outbox.attach(null);
 	}, [outbox]);
 	return {
 		state,
+		getState: outbox.getState,
 		send: outbox.send,
 		retry: outbox.retry,
 		discard: outbox.discard,
@@ -272,7 +267,8 @@ const roomCache = createRoomCache();
  *
  * A member has a socket to the room, which brings each new, changed and deleted message at once.
  * `onRoomChanged` runs when the socket tells that the name, the topic or the members changed, or that
- * the person is not a member now.
+ * the person is not a member now. `onChanges` gets each new, changed and deleted message from the
+ * socket and from a sync, also a message that the list does not take.
  *
  * `listed` is the version of the room in the room list, with the `tick` of that list. After each list,
  * the hook gets the changes when the room is ahead of the page. So the page is also current while the
@@ -285,7 +281,12 @@ const roomCache = createRoomCache();
  * A room that the page showed before starts with its last list (`roomCache.ts`), with `fresh: false`.
  * The load of the room then replaces it.
  */
-export function useRoom(roomId: string, listed: { version: number | null; tick: number }, onRoomChanged: () => void) {
+export function useRoom(
+	roomId: string,
+	listed: { version: number | null; tick: number },
+	onRoomChanged: () => void,
+	onChanges: (messages: readonly ChatMessage[]) => void,
+) {
 	// The person of the page when the room opens. The cache gives and takes a list only for that person.
 	const owner = useRef(currentAccount()).current;
 	const [state, setState] = useState<RoomState>(() => {
@@ -302,13 +303,20 @@ export function useRoom(roomId: string, listed: { version: number | null; tick: 
 	shown.current = state;
 	const roomChanged = useRef(onRoomChanged);
 	roomChanged.current = onRoomChanged;
+	const incoming = useRef(onChanges);
+	incoming.current = onChanges;
 
 	const { sync, pager } = useMemo(() => {
 		// The sync gives its changes to the pager, and the pager starts and rewinds the sync.
 		const pages: { pager: RoomPager | null } = { pager: null };
 		const sync = createRoomSync(
 			(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
-			(changes) => pages.pager?.apply(changes),
+			(changes) => {
+				// Each change goes to the view first: the list can drop a change outside its part of the
+				// history, and the view still needs to know of a message that the room stored.
+				incoming.current(changes);
+				pages.pager?.apply(changes);
+			},
 		);
 		const pager = createRoomPager({
 			read: (range) => api.call("chat.list_messages", { room_id: roomId, ...range }),

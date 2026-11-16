@@ -4,9 +4,10 @@ import { ApiError, type ChatMessage } from "@soldock/contracts";
 // and no network of its own, so apps/web/test checks it.
 
 /** The waits before a new attempt of a send that can succeed later. After the last one, the message is `failed`. */
-export const RETRY_WAITS_MS = [1000, 2000, 4000];
 /** The most message keys that an outbox keeps. A row needs its key only while the list shows it. */
 const MAX_KEYS = 200;
+
+export const RETRY_WAITS_MS = [1000, 2000, 4000];
 
 /** A message that waits for the server. */
 export interface PendingMessage {
@@ -28,26 +29,22 @@ export interface PendingMessage {
 	 * attempt: it does not have the message.
 	 */
 	uncertain: boolean;
-	/**
-	 * The seq of the last message of the list at the start of the call. A stored message of the person
-	 * with a higher seq can be the message of this send. Null before the call, and when no list with
-	 * its messages showed the room at that time.
-	 */
-	afterSeq: number | null;
 }
 
 /** The list that shows the room of an outbox. */
 export interface OutboxView {
 	/** Takes a stored message after its send. */
 	deliver(message: ChatMessage): void;
-	/** The seq of the last message of the list, or null while the list did not load. */
-	lastSeq(): number | null;
 }
 
 export interface OutboxState {
 	/** The messages that wait, in the order of the sends. */
 	pending: readonly PendingMessage[];
-	/** The key of each message that this outbox sent, by the id of the message. */
+	/**
+	 * The key of each message that this outbox sent, by the id of the message. The row of a stored
+	 * message keeps the key of its send with it, so the row stays the same row. A message of a
+	 * different client of the person is not in it, also when it has a key that this outbox used.
+	 */
 	keys: ReadonlyMap<string, string>;
 	/** The key of the message whose call runs now, or null. */
 	sendingKey: string | null;
@@ -92,8 +89,8 @@ export interface Outbox {
 	/** Removes a message that failed or that waits. A message whose call runs stays. */
 	discard(key: string): void;
 	/**
-	 * Records that the server has a failed message as the message `id`: the list got it, and the
-	 * answers of the send did not arrive. The stored message then has the key of the send.
+	 * Records that the server has a failed message as the message `id`: the room has a message with
+	 * the key of the send, and the answers of the send did not arrive. The message goes out of the line.
 	 */
 	settle(key: string, id: string): void;
 	/** Stops each send and removes each message, for example when the person of the page changes. */
@@ -197,11 +194,8 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		if (stopped || paused || state.sendingKey !== null) return;
 		const next = state.pending.find((message) => message.state === "waiting");
 		if (!next) return;
-		// A send that the person sends again keeps the start of its first call: the server can have
-		// its message from that call.
-		const afterSeq = next.afterSeq ?? view?.lastSeq() ?? null;
-		change({ pending: update(next.key, { state: "sending", afterSeq }), sendingKey: next.key });
-		attempt({ ...next, afterSeq }, 0, next.uncertain);
+		change({ pending: update(next.key, { state: "sending" }), sendingKey: next.key });
+		attempt(next, 0, next.uncertain);
 	}
 
 	return {
@@ -224,7 +218,6 @@ export function createOutbox(options: OutboxOptions): Outbox {
 				state: "waiting",
 				error: null,
 				uncertain: false,
-				afterSeq: null,
 			};
 			change({ pending: [...state.pending, message] });
 			pump();

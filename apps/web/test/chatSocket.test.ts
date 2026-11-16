@@ -68,6 +68,7 @@ describe("the socket of an open room", () => {
 			edited_at: null,
 			deleted: false,
 			version: 8,
+			idempotency_key: "k1",
 		};
 		const { handlers } = server.last();
 		handlers.message(HELLO);

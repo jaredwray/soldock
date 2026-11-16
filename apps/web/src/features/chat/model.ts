@@ -19,45 +19,30 @@ export interface ChatRow {
 }
 
 /**
- * The stored message of each send whose answer did not arrive, by the id of the message. The socket,
- * or a read, can bring the stored message before the answer of its send, and when each answer got
- * lost. The message of a send is a message of `own` with the text of the send, that the outbox did
- * not send before, and that came after the start of the call of the send.
- *
- * Only a send whose call runs, or whose answers got lost, can have a stored message. A send that the
- * server refused has none. A call that started while no list showed the room has none: the list does
- * not know which messages came after its start.
- *
- * The send whose call runs comes first. A person can write the text of a failed send again. The
- * message that arrives is then the message of the new send, and the failed send must stay.
- *
- * Two failed sends with the same text get no stored message: the list cannot know which of them the
- * server has. The two stay "Not sent". "Try again" then gives the correct answer for each one: the
- * stored message for the send that the server has, and a new message for the other one.
+ * The key of the send of a stored message, for a message of `own` that has one. A different author can
+ * use the same value as a key, so the key of a message of a different author is not a key of this page.
+ */
+function sendKeyOf(message: ChatMessage, own: ChatMessage["author"]): string | null {
+	return message.author.principal_id === own.principal_id ? message.idempotency_key : null;
+}
+
+/**
+ * The send of each stored message that the outbox still has, by the id of the message. The room
+ * stores each message with the key of its send (`idempotency_key`), so the pair is certain: the
+ * socket, or a read, can bring the stored message before the answer of its send, and also when
+ * each answer of the send got lost.
  */
 function storedOf(
 	messages: readonly ChatMessage[],
 	outbox: OutboxState,
 	own: ChatMessage["author"],
 ): Map<string, PendingMessage> {
+	const sends = new Map(outbox.pending.map((pending) => [pending.key, pending]));
 	const stored = new Map<string, PendingMessage>();
-	const failed = outbox.pending.filter((pending) => pending.state === "failed" && pending.uncertain);
-	const sends = [
-		...outbox.pending.filter((pending) => pending.state === "sending"),
-		...failed.filter((pending) => failed.every((other) => other === pending || other.text !== pending.text)),
-	];
-	for (const pending of sends) {
-		const afterSeq = pending.afterSeq;
-		if (afterSeq === null) continue;
-		const message = messages.find(
-			(entry) =>
-				entry.seq > afterSeq &&
-				entry.author.principal_id === own.principal_id &&
-				entry.text === pending.text &&
-				!outbox.keys.has(entry.id) &&
-				!stored.has(entry.id),
-		);
-		if (message) stored.set(message.id, pending);
+	for (const message of messages) {
+		const key = sendKeyOf(message, own);
+		const pending = key === null ? undefined : sends.get(key);
+		if (pending) stored.set(message.id, pending);
 	}
 	return stored;
 }
@@ -65,13 +50,14 @@ function storedOf(
 /**
  * The rows of the list: the stored messages, then the messages that wait, in the order of the sends.
  *
- * - A stored message that the outbox sent has the key of its send.
+ * - A stored message that this outbox sent has the key of its send as its row key (`outbox.keys`), so
+ *   the row of a send stays the same row when the stored message comes. Each other message has its
+ *   id. A row key never changes when a page of messages comes.
  * - A message that waits shows as a message of `own`, after the last stored message.
  * - A send whose stored message the list has shows as that stored message, at the position that the
  *   room gave it, with the key of the send. So the message shows one time, and it does not move when
  *   the answer of the send arrives.
- * - A stored message shows with its change that waits for the server (`changes`). The list finds the
- *   stored message of a send with the text that the room has, not with the text of a change.
+ * - A stored message shows with its change that waits for the server (`changes`).
  */
 export function chatRows(
 	messages: readonly ChatMessage[],
@@ -103,6 +89,7 @@ export function chatRows(
 				edited_at: null,
 				deleted: false,
 				version: 0,
+				idempotency_key: pending.key,
 			},
 			pending,
 		});
@@ -111,9 +98,11 @@ export function chatRows(
 }
 
 /**
- * The failed sends whose message the list has. The answers of such a send got lost, and the server
- * stored the message. Give each pair to `settle` of the outbox: the send did not fail, and "Try again"
- * and "Delete" must not show for a message that the room has.
+ * The failed sends whose message the room has: a message of `own` in `messages` has the key of the
+ * send. The answers of such a send got lost, and the server stored the message. Give each pair to
+ * `settle` of the outbox: the send did not fail, and "Try again" and "Delete" must not show for a
+ * message that the room has. `messages` can be messages that the list does not show, for example a
+ * message from the socket while the list is at older messages.
  */
 export function storedSends(
 	messages: readonly ChatMessage[],
@@ -131,9 +120,10 @@ export function storedSends(
  * that the room stored since the list left the newest messages. Without the line, the person sees
  * nothing of a send, and can send the message a second time. Null when the list hides no such message.
  *
- * A send can fail without an answer of the server. The room possibly has that message, and a list
- * that is not at the newest messages cannot find it. So the line does not tell that the message was
- * not sent. "Try again" on the row is safe: the send keeps its key, and the room stores it one time.
+ * A send can fail without an answer of the server. The room possibly has that message: the page
+ * settles the send when the room tells of it, but a message that the room stored before the list
+ * loaded does not come in a sync. So the line does not tell that the message was not sent. "Try
+ * again" on the row is safe: the send keeps its key, and the room stores it one time.
  */
 export function unseenSendsNote(outbox: OutboxState, sent: number): string | null {
 	const failed = outbox.pending.filter((pending) => pending.state === "failed");

@@ -680,8 +680,8 @@ MCP clients. The app has no UI-only path.
     - Until the load, the list can be behind the room. The page then does not mark the room as
       read, shows no **New messages** line, and does not read older messages.
     - A send before the load shows at once and waits in the outbox. Its call starts after the
-      load, as for a list that is not at the newest messages. So the message does not show two
-      times when the load brings the stored message before the answer of the send.
+      load, as for a list that is not at the newest messages: before the load, the list cannot
+      take the stored message, and the message would go away until the load.
     - A list is for one person. A sign-out, and a sign-in as a different person, remove each
       list. A room that does not load, and a room that the person is not a member of now, lose
       their list, also when the page left the room before the answer of the server.
@@ -729,17 +729,17 @@ MCP clients. The app has no UI-only path.
   - The socket can bring the stored message before the answer of the send. The list then shows the
     send as that stored message, at the position that the room gave it, with the key of the send.
     So the message shows one time, and it does not move when the answer arrives.
-  - The stored message of a send is a message of the person with the text of the send, that came
-    after the start of the call. A send keeps the last message of the list at the start of its
-    first call for this. A call that starts while no list shows the room has no stored message.
-  - The server can store a message while the answer of its send gets lost. When the list gets that
-    message, the send did not fail: the "Not sent" row becomes the row of the stored message. This is
-    for a send with an attempt whose answer did not arrive. A send that the server refused each
-    time stays "Not sent".
-  - The send whose call runs gets a stored message before a failed send, so a failed send stays
-    when the person writes its text again. Two failed sends with the same text get no stored
-    message: the page cannot know which of them the server has. **Try again** gives the correct
-    answer for each one.
+  - The stored message of a send is the message of the person whose `idempotency_key` is the key
+    of the send. The room stores each message with that key (`storedOf` in `model.ts`). A message
+    of a different author with the same key is not the message of a send of this page.
+  - The server can store a message while the answer of its send gets lost. When the room tells of
+    that message, the send did not fail: the "Not sent" row becomes the row of the stored message.
+    The room tells of it in a list, a sync or the socket, also while the list does not take the
+    message, for example a list at older messages (`onChanges` of `useRoom`, `settle.ts`).
+  - A stored message that this page sent has the key of its send as its row key (`keys` of the
+    outbox), so the row stays the same row from the send to the stored message. Each other message
+    has its id. So a row key never changes when a page of messages comes, also when a different
+    client of the person used the same key again after a day.
   - The messages that wait stay when the person opens a different room, and after a reload of the
     page. The page keeps them in IndexedDB ([Data inventory](#data-inventory)).
   - After a reload, the Chat page puts each message back in the line of its room, before the
@@ -839,16 +839,17 @@ MCP clients. The app has no UI-only path.
       server does not show.
     - A send from such a list goes to the outbox at once, with the text of that moment, and the
       list goes to the newest messages. The outbox starts no call until the list is there, so the
-      list finds the stored message of the send. The message also goes out when the list does not
-      get there, and when the person opens a different room.
+      list can take the stored message. The message also goes out when the list does not get
+      there, and when the person opens a different room.
     - While the list is not at the newest messages, a line below the list tells about the
       messages of the person that the list does not show: that a message was not sent, that
       the page got no answer for a message, that messages wait, or that the room has the new
       messages (`unseenSendsNote` in `model.ts`). So the person does not send a message a second
       time.
-    - Known limit: such a list cannot find the stored message of a send whose answers got lost.
-      The line then tells that the page got no answer. At the newest messages, the row shows
-      "Not sent", and **Try again** gets the stored message: the send keeps its key.
+    - When the room tells of the stored message of a send whose answers got lost, the line tells
+      that the room has the new messages. Known limit: a message that the room stored before the
+      list loaded does not come in a sync. The line then tells that the page got no answer, and
+      **Try again** at the newest messages gets the stored message: the send keeps its key.
     - A full list at its end drops its oldest messages when a new message comes in. When the
       person reads older messages in a full list, they stay: the new message does not go in, and
       the list shows **Show newer messages**.
@@ -1059,7 +1060,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |

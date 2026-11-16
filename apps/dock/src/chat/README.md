@@ -117,6 +117,11 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - `chat.post_message` takes `idempotency_key` (REST: also the `Idempotency-Key` header). A second
   call with the same key and the same input returns the first message. The same key with a
   different input gets `conflict`. The key belongs to its caller. Keys stay 24 hours.
+- Each message has the key of its send as `idempotency_key`, or null. A client finds the message of
+  its own send with it, also when each answer of the send got lost. The key is the value that the
+  author gave, so each member of the room sees it. Compare it with the author: two authors can use
+  the same value. A delete removes the key with the text, because an author can make a key from
+  the content.
 - The other changes are safe to repeat: a join, an add, a removal, an edit with the same text, a
   delete and a read marker give the same state.
 
@@ -370,7 +375,7 @@ Future notification levels and mention filters remain part of the roadmap.
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
-| Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays |
+| Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |

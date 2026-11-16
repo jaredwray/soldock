@@ -283,11 +283,20 @@ describe("messages", () => {
 		const first = await bot.call("chat.post_message", input);
 		const retry = await bot.call("chat.post_message", input);
 		expect(retry.message.id).toBe(first.message.id);
+		// Each reader of the message gets the key of its send, so the client of the author finds it.
+		expect([first.message.idempotency_key, retry.message.idempotency_key]).toEqual(["invoice-7", "invoice-7"]);
+		const listed = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(listed.map((message) => message.idempotency_key)).toEqual(["invoice-7"]);
+		expect((await post(ada, room.id, "Without a key")).idempotency_key).toBeNull();
 		expect(await codeOf(bot.call("chat.post_message", { ...input, text: "Invoice 8 is paid." }))).toBe("conflict");
 		// The key belongs to its caller: the same key from a different member posts a new message.
 		const other = await ada.call("chat.post_message", input);
 		expect(other.message.id).not.toBe(first.message.id);
-		expect(await texts(ada, room.id)).toEqual(["Invoice 7 is paid.", "Invoice 7 is paid."]);
+		expect(await texts(ada, room.id)).toEqual(["Invoice 7 is paid.", "Without a key", "Invoice 7 is paid."]);
+		// A key can come from the content of the message. A delete removes it with the text.
+		await bot.call("chat.delete_message", { room_id: room.id, message_id: first.message.id });
+		const after = (await ada.call("chat.list_messages", { room_id: room.id })).messages[0];
+		expect(after).toMatchObject({ deleted: true, text: "", idempotency_key: null });
 	});
 });
 
@@ -618,7 +627,7 @@ describe("a room object", () => {
 		// The old room writes its rows again, as after a write that failed before the fresh start.
 		const posted = await roomStub(room.id).postMessage(
 			{ roomId: room.id, actor: { principal_id: ada.id, kind: "human", display_name: "Ada Lovelace" } },
-			{ id: UNKNOWN_MESSAGE, text: "A late write." },
+			{ id: UNKNOWN_MESSAGE, text: "A late write.", clientKey: null },
 		);
 		expect(posted).toMatchObject({ duplicate: false });
 		expect((await fresh("chat.list_rooms", { view: "public" })).rooms.map((listed) => listed.id)).toEqual([created.id]);

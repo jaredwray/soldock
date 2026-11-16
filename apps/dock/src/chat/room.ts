@@ -66,6 +66,8 @@ export interface MessageRecord {
 	edited_at: number | null;
 	deleted: boolean;
 	version: number;
+	/** The idempotency key of the send of the message, as its author gave it, or null. */
+	idempotency_key: string | null;
 }
 
 /**
@@ -141,6 +143,7 @@ interface MessageRow extends Row {
 	edited_at: number | null;
 	deleted_at: number | null;
 	version: number;
+	idempotency_key: string | null;
 }
 
 interface OutboxRow extends Row {
@@ -210,6 +213,8 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE members ADD COLUMN membership_id TEXT NOT NULL DEFAULT ''",
 		"UPDATE members SET membership_id = lower(hex(randomblob(16)))",
 	],
+	// The key of the send of a message, so a client finds the message of its send.
+	["ALTER TABLE messages ADD COLUMN idempotency_key TEXT"],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -262,6 +267,7 @@ function toMessage(roomId: string, row: MessageRow): MessageRecord {
 		edited_at: row.edited_at,
 		deleted: row.deleted_at !== null,
 		version: row.version,
+		idempotency_key: row.idempotency_key,
 	};
 }
 
@@ -699,7 +705,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,
-		input: { id: string; text: string; idempotency?: { key: string; requestHash: string } | undefined },
+		input: {
+			id: string;
+			text: string;
+			/** The key of the room for a retry: the caller and the key of the client. */
+			idempotency?: { key: string; requestHash: string } | undefined;
+			/** The key of the client, as the caller gave it. The message keeps it. */
+			clientKey: string | null;
+		},
 	): Promise<{ message: MessageRecord; duplicate: boolean } | Refusal> {
 		// Hold room calls until the subscription boundary and message commit agree on their order.
 		const posted = await this.ctx.blockConcurrencyWhile(async () => {
@@ -727,14 +740,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const version = opened.room.version + 1;
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
-					`INSERT INTO messages (id, author_id, author_json, text, created_at, version)
-				VALUES (?, ?, ?, ?, ?, ?) RETURNING seq`,
+					`INSERT INTO messages (id, author_id, author_json, text, created_at, version, idempotency_key)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
 					input.text,
 					now,
 					version,
+					input.clientKey,
 				)?.seq as number;
 				this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
 				this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
@@ -831,7 +845,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const version = opened.room.version + 1;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
-				"UPDATE messages SET text = '', deleted_at = ?, version = ? WHERE id = ?",
+				// The key goes with the text: an author can make a key from the content of the message.
+				"UPDATE messages SET text = '', idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
 				Date.now(),
 				version,
 				messageId,
