@@ -1,5 +1,5 @@
 import type { SharedDrive } from "@soldock/contracts";
-import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
@@ -9,7 +9,7 @@ import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
 import type { About } from "./data.ts";
 import { Menu, type MenuItem } from "./Menu.tsx";
-import { MY_DRIVE, SHARED_DRIVE_ICON } from "./model.ts";
+import { MY_DRIVE, SHARED_DRIVE_ICON, sharedDrivesNav } from "./model.ts";
 
 /** The entry of the navigation that the current view belongs to. */
 export type NavEntry = "my-drive" | "shared-drives" | "shared" | "recent" | "starred" | "trash" | null;
@@ -33,6 +33,9 @@ interface DriveSidebarProps {
 	dropSpaces: ReadonlySet<string> | null;
 	/** Called with the id of the drive that the person dropped the items on. */
 	onDropItems: (spaceId: string) => void;
+	/** True when the person expanded the rows of the shared drives. The rows are collapsed by default. */
+	drivesExpanded: boolean;
+	onSetDrivesExpanded: (expanded: boolean) => void;
 	about: About | null;
 	open: boolean;
 	/** The entries of the New menu. Empty when the person cannot add items to the current folder. */
@@ -47,6 +50,8 @@ export function DriveSidebar({
 	drives,
 	dropSpaces,
 	onDropItems,
+	drivesExpanded,
+	onSetDrivesExpanded,
 	about,
 	open,
 	newItems,
@@ -54,9 +59,8 @@ export function DriveSidebar({
 }: DriveSidebarProps) {
 	const { whoami } = useSession();
 	const ownId = whoami.principal.id;
-	// The row of the shared drive on screen is the current page. Until the list has that row, the
-	// Shared drives entry is.
-	const driveRow = activeDriveId !== null && (drives ?? []).some((drive) => drive.id === activeDriveId);
+	const drivesNav = sharedDrivesNav(drives, activeDriveId, drivesExpanded, dropSpaces);
+	const drivesId = useId();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
 
@@ -98,37 +102,59 @@ export function DriveSidebar({
 				</Menu>
 				<ul className="nav-list">
 					{NAV.map((item) => {
-						const current = active === item.entry && !(item.entry === "shared-drives" && driveRow);
+						const drivesEntry = item.entry === "shared-drives";
+						const current = active === item.entry && !(drivesEntry && drivesNav.driveRowCurrent);
+						const link = (
+							<DropLink
+								to={drivePath(item.view)}
+								current={current}
+								// Items that the person drops on My Drive move to the root of the own drive.
+								spaceId={item.entry === "my-drive" ? ownId : null}
+								dropSpaces={dropSpaces}
+								onDropItems={onDropItems}
+							>
+								<Icon name={item.icon} />
+								<span className="nav-name">{item.title}</span>
+							</DropLink>
+						);
+						if (!drivesEntry || !drivesNav.toggle) return <li key={item.entry}>{link}</li>;
 						return (
 							<li key={item.entry}>
-								<DropLink
-									to={drivePath(item.view)}
-									current={current}
-									// Items that the person drops on My Drive move to the root of the own drive.
-									spaceId={item.entry === "my-drive" ? ownId : null}
-									dropSpaces={dropSpaces}
-									onDropItems={onDropItems}
+								{/* The chevron on the right expands or collapses the rows of the shared drives. */}
+								<div className="drive-nav-row">
+									{link}
+									<button
+										type="button"
+										className="icon-button icon-button-small drive-nav-toggle"
+										aria-label="List of shared drives"
+										title={drivesExpanded ? "Hide the shared drives" : "Show the shared drives"}
+										aria-expanded={drivesExpanded}
+										aria-controls={drivesId}
+										onClick={() => onSetDrivesExpanded(!drivesExpanded)}
+									>
+										<Icon name={drivesExpanded ? "chevronUp" : "chevronDown"} size={16} />
+									</button>
+								</div>
+								<ul
+									id={drivesId}
+									className="nav-list drive-nav-drives"
+									aria-label="Shared drives"
+									hidden={!drivesNav.listed}
 								>
-									<Icon name={item.icon} />
-									<span className="nav-name">{item.title}</span>
-								</DropLink>
-								{item.entry === "shared-drives" && drives !== null && drives.length > 0 && (
-									<ul className="nav-list drive-nav-drives" aria-label="Shared drives">
-										{drives.map((drive) => (
-											<li key={drive.id}>
-												<DropLink
-													to={sharedDrivePath(drive.id)}
-													current={drive.id === activeDriveId}
-													spaceId={drive.id}
-													dropSpaces={dropSpaces}
-													onDropItems={onDropItems}
-												>
-													<span className="nav-name">{drive.name}</span>
-												</DropLink>
-											</li>
-										))}
-									</ul>
-								)}
+									{(drives ?? []).map((drive) => (
+										<li key={drive.id}>
+											<DropLink
+												to={sharedDrivePath(drive.id)}
+												current={drivesNav.driveRowCurrent && drive.id === activeDriveId}
+												spaceId={drive.id}
+												dropSpaces={dropSpaces}
+												onDropItems={onDropItems}
+											>
+												<span className="nav-name">{drive.name}</span>
+											</DropLink>
+										</li>
+									))}
+								</ul>
 							</li>
 						);
 					})}

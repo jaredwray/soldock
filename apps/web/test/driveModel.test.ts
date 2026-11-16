@@ -19,6 +19,7 @@ import {
 	moveTargets,
 	moveToDriveInput,
 	previewKind,
+	sharedDrivesNav,
 	spaceBatches,
 	uploadMimeType,
 	uploadRefusal,
@@ -442,6 +443,36 @@ describe("breadcrumbs", () => {
 			{ label: "Shared with me", to: "/drive/shared" },
 			{ label: "Assets", to: null },
 		]);
+	});
+});
+
+describe("sharedDrivesNav", () => {
+	const drives = [{ id: DESIGN }];
+
+	// The rows of the shared drives are collapsed until the person expands them.
+	it("collapses the rows by default, and makes the Shared drives entry the current page", () => {
+		expect(sharedDrivesNav(drives, DESIGN, false, null)).toEqual({
+			toggle: true,
+			listed: false,
+			driveRowCurrent: false,
+		});
+		expect(sharedDrivesNav(drives, DESIGN, true, null)).toEqual({ toggle: true, listed: true, driveRowCurrent: true });
+		// Until the list has the drive on screen, the Shared drives entry is the current page.
+		expect(sharedDrivesNav(drives, ITEM, true, null).driveRowCurrent).toBe(false);
+	});
+
+	it("shows no button without shared drives", () => {
+		const none = { toggle: false, listed: false, driveRowCurrent: false };
+		expect(sharedDrivesNav(null, null, true, null)).toEqual(none);
+		expect(sharedDrivesNav([], null, true, new Set([ME]))).toEqual(none);
+	});
+
+	// A drop on a row moves the items to that drive, so the rows show during the drag.
+	it("shows the collapsed rows during a drag only when a drive can get the items", () => {
+		expect(sharedDrivesNav(drives, null, false, new Set([ME, DESIGN])).listed).toBe(true);
+		expect(sharedDrivesNav(drives, null, false, new Set([ME])).listed).toBe(false);
+		// The person did not expand the rows, so the Shared drives entry stays the current page.
+		expect(sharedDrivesNav(drives, DESIGN, false, new Set([DESIGN])).driveRowCurrent).toBe(false);
 	});
 });
 
