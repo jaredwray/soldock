@@ -426,19 +426,13 @@ MCP clients. The app has no UI-only path.
     items of other drives loads again on the same timer. The timer also loads the list of the
     shared drives again.
 - **Shared drives** (`/drive/shared-drives`). The sidebar of Drive has a **Shared drives** entry
-  below My Drive. Below that entry, the sidebar has a row for each shared drive of the person
-  (`drive.list_shared_drives`). The page of the entry lists the drives with the role of the person,
-  the number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
-  - The rows of the shared drives are collapsed by default. A chevron on the right of the entry
-    expands or collapses them: it points down when they are collapsed, and up when they are
-    expanded. The shell keeps this state while the page changes. A reload collapses the rows again
-    (`sharedDrivesNav` in [`model.ts`](src/features/drive/model.ts)).
-  - During a drag of items, the collapsed rows also show if a drive can get the items.
+  below My Drive. The sidebar does not show a row for each shared drive. The page of the entry lists
+  the shared drives of the person (`drive.list_shared_drives`) with the role of the person, the
+  number of members and the date. An owner or an admin also gets a link to Admin › Shared drives.
   - A shared drive has its own paths: `/drive/shared-drives/<drv_id>` for its root, and `…/trash` and
     `…/search?q=<query>` below that. A folder has the same form of path as in each other drive
     (`/drive/folders/<drv_id>/<itm_id>`). A doc and a sheet of a shared drive open in their editors.
-  - In a shared drive, the row of that drive is the current page of the sidebar. When the rows are
-    collapsed, the Shared drives entry is the current page. The first entry of
+  - In a shared drive, the Shared drives entry is the current page of the sidebar. The first entry of
     the folder path is the name of the drive (`drive.get_about` with `space_id`). A chip shows the
     role of the person: Manager, Editor or Viewer.
   - The actions follow the role (`itemActions` in [`model.ts`](src/features/drive/model.ts)). An
@@ -489,12 +483,12 @@ MCP clients. The app has no UI-only path.
   - A move in the same drive of more than 100 items makes one call for each 100 items. When a call
     fails after a different call moved items, the dialog says how many items moved, and the list
     loads again.
-  - A person can also drag a row, or the selection that the row is part of, onto My Drive or a
-    shared drive in the sidebar. During the drag, each drive that can get the items has a line
-    around it. A drop on a different drive opens the same confirmation. A drop on the drive that
-    holds the items moves them to its root. A selection with items of two drives does not start a
-    drag. The drag is for a pointer only, and the drawer of a
-    narrow screen has no drag: Move to… does the same.
+  - A person can also drag a row, or the selection that the row is part of, onto My Drive in the
+    sidebar. During the drag, My Drive has a line around it. A drop of items from a shared drive
+    opens the same confirmation. A drop of items from My Drive moves them to its root. The app does
+    not start a drag when the items cannot move to My Drive. Examples: a selection with items of two
+    drives, or items of a shared drive for a person who is not a manager. The drag is for a pointer
+    only, and the drawer of a narrow screen has no drag: Move to… does the same.
   - At 900px and below, the sidebar is part of the drawer of the shell, and the list hides the owner
     and the size. From 901px to 1100px, the Last change column is wider, for the name of the person.
 - **Document header.** The Docs and the Sheets editors share one header: a link back to Drive, the
