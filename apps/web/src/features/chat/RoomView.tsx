@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatMessage, type ChatRoom } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatMessage, type ChatRoom, type Principal } from "@soldock/contracts";
 import {
 	Fragment,
 	type KeyboardEvent,
@@ -17,12 +17,14 @@ import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { chatPath } from "../../routes.ts";
+import { chatPath, profilePath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { createCallLine } from "./callLine.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
+import { type MentionContext, MentionTextarea } from "./MentionTextarea.tsx";
+import { type MentionDirectory, textParts } from "./mentions.ts";
 import {
 	chatRows,
 	dayLabel,
@@ -54,6 +56,8 @@ export interface RoomViewProps {
 	listTick: number;
 	/** Gets the room list again, after a change that this view made. */
 	onRoomsChanged: () => Promise<void>;
+	/** The handles of the people and the agents, for the mentions. */
+	directory: MentionDirectory<Principal>;
 }
 
 type RoomDialog = { type: "members" } | { type: "settings" } | { type: "delete"; message: ChatMessage } | null;
@@ -62,7 +66,7 @@ type RoomDialog = { type: "members" } | { type: "settings" } | { type: "delete";
 const STICK_PX = 80;
 
 /** One room: its header, its messages and the box for a new message. */
-export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged }: RoomViewProps) {
+export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
 	const toast = useToast();
@@ -175,6 +179,19 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const own = useMemo(
 		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
 		[ownId, self.kind, self.display_name],
+	);
+	const members = view.members;
+	// The socket brings a change of the members. Without a socket, for example after the room replaced
+	// it, the room list shows the change: its number of members is not the number that the page has.
+	const listedCount = listed?.member_count;
+	const fresh = view.status === "ready" && view.fresh;
+	const loadMembers = view.loadMembers;
+	useEffect(() => {
+		if (fresh && listedCount !== undefined && listedCount !== members.length) void loadMembers();
+	}, [fresh, listedCount, members.length, loadMembers]);
+	const mentions = useMemo<MentionContext>(
+		() => ({ directory, memberIds: new Set(members.map((member) => member.principal_id)), ownId }),
+		[directory, members, ownId],
 	);
 	// An edit and a delete show at once, before the answer of the server. `latest` has the newest
 	// change of each message at each moment. `changes` is its copy for the list.
@@ -621,6 +638,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onCopyLink={() => copyLink(message.seq)}
 												message={message}
 												pending={pending}
+												mentions={mentions}
 												head={isNew || startsGroup(previous, message)}
 												own={message.author.principal_id === ownId}
 												canDelete={message.author.principal_id === ownId || room.role === "owner"}
@@ -680,15 +698,17 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 							Message to {title}
 						</label>
 						<div className="chat-composer-box">
-							<textarea
+							<MentionTextarea
 								id={draftId}
 								className="chat-draft"
 								rows={1}
 								placeholder={draftPlaceholder(room)}
 								value={draft}
 								maxLength={CHAT_LIMITS.messageChars}
-								onChange={(event) => setDraft(event.target.value)}
+								onValueChange={setDraft}
 								onKeyDown={onDraftKeyDown}
+								mentions={mentions}
+								placement="above"
 							/>
 							<span className="chat-composer-bar">
 								<button
@@ -764,6 +784,8 @@ interface MessageItemProps {
 	onCopyLink: () => void;
 	/** The state of the send, for a message that the server does not have yet. */
 	pending: PendingMessage | null;
+	/** The handles for the mentions in the text, and the suggestions of the edit box. */
+	mentions: MentionContext;
 	/** True when the message shows its author and its time. */
 	head: boolean;
 	own: boolean;
@@ -787,6 +809,7 @@ function MessageItem({
 	onCopyLink,
 	message,
 	pending,
+	mentions,
 	head,
 	own,
 	canDelete,
@@ -804,6 +827,7 @@ function MessageItem({
 	const failed = pending?.state === "failed";
 	// A message that the server does not have yet cannot change, and it has no id to delete or to link to.
 	const hasActions = pending === null && !message.deleted && editing === null;
+	const parts = useMemo(() => textParts(message.text, mentions.directory), [message.text, mentions.directory]);
 	return (
 		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
 		<li
@@ -832,7 +856,15 @@ function MessageItem({
 			<div className="chat-message-body">
 				{/* A message that continues a group keeps its author and time for a screen reader. */}
 				<p className={head ? "chat-message-meta" : "visually-hidden"}>
-					<strong className="chat-author">{author}</strong>
+					{/* A hidden link would be a stop for the Tab key that nobody sees. A principal that is not in
+					    the directory, for example a deleted one, has no profile. */}
+					{head && mentions.directory.byId.has(message.author.principal_id) ? (
+						<Link to={profilePath(message.author.principal_id)} className="chat-author">
+							{author}
+						</Link>
+					) : (
+						<strong className="chat-author">{author}</strong>
+					)}
 					{message.author.kind === "agent" && <span className="kind kind-agent">agent</span>}
 					<time className="chat-time" dateTime={message.created_at} title={fullDate(message.created_at)}>
 						{timeLabel(message.created_at)}
@@ -849,16 +881,18 @@ function MessageItem({
 						<label htmlFor={editId} className="visually-hidden">
 							New text of the message
 						</label>
-						<textarea
+						<MentionTextarea
 							id={editId}
 							className="input chat-edit-draft"
 							value={editing}
 							maxLength={CHAT_LIMITS.messageChars}
-							onChange={(event) => onEditChange(event.target.value)}
+							onValueChange={onEditChange}
 							onKeyDown={(event) => {
 								if (event.key === "Escape") onEditCancel();
 							}}
-							// biome-ignore lint/a11y/noAutofocus: the person asked for the edit box, so the focus goes to it.
+							mentions={mentions}
+							placement="below"
+							// The person asked for the edit box, so the focus goes to it.
 							autoFocus
 						/>
 						<span className="chat-edit-actions">
@@ -874,7 +908,23 @@ function MessageItem({
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
 					<p className="chat-text">
-						{message.text}
+						{parts.map((part, index) =>
+							part.person ? (
+								<Link
+									// The parts of one text keep their order, so the index is a stable key.
+									// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
+									key={index}
+									to={profilePath(part.person.id)}
+									className={part.person.id === mentions.ownId ? "chat-mention chat-mention-own" : "chat-mention"}
+									title={part.person.display_name}
+								>
+									{part.text}
+								</Link>
+							) : (
+								// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
+								<Fragment key={index}>{part.text}</Fragment>
+							),
+						)}
 						{message.edited_at && (
 							<span className="chat-edited" title={fullDate(message.edited_at)}>
 								{" "}

@@ -41,9 +41,36 @@
 	font-size: 13px;
 }
 
+/* The Shared drives entry of the sidebar. The chevron on the right expands or collapses the rows of
+   the shared drives. It points down when the rows are collapsed, and up when they are expanded. */
+.drive-nav-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.drive-nav-row .nav-item {
+	flex: 1;
+	min-width: 0;
+	padding-right: 40px;
+}
+
+.drive-nav-toggle {
+	position: absolute;
+	right: 4px;
+	width: 28px;
+	height: 28px;
+	color: var(--muted-foreground);
+}
+
 /* The shared drives of the person, under the Shared drives entry of the sidebar. */
 .drive-nav-drives {
 	margin-top: 3px;
+}
+
+/* The display of .nav-list wins over the hidden attribute. */
+.drive-nav-drives[hidden] {
+	display: none;
 }
 
 .drive-nav-drives .nav-item {
@@ -1133,6 +1160,16 @@ button.drive-name-link:hover .drive-name-text {
 
 /* Touch targets. */
 @media (max-width: 900px), (pointer: coarse) {
+	.drive-nav-row .nav-item {
+		padding-right: 44px;
+	}
+
+	.drive-nav-toggle {
+		right: 0;
+		width: 44px;
+		height: 44px;
+	}
+
 	.drive-check {
 		place-items: center;
 		width: 44px;

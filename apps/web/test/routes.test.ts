@@ -10,6 +10,7 @@ import {
 	type MailView,
 	ownMailboxPath,
 	parseRoute,
+	profilePath,
 	threadPath,
 	viewPath,
 } from "../src/routes.ts";
@@ -166,6 +167,15 @@ describe("routes", () => {
 		const room = chatPath("rm_01JD0000000000000000000000");
 		for (const seq of ["0", "-1", "1.5", "1e3", "abc", "12345678901234567890", "7/extra"]) {
 			expect(parseRoute(`${room}/${seq}`), seq).toEqual({ page: "not-found" });
+		}
+	});
+
+	// A mention in a message links to the profile, so the link must open that profile after a reload.
+	it("parses the path of a profile in Chat back to that principal", () => {
+		const profileId = "prn_01JD0000000000000000000000";
+		expect(parseRoute(profilePath(profileId))).toEqual({ page: "chat", roomId: null, seq: null, profileId });
+		for (const path of ["/chat/people", "/chat/people/rm_01JD0000000000000000000000", `/chat/people/${profileId}/x`]) {
+			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}
 	});
 
