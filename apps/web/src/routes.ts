@@ -33,7 +33,7 @@ export type Route =
 	| { page: "doc"; spaceId: string; itemId: string }
 	| { page: "sheet"; spaceId: string; itemId: string }
 	/** Chat. `roomId` is null for the page without an open room. */
-	| { page: "chat"; roomId: string | null }
+	| { page: "chat"; roomId: string | null; seq: number | null }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -89,8 +89,13 @@ export function parseRoute(location: string): Route {
 		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
-		if (parts.length === 1) return { page: "chat", roomId: null };
-		return parts.length === 2 && isRoomId(second) ? { page: "chat", roomId: second } : { page: "not-found" };
+		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
+		if (!isRoomId(second)) return { page: "not-found" };
+		if (parts.length === 2) return { page: "chat", roomId: second, seq: null };
+		// A link to one message has the seq of the message after the room.
+		return parts.length === 3 && third !== undefined && MESSAGE_SEQ.test(third)
+			? { page: "chat", roomId: second, seq: Number(third) }
+			: { page: "not-found" };
 	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
@@ -196,9 +201,17 @@ export function adminPath(section: AdminSection): string {
 	return `${ADMIN_PATH}/${section}`;
 }
 
-/** The path of a room of Chat, or of the Chat page without an open room. */
-export function chatPath(roomId: string | null = null): string {
-	return roomId ? `${CHAT_PATH}/${encodeURIComponent(roomId)}` : CHAT_PATH;
+/** The seq of a message in a path: a whole number from 1, in the range that a number keeps exactly. */
+const MESSAGE_SEQ = /^[1-9]\d{0,14}$/;
+
+/**
+ * The path of a room of Chat, or of the Chat page without an open room. With `seq`, the path is a link
+ * to one message of the room.
+ */
+export function chatPath(roomId: string | null = null, seq: number | null = null): string {
+	if (!roomId) return CHAT_PATH;
+	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
+	return seq === null ? room : `${room}/${seq}`;
 }
 
 /** The path of the thread list of a view, in the own mailbox, in a team mailbox or in the mailbox of an agent. */

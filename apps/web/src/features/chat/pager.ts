@@ -42,6 +42,12 @@ export interface RoomPager {
 	 * newer read, or a load, replaced the list first, or the page left the room.
 	 */
 	toLatest(): Promise<boolean>;
+	/**
+	 * Puts the history at one message of the room: the page of messages up to it, and the page after
+	 * it. False when the read did not apply, as for `toLatest`. A room that does not have the message
+	 * gets its newest messages.
+	 */
+	toMessage(seq: number): Promise<boolean>;
 	/** Tells if the person looks at the end of the list. A full history then drops its oldest messages. */
 	follow(atEnd: boolean): void;
 }
@@ -105,6 +111,25 @@ export function createRoomPager(options: PagerOptions): RoomPager {
 			const next = replace(page);
 			update(() => next);
 			// As after a load: one read gets the changes after this list at once.
+			void sync.run();
+			return true;
+		},
+		async toMessage(seq) {
+			const request = ++latestReads;
+			const [upTo, after] = await Promise.all([read({ before: seq + 1 }), read({ after: seq })]);
+			if (!alive() || request !== latestReads) return false;
+			// The two pages are one part of the history without a gap: a seq never changes. The two reads
+			// can be at different versions of the room, so the sync starts at the older one.
+			sync.start(Math.min(upTo.version, after.version));
+			pageReads += 1;
+			latestReads += 1;
+			const next: PagerState = {
+				messages: [...upTo.messages, ...after.messages],
+				hasOlder: upTo.has_more,
+				hasNewer: after.has_more,
+				paging: null,
+			};
+			update(() => next);
 			void sync.run();
 			return true;
 		},

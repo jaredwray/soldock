@@ -17,6 +17,8 @@ import { RoomView } from "./RoomView.tsx";
 export interface ChatAppProps {
 	/** The open room, or null for the page without a room. */
 	roomId: string | null;
+	/** The seq of the message that the path links to, or null. */
+	messageSeq: number | null;
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
@@ -25,7 +27,7 @@ export interface ChatAppProps {
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room at the right. */
-export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
+export function ChatApp({ roomId, messageSeq, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
 	const [dialog, setDialog] = useState<ChatDialog>(null);
 	const ownId = useSession().whoami.principal.id;
@@ -83,6 +85,7 @@ export function ChatApp({ roomId, navOpen, onCloseNav }: ChatAppProps) {
 					<RoomView
 						key={roomId}
 						roomId={roomId}
+						focusSeq={messageSeq}
 						listed={listed}
 						listReady={rooms.status === "ready"}
 						listTick={rooms.tick}

@@ -132,12 +132,23 @@ describe("routes", () => {
 
 	// A room and a direct message have different id prefixes. The two are rooms of Chat.
 	it("parses the path of Chat and of each room back to that room", () => {
-		expect(parseRoute(chatPath())).toEqual({ page: "chat", roomId: null });
+		expect(parseRoute(chatPath())).toEqual({ page: "chat", roomId: null, seq: null });
 		for (const roomId of ["rm_01JD0000000000000000000000", "dm_01JD0000000000000000000000"]) {
-			expect(parseRoute(chatPath(roomId))).toEqual({ page: "chat", roomId });
+			expect(parseRoute(chatPath(roomId))).toEqual({ page: "chat", roomId, seq: null });
+			// A link to one message has the seq of the message.
+			expect(chatPath(roomId, 42)).toBe(`${chatPath(roomId)}/42`);
+			expect(parseRoute(chatPath(roomId, 42))).toEqual({ page: "chat", roomId, seq: 42 });
 		}
 		for (const path of ["/chat/itm_01JD0000000000000000000000", "/chat/rm_1/extra"]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
+		}
+	});
+
+	// The seq goes into a call to the server. A path with a different value is not a link to a message.
+	it("takes only a whole number from 1 as the message of a link", () => {
+		const room = chatPath("rm_01JD0000000000000000000000");
+		for (const seq of ["0", "-1", "1.5", "1e3", "abc", "12345678901234567890", "7/extra"]) {
+			expect(parseRoute(`${room}/${seq}`), seq).toEqual({ page: "not-found" });
 		}
 	});
 
