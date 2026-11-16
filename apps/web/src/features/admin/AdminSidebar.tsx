@@ -8,16 +8,15 @@ import { useSession } from "../auth/session.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
 const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly: boolean }> = {
-	members: { title: "Members", icon: "team", adminOnly: true },
-	agents: { title: "Agents", icon: "bot", adminOnly: false },
+	members: { title: "Members", icon: "team", adminOnly: false },
 	"shared-mailboxes": { title: "Shared mailboxes", icon: "inbox", adminOnly: true },
 	"shared-drives": { title: "Shared drives", icon: "allMail", adminOnly: true },
 	domains: { title: "Email domains", icon: "external", adminOnly: true },
 };
 
-/** A member who sponsors an agent sees only the agents that the member sponsors. */
+/** A member who sponsors an agent sees only those agents. The section title says so. */
 export function sectionTitle(section: AdminSection, elevated: boolean): string {
-	return section === "agents" && !elevated ? "Your agents" : SECTIONS[section].title;
+	return section === "members" && !elevated ? "Your agents" : SECTIONS[section].title;
 }
 
 export function sectionIcon(section: AdminSection): IconName {
@@ -29,8 +28,8 @@ export function isAdminOnly(section: AdminSection): boolean {
 }
 
 /** The first section that the person can use. `/admin` shows it. */
-export function defaultSection(elevated: boolean): AdminSection {
-	return elevated ? "members" : "agents";
+export function defaultSection(): AdminSection {
+	return "members";
 }
 
 interface AdminSidebarProps {

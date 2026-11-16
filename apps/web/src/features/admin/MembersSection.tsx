@@ -3,21 +3,18 @@ import { useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
-import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { CreatePrincipalDialog } from "./CreatePrincipalForm.tsx";
-import { EditPrincipalDialog } from "./EditPrincipalDialog.tsx";
-import { policySummary } from "./policy.ts";
-import { ResetSignInDialog } from "./ResetSignInDialog.tsx";
-import { RowButton } from "./RowButton.tsx";
+import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
+import { PrincipalCard } from "./PrincipalCard.tsx";
 
-const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
-
-type Action = { kind: "create" } | { kind: "edit" | "sign-in" | "archive" | "delete"; principal: Principal };
+type Action = { kind: "create" } | { kind: "archive" | "delete"; principal: Principal };
 
 interface MembersSectionProps {
 	me: Principal;
+	/** True for an owner or an admin. A sponsor sees only the agents of that sponsor. */
+	elevated: boolean;
 	principals: readonly Principal[];
 	/** Called after each change, so the page loads the directory again. */
 	onChanged: () => void;
@@ -25,24 +22,19 @@ interface MembersSectionProps {
 }
 
 /**
- * The directory: each person and agent, with the controls of owners and admins. Edit changes the name,
- * the role or the sponsor. Reset sign-in sets a new password for a person. Archive stops each credential
- * and keeps the data, and Restore undoes it. Delete removes the principal from the directory. The owner
- * and you have no Reset sign-in, Archive or Delete, and only the owner edits the owner, as on the server.
+ * The directory: each person and each agent, in one list of cards. An owner or an admin opens a card
+ * to change the account. An agent card also has the policy, the connected apps, the webhooks and the
+ * API keys. A sponsor who is a member sees only the agents of that sponsor.
  */
-export function MembersSection({ me, principals, onChanged, onCreated }: MembersSectionProps) {
+export function MembersSection({ me, elevated, principals, onChanged, onCreated }: MembersSectionProps) {
 	const toast = useToast();
 	const [action, setAction] = useState<Action | null>(null);
-	const byId = new Map(principals.map((p) => [p.id, p]));
-	const humans = principals.filter((p) => p.kind === "human");
-	const sorted = [...principals].sort(
-		(a, b) => a.kind.localeCompare(b.kind) || a.display_name.localeCompare(b.display_name),
-	);
-	const canEdit = (p: Principal) => p.org_role !== "owner" || p.id === me.id;
-	const canRemove = (p: Principal) => p.org_role !== "owner" && p.id !== me.id;
+	const humans = principals.filter((principal) => principal.kind === "human");
+	const listed = listedPrincipals(principals, me, elevated);
 	// The server refuses to archive a person who sponsors an agent that is not archived, and to delete a
 	// person who sponsors any agent: the person could still act through the keys of the agent.
-	const activeAgentsOf = (p: Principal) => principals.filter((a) => a.sponsor_id === p.id && a.archived_at === null);
+	const activeAgentsOf = (principal: Principal) =>
+		principals.filter((agent) => agent.sponsor_id === principal.id && agent.archived_at === null);
 
 	async function restore(principal: Principal) {
 		try {
@@ -55,124 +47,43 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 	}
 
 	return (
-		<section className="panel">
-			<div className="panel-head">
-				<p className="panel-heading panel-intro">
-					The people and agents of the organization. An archived account cannot sign in, and keeps its mail and files.
-				</p>
-				<button type="button" className="button button-primary" onClick={() => setAction({ kind: "create" })}>
-					<Icon name="plus" size={18} />
-					New person or agent
-				</button>
-			</div>
-			<div className="panel-card panel-card-list table-scroll">
-				<table className="table table-rows">
-					<caption className="visually-hidden">People and agents of the organization</caption>
-					<thead>
-						<tr>
-							<th scope="col">Name</th>
-							<th scope="col" className="col-optional">
-								Kind
-							</th>
-							<th scope="col">Role</th>
-							<th scope="col" className="col-optional">
-								Sponsor
-							</th>
-							<th scope="col" className="col-optional">
-								Agent policy
-							</th>
-							<th scope="col" className="cell-actions">
-								<span className="visually-hidden">Actions</span>
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						{sorted.map((principal) => {
-							const archived = principal.archived_at !== null;
-							return (
-								<tr key={principal.id} className={archived ? "row-muted" : undefined}>
-									<td className="member-cell">
-										<div className="member">
-											<span className="avatar member-avatar" aria-hidden="true">
-												{principal.kind === "agent" ? <Icon name="bot" size={18} /> : initials(principal.display_name)}
-											</span>
-											<div className="member-text">
-												<div className="member-name">
-													{principal.display_name}
-													{principal.id === me.id && <span className="member-you">(you)</span>}
-													{/* A phone has no Kind column, so an agent gets its chip here. */}
-													{principal.kind === "agent" && <span className="kind kind-agent kind-inline">Agent</span>}
-													{archived && <span className="chip chip-small">Archived</span>}
-												</div>
-												<div className="row-note">{principal.address}</div>
-											</div>
-										</div>
-									</td>
-									<td className="col-optional">
-										<span className={`kind kind-${principal.kind}`}>
-											{principal.kind === "agent" ? "Agent" : "Person"}
-										</span>
-									</td>
-									<td>
-										{principal.org_role ? (
-											<span className={principal.org_role === "member" ? "role-chip" : "role-chip role-chip-strong"}>
-												{ROLE_NAMES[principal.org_role]}
-											</span>
-										) : (
-											"—"
-										)}
-									</td>
-									<td className="col-optional">
-										{principal.sponsor_id ? (byId.get(principal.sponsor_id)?.display_name ?? "Unknown") : "—"}
-									</td>
-									<td className="col-optional">
-										{principal.outbound_policy ? policySummary(principal.outbound_policy) : "—"}
-									</td>
-									<td className="cell-actions">
-										<div className="row-actions">
-											{canEdit(principal) && (
-												<RowButton
-													icon="pencil"
-													label={`Edit ${principal.display_name}`}
-													onClick={() => setAction({ kind: "edit", principal })}
-												/>
-											)}
-											{canRemove(principal) && principal.kind === "human" && (
-												<RowButton
-													icon="lock"
-													label={`Reset the sign-in of ${principal.display_name}`}
-													onClick={() => setAction({ kind: "sign-in", principal })}
-												/>
-											)}
-											{canRemove(principal) &&
-												(archived ? (
-													<RowButton
-														icon="restore"
-														label={`Restore ${principal.display_name}`}
-														onClick={() => void restore(principal)}
-													/>
-												) : (
-													<RowButton
-														icon="archive"
-														label={`Archive ${principal.display_name}`}
-														onClick={() => setAction({ kind: "archive", principal })}
-													/>
-												))}
-											{canRemove(principal) && (
-												<RowButton
-													icon="trash"
-													label={`Delete ${principal.display_name}`}
-													onClick={() => setAction({ kind: "delete", principal })}
-												/>
-											)}
-										</div>
-									</td>
-								</tr>
-							);
-						})}
-					</tbody>
-				</table>
-			</div>
+		<>
+			<McpEndpointBanner />
+			<section className="panel">
+				<div className="panel-head">
+					<p className="panel-heading panel-intro">
+						{elevated
+							? "The people and agents of the organization. Open a card to change the account. An archived account cannot sign in, and it keeps its mail and files."
+							: "Set who each agent can send mail to. Manage its connected apps and its API keys. An agent can never change its own policy."}
+					</p>
+					{elevated && (
+						<button type="button" className="button button-primary" onClick={() => setAction({ kind: "create" })}>
+							<Icon name="plus" size={18} />
+							New person or agent
+						</button>
+					)}
+				</div>
+				{listed.length === 0 && (
+					<p className="panel-card panel-empty">
+						{elevated ? "There are no people or agents yet." : "There are no agents yet."}
+					</p>
+				)}
+				<div className="admin-card-list">
+					{listed.map((principal) => (
+						<PrincipalCard
+							key={principal.id}
+							principal={principal}
+							me={me}
+							humans={humans}
+							elevated={elevated}
+							onChanged={onChanged}
+							onArchive={() => setAction({ kind: "archive", principal })}
+							onRestore={() => void restore(principal)}
+							onDelete={() => setAction({ kind: "delete", principal })}
+						/>
+					))}
+				</div>
+			</section>
 			{action?.kind === "create" && (
 				<CreatePrincipalDialog
 					me={me}
@@ -184,20 +95,6 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 					}}
 				/>
 			)}
-			{action?.kind === "edit" && (
-				<EditPrincipalDialog
-					me={me}
-					principal={action.principal}
-					humans={humans}
-					onClose={() => setAction(null)}
-					onSaved={(principal) => {
-						setAction(null);
-						toast({ message: `${principal.display_name} saved.` });
-						onChanged();
-					}}
-				/>
-			)}
-			{action?.kind === "sign-in" && <ResetSignInDialog person={action.principal} onClose={() => setAction(null)} />}
 			{action?.kind === "archive" && activeAgentsOf(action.principal).length > 0 && (
 				<SponsorNotice
 					principal={action.principal}
@@ -231,7 +128,7 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 			{action?.kind === "delete" && (
 				<DeleteDialog
 					principal={action.principal}
-					sponsored={principals.filter((p) => p.sponsor_id === action.principal.id)}
+					sponsored={principals.filter((principal) => principal.sponsor_id === action.principal.id)}
 					onClose={() => setAction(null)}
 					onDeleted={() => {
 						toast({ message: `${action.principal.display_name} is deleted.` });
@@ -239,7 +136,17 @@ export function MembersSection({ me, principals, onChanged, onCreated }: Members
 					}}
 				/>
 			)}
-		</section>
+		</>
+	);
+}
+
+/** People come first, then agents. Each group is in name order. A sponsor sees only their own agents. */
+function listedPrincipals(principals: readonly Principal[], me: Principal, elevated: boolean): Principal[] {
+	const visible = elevated
+		? principals
+		: principals.filter((principal) => principal.kind === "agent" && principal.sponsor_id === me.id);
+	return [...visible].sort(
+		(a, b) => Number(a.kind === "agent") - Number(b.kind === "agent") || a.display_name.localeCompare(b.display_name),
 	);
 }
 
@@ -264,8 +171,8 @@ function SponsorNotice({ principal, agents, action, onClose }: SponsorNoticeProp
 		<Dialog title={`${principal.display_name} sponsors agents`} onClose={onClose} className="dialog-small">
 			<div className="dialog-body">
 				<p>
-					{principal.display_name} sponsors {agents.map((agent) => agent.display_name).join(", ")}. Give each agent a
-					different sponsor with Edit, or {action} it. Then {action} {principal.display_name}.
+					{principal.display_name} sponsors {agents.map((agent) => agent.display_name).join(", ")}. Open each agent and
+					give it a different sponsor, or {action} it. Then {action} {principal.display_name}.
 				</p>
 			</div>
 			<div className="dialog-actions">

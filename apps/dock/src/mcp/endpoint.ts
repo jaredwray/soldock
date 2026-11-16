@@ -54,10 +54,10 @@ const CACHE = {
 /** How the credential gets a scope that it does not hold. */
 function addScopeHint(caller: AuthContext): string {
 	if (caller.credential === "oauth") {
-		return "The sponsor of this agent, an owner or an admin can add a scope to this connection in Admin › Agents. You do not need a new connection.";
+		return "The sponsor of this agent, an owner or an admin can add a scope in Admin › Members. You do not need a new connection.";
 	}
 	return caller.kind === "agent"
-		? "The scopes of an API key do not change. The sponsor of this agent, an owner or an admin can create a key with more scopes in Admin › Agents."
+		? "The scopes of an API key do not change. The sponsor of this agent, an owner or an admin can create a key with more scopes in Admin › Members."
 		: "The scopes of an API key do not change. You can create a key with more scopes in Settings.";
 }
 

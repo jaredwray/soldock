@@ -8,9 +8,7 @@ import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
-import { AgentPanel } from "./AgentPanel.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
-import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
 import { MembersSection } from "./MembersSection.tsx";
 import { SharedDrivesSection } from "./SharedDrivesSection.tsx";
 import { SharedMailboxesSection } from "./SharedMailboxesSection.tsx";
@@ -29,15 +27,15 @@ interface AdminPageProps {
 }
 
 /**
- * Owners and admins see the directory, create, change, archive and delete people and agents, and manage each agent. A member who
- * sponsors an agent sees only the agents that the member sponsors. The side navigation selects one
- * section. The page loads the directory once and keeps it while the section changes.
+ * Owners and admins see the directory. They create, change, archive and delete people and agents, and
+ * they manage each agent, in one list. A member who sponsors an agent sees only those agents. The side
+ * navigation selects one section. The page loads the directory once and keeps it while the section changes.
  */
 export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminPageProps) {
 	const { whoami } = useSession();
 	const me = whoami.principal;
 	const elevated = isOrgAdmin(me);
-	const section = routeSection ?? defaultSection(elevated);
+	const section = routeSection ?? defaultSection();
 	const title = sectionTitle(section, elevated);
 	const mainRef = useRef<HTMLElement>(null);
 	const [state, setState] = useState<DirectoryState>({ status: "loading" });
@@ -118,6 +116,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 				return (
 					<MembersSection
 						me={me}
+						elevated={elevated}
 						principals={principals}
 						onChanged={() => void load()}
 						onCreated={(principal, key) => {
@@ -125,30 +124,6 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 							void load();
 						}}
 					/>
-				);
-			case "agents":
-				return (
-					<>
-						<McpEndpointBanner />
-						<section className="panel">
-							<p className="panel-intro">
-								Set who each agent can send mail to, and manage its connected apps and its API keys. An agent can never
-								change its own policy.
-							</p>
-							{agents.length === 0 && <p className="panel-card panel-empty">There are no agents yet.</p>}
-							<div className="admin-card-list">
-								{agents.map((agent) => (
-									<AgentPanel
-										key={agent.id}
-										agent={agent}
-										sponsor={principals.find((p) => p.id === agent.sponsor_id) ?? null}
-										canReadMail={elevated}
-										onChanged={() => void load()}
-									/>
-								))}
-							</div>
-						</section>
-					</>
 				);
 			case "shared-mailboxes":
 				return <SharedMailboxesSection principals={principals} />;

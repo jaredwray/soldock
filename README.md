@@ -105,7 +105,7 @@ for new mail.
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
 
-![Admin, Agents: the MCP endpoint with a Copy button, and two agents with the Internal only policy](docs/screenshots/agents.png)
+![Admin, Members: the MCP endpoint with a Copy button, and people and agents in one list](docs/screenshots/members.png)
 
 ### Admin
 

@@ -1,0 +1,144 @@
+import type { InputOf, Principal } from "@soldock/contracts";
+import { type FormEvent, useId, useState } from "react";
+import { api, errorMessage } from "../../lib/api.ts";
+import { Select } from "../../lib/Select.tsx";
+import { useToast } from "../../lib/toast.tsx";
+
+type Role = "admin" | "member";
+
+const ROLE_OPTIONS: readonly { value: Role; label: string }[] = [
+	{ value: "member", label: "Member" },
+	{ value: "admin", label: "Admin" },
+];
+
+export const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
+
+interface ProfileFormProps {
+	me: Principal;
+	principal: Principal;
+	/** The people of the directory. An agent can get a sponsor who is not archived. */
+	humans: readonly Principal[];
+	onChanged: () => void;
+}
+
+/**
+ * Changes the name of a person or an agent, the role of a person, or the sponsor of an agent
+ * (`directory.update_principal`). The form sends only the fields that changed. Nobody changes their
+ * own role or the role of the owner, so the role control is off for them.
+ */
+export function ProfileForm({ me, principal, humans, onChanged }: ProfileFormProps) {
+	const toast = useToast();
+	const [name, setName] = useState(principal.display_name);
+	const [role, setRole] = useState<Role>(principal.org_role === "admin" ? "admin" : "member");
+	const [sponsorId, setSponsorId] = useState(principal.sponsor_id ?? "");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const ids = { name: useId(), role: useId(), roleHint: useId(), sponsor: useId() };
+	const isOwner = principal.org_role === "owner";
+	const isMe = principal.id === me.id;
+	const isAgent = principal.kind === "agent";
+	// The current sponsor stays in the list, also when archived, so the control shows the current value.
+	const sponsors = humans.filter((human) => human.archived_at === null || human.id === principal.sponsor_id);
+	const trimmed = name.trim();
+	const unchanged =
+		trimmed === principal.display_name &&
+		(isAgent || isOwner || isMe || role === principal.org_role) &&
+		(!isAgent || sponsorId === (principal.sponsor_id ?? ""));
+
+	async function submit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!trimmed) return setError("Enter a name.");
+		const input: InputOf<"directory.update_principal"> = { principal_id: principal.id };
+		if (trimmed !== principal.display_name) input.display_name = trimmed;
+		if (!isAgent && !isOwner && !isMe && role !== principal.org_role) input.org_role = role;
+		if (isAgent && sponsorId && sponsorId !== principal.sponsor_id) input.sponsor_id = sponsorId;
+		if (Object.keys(input).length === 1) return;
+		setBusy(true);
+		setError(null);
+		try {
+			const result = await api.call("directory.update_principal", input);
+			setName(result.principal.display_name);
+			toast({ message: `${result.principal.display_name} saved.` });
+			onChanged();
+		} catch (caught) {
+			setError(errorMessage(caught));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<form className="admin-card-form" onSubmit={submit} noValidate>
+			<h2 className="subpanel-title">{isAgent ? "Name and sponsor" : "Name and role"}</h2>
+			<div className="field">
+				<label htmlFor={ids.name} className="field-label">
+					Display name
+				</label>
+				<input
+					id={ids.name}
+					className="input"
+					value={name}
+					maxLength={100}
+					onChange={(event) => setName(event.target.value)}
+					disabled={busy}
+				/>
+			</div>
+			{!isAgent && (
+				<div className="field">
+					<label htmlFor={ids.role} className="field-label">
+						Role
+					</label>
+					{isOwner ? (
+						<p id={ids.role} className="field-hint">
+							Owner. The role of the owner cannot change.
+						</p>
+					) : (
+						<>
+							<Select
+								id={ids.role}
+								value={role}
+								options={ROLE_OPTIONS}
+								onChange={setRole}
+								aria-describedby={ids.roleHint}
+								disabled={busy || isMe}
+							/>
+							<p id={ids.roleHint} className="field-hint">
+								{isMe
+									? "You cannot change your own role."
+									: "An admin can manage people, agents, shared mailboxes and email domains."}
+							</p>
+						</>
+					)}
+				</div>
+			)}
+			{isAgent && (
+				<div className="field">
+					<label htmlFor={ids.sponsor} className="field-label">
+						Sponsor
+					</label>
+					<Select
+						id={ids.sponsor}
+						value={sponsorId}
+						options={sponsors.map((human) => ({
+							value: human.id,
+							label: human.display_name,
+							description: human.archived_at === null ? human.address : `${human.address}, archived`,
+							disabled: human.archived_at !== null,
+						}))}
+						placeholder="Select a person"
+						onChange={setSponsorId}
+						disabled={busy}
+					/>
+				</div>
+			)}
+			{error && (
+				<p className="form-error" role="alert">
+					{error}
+				</p>
+			)}
+			<button type="submit" className="button button-primary" disabled={busy || unchanged}>
+				{busy ? "Saving…" : "Save"}
+			</button>
+		</form>
+	);
+}

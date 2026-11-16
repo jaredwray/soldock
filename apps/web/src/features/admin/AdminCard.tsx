@@ -3,8 +3,12 @@ import { Icon, type IconName } from "../../lib/icons.tsx";
 
 interface AdminCardProps {
 	icon: IconName;
-	name: string;
+	/** Shown in place of `icon`, for example the initials of a person. */
+	mark?: ReactNode;
+	name: ReactNode;
 	address: string;
+	/** True for an archived account. The name and the avatar are then muted. */
+	muted?: boolean;
 	/** The chips at the right of the summary. */
 	chips: ReactNode;
 	/** The parts of the open card. Each part is a direct child, so it gets a line above it. */
@@ -12,22 +16,23 @@ interface AdminCardProps {
 }
 
 /**
- * One agent or one shared mailbox in an Admin section. The card shows an icon, the name, the address and
- * chips. A click opens the card and shows its parts. The parts load their own data, so the card renders
- * them at the first open only. The parts stay after the card closes, so a form keeps its text.
+ * One person, one agent, one shared mailbox or one shared drive in an Admin section. The card shows an
+ * icon, the name, the address and chips. A click opens the card and shows its parts. The parts load
+ * their own data, so the card renders them at the first open only. The parts stay after the card closes,
+ * so a form keeps its text.
  */
-export function AdminCard({ icon, name, address, chips, children }: AdminCardProps) {
+export function AdminCard({ icon, mark, name, address, muted = false, chips, children }: AdminCardProps) {
 	const [opened, setOpened] = useState(false);
 	return (
 		<details
-			className="admin-card"
+			className={muted ? "admin-card admin-card-muted" : "admin-card"}
 			onToggle={(event) => {
 				if (event.currentTarget.open) setOpened(true);
 			}}
 		>
 			<summary className="admin-card-summary">
 				<span className="avatar member-avatar" aria-hidden="true">
-					<Icon name={icon} size={18} />
+					{mark ?? <Icon name={icon} size={18} />}
 				</span>
 				<span className="admin-card-text">
 					<span className="admin-card-name">{name}</span>

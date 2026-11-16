@@ -229,12 +229,14 @@ MCP clients. The app has no UI-only path.
     changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
     mail. The server refuses each change and each send in the mailbox of an agent.
-  - **Admin › Agents** has a **Read the mail of …** link on each agent, for owners and admins only. A
-    sponsor who is a member does not see it.
+  - **Admin › Members** has a **Read the mail of …** link on each agent.
+    Only an owner or an admin sees the link. A sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
-  - Owners and admins see all five sections. A member who sponsors an agent sees only **Your agents**.
+  - Owners and admins see four sections. A member who sponsors an agent sees only **Your agents**.
+    **Your agents** is the Members section, and it lists only the agents of that member.
     A member who opens a section for owners and admins sees a notice and not the section.
+  - `/admin/agents` redirects to `/admin/members`. People and agents share that section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
   - The page loads the directory one time. The directory stays when the section changes. Each
@@ -242,48 +244,58 @@ MCP clients. The app has no UI-only path.
   - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
   - Each section is a column of 960px at most. A section starts with a muted line of text. Its lists
     and its forms are in cards on the surface (`.panel-card`). A table in a card shows as list rows.
-  - **Members** (`members`) shows the directory in a table: the name and the address, the kind, the
-    role, the sponsor and the agent policy of each person and agent. Each row starts with an avatar:
-    the initials of a person, or the agent icon. The kind and the role are chips. An archived account
-    has an **Archived** chip. At 1100px and below, the table shows only the name, the role and the
-    actions, and an agent gets its chip next to its name. At 600px and below, a row has two lines:
-    the name and the address, then the role and the buttons. At 500px and below, the rows have no
-    avatar.
-    - **New person or agent**, above the table, opens a dialog. The first API key of a new principal
-      shows once, with a copy button. A credential cannot grant a scope that it does not hold. The
-      form offers only the scopes of the session. For an agent, it also applies `AGENT_SCOPES`. For a
-      person, the app sends these scopes as `key_scopes`. A person also needs a first password, which
-      the admin gives to the person. An archived person cannot be a sponsor.
-    - Each row has round icon buttons, with the name in the accessible name: **Edit**, **Reset sign-in**
-      (people only), **Archive** or **Restore**, and **Delete**. The buttons follow the rules of the
-      server: the owner and you have no Reset sign-in, Archive or Delete, and only the owner edits the owner.
-    - **Edit** opens a dialog for the name, the role of a person (Member or Admin) or the sponsor of an
-      agent (`directory.update_principal`). It sends only the fields that changed. The role control is
-      off for you and for the owner.
-    - **Reset sign-in** opens a dialog that sets a new password (`account.set_password`) or turns off
-      two-step verification (`account.disable_totp`), after a confirmation.
-    - **Archive** asks for a confirmation, then calls `directory.archive_principal`. **Restore**
-      (`directory.restore_principal`) needs no confirmation.
-    - **Delete** asks for a confirmation that says that it cannot be undone, then calls
-      `directory.delete_principal`. For a person who sponsors agents, the dialog names the agents and
-      tells the admin to give them a different sponsor first.
-  - **Agents** (`agents`). A banner at the top shows the full URL of `/mcp` (from the origin of the
-    page), with a copy button. OAuth is the main way to add an agent: the client needs only this URL.
-    Each agent is one card (`AdminCard`), which opens on a click and shows the parts of the agent
-    with a line between them. The parts load their data, so the card renders them at the first open
-    only. For each agent, the page sets the outbound policy (mail recipients and webhook
-    hosts), lists the apps that connected as it with OAuth (`oauth.list_grants`, with an **Add
-    scopes** button, `oauth.add_grant_scopes`, and a Revoke button, `oauth.revoke_grant`), lists the webhooks of its mailbox (`mail.list_webhooks`, with a Delete
-    button), and manages the API keys. Only the sponsor sees the form that creates a webhook for the
-    agent (`mail.create_webhook` with the id of the agent).
-    **Add scopes** shows on a live connection when the session can give one more agent scope. Its
-    dialog lists those scopes. The confirm button stays off until the person selects a scope. The
-    dialog does not offer a removal: it tells the person to revoke the connection and connect again.
-    For an owner or an admin, it also has a link to the mailbox of the agent, which they can read.
-    A member who sponsors an agent sees only those agents. An archived agent has an **Archived** chip.
-    The **New person or agent** dialog also shows the banner when Agent is selected.
+  - **Members** (`members`) lists each person and each agent as a card (`AdminCard`).
+    People come first, then agents. Each group is in name order.
+    A click opens the card and shows its parts, with a line between the parts.
+    The parts load their data, so the card renders them only after the first open.
+    The parts stay after the card closes, so a form keeps its text.
+    A person shows initials in the avatar. An agent shows the agent icon.
+    The chips show the role of a person, or **Agent** and the outbound policy.
+    An archived account has an **Archived** chip. Your name shows **(you)**.
+    A banner above the list shows the full URL of `/mcp`, with a copy button.
+    OAuth is the main way to add an agent. The client needs only this URL.
+    A member who sponsors an agent sees only those agents. The section title is then **Your agents**.
+    That member does not get the forms that change an account.
+    - **New person or agent**, above the list, opens a dialog for an owner or an admin.
+      The first API key of a new principal shows once, with a copy button.
+      A credential cannot grant a scope that it does not hold.
+      The form offers only the scopes of the session.
+      For an agent, the form also applies `AGENT_SCOPES`.
+      For a person, the app sends these scopes as `key_scopes`.
+      A person also needs a first password. The admin gives the password to the person.
+      An archived person cannot be a sponsor.
+      The dialog shows the banner when Agent is selected.
+    - **Name and role**, or **Name and sponsor**, is the first part of an open card.
+      It saves with `directory.update_principal` and sends only the fields that changed.
+      **Save** stays off while nothing changed.
+      The role control is off for you and for the owner.
+      An admin has no form for the owner.
+      The card says that only the owner can change that account.
+    - **Reset sign-in** is a part of the card of each other person.
+      It sets a new password (`account.set_password`).
+      It can also turn off two-step verification (`account.disable_totp`) after a confirmation.
+      The owner and you have no **Reset sign-in** part.
+    - **Account** is a part of each card except the owner and you.
+      **Archive** asks for a confirmation, then calls `directory.archive_principal`.
+      **Restore** calls `directory.restore_principal` and needs no confirmation.
+      **Delete** asks for a confirmation, then calls `directory.delete_principal`.
+      The confirmation says that delete cannot be undone.
+      For a person who sponsors agents, the dialog names the agents.
+      It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
+    - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
+      The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
+      **Apps connected as …** uses `oauth.list_grants`, **Add scopes** (`oauth.add_grant_scopes`) and Revoke (`oauth.revoke_grant`).
+      **Add scopes** shows on a live connection when the session can give one more agent scope.
+      Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
+      To remove a scope, revoke the connection and connect again.
+      Mail webhooks use `mail.list_webhooks`. Chat webhooks use `chat.list_webhooks`. Each has a Delete button.
+      Only the sponsor sees the form that creates a webhook for the agent.
+      The call is `mail.create_webhook` or `chat.create_webhook`, with the id of the agent.
+      An owner or an admin can delete a webhook.
+      An owner or an admin also gets **Read the mail of …**.
+      A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
-    one card for each shared mailbox, as each agent has one in **Agents**. The card shows the name,
+    one card for each shared mailbox, as each account has one in **Members**. The card shows the name,
     the address and the number of members. A click opens the card and shows three parts:
     - **Display name**, a form that changes the name (`directory.update_team_mailbox`). The address
       cannot change. **Save name** is off while the name is the same.
