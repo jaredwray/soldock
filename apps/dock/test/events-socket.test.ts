@@ -2,7 +2,12 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EVENTS_SOCKET_MAX_MS, EVENTS_SOCKET_RECHECK_MS } from "../src/identity/principal.ts";
+import {
+	EVENTS_SOCKET_HEADER,
+	EVENTS_SOCKET_MAX_MS,
+	EVENTS_SOCKET_RECHECK_MS,
+	type EventsSocketOpen,
+} from "../src/identity/principal.ts";
 import { type Actor, bearer, ORIGIN, readSocket, request, seedOrg, signIn } from "./helpers.ts";
 
 let owner: Actor;
@@ -28,6 +33,15 @@ async function connect(headers: Record<string, string>) {
 
 const privateRoom = async (creator: Actor, name: string, member_ids: string[]) =>
 	(await creator.call("chat.create_room", { kind: "private", name, member_ids })).room;
+
+/** The number of sockets of a principal whose credential the object checked. */
+const checkedSockets = (principalId: string) =>
+	runInDurableObject(
+		env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId)),
+		(_instance, state) =>
+			state.getWebSockets().filter((socket) => (socket.deserializeAttachment() as { checkedAt: number }).checkedAt > 0)
+				.length,
+	);
 
 const listed = async (actor: Actor, roomId: string) =>
 	(await actor.call("chat.list_rooms")).rooms.find((room) => room.id === roomId);
@@ -104,11 +118,18 @@ describe("the events socket", () => {
 	// A failed check must not let a socket get events without a check, and must not stop the others.
 	it("closes the sockets that wait for a check that fails, and sends to the other sockets", async () => {
 		const room = await privateRoom(bot, "Ops", [ada.id]);
-		vi.useFakeTimers({ toFake: ["Date"] });
-		const waits = await connect(bearer(ada.key));
-		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
+		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
+		const waits = await connect(bearer(second.secret));
 		const fresh = await connect(bearer(ada.key));
-		await runInDurableObject(env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id)), (instance) => {
+		await vi.waitFor(async () => expect(await checkedSockets(ada.id)).toBe(2));
+		// The last check of one socket is old, so the next event waits for a new check. The directory then fails.
+		await runInDurableObject(env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id)), (instance, state) => {
+			for (const socket of state.getWebSockets()) {
+				const attachment = socket.deserializeAttachment() as { credential: { id: string }; checkedAt: number };
+				if (attachment.credential.id === second.id) {
+					socket.serializeAttachment({ ...attachment, checkedAt: Date.now() - EVENTS_SOCKET_RECHECK_MS });
+				}
+			}
 			const target = instance as unknown as { env: Env };
 			const failing = {
 				prepare: () => {
@@ -165,6 +186,23 @@ describe("the events socket", () => {
 		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 	});
 
+	// A sign-out or a revoke can come between the check of the Worker and the accept of the object.
+	it("closes a socket whose credential stopped before the object accepted it, and sends it no event", async () => {
+		const room = await privateRoom(owner, "Launch", [ada.id]);
+		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
+		await ada.call("account.revoke_api_key", { key_id: second.id });
+		// The Worker authenticated the key before the revoke, and asks the object for the socket now.
+		const open: EventsSocketOpen = { credential: { principalId: ada.id, kind: "api_key", id: second.id } };
+		const late = readSocket(
+			await env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id)).fetch("https://principal.internal/events", {
+				headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },
+			}),
+		);
+		expect(await late.next()).toEqual({ type: "hello", protocol: EVENTS_SOCKET_PROTOCOL });
+		await owner.call("chat.post_message", { room_id: room.id, text: "Not for a revoked key." });
+		expect(await late.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
+	});
+
 	// A socket that stays open must not outlive the credential that opened it.
 	it("closes when its credential stops without a sign-out, and after its longest life", async () => {
 		const room = await privateRoom(owner, "Launch", [ada.id]);
@@ -173,6 +211,8 @@ describe("the events socket", () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const expired = await connect({ cookie, origin: ORIGIN });
 		const steady = await connect(bearer(ada.key));
+		// The first check of a socket starts at its accept. It must end before the clock moves.
+		await vi.waitFor(async () => expect(await checkedSockets(ada.id)).toBe(2));
 
 		// The session reaches its end. Nothing tells the object, so the check finds it.
 		await env.DIRECTORY.prepare("UPDATE sessions SET expires_at = ? WHERE principal_id = ?")
