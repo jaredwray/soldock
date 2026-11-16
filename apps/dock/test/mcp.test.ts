@@ -69,7 +69,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(92);
+		expect(all).toHaveLength(96);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
@@ -81,17 +81,21 @@ describe("the MCP endpoint", () => {
 			"account_whoami",
 			"chat_add_members",
 			"chat_create_room",
+			"chat_create_webhook",
 			"chat_delete_message",
+			"chat_delete_webhook",
 			"chat_edit_message",
 			"chat_get_room",
 			"chat_join_room",
 			"chat_list_messages",
 			"chat_list_rooms",
+			"chat_list_webhooks",
 			"chat_mark_read",
 			"chat_open_dm",
 			"chat_post_message",
 			"chat_remove_member",
 			"chat_update_room",
+			"chat_update_webhook",
 			"directory_list_principals",
 			"directory_list_team_mailboxes",
 			"docs_create",

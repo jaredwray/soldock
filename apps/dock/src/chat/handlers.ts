@@ -4,6 +4,8 @@ import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../pla
 import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
 import { listJoinedRooms, listPublicRooms } from "./room-index.ts";
 
+import { chatWebhookHandlers } from "./webhooks.ts";
+
 type ChatOperation = Extract<OperationName, `chat.${string}`>;
 
 const DEFAULT_PAGE = 50;
@@ -104,6 +106,7 @@ async function idempotencyOf(
 }
 
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
+	...chatWebhookHandlers,
 	async "chat.list_rooms"(call, input) {
 		const list = input.view === "public" ? listPublicRooms : listJoinedRooms;
 		const page = await list(call.env.DIRECTORY, call.caller.id, {

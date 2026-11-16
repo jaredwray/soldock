@@ -496,6 +496,7 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 		// The webhooks of the mail module that the principal created or that watch its mailbox. Nobody can
 		// see them after the delete, and each one holds a signing secret.
 		db.prepare(`DELETE FROM webhooks WHERE (created_by = ?2 OR mailbox_id = ?2) AND ${deleted}`).bind(now, id),
+		db.prepare(`DELETE FROM chat_webhooks WHERE (created_by = ?2 OR mailbox_id = ?2) AND ${deleted}`).bind(now, id),
 	]);
 	return first?.meta.changes === 1;
 }

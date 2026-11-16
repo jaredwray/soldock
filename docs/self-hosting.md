@@ -272,7 +272,10 @@ An inbound job that fails 5 times, or that cannot be read, goes to the queue
 (**Storage & Databases › Queues**). The Worker logs each dead letter with the principal id.
 
 A webhook job that cannot be read, or that fails 10 times in Soldock itself (for example while D1 is
-down), goes to the queue `soldock-webhooks-dlq`. A job holds ids only, never mail content or
+down), goes to the queue `soldock-webhooks-dlq`. A job holds ids only, never mail or chat content or
 secrets. A failed POST to the receiver does not go there: the webhook records the failure, and it
 stops after 5 failed events in a row. The log line `webhook disabled` gives the webhook, the mailbox,
 the host of the URL and the reason. The first deploy creates both webhook queues by name.
+
+Migration `0011_chat_webhooks.sql` adds Chat subscriptions. The existing `WEBHOOKS` and `WEBHOOKS_DLQ` bindings serve both Mail and Chat.
+Chat rooms apply their object migration on their next start. No new Cloudflare resource or secret is required.

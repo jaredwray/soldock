@@ -3,11 +3,11 @@ import { DurableObject } from "cloudflare:workers";
 import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@soldock/contracts";
 import { addressTag, getMailbox } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
+import type { WebhookEventJob } from "../webhooks/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
-import type { WebhookEventJob } from "./webhook-delivery.ts";
 
 class SenderUnavailable extends Error {}
 
