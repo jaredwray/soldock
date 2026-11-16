@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import {
 	composer,
 	createRoom,
@@ -18,6 +18,23 @@ import {
 /** The calls that post a message to a room. */
 const postsOf = (roomId: string) => `**/api/v1/chat/rooms/${roomId}/messages`;
 
+/**
+ * Holds the calls of `method` to `url` until `release` runs. A test then sees the page before the
+ * answer of the server: a local Worker answers in some milliseconds, faster than an assertion.
+ */
+async function hold(page: Page, url: string, method: string): Promise<{ release: () => void }> {
+	let release = () => {};
+	const released = new Promise<void>((done) => {
+		release = done;
+	});
+	await page.route(url, async (route) => {
+		if (route.request().method() !== method) return route.continue();
+		await released;
+		return route.continue();
+	});
+	return { release };
+}
+
 test("a send shows at once, and the room stores it one time", async ({ browser }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const nadia = await signIn(browser, "nadia");
@@ -27,11 +44,13 @@ test("a send shows at once, and the room stores it one time", async ({ browser }
 	await openRoom(page, roomId);
 
 	const text = unique("hello");
+	const answer = await hold(page, postsOf(roomId), "POST");
 	await composer(page, name).fill(text);
 	await composer(page, name).press("Enter");
-	// The row shows before the answer of the server.
-	await expect(rowsWithText(page, text)).toHaveCount(1, { timeout: 2000 });
+	// The row shows, and the box is empty, while the server has not answered.
+	await expect(page.locator(".chat-message-pending").filter({ hasText: text })).toHaveCount(1);
 	await expect(composer(page, name)).toHaveValue("");
+	answer.release();
 	await expect
 		.poll(async () => (await newest(nadia, roomId)).filter((message) => message.text === text).length)
 		.toBe(1);
@@ -133,12 +152,15 @@ test("a change and a delete show at once, and come back after a refusal", async 
 	await expect(page.locator(".chat-edit-draft")).toHaveValue("refused text");
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
 
-	// The change goes through: the new text shows, with the edited mark.
+	// The change goes through: the new text shows at once, with the edited mark.
 	await page.unrouteAll({ behavior: "ignoreErrors" });
+	const editAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/edit", "POST");
 	await page.locator(".chat-edit-draft").fill("changed text");
 	await page.getByRole("button", { name: "Save" }).click();
 	const changed = page.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(changed.locator(".chat-edited")).toBeVisible();
+	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
+	editAnswer.release();
 	await expect
 		.poll(async () => (await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text)
 		.toBe("changed text");
@@ -153,12 +175,15 @@ test("a change and a delete show at once, and come back after a refusal", async 
 	// The text has the edited mark after it, so the test finds the row by a part of its text.
 	await expect(changed).toHaveCount(1);
 
-	// The delete goes through.
+	// The delete goes through: the message shows as deleted at once.
 	await page.unrouteAll({ behavior: "ignoreErrors" });
+	const deleteAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*", "DELETE");
 	await changed.hover();
 	await changed.getByRole("button", { name: /Delete the message/ }).click();
 	await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
 	await expect(changed).toHaveCount(0);
+	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.deleted).toBe(false);
+	deleteAnswer.release();
 	await expect
 		.poll(async () => (await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.deleted)
 		.toBe(true);
