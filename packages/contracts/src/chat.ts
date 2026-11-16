@@ -89,8 +89,13 @@ export const ChatRoom = z.object({
 	last_message_at: Timestamp.nullable(),
 	/** The seq of the last message that you read. */
 	last_read_seq: z.number().int(),
-	/** True when you are a member and the room has a message after `last_read_seq`. */
+	/** True when you are a member and the room has a message of a different member after `last_read_seq`. */
 	unread: z.boolean(),
+	/**
+	 * The messages of other members after `last_read_seq`, without deleted messages. The count stops at
+	 * 100, so 100 means 100 or more. 0 when you are not a member.
+	 */
+	unread_count: z.number().int().nonnegative(),
 	/** A number that grows with each new, changed or deleted message. Compare it to find out if you must get the changes. */
 	version: z.number().int(),
 });
@@ -192,8 +197,8 @@ export const listRooms = defineOperation({
 		"Returns the rooms of one view. The default view is joined: the rooms and the direct messages that you are a member of, with the newest message first.",
 		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you can join with chat.join_room.",
 		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
-		"Each room has unread and version. Compare version with the value that you have to find out if the messages of a room changed.",
-		"The list comes from an index that follows each room. It can be a moment behind a change.",
+		"Each room has unread, unread_count and version. Compare version with the value that you have to find out if the messages of a room changed.",
+		"Each room sends its changes to the lists after the change. A list can be a moment behind a change.",
 		"Pass next_cursor as cursor to get the next page.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms" },
@@ -415,7 +420,7 @@ export const markRead = defineOperation({
 	name: "chat.mark_read",
 	summary: "Set what you read in a room",
 	description:
-		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room has the new marker at once, and chat.list_rooms a few seconds later.",
+		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room and chat.list_rooms have the new marker when the call returns, on each of your devices.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/read" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

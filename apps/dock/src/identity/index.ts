@@ -17,6 +17,14 @@ export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
+export {
+	type ChatRoomEntry,
+	type ChatRoomQuery,
+	type ChatRoomState,
+	type ChatRoomView,
+	PrincipalDO,
+	UNREAD_COUNT_MAX,
+} from "./principal.ts";
 export { mountAuthRoutes } from "./routes.ts";
 export {
 	addressTag,

@@ -8,7 +8,13 @@ import {
 	type RoomKind,
 	type RoomRole,
 } from "@soldock/contracts";
-import { type CredentialCheck, type CredentialRef, checkCredentials } from "../identity/index.ts";
+import {
+	type ChatRoomState,
+	type CredentialCheck,
+	type CredentialRef,
+	checkCredentials,
+	UNREAD_COUNT_MAX,
+} from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 
@@ -48,6 +54,8 @@ export interface RoomRecord {
 	last_message_at: number | null;
 	last_read_seq: number;
 	unread: boolean;
+	/** The messages of other members after `last_read_seq`, without deleted messages. At most `UNREAD_COUNT_MAX`. */
+	unread_count: number;
 	version: number;
 }
 
@@ -226,11 +234,8 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
  * index. The end of each write moves or removes this alarm.
  */
 const ALARM_GUARD_MS = 30_000;
-/**
- * A read marker goes to the index after this time, with the alarm. Each member that reads a new
- * message moves its marker, so one write then holds the markers of all of them.
- */
-const MARKER_DELAY_MS = 3000;
+/** The start of an outbox target for the `PrincipalDO` of a member: `principal:<principal id>`. */
+const PRINCIPAL_TARGET = "principal:";
 
 const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
@@ -391,23 +396,44 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { room: opened.room, member: opened.member as MemberRow };
 	}
 
+	/** The other member of a direct message, as JSON, or null for each other kind of room. */
+	private peerJson(room: RoomRow, principalId: string): string | null {
+		if (room.kind !== "dm") return null;
+		return (
+			this.one<{ actor_json: string }>("SELECT actor_json FROM members WHERE principal_id <> ? LIMIT 1", principalId)
+				?.actor_json ?? null
+		);
+	}
+
+	/**
+	 * The messages of other members after the read marker of a member, without deleted messages. The
+	 * count stops at `UNREAD_COUNT_MAX`, so its cost has a limit.
+	 */
+	private unreadCount(member: MemberRow | null): number {
+		if (!member) return 0;
+		return (
+			this.one<{ n: number }>(
+				`SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages
+				WHERE seq > ? AND author_id <> ? AND deleted_at IS NULL LIMIT ?)`,
+				member.last_read_seq,
+				member.principal_id,
+				UNREAD_COUNT_MAX,
+			)?.n ?? 0
+		);
+	}
+
 	/** The room as one principal sees it. */
 	private record(principalId: string): RoomRecord {
 		const room = this.room() as RoomRow;
 		const member = this.member(principalId);
-		const peer =
-			room.kind === "dm"
-				? this.one<{ actor_json: string }>(
-						"SELECT actor_json FROM members WHERE principal_id <> ? LIMIT 1",
-						principalId,
-					)
-				: null;
+		const peer = this.peerJson(room, principalId);
+		const unreadCount = this.unreadCount(member);
 		return {
 			id: room.room_id,
 			kind: room.kind,
 			name: room.name,
 			topic: room.topic,
-			peer: peer ? (JSON.parse(peer.actor_json) as ActorRecord) : null,
+			peer: peer === null ? null : (JSON.parse(peer) as ActorRecord),
 			created_at: room.created_at,
 			created_by: JSON.parse(room.created_by_json) as ActorRecord,
 			member_count: this.memberCount(),
@@ -415,9 +441,54 @@ export class ChatRoomDO extends DurableObject<Env> {
 			last_seq: room.last_seq,
 			last_message_at: room.last_message_at,
 			last_read_seq: member?.last_read_seq ?? 0,
-			unread: member !== null && room.last_seq > member.last_read_seq,
+			unread: unreadCount > 0,
+			unread_count: unreadCount,
 			version: room.version,
 		};
+	}
+
+	/**
+	 * The state of the room for the `PrincipalDO` of one principal. Each call takes a new stamp, in the
+	 * same step as the read. So a state with a higher stamp is always the newer state.
+	 */
+	private principalState(room: RoomRow, principalId: string, memberCount = this.memberCount()): ChatRoomState {
+		const stamp = Number(
+			this.one<{ value: string }>(
+				`INSERT INTO meta (key, value) VALUES ('principal_stamp', '1')
+				ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1 RETURNING value`,
+			)?.value,
+		);
+		const member = this.member(principalId);
+		if (!member) return { room_id: room.room_id, stamp, view: null };
+		return {
+			room_id: room.room_id,
+			stamp,
+			view: {
+				kind: room.kind,
+				name: room.name,
+				name_key: room.name === null ? null : nameKey(room.name),
+				topic: room.topic,
+				created_at: room.created_at,
+				created_by_json: room.created_by_json,
+				member_count: memberCount,
+				role: member.role,
+				last_seq: room.last_seq,
+				last_message_at: room.last_message_at,
+				last_read_seq: member.last_read_seq,
+				unread_count: this.unreadCount(member),
+				peer_json: this.peerJson(room, principalId),
+				version: room.version,
+			},
+		};
+	}
+
+	/**
+	 * The state of the room for one principal, for the first fill of its `PrincipalDO`. Null for an
+	 * object that nobody created.
+	 */
+	stateFor(principalId: string): ChatRoomState | null {
+		const room = this.room();
+		return room ? this.principalState(room, principalId) : null;
 	}
 
 	// --- Rooms and members ----------------------------------------------------------------------
@@ -451,7 +522,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A dm room has no owner: its two members are equal.
 			this.insertMember(call.actor, kind === "dm" ? "member" : "owner", now, 0);
 			for (const actor of others) this.insertMember(actor, "member", now, 0);
-			this.touch("room");
+			this.roomChanged();
 		});
 	}
 
@@ -516,7 +587,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				input.name ?? null,
 				input.topic ?? null,
 			);
-			this.touch("room");
+			this.roomChanged();
 		});
 		await this.publish({ type: "room" });
 		return this.record(call.actor.principal_id);
@@ -535,7 +606,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const lastSeq = (this.room() as RoomRow).last_seq;
 		this.ctx.storage.transactionSync(() => {
 			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq);
-			this.touch("room");
+			this.roomChanged();
 		});
 		await this.publish({ type: "room" });
 		return { room: this.record(call.actor.principal_id), joined: true };
@@ -568,7 +639,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				const now = Date.now();
 				for (const actor of fresh.values()) this.insertMember(actor, "member", now, opened.room.last_seq);
-				this.touch("room");
+				this.roomChanged();
 			});
 			await this.publish({ type: "room" });
 		}
@@ -595,6 +666,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
+			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
 				const next = this.one<{ principal_id: string }>(
 					"SELECT principal_id FROM members ORDER BY joined_at, principal_id LIMIT 1",
@@ -604,7 +676,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.touch(`member:${next.principal_id}`);
 				}
 			}
-			this.touch("room");
+			this.roomChanged();
 		});
 		// The sockets of the removed member close in the same step, so no later event reaches them.
 		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
@@ -783,8 +855,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 						now,
 					);
 				}
-				this.touch("room");
-				this.touch(`member:${call.actor.principal_id}`);
+				this.roomChanged();
 			});
 			const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
 			return { message, duplicate: false };
@@ -822,7 +893,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				messageId,
 			);
 			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-			this.touch("room");
+			this.roomChanged();
 		});
 		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
 		await this.publish({ type: "message", message: messageOutput(message) });
@@ -852,7 +923,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				messageId,
 			);
 			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-			this.touch("room");
+			this.roomChanged();
 		});
 		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
 		await this.publish({ type: "message", message: messageOutput(message) });
@@ -861,8 +932,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Sets the read marker of the caller. Without `seq`, the marker goes to the newest message. The
-	 * object has the marker at once. The index gets it a moment later, with the markers of the other
-	 * members that read the same message.
+	 * `PrincipalDO` of the caller has the new state before the call returns, so each device of the
+	 * caller gets it with its next list.
 	 */
 	async markRead(call: RoomCall, seq: number | null): Promise<{ lastReadSeq: number; unread: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
@@ -875,11 +946,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 					lastReadSeq,
 					call.actor.principal_id,
 				);
-				this.touch(`member:${call.actor.principal_id}`, MARKER_DELAY_MS);
+				this.touch(`${PRINCIPAL_TARGET}${call.actor.principal_id}`);
 			});
-			await this.schedule();
+			await this.flush();
 		}
-		return { lastReadSeq, unread: opened.room.last_seq > lastReadSeq };
+		return { lastReadSeq, unread: this.unreadCount(this.member(call.actor.principal_id)) > 0 };
 	}
 
 	// --- Live sockets ---------------------------------------------------------------------------
@@ -1036,16 +1107,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 	// --- The index in D1 ------------------------------------------------------------------------
 
 	/**
-	 * Records that a row of the index is behind. `gen` shows a change that came during a write. With a
-	 * delay, the row waits for the alarm. A row that waits already keeps the earlier time.
+	 * Records that a target is behind: a row of the index, or the `PrincipalDO` of a principal. `gen`
+	 * shows a change that came during a write. A target that waits for a retry is due at once again.
 	 */
-	private touch(target: string, delayMs = 0): void {
+	private touch(target: string): void {
 		this.sql.exec(
 			`INSERT INTO outbox (target, gen, next_attempt_at) VALUES (?, 1, ?)
-			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0,
-				next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at)`,
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
 			target,
-			Date.now() + delayMs,
+			Date.now(),
+		);
+	}
+
+	/**
+	 * Records a change that each member sees in its list: the room row of the index, and the
+	 * `PrincipalDO` of each member. Call it after the change to the members, in the same transaction.
+	 */
+	private roomChanged(): void {
+		this.touch("room");
+		this.sql.exec(
+			`INSERT INTO outbox (target, gen, next_attempt_at) SELECT ? || principal_id, 1, ? FROM members WHERE true
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
+			PRINCIPAL_TARGET,
+			Date.now(),
 		);
 	}
 
@@ -1116,6 +1200,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * Each write holds the state at the time of the write, not at the time of the change. So a write is
 	 * safe to run two times, the order of two writes does not matter, and a row never goes out of use:
 	 * a write that fails is tried again until it succeeds.
+	 *
+	 * A pass writes the rows of the index in one D1 batch, and sends the state of the room to each
+	 * `PrincipalDO` that is behind, with one call for each. A failure of one target does not stop the
+	 * others.
 	 */
 	private async drain(): Promise<void> {
 		for (let round = 0; round < DRAIN_ROUNDS; round++) {
@@ -1127,28 +1215,74 @@ export class ChatRoomDO extends DurableObject<Env> {
 				OUTBOX_BATCH,
 			);
 			if (rows.length === 0) break;
-			try {
-				await this.env.DIRECTORY.batch(rows.map((row) => this.indexStatement(room, row.target)));
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				log("warn", "chat index write failed", { rows: rows.length, error: message });
-				for (const row of rows) {
-					const attempts = row.attempts + 1;
-					this.sql.exec(
-						"UPDATE outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE target = ? AND gen = ?",
-						attempts,
-						Date.now() + backoff(attempts),
-						message.slice(0, 500),
-						row.target,
-						row.gen,
-					);
-				}
-				break;
-			}
-			// A row that changed during the write has a new gen. It stays, and the next pass writes it.
-			for (const row of rows) this.sql.exec("DELETE FROM outbox WHERE target = ? AND gen = ?", row.target, row.gen);
+			const indexRows = rows.filter((row) => !row.target.startsWith(PRINCIPAL_TARGET));
+			const principalRows = rows.filter((row) => row.target.startsWith(PRINCIPAL_TARGET));
+			const [indexFailed, principalsFailed] = await Promise.all([
+				this.writeIndex(room, indexRows),
+				this.sendStates(room, principalRows),
+			]);
+			if (indexFailed || principalsFailed) break;
 		}
 		await this.schedule();
+	}
+
+	/** Removes a row that the write brought to the current state. A row that changed during the write has a new gen, and stays. */
+	private done(row: OutboxRow): void {
+		this.sql.exec("DELETE FROM outbox WHERE target = ? AND gen = ?", row.target, row.gen);
+	}
+
+	/** Gives a row that failed its next attempt, later with each failure. */
+	private retryLater(row: OutboxRow, error: string): void {
+		const attempts = row.attempts + 1;
+		this.sql.exec(
+			"UPDATE outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE target = ? AND gen = ?",
+			attempts,
+			Date.now() + backoff(attempts),
+			error.slice(0, 500),
+			row.target,
+			row.gen,
+		);
+	}
+
+	/** Writes the rows of the index in one batch. Returns true when the batch failed. */
+	private async writeIndex(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
+		if (rows.length === 0) return false;
+		try {
+			await this.env.DIRECTORY.batch(rows.map((row) => this.indexStatement(room, row.target)));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log("warn", "chat index write failed", { rows: rows.length, error: message });
+			for (const row of rows) this.retryLater(row, message);
+			return true;
+		}
+		for (const row of rows) this.done(row);
+		return false;
+	}
+
+	/** Sends the current state of the room to the `PrincipalDO` of each row. Returns true when a send failed. */
+	private async sendStates(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
+		if (rows.length === 0) return false;
+		const memberCount = this.memberCount();
+		const results = await Promise.allSettled(
+			rows.map((row) => {
+				const principalId = row.target.slice(PRINCIPAL_TARGET.length);
+				const state = this.principalState(room, principalId, memberCount);
+				return this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(principalId)).applyChatRoomStates([state]);
+			}),
+		);
+		let failed = 0;
+		results.forEach((result, index) => {
+			const row = rows[index] as OutboxRow;
+			if (result.status === "fulfilled") {
+				this.done(row);
+				return;
+			}
+			failed += 1;
+			const reason = result.reason as unknown;
+			this.retryLater(row, reason instanceof Error ? reason.message : String(reason));
+		});
+		if (failed > 0) log("warn", "chat principal state send failed", { targets: rows.length, failed });
+		return failed > 0;
 	}
 
 	/**

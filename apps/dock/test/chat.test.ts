@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatRoomState } from "../src/identity/index.ts";
 import { type Actor, api, callTool, codeOf, ORIGIN, PASSWORD, request, SETUP_TOKEN, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
@@ -318,16 +319,12 @@ describe("the read marker", () => {
 		]);
 
 		expect(await bot.call("chat.mark_read", { room_id: busy.id })).toEqual({ last_read_seq: 2, unread: false });
-		// The room has the marker at once. The list gets it with the alarm of the room, a moment later.
+		// The room and the list have the marker when the call returns.
 		expect((await bot.call("chat.get_room", { room_id: busy.id })).room.unread).toBe(false);
-		await vi.waitFor(
-			async () =>
-				expect((await joined(bot)).map((room) => [room.name, room.unread])).toEqual([
-					["Busy", false],
-					["Quiet", true],
-				]),
-			{ timeout: 10_000, interval: 250 },
-		);
+		expect((await joined(bot)).map((room) => [room.name, room.unread])).toEqual([
+			["Busy", false],
+			["Quiet", true],
+		]);
 		// A lower seq makes the room unread again. The marker of a different member does not change.
 		expect(await bot.call("chat.mark_read", { room_id: busy.id, seq: 1 })).toEqual({ last_read_seq: 1, unread: true });
 		expect((await bot.call("chat.get_room", { room_id: busy.id })).room.unread).toBe(true);
@@ -373,6 +370,133 @@ describe("the list of joined rooms", () => {
 			const own = (await member.call("chat.get_room", { room_id: room.id })).room;
 			expect([listed?.last_seq, listed?.version, listed?.unread]).toEqual([9, current.version, own.unread]);
 		}
+	});
+});
+
+function principalStub(principalId: string) {
+	return env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId));
+}
+
+describe("the state of each principal", () => {
+	it("counts the unread messages of each member, without its own messages and without deleted messages", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		await post(ada, room.id, "One");
+		const two = await post(ada, room.id, "Two");
+		expect((await joined(bot))[0]).toMatchObject({ unread_count: 2, unread: true, last_read_seq: 0 });
+		// A post moves the marker of its author. So the agent has read the room, and Ada has one message.
+		await post(bot, room.id, "Three");
+		expect((await joined(bot))[0]).toMatchObject({ unread_count: 0, unread: false, last_read_seq: 3 });
+		expect((await joined(ada))[0]).toMatchObject({ unread_count: 1, unread: true });
+
+		// The own message of the agent does not count.
+		await bot.call("chat.mark_read", { room_id: room.id, seq: 0 });
+		expect((await joined(bot))[0]).toMatchObject({ unread_count: 2, last_read_seq: 0 });
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: two.id });
+		expect((await joined(bot))[0]).toMatchObject({ unread_count: 1 });
+		expect((await bot.call("chat.get_room", { room_id: room.id })).room).toMatchObject({ unread_count: 1 });
+		// The public list has the state of the caller in each room that it joined.
+		const [listed] = (await bot.call("chat.list_rooms", { view: "public" })).rooms;
+		expect(listed).toMatchObject({ id: room.id, role: "member", unread_count: 1, last_read_seq: 0 });
+		expect((await owner.call("chat.list_rooms", { view: "public" })).rooms[0]).toMatchObject({
+			role: null,
+			unread_count: 0,
+		});
+	});
+
+	it("clears the count on each device of a person when one device calls chat.mark_read", async () => {
+		const room = await createRoom(bot, "private", "Ops", [ada.id]);
+		await post(bot, room.id, "Deploy at noon.");
+		const { api_key: laptop } = await ada.call("account.create_api_key", { label: "laptop", scopes: ["chat.read"] });
+		const onLaptop = api(laptop.secret);
+		expect((await onLaptop("chat.list_rooms")).rooms[0]).toMatchObject({ unread_count: 1 });
+
+		await ada.call("chat.mark_read", { room_id: room.id });
+		// No wait and no poll: the other device has the marker when the call returns.
+		expect((await onLaptop("chat.list_rooms")).rooms[0]).toMatchObject({ unread_count: 0, last_read_seq: 1 });
+	});
+
+	// The index in D1 has a member row for the lists of public rooms. A message and a read marker must
+	// not write it: with many readers, those writes are a load on the database of each request.
+	it("writes no member row of the index for a post or a read marker", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
+		await env.DIRECTORY.prepare("UPDATE chat_members SET last_read_seq = -1").run();
+		await post(ada, room.id, "Hello");
+		await bot.call("chat.mark_read", { room_id: room.id });
+		const stub = roomStub(room.id);
+		await runInDurableObject(stub, (_instance, state) =>
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0"),
+		);
+		await runDurableObjectAlarm(stub);
+		const rows = await env.DIRECTORY.prepare("SELECT DISTINCT last_read_seq FROM chat_members WHERE room_id = ?")
+			.bind(room.id)
+			.all<{ last_read_seq: number }>();
+		expect(rows.results).toEqual([{ last_read_seq: -1 }]);
+	});
+
+	it("keeps the newest state when a room sends a state two times, or an older state arrives late", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const older = await roomStub(room.id).stateFor(bot.id);
+		await post(ada, room.id, "One");
+		const newer = await roomStub(room.id).stateFor(bot.id);
+		const principal = principalStub(bot.id);
+		await principal.applyChatRoomStates([newer as ChatRoomState]);
+		await principal.applyChatRoomStates([newer as ChatRoomState, older as ChatRoomState]);
+		expect((await joined(bot))[0]).toMatchObject({ last_seq: 1, unread_count: 1 });
+		// A late state of a member that left cannot add the room again.
+		await bot.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		expect(await joined(bot)).toEqual([]);
+		await principal.applyChatRoomStates([newer as ChatRoomState]);
+		expect(await joined(bot)).toEqual([]);
+	});
+
+	it("keeps a change when a send to a principal fails, and its alarm sends it later", async () => {
+		const room = await createRoom(ada, "private", "Ops", [bot.id]);
+		const stub = roomStub(room.id);
+		// The first list fills the object of the agent. After it, only the room sends states.
+		expect((await joined(bot))[0]).toMatchObject({ last_seq: 0 });
+		let principals: Env["PRINCIPAL"] | undefined;
+		await runInDurableObject(stub, (instance) => {
+			const target = instance as unknown as { env: Env };
+			const real = target.env.PRINCIPAL;
+			principals = real;
+			const failing = {
+				idFromName: (name: string) => real.idFromName(name),
+				get: () => ({
+					applyChatRoomStates: async () => {
+						throw new Error("The object is not available");
+					},
+				}),
+			} as unknown as Env["PRINCIPAL"];
+			target.env = { ...target.env, PRINCIPAL: failing };
+		});
+		await post(ada, room.id, "Still here.");
+		expect((await joined(bot))[0]).toMatchObject({ last_seq: 0, unread_count: 0 });
+
+		await runInDurableObject(stub, (instance, state) => {
+			const target = instance as unknown as { env: Env };
+			target.env = { ...target.env, PRINCIPAL: principals as Env["PRINCIPAL"] };
+			// The next attempt is a minute away. Make it due, so the test does not wait.
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+		});
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect((await joined(bot))[0]).toMatchObject({ last_seq: 1, unread_count: 1 });
+	});
+
+	// A principal that joined rooms before its object existed has those rooms in the index only.
+	it("fills an object without state from the rooms of the principal in the index", async () => {
+		const quiet = await createRoom(ada, "public", "Quiet", [bot.id]);
+		const busy = await createRoom(ada, "private", "Busy", [bot.id]);
+		await post(ada, quiet.id, "One");
+		await post(ada, busy.id, "Two");
+		await post(ada, busy.id, "Three");
+		await runInDurableObject(principalStub(bot.id), (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_rooms");
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+		});
+		expect((await joined(bot)).map((room) => [room.name, room.unread_count])).toEqual([
+			["Busy", 2],
+			["Quiet", 1],
+		]);
 	});
 });
 
@@ -561,9 +685,13 @@ describe("a room object", () => {
 			target.env = { ...target.env, DIRECTORY: failing };
 		});
 		expect((await post(ada, room.id, "Still here.")).seq).toBe(1);
-		// The room has the message. The list is behind.
+		// The room has the message. The public list of a principal that is not a member comes from the
+		// index only, and is behind.
+		const publicList = async () => (await owner.call("chat.list_rooms", { view: "public" })).rooms;
 		expect(await texts(ada, room.id)).toEqual(["Still here."]);
-		expect((await joined(ada))[0]).toMatchObject({ last_seq: 0 });
+		expect((await publicList())[0]).toMatchObject({ last_seq: 0 });
+		// The joined list does not use the index.
+		expect((await joined(ada))[0]).toMatchObject({ last_seq: 1 });
 
 		await runInDurableObject(stub, async (instance, state) => {
 			const target = instance as unknown as { env: Env };
@@ -572,7 +700,7 @@ describe("a room object", () => {
 			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
 		});
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect((await joined(ada))[0]).toMatchObject({ last_seq: 1, unread: false });
+		expect((await publicList())[0]).toMatchObject({ last_seq: 1, unread: false });
 	});
 
 	// A stop of the object during the write must not leave a row in the outbox without an alarm.

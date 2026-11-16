@@ -2,7 +2,8 @@ import type { RoomKind, RoomRole } from "@soldock/contracts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
 
 // Reads of the Chat index in D1 (`chat_rooms`, `chat_members`). Each `ChatRoomDO` writes its own rows.
-// The index is a copy for the lists. The room object decides each access.
+// The index is a copy for the public list. The room object decides each access. The joined list comes
+// from the `PrincipalDO` of the caller (principal-rooms.ts).
 
 interface IndexRow {
 	id: string;
@@ -43,14 +44,16 @@ function toRecord(row: IndexRow): RoomRecord {
 		role: row.role,
 		last_seq: row.last_seq,
 		last_message_at: row.last_message_at,
+		// The read marker of a member comes from its `PrincipalDO`. The index has only the marker of the join.
 		last_read_seq: row.last_read_seq ?? 0,
-		unread: row.role !== null && row.last_seq > (row.last_read_seq ?? 0),
+		unread: false,
+		unread_count: 0,
 		version: row.version,
 	};
 }
 
 /** A cursor is base64url of the UTF-8 bytes of JSON. A name in a cursor can have characters of each script. */
-function encodeCursor(values: (string | number)[]): string {
+export function encodeCursor(values: (string | number)[]): string {
 	const bytes = new TextEncoder().encode(JSON.stringify(values));
 	return btoa(String.fromCharCode(...bytes))
 		.replaceAll("+", "-")
@@ -59,7 +62,7 @@ function encodeCursor(values: (string | number)[]): string {
 }
 
 /** The values of a cursor, or null when the text is not a cursor with these value types. */
-function decodeCursor<T extends (string | number)[]>(cursor: string, types: ("string" | "number")[]): T | null {
+export function decodeCursor<T extends (string | number)[]>(cursor: string, types: ("string" | "number")[]): T | null {
 	try {
 		const binary = atob(cursor.replaceAll("-", "+").replaceAll("_", "/"));
 		const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
@@ -85,32 +88,6 @@ function page(rows: IndexRow[], limit: number, cursorOf: (row: IndexRow) => (str
 		rooms: shown.map(toRecord),
 		nextCursor: rows.length > limit && last ? encodeCursor(cursorOf(last)) : null,
 	};
-}
-
-/**
- * The rooms that a principal is a member of, with the newest message first. Returns null for a cursor
- * that is not from this list.
- */
-export async function listJoinedRooms(db: D1Database, principalId: string, input: ListInput): Promise<RoomPage | null> {
-	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
-	if (input.cursor !== null && cursor === null) return null;
-	const { results } = await db
-		.prepare(
-			`SELECT ${COLUMNS} FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
-			WHERE m.principal_id = ?1
-				AND (?2 IS NULL OR instr(r.name_key, ?2) > 0)
-				AND (?3 IS NULL OR r.activity_at < ?3 OR (r.activity_at = ?3 AND r.id < ?4))
-			ORDER BY r.activity_at DESC, r.id DESC LIMIT ?5`,
-		)
-		.bind(
-			principalId,
-			input.query === null ? null : nameKey(input.query),
-			cursor?.[0] ?? null,
-			cursor?.[1] ?? null,
-			input.limit + 1,
-		)
-		.all<IndexRow>();
-	return page(results, input.limit, (row) => [row.activity_at, row.id]);
 }
 
 /**
