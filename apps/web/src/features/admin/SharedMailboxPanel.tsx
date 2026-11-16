@@ -2,7 +2,9 @@ import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@soldock/
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { principalOption } from "../../lib/usePrincipals.ts";
 import { WebhookManager } from "../settings/Webhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
 
@@ -43,10 +45,6 @@ export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMai
 /** Sorts people and agents by name. */
 export function byName(a: Principal, b: Principal): number {
 	return a.display_name.localeCompare(b.display_name);
-}
-
-function describe(principal: Principal): string {
-	return `${principal.display_name} (${principal.address})${principal.kind === "agent" ? ", agent" : ""}`;
 }
 
 interface PartProps {
@@ -214,21 +212,15 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 						<label htmlFor={ids.select} className="field-label">
 							Add a member
 						</label>
-						<select
+						<Select
 							id={ids.select}
-							className="input"
 							value={candidateId}
-							onChange={(event) => setCandidateId(event.target.value)}
+							options={candidates.map(principalOption)}
+							placeholder="Select a person or an agent"
+							onChange={setCandidateId}
 							aria-describedby={ids.hint}
 							disabled={busy || full || candidates.length === 0}
-						>
-							<option value="">Select a person or an agent</option>
-							{candidates.map((candidate) => (
-								<option key={candidate.id} value={candidate.id}>
-									{describe(candidate)}
-								</option>
-							))}
-						</select>
+						/>
 						<p id={ids.hint} className="field-hint">
 							{full
 								? `A shared mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`

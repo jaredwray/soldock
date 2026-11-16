@@ -4,6 +4,8 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { Select } from "../../lib/Select.tsx";
+import { principalOption } from "../../lib/usePrincipals.ts";
 import { isSharedDriveId } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { usePrincipals } from "./data.ts";
@@ -12,6 +14,11 @@ import { canShare, linkPath, SHARED_DRIVE_ICON, spaceInput } from "./model.ts";
 type GrantRole = Permission["role"];
 
 const ROLE_NAMES: Record<GrantRole | "owner", string> = { owner: "Owner", editor: "Editor", viewer: "Viewer" };
+
+const ROLE_OPTIONS: readonly { value: GrantRole; label: string }[] = [
+	{ value: "viewer", label: ROLE_NAMES.viewer },
+	{ value: "editor", label: ROLE_NAMES.editor },
+];
 
 export interface ShareDialogProps {
 	item: DriveItem;
@@ -136,36 +143,21 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 							<label htmlFor={personId} className="field-label">
 								Person or agent
 							</label>
-							<select
+							<Select
 								id={personId}
-								className="input"
 								value={principalId}
+								options={candidates.map(principalOption)}
+								placeholder={principals === null ? "Loading…" : "Select…"}
 								disabled={busy || principals === null}
-								onChange={(event) => setPrincipalId(event.target.value)}
+								onChange={setPrincipalId}
 								data-autofocus
-							>
-								<option value="">{principals === null ? "Loading…" : "Select…"}</option>
-								{candidates.map((principal) => (
-									<option key={principal.id} value={principal.id}>
-										{principalLabel(principal)}
-									</option>
-								))}
-							</select>
+							/>
 						</div>
 						<div>
 							<label htmlFor={roleId} className="field-label">
 								Role
 							</label>
-							<select
-								id={roleId}
-								className="input"
-								value={role}
-								disabled={busy}
-								onChange={(event) => setRole(event.target.value as GrantRole)}
-							>
-								<option value="viewer">Viewer</option>
-								<option value="editor">Editor</option>
-							</select>
+							<Select id={roleId} value={role} options={ROLE_OPTIONS} disabled={busy} onChange={setRole} />
 						</div>
 						<button type="submit" className="button button-primary" disabled={busy}>
 							Share
@@ -228,25 +220,23 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 										</span>
 									) : (
 										<>
-											<select
+											<Select
 												className="input drive-share-role"
-												aria-label={`Role of ${name}`}
+												label={`Role of ${name}`}
 												value={permission.role}
+												options={ROLE_OPTIONS}
 												disabled={busy}
-												onChange={(event) =>
+												onChange={(role) =>
 													void change(() =>
 														api.call("drive.share_item", {
 															...space,
 															item_id: item.id,
 															principal_id: permission.principal_id,
-															role: event.target.value as GrantRole,
+															role,
 														}),
 													)
 												}
-											>
-												<option value="viewer">Viewer</option>
-												<option value="editor">Editor</option>
-											</select>
+											/>
 											<button
 												type="button"
 												className="icon-button icon-button-small"
@@ -286,10 +276,6 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 			</div>
 		</Dialog>
 	);
-}
-
-function principalLabel(principal: Principal): string {
-	return `${principal.display_name}${principal.kind === "agent" ? " (agent)" : ""} – ${principal.address}`;
 }
 
 function AccessRow({

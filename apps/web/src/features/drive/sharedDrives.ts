@@ -25,6 +25,11 @@ export function memberRoles(kind: Principal["kind"]): readonly SharedDriveRole[]
 	return kind === "agent" ? SHARED_DRIVE_ROLES.filter((role) => role !== "manager") : SHARED_DRIVE_ROLES;
 }
 
+/** The roles as the options of a role control. */
+export function roleOptions(roles: readonly SharedDriveRole[]): { value: SharedDriveRole; label: string }[] {
+	return roles.map((role) => ({ value: role, label: ROLE_NAMES[role] }));
+}
+
 /** The reason why a new shared drive cannot have these members, or null. */
 export function membersProblem(
 	members: readonly { kind: Principal["kind"]; role: SharedDriveRole; name: string }[],

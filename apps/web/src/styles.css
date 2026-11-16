@@ -438,6 +438,125 @@ kbd {
 	font-size: 13px;
 }
 
+/* A select (src/lib/Select.tsx): a button that shows the value and a chevron, and a list of options
+   under it. With the `input` class, the button has the look of a text field. */
+.select-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	text-align: left;
+	cursor: pointer;
+}
+
+.select-trigger.input:hover:not(:disabled) {
+	background: var(--control-hover);
+}
+
+.select-trigger.input[aria-expanded="true"] {
+	border-color: var(--ring);
+}
+
+.select-trigger:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+
+.select-icon {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.select-value,
+.select-option-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.select-placeholder,
+.select-description {
+	color: var(--muted-foreground);
+}
+
+.select-chevron {
+	flex: none;
+	margin-right: -2px;
+	color: var(--muted-foreground);
+	transition: rotate 0.15s ease;
+}
+
+.select-trigger[aria-expanded="true"] .select-chevron {
+	rotate: 180deg;
+}
+
+/* The list has a fixed position. Select.tsx puts it under or over the button, and shows it after that. */
+.select-list {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: 70;
+	max-width: calc(100vw - 16px);
+	max-height: 320px;
+	padding: 4px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	visibility: hidden;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	color: var(--foreground);
+	box-shadow: var(--shadow-menu);
+	animation: select-in 0.12s ease-out;
+}
+
+@keyframes select-in {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+}
+
+.select-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 32px;
+	padding: 6px 8px;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	user-select: none;
+}
+
+.select-option-active {
+	background: var(--hover);
+}
+
+.select-option[aria-selected="true"] {
+	font-weight: 500;
+}
+
+.select-option[aria-disabled="true"] {
+	color: var(--muted-foreground);
+	cursor: default;
+}
+
+.select-check {
+	flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.select-chevron {
+		transition: none;
+	}
+
+	.select-list {
+		animation: none;
+	}
+}
+
 .textarea {
 	resize: vertical;
 }
@@ -1520,29 +1639,31 @@ fieldset {
 }
 
 .label-picker {
-	position: relative;
 	display: inline-flex;
 	align-items: center;
-	color: var(--muted-foreground);
-}
-
-.label-picker .icon {
-	position: absolute;
-	left: 10px;
-	pointer-events: none;
+	min-width: 0;
 }
 
 .label-select {
+	gap: 6px;
 	max-width: 180px;
 	height: 32px;
-	padding: 0 12px 0 34px;
+	padding: 0 10px;
 	border: 1px solid var(--input);
 	border-radius: var(--radius-md);
 	background: var(--field);
 	color: var(--foreground);
 	font: inherit;
 	font-size: 13px;
-	cursor: pointer;
+}
+
+.label-select:hover {
+	background: var(--control-hover);
+}
+
+/* "Label as…" is the name of an action, not a missing value. */
+.label-select .select-placeholder {
+	color: var(--foreground);
 }
 
 /* Thread list */
@@ -3834,7 +3955,6 @@ fieldset {
 
 	.label-select {
 		max-width: 160px;
-		padding-right: 4px;
 	}
 
 	.thread-list {
@@ -4291,6 +4411,7 @@ fieldset {
 	.nav-item,
 	.menu-item,
 	.drive-menu-item,
+	.select-option,
 	.appearance-option {
 		min-height: 44px;
 	}

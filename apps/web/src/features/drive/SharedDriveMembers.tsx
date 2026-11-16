@@ -9,9 +9,10 @@ import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { usePrincipals } from "../../lib/usePrincipals.ts";
-import { isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES } from "./sharedDrives.ts";
+import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
+import { isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES, roleOptions } from "./sharedDrives.ts";
 
 // The members and the name of one shared drive. Admin › Shared drives shows these parts in a card.
 // Drive shows them in a dialog. The parts use only the styles of the shell, because Admin does not
@@ -19,10 +20,6 @@ import { isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES } from "./sharedDrive
 
 function byName(a: Principal, b: Principal): number {
 	return a.display_name.localeCompare(b.display_name);
-}
-
-function describe(principal: Principal): string {
-	return `${principal.display_name} (${principal.address})${principal.kind === "agent" ? ", agent" : ""}`;
 }
 
 interface NameFormProps {
@@ -249,22 +246,15 @@ export function SharedDriveMembersPart({
 											</td>
 											<td>
 												{canManage && principal ? (
-													<select
+													<Select
 														className="input shared-drive-role"
-														aria-label={`Role of ${name}`}
+														label={`Role of ${name}`}
 														aria-describedby={last ? ids.lastManager : undefined}
 														value={member.role}
+														options={roleOptions(memberRoles(principal.kind))}
 														disabled={busy || last}
-														onChange={(event) =>
-															void setMemberRole(principal, event.target.value as SharedDriveRole, false)
-														}
-													>
-														{memberRoles(principal.kind).map((option) => (
-															<option key={option} value={option}>
-																{ROLE_NAMES[option]}
-															</option>
-														))}
-													</select>
+														onChange={(next) => void setMemberRole(principal, next, false)}
+													/>
 												) : (
 													ROLE_NAMES[member.role]
 												)}
@@ -308,44 +298,32 @@ export function SharedDriveMembersPart({
 								<label htmlFor={ids.select} className="field-label">
 									Add a member
 								</label>
-								<select
+								<Select
 									id={ids.select}
-									className="input"
 									value={candidateId}
-									onChange={(event) => {
-										setCandidateId(event.target.value);
+									options={candidates.map(principalOption)}
+									placeholder="Select a person or an agent"
+									onChange={(id) => {
+										setCandidateId(id);
 										// An agent cannot be a manager, so the role control goes back to the editor role.
-										const next = candidates.find((principal) => principal.id === event.target.value);
+										const next = candidates.find((principal) => principal.id === id);
 										if (next && !memberRoles(next.kind).includes(role)) setRole("editor");
 									}}
 									disabled={busy || full || candidates.length === 0}
-								>
-									<option value="">Select a person or an agent</option>
-									{candidates.map((principal) => (
-										<option key={principal.id} value={principal.id}>
-											{describe(principal)}
-										</option>
-									))}
-								</select>
+								/>
 							</div>
 							<div className="field shared-drive-add-role">
 								<label htmlFor={ids.role} className="field-label">
 									Role
 								</label>
-								<select
+								<Select
 									id={ids.role}
-									className="input"
 									value={role}
-									onChange={(event) => setRole(event.target.value as SharedDriveRole)}
+									options={roleOptions(roles)}
+									onChange={setRole}
 									aria-describedby={ids.hint}
 									disabled={busy || full}
-								>
-									{roles.map((option) => (
-										<option key={option} value={option}>
-											{ROLE_NAMES[option]}
-										</option>
-									))}
-								</select>
+								/>
 							</div>
 						</div>
 						<p id={ids.hint} className="field-hint">

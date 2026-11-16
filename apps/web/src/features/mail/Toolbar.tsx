@@ -1,6 +1,7 @@
 import type { Label } from "@soldock/contracts";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
+import { Select } from "../../lib/Select.tsx";
 import type { MailView } from "../../routes.ts";
 import type { MailAction } from "./actions.ts";
 
@@ -159,24 +160,18 @@ function TextButton({ icon, label, onClick }: { icon: IconName; label: string; o
 }
 
 function LabelPicker({ labels, onPick }: { labels: readonly Label[]; onPick: (labelId: string) => void }) {
+	// The control has no value: each choice applies a label, and the control shows "Label as…" again.
 	return (
-		<label className="label-picker">
-			<span className="visually-hidden">Apply a label</span>
-			<Icon name="tag" size={18} />
-			<select
+		<span className="label-picker">
+			<Select
 				className="label-select"
+				label="Apply a label"
+				icon="tag"
 				value=""
-				onChange={(event) => {
-					if (event.target.value) onPick(event.target.value);
-				}}
-			>
-				<option value="">Label as…</option>
-				{labels.map((label) => (
-					<option key={label.id} value={label.id}>
-						{label.name}
-					</option>
-				))}
-			</select>
-		</label>
+				placeholder="Label as…"
+				options={labels.map((label) => ({ value: label.id, label: label.name }))}
+				onChange={onPick}
+			/>
+		</span>
 	);
 }

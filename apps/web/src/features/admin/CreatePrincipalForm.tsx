@@ -14,8 +14,14 @@ import {
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useSession } from "../auth/session.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
+
+const ROLE_OPTIONS = [
+	{ value: "member", label: "Member" },
+	{ value: "admin", label: "Admin" },
+] as const;
 
 interface CreatePrincipalDialogProps {
 	me: Principal;
@@ -192,16 +198,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							<label htmlFor={ids.role} className="field-label">
 								Role
 							</label>
-							<select
-								id={ids.role}
-								className="input"
-								value={role}
-								onChange={(event) => setRole(event.target.value === "admin" ? "admin" : "member")}
-								disabled={busy}
-							>
-								<option value="member">Member</option>
-								<option value="admin">Admin</option>
-							</select>
+							<Select id={ids.role} value={role} options={ROLE_OPTIONS} onChange={setRole} disabled={busy} />
 						</div>
 						<p className="field-hint form-grid-wide">
 							The first key of the person gets the scopes of this session: {humanScopes.join(", ")}.
@@ -213,19 +210,17 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							<label htmlFor={ids.sponsor} className="field-label">
 								Sponsor
 							</label>
-							<select
+							<Select
 								id={ids.sponsor}
-								className="input"
 								value={sponsorId}
-								onChange={(event) => setSponsorId(event.target.value)}
+								options={sponsors.map((human) => ({
+									value: human.id,
+									label: human.display_name,
+									description: human.address,
+								}))}
+								onChange={setSponsorId}
 								disabled={busy}
-							>
-								{sponsors.map((human) => (
-									<option key={human.id} value={human.id}>
-										{human.display_name} ({human.address})
-									</option>
-								))}
-							</select>
+							/>
 						</div>
 						<fieldset className="scope-list form-grid-wide">
 							<legend className="field-label">Scopes of the first key</legend>

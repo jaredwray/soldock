@@ -2,8 +2,14 @@ import type { InputOf, Principal } from "@soldock/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 
 type Role = "admin" | "member";
+
+const ROLE_OPTIONS: readonly { value: Role; label: string }[] = [
+	{ value: "member", label: "Member" },
+	{ value: "admin", label: "Admin" },
+];
 
 interface EditPrincipalDialogProps {
 	me: Principal;
@@ -85,17 +91,14 @@ export function EditPrincipalDialog({ me, principal, humans, onClose, onSaved }:
 								</p>
 							) : (
 								<>
-									<select
+									<Select
 										id={ids.role}
-										className="input"
 										value={role}
-										onChange={(event) => setRole(event.target.value === "admin" ? "admin" : "member")}
+										options={ROLE_OPTIONS}
+										onChange={setRole}
 										aria-describedby={ids.roleHint}
 										disabled={busy || isMe}
-									>
-										<option value="member">Member</option>
-										<option value="admin">Admin</option>
-									</select>
+									/>
 									<p id={ids.roleHint} className="field-hint">
 										{isMe
 											? "You cannot change your own role."
@@ -110,19 +113,19 @@ export function EditPrincipalDialog({ me, principal, humans, onClose, onSaved }:
 							<label htmlFor={ids.sponsor} className="field-label">
 								Sponsor
 							</label>
-							<select
+							<Select
 								id={ids.sponsor}
-								className="input"
 								value={sponsorId}
-								onChange={(event) => setSponsorId(event.target.value)}
+								options={sponsors.map((human) => ({
+									value: human.id,
+									label: human.display_name,
+									description: human.archived_at === null ? human.address : `${human.address}, archived`,
+									disabled: human.archived_at !== null,
+								}))}
+								placeholder="Select a person"
+								onChange={setSponsorId}
 								disabled={busy}
-							>
-								{sponsors.map((human) => (
-									<option key={human.id} value={human.id} disabled={human.archived_at !== null}>
-										{human.display_name} ({human.address}){human.archived_at !== null ? ", archived" : ""}
-									</option>
-								))}
-							</select>
+							/>
 						</div>
 					)}
 					{error && (

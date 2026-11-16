@@ -962,6 +962,35 @@ The icons are from [Iconoir](https://iconoir.com) 7.12.1 (MIT): a 24px grid and 
   Inbox uses `mail-in`. The number formats and the functions menu of Sheets show text: `$`, `%`,
   `.0`, `.00` and `Σ`.
 
+### Select
+
+The app does not use the native `<select>` element. The browser draws the list of a native select,
+so that list does not look like the app. [`src/lib/Select.tsx`](src/lib/Select.tsx) is the control
+for each value that the user selects from a list.
+
+- The control is a button with the `combobox` role. It shows the value and a chevron. With the
+  `input` class, it looks like a text field. When no option has the value, the button shows a
+  placeholder in `--muted-foreground`.
+- The list is a `listbox` on `--popover`, with `--shadow-menu` and a radius of 8px. The current
+  option has the `--hover` fill, and the selected option has a check mark. An option can show muted
+  text after its label, for example the address of a person.
+- The focus stays on the button. `aria-activedescendant` gives the current option. The keys follow
+  the select-only combobox of the WAI-ARIA Authoring Practices:
+  - The arrow keys, Enter and Space open the list. Home and End open it at the first or the last
+    option. A letter opens it at the first option that starts with that letter.
+  - In the list, the arrow keys, Home, End, Page Up and Page Down move between the options. A
+    letter goes to the next option that starts with it. A word goes to the option that starts with
+    that word.
+  - Enter, Space and a click select the current option. Escape and Tab close the list and keep the
+    value.
+  - The keys and the pointer skip a disabled option.
+- The list has a fixed position under the button, or over it when the window has more room there.
+  The list goes into the open `<dialog>` of the button, or else into `<body>`. Thus a modal dialog
+  does not make it inert, and a container that scrolls does not cut it.
+- [`src/lib/listbox.ts`](src/lib/listbox.ts) has the keyboard model as pure functions.
+  `test/listbox.test.ts` tests it.
+- At 900px and below, and for a touch screen, the button and each option are 44px high or more.
+
 ### Layout
 
 - The canvas (`--background`) has the content. The rail and the sidebar are on `--surface`, with a
@@ -1032,7 +1061,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
