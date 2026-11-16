@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry, type SharedDrive } from "@soldock/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
@@ -57,6 +57,85 @@ export function useAboutPoll(onVersionChange: () => void, onTick: () => void) {
 
 	const sync = useCallback(() => poll(false), [poll]);
 	return { about, sync };
+}
+
+/**
+ * Each shared drive of the person, in the order of the names. With `all`, each shared drive of the
+ * organization: only an owner or an admin can get that list.
+ */
+export async function listSharedDrives(all = false): Promise<SharedDrive[]> {
+	const drives: SharedDrive[] = [];
+	let cursor: string | null = null;
+	do {
+		const page: OutputOf<"drive.list_shared_drives"> = await api.call("drive.list_shared_drives", {
+			// The input of a GET is text, so `all` is "true" or "false".
+			all: all ? "true" : "false",
+			...(cursor ? { cursor } : {}),
+		});
+		drives.push(...page.shared_drives);
+		cursor = page.next_cursor;
+	} while (cursor !== null);
+	return drives;
+}
+
+export interface SharedDrivesState {
+	/** Null until the list loads. */
+	drives: SharedDrive[] | null;
+	/** The error of the last call. The drives of an earlier call stay. */
+	error: string | null;
+	reload: () => Promise<void>;
+}
+
+/** The shared drives of the person, with the role of the person in each one. */
+export function useSharedDrives(): SharedDrivesState {
+	const [state, setState] = useState<{ drives: SharedDrive[] | null; error: string | null }>({
+		drives: null,
+		error: null,
+	});
+	const requestRef = useRef(0);
+
+	const reload = useCallback(async () => {
+		const request = ++requestRef.current;
+		try {
+			const drives = await listSharedDrives();
+			if (request === requestRef.current) setState({ drives, error: null });
+		} catch (caught) {
+			if (request === requestRef.current) setState((current) => ({ ...current, error: errorMessage(caught) }));
+		}
+	}, []);
+
+	useEffect(() => {
+		void reload();
+	}, [reload]);
+
+	return { ...state, reload };
+}
+
+/**
+ * The totals, the name and the role of the person for one shared drive (`drive.get_about` with
+ * `space_id`). A null id makes no call. The state belongs to one drive.
+ */
+export function useSharedDriveAbout(driveId: string | null) {
+	const [stored, setStored] = useState<{ driveId: string | null; about: About | null }>({ driveId, about: null });
+	const about = stored.driveId === driveId ? stored.about : null;
+	const requestRef = useRef(0);
+
+	const reload = useCallback(async () => {
+		const request = ++requestRef.current;
+		if (driveId === null) return;
+		try {
+			const next = await api.call("drive.get_about", { space_id: driveId });
+			if (request === requestRef.current) setStored({ driveId, about: next });
+		} catch {
+			// The item list of the drive shows the error of its own call. A failed refresh keeps the name on screen.
+		}
+	}, [driveId]);
+
+	useEffect(() => {
+		void reload();
+	}, [reload]);
+
+	return { about, reload };
 }
 
 // The share dialog and the item list get the people and agents from the hook that Chat also uses.

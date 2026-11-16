@@ -13,7 +13,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
 | `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox` and `chat.room` |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the webhook operations, `Webhook`, `WEBHOOK_LIMITS` and `WEBHOOK_EVENT_TYPE` |
-| `src/drive.ts` | The Drive operations, the item, permission and version schemas, the roles, and `DRIVE_LIMITS` |
+| `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
 | `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the four webhook operations, `ChatWebhook`, `CreatedChatWebhook`, `CHAT_WEBHOOK_EVENT_TYPE`, and the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |

@@ -8,6 +8,7 @@ import lifecycleSchema from "../../migrations/0008_principal_lifecycle.sql";
 import webhookSchema from "../../migrations/0009_webhooks.sql";
 import webhookAuthSchema from "../../migrations/0010_webhook_auth.sql";
 import chatWebhookSchema from "../../migrations/0011_chat_webhooks.sql";
+import sharedDriveSchema from "../../migrations/0012_shared_drives.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -74,6 +75,10 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// stays in storage, and no new account is a member of them.
 		"DROP TABLE IF EXISTS chat_members",
 		"DROP TABLE IF EXISTS chat_rooms",
+		// The index of the shared drives names the old principals. The drives stay in their objects, and
+		// no operation opens them.
+		"DROP TABLE IF EXISTS shared_drive_members",
+		"DROP TABLE IF EXISTS shared_drives",
 		// The webhooks act for the old principals.
 		"DROP TABLE IF EXISTS webhooks",
 		"DROP TABLE IF EXISTS chat_webhooks",
@@ -100,6 +105,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...webhookSchema.split("--> statement-breakpoint"),
 		...webhookAuthSchema.split("--> statement-breakpoint"),
 		...chatWebhookSchema.split("--> statement-breakpoint"),
+		...sharedDriveSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -122,4 +128,5 @@ const BUNDLED_MIGRATIONS = [
 	"0009_webhooks.sql",
 	"0010_webhook_auth.sql",
 	"0011_chat_webhooks.sql",
+	"0012_shared_drives.sql",
 ] as const;

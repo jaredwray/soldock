@@ -27,6 +27,18 @@ export interface Drive {
 	items: DriveNode[];
 }
 
+/** A shared drive. The drive owns its items, and each member gets access through a role. */
+export interface SharedDriveSeed {
+	/** A stable name. It makes the idempotency key of the create call. */
+	id: string;
+	name: string;
+	/** At least one person is a manager. An agent can be only an editor or a viewer. */
+	members: { who: ActorKey; role: "manager" | "editor" | "viewer" }[];
+	/** The member who adds the items: an editor or a manager. */
+	author: ActorKey;
+	items: DriveNode[];
+}
+
 const DESIGN_BRIEF = `# Alder Street Library: design brief
 
 ## The building
@@ -325,6 +337,69 @@ export const DRIVES: Drive[] = [
 				share: [
 					{ with: "chidi", role: "editor" },
 					{ with: "nadia", role: "viewer" },
+				],
+			},
+		],
+	},
+];
+
+const FINISHES_BOARD = `# Tamsin Bakery: finishes board
+
+## The idea
+
+The shop must feel warm at seven in the morning, when the first trays come out. The colors come from bread: crust, crumb and flour.
+
+## The board
+
+- **Walls:** warm white mineral paint. It lets the old plaster breathe.
+- **Counter front:** green glazed tile, laid in a stack bond.
+- **Counter top:** ash with hard wax oil. Tamsin prefers ash to oak.
+- **Floor:** clay tile, 200 mm, with a wide joint.
+- **Lights:** three opal glass pendants above the counter.
+
+## To decide
+
+1. The green of the tile: the sample "Moss 04" or the darker "Bottle 11".
+2. A brass or a painted steel rail on the counter front.
+
+Put each new sample photo in this folder, and write its supplier in the paint list.
+`;
+
+const PAINT_LIST = `Name,Code,Supplier,Use
+Warm white,WW-102,Harlow Mineral Paints,Walls
+Flour,FL-008,Harlow Mineral Paints,Ceiling
+Crust,CR-221,Harlow Mineral Paints,Door and window frames
+Moss 04,M-04,Quarry Road Tiles,Counter front
+Bottle 11,B-11,Quarry Road Tiles,Counter front (option)
+`;
+
+/** The shared drives. The owner creates each one, and its author adds the items. */
+export const SHARED_DRIVES: SharedDriveSeed[] = [
+	{
+		id: "design",
+		name: "Design",
+		members: [
+			{ who: "meiling", role: "manager" },
+			{ who: "nadia", role: "editor" },
+			{ who: "chidi", role: "editor" },
+			{ who: "research", role: "editor" },
+			{ who: "rafael", role: "viewer" },
+		],
+		author: "meiling",
+		items: [
+			{
+				kind: "folder",
+				id: "design/bakery-interiors",
+				name: "Bakery interiors",
+				children: [
+					{ kind: "doc", id: "design/finishes-board", name: "Finishes board", markdown: FINISHES_BOARD },
+					{
+						kind: "file",
+						id: "design/paint-list",
+						name: "paint-list.csv",
+						mimeType: "text/csv",
+						text: PAINT_LIST,
+					},
 				],
 			},
 		],
