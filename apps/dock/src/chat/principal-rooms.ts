@@ -49,15 +49,19 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
  *   the fill. The next list asks it again.
  * - The fill is complete when each room answered. A room that sent a newer state first keeps it:
  *   see `stamp`.
+ *
+ * Returns null when the fill is complete. Else it returns the place in the list of the last room
+ * that the fill asked, by the index. Each room that the fill did not ask comes after that place.
  */
-async function seed(env: Env, principalId: string): Promise<void> {
+async function seed(env: Env, principalId: string): Promise<Position | null> {
 	const principal = principalStub(env, principalId);
 	const { results } = await env.DIRECTORY.prepare(
-		`SELECT m.room_id FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
+		`SELECT m.room_id, r.activity_at FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
 		WHERE m.principal_id = ? ORDER BY r.activity_at DESC, r.id DESC`,
 	)
 		.bind(principalId)
-		.all<{ room_id: string }>();
+		.all<{ room_id: string; activity_at: number }>();
+	const activity = new Map(results.map((row) => [row.room_id, row.activity_at]));
 	const unknown = await principal.unknownChatRooms(results.map((row) => row.room_id));
 	const asked = unknown.slice(0, SEED_MAX);
 	let failed = 0;
@@ -74,7 +78,23 @@ async function seed(env: Env, principalId: string): Promise<void> {
 		await principal.seedChat(states, false);
 	}
 	if (failed > 0) log("warn", "chat principal fill: rooms did not answer", { rooms: failed });
-	if (failed === 0 && asked.length === unknown.length) await principal.seedChat([], true);
+	if (failed === 0 && asked.length === unknown.length) {
+		await principal.seedChat([], true);
+		return null;
+	}
+	const last = asked[asked.length - 1] as string;
+	return { activityAt: activity.get(last) ?? 0, roomId: last };
+}
+
+/** A place in the joined list: the newest activity first, then the highest id. */
+interface Position {
+	activityAt: number;
+	roomId: string;
+}
+
+/** True when `a` comes after `b` in the joined list. */
+function isAfter(a: Position, b: Position): boolean {
+	return a.activityAt < b.activityAt || (a.activityAt === b.activityAt && a.roomId < b.roomId);
 }
 
 /**
@@ -85,22 +105,28 @@ export async function listJoinedRooms(env: Env, principalId: string, input: List
 	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
 	if (input.cursor !== null && cursor === null) return null;
 	const principal = principalStub(env, principalId);
+	const after = cursor === null ? null : { activityAt: cursor[0], roomId: cursor[1] };
 	const query = {
 		nameKey: input.query === null ? null : nameKey(input.query),
-		after: cursor === null ? null : { activityAt: cursor[0], roomId: cursor[1] },
+		after,
+		until: null,
 		limit: input.limit,
 	};
 	let listed = await principal.listChatRooms(query);
+	// While the fill is not complete, the page ends at the place that the fill reached. The rooms after
+	// it can come in a later part, so the page gives a cursor to that place. The next list continues
+	// the fill, and then the list after that place. A search then finds an old room too.
+	let reached: Position | null = null;
 	if (!listed.seeded) {
-		await seed(env, principalId);
-		listed = await principal.listChatRooms(query);
+		reached = await seed(env, principalId);
+		if (reached !== null && after !== null && !isAfter(reached, after)) reached = null;
+		listed = await principal.listChatRooms({ ...query, until: reached });
 	}
 	const shown = listed.rooms.slice(0, input.limit);
 	const last = shown[shown.length - 1];
-	return {
-		rooms: shown.map(toRecord),
-		nextCursor: listed.rooms.length > input.limit && last ? encodeCursor([last.activity_at, last.room_id]) : null,
-	};
+	let nextCursor = listed.rooms.length > input.limit && last ? encodeCursor([last.activity_at, last.room_id]) : null;
+	if (nextCursor === null && reached !== null) nextCursor = encodeCursor([reached.activityAt, reached.roomId]);
+	return { rooms: shown.map(toRecord), nextCursor };
 }
 
 /**

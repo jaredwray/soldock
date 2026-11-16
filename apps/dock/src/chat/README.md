@@ -203,6 +203,9 @@ role, `last_read_seq`, `unread_count` and the other member of a `dm` room.
   1. 25 rooms at a time, and 200 rooms at most in one request. The next list continues.
      It asks the rooms in the order of the joined list, the newest activity in the index first. So
      the rooms of a later part come after the cursor of an earlier page, and no page skips them.
+     While the fill is not complete, a page ends at the last room that the fill asked, and gives a
+     cursor to that place, also when the page has fewer rooms than `limit`. So a search with
+     `query` finds an old room in a later page.
   2. It keeps the states of each part when the part ends.
   3. A room that does not answer does not stop the fill. The next list asks it again.
   4. When each room answered, the object records that the fill is complete.
@@ -214,6 +217,9 @@ Known limits:
   again: 1 minute, doubled, at most 1 hour. The list shows the name, the topic, the member count and
   `last_seq` from the time of the removal. No later change reaches it, because a change makes only
   the current members a target. The messages stay closed.
+- The order of the fill comes from the index in D1. A room whose row in the index is behind, and a
+  room that did not answer, can be in a different part than its place in the list. The pages of
+  that request can then skip it. The next list from the start has it.
 - The fill does not see a room whose member row in D1 waits in the outbox of the room. Such a row
   can be from before this layer. The room shows in the list after its next change.
 - A post in a room with 500 members makes 500 calls to `PrincipalDO`s, in passes of 100 targets.

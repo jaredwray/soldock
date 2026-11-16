@@ -527,7 +527,9 @@ describe("the state of each principal", () => {
 	// later part of the fill adds.
 	it("lists each room one time in pages while the fill of the object takes more than one request", async () => {
 		const names = Array.from({ length: 205 }, (_, index) => `Room ${String(index).padStart(3, "0")}`);
-		for (let start = 0; start < names.length; start += 25) {
+		// "Room 000" is the oldest room, so the first part of a fill does not have it.
+		await createRoom(ada, "private", names[0] as string, [bot.id]);
+		for (let start = 1; start < names.length; start += 25) {
 			await Promise.all(names.slice(start, start + 25).map((name) => createRoom(ada, "private", name, [bot.id])));
 		}
 		await runInDurableObject(principalStub(bot.id), (_instance, state) => {
@@ -546,6 +548,25 @@ describe("the state of each principal", () => {
 		} while (cursor !== null);
 		expect(listed.length).toBe(names.length);
 		expect([...listed].sort()).toEqual(names);
+
+		// A search while the fill is not complete finds an old room through the pages.
+		await runInDurableObject(principalStub(bot.id), (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_rooms");
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+		});
+		const found: string[] = [];
+		let next: string | null = null;
+		let pages = 0;
+		do {
+			const page: { rooms: { name: string | null }[]; next_cursor: string | null } = await bot.call(
+				"chat.list_rooms",
+				next === null ? { query: "Room 000" } : { query: "Room 000", cursor: next },
+			);
+			found.push(...page.rooms.map((room) => room.name ?? ""));
+			next = page.next_cursor;
+			pages += 1;
+		} while (next !== null && pages < 10);
+		expect(found).toEqual(["Room 000"]);
 	}, 30_000);
 });
 

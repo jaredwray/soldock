@@ -50,6 +50,8 @@ export interface ChatRoomQuery {
 	nameKey: string | null;
 	/** The `activity_at` and the id of the last room of the page before. */
 	after: { activityAt: number; roomId: string } | null;
+	/** Keep the rooms up to this room, with it. Null for no end. */
+	until: { activityAt: number; roomId: string } | null;
 	limit: number;
 }
 
@@ -166,11 +168,14 @@ export class PrincipalDO extends DurableObject<Env> {
 				WHERE joined = 1
 					AND (?1 IS NULL OR instr(name_key, ?1) > 0)
 					AND (?2 IS NULL OR activity_at < ?2 OR (activity_at = ?2 AND room_id < ?3))
+					AND (?5 IS NULL OR activity_at > ?5 OR (activity_at = ?5 AND room_id >= ?6))
 				ORDER BY activity_at DESC, room_id DESC LIMIT ?4`,
 				query.nameKey,
 				query.after?.activityAt ?? null,
 				query.after?.roomId ?? null,
 				query.limit + 1,
+				query.until?.activityAt ?? null,
+				query.until?.roomId ?? null,
 			)
 			.toArray();
 		return { seeded: this.chatSeeded(), rooms };
