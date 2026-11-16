@@ -6,7 +6,7 @@ import {
 	SHARED_DRIVE_LIMITS,
 	type SharedDriveRole,
 } from "@soldock/contracts";
-import { log } from "../platform/index.ts";
+import { audit, log } from "../platform/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = { error: { code: "invalid" | "not_found" | "conflict" | "forbidden"; message: string } };
@@ -162,6 +162,9 @@ export interface MoveOutInput {
 	/** The level that an item gets in that folder: 1 at the root of the target. */
 	targetDepth: number;
 	dryRun: boolean;
+	/** The credential kind and the request id of the call, for the audit line of the move. */
+	credential: string;
+	requestId: string;
 }
 
 /** The answer of a move to a different drive. */
@@ -174,8 +177,6 @@ export interface MoveOutResult {
 	keptShares: string[];
 	/** The selected items that are not in a different selected item. */
 	topIds: string[];
-	/** True when this call joined a move that an earlier call started. */
-	joined: boolean;
 }
 
 /** One item of a move, as the source drive sends it to the target drive. */
@@ -486,6 +487,11 @@ const STAGE_BYTES = 512 * 1024;
 const MOVE_MAX_ATTEMPTS = 8;
 /** The time that a drive keeps the new place of a moved item. */
 const MOVED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * The most drives that a `moved` notice follows from one drive to the next, and the most times that it
+ * looks for an item that moved on again.
+ */
+const MOVED_HOPS = 10;
 /** R2 holds the bytes of a file with a neutral type. Nothing serves them from R2 to a browser. */
 const STORED_TYPE = { httpMetadata: { contentType: "application/octet-stream" } };
 
@@ -2057,14 +2063,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		);
 		if (running) {
 			totals = JSON.parse(running.totals_json) as MoveTotals;
-			if (input.dryRun) return { status: "dry_run", ...totals, joined: true };
+			if (input.dryRun) return { status: "dry_run", ...totals };
 			transferId = running.id;
 		} else {
 			const plan = this.planMove(call, input, ids);
 			if ("error" in plan) return plan;
 			const { all, ...rest } = plan;
 			totals = rest;
-			if (input.dryRun) return { status: "dry_run", ...totals, joined: false };
+			if (input.dryRun) return { status: "dry_run", ...totals };
 			transferId = crypto.randomUUID();
 			const now = Date.now();
 			const top = new Set(totals.topIds);
@@ -2091,6 +2097,18 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				}
 				this.bump();
 			});
+			// One audit line for each move that started. This object writes it, because the alarm completes
+			// the move when the call of the Worker stops. A call that joins a move writes no line.
+			audit({
+				op: "drive.move_to_drive",
+				actor: call.actor.principal_id,
+				actorKind: call.actor.kind,
+				credential: input.credential,
+				target: `${call.spaceId}>${input.targetId}:${ids.join(",")}`,
+				...(call.spaceId === call.actor.principal_id ? {} : { space: call.spaceId }),
+				result: "ok",
+				requestId: input.requestId,
+			});
 			// The alarm comes first. If the object stops during the steps, the alarm continues the move.
 			const set = await this.ctx.storage.getAlarm();
 			const guard = now + ALARM_GUARD_MS;
@@ -2100,7 +2118,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		await this.schedule();
 		await this.scheduleTransfers();
 		if (typeof outcome !== "string") return outcome;
-		return { status: outcome, ...totals, joined: running !== null };
+		return { status: outcome, ...totals };
 	}
 
 	/** One run of the moves. A second caller gets the run that is in progress, with the budget of that run. */
@@ -2223,7 +2241,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				Number(cursor || 0),
 				STAGE_BATCH,
 			);
-			// One part has at most STAGE_BYTES, and always one item.
+			// One part has at most STAGE_BYTES, and at least one item.
 			const part: StagedItem[] = [];
 			let bytes = 0;
 			let last = 0;
@@ -2417,10 +2435,21 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		});
 	}
 
-	/** Deletes the records of moves that are older than 30 days. */
+	/**
+	 * Deletes the records of moves that are older than 30 days. A staged item of that age is from a move
+	 * that stopped, and the notice of the source did not arrive. The copies of its bytes go away through
+	 * the outbox (`dropStaged`).
+	 */
 	private forget(now: number): void {
-		this.sql.exec("DELETE FROM moved WHERE moved_at < ?", now - MOVED_TTL_MS);
-		this.sql.exec("DELETE FROM imports WHERE created_at < ?", now - MOVED_TTL_MS);
+		const before = now - MOVED_TTL_MS;
+		this.sql.exec("DELETE FROM moved WHERE moved_at < ?", before);
+		for (const old of this.all<{ transfer_id: string }>(
+			"SELECT DISTINCT transfer_id FROM imports WHERE seq >= 0 AND created_at < ?",
+			before,
+		)) {
+			this.dropStaged(old.transfer_id);
+		}
+		this.sql.exec("DELETE FROM imports WHERE created_at < ?", before);
 	}
 
 	/** Changes the drive of the pointers to moved items. A pointer that the new drive has stays as it is. */
@@ -2465,8 +2494,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 		const refused = this.gate(call, "editor");
 		if (refused) {
-			// The source copies no bytes before each part is here, so this drive has no copy to delete.
-			this.sql.exec("DELETE FROM imports WHERE transfer_id = ?", input.transferId);
+			// The source stops the move. A late repeat of this call can arrive after the source copied bytes,
+			// so this drive also deletes the copies.
+			this.ctx.storage.transactionSync(() => this.dropStaged(input.transferId));
+			await this.schedule();
 			return refused;
 		}
 		// A delete of a key of these versions can wait in the outbox, from the time that the item left
@@ -2503,8 +2534,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * can have copied bytes to the keys of this drive for them. This drive owns the deletes of its keys,
 	 * so they go into its outbox, where a later move of the same item finds them (`stageImport`).
 	 *
-	 * A key stays when this drive holds its item, or when a different move staged its item: a later move
-	 * of the same item then owns the key.
+	 * A key stays when a version of this drive has it, or when a different move staged its version: that
+	 * version owns the key. Each other key of a staged item goes, also when this drive holds the item.
 	 */
 	private dropStaged(transferId: string): void {
 		const spaceId = this.meta("space_id");
@@ -2515,15 +2546,21 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		);
 		for (const part of parts) {
 			for (const item of JSON.parse(part.payload) as StagedItem[]) {
-				if (item.versions.length === 0 || this.row(item.id)) continue;
-				const other = this.one(
-					`SELECT 1 AS found FROM imports i, json_each(i.payload) staged
-					WHERE i.transfer_id != ?1 AND i.seq >= 0 AND json_extract(staged.value, '$.id') = ?2 LIMIT 1`,
-					transferId,
-					item.id,
+				if (item.versions.length === 0) continue;
+				const kept = new Set(
+					this.all<{ id: string }>(
+						`SELECT id FROM versions WHERE item_id = ?2
+						UNION
+						SELECT json_extract(version.value, '$.id') FROM imports i, json_each(i.payload) staged,
+							json_each(staged.value, '$.versions') version
+						WHERE i.transfer_id != ?1 AND i.seq >= 0 AND json_extract(staged.value, '$.id') = ?2`,
+						transferId,
+						item.id,
+					).map((version) => version.id),
 				);
-				if (other) continue;
-				for (const version of item.versions) this.enqueue("blob", blobKeyFor(spaceId, item.id, version.id), {});
+				for (const version of item.versions) {
+					if (!kept.has(version.id)) this.enqueue("blob", blobKeyFor(spaceId, item.id, version.id), {});
+				}
 			}
 		}
 		this.sql.exec("DELETE FROM imports WHERE transfer_id = ? AND seq >= 0", transferId);
@@ -2538,29 +2575,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (this.one("SELECT 1 AS found FROM imports WHERE transfer_id = ? AND seq = -1", input.transferId)) return;
 		this.ctx.storage.transactionSync(() => this.dropStaged(input.transferId));
 		await this.schedule();
-	}
-
-	/**
-	 * In the transaction of a commit: removes the items that came back from the `moved` notices that wait
-	 * in the outbox of this drive. Such a notice is from the time that the items left this drive. If it
-	 * arrived now, it would send the stars and the pointers of a principal to the drive that the items left.
-	 */
-	private dropNotices(itemIds: Set<string>): void {
-		for (const row of this.all<{ id: number; payload: string }>(
-			"SELECT id, payload FROM outbox WHERE kind = 'moved'",
-		)) {
-			const payload = JSON.parse(row.payload) as { to: string; itemIds: string[] };
-			const rest = payload.itemIds.filter((id) => !itemIds.has(id));
-			if (rest.length === payload.itemIds.length) continue;
-			if (rest.length === 0) this.sql.exec("DELETE FROM outbox WHERE id = ?", row.id);
-			else {
-				this.sql.exec(
-					"UPDATE outbox SET payload = ? WHERE id = ?",
-					JSON.stringify({ ...payload, itemIds: rest }),
-					row.id,
-				);
-			}
-		}
 	}
 
 	/**
@@ -2596,7 +2610,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			try {
 				this.ctx.storage.transactionSync(() => {
 					const tops: string[] = [];
-					const imported = new Set<string>();
 					for (const batch of batches) {
 						for (const item of JSON.parse(batch.payload) as StagedItem[]) {
 							if (this.row(item.id)) {
@@ -2605,7 +2618,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 							}
 							this.importItem(call.spaceId, item, input.parentId);
 							if (item.top) tops.push(item.id);
-							imported.add(item.id);
 							count++;
 						}
 					}
@@ -2617,7 +2629,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 						refusal = height === null || height === undefined ? null : this.tooDeep(place.depth + height);
 						if (refusal) throw new Error("import refused");
 					}
-					this.dropNotices(imported);
 					this.sql.exec("DELETE FROM imports WHERE transfer_id = ?", input.transferId);
 					this.sql.exec(
 						"INSERT INTO imports (transfer_id, seq, payload, created_at) VALUES (?, -1, '', ?)",
@@ -2844,26 +2855,111 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * From the outbox of a different drive: items moved from the drive `from` to the drive `to`. The
-	 * stars and the shared pointers of the owner of this drive get the new drive. A second call changes
-	 * nothing.
+	 * From the outbox of a different drive: items left the drive `from`. Each entry of `moves` has the
+	 * drive that holds its items now. The stars and the shared pointers of the owner of this drive for
+	 * the items go from `from` to that drive. A pointer that is not at `from` does not change, so a
+	 * second call changes nothing.
 	 */
-	applyMoved(input: { principalId: string; from: string; to: string; itemIds: string[] }): void {
-		const list = JSON.stringify(input.itemIds);
+	applyMoved(input: { principalId: string; from: string; moves: { to: string; itemIds: string[] }[] }): void {
 		this.ctx.storage.transactionSync(() => {
-			let changed = this.repoint("stars", input.from, input.to, list);
-			if (input.to === input.principalId) {
-				// The items are in the own drive of this principal now. An own item has no shared pointer.
-				changed += this.sql.exec(
-					"DELETE FROM shared_with_me WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))",
-					input.from,
-					list,
-				).rowsWritten;
-			} else {
-				changed += this.repoint("shared_with_me", input.from, input.to, list);
+			let changed = 0;
+			for (const move of input.moves) {
+				// The items are in the drive `from` again. Its pointers are correct.
+				if (move.to === input.from) continue;
+				const list = JSON.stringify(move.itemIds);
+				changed += this.repoint("stars", input.from, move.to, list);
+				if (move.to === input.principalId) {
+					// The items are in the own drive of this principal now. An own item has no shared pointer.
+					changed += this.sql.exec(
+						"DELETE FROM shared_with_me WHERE space_id = ?1 AND item_id IN (SELECT value FROM json_each(?2))",
+						input.from,
+						list,
+					).rowsWritten;
+				} else {
+					changed += this.repoint("shared_with_me", input.from, move.to, list);
+				}
 			}
 			if (changed > 0) this.bump();
 		});
+	}
+
+	/**
+	 * From a different drive: the next drive of each of these items that left this drive (the `moved`
+	 * records, kept 30 days). An item that this drive holds, or that has no record, is not in the answer.
+	 */
+	movedOn(itemIds: string[]): Record<string, string> {
+		const rows = this.all<{ item_id: string; target: string }>(
+			`SELECT m.item_id, m.target FROM moved m WHERE m.item_id IN (SELECT value FROM json_each(?))
+				AND NOT EXISTS (SELECT 1 FROM items i WHERE i.id = m.item_id)`,
+			JSON.stringify(itemIds),
+		);
+		return Object.fromEntries(rows.map((row) => [row.item_id, row.target]));
+	}
+
+	/**
+	 * The drive that holds each item now, as a map from a drive to its items. The search starts at the
+	 * drive `start` and follows the `moved` records from one drive to the next. It stops at a drive that
+	 * holds the item or has no record of it, and after 10 drives.
+	 */
+	private async located(start: string, itemIds: string[]): Promise<Map<string, string[]>> {
+		const spaceId = this.meta("space_id") as string;
+		const found = new Map<string, string[]>();
+		let open = new Map([[start, itemIds]]);
+		for (let hop = 0; open.size > 0; hop++) {
+			const next = new Map<string, string[]>();
+			for (const [drive, ids] of open) {
+				let on: Record<string, string> = {};
+				if (hop < MOVED_HOPS) {
+					on =
+						drive === spaceId
+							? this.movedOn(ids)
+							: await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(drive)).movedOn(ids);
+				}
+				for (const id of ids) {
+					const to = on[id];
+					const group = to === undefined ? found : next;
+					const key = to ?? drive;
+					group.set(key, [...(group.get(key) ?? []), id]);
+				}
+			}
+			open = next;
+		}
+		return found;
+	}
+
+	/**
+	 * Delivers a `moved` notice: items left this drive for the drive `to`. The items can have moved on
+	 * before this notice goes out, so this drive first finds the drive that holds each item now, and
+	 * sends that drive. An item that is in this drive again needs no notice.
+	 *
+	 * The orders of this notice and of the notice of a later move, for an item that went from this drive
+	 * to B and then to C:
+	 *
+	 * - This notice goes out before the item leaves B. It has B. B makes its notice after that, with C.
+	 *   If its notice arrives last, the pointer goes from this drive to B, and then to C.
+	 * - The notice of B arrives first, and finds no pointer at B. This notice then has C, because B made
+	 *   its record of the move before it sent its notice.
+	 * - This notice has B, and the notice of B arrives before it. The pointer then goes to B, where the
+	 *   item is not. Thus, after each delivery, this drive looks for the items again. For an item that
+	 *   left B, it sends the notice of B again, which is safe to repeat. B made its record before its
+	 *   notice, so this drive finds the record.
+	 * - An item that leaves B after the last look has a notice of B that arrives after this notice.
+	 */
+	private async notifyMoved(principalId: string, to: string, itemIds: string[]): Promise<void> {
+		const stub = this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(principalId));
+		let open = [{ from: this.meta("space_id") as string, at: to, itemIds }];
+		for (let round = 0; round < MOVED_HOPS && open.length > 0; round++) {
+			const next: typeof open = [];
+			for (const step of open) {
+				const moves = [...(await this.located(step.at, step.itemIds))]
+					.map(([drive, ids]) => ({ to: drive, itemIds: ids }))
+					.filter((move) => move.to !== step.from);
+				if (moves.length === 0) continue;
+				await stub.applyMoved({ principalId, from: step.from, moves });
+				for (const move of moves) next.push({ from: move.to, at: move.to, itemIds: move.itemIds });
+			}
+			open = next;
+		}
 	}
 
 	/**
@@ -3034,12 +3130,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				return;
 			}
 			case "moved":
-				await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(row.target)).applyMoved({
-					principalId: row.target,
-					from: spaceId,
-					to: payload.to as string,
-					itemIds: payload.itemIds as string[],
-				});
+				await this.notifyMoved(row.target, payload.to as string, payload.itemIds as string[]);
 				return;
 			case "cancel":
 				await this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(row.target)).cancelImport({

@@ -186,8 +186,8 @@ count for the drive. No principal is the owner of an item.
   trash. The members go, and the index gets `deleted_at`. No operation opens the drive after that.
 - Known limit: the rows of a deleted principal (`directory.delete_principal`) stay in the `members`
   table and in the index. That principal cannot authenticate, so it has no access. The member lists
-  and the member count leave it out. The count of managers and the limit of 100 members also leave it out. When each manager of
-  a drive is deleted, an owner or an admin adds a new manager.
+  and the member count leave it out. The count of managers and the limit of 100 members also leave
+  it out. When each manager of a drive is deleted, an owner or an admin adds a new manager.
 - Known limit: an agent cannot leave a shared drive, because an agent cannot call the member
   operations. A manager removes it.
 
@@ -252,7 +252,7 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
    `transfer_items` row for each item of the move. It sets an alarm.
 2. **Stage** (`stage`). The source sends the items to the target in parts (`stageImport`): the
    rows, the versions and the grants. One part has at most 25 items and approximately 512 KiB,
-   and always one item. The target keeps each part in one row of its `imports` table, and a row
+   and at least one item. The target keeps each part in one row of its `imports` table, and a row
    has at most 2 MB. Its own tables do not change. The text for the search index is not in a
    part, because the text of one doc can have 100,000 characters.
 3. **Copy** (`copy`). The source copies the bytes of each version to its key in the target (get,
@@ -279,8 +279,12 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
 - The target owns the deletes of its keys. When the target refuses the commit, it deletes the
   staged items, and puts a `blob` row in its own outbox for each copy. When the source stops a
   move, it puts a `cancel` row in its outbox, and the target then does the same (`cancelImport`).
-  The target keeps a key when it holds the item of that key, or when a different move staged that
-  item. Thus a late `cancel` cannot delete the bytes of an item that came to the target later.
+  The target also does the same when it refuses a part in the stage step.
+- The target keeps a key when one of its versions has that key, or when a different move staged
+  the version of that key. Thus a late `cancel` cannot delete the bytes of an item that came to the
+  target later. It deletes the copy of a version that the target does not have.
+- Staged items that are older than 30 days are from a move that stopped. The target deletes them
+  and the copies of their bytes, with the same rule, when it finishes a move and in its alarm.
 - The call runs the steps and answers `done`. It answers `moving` when the steps are not complete
   after 20 seconds, after 400 calls to R2 and to the target, or after a step fails. One call has
   one budget for all its runs. The alarm of the source then continues the move, also after the
@@ -290,9 +294,10 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
   commit, the source tries the move until it is complete.
 - A second call with the same input, during the move, joins that move and starts no new one. After
   the move, such a call gets `not_found`, with the new drive in the message.
-- One audit line records the move: the source, the target and the item ids. The call that starts
-  the move writes the line. With the status `moving`, the target of the line starts with
-  `started:`. A call that joins a move writes no line.
+- One audit line records each move that starts: the actor, the source, the target and the item
+  ids. The source `DriveSpaceDO` writes the line when it takes the lock. Thus a move that the alarm
+  completes has its line, also when the call of the Worker stops. A call that joins a move writes
+  no line. The line does not show that the move completed.
 
 #### An item of a move
 
@@ -318,9 +323,14 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
   `shared_with_me` rows for the moved items the new drive (`applyMoved`). A second delivery
   changes nothing. The `share` rows of the target make the same pointers, so the order of the two
   does not matter.
-- An item can come back to a drive while the `moved` notice of its first move waits in the outbox
-  of that drive. The commit removes the item from each such notice. Thus a late notice does not
-  send the stars and the pointers of a principal to the drive that the item left.
+- An item can move again while the `moved` notice of its first move waits in the outbox of the
+  source. Thus the source does not send the target of the move. Before it sends the notice, it asks
+  the target where each item is now (`movedOn`), and follows the `moved` rows from drive to drive.
+  It stops at a drive that holds the item or has no row for it, and after 10 drives. The notice
+  gives the pointers that drive. An item that is in the source again gets no notice.
+- After the delivery, the source asks again. For an item that left the drive of the notice in that
+  time, it sends the notice of that drive. Thus a notice of a later move that arrived first cannot
+  leave a pointer at a drive that the item left.
 - The key of an R2 object has the drive in it, so an item that comes back to a drive gets its old
   keys again. A `blob` row for such a key can still wait in the outbox of that drive. Each `blob`
   row of a drive has a key of that drive. The target deletes its rows for the keys of the items
@@ -339,8 +349,11 @@ The source `DriveSpaceDO` runs the move. The `transfers` row of the move has the
 - The move of a file with many versions uses many calls to R2. One run copies at most 200
   versions. The alarm runs again immediately, so such a move answers `moving`.
 - A version without bytes in R2 moves without bytes. The move logs it as an error.
-- A `cancel` row that fails 8 times is dropped. The staged items then stay in the target for 30
-  days, and the copies of their bytes stay in R2 without an owner.
+- A `cancel` row that fails 8 times is dropped. The staged items and the copies of their bytes
+  then stay in the target for 30 days. The target deletes them in its first alarm after that time.
+  A drive with no later change has no alarm, and keeps them.
+- A `moved` notice follows an item through at most 10 drives, and only while each drive has its
+  `moved` row (30 days). After that, the pointers go to the last drive that the notice found.
 - One item with many thousands of grants can make a staged row larger than 2 MB. Such a move fails
   in the stage step and stops after 8 attempts. The items stay in the source.
 
@@ -362,7 +375,7 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | `unshare` | Removes that pointer | Yes |
 | `blob` | Deletes one R2 object | Yes |
 | `document` | Deletes the content of a doc or a sheet (`DocumentDO.destroy()`) | Yes |
-| `moved` | Gives the stars and the shared pointers of a principal the new drive of moved items (`applyMoved`) | Yes |
+| `moved` | Gives the stars and the shared pointers of a principal the drive that holds the moved items now (`applyMoved`) | Yes |
 | `cancel` | Tells the target drive of a stopped move to delete the staged items and the copies of their bytes (`cancelImport`) | Yes |
 
 - The alarm delivers the rows in order. A failed row stops the drain until its next attempt
@@ -422,7 +435,7 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |
 | Moves to a different drive that are not complete | `DriveSpaceDO` tables `transfers` and `transfer_items`, in the source drive | The target, the folder, the actor, the totals, the next step, and each item of the move. Deleted when the move is complete or stopped |
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |
-| Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source, without the text for the search index. Deleted at the commit, at a refusal, or when the source stops the move. The record of a commit (`seq` -1) is kept 30 days |
+| Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source, without the text for the search index. Deleted at the commit, at a refusal, when the source stops the move, or after 30 days. The record of a commit (`seq` -1) is kept 30 days |
 | Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0011_shared_drives.sql` |
 | File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key |
 

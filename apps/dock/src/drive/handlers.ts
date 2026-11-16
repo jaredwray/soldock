@@ -363,19 +363,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				parentId,
 				targetDepth: place.depth,
 				dryRun: input.dry_run,
+				// The source drive writes the audit line when it starts the move. The alarm can complete the
+				// move after this call stops, so a line from here could be lost.
+				credential: call.caller.credential,
+				requestId: call.requestId,
 			}),
 		);
-		// One line for one move: a call that joins a move writes no second line. With the status `moving`,
-		// the line records that the move started.
-		if (moved.status !== "dry_run" && !moved.joined) {
-			const state = moved.status === "moving" ? "started:" : "";
-			auditOk(
-				call,
-				source,
-				"drive.move_to_drive",
-				`${state}${source.spaceId}>${target.spaceId}:${input.item_ids.join(",")}`,
-			);
-		}
 		const items =
 			moved.status === "done" ? await target.space.getItems(target.ctx, moved.topIds, { includeTrashed: false }) : [];
 		return {

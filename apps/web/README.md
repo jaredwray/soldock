@@ -455,6 +455,8 @@ MCP clients. The app has no UI-only path.
   - The editors of Docs and Sheets go back to the folder of the item in the shared drive for a
     member (`drive.get_about` with `space_id` gives the role only to a member). A person with only a
     direct share goes back to Shared with me, also while the role loads.
+  - Known limit: `useSharedDriveAbout` gives no error to the header. When `drive.get_about` fails
+    for a member, the editor also goes back to Shared with me.
 - **Move to…** is in the More menu of an item and in the toolbar of a selection
   ([`ItemDialogs.tsx`](src/features/drive/ItemDialogs.tsx)).
   - The dialog starts in the drive that holds the items. **Drives** lists each drive that can get
