@@ -1,6 +1,14 @@
 import { Emoji } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { EMOJI, emojiName, findEmoji } from "../src/features/chat/emoji.ts";
+import {
+	EMOJI,
+	emojiCode,
+	emojiName,
+	emojiOfCode,
+	emojiQueryAt,
+	emojiSuggestions,
+	findEmoji,
+} from "../src/features/chat/emoji.ts";
 
 describe("the emoji of the reaction picker", () => {
 	it("finds an emoji by its name first, then by its other words", () => {
@@ -19,5 +27,37 @@ describe("the emoji of the reaction picker", () => {
 		for (const one of emoji) expect(Emoji.safeParse(one).success, one).toBe(true);
 		expect(emojiName("👍")).toBe("thumbs up");
 		expect(emojiName("🦄")).toBe("🦄");
+	});
+});
+
+describe("the emoji codes of the message box", () => {
+	// A person types `:tada:` or `:thumbs_up:`, as in other chat apps.
+	it("find an emoji by its code or a word, with the first emoji of the list for a shared word", () => {
+		expect(emojiCode(EMOJI.find((choice) => choice.emoji === "👍") as (typeof EMOJI)[number])).toBe("thumbs_up");
+		expect(emojiCode(EMOJI.find((choice) => choice.emoji === "🙈") as (typeof EMOJI)[number])).toBe(
+			"see_no_evil_monkey",
+		);
+		expect(emojiOfCode("thumbs_up")?.emoji).toBe("👍");
+		expect(emojiOfCode("TADA")?.emoji).toBe("🎉");
+		// "+1" is a word of 👍 and of ➕. The first emoji of the list wins.
+		expect(emojiOfCode("+1")?.emoji).toBe("👍");
+		expect(emojiOfCode("no_such_emoji")).toBeNull();
+		// Every code of the list finds its emoji, and a person can type it after ":".
+		for (const choice of EMOJI) {
+			expect(emojiOfCode(emojiCode(choice))?.emoji, choice.name).toBe(choice.emoji);
+			expect(emojiQueryAt(`:${emojiCode(choice)}`)?.query, choice.name).toBe(emojiCode(choice));
+		}
+	});
+
+	// A ":" in a time, a word or a link must not open the list.
+	it("start at a ':' after a space or at the start, with two characters or more", () => {
+		expect(emojiQueryAt("ship it :ta")).toEqual({ start: 8, query: "ta" });
+		expect(emojiQueryAt(":+1")).toEqual({ start: 0, query: "+1" });
+		for (const text of ["at 10:30", "note:ab", "see https://ex", "a :t", "a ::ta", "a :ta b"]) {
+			expect(emojiQueryAt(text), text).toBeNull();
+		}
+		// A "_" is a space of the name. The list has eight emoji at most.
+		expect(emojiSuggestions("thumbs_u").map((choice) => choice.emoji)).toEqual(["👍"]);
+		expect(emojiSuggestions("e").length).toBe(8);
 	});
 });

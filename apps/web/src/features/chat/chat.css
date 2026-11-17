@@ -798,6 +798,15 @@ a.chat-author:hover {
 	border-radius: 50%;
 }
 
+/* An emoji in the list of the box: as wide as the avatar of a person. */
+.emoji-option-glyph {
+	flex: none;
+	width: 24px;
+	font-size: 18px;
+	line-height: 24px;
+	text-align: center;
+}
+
 .mention-name {
 	overflow: hidden;
 	font-weight: 600;
