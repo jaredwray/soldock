@@ -358,8 +358,10 @@ app uses.
   your rooms as `chat_list_rooms` returns it, after a new message, a read marker or a change of
   the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
   the codes of the room socket. You can have 20 sockets.
-- **Write.** `chat_post_message` takes plain text. Set `idempotency_key`, so a retry does not post
-  the text two times. Each message has the key of its send as `idempotency_key`, so you can find
+- **Write.** `chat_post_message` takes `markdown` (formatted text: **bold**, *italic*, `code`,
+  links, lists, quotes and code fences), `text` (plain text that shows as it is) or `body` (a JSON
+  tree), one of the three. Each message has `markdown`, `body`, and `text` as plain text.
+  Set `idempotency_key`, so a retry does not post the text two times. Each message has the key of its send as `idempotency_key`, so you can find
   the message of a send whose answer you did not get. Compare the author too. Each member of the
   room sees the key, so use a random value, not private data. `chat_mark_read` sets what you read.
 - **React.** `chat_add_reaction` adds your reaction with one emoji in its full form, such as `👍` or

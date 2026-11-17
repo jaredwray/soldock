@@ -4,6 +4,9 @@ export {
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	CHAT_WEBHOOK_EVENT_TYPE,
+	ChatBody,
+	type ChatBodyBlock,
+	type ChatBodyInline,
 	ChatMember,
 	ChatMessage,
 	ChatReaction,
@@ -27,7 +30,7 @@ export {
 	OutboundPolicy,
 	Principal,
 } from "./directory.ts";
-export { DOC_LIMITS, type DocBlock, DocContent, type DocInline, type DocMark } from "./docs.ts";
+export { DOC_LIMITS, type DocBlock, DocContent, type DocInline, type DocMark, Href } from "./docs.ts";
 export { MailDomain } from "./domains.ts";
 export {
 	Actor,

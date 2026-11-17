@@ -191,7 +191,7 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 	if (!outbox) {
 		outbox = createOutbox({
 			post: async (text, key) =>
-				(await api.call("chat.post_message", { room_id: roomId, text, idempotency_key: key })).message,
+				(await api.call("chat.post_message", { room_id: roomId, markdown: text, idempotency_key: key })).message,
 			describe: errorMessage,
 			active: () => currentAccount() === ownId,
 		});

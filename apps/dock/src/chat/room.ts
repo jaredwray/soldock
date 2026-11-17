@@ -3,6 +3,7 @@ import {
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
+	type ChatBody,
 	type ChatMessage,
 	type ChatReaction,
 	type ChatSocketEvent,
@@ -19,6 +20,7 @@ import {
 } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
+import { bodyMarkdown, type MessageContent, textBody } from "./body.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -79,6 +81,8 @@ export interface MessageRecord {
 	/** The idempotency key of the send of the message, as its author gave it, or null. */
 	idempotency_key: string | null;
 	reactions: ChatReaction[];
+	/** The body. A message from before the bodies, and a deleted message, have the body of their text. */
+	body: ChatBody;
 }
 
 /**
@@ -155,6 +159,7 @@ interface MessageRow extends Row {
 	deleted_at: number | null;
 	version: number;
 	idempotency_key: string | null;
+	body_json: string | null;
 }
 
 interface OutboxRow extends Row {
@@ -238,6 +243,8 @@ const MIGRATIONS: string[][] = [
 			PRIMARY KEY (message_id, emoji, principal_id)
 		) WITHOUT ROWID`,
 	],
+	// The body of a message, as the JSON of `ChatBody`. A message from before has null: its body is its text.
+	["ALTER TABLE messages ADD COLUMN body_json TEXT"],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -294,6 +301,7 @@ function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): 
 		version: row.version,
 		idempotency_key: row.idempotency_key,
 		reactions,
+		body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
 	};
 }
 
@@ -305,6 +313,7 @@ function iso(ms: number): string {
 export function messageOutput(record: MessageRecord): ChatMessage {
 	return {
 		...record,
+		markdown: record.deleted ? "" : bodyMarkdown(record.body),
 		created_at: iso(record.created_at),
 		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
@@ -909,7 +918,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		input: {
 			id: string;
-			text: string;
+			content: MessageContent;
 			/** The key of the room for a retry: the caller and the key of the client. */
 			idempotency?: { key: string; requestHash: string } | undefined;
 			/** The key of the client, as the caller gave it. The message keeps it. */
@@ -942,12 +951,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const version = opened.room.version + 1;
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
-					`INSERT INTO messages (id, author_id, author_json, text, created_at, version, idempotency_key)
-				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+					`INSERT INTO messages (id, author_id, author_json, text, body_json, created_at, version, idempotency_key)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
-					input.text,
+					input.content.text,
+					JSON.stringify(input.content.body),
 					now,
 					version,
 					input.clientKey,
@@ -984,11 +994,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return posted;
 	}
 
-	/** Replaces the text of a message. Only its author can do this. */
+	/** Replaces the content of a message. Only its author can do this. */
 	async editMessage(
 		call: RoomCall,
 		messageId: string,
-		text: string,
+		content: MessageContent,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		// Hold other room calls until the new version and the webhook event are stored.
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
@@ -1002,15 +1012,18 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
-			if (row.text === text) return { message: this.messageRecord(room.room_id, row), changed: false as const };
+			const bodyJson = JSON.stringify(content.body);
+			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
+			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };
 			const limited = this.spendAllowance(call, Date.now());
 			if (limited) return limited;
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
-					"UPDATE messages SET text = ?, edited_at = ?, version = ? WHERE id = ?",
-					text,
+					"UPDATE messages SET text = ?, body_json = ?, edited_at = ?, version = ? WHERE id = ?",
+					content.text,
+					bodyJson,
 					now,
 					version,
 					messageId,
@@ -1057,7 +1070,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
 					// The key goes with the text: an author can make a key from the content of the message.
-					"UPDATE messages SET text = '', idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
+					"UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
 					now,
 					version,
 					messageId,

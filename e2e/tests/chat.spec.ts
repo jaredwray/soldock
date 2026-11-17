@@ -7,6 +7,7 @@ import {
 	newest,
 	openRoom,
 	post,
+	postMarkdown,
 	react,
 	rowsWithText,
 	signIn,
@@ -435,4 +436,51 @@ test("a reaction from the picker shows on the message, a reaction of a different
 		expect.objectContaining({ emoji: "👍", count: 1 }),
 		expect.objectContaining({ emoji: "🎉", count: 1 }),
 	]);
+});
+
+// Layer 4 (jaredwray/soldock#73): rich text.
+test("a message shows its formats, shows HTML as text, and the box sends Markdown that an edit keeps", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("Format");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	await postMarkdown(
+		tomasz,
+		roomId,
+		"Ship **today**, *carefully*, with `make ship`.\n\n- [notes](https://example.com/notes)\n- ~~old plan~~\n\n> quoted",
+	);
+	await post(tomasz, roomId, "<script>alert(1)</script> <b>not bold</b>");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+
+	const formatted = page.locator(".chat-message").filter({ hasText: "Ship today" });
+	await expect(formatted.locator("strong")).toHaveText("today");
+	await expect(formatted.locator("em")).toHaveText("carefully");
+	await expect(formatted.locator("code")).toHaveText("make ship");
+	await expect(formatted.locator("s")).toHaveText("old plan");
+	await expect(formatted.locator("blockquote")).toHaveText("quoted");
+	const link = formatted.getByRole("link", { name: "notes" });
+	await expect(link).toHaveAttribute("href", "https://example.com/notes");
+	await expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");
+	// Plain text is text: no element comes from it.
+	const raw = page.locator(".chat-message").filter({ hasText: "not bold" });
+	await expect(raw.locator(".chat-text")).toContainText("<script>alert(1)</script> <b>not bold</b>");
+	await expect(raw.locator(".chat-text b, .chat-text script")).toHaveCount(0);
+
+	// The box sends Markdown. An edit opens with the Markdown of the message, and keeps its format.
+	await composer(page, name).fill("I can do **that**");
+	await composer(page, name).press("Enter");
+	const mine = page.locator(".chat-message").filter({ hasText: "I can do that" });
+	await expect(mine.locator("strong")).toHaveText("that");
+	await mine.hover();
+	await mine.getByRole("button", { name: /^Change your message/ }).click();
+	const box = page.getByRole("textbox", { name: "New text of the message" });
+	await expect(box).toHaveValue("I can do **that**");
+	await box.fill("I can do **that** *now*");
+	await page.getByRole("button", { name: "Save" }).click();
+	const edited = page.locator(".chat-message").filter({ hasText: "I can do that now" });
+	await expect(edited.locator("em")).toHaveText("now");
+	await expect(edited.locator("strong")).toHaveText("that");
 });

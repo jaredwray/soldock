@@ -12,8 +12,8 @@ export const DOC_LIMITS = {
 	hrefChars: 2048,
 } as const;
 
-/** An absolute http, https or mailto link. No other scheme can go into a doc. */
-const Href = z
+/** An absolute http, https or mailto link. No other scheme can go into a doc, or into a chat message. */
+export const Href = z
 	.string()
 	.max(DOC_LIMITS.hrefChars)
 	.regex(/^(?:https?:\/\/[^\s/?#]|mailto:[^\s])[^\s]*$/i, "must be an http, https or mailto link");

@@ -831,7 +831,13 @@ MCP clients. The app has no UI-only path.
     and the name. A screen reader still gets the author and the time.
   - The first message of each day has the date above it, in a pill at the center of a line. The
     day is the day of the device.
-  - The text of a message shows as plain text, with its line breaks.
+  - The body of a message shows its formats (`MessageBody.tsx`): paragraphs, line breaks, **bold**,
+    *italic*, ~~strike~~, `code`, links, bulleted and numbered lists, quotes and code blocks. A
+    message without a body (from an older server, or an edit that waits for the server) shows its
+    text as plain text, with its line breaks.
+  - The box sends its text as Markdown, so `**bold**` and `*italic*` show as formats. An edit opens
+    with the Markdown of the message, and saves Markdown. A message that waits for the server shows
+    its Markdown as text until the server gives its body. A toolbar for the formats is a later step.
   - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
     `@captain`. The handle is the part of the address before the `@`. When two principals have the
     same part, on two mail domains, each of them has the full address as its handle, for example
@@ -1177,9 +1183,14 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
-- **A chat message is text.** The app puts the text of a message into text nodes. It never makes
-  HTML from it. The only link is a mention of a principal in the directory: the app makes the path
-  of the profile from the id of that principal, never from the text. A URL in a message stays text.
+- **A chat message is data, never HTML.** The body of a message is a tree of nodes, and the app
+  makes one React element for each node of the schema (`MessageBody.tsx`). The text of each node is
+  a text node. A node that the schema does not have shows nothing. It never uses `innerHTML`.
+  - A link comes from a `link` mark, whose URL the server checks: http, https or mailto only. It
+    opens in a new tab with `rel="noopener noreferrer nofollow"`.
+  - A mention of a principal in the directory is a link to the profile: the app makes the path from
+    the id of that principal, never from the text. A mention in code stays code.
+  - A URL in plain text stays text.
 - **External content is marked.** External mail shows the "External sender" notice. The server
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and
