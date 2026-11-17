@@ -250,7 +250,11 @@ export function ChatComposer({
 				// Safari gives the key that ends a text composition the code 229, without `isComposing`.
 				const composing = event.isComposing || event.keyCode === 229;
 				const current = list.current;
-				const action = mentionKeyAction(event.key, event.shiftKey, composing, current);
+				// Ctrl+Enter (⌘Enter) always sends, also while the list is open.
+				const sends = event.key === "Enter" && (event.ctrlKey || event.metaKey);
+				const action = sends
+					? ({ kind: "none" } as const)
+					: mentionKeyAction(event.key, event.shiftKey, composing, current);
 				if (action.kind === "select") setSelected({ query: current.query, index: action.index });
 				else if (action.kind === "take") current.choose(action.index);
 				else if (action.kind === "close") setMentionOpen(false);
@@ -258,7 +262,9 @@ export function ChatComposer({
 					callbacks.current.onCancel();
 					return true;
 				}
-				return action.kind !== "none";
+				// ProseMirror sends no key of a text composition here. If one comes, the input method has
+				// it, so the keys of the box (Enter sends) do not run.
+				return composing || action.kind !== "none";
 			},
 			handleDOMEvents: {
 				blur: () => {

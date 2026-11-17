@@ -573,6 +573,13 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect(box).toHaveText(/^thanks @tomasz\s$/);
 	await box.pressSequentially("for the review");
 	await box.press("Enter");
+
+	// Ctrl+Enter sends, also while the list is open.
+	await box.pressSequentially("ping @to");
+	await expect(page.getByRole("option", { name: /Tomasz/ })).toBeVisible();
+	await box.press("Control+Enter");
+	await expect(page.locator(".chat-message").filter({ hasText: "ping @to" })).toBeVisible();
+	await expect(box).toHaveText("");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
 
