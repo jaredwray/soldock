@@ -748,8 +748,10 @@ describe("a room object", () => {
 			directory = readable;
 			const failing = {
 				prepare: (query: string) => readable.prepare(query),
-				batch: async () => {
-					throw new Error("D1 is not available");
+				// The webhook copy is one batch of seven statements. The index write is shorter.
+				batch: async (statements: D1PreparedStatement[]) => {
+					if (statements.length < 7) throw new Error("D1 is not available");
+					return readable.batch(statements);
 				},
 			} as unknown as D1Database;
 			target.env = { ...target.env, DIRECTORY: failing };
@@ -784,9 +786,12 @@ describe("a room object", () => {
 			const directory = target.env.DIRECTORY;
 			const slow = {
 				prepare: (query: string) => directory.prepare(query),
+				// The webhook copy is one batch of seven statements. The index write is shorter.
 				batch: async (statements: D1PreparedStatement[]) => {
-					gate.entered = true;
-					while (!gate.released) await scheduler.wait(5);
+					if (statements.length < 7) {
+						gate.entered = true;
+						while (!gate.released) await scheduler.wait(5);
+					}
 					return directory.batch(statements);
 				},
 			} as unknown as D1Database;

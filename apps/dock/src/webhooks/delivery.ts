@@ -353,15 +353,8 @@ async function checkDelivery(
 	if (memberIds !== undefined) {
 		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
 	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
-		const member = await db
-			.prepare(
-				`SELECT 1 AS found FROM shared_drive_members m
-				JOIN shared_drives d ON d.id = m.drive_id
-				WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
-			)
-			.bind(target, creator.id)
-			.first();
-		if (!member) return { action: "disable_subscription", reason: "access_lost" };
+		// A shared drive event stores its members. The directory index can be behind, so a job with no list sends nothing.
+		return { action: "skip" };
 	} else if (target !== creator.id) {
 		if (subscription.domain === "mail" && isTeamMailboxId(target)) {
 			if (!(await isTeamMailboxMember(db, target, creator.id))) {

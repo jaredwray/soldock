@@ -430,6 +430,7 @@ A star sends nothing. A doc or a sheet uses `drive.item.updated`.
 The drive stores events only after the first subscription.
 The object stores the event in `webhook_outbox` in the same transaction as the change.
 A shared drive event also stores the member ids from that moment.
+Delivery uses that list. A job with no list sends nothing.
 A permanent delete of a folder sends one `drive.item.deleted` for the folder.
 The alarm sends the event to `soldock-webhooks`.
 A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.
