@@ -80,13 +80,16 @@ const codeLine: Command = (state, dispatch) => {
 	return true;
 };
 
-/** Shift+Enter on an empty line of a quote: the line leaves the quote. */
-const leaveQuote: Command = (state, dispatch) => {
+/**
+ * Shift+Enter on an empty line of a list item or a quote: the line leaves the list or the quote.
+ * `splitListItem` gives an empty item of the outer list to this command.
+ */
+const leaveBlock: Command = (state, dispatch) => {
 	const { $head, empty } = state.selection;
 	if (!empty || $head.parent.content.size > 0) return false;
 	for (let depth = $head.depth - 1; depth > 0; depth--) {
 		const type = $head.node(depth).type;
-		if (type === nodes.list_item) return false;
+		if (type === nodes.list_item) return liftListItem(nodes.list_item)(state, dispatch);
 		if (type === nodes.blockquote) return liftEmptyBlock(state, dispatch);
 	}
 	return false;
@@ -96,7 +99,7 @@ const leaveQuote: Command = (state, dispatch) => {
  * Shift+Enter: a new line. In a list, a new item (an empty item leaves the list). In a code block, a
  * new line of code. On an empty line of a quote, the line leaves the quote.
  */
-export const newLine: Command = chainCommands(codeLine, splitListItem(nodes.list_item), leaveQuote, splitBlock);
+export const newLine: Command = chainCommands(codeLine, splitListItem(nodes.list_item), leaveBlock, splitBlock);
 
 /**
  * The keys of the box. Enter sends (`submit`), and Shift+Enter makes a new line. `openLink` opens the

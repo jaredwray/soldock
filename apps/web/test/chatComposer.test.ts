@@ -167,7 +167,7 @@ describe("the commands of the box", () => {
 	});
 
 	// Shift+Enter makes a new line. The person must be able to leave a code block and a quote with it.
-	it("makes a new line, leaves a code block after an empty line, and leaves a quote from an empty line", () => {
+	it("makes a new line or a new item, and leaves a code block, a quote or a list from an empty line", () => {
 		const code = stateAt(doc(nodes.code_block.create(null, chatSchema.text("a"))));
 		const second = run(code, newLine);
 		expect(second.doc.child(0).textContent).toBe("a\n");
@@ -184,6 +184,15 @@ describe("the commands of the box", () => {
 
 		const line = run(stateAt(doc(p(t("one")))), newLine);
 		expect(line.doc.childCount).toBe(2);
+
+		// In a list, a new item. On the empty item, the line leaves the list.
+		const list = stateAt(doc(nodes.bullet_list.create(null, [nodes.list_item.create(null, p(t("one")))])));
+		const item = run(list, newLine);
+		expect(item.doc.child(0).childCount).toBe(2);
+		const after = run(item, newLine);
+		expect(after.doc.child(0).childCount).toBe(1);
+		expect(after.doc.child(1).type).toBe(nodes.paragraph);
+		expect(after.selection.$head.parent).toBe(after.doc.child(1));
 	});
 });
 
