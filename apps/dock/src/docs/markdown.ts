@@ -341,8 +341,11 @@ function trailing(line: string, ch: string): number {
 	return count;
 }
 
-/** The text of the lines of a paragraph. A line that ends with two spaces or a backslash ends with a hard break. */
-function paragraphText(lines: string[]): string {
+/**
+ * The text of the lines of a paragraph. A line that ends with two spaces or a backslash ends with a hard break.
+ * With `breaks`, each line ends with a hard break, as in a chat.
+ */
+function paragraphText(lines: string[], breaks: boolean): string {
 	let text = "";
 	lines.forEach((line, index) => {
 		const last = index === lines.length - 1;
@@ -351,17 +354,20 @@ function paragraphText(lines: string[]): string {
 		const hard = cut > 0;
 		const body = (hard && !last ? line.slice(0, line.length - cut) : line).trim();
 		text += body;
-		if (!last) text += hard ? "\n" : " ";
+		if (!last) text += hard || breaks ? "\n" : " ";
 	});
 	return text;
 }
 
-function paragraph(lines: string[]): DocBlock {
-	return withContent({ type: "paragraph" as const }, parseInline(paragraphText(lines)));
+function paragraph(lines: string[], breaks: boolean): DocBlock {
+	return withContent({ type: "paragraph" as const }, parseInline(paragraphText(lines, breaks)));
 }
 
-/** `depth` is the level of the blocks that these lines make. Blocks over the limit become paragraphs. */
-function parseBlocks(lines: string[], depth: number): DocBlock[] {
+/**
+ * `depth` is the level of the blocks that these lines make. Blocks over the limit become paragraphs. With
+ * `breaks`, each new line in a paragraph is a hard break.
+ */
+function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[] {
 	const blocks: DocBlock[] = [];
 	let i = 0;
 	while (i < lines.length) {
@@ -401,7 +407,7 @@ function parseBlocks(lines: string[], depth: number): DocBlock[] {
 			while (i < lines.length && QUOTE.test(lines[i] as string)) {
 				inner.push((lines[i++] as string).replace(/^ {0,3}> ?/, ""));
 			}
-			const content = parseBlocks(inner, depth + 1);
+			const content = parseBlocks(inner, depth + 1, breaks);
 			blocks.push({ type: "blockquote", content: content.length > 0 ? content : [{ type: "paragraph" }] });
 			continue;
 		}
@@ -435,7 +441,7 @@ function parseBlocks(lines: string[], depth: number): DocBlock[] {
 						break;
 					}
 				}
-				const content = parseBlocks(itemLines, depth + 2);
+				const content = parseBlocks(itemLines, depth + 2, breaks);
 				items.push({ type: "list_item", content: content.length > 0 ? content : [{ type: "paragraph" }] });
 				// Empty lines between two items of the same list do not end the list.
 				let j = i;
@@ -455,14 +461,18 @@ function parseBlocks(lines: string[], depth: number): DocBlock[] {
 		while (i < lines.length && !isBlank(lines[i] as string) && !startsBlock(lines[i] as string)) {
 			text.push(lines[i++] as string);
 		}
-		blocks.push(paragraph(text));
+		blocks.push(paragraph(text, breaks));
 	}
 	return blocks;
 }
 
-/** Reads Markdown into the content of a doc. Text that is not Markdown of this subset stays text. */
-export function markdownToDoc(markdown: string): DocContent {
-	const blocks = parseBlocks(markdown.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n"), 1);
+/**
+ * Reads Markdown into the content of a doc. Text that is not Markdown of this subset stays text. With
+ * `lineBreaks`, each new line in a paragraph is a hard break, as in a chat. Without it, Markdown joins the lines.
+ */
+export function markdownToDoc(markdown: string, options: { lineBreaks?: boolean } = {}): DocContent {
+	const lines = markdown.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
+	const blocks = parseBlocks(lines, 1, options.lineBreaks === true);
 	return { type: "doc", content: blocks.length > 0 ? blocks : [{ type: "paragraph" }] };
 }
 

@@ -930,6 +930,17 @@ describe("rich text", () => {
 		});
 		expect(await blocks("# Heading\nparagraph")).toEqual([bold("Heading"), text("paragraph")]);
 		expect(await blocks("a\n\n---\nb")).toEqual([text("a"), text("b")]);
+		// The lines of a quote are lines too. A line without the `>` or the indent of an item ends the block.
+		const lines = {
+			type: "paragraph",
+			content: [{ type: "text", text: "a" }, { type: "hard_break" }, { type: "text", text: "b" }],
+		};
+		expect(await blocks("> a\n> b")).toEqual([{ type: "blockquote", content: [lines] }]);
+		expect(await blocks("> a\nb")).toEqual([{ type: "blockquote", content: [text("a")] }, text("b")]);
+		expect(await blocks("- a\n  b\nc")).toEqual([
+			{ type: "bullet_list", content: [{ type: "list_item", content: [lines] }] },
+			text("c"),
+		]);
 	});
 
 	it("shows plain text as it is, with its line breaks and its Markdown characters", async () => {

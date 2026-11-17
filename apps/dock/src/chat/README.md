@@ -105,9 +105,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A call sends the content in one of three forms, never two (`chat.post_message`,
   `chat.edit_message`):
   - `markdown`: the server reads it with the Markdown code of [`docs`](../docs/README.md), as a chat
-    writes it: a new line is a line break (`chatLineBreaks`), out of code fences, after no heading
-    or rule, and before no line that starts a new block. A fence ends at a fence of the same
-    character with at least the same length. A heading becomes a paragraph in bold, a rule goes away, and underline
+    writes it: each new line in a paragraph is a line break (the `lineBreaks` option of
+    `markdownToDoc`), also in a quote and in a list item. A line that ends a quote or a list item
+    without its `>` or its indent starts a new paragraph. A heading becomes a paragraph in bold, a rule goes away, and underline
     goes away: a message has none. An image becomes its `!` and a link to it.
   - `text`: plain text. It shows as it is: one paragraph, with a line break for each new line. New
     lines at the end go away. Its Markdown keeps its characters as text (with escapes), so it reads

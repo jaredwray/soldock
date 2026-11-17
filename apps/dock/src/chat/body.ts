@@ -148,49 +148,6 @@ function blockCount(list: readonly ChatBodyBlock[]): number {
 }
 
 /**
- * A line that starts a new block in Markdown: a list item or a quote at each indent (a nested list), or
- * a heading, a fence or a rule. `markdownToDoc` reads no underline of a heading.
- */
-const BLOCK_START =
-	/^[ \t]*(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>)|^ {0,3}(?:#{1,6}(?:[ \t]|$)|```|~~~|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
-/** A line that is a full block: a heading or a rule. No line of a paragraph follows it. */
-const LINE_BLOCK = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
-/** The line that opens a code fence, as `markdownToDoc` reads it. */
-const FENCE_OPEN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
-
-/**
- * Markdown as a chat writes it: a new line is a line break, as in each chat app. Markdown itself joins
- * two lines of a paragraph into one line, so this adds a hard break (a backslash) at the end of each
- * line that a line of the same paragraph follows. Lines in a code fence stay as they are. A fence ends
- * only at a line of the same character, with at least the same length, as `markdownToDoc` reads it.
- */
-export function chatLineBreaks(markdown: string): string {
-	const lines = markdown.split("\n");
-	let close: RegExp | null = null;
-	for (let index = 0; index < lines.length; index++) {
-		const line = lines[index] as string;
-		if (close) {
-			if (close.test(line)) close = null;
-			continue;
-		}
-		const fence = FENCE_OPEN.exec(line);
-		if (fence) {
-			const marker = (fence[1] ?? fence[2]) as string;
-			close = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}[ \\t]*$`);
-			continue;
-		}
-		const next = lines[index + 1];
-		if (next === undefined || line.trim() === "" || next.trim() === "") continue;
-		if (LINE_BLOCK.test(line) || BLOCK_START.test(next)) continue;
-		// A line that ends with an odd number of backslashes, or with two spaces, has its hard break.
-		const backslashes = /\\*$/.exec(line)?.[0].length ?? 0;
-		if (backslashes % 2 === 1 || line.endsWith("  ")) continue;
-		lines[index] = `${line}\\`;
-	}
-	return lines.join("\n");
-}
-
-/**
  * The content of a message from the form that a call sent. Throws `invalid` for content with no text,
  * plain text above `CHAT_LIMITS.messageChars`, a body that is too deep or too large, Markdown with
  * no text, or a body with Markdown above `CHAT_LIMITS.markdownChars`.
@@ -209,7 +166,8 @@ export function messageContent(input: {
 		let body: ChatBody;
 		if (input.markdown !== undefined) {
 			const markdown = input.markdown.replace(/\r\n?/g, "\n");
-			const doc = fromDoc(markdownToDoc(chatLineBreaks(markdown)));
+			// As in each chat app, a new line is a line break. Markdown itself joins the lines of a paragraph.
+			const doc = fromDoc(markdownToDoc(markdown, { lineBreaks: true }));
 			// The cheap checks come before the schema, so a large input fails fast and with its reason.
 			if (blockCount(doc.content) > CHAT_LIMITS.bodyBlocks) {
 				throw new OperationError("invalid", `A message has at most ${CHAT_LIMITS.bodyBlocks} blocks and list items.`);
