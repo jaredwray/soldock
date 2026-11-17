@@ -139,7 +139,7 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	await admin.close();
 });
 
-test("a save that fails in part shows the problem, and a second save sends only the remaining event", async ({
+test("a save that fails in part shows the problem, a second save sends only the remaining event, and a list that does not load hides its old rows", async ({
 	browser,
 }) => {
 	const context = await signIn(browser, "rafael");
@@ -158,6 +158,13 @@ test("a save that fails in part shows the problem, and a second save sends only 
 			contentType: "application/problem+json",
 			body: JSON.stringify({ title: "Conflict", detail: "A test refused this event.", code: "conflict" }),
 		});
+	});
+	// The next load of the list fails when `failList` is true.
+	let failList = false;
+	await page.route("**/api/v1/webhooks/endpoints", async (route) => {
+		if (route.request().method() !== "GET" || !failList) return route.continue();
+		failList = false;
+		await route.fulfill({ status: 500, contentType: "application/problem+json", body: "{}" });
 	});
 	await page.goto("/settings");
 
@@ -185,9 +192,14 @@ test("a save that fails in part shows the problem, and a second save sends only 
 	await edit.getByLabel("An edited message").check();
 	await edit.getByRole("button", { name: "Save" }).click();
 	await expect(edit.getByRole("alert")).toContainText("Soldock did not save each event. A test refused this event.");
+	failList = true;
 	await edit.getByRole("button", { name: "Save" }).click();
 	await expect(edit).toHaveCount(0);
 	expect(chatCreates).toBe(3);
+	// The list did not load after the save. The old row goes away, so Edit cannot open with old events.
+	await expect(page.getByRole("alert")).toContainText("The webhooks did not load.");
+	await expect(row).toHaveCount(0);
+	await page.getByRole("button", { name: "Try again" }).click();
 	await expect(row).toContainText("A new message, An edited message");
 	const id = await endpointId(context, label);
 	expect(await eventsOf(context, "chat", id)).toEqual(["chat.message.created", "chat.message.updated"]);

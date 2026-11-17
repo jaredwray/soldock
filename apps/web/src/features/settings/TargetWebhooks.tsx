@@ -73,7 +73,12 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 			setOwn(endpoints);
 			setError(null);
 		},
-		(caught) => setError(errorMessage(caught)),
+		// An old list must not stay after a load that failed. Edit on old events sends wrong changes.
+		(caught) => {
+			setSubscriptions(null);
+			setOwn([]);
+			setError(errorMessage(caught));
+		},
 	);
 
 	useEffect(() => {
@@ -117,6 +122,13 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 			)}
 			<div className="panel-card panel-card-list">
 				{rows === null && !error && <p className="panel-empty">Loading webhooks…</p>}
+				{rows === null && error && (
+					<p className="panel-empty">
+						<button type="button" className="button" onClick={() => void load()} disabled={loading}>
+							Try again
+						</button>
+					</p>
+				)}
 				{rows !== null && rows.length === 0 && <p className="panel-empty">No webhooks yet.</p>}
 				{rows !== null && rows.length > 0 && (
 					<div className="table-scroll">

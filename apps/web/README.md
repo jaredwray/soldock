@@ -378,6 +378,7 @@ MCP clients. The app has no UI-only path.
   - The signing secret shows once, after **Add webhook**. When an event of the new webhook fails, the
     problem shows in the secret dialog, and **Edit** adds the event later. The URL of a webhook cannot change.
   - **Add webhook** and **Edit** are off while the list loads, so the dialog never opens with old events.
+    When the list does not load, the old rows go away, and the card shows the error and **Try again**.
   - A stopped event has the text **Stopped** under its check box. To start it again, clear it, save, and set it.
   - The dialog also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key

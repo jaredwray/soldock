@@ -178,7 +178,12 @@ export function WebhookSettings() {
 			setSubscriptions(rows);
 			setError(null);
 		},
-		(caught) => setError(errorMessage(caught)),
+		// An old list must not stay after a load that failed. Edit on old events sends wrong changes.
+		(caught) => {
+			setEndpoints(null);
+			setSubscriptions([]);
+			setError(errorMessage(caught));
+		},
 	);
 
 	useEffect(() => {
@@ -264,6 +269,13 @@ export function WebhookSettings() {
 			)}
 			<div className="panel-card panel-card-list">
 				{endpoints === null && !error && <p className="panel-empty">Loading webhooks…</p>}
+				{endpoints === null && error && (
+					<p className="panel-empty">
+						<button type="button" className="button" onClick={() => void load()} disabled={loading}>
+							Try again
+						</button>
+					</p>
+				)}
 				{endpoints !== null && endpoints.length === 0 && (
 					<p className="panel-empty">No webhooks yet. Add a webhook, then select its events.</p>
 				)}
