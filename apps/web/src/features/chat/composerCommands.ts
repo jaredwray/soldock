@@ -3,9 +3,10 @@ import { redo, undo } from "prosemirror-history";
 import { InputRule, textblockTypeInputRule, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";
 import type { MarkType, Node } from "prosemirror-model";
 import { liftListItem, sinkListItem, splitListItem } from "prosemirror-schema-list";
-import { type Command, type EditorState, TextSelection } from "prosemirror-state";
+import { type Command, type EditorState, TextSelection, type Transaction } from "prosemirror-state";
 import { createRichTextCommands, keepKey, type RichTextSchema } from "../mail/richTextCommands.ts";
 import { chatSchema } from "./composerSchema.ts";
+import { insertMention, mentionAt } from "./mentions.ts";
 
 // The commands, the keys and the Markdown shortcuts of the chat box. Each one works on an EditorState
 // only, so the Node tests can run them without a DOM.
@@ -175,3 +176,48 @@ export const markdownRules: readonly InputRule[] = [
 	wrappingInputRule(/^\s*>\s$/, nodes.blockquote),
 	textblockTypeInputRule(/^```$/, nodes.code_block),
 ];
+
+/** The mention that the person types: from its "@" (`from`) to the caret (`to`), in positions of the document. */
+export interface TypedMention {
+	from: number;
+	to: number;
+	query: string;
+	/** The text of the line before the "@", the typed text and the text after the caret, for `insertMention`. */
+	before: string;
+	after: string;
+}
+
+/** The mention before the caret, or null. A code block and a code mark have no mention. */
+export function typedMention(state: EditorState): TypedMention | null {
+	const { $head, empty } = state.selection;
+	if (!empty || !$head.parent.isTextblock || $head.parent.type.spec.code) return null;
+	if ($head.marks().some((mark) => mark.type === marks.code)) return null;
+	const parent = $head.parent;
+	const before = parent.textBetween(0, $head.parentOffset, undefined, "￼");
+	const token = mentionAt(before, before.length);
+	if (!token) return null;
+	const start = $head.start();
+	return {
+		from: start + token.start,
+		to: $head.pos,
+		query: token.query,
+		before,
+		after: parent.textBetween($head.parentOffset, parent.content.size, undefined, "￼"),
+	};
+}
+
+/**
+ * The change that puts the mention of `handle` in place of the mention that the person types, with the
+ * caret after it, as `insertMention` does in a text. Null when the caret is not at a typed mention.
+ */
+export function insertTypedMention(state: EditorState, handle: string): Transaction | null {
+	const mention = typedMention(state);
+	if (!mention) return null;
+	const text = mention.before + mention.after;
+	const start = mention.before.length - mention.query.length - 1;
+	const next = insertMention(text, { start, end: mention.before.length, query: mention.query }, handle);
+	const inserted = next.value.slice(start, next.value.length - mention.after.length);
+	const lineStart = mention.from - start;
+	const tr = state.tr.insertText(inserted, mention.from, mention.to);
+	return tr.setSelection(TextSelection.create(tr.doc, lineStart + next.caret)).scrollIntoView();
+}

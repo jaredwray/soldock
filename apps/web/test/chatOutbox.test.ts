@@ -1,6 +1,6 @@
 import { ApiError, type ChatBody, type ChatMessage } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOutbox, RETRY_WAITS_MS } from "../src/features/chat/outbox.ts";
+import { createOutbox, postContent, RETRY_WAITS_MS } from "../src/features/chat/outbox.ts";
 
 interface Call {
 	text: string;
@@ -91,6 +91,13 @@ describe("the outbox of a room", () => {
 		const keys = room.outbox.getState().keys;
 		expect([keys.get("cmsg_1"), keys.get("cmsg_2")]).toEqual([room.calls[0]?.key, room.calls[1]?.key]);
 		expect(room.calls[0]?.key).not.toBe(room.calls[1]?.key);
+	});
+
+	// The server takes one form. A message from before the box had formats has the Markdown that the person typed.
+	it("posts the body of a message, or the text of a message without a body as Markdown, never both", () => {
+		const body: ChatBody = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "a" }] }] };
+		expect(postContent({ text: "a", body })).toEqual({ body });
+		expect(postContent({ text: "**old** draft" })).toEqual({ markdown: "**old** draft" });
 	});
 
 	// The box sends a body with formats. A message from before the box had formats has only its text.

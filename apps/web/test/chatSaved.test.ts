@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { textToBody } from "../src/features/chat/composerSchema.ts";
 import type { PendingMessage } from "../src/features/chat/outbox.ts";
 import {
 	fromSaved,
@@ -76,7 +77,7 @@ describe("the messages that wait, after a reload of the page", () => {
 	});
 
 	// The record is in the storage of the browser, which the contract does not check.
-	it("keep the body of a message, and drop a body that the contract does not take", () => {
+	it("keep the body of a message, and send a body that the contract does not take as its plain text", () => {
 		const body = {
 			type: "doc" as const,
 			content: [{ type: "paragraph" as const, content: [{ type: "text" as const, text: "Hi" }] }],
@@ -90,8 +91,10 @@ describe("the messages that wait, after a reload of the page", () => {
 			NOW,
 		);
 		expect(kept?.body).toEqual(body);
-		expect(dropped).toMatchObject({ key: "k2", text: "text k2" });
-		expect(dropped?.body).toBeUndefined();
+		// The text of a record with a body is plain text, not Markdown: it goes out as it is.
+		expect(dropped).toMatchObject({ key: "k2", text: "text k2", body: textToBody("text k2") });
+		// A record from before the box had formats has no body: its text is the Markdown of the person.
+		expect(fromSaved([saved("k3")], NOW)[0]?.body).toBeUndefined();
 	});
 
 	it("have the person and the room of the message in their record", () => {

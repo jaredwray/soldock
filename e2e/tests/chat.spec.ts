@@ -543,6 +543,25 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await box.pressSequentially("2*3*4 = 24");
 	await expect(box.locator("em")).toHaveCount(0);
 
+	// A paste of HTML keeps only the formats of a message: no script, no image, no unsafe link.
+	await box.press("Control+a");
+	await box.press("Delete");
+	await box.evaluate((element) => {
+		const data = new DataTransfer();
+		data.setData(
+			"text/html",
+			'<p><b>bold</b> <a href="javascript:alert(1)">bad</a> <a href="https://example.com/ok">ok</a>' +
+				'<img src="x" onerror="window.pasted = 1"><script>window.pasted = 2</script></p>',
+		);
+		data.setData("text/plain", "bold bad ok");
+		element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+	});
+	await expect(box.locator("strong")).toHaveText("bold");
+	await expect(box.locator("a")).toHaveCount(1);
+	await expect(box.locator("a")).toHaveAttribute("href", "https://example.com/ok");
+	await expect(box.locator("img, script")).toHaveCount(0);
+	expect(await page.evaluate(() => (window as { pasted?: number }).pasted)).toBeUndefined();
+
 	// "@" opens the list of people. Enter takes a suggestion, and does not send.
 	await box.press("Control+a");
 	await box.press("Delete");
@@ -556,4 +575,18 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await box.press("Enter");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
+
+	// In the edit box, Escape closes the list of a mention first, and then the edit box.
+	await thanks.hover();
+	await thanks.getByRole("button", { name: /^Change your message/ }).click();
+	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editBox.press("End");
+	await editBox.pressSequentially(" @to");
+	const people = page.getByRole("listbox", { name: "People and agents to mention" });
+	await expect(people).toBeVisible();
+	await editBox.press("Escape");
+	await expect(people).toHaveCount(0);
+	await expect(editBox).toBeVisible();
+	await editBox.press("Escape");
+	await expect(editBox).toHaveCount(0);
 });

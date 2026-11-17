@@ -97,10 +97,14 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 
 const LOCAL_ONLY = new RegExp(`^${LOCAL}$`);
 
+/** Words that a chat uses for a group of people, never the name alias of one principal. */
+const GROUP_WORDS: ReadonlySet<string> = new Set(["all", "channel", "everyone", "here", "room"]);
+
 /**
  * The name aliases of a display name: the first word, and the full name without spaces, in lowercase
  * and without accents. "Ada Lovelace" has "ada" and "adalovelace". An alias must have the form of a
- * handle, so a name in a different script has no alias.
+ * handle, so a name in a different script has no alias. A word for a group, such as "here" for
+ * "Here Maps", is not an alias.
  */
 function nameAliases(displayName: string): string[] {
 	const words = displayName
@@ -110,7 +114,7 @@ function nameAliases(displayName: string): string[] {
 		.split(/\s+/)
 		.filter((word) => word !== "");
 	const aliases = new Set([words[0] ?? "", words.join("")]);
-	return [...aliases].filter((alias) => LOCAL_ONLY.test(alias));
+	return [...aliases].filter((alias) => LOCAL_ONLY.test(alias) && !GROUP_WORDS.has(alias));
 }
 
 /** What the suggestions of a mention need: the handles of the directory, the members of the room, and the writer. */

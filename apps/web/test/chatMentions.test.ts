@@ -87,6 +87,10 @@ describe("the mentions in the text of a message", () => {
 		const withCook = mentionDirectory([...PEOPLE, COOK]);
 		expect(textParts("@captain", withCook)).toEqual([{ text: "@captain", person: CAPTAIN }]);
 		expect(textParts("@ada", withCook)).toEqual([plain("@ada")]);
+		// A word for a group is never the name of one principal.
+		const groups = mentionDirectory([...PEOPLE, person("here", "Here Maps", "maps@example.com")]);
+		expect(textParts("@here", groups)).toEqual([plain("@here")]);
+		expect(textParts("@heremaps", groups)[0]?.person?.display_name).toBe("Here Maps");
 	});
 
 	// A wrong link would send a reader to a different person than the author meant.

@@ -115,6 +115,8 @@ export const chatSchema = new Schema({
 			toDOM: () => ["s", 0],
 		},
 		code: {
+			// `code` tells ProseMirror and the Markdown shortcuts that the text of the mark is code.
+			code: true,
 			parseDOM: [{ tag: "code" }],
 			toDOM: () => ["code", 0],
 		},
@@ -136,8 +138,9 @@ function markToBody(mark: Mark): BodyMark | null {
 		case "code":
 			return { type: mark.type.name };
 		case "link": {
-			const href = safeHref(String(mark.attrs.href));
-			return href === null ? null : { type: "link", attrs: { href } };
+			// The link keeps its form, so an edit with no change gives the same body.
+			const href = String(mark.attrs.href);
+			return safeHref(href) === null ? null : { type: "link", attrs: { href } };
 		}
 		default:
 			return null;
@@ -188,30 +191,40 @@ function blocksToBody(container: Node): ChatBodyBlock[] {
 			lines.push(block);
 			return;
 		}
+		// A block with no text goes away. The lines before and after it stay one paragraph, so the body
+		// of a body is the same body again.
+		const converted = blockToBody(block);
+		if (!converted) return;
 		flush();
-		if (block.type === nodes.code_block) {
-			// New lines at the end of a code block show nothing.
-			const text = block.textContent.replace(/\n+$/, "");
-			if (text !== "") out.push({ type: "code_block", content: [{ type: "text", text }] });
-		} else if (block.type === nodes.blockquote) {
-			const content = blocksToBody(block);
-			if (content.length > 0) out.push({ type: "blockquote", content });
-		} else if (block.type === nodes.bullet_list || block.type === nodes.ordered_list) {
-			const items: { type: "list_item"; content: ChatBodyBlock[] }[] = [];
-			block.forEach((item) => {
-				const content = blocksToBody(item);
-				if (content.length > 0) items.push({ type: "list_item", content });
-			});
-			if (items.length === 0) return;
-			out.push(
-				block.type === nodes.bullet_list
-					? { type: "bullet_list", content: items }
-					: { type: "ordered_list", attrs: { order: listOrder(block.attrs.order) }, content: items },
-			);
-		}
+		out.push(converted);
 	});
 	flush();
 	return out;
+}
+
+/** A block that is not a paragraph, or null when it has no text. */
+function blockToBody(block: Node): ChatBodyBlock | null {
+	if (block.type === nodes.code_block) {
+		// New lines at the end of a code block show nothing.
+		const text = block.textContent.replace(/\n+$/, "");
+		return text === "" ? null : { type: "code_block", content: [{ type: "text", text }] };
+	}
+	if (block.type === nodes.blockquote) {
+		const content = blocksToBody(block);
+		return content.length > 0 ? { type: "blockquote", content } : null;
+	}
+	if (block.type === nodes.bullet_list || block.type === nodes.ordered_list) {
+		const items: { type: "list_item"; content: ChatBodyBlock[] }[] = [];
+		block.forEach((item) => {
+			const content = blocksToBody(item);
+			if (content.length > 0) items.push({ type: "list_item", content });
+		});
+		if (items.length === 0) return null;
+		return block.type === nodes.bullet_list
+			? { type: "bullet_list", content: items }
+			: { type: "ordered_list", attrs: { order: listOrder(block.attrs.order) }, content: items };
+	}
+	return null;
 }
 
 /** The body of the box, or null when the box has no text. */
@@ -227,8 +240,7 @@ function marksFromBody(bodyMarks: BodyText["marks"]): Mark[] {
 	const out: Mark[] = [];
 	for (const mark of bodyMarks ?? []) {
 		if (mark.type === "link") {
-			const href = safeHref(mark.attrs.href);
-			if (href !== null) out.push(marks.link.create({ href }));
+			if (safeHref(mark.attrs.href) !== null) out.push(marks.link.create({ href: mark.attrs.href }));
 		} else {
 			out.push(marks[mark.type].create());
 		}
@@ -344,11 +356,11 @@ export function bodyText(body: ChatBody): string {
 
 /**
  * Pasted plain text: one paragraph for each line, also for an empty line. The first and last
- * paragraphs join the paragraphs around the cursor. In a code block, the text stays one text.
+ * paragraphs join the paragraphs around the cursor. In a code block, ProseMirror pastes the text as it
+ * is and does not call this function.
  */
-export function plainTextSlice(text: string, lineMarks: readonly Mark[], inCode: boolean): Slice {
+export function plainTextSlice(text: string, lineMarks: readonly Mark[]): Slice {
 	const normal = text.replace(/\r\n?/g, "\n");
-	if (inCode) return new Slice(Fragment.from(normal === "" ? [] : chatSchema.text(normal)), 0, 0);
 	const lines = normal
 		.split("\n")
 		.map((line) => nodes.paragraph.create(null, line === "" ? null : chatSchema.text(line, lineMarks)));

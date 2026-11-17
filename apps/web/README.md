@@ -866,7 +866,8 @@ MCP clients. The app has no UI-only path.
       the other limits of a body.
   - A message that waits for the server shows its body at once. A message in the outbox from
     before the box had formats goes out as Markdown: a plain text with `*` or `_` can then show
-    formats. A draft from before the box had formats opens as its text.
+    formats. A record with a body that the contract does not take goes out as its plain text. A
+    draft from before the box had formats opens as its text.
   - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
     `@captain`. The handle is the part of the address before the `@`. When two principals have the
     same part, on two mail domains, each of them has the full address as its handle, for example
@@ -880,7 +881,10 @@ MCP clients. The app has no UI-only path.
       without spaces, in lowercase and without accents. For example, `@jared` and `@jaredwray` find
       "Jared Wray", also when the address is `me@example.com`. Only an alias of one principal
       counts. An alias that is a handle or the local part of an address is not an alias, so a
-      handle always wins. The list puts the handle in a new mention.
+      handle always wins. A word for a group (`all`, `channel`, `everyone`, `here`, `room`) is
+      never an alias. The list puts the handle in a new mention.
+    - Known limit: an alias is in the directory of that time. When a second principal gets the same
+      first name, an old mention of that name stays text.
     - The message box and the edit box of a message suggest people and agents while the
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the

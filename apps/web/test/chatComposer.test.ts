@@ -1,10 +1,25 @@
 import type { ChatBody } from "@soldock/contracts";
 import { ChatBody as ChatBodySchema } from "@soldock/contracts";
+import { inputRules, undoInputRule } from "prosemirror-inputrules";
 import type { Node } from "prosemirror-model";
 import { EditorState, Selection, TextSelection, type Transaction } from "prosemirror-state";
+import type { EditorView } from "prosemirror-view";
 import { describe, expect, it } from "vitest";
-import { markdownRules, newLine, toggleCodeBlock } from "../src/features/chat/composerCommands.ts";
-import { bodyToDoc, chatSchema, docToBody, sameInBox, textToBody } from "../src/features/chat/composerSchema.ts";
+import {
+	insertTypedMention,
+	markdownRules,
+	newLine,
+	toggleCodeBlock,
+	typedMention,
+} from "../src/features/chat/composerCommands.ts";
+import {
+	bodyToDoc,
+	chatSchema,
+	docToBody,
+	plainTextSlice,
+	sameInBox,
+	textToBody,
+} from "../src/features/chat/composerSchema.ts";
 
 const { nodes, marks } = chatSchema;
 const p = (...content: Node[]) => nodes.paragraph.create(null, content);
@@ -146,6 +161,71 @@ function run(state: EditorState, command: (s: EditorState, d: (tr: Transaction) 
 	return next;
 }
 
+describe("the safety and the form of the body of the box", () => {
+	// The box and the message must never hold a link that runs script. The server refuses it too, but
+	// the box must not keep it, and a draft must not hold it.
+	it("drops a link that is not http, https or mailto, keeps a safe link as written, and keeps a list number in range", () => {
+		const unsafe = marks.link.create({ href: "javascript:alert(1)" });
+		const safe = marks.link.create({ href: "https://Example.com/A" });
+		const body = docToBody(
+			doc(
+				p(chatSchema.text("bad", [unsafe]), chatSchema.text(" good", [safe])),
+				nodes.ordered_list.create({ order: 1_000_000 }, [nodes.list_item.create(null, p(t("item")))]),
+			),
+		) as ChatBody;
+		expect(body.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "bad" },
+				{ type: "text", text: " good", marks: [{ type: "link", attrs: { href: "https://Example.com/A" } }] },
+			],
+		});
+		expect(body.content[1]).toMatchObject({ type: "ordered_list", attrs: { order: 1 } });
+		expect(ChatBodySchema.safeParse(body).success).toBe(true);
+		// A body from storage with an unsafe link opens without the link.
+		const opened = bodyToDoc({
+			type: "doc",
+			content: [
+				{
+					type: "paragraph",
+					content: [{ type: "text", text: "x", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }],
+				},
+			],
+		} as never);
+		expect(opened.rangeHasMark(0, opened.content.size, marks.link)).toBe(false);
+		expect(sameInBox(body, docToBody(bodyToDoc(body)) as ChatBody)).toBe(true);
+	});
+
+	it("pastes plain text as one line for each line, with the marks at the caret", () => {
+		const slice = plainTextSlice("a\r\nb\n\nc", [marks.strong.create()]);
+		expect([slice.openStart, slice.openEnd]).toEqual([1, 1]);
+		const lines: string[] = [];
+		slice.content.forEach((line) => {
+			lines.push(line.textContent);
+			line.forEach((text) => {
+				expect(text.marks.map((mark) => mark.type)).toEqual([marks.strong]);
+			});
+		});
+		expect(lines).toEqual(["a", "b", "", "c"]);
+	});
+
+	// An edit with no change must not send an edit. So a body opens and saves to the same body again.
+	it("keeps the lines around a block with no text as one paragraph, so a body gives the same body again", () => {
+		expect(docToBody(doc(p(t("a")), nodes.code_block.create(), p(t("b"))))).toEqual(textToBody("a\nb"));
+		const agent: ChatBody = {
+			type: "doc",
+			content: [
+				{ type: "paragraph", content: [{ type: "text", text: "a" }] },
+				{ type: "code_block" },
+				{ type: "paragraph", content: [{ type: "text", text: "b" }] },
+			],
+		};
+		const once = docToBody(bodyToDoc(agent)) as ChatBody;
+		expect(docToBody(bodyToDoc(once))).toEqual(once);
+		expect(sameInBox(agent, once)).toBe(true);
+	});
+});
+
 describe("the commands of the box", () => {
 	it("makes a code block of the selected lines, and lines of a code block", () => {
 		const box = doc(p(t("make a")), p(t("make b")));
@@ -196,36 +276,39 @@ describe("the commands of the box", () => {
 	});
 });
 
-/** Types `text` at the caret, as the input rules of the box see a typed character. */
-function type(state: EditorState, text: string): EditorState {
-	let next = state;
-	for (const char of text) {
-		const { from, $from } = next.selection;
-		const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "￼") + char;
-		let applied = false;
-		for (const rule of markdownRules) {
-			const match = (rule as unknown as { match: RegExp }).match.exec(before);
-			if (!match) continue;
-			const handler = (
-				rule as unknown as {
-					handler: (s: EditorState, m: RegExpMatchArray, a: number, b: number) => Transaction | null;
-				}
-			).handler;
-			const tr = handler(next, match, from - (match[0].length - 1), from);
-			if (tr) {
-				next = next.apply(tr);
-				applied = true;
-				break;
-			}
-		}
-		if (!applied) next = next.apply(next.tr.insertText(char));
-	}
-	return next;
+const rulesPlugin = inputRules({ rules: [...markdownRules] });
+
+/** A state of the box with the Markdown shortcuts, and the caret at the end, or at `at`. */
+function typingState(box: Node, at?: number): EditorState {
+	const state = EditorState.create({ doc: box, plugins: [rulesPlugin] });
+	return state.apply(
+		state.tr.setSelection(at === undefined ? Selection.atEnd(state.doc) : TextSelection.create(state.doc, at)),
+	);
 }
 
-describe("the Markdown marks of the box", () => {
-	it("makes bold, italic, strike and code at the closing mark, and keeps a mark in a word as text", () => {
-		const typed = type(stateAt(doc(p())), "a **b** *c* _d_ ~~e~~ `f` 2*3*4");
+/** Types `text` one character at a time, through the plugin of the Markdown shortcuts, as a view does. */
+function type(state: EditorState, text: string): EditorState {
+	let current = state;
+	const view = {
+		get state() {
+			return current;
+		},
+		composing: false,
+		dispatch(tr: Transaction) {
+			current = current.apply(tr);
+		},
+	} as unknown as EditorView;
+	for (const char of text) {
+		const { from, to } = current.selection;
+		const handled = rulesPlugin.props.handleTextInput?.call(rulesPlugin, view, from, to, char, () => current.tr);
+		if (!handled) current = current.apply(current.tr.insertText(char, from, to));
+	}
+	return current;
+}
+
+describe("the Markdown shortcuts of the box", () => {
+	it("make bold, italic, strike and code at the closing mark, and keep a mark in a word as text", () => {
+		const typed = type(typingState(doc(p())), "a **b** *c* _d_ ~~e~~ `f` 2*3*4");
 		expect(docToBody(typed.doc)?.content[0]).toEqual({
 			type: "paragraph",
 			content: [
@@ -242,5 +325,60 @@ describe("the Markdown marks of the box", () => {
 				{ type: "text", text: " 2*3*4" },
 			],
 		});
+	});
+
+	it("make a list, a numbered list, a quote and a code block at the start of a line", () => {
+		expect(type(typingState(doc(p())), "- x").doc.child(0).type).toBe(nodes.bullet_list);
+		const ordered = type(typingState(doc(p())), "3. x").doc.child(0);
+		expect([ordered.type, ordered.attrs.order]).toEqual([nodes.ordered_list, 3]);
+		expect(type(typingState(doc(p())), "> x").doc.child(0).type).toBe(nodes.blockquote);
+		expect(type(typingState(doc(p())), "```").doc.child(0).type).toBe(nodes.code_block);
+	});
+
+	// A person who wants the characters must get them back. Code shows its characters as they are.
+	it("give the text back with Backspace right after a shortcut, and do nothing in code", () => {
+		const bold = type(typingState(doc(p())), "a **b**");
+		let undone = bold;
+		expect(undoInputRule(bold, (tr) => (undone = bold.apply(tr)))).toBe(true);
+		expect(undone.doc.textContent).toBe("a **b**");
+		expect(undone.doc.rangeHasMark(0, undone.doc.content.size, marks.strong)).toBe(false);
+		const list = type(typingState(doc(p())), "- ");
+		let lineBack = list;
+		expect(undoInputRule(list, (tr) => (lineBack = list.apply(tr)))).toBe(true);
+		expect([lineBack.doc.child(0).type, lineBack.doc.textContent]).toEqual([nodes.paragraph, "- "]);
+
+		const inCodeMark = type(typingState(doc(p(t("*y", "code")))), "*");
+		expect(inCodeMark.doc.textContent).toBe("*y*");
+		expect(inCodeMark.doc.rangeHasMark(0, inCodeMark.doc.content.size, marks.em)).toBe(false);
+		const inBlock = type(typingState(doc(nodes.code_block.create(null, chatSchema.text("a *b")))), "*");
+		expect(inBlock.doc.textContent).toBe("a *b*");
+	});
+});
+
+describe("a mention in the box", () => {
+	const at = (box: Node, pos?: number) => stateAt(box, pos);
+
+	// The list replaces only the typed mention, also in the middle of a line and on a later line.
+	it("replaces the typed text with the handle, with a space and the caret after it", () => {
+		const end = insertTypedMention(at(doc(p(t("hi @ad")))), "ada") as Transaction;
+		expect(end.doc.textContent).toBe("hi @ada ");
+		expect(end.selection.from).toBe(end.doc.content.size - 1);
+
+		// "hi @ad|, see": a comma ends the word, so no space goes in.
+		const middle = insertTypedMention(at(doc(p(t("hi @ad, see"))), 7), "ada") as Transaction;
+		expect(middle.doc.textContent).toBe("hi @ada, see");
+		expect(middle.selection.from).toBe(1 + "hi @ada".length);
+
+		const second = insertTypedMention(at(doc(p(t("bold", "strong")), p(t("x @ca")))), "captain") as Transaction;
+		expect(second.doc.child(0).textContent).toBe("bold");
+		expect(second.doc.child(1).textContent).toBe("x @captain ");
+		expect(second.selection.$from.parent).toBe(second.doc.child(1));
+	});
+
+	it("has no mention in a code block, in code, or away from an @", () => {
+		expect(typedMention(at(doc(nodes.code_block.create(null, chatSchema.text("@ad")))))).toBeNull();
+		expect(typedMention(at(doc(p(t("@ad", "code")))))).toBeNull();
+		expect(typedMention(at(doc(p(t("mail ada@example")))))).toBeNull();
+		expect(typedMention(at(doc(p(t("@ad")))))).toMatchObject({ from: 1, to: 4, query: "ad" });
 	});
 });

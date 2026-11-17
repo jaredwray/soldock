@@ -4,7 +4,7 @@ import { baseKeymap, toggleMark } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { inputRules } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
-import { type Command, EditorState, TextSelection } from "prosemirror-state";
+import { type Command, EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import {
 	type ReactNode,
@@ -20,16 +20,17 @@ import { createPortal } from "react-dom";
 import { initials, plural } from "../../lib/format.ts";
 import { FormatToolbar, LinkDialog, placeholderPlugin, shortcut, type Tool } from "../mail/RichTextEditor.tsx";
 import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
-import { composerKeys, isCodeBlockActive, markdownRules, rich, toggleCodeBlock } from "./composerCommands.ts";
-import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
 import {
-	insertMention,
-	type MentionContext,
-	type MentionSuggestion,
-	mentionAt,
-	mentionKeyAction,
-	mentionSuggestions,
-} from "./mentions.ts";
+	composerKeys,
+	insertTypedMention,
+	isCodeBlockActive,
+	markdownRules,
+	rich,
+	toggleCodeBlock,
+	typedMention,
+} from "./composerCommands.ts";
+import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
+import { type MentionContext, type MentionSuggestion, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -96,35 +97,6 @@ const TOOLS: readonly Tool[] = [
 		pressed: isCodeBlockActive,
 	},
 ];
-
-/** The mention that the person types: from its "@" (`from`) to the caret (`to`), in positions of the document. */
-interface TypedMention {
-	from: number;
-	to: number;
-	query: string;
-	/** The text of the line before the "@", the typed text and the text after the caret, for `insertMention`. */
-	before: string;
-	after: string;
-}
-
-/** The mention before the caret, or null. A code block and a code mark have no mention. */
-function typedMention(state: EditorState): TypedMention | null {
-	const { $head, empty } = state.selection;
-	if (!empty || !$head.parent.isTextblock || $head.parent.type.spec.code) return null;
-	if ($head.marks().some((mark) => mark.type === marks.code)) return null;
-	const parent = $head.parent;
-	const before = parent.textBetween(0, $head.parentOffset, undefined, "￼");
-	const token = mentionAt(before, before.length);
-	if (!token) return null;
-	const start = $head.start();
-	return {
-		from: start + token.start,
-		to: $head.pos,
-		query: token.query,
-		before,
-		after: parent.textBetween($head.parentOffset, parent.content.size, undefined, "￼"),
-	};
-}
 
 export interface ChatComposerHandle {
 	/** Empties the box. */
@@ -233,20 +205,9 @@ export function ChatComposer({
 
 	function choose(suggestion: MentionSuggestion) {
 		const view = viewRef.current;
-		const mention = view ? typedMention(view.state) : null;
 		setMentionOpen(false);
-		if (!view || !mention) return;
-		const text = mention.before + mention.after;
-		const token = {
-			start: mention.before.length - mention.query.length - 1,
-			end: mention.before.length,
-			query: mention.query,
-		};
-		const next = insertMention(text, token, suggestion.handle);
-		const inserted = next.value.slice(token.start, next.value.length - mention.after.length);
-		const lineStart = mention.from - token.start;
-		const tr = view.state.tr.insertText(inserted, mention.from, mention.to);
-		view.dispatch(tr.setSelection(TextSelection.create(tr.doc, lineStart + next.caret)).scrollIntoView());
+		const tr = view ? insertTypedMention(view.state, suggestion.handle) : null;
+		if (view && tr) view.dispatch(tr);
 	}
 
 	// The keys of the list, for the handler of the view, which the first render makes.
@@ -281,8 +242,7 @@ export function ChatComposer({
 				"aria-autocomplete": "list",
 				spellcheck: "true",
 			},
-			clipboardTextParser: (text, $context) =>
-				plainTextSlice(text, $context.marks(), $context.parent.type.spec.code === true),
+			clipboardTextParser: (text, $context) => plainTextSlice(text, $context.marks()),
 			// A paste with nothing to parse (only an image, for example) would go to the fallback of
 			// ProseMirror, which lets the browser paste into a live element. Nothing can be inserted, so stop it.
 			handlePaste: (_view, _event, slice) => slice.content.size === 0,

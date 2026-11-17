@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
-import { createOutbox, type Outbox } from "./outbox.ts";
+import { createOutbox, type Outbox, postContent } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
@@ -190,13 +190,12 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 	let outbox = outboxes.get(name);
 	if (!outbox) {
 		outbox = createOutbox({
-			// A message from before the box had formats has no body: its text is the Markdown that the person typed.
-			post: async ({ text, body, key }) =>
+			post: async (message) =>
 				(
 					await api.call("chat.post_message", {
 						room_id: roomId,
-						...(body ? { body } : { markdown: text }),
-						idempotency_key: key,
+						...postContent(message),
+						idempotency_key: message.key,
 					})
 				).message,
 			describe: errorMessage,

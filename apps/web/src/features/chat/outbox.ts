@@ -34,6 +34,14 @@ export interface PendingMessage {
 	uncertain: boolean;
 }
 
+/**
+ * The content of the post of a message: its body, or for a message from before the box had formats
+ * (no body), its text as the Markdown that the person typed. Never both: the server takes one form.
+ */
+export function postContent(message: Pick<PendingMessage, "text" | "body">): { body: ChatBody } | { markdown: string } {
+	return message.body ? { body: message.body } : { markdown: message.text };
+}
+
 /** The list that shows the room of an outbox. */
 export interface OutboxView {
 	/** Takes a stored message after its send. */
