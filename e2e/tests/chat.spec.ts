@@ -25,7 +25,11 @@ const postsOf = (roomId: string) => `**/api/v1/chat/rooms/${roomId}/messages`;
  * Holds the calls of `method` to `url` until `release` runs. A test then sees the page before the
  * answer of the server: a local Worker answers in some milliseconds, faster than an assertion.
  */
-async function hold(page: Page, url: string, method: string): Promise<{ release: () => void }> {
+async function hold(
+	page: Page,
+	url: string | ((url: URL) => boolean),
+	method: string,
+): Promise<{ release: () => void }> {
 	let release = () => {};
 	const released = new Promise<void>((done) => {
 		release = done;
@@ -398,6 +402,8 @@ test("a star moves a room to Starred, a second page of the person gets it withou
 		if (request.method() === "GET" && new URL(request.url()).pathname === "/api/v1/chat/rooms") reads += 1;
 	});
 	await openRoom(page, roomId);
+	// The reads of the list of this page answer late. A click while a read runs must not get lost.
+	const lateList = await hold(page, (url) => url.pathname === "/api/v1/chat/rooms", "GET");
 
 	await page.getByRole("button", { name: "Star", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Remove star" })).toHaveAttribute("aria-pressed", "true");
@@ -410,6 +416,7 @@ test("a star moves a room to Starred, a second page of the person gets it withou
 
 	await page.getByRole("button", { name: "Remove star" }).click();
 	await expect(page.getByRole("button", { name: "Star", exact: true })).toHaveAttribute("aria-pressed", "false");
+	lateList.release();
 	for (const shown of [page, other]) {
 		await expect(shown.getByRole("list", { name: "Rooms" }).getByRole("link", { name })).toBeVisible();
 		await expect(shown.getByRole("heading", { name: "Starred" })).toHaveCount(0);

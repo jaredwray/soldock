@@ -715,8 +715,9 @@ MCP clients. The app has no UI-only path.
   - **Stars.** The header of a room has a star button for a member: **Star** puts the star of the
     person on the room (`chat.star_room`), and **Remove star** removes it. The button changes at
     once and is pressed (`aria-pressed`) while the star is set. After a refusal, it goes back and a
-    toast shows the problem. A click while a call runs does nothing. The events socket brings the
-    star to each other page of the person.
+    toast shows the problem. A click while a call runs waits for that call, so the calls reach the
+    room in the order of the clicks, and no click gets lost. The events socket brings the star to
+    each other page of the person.
     - Known limit: for a person with more than 100 rooms, a room after the first 100 leaves the list
       when its star goes away. The open room then loads again, and its list goes back to the newest
       messages.

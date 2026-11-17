@@ -108,6 +108,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	 * the list shows it: it is newer than the room of the load.
 	 */
 	const [answeredStar, setAnsweredStar] = useState<boolean | null>(null);
+	/** The end of the line of star calls. Each call starts after the call before it ends. */
+	const starCalls = useRef<Promise<void>>(Promise.resolve());
+	/** The number of star clicks. Only the last click clears the star of the button. */
+	const starClicks = useRef(0);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
@@ -573,20 +577,24 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	/**
 	 * Sets or removes the star of the person. The button changes at once, and goes back after a refusal.
-	 * A click while a call runs does nothing: two calls can reach the room in the other order.
+	 * A click while a call runs waits in a line: two calls at the same time can reach the room in the
+	 * other order, and a click must not get lost.
 	 */
-	async function setStar(starred: boolean) {
-		if (starring !== null) return;
+	function setStar(starred: boolean) {
+		const click = ++starClicks.current;
 		setStarring(starred);
-		try {
-			const answer = await api.call("chat.star_room", { room_id: roomId, starred });
-			setAnsweredStar(answer.room.starred);
-			// The list puts the room in its part of the sidebar. The events socket brings it too.
-			await onRoomsChanged();
-		} catch (caught) {
-			fail(caught);
-		}
-		setStarring(null);
+		starCalls.current = starCalls.current.then(async () => {
+			try {
+				const answer = await api.call("chat.star_room", { room_id: roomId, starred });
+				setAnsweredStar(answer.room.starred);
+				// The list puts the room in its part of the sidebar. The events socket brings it too.
+				await onRoomsChanged();
+			} catch (caught) {
+				fail(caught);
+			}
+			// A later click keeps its own star on the button until its call ends.
+			if (click === starClicks.current) setStarring(null);
+		});
 	}
 
 	async function join() {
@@ -636,10 +644,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				</h1>
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{room.role !== null && (
-					<StarButton
-						starred={starring ?? listed?.starred ?? answeredStar ?? room.starred}
-						onChange={(next) => void setStar(next)}
-					/>
+					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
 				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
