@@ -74,6 +74,11 @@ export const UNREAD_COUNT_MAX = 100;
  */
 export interface EventsSocketOpen {
 	credential: CredentialRef;
+	/**
+	 * True for the change feed of an MCP stream. One stream holds many feeds, and the end of one feed
+	 * ends the stream. So the object never closes a feed to make room for a new socket.
+	 */
+	feed: boolean;
 }
 
 export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
@@ -107,6 +112,7 @@ export const EVENTS_SOCKET_MAX_MS = 60 * 60_000;
 /** What a socket keeps while the object sleeps. */
 interface EventsSocketState {
 	credential: CredentialRef;
+	feed: boolean;
 	openedAt: number;
 	/** The time of the last check of the credential. */
 	checkedAt: number;
@@ -358,13 +364,18 @@ export class PrincipalDO extends DurableObject<Env> {
 		) as EventsSocketOpen | null;
 		if (!open) return new Response("The request does not say who opens the socket.", { status: 400 });
 
-		// At the limit, a new socket closes the oldest socket.
+		// At the limit, a new socket closes the oldest socket that is not a feed. A feed is never closed
+		// for this, and a new feed is refused: its stream then leaves the resource out.
 		const sockets = this.ctx.getWebSockets();
 		if (sockets.length >= EVENTS_LIMITS.socketsPerPrincipal) {
-			const oldest = sockets
-				.map((socket) => ({ socket, state: socket.deserializeAttachment() as EventsSocketState | null }))
-				.sort((a, b) => (a.state?.openedAt ?? 0) - (b.state?.openedAt ?? 0))[0];
-			if (oldest) this.end(oldest.socket, EVENTS_SOCKET_CLOSE.replaced, "The principal opened too many sockets.");
+			const oldest = open.feed
+				? undefined
+				: sockets
+						.map((socket) => ({ socket, state: socket.deserializeAttachment() as EventsSocketState | null }))
+						.filter((entry) => entry.state?.feed !== true)
+						.sort((a, b) => (a.state?.openedAt ?? 0) - (b.state?.openedAt ?? 0))[0];
+			if (!oldest) return new Response("The principal has too many sockets.", { status: 409 });
+			this.end(oldest.socket, EVENTS_SOCKET_CLOSE.replaced, "The principal opened too many sockets.");
 		}
 
 		const { 0: client, 1: server } = new WebSocketPair();
@@ -374,6 +385,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		// first check of the object, which starts now.
 		server.serializeAttachment({
 			credential: open.credential,
+			feed: open.feed === true,
 			openedAt: Date.now(),
 			checkedAt: 0,
 		} satisfies EventsSocketState);

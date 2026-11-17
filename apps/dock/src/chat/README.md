@@ -14,7 +14,7 @@
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the table `chat_rooms` in each `PrincipalDO` (the joined rooms of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
 | **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
-| **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resource `chat.room`. See [The socket of a room](#the-socket-of-a-room). |
+| **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -33,7 +33,7 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
 | `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
 | `webhooks.ts` | The Chat adapter for shared webhook operations |
-| `watch.ts` | The change feed of the `chat.room` resource, for MCP `subscriptions/listen` |
+| `watch.ts` | The change feeds of the `chat.room` and `chat.rooms` resources, for MCP `subscriptions/listen` |
 
 ## Rooms
 
@@ -346,6 +346,16 @@ A socket stays open after its request. It must not outlive the access that opene
 - A feed counts for the limit of 8 sockets of one member in one room. The room never closes a feed
   to make room for a new socket, because the end of one feed ends its stream with all of its other
   feeds. At the limit, the room refuses a new feed, and the new stream leaves the room out.
+- The resource `chat.rooms` (`soldock://chat/rooms`) has each room of the caller. One subscription
+  follows each room, also a room that the caller joins later. Its read operation is
+  `chat.list_rooms`, with the first 100 rooms. Each principal that can call `chat.list_rooms` can
+  watch it.
+- The change feed of `chat.rooms` is the events socket of the caller
+  ([`identity`](../identity/README.md#the-events-socket)), which the Worker opens for the stream.
+  Each `chat.room` and `chat.room_removed` event sends `notifications/resources/updated`: a message,
+  a read marker, a change of the room or of its members, a join and a leave.
+- That feed counts for the limit of 20 events sockets of the principal. The object never closes a
+  feed for that limit. At the limit, it refuses a new feed, and the new stream leaves the resource out.
 - The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
   one query, which wakes no room. The index is a first filter only. The room object decides when the
   feed opens. When the index is behind and the room refuses the caller, the stream leaves that room

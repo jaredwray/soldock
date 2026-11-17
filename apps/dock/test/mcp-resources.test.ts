@@ -1,6 +1,12 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_LIMITS, UNTRUSTED_NOTICE } from "@soldock/contracts";
+import {
+	CHAT_LIMITS,
+	EVENTS_LIMITS,
+	EVENTS_SOCKET_CLOSE,
+	EVENTS_SOCKET_PATH,
+	UNTRUSTED_NOTICE,
+} from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.ts";
 import {
@@ -12,13 +18,16 @@ import {
 	modern,
 	modernRequest,
 	rawMessage,
+	readSocket,
 	readSse,
+	request,
 	seedOrg,
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
 const inbox = (mailboxId: string) => `soldock://mail/${mailboxId}/inbox`;
 const roomMessages = (roomId: string) => `soldock://chat/${roomId}/messages`;
+const ROOMS = "soldock://chat/rooms";
 
 /** The owner, Ada and the agent Bot, with a team mailbox that Bot is a member of and one that Bot is not. */
 async function seedTeams() {
@@ -81,11 +90,14 @@ describe("MCP resources", () => {
 				title: "Inbox of Billing Bot <bot@dock.test>",
 			}),
 			expect.objectContaining({ uri: inbox(support.id), title: "Inbox of support <support@dock.test>" }),
+			// Each principal with chat.read has the resource of its rooms, also with no room.
+			expect.objectContaining({ uri: ROOMS, title: "Your rooms" }),
 		]);
 		const templates = (await modern(bot.key, "resources/templates/list")).body?.result as Record<string, unknown>;
 		expect(templates.resourceTemplates).toEqual([
 			expect.objectContaining({ uriTemplate: "soldock://mail/{mailbox_id}/inbox", name: "mail.inbox" }),
 			expect.objectContaining({ uriTemplate: "soldock://chat/{room_id}/messages", name: "chat.room" }),
+			expect.objectContaining({ uriTemplate: "soldock://chat/rooms", name: "chat.rooms" }),
 			expect.objectContaining({ uriTemplate: "soldock://drive/{space_id}/items/{item_id}", name: "drive.item" }),
 			expect.objectContaining({ uriTemplate: "soldock://drive/{drive_id}", name: "drive.space" }),
 		]);
@@ -145,7 +157,13 @@ describe("MCP resources", () => {
 		expect(listed.resources.filter((resource) => String(resource.uri).startsWith("soldock://chat/"))).toEqual([
 			expect.objectContaining({ uri: roomMessages(room.id), title: "Messages of #Launch" }),
 			expect.objectContaining({ uri: roomMessages(dm.id), title: "Direct message with Ada Lovelace" }),
+			expect.objectContaining({ uri: ROOMS, name: "chat.rooms", title: "Your rooms" }),
 		]);
+		// Parity: the resource of all rooms runs chat.list_rooms, so it returns what REST returns.
+		const rooms = (await modern(bot.key, "resources/read", { uri: ROOMS })).body?.result as {
+			contents: { text: string }[];
+		};
+		expect(JSON.parse(rooms.contents[0]?.text ?? "null")).toEqual(await bot.call("chat.list_rooms", { limit: 100 }));
 		// Parity: the read runs chat.list_messages, so it returns what REST returns. Chat has no content from outside.
 		const read = (await modern(bot.key, "resources/read", { uri: roomMessages(room.id) })).body?.result as {
 			contents: { mimeType: string; text: string }[];
@@ -165,7 +183,7 @@ describe("MCP resources", () => {
 		const init = await mcp(bot.key, "initialize", { protocolVersion: "2025-11-25", capabilities: {} });
 		expect(init.body?.result).toMatchObject({ capabilities: { resources: { subscribe: false } } });
 		expect((await mcp(bot.key, "resources/list")).body?.result).toMatchObject({
-			resources: [expect.objectContaining({ uri: inbox(bot.id) })],
+			resources: [expect.objectContaining({ uri: inbox(bot.id) }), expect.objectContaining({ uri: ROOMS })],
 		});
 	});
 });
@@ -366,6 +384,58 @@ describe("MCP subscriptions/listen", () => {
 			await stream.cancel();
 		}
 		await extra.cancel();
+	});
+
+	it("notifies about each change of each room of the caller with one subscription, also a room that it joins later", async () => {
+		const { ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const stream = await listen(bot.key, [ROOMS]);
+		expect(await stream.next()).toMatchObject({
+			method: "notifications/subscriptions/acknowledged",
+			params: { notifications: { resourceSubscriptions: [ROOMS] } },
+		});
+
+		await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
+		expect(await stream.next()).toEqual(updated(ROOMS));
+		// A read marker changes the unread count of the list.
+		await bot.call("chat.mark_read", { room_id: room.id });
+		expect(await stream.next()).toEqual(updated(ROOMS));
+		// A room that the agent joins after the start of the stream: no new subscription.
+		const { room: later } = await ada.call("chat.create_room", { kind: "public", name: "Town hall" });
+		await bot.call("chat.join_room", { room_id: later.id });
+		expect(await stream.next()).toEqual(updated(ROOMS));
+		// A room that the agent leaves.
+		await bot.call("chat.remove_member", { room_id: later.id, principal_id: bot.id });
+		expect(await stream.next()).toEqual(updated(ROOMS));
+		await stream.cancel();
+	});
+
+	// A feed that the object closes ends its stream, with all of its other feeds. So a socket must not close a feed.
+	it("keeps the feed of a stream when the caller opens more events sockets than the limit, and refuses a new feed", async () => {
+		const { ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const stream = await listen(bot.key, [ROOMS]);
+		expect(await stream.next()).toMatchObject({ params: { notifications: { resourceSubscriptions: [ROOMS] } } });
+		const open = async () => {
+			const socket = readSocket(
+				await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(bot.key) } }),
+			);
+			expect(await socket.next()).toMatchObject({ type: "hello" });
+			return socket;
+		};
+		const sockets = [];
+		for (let index = 1; index < EVENTS_LIMITS.socketsPerPrincipal; index++) sockets.push(await open());
+		// At the limit, a new socket closes the oldest socket that is not a feed.
+		await open();
+		expect(await sockets[0]?.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.replaced });
+		// A new feed has no socket to close: the object refuses it, and the new stream leaves the resource out.
+		const extra = await listen(bot.key, [ROOMS], {}, "extra");
+		expect(await extra.next()).toMatchObject({ params: { notifications: { resourceSubscriptions: [] } } });
+		await extra.cancel();
+
+		await ada.call("chat.post_message", { room_id: room.id, text: "The first stream works." });
+		expect(await stream.next()).toEqual(updated(ROOMS));
+		await stream.cancel();
 	});
 
 	// A long-lived stream must not outlive the access that opened it.

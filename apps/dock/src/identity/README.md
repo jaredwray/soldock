@@ -60,8 +60,11 @@ contract of the socket.
   session needs the `Origin` of this host. The credential must be able to call `chat.list_rooms`
   (the scope `chat.read`), because each event now is Chat. A later event type adds its own check.
 - The socket ends in the object of the principal of the credential, and nowhere else.
-- One principal has at most 20 sockets (`EVENTS_LIMITS.socketsPerPrincipal`). At the limit, a new
-  socket closes the oldest one with `4002` (`replaced`).
+- One principal has at most 20 sockets (`EVENTS_LIMITS.socketsPerPrincipal`), with the feeds of its
+  MCP streams (the resource `chat.rooms`). At the limit, a new socket closes the oldest socket that
+  is not a feed with `4002` (`replaced`). The object never closes a feed for this, because the end
+  of one feed ends its stream. At the limit, a new feed is refused, and so is a socket when each
+  socket is a feed.
 - The access rules after the open are the rules of the room socket
   ([`chat`](../chat/README.md#access-after-the-open)): a check of all credentials of the sockets
   with one D1 query, before an event, when the last check is 60 seconds old or more; `4003`
