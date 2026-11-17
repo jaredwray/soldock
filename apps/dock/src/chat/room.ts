@@ -226,13 +226,15 @@ const MIGRATIONS: string[][] = [
 	],
 	// The key of the send of a message, so a client finds the message of its send.
 	["ALTER TABLE messages ADD COLUMN idempotency_key TEXT"],
-	// One row for each reaction: a principal, a message and an emoji.
+	// One row for each reaction: a principal, a message and an emoji. `version` is the version of the
+	// room at the reaction, so it gives the order of the reactions, also in one millisecond.
 	[
 		`CREATE TABLE reactions (
 			message_id TEXT NOT NULL,
 			emoji TEXT NOT NULL,
 			principal_id TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
+			version INTEGER NOT NULL,
 			PRIMARY KEY (message_id, emoji, principal_id)
 		) WITHOUT ROWID`,
 	],
@@ -802,7 +804,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (messageIds.length === 0) return byMessage;
 		const rows = this.all<{ message_id: string; emoji: string; principal_id: string }>(
 			`SELECT message_id, emoji, principal_id FROM reactions JOIN json_each(?) wanted ON wanted.value = message_id
-			ORDER BY created_at, principal_id`,
+			ORDER BY version`,
 			JSON.stringify(messageIds),
 		);
 		for (const row of rows) {
@@ -878,11 +880,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			if (add) {
 				this.sql.exec(
-					"INSERT INTO reactions (message_id, emoji, principal_id, created_at) VALUES (?, ?, ?, ?)",
+					"INSERT INTO reactions (message_id, emoji, principal_id, created_at, version) VALUES (?, ?, ?, ?, ?)",
 					messageId,
 					emoji,
 					principalId,
 					Date.now(),
+					version,
 				);
 			} else {
 				this.sql.exec(

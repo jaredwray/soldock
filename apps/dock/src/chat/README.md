@@ -477,7 +477,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
 | Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
-| Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time. A delete of the message removes its rows |
+| Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |

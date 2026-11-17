@@ -903,6 +903,24 @@ describe("reactions", () => {
 		expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji: "👍" }))).toBe("invalid");
 	});
 
+	// The order is the order of the reactions, also for reactions in one millisecond.
+	it("keeps the order of reactions that come in the same millisecond", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "Hello");
+		const target = { room_id: room.id, message_id: message.id };
+		vi.useFakeTimers({ toFake: ["Date"] });
+		// The id of Ada sorts before the id of the agent. The agent reacts first.
+		expect(ada.id < bot.id).toBe(true);
+		await bot.call("chat.add_reaction", { ...target, emoji: "👍" });
+		await ada.call("chat.add_reaction", { ...target, emoji: "🎉" });
+		const both = (await ada.call("chat.add_reaction", { ...target, emoji: "👍" })).message;
+		vi.useRealTimers();
+		expect(both.reactions).toEqual([
+			{ emoji: "👍", count: 2, principal_ids: [bot.id, ada.id] },
+			{ emoji: "🎉", count: 1, principal_ids: [ada.id] },
+		]);
+	});
+
 	// A client shows a reaction of a different member when its socket gets the message.
 	it("sends the message with its reactions to the sockets of the room", async () => {
 		const room = await createRoom(ada, "private", "Launch", [bot.id]);
