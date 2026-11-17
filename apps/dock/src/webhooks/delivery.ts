@@ -96,6 +96,8 @@ export interface DriveWebhookEventJob {
 	eventId: string;
 	itemId: string;
 	occurredAt: number;
+	/** The last subscription sequence before this change. A later subscription does not get the event. */
+	subscriptionSequence: number;
 	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
 	memberIds?: string[];
 }
@@ -157,7 +159,13 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 			job.kind === "drive_event" ||
 			attempt === undefined ||
 			(typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 1);
+		const sequenceOk =
+			job.kind !== "drive_event" ||
+			(typeof job.subscriptionSequence === "number" &&
+				Number.isSafeInteger(job.subscriptionSequence) &&
+				job.subscriptionSequence >= 0);
 		return (
+			sequenceOk &&
 			validAttempt &&
 			typeof job.spaceId === "string" &&
 			typeof job.itemId === "string" &&
@@ -300,7 +308,9 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
 	const rows = await activeSubscriptions(env.DIRECTORY, job.eventType, job.spaceId);
 	const allowed = job.memberIds === undefined ? null : new Set(job.memberIds);
-	const chosen = allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by));
+	const chosen = (allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by))).filter(
+		(row) => row.sequence <= job.subscriptionSequence,
+	);
 	if (chosen.length === 0) return;
 	await env.WEBHOOKS.sendBatch(
 		chosen.map((row) => ({

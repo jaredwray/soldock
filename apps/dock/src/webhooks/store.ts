@@ -124,10 +124,22 @@ export async function chatWebhookBoundary(db: D1Database): Promise<number> {
 	return row?.boundary ?? 0;
 }
 
+/** The last drive subscription for one target. A drive change records this before it commits. */
+export async function driveWebhookBoundary(db: D1Database, targetId: string): Promise<number> {
+	const row = await db
+		.prepare(
+			"SELECT COALESCE(MAX(sequence), 0) AS boundary FROM webhook_subscriptions WHERE domain = 'drive' AND target_id = ?",
+		)
+		.bind(targetId)
+		.first<{ boundary: number }>();
+	return row?.boundary ?? 0;
+}
+
 export interface ActiveSubscription {
 	id: string;
 	target_id: string;
 	created_by: string;
+	sequence: number;
 }
 
 /** Active subscriptions for one event and one target, whose endpoint is also active. */
@@ -138,7 +150,7 @@ export async function activeSubscriptions(
 ): Promise<ActiveSubscription[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT s.id, s.target_id, e.created_by FROM webhook_subscriptions s
+			`SELECT s.id, s.target_id, s.sequence, e.created_by FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
 			WHERE s.event_type = ? AND s.target_id = ? AND s.status = 'active' AND e.status = 'active'`,
 		)

@@ -402,11 +402,49 @@ describe("drive webhook rules from review", () => {
 		"drive.deleted",
 	] as const;
 
+	it("sends an event that was stored before the sequence column", async () => {
+		await subscribe(ada, "drive.item.created");
+		const queue = await capture(ada.id);
+		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id));
+		await runInDurableObject(stub, async (_instance, state) => {
+			const sql = state.storage.sql;
+			// A drive that stored an event already has its id. The subscription call does not write it.
+			sql.exec(
+				"INSERT INTO meta (key, value) VALUES ('space_id', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+				ada.id,
+			);
+			sql.exec(
+				`INSERT INTO webhook_outbox (id, event_type, item_id, occurred_at, next_attempt_at, members_json, subscription_sequence)
+				VALUES ('evt-old', 'drive.item.created', 'itm_01AAAAAAAAAAAAAAAAAAAAAAAA', ?, ?, NULL, NULL)`,
+				Date.now(),
+				Date.now(),
+			);
+			await state.storage.setAlarm(Date.now());
+		});
+		await queue.drain();
+		const bodies = await posted(queue.events);
+		expect(bodies.map((body) => body.type)).toEqual(["drive.item.created"]);
+	});
+
 	it("stores no event before the first subscription", async () => {
 		const queue = await capture(ada.id);
 		await ada.call("drive.create_folder", { name: "Quiet" });
 		await queue.drain();
 		expect(queue.events).toEqual([]);
+	});
+
+	it("does not send an event that happened before the subscription", async () => {
+		const first = await subscribe(ada, "drive.item.created");
+		const queue = await capture(ada.id);
+		await ada.call("drive.create_folder", { name: "Before" });
+		const second = await subscribe(ada, "drive.item.created");
+		await queue.drain();
+		const early = await posted(queue.events);
+		expect(early.map((body) => body.data.webhook_id)).toEqual([first.id]);
+		await ada.call("drive.create_folder", { name: "After" });
+		await queue.drain();
+		const later = await posted(queue.events);
+		expect(later.map((body) => body.data.webhook_id).sort()).toEqual([first.id, second.id].sort());
 	});
 
 	it("sends one delete event for a folder and the file inside it", async () => {

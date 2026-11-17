@@ -3,10 +3,7 @@ import type { CallContext } from "../identity/index.ts";
 import type { HandlerMap } from "../platform/index.ts";
 import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";
 
-const shared = createSubscriptionHandlers("drive", async (call, targetId) => {
-	const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(targetId));
-	await space.enableWebhookEvents();
-});
+const shared = createSubscriptionHandlers("drive");
 
 function forDrive(view: SubscriptionView): DriveWebhookSubscription {
 	const { target_id, event, ...rest } = view;
@@ -27,6 +24,8 @@ export const driveWebhookHandlers: Pick<
 			event: input.event,
 			...(input.space_id ? { mailbox_id: input.space_id } : {}),
 		});
+		const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(result.subscription.target_id));
+		await space.enableWebhookEvents();
 		return { subscription: forDrive(result.subscription) };
 	},
 	async "drive.list_webhook_subscriptions"(call, input) {
