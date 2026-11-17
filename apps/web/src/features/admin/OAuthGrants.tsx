@@ -43,83 +43,92 @@ export function OAuthGrants({ principalId, agentName }: { principalId: string; a
 
 	return (
 		<section className="panel" aria-labelledby={headingId}>
-			<h2 id={headingId} className="panel-title">
-				{heading}
-			</h2>
+			<header className="panel-heading">
+				<h2 id={headingId} className="panel-title">
+					{heading}
+				</h2>
+				<p className="panel-note">
+					An app that connects with OAuth acts as {agentName}. It can do only what its scopes allow.
+				</p>
+			</header>
 			{error && (
 				<p className="form-error" role="alert">
 					The connections did not load. {error}
 				</p>
 			)}
-			{grants === null && !error && <p className="panel-note">Loading connections…</p>}
-			{grants !== null && grants.length === 0 && (
-				<p className="panel-note">No app connected with OAuth yet. Give the app the MCP endpoint URL above.</p>
-			)}
-			{grants !== null && grants.length > 0 && (
-				<div className="table-scroll">
-					<table className="table table-rows">
-						<caption className="visually-hidden">{heading}</caption>
-						<thead>
-							<tr>
-								<th scope="col">App and scopes</th>
-								<th scope="col" className="col-optional">
-									Connected
-								</th>
-								<th scope="col" className="col-optional">
-									Last used
-								</th>
-								<th scope="col" className="cell-actions">
-									<span className="visually-hidden">Actions</span>
-								</th>
-							</tr>
-						</thead>
-						<tbody>
-							{sorted.map((grant) => {
-								const ended = status(grant);
-								return (
-									<tr key={grant.id} className={ended ? "row-muted" : undefined}>
-										<td>
-											<div className="row-title">
-												{grant.client_name}
-												{ended && <span className="status status-failed">{ended}</span>}
-											</div>
-											<div className="row-note cell-scopes">{grant.scopes.join(", ")}</div>
-										</td>
-										<td className="cell-date col-optional" title={fullDate(grant.created_at)}>
-											{shortDate(grant.created_at)}
-										</td>
-										<td className="cell-date col-optional">
-											{grant.last_used_at ? shortDate(grant.last_used_at) : "Never"}
-										</td>
-										<td className="cell-actions">
-											{!ended && addable(grant).length > 0 && (
-												<button
-													type="button"
-													className="button button-small"
-													onClick={() => setAdding(grant)}
-													aria-label={`Add scopes to the connection of ${grant.client_name}`}
-												>
-													Add scopes
-												</button>
-											)}
-											{!grant.revoked && (
-												<button
-													type="button"
-													className="button button-small button-danger-outline"
-													onClick={() => setRevoking(grant)}
-													aria-label={`Revoke the connection of ${grant.client_name}`}
-												>
-													Revoke
-												</button>
-											)}
-										</td>
-									</tr>
-								);
-							})}
-						</tbody>
-					</table>
-				</div>
-			)}
+			<div className="panel-card panel-card-list">
+				{grants === null && !error && <p className="panel-empty">Loading connections…</p>}
+				{grants !== null && grants.length === 0 && (
+					<p className="panel-empty">No app connected with OAuth yet. Give the app the MCP endpoint URL above.</p>
+				)}
+				{grants !== null && grants.length > 0 && (
+					<div className="table-scroll">
+						<table className="table table-rows">
+							<caption className="visually-hidden">{heading}</caption>
+							<thead>
+								<tr>
+									<th scope="col">App and scopes</th>
+									<th scope="col" className="col-optional">
+										Connected
+									</th>
+									<th scope="col" className="col-optional">
+										Last used
+									</th>
+									<th scope="col" className="cell-actions">
+										<span className="visually-hidden">Actions</span>
+									</th>
+								</tr>
+							</thead>
+							<tbody>
+								{sorted.map((grant) => {
+									const ended = status(grant);
+									return (
+										<tr key={grant.id} className={ended ? "row-muted" : undefined}>
+											<td>
+												<div className="row-title">
+													{grant.client_name}
+													{ended && <span className="status status-failed">{ended}</span>}
+												</div>
+												<div className="row-note cell-scopes">{grant.scopes.join(", ")}</div>
+											</td>
+											<td className="cell-date col-optional" title={fullDate(grant.created_at)}>
+												{shortDate(grant.created_at)}
+											</td>
+											<td className="cell-date col-optional">
+												{grant.last_used_at ? shortDate(grant.last_used_at) : "Never"}
+											</td>
+											<td className="cell-actions">
+												<div className="row-actions row-actions-text">
+													{!ended && addable(grant).length > 0 && (
+														<button
+															type="button"
+															className="button button-small"
+															onClick={() => setAdding(grant)}
+															aria-label={`Add scopes to the connection of ${grant.client_name}`}
+														>
+															Add scopes
+														</button>
+													)}
+													{!grant.revoked && (
+														<button
+															type="button"
+															className="button button-small button-danger-outline"
+															onClick={() => setRevoking(grant)}
+															aria-label={`Revoke the connection of ${grant.client_name}`}
+														>
+															Revoke
+														</button>
+													)}
+												</div>
+											</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				)}
+			</div>
 			{adding && (
 				<AddScopesDialog
 					grant={adding}

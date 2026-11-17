@@ -99,7 +99,7 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 						{heading}
 					</h2>
 					<p className="panel-note">
-						Each webhook gets a signed POST for the events below. The POST has ids only.
+						Soldock sends a signed POST to each webhook when one of its events occurs. The POST has ids only.
 						{note && ` ${note}`}
 					</p>
 				</header>

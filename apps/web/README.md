@@ -249,6 +249,8 @@ MCP clients. The app has no UI-only path.
   - **Members** (`members`) lists each person and each agent as a card (`AdminCard`).
     People come first, then agents. Each group is in name order.
     A click opens the card and shows its parts, with a line between the parts.
+    A part with a list has its title and a muted line above a box on the canvas color. The list is in the box.
+    The muted line says what the part is for.
     The parts load their data, so the card renders them only after the first open.
     The parts stay after the card closes, so a form keeps its text.
     A policy choice that is not saved shows a status line. The chip keeps the saved policy.
@@ -288,6 +290,7 @@ MCP clients. The app has no UI-only path.
     - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
       **Apps connected as …** uses `oauth.list_grants`, **Add scopes** (`oauth.add_grant_scopes`) and Revoke (`oauth.revoke_grant`).
+      The two buttons are side by side with a space between them. At 500px and below, one is above the other.
       **Add scopes** shows on a live connection when the session can give one more agent scope.
       Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
       To remove a scope, revoke the connection and connect again.
@@ -1074,7 +1077,8 @@ for each value that the user selects from a list.
   `env(safe-area-inset-*)` to its padding.
 - Toasts are at the bottom right, because the account button is at the bottom left.
 - Settings and Admin use panels: a heading (`.panel-title`), a muted line (`.panel-note`), and a
-  card on the surface (`.panel-card`) only for a list or a form. Sign-in, setup and Connect use one
+  card on the surface (`.panel-card`) only for a list or a form. In an open Admin card, which is on the
+  surface, that card is a box on the canvas color. Sign-in, setup and Connect use one
   card of 440px (600px for Connect) on the surface (`.auth-card`), with fields and buttons 42px high.
 
 ## Routes

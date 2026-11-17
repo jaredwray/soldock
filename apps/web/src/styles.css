@@ -3202,8 +3202,9 @@ fieldset {
 	font-weight: 500;
 }
 
-/* The Edit and Delete buttons of a webhook have text, so they need more room than icon buttons. */
-.webhook-actions {
+/* Two buttons of one row that have text, for example Edit and Delete of a webhook, or Add scopes and
+   Revoke of a connected app. They need more room than icon buttons. */
+.row-actions-text {
 	gap: 8px;
 }
 
@@ -3566,7 +3567,7 @@ fieldset {
 	color: var(--foreground);
 }
 
-/* The buttons of one row, for example the webhook actions. */
+/* The buttons of one row, side by side with a space between them. */
 .row-actions {
 	display: inline-flex;
 	gap: 6px;
@@ -3748,12 +3749,16 @@ fieldset {
 	border-top: 1px solid var(--border);
 }
 
-/* In an open card, a panel has no card of its own. */
+/* In an open card, the list of a part is in a box on the canvas color. The title and the note of the
+   part are above the box, so each part shows as one unit. */
 .admin-card-body .panel-card {
-	padding: 0;
-	border: 0;
-	border-radius: 0;
-	background: none;
+	padding: 2px 16px;
+	border-radius: var(--radius-md);
+	background: var(--background);
+}
+
+.admin-card-body .panel-card > .panel-empty {
+	padding: 20px 0;
 }
 
 .admin-card-body .panel-title,
@@ -3765,6 +3770,11 @@ fieldset {
 
 .admin-card-body .panel-form-divided {
 	padding-bottom: 0;
+}
+
+/* A form in the box of a part keeps a space below its button. */
+.admin-card-body .panel-card .panel-form-divided {
+	padding-bottom: 16px;
 }
 
 /* Shared drives: the members and the roles, in a card of Admin and in a dialog of Drive. */
@@ -4241,7 +4251,7 @@ fieldset {
 	}
 
 	.admin-card-body .panel-card {
-		padding: 0;
+		padding: 2px 12px;
 	}
 
 	.connect-page {
@@ -4276,8 +4286,8 @@ fieldset {
 		padding-right: 10px;
 	}
 
-	/* The Edit and Delete buttons of a webhook, one under the other, so the events keep their width. */
-	.webhook-actions {
+	/* The text buttons of a row, one under the other, so the first column keeps its width. */
+	.row-actions-text {
 		flex-direction: column;
 	}
 }
