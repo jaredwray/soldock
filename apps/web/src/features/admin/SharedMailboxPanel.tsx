@@ -5,7 +5,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
-import { WebhookManager } from "../settings/Webhooks.tsx";
+import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
@@ -19,7 +19,7 @@ interface SharedMailboxPanelProps {
 
 /**
  * One shared mailbox, as a card like an agent: its name, its members and its webhooks. Members create
- * webhooks in Settings. An owner or an admin can delete one.
+ * webhooks in Settings. An owner or an admin can clear an event of one.
  */
 export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMailboxPanelProps) {
 	const count = mailbox.member_ids.length;
@@ -32,11 +32,13 @@ export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMai
 		>
 			<NameForm mailbox={mailbox} onChanged={onChanged} />
 			<MembersPart mailbox={mailbox} principals={principals} onChanged={onChanged} />
-			<WebhookManager
+			<TargetWebhooks
 				heading={`Webhooks of ${mailbox.display_name}`}
-				mailboxId={mailbox.id}
+				targetId={mailbox.id}
+				targetName={mailbox.address}
+				domains={["mail"]}
 				canCreate={false}
-				note="Members create webhooks in Settings. You can delete one, for example when the mailbox reaches its limit."
+				note="Members add a webhook in Settings. You can clear an event, for example when the mailbox reaches its limit."
 			/>
 		</AdminCard>
 	);

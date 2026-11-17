@@ -7,7 +7,8 @@ import { useToast } from "../../lib/toast.tsx";
 import { viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
-import { WebhookManager } from "../settings/Webhooks.tsx";
+import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
+import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist } from "./policy.ts";
 
@@ -24,7 +25,7 @@ interface AgentDetailsProps {
 /**
  * The tools of one agent: its outbound policy, the apps that connected as it with OAuth, its webhooks
  * and its API keys. An owner or an admin also gets a link to the mailbox, which they can read. Only the
- * sponsor can create a webhook for the agent. An owner or an admin can delete one.
+ * sponsor can add a webhook or an event for the agent. An owner or an admin can clear an event.
  */
 export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
@@ -47,22 +48,13 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 			</div>
 			<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
 			<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
-			<WebhookManager
-				heading={`Mail events of ${agent.display_name}`}
-				mailboxId={agent.id}
+			<TargetWebhooks
+				heading={`Webhooks of ${agent.display_name}`}
+				targetId={agent.id}
+				targetName={agent.display_name}
+				domains={WEBHOOK_DOMAINS}
 				canCreate={agent.sponsor_id === whoami.principal.id}
-			/>
-			<WebhookManager
-				domain="chat"
-				heading={`Chat events of ${agent.display_name}`}
-				mailboxId={agent.id}
-				canCreate={agent.sponsor_id === whoami.principal.id}
-			/>
-			<WebhookManager
-				domain="drive"
-				heading={`Drive events of ${agent.display_name}`}
-				mailboxId={agent.id}
-				canCreate={agent.sponsor_id === whoami.principal.id}
+				note="Only the sponsor can add a webhook or an event."
 			/>
 			<ApiKeyManager
 				principalId={agent.id}

@@ -3106,6 +3106,102 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
+/* The events of a webhook in its row: one line for each product, with the name of the product in ink. */
+.event-lines {
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.event-lines li {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 8px;
+}
+
+.event-lines li + li {
+	margin-top: 2px;
+}
+
+.event-line-name {
+	color: var(--foreground);
+	font-weight: 500;
+}
+
+.row-muted .event-line-name {
+	color: inherit;
+}
+
+.event-line-stopped {
+	color: var(--negative);
+}
+
+/* A part of a dialog that has its own title, for example the events of a webhook. */
+.dialog-section {
+	padding-top: 16px;
+	border-top: 1px solid var(--border);
+}
+
+.dialog-section-title {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.dialog-section > .field-hint {
+	margin-top: 2px;
+}
+
+/* The check boxes of a webhook: one group for each product, with the events in columns. */
+.event-groups {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.event-group {
+	padding: 12px 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+}
+
+.event-group-title {
+	float: left;
+	width: 100%;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.event-group .field-hint {
+	clear: both;
+	margin: 0 0 8px;
+}
+
+.event-target {
+	max-width: 320px;
+	margin-bottom: 8px;
+}
+
+.event-target .input {
+	background: var(--background);
+}
+
+.event-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	column-gap: 16px;
+}
+
+/* The check box that sets each event of a product. It has a row of its own above the events. */
+.event-all {
+	grid-column: 1 / -1;
+	font-weight: 500;
+}
+
 /* The Edit and Delete buttons of a webhook have text, so they need more room than icon buttons. */
 .webhook-actions {
 	gap: 8px;
@@ -3442,11 +3538,6 @@ fieldset {
 .member-you {
 	color: var(--muted-foreground);
 	font-weight: 400;
-}
-
-/* The mailbox of a webhook under its URL. It shows only at 900px and below, where the Mailbox column hides. */
-.row-note.row-note-inline {
-	display: none;
 }
 
 .row-muted .member-name {
@@ -4169,10 +4260,6 @@ fieldset {
 	.col-optional {
 		display: none;
 	}
-
-	.row-note.row-note-inline {
-		display: block;
-	}
 }
 
 /* From 901px to 1100px, the Admin tables have the sidebar next to them. They keep the name and the
@@ -4187,6 +4274,11 @@ fieldset {
 	.table-rows th,
 	.table-rows td {
 		padding-right: 10px;
+	}
+
+	/* The Edit and Delete buttons of a webhook, one under the other, so the events keep their width. */
+	.webhook-actions {
+		flex-direction: column;
 	}
 }
 
