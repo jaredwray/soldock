@@ -481,8 +481,8 @@ const MIGRATIONS: string[][] = [
 	],
 	// The members at the time of the event. A later membership change does not change this list.
 	["ALTER TABLE webhook_outbox ADD COLUMN members_json TEXT"],
-	// The last subscription sequence before the change. A later subscription does not get this event.
-	["ALTER TABLE webhook_outbox ADD COLUMN subscription_sequence INTEGER NOT NULL DEFAULT 0"],
+	// Null means the event was stored before this column. Delivery then sends it to each active subscription.
+	["ALTER TABLE webhook_outbox ADD COLUMN subscription_sequence INTEGER"],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -639,8 +639,6 @@ function ftsQuery(text: string): string | null {
 export class DriveSpaceDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private drainTask: Promise<void> | null = null;
-	/** The last drive subscription seen before the current change. */
-	private webhookBoundary = 0;
 	/** The end of the line of index writes. Each write starts after the one before it ends. */
 	private flushed: Promise<void> = Promise.resolve();
 	/** The run of the moves between drives. One run at a time keeps the steps of a move in order. */
@@ -1268,12 +1266,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (this.meta("webhook_events") !== "1") this.setMeta("webhook_events", "1");
 	}
 
-	/** Reads the last drive subscription for this target. Call this before the change transaction. */
-	private async captureWebhookBoundary(): Promise<void> {
-		if (this.meta("webhook_events") !== "1") return;
+	/** The last drive subscription for this target. Call this before the checks for the change. */
+	private async captureWebhookBoundary(): Promise<number> {
+		if (this.meta("webhook_events") !== "1") return 0;
 		const spaceId = this.meta("space_id");
-		if (!spaceId) return;
-		this.webhookBoundary = await driveWebhookBoundary(this.env.DIRECTORY, spaceId);
+		if (!spaceId) return 0;
+		return driveWebhookBoundary(this.env.DIRECTORY, spaceId);
 	}
 
 	/** The members of a shared drive now. A personal drive has no member list. */
@@ -1287,7 +1285,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * Records one drive event. Call this inside the transaction that stores the change.
 	 * Pass `members` when the transaction deletes the members before this call.
 	 */
-	private noteWebhook(eventType: DriveWebhookEvent, itemId: string, members?: string[] | null): void {
+	private noteWebhook(eventType: DriveWebhookEvent, itemId: string, boundary: number, members?: string[] | null): void {
 		if (this.meta("webhook_events") !== "1") return;
 		const now = Date.now();
 		const ids = members === undefined ? this.webhookMemberIds() : members;
@@ -1300,7 +1298,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			now,
 			now,
 			ids === null ? null : JSON.stringify(ids),
-			this.webhookBoundary,
+			boundary,
 		);
 	}
 
@@ -1351,13 +1349,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			const earlier = this.idempotentResult(call, input.idempotency.key, input.idempotency.requestHash);
 			if (earlier !== null) return "error" in earlier ? earlier : { item: earlier, duplicate: true };
 		}
+		const boundary = await this.captureWebhookBoundary();
 		const allowed = this.checkCreate(call, input.parentId);
 		if ("error" in allowed) return allowed;
 		const deep = input.kind === "folder" ? this.tooDeep(allowed.depth) : null;
 		if (deep) return deep;
 		const now = Date.now();
 		const actor = JSON.stringify(call.actor);
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			const seq = this.one<{ seq: number }>(
 				`INSERT INTO items (id, parent_id, kind, name, name_key, mime_type, size, head_version_id, created_at, modified_at, modified_by_json)
@@ -1387,7 +1385,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				);
 			}
 			this.bump();
-			this.noteWebhook("drive.item.created", input.id);
+			this.noteWebhook("drive.item.created", input.id, boundary);
 		});
 		await this.schedule();
 		return { item: this.recordOf(call, input.id), duplicate: false };
@@ -1414,6 +1412,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		input: Omit<NewVersion, "mimeType"> & { mimeType: string | null },
 	): Promise<{ item: ItemRecord; version: VersionRecord } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const found = this.open(call, itemId, "editor");
 		if ("error" in found) return found;
 		if (found.item.kind !== "file") return refuse("invalid", "Only a file has versions.");
@@ -1421,7 +1420,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const now = Date.now();
 		const actor = JSON.stringify(call.actor);
 		const mimeType = input.mimeType ?? found.item.mime_type ?? "application/octet-stream";
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			this.insertVersion(itemId, { ...input, mimeType }, now, actor);
 			this.sql.exec(
@@ -1449,7 +1447,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				this.enqueue("blob", version.blob_key, {});
 			}
 			this.bump();
-			this.noteWebhook("drive.item.updated", itemId);
+			this.noteWebhook("drive.item.updated", itemId, boundary);
 		});
 		await this.schedule();
 		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", input.id) as VersionRow;
@@ -1462,6 +1460,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		versionId: string,
 	): Promise<{ item: ItemRecord; version: VersionRecord } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const found = this.open(call, itemId, "editor");
 		if ("error" in found) return found;
 		if (found.item.kind !== "file") return refuse("invalid", "Only a file has versions.");
@@ -1469,7 +1468,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const version = this.one<VersionRow>("SELECT * FROM versions WHERE item_id = ? AND id = ?", itemId, versionId);
 		if (!version) return refuse("not_found", "The file has no version with that id.");
 		if (found.item.head_version_id !== versionId) {
-			await this.captureWebhookBoundary();
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
 					"UPDATE items SET head_version_id = ?, size = ?, mime_type = ?, modified_at = ?, modified_by_json = ? WHERE id = ?",
@@ -1481,7 +1479,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					itemId,
 				);
 				this.bump();
-				this.noteWebhook("drive.item.updated", itemId);
+				this.noteWebhook("drive.item.updated", itemId, boundary);
 			});
 			this.ctx.waitUntil(this.schedule());
 		}
@@ -1490,11 +1488,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	async rename(call: SpaceCall, itemId: string, name: string): Promise<ItemRecord | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const found = this.open(call, itemId, "editor");
 		if ("error" in found) return found;
 		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
 		if (found.item.name !== name) {
-			await this.captureWebhookBoundary();
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
 					"UPDATE items SET name = ?, name_key = ?, modified_at = ?, modified_by_json = ? WHERE id = ?",
@@ -1506,7 +1504,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				);
 				this.sql.exec("UPDATE items_fts SET name = ? WHERE rowid = ?", name, found.item.seq);
 				this.bump();
-				this.noteWebhook("drive.item.updated", itemId);
+				this.noteWebhook("drive.item.updated", itemId, boundary);
 			});
 			this.ctx.waitUntil(this.schedule());
 		}
@@ -1516,6 +1514,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Moves items into a folder, or to the root. The call moves each item or no item. */
 	async move(call: SpaceCall, itemIds: string[], parentId: string | null): Promise<ItemRecord[] | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const refused = this.gate(call, "editor");
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
@@ -1539,7 +1538,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			const deep = height === null || height === undefined ? null : this.tooDeep(target.depth + height);
 			if (deep) return deep;
 		}
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			let changed = false;
 			for (const id of ids) {
@@ -1548,7 +1546,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					parentId,
 					id,
 				).rowsWritten;
-				if (moved > 0) this.noteWebhook("drive.item.moved", id);
+				if (moved > 0) this.noteWebhook("drive.item.moved", id, boundary);
 				changed ||= moved > 0;
 			}
 			if (changed) this.bump();
@@ -1595,6 +1593,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Puts items in the trash. A folder hides all that it holds. Nothing is deleted. */
 	async trash(call: SpaceCall, itemIds: string[], dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const refused = this.gate(call, "editor");
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
@@ -1618,7 +1617,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				),
 		);
 		if (dryRun || changed.length === 0) return { items_changed: changed.length };
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			const now = Date.now();
 			for (const item of changed) {
@@ -1627,7 +1625,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					`${DOWN} UPDATE items SET trash_root = ?1 WHERE trash_root IS NULL AND id IN (SELECT id FROM down)`,
 					item.id,
 				);
-				this.noteWebhook("drive.item.trashed", item.id);
+				this.noteWebhook("drive.item.trashed", item.id, boundary);
 			}
 			this.bump();
 		});
@@ -1638,6 +1636,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Takes items out of the trash. An item whose folder is gone or in the trash goes to the root. */
 	async restore(call: SpaceCall, itemIds: string[]): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const refused = this.gate(call, "editor");
 		if (refused) return refused;
 		const rows: ItemRow[] = [];
@@ -1654,7 +1653,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (item.trash_root !== null) rows.push(item);
 		}
 		if (rows.length === 0) return { items_changed: 0 };
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			// A folder comes back before the items in it, so such an item stays in its folder.
 			for (const item of this.topDown(rows)) {
@@ -1666,7 +1664,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					item.id,
 				);
 				this.sql.exec("UPDATE items SET trash_root = NULL WHERE trash_root = ?", item.id);
-				this.noteWebhook("drive.item.restored", item.id);
+				this.noteWebhook("drive.item.restored", item.id, boundary);
 			}
 			this.bump();
 		});
@@ -1677,6 +1675,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Deletes items that are in the trash, with all that a folder holds. This cannot be undone. */
 	async remove(call: SpaceCall, itemIds: string[], dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const refused = this.gate(call, "manager");
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
@@ -1689,9 +1688,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			}
 		}
 		if (dryRun) return { items_changed: ids.length };
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
-			for (const id of ids) this.deleteTree(id);
+			for (const id of ids) this.deleteTree(id, boundary);
 			this.bump();
 		});
 		await this.schedule();
@@ -1711,7 +1709,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * Deletes an item and all that it holds, in the transaction of the caller. The bytes in R2, the
 	 * content of each doc and sheet, and the pointers in other drives go away through the outbox.
 	 */
-	private deleteTree(itemId: string): void {
+	private deleteTree(itemId: string, boundary: number): void {
 		const rows = this.all<{ seq: number; id: string; kind: ItemKind }>(
 			`${DOWN} SELECT i.seq, i.id, i.kind FROM items i JOIN down ON down.id = i.id`,
 			itemId,
@@ -1734,7 +1732,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM items_fts WHERE rowid = ?", row.seq);
 			this.sql.exec("DELETE FROM items WHERE id = ?", row.id);
 		}
-		this.noteWebhook("drive.item.deleted", itemId);
+		this.noteWebhook("drive.item.deleted", itemId, boundary);
 	}
 
 	// --- Share ----------------------------------------------------------------------------------
@@ -1747,12 +1745,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		role: "editor" | "viewer",
 	): Promise<PermissionRecord | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const found = this.open(call, itemId, this.top(call));
 		if ("error" in found) return found;
 		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
 		if (principalId === call.spaceId) return refuse("invalid", "You own this item. It needs no grant for you.");
 		const now = Date.now();
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				`INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at) VALUES (?, ?, ?, ?, ?)
@@ -1765,7 +1763,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			);
 			this.enqueue("share", principalId, { itemId, role, sharedAt: now });
 			this.bump();
-			this.noteWebhook("drive.item.shared", itemId);
+			this.noteWebhook("drive.item.shared", itemId, boundary);
 		});
 		await this.schedule();
 		const row = this.one<{ granted_by_json: string | null; created_at: number }>(
@@ -1789,12 +1787,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	async unshare(call: SpaceCall, itemId: string, principalId: string): Promise<{ removed: boolean } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		const self = call.actor.principal_id === principalId;
 		const found = this.open(call, itemId, self ? "viewer" : this.top(call));
 		if ("error" in found) return found;
 		if (this.busy(itemId)) return refuse("conflict", MOVING);
 		let removed = false;
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			removed =
 				this.sql.exec("DELETE FROM permissions WHERE item_id = ? AND principal_id = ?", itemId, principalId)
@@ -1802,7 +1800,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (!removed) return;
 			this.enqueue("unshare", principalId, { itemId });
 			this.bump();
-			this.noteWebhook("drive.item.unshared", itemId);
+			this.noteWebhook("drive.item.unshared", itemId, boundary);
 		});
 		await this.schedule();
 		return { removed };
@@ -1994,7 +1992,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const full = this.memberCount(new Set()) + adds > SHARED_DRIVE_LIMITS.members;
 		// A member that the directory deleted is no manager, and does not count for the limit.
 		const gone = demotes || full ? await this.goneMembers() : new Set<string>();
-		// The read of the directory let other calls in. Each check from here is in one step with the change.
+		const boundary = await this.captureWebhookBoundary();
+		// The reads above let other calls in. Each check from here is in one step with the change.
 		const facts = this.manage(call, "manager");
 		if ("error" in facts) return facts;
 		const changed = members.filter((member) => this.memberRole(member.principalId) !== member.role);
@@ -2008,13 +2007,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			return refuse("invalid", LAST_MANAGER);
 		}
 		if (changed.length > 0) {
-			await this.captureWebhookBoundary();
 			this.ctx.storage.transactionSync(() => {
 				const actor = JSON.stringify(call.actor);
 				const now = Date.now();
 				for (const member of changed) this.putMember(member, actor, now);
 				this.bump();
-				this.noteWebhook("drive.members.changed", call.spaceId);
+				this.noteWebhook("drive.members.changed", call.spaceId, boundary);
 			});
 		}
 		await this.schedule();
@@ -2032,6 +2030,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const allowed = this.manage(call, self ? "member" : "manager");
 		if ("error" in allowed) return allowed;
 		const gone = this.memberRole(principalId) === "manager" ? await this.goneMembers() : new Set<string>();
+		const boundary = await this.captureWebhookBoundary();
 		const facts = this.manage(call, self ? "member" : "manager");
 		if ("error" in facts) return facts;
 		const role = this.memberRole(principalId);
@@ -2039,12 +2038,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (role === "manager" && !this.hasManager(new Set([...gone, principalId]))) {
 			return refuse("invalid", LAST_MANAGER);
 		}
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
 			this.bump();
-			this.noteWebhook("drive.members.changed", call.spaceId);
+			this.noteWebhook("drive.members.changed", call.spaceId, boundary);
 		});
 		await this.schedule();
 		await this.flush();
@@ -2067,6 +2065,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			await this.flush();
 			return { deleted: false };
 		}
+		const boundary = await this.captureWebhookBoundary();
 		if ((this.one<{ n: number }>("SELECT COUNT(*) AS n FROM items")?.n ?? 0) > 0) {
 			return refuse(
 				"invalid",
@@ -2074,11 +2073,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			);
 		}
 		const members = this.memberRows().map((member) => member.principal_id);
-		await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			this.setMeta("drive", JSON.stringify({ ...facts, deleted_at: Date.now() }));
 			for (const member of this.memberRows()) this.touch(`member:${member.principal_id}`);
-			this.noteWebhook("drive.deleted", call.spaceId, members);
+			this.noteWebhook("drive.deleted", call.spaceId, boundary, members);
 			this.sql.exec("DELETE FROM members");
 			this.touch("drive");
 			this.bump();
@@ -2512,7 +2510,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const spaceId = this.meta("space_id") as string;
 		const actor = JSON.parse(row.actor_json) as ActorRecord;
 		const now = Date.now();
-		await this.captureWebhookBoundary();
+		const boundary = await this.captureWebhookBoundary();
 		this.ctx.storage.transactionSync(() => {
 			const itemIds = this.all<{ item_id: string }>(
 				"SELECT item_id FROM transfer_items WHERE transfer_id = ? ORDER BY item_id",
@@ -2552,7 +2550,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				"SELECT item_id FROM transfer_items WHERE transfer_id = ? AND top = 1",
 				row.id,
 			)) {
-				this.noteWebhook("drive.item.moved", top.item_id);
+				this.noteWebhook("drive.item.moved", top.item_id, boundary);
 			}
 			this.sql.exec("DELETE FROM transfer_items WHERE transfer_id = ?", row.id);
 			this.sql.exec("DELETE FROM transfers WHERE id = ?", row.id);
@@ -2715,6 +2713,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		input: { transferId: string; parentId: string | null; itemsTotal: number },
 	): Promise<{ items: number } | Refusal> {
 		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
 		if (this.one("SELECT 1 AS found FROM imports WHERE transfer_id = ? AND seq = -1", input.transferId)) {
 			return { items: 0 };
 		}
@@ -2733,7 +2732,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		let count = 0;
 		if (!refusal && !("error" in place)) {
 			const now = Date.now();
-			await this.captureWebhookBoundary();
 			try {
 				this.ctx.storage.transactionSync(() => {
 					const tops: string[] = [];
@@ -2762,7 +2760,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 						input.transferId,
 						now,
 					);
-					for (const id of tops) this.noteWebhook("drive.item.created", id);
+					for (const id of tops) this.noteWebhook("drive.item.created", id, boundary);
 					this.forget(now);
 					this.bump();
 				});
@@ -3159,8 +3157,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * access before the move. This drive sends such a change on to the drive that holds the item.
 	 */
 	async applyDocumentChange(change: DocumentChange): Promise<void> {
-		await this.captureWebhookBoundary();
-		this.applyChange(change, false, true);
+		const boundary = await this.captureWebhookBoundary();
+		this.applyChange(change, false, true, boundary);
 		this.ctx.waitUntil(this.schedule());
 		// Before the commit of a move, the target has no row for the item. The `refresh` step of the move
 		// sends the state of this drive then.
@@ -3188,7 +3186,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/** Stores a change with a newer revision. With `same`, also a change with the revision of the item. */
-	private applyChange(change: DocumentChange, same = false, notify = false): void {
+	private applyChange(change: DocumentChange, same = false, notify = false, boundary = 0): void {
 		const item = this.one<{ seq: number; content_revision: number }>(
 			"SELECT seq, content_revision FROM items WHERE id = ? AND kind IN ('doc', 'sheet')",
 			change.itemId,
@@ -3210,7 +3208,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				item.seq,
 			);
 			this.bump();
-			if (notify) this.noteWebhook("drive.item.updated", change.itemId);
+			if (notify) this.noteWebhook("drive.item.updated", change.itemId, boundary);
 		});
 	}
 
@@ -3238,7 +3236,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			occurred_at: number;
 			attempts: number;
 			members_json: string | null;
-			subscription_sequence: number;
+			subscription_sequence: number | null;
 		}>(
 			"SELECT id, event_type, item_id, occurred_at, attempts, members_json, subscription_sequence FROM webhook_outbox WHERE next_attempt_at <= ? ORDER BY occurred_at LIMIT ?",
 			Date.now(),
@@ -3258,7 +3256,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				eventId: row.id,
 				itemId: row.item_id,
 				occurredAt: row.occurred_at,
-				subscriptionSequence: row.subscription_sequence,
+				// A null sequence is an event from before this column. Each active subscription still receives it.
+				subscriptionSequence: row.subscription_sequence ?? Number.MAX_SAFE_INTEGER,
 				...(memberIds !== undefined ? { memberIds } : {}),
 			};
 			try {

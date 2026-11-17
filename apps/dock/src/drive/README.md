@@ -429,7 +429,9 @@ The POST has ids and a URI. It has no file content.
 A star sends nothing. A doc or a sheet uses `drive.item.updated`.
 The drive stores events only after the first subscription.
 The Worker turns storage on after it stores that subscription.
-The object reads the last subscription sequence, then stores the event in `webhook_outbox` in the same transaction as the change.
+The object reads the last subscription sequence before it checks the change.
+It stores that sequence with the event, in the same transaction.
+An event with no sequence goes to each active subscription.
 A subscription that starts after that sequence does not get the event.
 A shared drive event also stores the member ids from that moment.
 A permanent delete of a folder sends one `drive.item.deleted` for the folder.
