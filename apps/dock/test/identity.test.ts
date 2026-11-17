@@ -985,6 +985,44 @@ describe("directory authorization", () => {
 		expect(principals.find((p) => p.id === bot.id)?.outbound_policy?.mode).toBe("internal-only");
 	});
 
+	it("records the outbound mode that this policy write replaced", async () => {
+		const { ada, bot } = await seedOrg();
+		const spy = vi.spyOn(console, "log");
+		// A second change commits after the permission read and before the policy write.
+		const res = await withEnv(
+			{
+				DIRECTORY: racing(
+					`UPDATE principals SET outbound_mode = 'allowlist', outbound_allowlist = '["vendor.example"]' WHERE id = ?`,
+					bot.id,
+				),
+			},
+			`/api/v1/directory/agents/${bot.id}/policy`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ mode: "any" }),
+			},
+		);
+		expect(res.status).toBe(200);
+		const lines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+		spy.mockRestore();
+		const policyLine = lines.find((line) => line.op === "directory.update_agent_policy");
+		expect(policyLine).toMatchObject({
+			result: "ok",
+			outboundMode: "any",
+			previousOutboundMode: "allowlist",
+			allowlistSize: 0,
+		});
+		expect(JSON.stringify(policyLine)).not.toContain("vendor.example");
+		expect(
+			await env.DIRECTORY.prepare("SELECT outbound_mode, outbound_allowlist FROM principals WHERE id = ?")
+				.bind(bot.id)
+				.first(),
+		).toEqual({ outbound_mode: "any", outbound_allowlist: "[]" });
+	});
+
 	it("lets the sponsor manage an agent's keys within agent scopes, and nobody else but admins", async () => {
 		const { ada, bot, owner } = await seedOrg();
 		const other = await createActor(owner, {

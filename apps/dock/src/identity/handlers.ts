@@ -250,7 +250,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				"Only the sponsor of the agent, an owner or an admin can change its policy.",
 			);
 		}
-		await updateOutboundPolicy(call.env.DIRECTORY, target.id, input.mode, input.allowlist);
+		const previousMode = await updateOutboundPolicy(call.env.DIRECTORY, target.id, input.mode, input.allowlist);
+		if (!previousMode) throw new Error(`agent ${target.id} missing after update`);
 		audit({
 			op: "directory.update_agent_policy",
 			actor: call.caller.principal.id,
@@ -260,7 +261,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			result: "ok",
 			requestId: call.requestId,
 			outboundMode: input.mode,
-			previousOutboundMode: target.outbound_mode ?? "internal-only",
+			previousOutboundMode: previousMode,
 			allowlistSize: input.mode === "allowlist" ? input.allowlist.length : 0,
 		});
 		const updated = await getPrincipal(call.env.DIRECTORY, target.id);

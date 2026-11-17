@@ -479,7 +479,8 @@ Each call passes three checks:
    policy that no longer allows the address, or an archived agent, fails that delivery with no retry.
    Mail that already left stays sent. `webhooks.create_endpoint` refuses a host outside the policy in
    the same way. The audit line of `directory.update_agent_policy` records the old mode, the new mode
-   and the allowlist size. The entries stay out of the log. The audit line of an agent `mail.send`
+   and the allowlist size. The old mode is the mode that this write replaced. Two changes at the
+   same time record that order. The entries stay out of the log. The audit line of an agent `mail.send`
    records the mode and the external recipient count.
 
 A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the

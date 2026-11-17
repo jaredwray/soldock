@@ -31,7 +31,7 @@ export function audit(fields: {
 	code?: string;
 	/** The outbound mode in force. A policy change records the mode after the change. */
 	outboundMode?: string;
-	/** The outbound mode before a policy change. */
+	/** The outbound mode that a policy write replaced. */
 	previousOutboundMode?: string;
 	/** The number of allowlist entries after a policy change. The entries stay out of the log. */
 	allowlistSize?: number;
