@@ -96,6 +96,8 @@ export interface DriveWebhookEventJob {
 	eventId: string;
 	itemId: string;
 	occurredAt: number;
+	/** The last subscription sequence before this change. A later subscription does not get the event. */
+	subscriptionSequence: number;
 	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
 	memberIds?: string[];
 }
@@ -157,7 +159,13 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 			job.kind === "drive_event" ||
 			attempt === undefined ||
 			(typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 1);
+		const sequenceOk =
+			job.kind !== "drive_event" ||
+			(typeof job.subscriptionSequence === "number" &&
+				Number.isSafeInteger(job.subscriptionSequence) &&
+				job.subscriptionSequence >= 0);
 		return (
+			sequenceOk &&
 			validAttempt &&
 			typeof job.spaceId === "string" &&
 			typeof job.itemId === "string" &&
@@ -300,7 +308,9 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
 	const rows = await activeSubscriptions(env.DIRECTORY, job.eventType, job.spaceId);
 	const allowed = job.memberIds === undefined ? null : new Set(job.memberIds);
-	const chosen = allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by));
+	const chosen = (allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by))).filter(
+		(row) => row.sequence <= job.subscriptionSequence,
+	);
 	if (chosen.length === 0) return;
 	await env.WEBHOOKS.sendBatch(
 		chosen.map((row) => ({
@@ -353,15 +363,8 @@ async function checkDelivery(
 	if (memberIds !== undefined) {
 		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
 	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
-		const member = await db
-			.prepare(
-				`SELECT 1 AS found FROM shared_drive_members m
-				JOIN shared_drives d ON d.id = m.drive_id
-				WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
-			)
-			.bind(target, creator.id)
-			.first();
-		if (!member) return { action: "disable_subscription", reason: "access_lost" };
+		// A shared drive event stores its members. The directory index can be behind, so a job with no list sends nothing.
+		return { action: "skip" };
 	} else if (target !== creator.id) {
 		if (subscription.domain === "mail" && isTeamMailboxId(target)) {
 			if (!(await isTeamMailboxMember(db, target, creator.id))) {
