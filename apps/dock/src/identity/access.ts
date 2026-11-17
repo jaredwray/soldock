@@ -1,4 +1,4 @@
-import { operationList, SCOPES, type Scope } from "@soldock/contracts";
+import { operationList, operationNeedsScope, SCOPES, type Scope } from "@soldock/contracts";
 import { audit, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
@@ -76,7 +76,7 @@ export function missingScopes(caller: AuthContext): MissingScope[] {
 			scope,
 			description: SCOPES[scope],
 			operations: operationList
-				.filter((operation) => operation.callers.includes(caller.kind) && operation.scopes.includes(scope))
+				.filter((operation) => operationNeedsScope(operation, scope, caller.scopes, caller.kind))
 				.map((operation) => operation.name),
 		}))
 		.filter((missing) => missing.operations.length > 0);

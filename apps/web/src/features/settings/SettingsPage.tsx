@@ -7,7 +7,7 @@ import { SIGN_OUT_FAILED } from "../auth/auth.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "./ApiKeys.tsx";
 import { PasswordCard, TwoStepCard } from "./SignInSettings.tsx";
-import { WebhookManager } from "./Webhooks.tsx";
+import { WebhookEndpoints, WebhookManager } from "./Webhooks.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -60,8 +60,10 @@ export function SettingsPage() {
 					note="A key lets a script or an MCP client act as you."
 					allowedScopes={ALL_SCOPES}
 				/>
-				<WebhookManager heading="Your mail webhooks" canCreate />
-				<WebhookManager domain="chat" heading="Your chat webhooks" canCreate />
+				<WebhookEndpoints />
+				<WebhookManager heading="Mail events" canCreate />
+				<WebhookManager domain="chat" heading="Chat events" canCreate />
+				<WebhookManager domain="drive" heading="Drive events" canCreate />
 				<section className="panel" aria-labelledby={ids.signOut}>
 					<h2 id={ids.signOut} className="panel-title">
 						Sign out

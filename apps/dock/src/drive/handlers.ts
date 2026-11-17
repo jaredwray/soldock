@@ -25,6 +25,7 @@ import {
 	type SharedDriveRecord,
 	type VersionRecord,
 } from "./space.ts";
+import { driveWebhookHandlers } from "./webhooks.ts";
 
 type DriveOperation = Extract<OperationName, `drive.${string}`>;
 
@@ -178,6 +179,7 @@ async function memberInputs(
 }
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
+	...driveWebhookHandlers,
 	async "drive.get_about"(call, input) {
 		const own = await openSpace(call, input.space_id);
 		const about = accept(await own.space.about(own.ctx));

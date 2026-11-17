@@ -1,4 +1,4 @@
-import type { CreatedApiKey, CreatedWebhook } from "@soldock/contracts";
+import type { CreatedApiKey, CreatedWebhookEndpoint } from "@soldock/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
@@ -31,16 +31,16 @@ export function SecretDialog({
 }
 
 /** Shows the signing secret of a new webhook. The server returns it once and never again. */
-export function WebhookSecretDialog({ webhook, onClose }: { webhook: CreatedWebhook; onClose: () => void }) {
+export function WebhookSecretDialog({ endpoint, onClose }: { endpoint: CreatedWebhookEndpoint; onClose: () => void }) {
 	return (
 		<OneTimeSecretDialog
 			title="Copy the signing secret"
-			label={`Signing secret of “${webhook.label}”`}
-			secret={webhook.secret}
+			label={`Signing secret of “${endpoint.label}”`}
+			secret={endpoint.secret}
 			warning="This secret is shown only once. Copy it now and give it to the receiver of the webhook, which uses it to verify each POST (Standard Webhooks)."
 			onClose={onClose}
 		>
-			<p className="field-hint">URL: {webhook.url}</p>
+			<p className="field-hint">URL: {endpoint.url}</p>
 		</OneTimeSecretDialog>
 	);
 }

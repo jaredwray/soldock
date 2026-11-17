@@ -7,6 +7,7 @@ import { type CallContext, identityHandlers } from "./identity/index.ts";
 import { mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { HandlerMap, WatcherMap } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
+import { endpointHandlers } from "./webhooks/index.ts";
 
 export const handlers: HandlerMap<CallContext> = {
 	...identityHandlers,
@@ -15,6 +16,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...docsHandlers,
 	...sheetsHandlers,
 	...chatHandlers,
+	...endpointHandlers,
 };
 
 /** The change feed of each resource kind, for `subscriptions/listen` on MCP. */

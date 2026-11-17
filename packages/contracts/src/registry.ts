@@ -9,6 +9,7 @@ import { oauthOperations } from "./oauth.ts";
 import type { Operation } from "./operation.ts";
 import { sheetsOperations } from "./sheets.ts";
 import { teamMailboxOperations } from "./team-mailboxes.ts";
+import { webhookOperations } from "./webhooks.ts";
 
 /** Every operation, by name. Adapters and the client are generated from this registry. */
 export const operations = {
@@ -21,6 +22,7 @@ export const operations = {
 	...sheetsOperations,
 	...chatOperations,
 	...oauthOperations,
+	...webhookOperations,
 } as const;
 
 export type Operations = typeof operations;

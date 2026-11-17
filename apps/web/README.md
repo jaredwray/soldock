@@ -288,10 +288,11 @@ MCP clients. The app has no UI-only path.
       **Add scopes** shows on a live connection when the session can give one more agent scope.
       Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
       To remove a scope, revoke the connection and connect again.
-      Mail webhooks use `mail.list_webhooks`. Chat webhooks use `chat.list_webhooks`. Each has a Delete button.
-      Only the sponsor sees the form that creates a webhook for the agent.
-      The call is `mail.create_webhook` or `chat.create_webhook`, with the id of the agent.
-      An owner or an admin can delete a webhook.
+      Mail, chat and drive subscriptions use `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
+      Each has a Delete button.
+      Only the sponsor sees the form that adds a subscription for the agent.
+      The call is `mail.create_webhook_subscription`, `chat.create_webhook_subscription` or `drive.create_webhook_subscription`, with the id of the agent.
+      An owner or an admin can delete a subscription.
       An owner or an admin also gets **Read the mail of …**.
       A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
@@ -302,9 +303,9 @@ MCP clients. The app has no UI-only path.
     - **Members of …**, a list of the members with a **Remove** button for each member, with a
       confirmation (`directory.remove_team_mailbox_member`). A control below the list adds a member
       (`directory.add_team_mailbox_member`).
-    - **Webhooks of …**, each webhook of the shared mailbox with a Delete button (`mail.list_webhooks`,
-      `mail.delete_webhook`). Members create webhooks in Settings. An owner or an admin can delete
-      one, for example when the mailbox reaches its limit of active webhooks.
+    - **Webhooks of …**, each mail subscription of the shared mailbox with a Delete button (`mail.list_webhook_subscriptions`,
+      `mail.delete_webhook_subscription`). Members add subscriptions in Settings. An owner or an admin can delete
+      one, for example when the mailbox reaches its limit of active subscriptions.
     - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - The lists of new members do not offer an archived account.
@@ -347,18 +348,18 @@ MCP clients. The app has no UI-only path.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks` or `chat.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them.
-  - **Your chat webhooks** manages notifications from all joined rooms and direct messages with the four `chat.*_webhook` operations.
-    The agent panel has the same controls with `principal_id`. Only the sponsor can create an agent's webhook.
-    Owners, admins and sponsors can list and delete the agent's webhooks. Only a creator can edit their webhook.
-    Both kinds share the URL, auth key, header and secret controls. Chat creates no browser storage.
-  - A new mail webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
-    once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
+  - **Webhook endpoints** creates the URL. The signing secret shows once. **Edit** (`webhooks.update_endpoint`) changes the label, the auth key and the custom header.
+  - **Mail events**, **Chat events** and **Drive events** add a subscription to one of your endpoints.
+    Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
+    A star sends nothing. The agent panel lists the same subscriptions for an agent. Only the sponsor can add one.
+    Owners, admins and sponsors can delete an agent's subscription. Chat creates no browser storage.
+  - A new mail subscription watches your mailbox or a team mailbox that you select. A disabled endpoint shows the reason.
   - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
     is set and the name of the header.
-  - **Edit** shows on the webhooks that you created (`mail.update_webhook`). It changes the label, and
+  - **Edit** shows on the endpoints that you created (`webhooks.update_endpoint`). It changes the label, and
     keeps, replaces or removes the auth key and the header.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value

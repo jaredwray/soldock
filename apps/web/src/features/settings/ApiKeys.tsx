@@ -9,9 +9,15 @@ import { SecretDialog } from "./SecretDialog.tsx";
 
 /**
  * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
- * outside Soldock, so `mail.webhooks` is one of them.
+ * outside Soldock, so the webhook scopes are among them.
  */
-const PRIVILEGED: readonly Scope[] = ["account.keys", "directory.write", "mail.webhooks", "chat.webhooks"];
+const PRIVILEGED: readonly Scope[] = [
+	"account.keys",
+	"directory.write",
+	"mail.webhooks",
+	"chat.webhooks",
+	"drive.webhooks",
+];
 
 interface ApiKeyManagerProps {
 	/** The key owner. Leave it out for your own keys. */
