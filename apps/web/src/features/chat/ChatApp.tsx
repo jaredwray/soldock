@@ -206,9 +206,19 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 	);
 }
 
+/** The count of the sidebar. The server stops the count at 100, so 100 means 100 or more. */
+function unreadLabel(count: number): string {
+	return count > 99 ? "99+" : String(count);
+}
+
+function unreadText(count: number): string {
+	if (count > 99) return "More than 99 unread messages";
+	return count === 1 ? "1 unread message" : `${count} unread messages`;
+}
+
 function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 	const title = roomTitle(room);
-	// The open room is read while it shows. Its marker reaches the list a moment later, so it gets no dot.
+	// The open room is read while it shows. Its marker reaches the list a moment later, so it gets no count.
 	const unread = room.unread && !active;
 	const className = ["nav-item", active ? "nav-item-active" : "", unread ? "chat-nav-unread" : ""]
 		.filter(Boolean)
@@ -226,8 +236,9 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 				<span className="nav-name">{title}</span>
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{unread && (
-					<span className="chat-nav-dot">
-						<span className="visually-hidden">Unread messages</span>
+					<span className="chat-nav-count">
+						<span aria-hidden="true">{unreadLabel(room.unread_count)}</span>
+						<span className="visually-hidden">{unreadText(room.unread_count)}</span>
 					</span>
 				)}
 			</Link>
