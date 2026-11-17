@@ -362,6 +362,9 @@ app uses.
   the text two times. Each message has the key of its send as `idempotency_key`, so you can find
   the message of a send whose answer you did not get. Compare the author too. Each member of the
   room sees the key, so use a random value, not private data. `chat_mark_read` sets what you read.
+- **React.** `chat_add_reaction` adds your reaction with one emoji character, such as `👍`, not a
+  name such as `:thumbsup:`. `chat_remove_reaction` removes it. The two are safe to repeat. Each
+  message has `reactions`: the emoji, the count and the ids of the principals.
 - **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the local
   part of the address, for example `@ada` for `ada@example.com`. When two principals have the same
   local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`

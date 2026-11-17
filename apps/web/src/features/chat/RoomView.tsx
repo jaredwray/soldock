@@ -42,6 +42,7 @@ import {
 	unseenSendsNote,
 } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
+import { ReactionPicker, Reactions } from "./Reactions.tsx";
 import { createSendSettler } from "./settle.ts";
 
 export interface RoomViewProps {
@@ -515,6 +516,22 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		});
 	}
 
+	/** Adds or removes a reaction of the person. The message shows the answer of the room. */
+	function react(id: string, emoji: string, add: boolean) {
+		void (async () => {
+			try {
+				const { message } = await api.call(add ? "chat.add_reaction" : "chat.remove_reaction", {
+					room_id: roomId,
+					message_id: id,
+					emoji,
+				});
+				view.apply(message);
+			} catch (caught) {
+				fail(caught);
+			}
+		})();
+	}
+
 	function deleteMessage(id: string) {
 		// The message shows as deleted at once. After a refusal, it shows again.
 		const change: LocalChange = { kind: "delete" };
@@ -670,6 +687,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onDelete={() => setDialog({ type: "delete", message })}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
+												ownId={ownId}
+												onReact={(emoji, add) => react(message.id, emoji, add)}
 											/>
 										</Fragment>
 									);
@@ -821,6 +840,10 @@ interface MessageItemProps {
 	onSendAgain: () => void;
 	/** Removes a message whose send failed. */
 	onSendCancel: () => void;
+	/** The id of the person, to show the reactions of the person. */
+	ownId: string;
+	/** Adds or removes the reaction of the person with one emoji. */
+	onReact: (emoji: string, add: boolean) => void;
 }
 
 function MessageItem({
@@ -841,8 +864,13 @@ function MessageItem({
 	onDelete,
 	onSendAgain,
 	onSendCancel,
+	ownId,
+	onReact,
 }: MessageItemProps) {
 	const editId = useId();
+	const [picking, setPicking] = useState(false);
+	const closePicker = useCallback(() => setPicking(false), []);
+	const nameOf = (principalId: string) => mentions.directory.byId.get(principalId)?.display_name ?? "A member";
 	const author = message.author.display_name;
 	const failed = pending?.state === "failed";
 	// A message that the server does not have yet cannot change, and it has no id to delete or to link to.
@@ -953,6 +981,9 @@ function MessageItem({
 						)}
 					</p>
 				)}
+				{pending === null && !message.deleted && (
+					<Reactions reactions={message.reactions} ownId={ownId} nameOf={nameOf} onToggle={onReact} />
+				)}
 				{failed && (
 					<p className="chat-send-failed" role="alert">
 						<span>Not sent. {pending.error}</span>
@@ -965,8 +996,31 @@ function MessageItem({
 					</p>
 				)}
 			</div>
+			{picking && (
+				<ReactionPicker
+					onPick={(emoji) => {
+						setPicking(false);
+						if (
+							!message.reactions.some((reaction) => reaction.emoji === emoji && reaction.principal_ids.includes(ownId))
+						) {
+							onReact(emoji, true);
+						}
+					}}
+					onClose={closePicker}
+				/>
+			)}
 			{hasActions && (
 				<span className="chat-message-actions">
+					<button
+						type="button"
+						className="icon-button icon-button-small chat-react-button"
+						aria-label={`Add a reaction to the message of ${author} from ${shortDate(message.created_at)}`}
+						aria-expanded={picking}
+						title="Add a reaction"
+						onClick={() => setPicking((open) => !open)}
+					>
+						<span aria-hidden="true">🙂</span>
+					</button>
 					<button
 						type="button"
 						className="icon-button icon-button-small"

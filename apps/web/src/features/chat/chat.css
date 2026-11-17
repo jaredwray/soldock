@@ -1038,3 +1038,110 @@ a.chat-author:hover {
 		padding: 6px 6px 6px 12px;
 	}
 }
+
+/* Reactions: one button for each emoji, under the text of a message. */
+.chat-reactions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin: 4px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chat-reaction {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 24px;
+	padding: 0 8px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--surface);
+	color: var(--foreground);
+	font: inherit;
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.chat-reaction:hover {
+	background: var(--hover);
+}
+
+.chat-reaction-mine {
+	border-color: var(--link);
+	background: color-mix(in srgb, var(--link) 12%, transparent);
+}
+
+.chat-reaction-count {
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+.chat-react-button {
+	font-size: 15px;
+	line-height: 1;
+}
+
+/* The list of emoji for a new reaction. It opens above the actions of its message. */
+.chat-picker {
+	position: absolute;
+	top: 20px;
+	right: 20px;
+	z-index: 3;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	width: min(296px, calc(100vw - 32px));
+	padding: 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--popover);
+	box-shadow: var(--shadow-menu);
+}
+
+.chat-picker-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+	gap: 2px;
+	max-height: 200px;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	list-style: none;
+}
+
+.chat-picker-emoji {
+	width: 100%;
+	height: 36px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: none;
+	font-size: 20px;
+	cursor: pointer;
+}
+
+.chat-picker-emoji:hover,
+.chat-picker-emoji:focus-visible {
+	background: var(--hover);
+}
+
+.chat-picker-empty {
+	margin: 0;
+	padding: 8px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+@media (width <= 900px), (pointer: coarse) {
+	.chat-reaction {
+		height: 32px;
+		padding: 0 10px;
+		border-radius: 16px;
+	}
+
+	.chat-picker-emoji {
+		height: 44px;
+	}
+}

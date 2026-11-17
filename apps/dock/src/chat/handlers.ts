@@ -235,6 +235,20 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		return result;
 	},
 
+	async "chat.add_reaction"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, true));
+		if (result.changed) auditOk(call, "chat.add_reaction", `${input.room_id}:${input.message_id}`);
+		return { message: messageOutput(result.message) };
+	},
+
+	async "chat.remove_reaction"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, false));
+		if (result.changed) auditOk(call, "chat.remove_reaction", `${input.room_id}:${input.message_id}`);
+		return { message: messageOutput(result.message) };
+	},
+
 	async "chat.mark_read"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.markRead(opened.ctx, input.seq ?? null));

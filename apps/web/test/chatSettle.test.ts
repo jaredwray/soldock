@@ -18,6 +18,7 @@ function stored(seq: number, key: string | null, author: ChatMessage["author"] =
 		deleted: false,
 		version: seq,
 		idempotency_key: key,
+		reactions: [],
 	};
 }
 

@@ -7,6 +7,7 @@ import {
 	newest,
 	openRoom,
 	post,
+	react,
 	rowsWithText,
 	signIn,
 	unique,
@@ -373,4 +374,34 @@ test("the sidebar count of a room that is not open goes up and clears without a 
 	await markRead(nadia, busyId);
 	await expect(link.locator(".chat-nav-count")).toHaveCount(0);
 	expect(reads).toBe(0);
+});
+
+// Layer 4 (jaredwray/soldock#73): reactions.
+test("a reaction from the picker shows on the message, a reaction of a different person arrives live, and a click removes it", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("React");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	const message = await post(tomasz, roomId, "We ship on Friday.");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+
+	const row = page.locator(".chat-message").filter({ hasText: "We ship on Friday." });
+	await row.hover();
+	await row.getByRole("button", { name: /^Add a reaction/ }).click();
+	await page.getByRole("searchbox", { name: "Find an emoji" }).fill("party");
+	await page.getByRole("searchbox", { name: "Find an emoji" }).press("Enter");
+	const party = row.getByRole("button", { name: "party popper: 1 reaction, with yours" });
+	await expect(party).toHaveAttribute("aria-pressed", "true");
+
+	// The reaction of a different person comes through the socket of the room.
+	await react(tomasz, roomId, message.id, "🎉");
+	await expect(row.getByRole("button", { name: "party popper: 2 reactions, with yours" })).toBeVisible();
+
+	await row.getByRole("button", { name: "party popper: 2 reactions, with yours" }).click();
+	await expect(row.getByRole("button", { name: "party popper: 1 reaction" })).toHaveAttribute("aria-pressed", "false");
+	const stored = (await newest(nadia, roomId))[0] as unknown as { reactions: { emoji: string; count: number }[] };
+	expect(stored.reactions).toEqual([expect.objectContaining({ emoji: "🎉", count: 1 })]);
 });

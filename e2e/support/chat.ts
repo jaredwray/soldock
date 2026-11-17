@@ -59,6 +59,11 @@ export async function post(context: BrowserContext, roomId: string, text: string
 		.message;
 }
 
+/** Adds a reaction of the person of the context to a message. */
+export async function react(context: BrowserContext, roomId: string, messageId: string, emoji: string): Promise<void> {
+	await call(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages/${messageId}/reactions`, { emoji });
+}
+
 /** Sets the read marker of the person of the context to the newest message of a room. */
 export async function markRead(context: BrowserContext, roomId: string): Promise<void> {
 	await call(context.request, "POST", `/api/v1/chat/rooms/${roomId}/read`, {});
