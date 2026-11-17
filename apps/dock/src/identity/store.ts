@@ -362,16 +362,26 @@ export async function createPrincipal(
 	};
 }
 
+/**
+ * Sets the outbound policy of an agent. The read of the old mode and the write run in one
+ * transaction, so the old mode is the mode that this write replaced. Returns null when no agent
+ * has that id.
+ */
 export async function updateOutboundPolicy(
 	db: D1Database,
 	id: string,
 	mode: OutboundMode,
 	allowlist: string[],
-): Promise<void> {
-	await db
-		.prepare("UPDATE principals SET outbound_mode = ?, outbound_allowlist = ? WHERE id = ? AND kind = 'agent'")
-		.bind(mode, JSON.stringify(mode === "allowlist" ? allowlist : []), id)
-		.run();
+): Promise<OutboundMode | null> {
+	const [prior, updated] = await db.batch<{ outbound_mode: OutboundMode }>([
+		db.prepare("SELECT outbound_mode FROM principals WHERE id = ? AND kind = 'agent'").bind(id),
+		db
+			.prepare("UPDATE principals SET outbound_mode = ?, outbound_allowlist = ? WHERE id = ? AND kind = 'agent'")
+			.bind(mode, JSON.stringify(mode === "allowlist" ? allowlist : []), id),
+	]);
+	const previousMode = prior?.results[0]?.outbound_mode;
+	if (!previousMode || updated?.meta.changes !== 1) return null;
+	return previousMode;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

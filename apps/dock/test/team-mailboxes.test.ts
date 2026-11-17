@@ -337,6 +337,67 @@ describe("mail in a team mailbox", () => {
 		expect(copy?.sent_by).toEqual({ principal_id: bot.id, kind: "agent", display_name: "Billing Bot" });
 	});
 
+	it("does not send queued external mail from a team mailbox after the agent policy tightens", async () => {
+		const support = await createSupport();
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(support.id);
+		email.fail = new Error("temporary failure");
+		const sent = await bot.call("mail.send", {
+			mailbox_id: support.id,
+			to: ["cy@customer.example"],
+			text: "Queued",
+		});
+		await drainOutbox(support.id);
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "internal-only" });
+		email.fail = null;
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(support.id));
+		await runInDurableObject(mailbox, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+		});
+		await drainOutbox(support.id);
+		expect(email.sent).toEqual([]);
+		const thread = await ada.call("mail.get_thread", { mailbox_id: support.id, thread_id: sent.thread_id });
+		expect(thread.messages[0]?.delivery).toEqual([
+			{
+				address: "cy@customer.example",
+				kind: "external",
+				status: "failed",
+				error:
+					"The outbound policy of this agent (internal-only) does not allow mail to cy@customer.example. Ask its sponsor to change the policy.",
+			},
+		]);
+	});
+
+	it("does not send queued external mail from a team mailbox after the agent is deleted", async () => {
+		const support = await createSupport();
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(support.id);
+		email.fail = new Error("temporary failure");
+		const sent = await bot.call("mail.send", {
+			mailbox_id: support.id,
+			to: ["cy@customer.example"],
+			text: "Queued",
+		});
+		await drainOutbox(support.id);
+		await owner.call("directory.delete_principal", { principal_id: bot.id });
+		email.fail = null;
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(support.id));
+		await runInDurableObject(mailbox, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+		});
+		await drainOutbox(support.id);
+		expect(email.sent).toEqual([]);
+		const thread = await ada.call("mail.get_thread", { mailbox_id: support.id, thread_id: sent.thread_id });
+		expect(thread.messages[0]?.delivery).toEqual([
+			{
+				address: "cy@customer.example",
+				kind: "external",
+				status: "failed",
+				error: "The agent does not exist, so Soldock does not send this message.",
+			},
+		]);
+	});
+
 	it("limits a key to its scopes in a team mailbox, and ends the access of a removed member at once", async () => {
 		const support = await createSupport();
 		await inject(

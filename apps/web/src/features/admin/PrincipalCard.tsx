@@ -46,6 +46,7 @@ export function PrincipalCard({
 			icon={isAgent ? "bot" : "team"}
 			mark={isAgent ? undefined : initials(principal.display_name)}
 			muted={archived}
+			onOpen={onChanged}
 			name={
 				<>
 					{principal.display_name}

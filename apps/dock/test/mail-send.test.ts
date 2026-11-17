@@ -37,6 +37,27 @@ async function sentCount(actor: Actor): Promise<number> {
 	return (await actor.call("mail.list_threads", { query: "in:sent" })).threads.length;
 }
 
+/** The audit lines that the Worker wrote while `run` ran. */
+async function auditLines(run: () => Promise<unknown>): Promise<Record<string, unknown>[]> {
+	const spy = vi.spyOn(console, "log");
+	try {
+		await run();
+		return spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+	} finally {
+		spy.mockRestore();
+	}
+}
+
+/** Makes each queued outbox row due now, so the next drain tries it again. */
+async function releaseOutbox(principalId: string): Promise<void> {
+	const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(principalId));
+	await runInDurableObject(mailbox, (_instance, state) => {
+		state.storage.sql.exec("UPDATE outbox SET next_attempt_at = ?", Date.now());
+	});
+}
+
 async function deliveryOf(actor: Actor, threadId: string) {
 	const thread = await actor.call("mail.get_thread", { thread_id: threadId });
 	return thread.messages.at(-1)?.delivery;
@@ -332,7 +353,6 @@ describe("mail.send to the internet", () => {
 
 	// The alarm takes 25 outbox rows at a time, and it must set itself again until the outbox is empty.
 	it("delivers more recipients than one alarm batch takes", async () => {
-		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 		const email = await fakeEmailService(ada.id);
 		const to = Array.from({ length: 30 }, (_, i) => `r${i}@example.org`);
 		const sent = await ada.call("mail.send", { to, text: "To many" });
@@ -384,13 +404,41 @@ describe("mail.send to the internet", () => {
 });
 
 describe("agent outbound policy", () => {
+	const deniedTo = (address: string) =>
+		`The outbound policy of this agent (internal-only) does not allow mail to ${address}. Ask its sponsor to change the policy.`;
+
 	it("lets an internal-only agent send only inside the deployment, before anything is stored", async () => {
-		expect(await code(bot.call("mail.send", { to: ["customer@example.org"], text: "Invoice" }))).toBe("policy_denied");
-		expect(await code(bot.call("mail.send", { to: ["ada@dock.test"], cc: ["customer@example.org"], text: "x" }))).toBe(
-			"policy_denied",
-		);
+		const email = await fakeEmailService(bot.id);
+		await expect(bot.call("mail.send", { to: ["customer@example.org"], text: "Invoice" })).rejects.toMatchObject({
+			code: "policy_denied",
+			message: deniedTo("customer@example.org"),
+		});
+		await expect(
+			bot.call("mail.send", { to: ["ada@dock.test"], cc: ["customer@example.org"], text: "x" }),
+		).rejects.toMatchObject({ code: "policy_denied", message: deniedTo("customer@example.org") });
+		await expect(bot.call("mail.send", { bcc: ["customer@example.org"], text: "x" })).rejects.toMatchObject({
+			code: "policy_denied",
+			message: deniedTo("customer@example.org"),
+		});
 		expect(await sentCount(bot)).toBe(0);
-		await bot.call("mail.send", { to: ["ada@dock.test"], text: "Internal note" });
+		expect(email.sent).toEqual([]);
+		const { objects } = await env.BLOBS.list({ prefix: `mail/raw/${bot.id}/` });
+		expect(objects).toEqual([]);
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(bot.id));
+		const outbox = await runInDurableObject(
+			mailbox,
+			(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+		);
+		expect(outbox).toBe(0);
+		const lines = await auditLines(() => bot.call("mail.send", { to: ["ada@dock.test"], text: "Internal note" }));
+		expect(lines).toContainEqual(
+			expect.objectContaining({
+				op: "mail.send",
+				result: "ok",
+				outboundMode: "internal-only",
+				externalRecipients: 0,
+			}),
+		);
 		expect(await sentCount(bot)).toBe(1);
 	});
 
@@ -400,7 +448,14 @@ describe("agent outbound policy", () => {
 			mode: "allowlist",
 			allowlist: ["Example.org", "partner@vendor.example"],
 		});
-		await bot.call("mail.send", { to: ["anyone@example.org", "partner@vendor.example"], text: "Allowed" });
+		const allowed = await auditLines(() =>
+			bot.call("mail.send", { to: ["anyone@example.org", "partner@vendor.example"], text: "Allowed" }),
+		);
+		expect(allowed).toContainEqual(
+			expect.objectContaining({ op: "mail.send", outboundMode: "allowlist", externalRecipients: 2 }),
+		);
+		const sendLine = allowed.find((line) => line.op === "mail.send");
+		expect(JSON.stringify(sendLine)).not.toContain("example.org");
 		expect(await code(bot.call("mail.send", { to: ["other@vendor.example"], text: "No" }))).toBe("policy_denied");
 		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 		await bot.call("mail.send", { to: ["other@vendor.example"], text: "Now allowed" });
@@ -411,11 +466,136 @@ describe("agent outbound policy", () => {
 	it("refuses the send through MCP with the same code, and marks agent mail with X-Soldock-Agent", async () => {
 		const result = await callTool(bot.key, "mail_send", { to: ["customer@example.org"], text: "Invoice" });
 		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content[0]?.text ?? "{}")).toMatchObject({ code: "policy_denied" });
+		expect(JSON.parse(result.content[0]?.text ?? "{}")).toEqual({
+			code: "policy_denied",
+			message: deniedTo("customer@example.org"),
+		});
 		await bot.call("mail.send", { to: ["ada@dock.test"], text: "Hello" });
 		const { objects } = await env.BLOBS.list({ prefix: `mail/raw/${bot.id}/` });
 		const raw = await (await env.BLOBS.get(objects[0]?.key as string))?.text();
 		expect(raw).toMatch(/^X-Soldock-Agent: true\r$/m);
+	});
+
+	it("does not send queued external mail after the policy becomes internal-only", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(bot.id);
+		email.fail = new Error("temporary failure");
+		const sent = await bot.call("mail.send", {
+			to: ["ada@dock.test", "customer@example.org"],
+			text: "Queued",
+		});
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([]);
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "internal-only" });
+		email.fail = null;
+		const warns: string[] = [];
+		const spy = vi.spyOn(console, "warn").mockImplementation((line?: unknown) => {
+			warns.push(String(line));
+		});
+		try {
+			await releaseOutbox(bot.id);
+			await drainOutbox(bot.id);
+		} finally {
+			spy.mockRestore();
+		}
+		expect(warns.join("\n")).not.toContain("customer@example.org");
+		expect(warns.join("\n")).toContain("outbound policy");
+		expect(email.sent).toEqual([]);
+		expect(await deliveryOf(bot, sent.thread_id)).toEqual([
+			{ address: "ada@dock.test", kind: "local", status: "delivered", error: null },
+			{
+				address: "customer@example.org",
+				kind: "external",
+				status: "failed",
+				error: deniedTo("customer@example.org"),
+			},
+		]);
+	});
+
+	it("retries a queued external delivery when the directory fails, and sends it when the directory returns", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(bot.id);
+		email.fail = new Error("temporary failure");
+		const sent = await bot.call("mail.send", { to: ["customer@example.org"], text: "Queued" });
+		await drainOutbox(bot.id);
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(bot.id));
+		let directory: D1Database | undefined;
+		await runInDurableObject(mailbox, (instance) => {
+			const target = instance as unknown as { env: Env };
+			directory = target.env.DIRECTORY;
+			const readable = directory;
+			target.env = {
+				...target.env,
+				DIRECTORY: {
+					prepare: (query: string) => {
+						if (query.includes("outbound_mode")) {
+							return {
+								bind: () => ({
+									first: async () => {
+										throw new Error("D1 is not available");
+									},
+								}),
+							};
+						}
+						return readable.prepare(query);
+					},
+				} as unknown as D1Database,
+			};
+		});
+		email.fail = null;
+		await releaseOutbox(bot.id);
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([]);
+		expect(await deliveryOf(bot, sent.thread_id)).toEqual([
+			{ address: "customer@example.org", kind: "external", status: "queued", error: null },
+		]);
+		await runInDurableObject(mailbox, (instance) => {
+			const target = instance as unknown as { env: Env };
+			target.env = { ...target.env, DIRECTORY: directory as D1Database };
+		});
+		await releaseOutbox(bot.id);
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([{ from: "bot@dock.test", to: "customer@example.org" }]);
+		expect(await deliveryOf(bot, sent.thread_id)).toEqual([
+			{ address: "customer@example.org", kind: "external", status: "sent", error: null },
+		]);
+	});
+
+	it("does not send queued external mail after the agent is archived", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(bot.id);
+		email.fail = new Error("temporary failure");
+		const sent = await bot.call("mail.send", { to: ["customer@example.org"], text: "Queued" });
+		await drainOutbox(bot.id);
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		email.fail = null;
+		await releaseOutbox(bot.id);
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([]);
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(bot.id));
+		const thread = await mailbox.getThread(sent.thread_id);
+		expect(thread?.messages[0]?.delivery).toEqual([
+			{
+				address: "customer@example.org",
+				kind: "external",
+				status: "failed",
+				error: "The agent is archived, so Soldock does not send this message.",
+			},
+		]);
+	});
+
+	it("returns the first result when the same key is reused after the policy tightens, and sends nothing more", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const email = await fakeEmailService(bot.id);
+		const message = { to: ["customer@example.org"], text: "Once", idempotency_key: "policy-key" };
+		const first = await bot.call("mail.send", message);
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([{ from: "bot@dock.test", to: "customer@example.org" }]);
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "internal-only" });
+		const second = await bot.call("mail.send", message);
+		expect(second.message_id).toBe(first.message_id);
+		await drainOutbox(bot.id);
+		expect(email.sent).toEqual([{ from: "bot@dock.test", to: "customer@example.org" }]);
 	});
 
 	it("needs the mail.send scope", async () => {

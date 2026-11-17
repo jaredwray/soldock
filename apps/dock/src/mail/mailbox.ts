@@ -1,15 +1,36 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
 import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@soldock/contracts";
-import { addressTag, getMailbox } from "../identity/index.ts";
+import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import type { WebhookEventJob } from "../webhooks/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
+import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
 
-class SenderUnavailable extends Error {}
+class SenderUnavailable extends Error {
+	/** Text for the log. The delivery row keeps `message`, which can name an external address. */
+	readonly logReason: string | null;
+
+	constructor(message: string, logReason: string | null = null) {
+		super(message);
+		this.logReason = logReason;
+	}
+}
+
+/** The sender recorded on a message, or null when the column is empty or not valid JSON. */
+function sentByOf(json: string | null): SentBy | null {
+	if (!json) return null;
+	try {
+		const value = JSON.parse(json) as Partial<SentBy>;
+		if ((value.kind !== "agent" && value.kind !== "human") || typeof value.principal_id !== "string") return null;
+		return { principal_id: value.principal_id, kind: value.kind, display_name: value.display_name ?? "" };
+	} catch {
+		return null;
+	}
+}
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = { error: { code: "invalid" | "not_found" | "conflict"; message: string } };
@@ -1428,6 +1449,26 @@ export class MailboxDO extends DurableObject<Env> {
 		});
 	}
 
+	/**
+	 * Stops an external delivery when the agent that sent the message cannot reach that address. A
+	 * missing agent, an archived agent, or a policy refusal fails the row with no retry.
+	 * A human has no policy. Soldock does not check a message that has no sent_by. Each send stores
+	 * one. A directory error throws, so the row retries and sends nothing.
+	 */
+	private async assertAgentMaySend(sentByJson: string | null, address: string): Promise<void> {
+		const sentBy = sentByOf(sentByJson);
+		if (sentBy?.kind !== "agent") return;
+		const principal = await getPrincipal(this.env.DIRECTORY, sentBy.principal_id);
+		if (!principal) throw new SenderUnavailable("The agent does not exist, so Soldock does not send this message.");
+		if (principal.archived_at !== null) {
+			throw new SenderUnavailable("The agent is archived, so Soldock does not send this message.");
+		}
+		const denied = deniedOutboundAddresses(principal, [address.trim().toLowerCase()]);
+		if (denied.length > 0) {
+			throw new SenderUnavailable(outboundPolicyDenial(outboundMode(principal), denied), "outbound policy");
+		}
+	}
+
 	private async drainOutbox(): Promise<void> {
 		const now = Date.now();
 		const due = this.all<{
@@ -1439,8 +1480,9 @@ export class MailboxDO extends DurableObject<Env> {
 			attempts: number;
 			raw_key: string;
 			from_addr: string | null;
+			sent_by_json: string | null;
 		}>(
-			`SELECT o.id, o.message_seq, o.kind, o.target, o.address, o.attempts, m.raw_key, m.from_addr
+			`SELECT o.id, o.message_seq, o.kind, o.target, o.address, o.attempts, m.raw_key, m.from_addr, m.sent_by_json
 			FROM outbox o JOIN messages m ON m.seq = o.message_seq
 			WHERE o.next_attempt_at <= ? ORDER BY o.id LIMIT ?`,
 			now,
@@ -1475,6 +1517,9 @@ export class MailboxDO extends DurableObject<Env> {
 					status = "delivered";
 				} else {
 					if (!row.from_addr) throw new Error("the message has no sender address");
+					// The policy can change after the send is stored. Check it again before the mail leaves.
+					await this.assertAgentMaySend(row.sent_by_json, row.address);
+					if (this.meta("delivery_pause")) return;
 					const sent = await this.env.EMAIL.send(new EmailMessage(row.from_addr, row.address, decoder.decode(raw)));
 					status = "sent";
 					providerId = sent.messageId;
@@ -1494,11 +1539,13 @@ export class MailboxDO extends DurableObject<Env> {
 			} catch (error) {
 				const attempts = error instanceof SenderUnavailable ? OUTBOX_MAX_ATTEMPTS : row.attempts + 1;
 				const message = error instanceof Error ? error.message : String(error);
+				// The delivery row keeps the address. The log keeps the domain and a fixed reason.
+				const logged = error instanceof SenderUnavailable && error.logReason !== null ? error.logReason : message;
 				log("warn", "outbox delivery failed", {
 					kind: row.kind,
 					attempts,
 					recipientDomain: row.address.split("@").pop(),
-					error: message,
+					error: logged,
 				});
 				this.ctx.storage.transactionSync(() => {
 					if (attempts >= OUTBOX_MAX_ATTEMPTS) {

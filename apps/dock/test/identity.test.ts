@@ -1,7 +1,7 @@
 import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
@@ -941,7 +941,37 @@ describe("directory authorization", () => {
 			password: PASSWORD,
 		});
 		const change = (mode: "any" | "internal-only") => ({ principal_id: bot.id, mode });
+		const spy = vi.spyOn(console, "log");
+		await ada.call("directory.update_agent_policy", {
+			principal_id: bot.id,
+			mode: "allowlist",
+			allowlist: ["example.org", "partner@vendor.example"],
+		});
+		const lines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+		spy.mockRestore();
+		const policyLine = lines.find((line) => line.op === "directory.update_agent_policy");
+		expect(policyLine).toMatchObject({
+			result: "ok",
+			outboundMode: "allowlist",
+			previousOutboundMode: "internal-only",
+			allowlistSize: 2,
+		});
+		expect(JSON.stringify(policyLine)).not.toContain("example.org");
+		expect(JSON.stringify(policyLine)).not.toContain("partner@vendor.example");
+		const again = vi.spyOn(console, "log");
 		await ada.call("directory.update_agent_policy", change("any"));
+		const second = again.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true)
+			.find((line) => line.op === "directory.update_agent_policy");
+		again.mockRestore();
+		expect(second).toMatchObject({
+			outboundMode: "any",
+			previousOutboundMode: "allowlist",
+			allowlistSize: 0,
+		});
 		await owner.call("directory.update_agent_policy", change("internal-only"));
 		expect(await denied(other.call("directory.update_agent_policy", change("any")))).toBe("forbidden");
 		expect(await denied(bot.call("directory.update_agent_policy", change("any")))).toBe("forbidden");
@@ -953,6 +983,44 @@ describe("directory authorization", () => {
 		expect(tool.body).toMatchObject({ error: { code: -32602 } });
 		const { principals } = await owner.call("directory.list_principals");
 		expect(principals.find((p) => p.id === bot.id)?.outbound_policy?.mode).toBe("internal-only");
+	});
+
+	it("records the outbound mode that this policy write replaced", async () => {
+		const { ada, bot } = await seedOrg();
+		const spy = vi.spyOn(console, "log");
+		// A second change commits after the permission read and before the policy write.
+		const res = await withEnv(
+			{
+				DIRECTORY: racing(
+					`UPDATE principals SET outbound_mode = 'allowlist', outbound_allowlist = '["vendor.example"]' WHERE id = ?`,
+					bot.id,
+				),
+			},
+			`/api/v1/directory/agents/${bot.id}/policy`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ mode: "any" }),
+			},
+		);
+		expect(res.status).toBe(200);
+		const lines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+		spy.mockRestore();
+		const policyLine = lines.find((line) => line.op === "directory.update_agent_policy");
+		expect(policyLine).toMatchObject({
+			result: "ok",
+			outboundMode: "any",
+			previousOutboundMode: "allowlist",
+			allowlistSize: 0,
+		});
+		expect(JSON.stringify(policyLine)).not.toContain("vendor.example");
+		expect(
+			await env.DIRECTORY.prepare("SELECT outbound_mode, outbound_allowlist FROM principals WHERE id = ?")
+				.bind(bot.id)
+				.first(),
+		).toEqual({ outbound_mode: "any", outbound_allowlist: "[]" });
 	});
 
 	it("lets the sponsor manage an agent's keys within agent scopes, and nobody else but admins", async () => {

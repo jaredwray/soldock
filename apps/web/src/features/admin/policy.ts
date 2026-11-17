@@ -25,6 +25,48 @@ export function policySummary(policy: OutboundPolicy): string {
 	}
 }
 
+/** The policy form values. `allowlistText` is the textarea, one entry on each line. */
+export interface PolicyDraft {
+	mode: OutboundPolicy["mode"];
+	allowlistText: string;
+}
+
+/** The draft that matches a stored policy. */
+export function policyDraftFrom(policy: OutboundPolicy): PolicyDraft {
+	return { mode: policy.mode, allowlistText: policy.allowlist.join("\n") };
+}
+
+/** True when two stored policies have the same mode and the same entries in the same order. */
+export function sameOutboundPolicy(a: OutboundPolicy, b: OutboundPolicy): boolean {
+	return a.mode === b.mode && a.allowlist.join("\n") === b.allowlist.join("\n");
+}
+
+/** True when the draft matches the stored policy. Allowlist text matters only in allowlist mode. */
+export function samePolicyDraft(draft: PolicyDraft, saved: PolicyDraft): boolean {
+	if (draft.mode !== saved.mode) return false;
+	if (draft.mode !== "allowlist") return true;
+	// The save parses the text, so spaces, case and a final line break still match.
+	return parseAllowlist(draft.allowlistText).join("\n") === parseAllowlist(saved.allowlistText).join("\n");
+}
+
+/**
+ * The draft after the stored policy changes. A draft that still matches the previous policy follows
+ * the new one. A draft with an unsaved choice stays.
+ */
+export function draftAfterPolicyChange(
+	draft: PolicyDraft,
+	previous: OutboundPolicy,
+	next: OutboundPolicy,
+): PolicyDraft {
+	if (samePolicyDraft(draft, policyDraftFrom(previous))) return policyDraftFrom(next);
+	return draft;
+}
+
+/** True when the draft is not the stored policy. The stored policy stays in force until a save. */
+export function policyDraftDirty(draft: PolicyDraft, policy: OutboundPolicy): boolean {
+	return !samePolicyDraft(draft, policyDraftFrom(policy));
+}
+
 /** Splits the allowlist text into entries. Commas, spaces and line breaks separate them. */
 export function parseAllowlist(text: string): string[] {
 	return [

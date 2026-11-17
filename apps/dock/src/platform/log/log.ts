@@ -29,6 +29,14 @@ export function audit(fields: {
 	result: "ok" | "denied" | "error";
 	requestId?: string;
 	code?: string;
+	/** The outbound mode in force. A policy change records the mode after the change. */
+	outboundMode?: string;
+	/** The outbound mode that a policy write replaced. */
+	previousOutboundMode?: string;
+	/** The number of allowlist entries after a policy change. The entries stay out of the log. */
+	allowlistSize?: number;
+	/** The number of external recipients of an agent send. The addresses stay out of the log. */
+	externalRecipients?: number;
 }): void {
 	log("info", "audit", { audit: true, ...fields });
 }

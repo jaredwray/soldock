@@ -10,7 +10,15 @@ import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
 import { OAuthGrants } from "./OAuthGrants.tsx";
-import { invalidAllowlistEntries, POLICY_MODES, parseAllowlist } from "./policy.ts";
+import {
+	draftAfterPolicyChange,
+	invalidAllowlistEntries,
+	POLICY_MODES,
+	parseAllowlist,
+	policyDraftDirty,
+	policyDraftFrom,
+	sameOutboundPolicy,
+} from "./policy.ts";
 
 interface AgentDetailsProps {
 	agent: Principal;
@@ -67,8 +75,16 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 
 function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: OutboundPolicy; onChanged: () => void }) {
 	const toast = useToast();
-	const [mode, setMode] = useState<OutboundPolicy["mode"]>(policy.mode);
-	const [allowlist, setAllowlist] = useState(policy.allowlist.join("\n"));
+	const [draft, setDraft] = useState(() => policyDraftFrom(policy));
+	const [baseline, setBaseline] = useState(policy);
+	// A stored change replaces a clean draft. An unsaved choice stays, and the form says so.
+	if (!sameOutboundPolicy(policy, baseline)) {
+		setDraft(draftAfterPolicyChange(draft, baseline, policy));
+		setBaseline(policy);
+	}
+	const mode = draft.mode;
+	const allowlist = draft.allowlistText;
+	const dirty = policyDraftDirty(draft, policy);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const listId = useId();
@@ -107,7 +123,7 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 							name={groupName}
 							value={option.mode}
 							checked={mode === option.mode}
-							onChange={() => setMode(option.mode)}
+							onChange={() => setDraft((current) => ({ ...current, mode: option.mode }))}
 							disabled={busy}
 						/>
 						<span>
@@ -127,7 +143,7 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 						className="input textarea"
 						rows={4}
 						value={allowlist}
-						onChange={(event) => setAllowlist(event.target.value)}
+						onChange={(event) => setDraft((current) => ({ ...current, allowlistText: event.target.value }))}
 						aria-describedby={hintId}
 						disabled={busy}
 						placeholder={"example.com\nada@partner.org"}
@@ -137,6 +153,11 @@ function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: Ou
 						host. At most 100 entries.
 					</p>
 				</div>
+			)}
+			{dirty && (
+				<p className="field-hint" role="status">
+					This choice is not saved. The saved policy stays in force until you save.
+				</p>
 			)}
 			{error && (
 				<p className="form-error" role="alert">
