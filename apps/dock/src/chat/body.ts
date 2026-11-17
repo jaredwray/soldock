@@ -119,16 +119,61 @@ export function bodyText(body: ChatBody): string {
 	return lines.join("\n").trim();
 }
 
-/** The depth of blocks in blocks of a body: 1 for a body of paragraphs. */
+/** The depth of blocks in blocks of a body: 1 for a body of paragraphs. A list and its items are one level. */
 function depthOf(list: readonly ChatBodyBlock[]): number {
 	let deepest = 1;
 	for (const block of list) {
 		if (block.type === "blockquote") deepest = Math.max(deepest, 1 + depthOf(block.content));
 		if (block.type === "bullet_list" || block.type === "ordered_list") {
-			for (const item of block.content) deepest = Math.max(deepest, 2 + depthOf(item.content));
+			for (const item of block.content) deepest = Math.max(deepest, 1 + depthOf(item.content));
 		}
 	}
 	return deepest;
+}
+
+/** The blocks of a body, with each list item, as `CHAT_LIMITS.bodyBlocks` counts them. */
+function blockCount(list: readonly ChatBodyBlock[]): number {
+	let count = 0;
+	for (const block of list) {
+		count += 1;
+		if (block.type === "blockquote") count += blockCount(block.content);
+		if (block.type === "bullet_list" || block.type === "ordered_list") {
+			for (const item of block.content) count += 1 + blockCount(item.content);
+		}
+	}
+	return count;
+}
+
+/**
+ * A line that starts a new block in Markdown: a list item or a quote at each indent (a nested list), or
+ * a heading, a fence or a rule.
+ */
+const BLOCK_START =
+	/^[ \t]*(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>)|^ {0,3}(?:#{1,6}(?:[ \t]|$)|```|~~~|(?:[-*_][ \t]*){3,}$|=+[ \t]*$)/;
+const FENCE = /^ {0,3}(?:```|~~~)/;
+
+/**
+ * Markdown as a chat writes it: a new line is a line break, as in each chat app. Markdown itself joins
+ * two lines of a paragraph into one line, so this adds a hard break (a backslash) at the end of each
+ * line that a line of the same paragraph follows. Lines in a code fence stay as they are.
+ */
+export function chatLineBreaks(markdown: string): string {
+	const lines = markdown.split("\n");
+	let fence = false;
+	for (let index = 0; index < lines.length - 1; index++) {
+		const line = lines[index] as string;
+		const next = lines[index + 1] as string;
+		if (FENCE.test(line)) {
+			fence = !fence;
+			continue;
+		}
+		if (fence || line.trim() === "" || next.trim() === "" || BLOCK_START.test(next)) continue;
+		// A line that ends with an odd number of backslashes, or with two spaces, has its hard break.
+		const backslashes = /\\*$/.exec(line)?.[0].length ?? 0;
+		if (backslashes % 2 === 1 || line.endsWith("  ")) continue;
+		lines[index] = `${line}\\`;
+	}
+	return lines.join("\n");
 }
 
 /**
@@ -143,15 +188,32 @@ export function messageContent(input: {
 }): MessageContent {
 	let content: MessageContent;
 	if (input.text !== undefined) {
-		content = { body: textBody(input.text), text: input.text };
+		// New lines at the end show nothing. Without them, the Markdown of the text reads back the same.
+		const text = input.text.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+		content = { body: textBody(text), text };
 	} else {
 		let body: ChatBody;
 		if (input.markdown !== undefined) {
-			const parsed = ChatBody.safeParse(fromDoc(markdownToDoc(input.markdown)));
+			const markdown = input.markdown.replace(/\r\n?/g, "\n");
+			const doc = fromDoc(markdownToDoc(chatLineBreaks(markdown)));
+			// The cheap checks come before the schema, so a large input fails fast and with its reason.
+			if (blockCount(doc.content) > CHAT_LIMITS.bodyBlocks) {
+				throw new OperationError("invalid", `A message has at most ${CHAT_LIMITS.bodyBlocks} blocks and list items.`);
+			}
+			if (bodyText(doc).length > CHAT_LIMITS.messageChars) {
+				throw new OperationError(
+					"invalid",
+					`The text of a message has at most ${CHAT_LIMITS.messageChars} characters.`,
+				);
+			}
+			const parsed = ChatBody.safeParse(doc);
 			if (!parsed.success) throw new OperationError("invalid", "The Markdown gives a message that Chat cannot show.");
 			body = parsed.data;
 		} else {
 			body = input.body as ChatBody;
+			if (blockCount(body.content) > CHAT_LIMITS.bodyBlocks) {
+				throw new OperationError("invalid", `A message has at most ${CHAT_LIMITS.bodyBlocks} blocks and list items.`);
+			}
 		}
 		if (depthOf(body.content) > CHAT_LIMITS.bodyDepth) {
 			throw new OperationError(

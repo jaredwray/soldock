@@ -37,11 +37,14 @@ function TextWithMentions({ text, mentions }: { text: string; mentions: MentionC
 	);
 }
 
-/** One text node with its marks. A mention in code is code, not a link. */
+/**
+ * One text node with its marks. A mention in code is code, and a mention in a link is the text of the
+ * link: a link in a link is not valid HTML.
+ */
 function TextNode({ node, mentions }: { node: Text; mentions: MentionContext }) {
 	const marks = node.marks ?? [];
-	const code = marks.some((mark) => mark.type === "code");
-	let content: ReactNode = code ? node.text : <TextWithMentions text={node.text} mentions={mentions} />;
+	const plain = marks.some((mark) => mark.type === "code" || mark.type === "link");
+	let content: ReactNode = plain ? node.text : <TextWithMentions text={node.text} mentions={mentions} />;
 	for (const mark of marks) {
 		switch (mark.type) {
 			case "code":

@@ -95,17 +95,22 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A message has a body: formatted text, as a tree of nodes in the JSON form of ProseMirror
   (`ChatBody` of the contracts, `body.ts`). The schema is the allowlist:
   - Blocks: paragraph, code_block, blockquote, bullet_list, ordered_list and list_item, at most 6
-    levels deep (`CHAT_LIMITS.bodyDepth`).
-  - Inline: text and hard_break. Marks: strong, em, strike, code and link (http, https or mailto).
-    An emoji is text.
+    levels deep (`CHAT_LIMITS.bodyDepth`; a list and its items are one level), and at most 1,000
+    blocks with each list item (`CHAT_LIMITS.bodyBlocks`).
+  - Inline: text and hard_break. A text has no new line: a line break is a hard_break. Marks:
+    strong, em, strike, code and link (http, https or mailto), each type one time on a text. An
+    emoji is text.
   - A node, a mark or a link scheme that the schema does not have gets `invalid`. Clients show the
     body as elements of the schema, never as HTML.
 - A call sends the content in one of three forms, never two (`chat.post_message`,
   `chat.edit_message`):
-  - `markdown`: the server reads it with the Markdown code of [`docs`](../docs/README.md). A heading
-    becomes a paragraph in bold, a rule goes away, and underline goes away: a message has none.
-  - `text`: plain text. It shows as it is: one paragraph, with a line break for each new line. Its
-    Markdown keeps its characters as text.
+  - `markdown`: the server reads it with the Markdown code of [`docs`](../docs/README.md), as a chat
+    writes it: a new line is a line break (`chatLineBreaks`), out of code fences and before a line
+    that starts a new block. A heading becomes a paragraph in bold, a rule goes away, and underline
+    goes away: a message has none. An image becomes its `!` and a link to it.
+  - `text`: plain text. It shows as it is: one paragraph, with a line break for each new line. New
+    lines at the end go away. Its Markdown keeps its characters as text (with escapes), so it reads
+    back to the same body.
   - `body`: the tree.
 - Each message has `body`, `markdown` (the body as Markdown, for agents and for an edit) and `text`:
   the plain text of the body, one line for each block. Search and notifications use `text`.
@@ -113,6 +118,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   is not a space. The Markdown has at most 16,000 characters, and the JSON of the body at most
   64 KB.
 - A message from before the bodies has no stored body. Its body is the body of its text.
+- Known limit: Markdown has no spaces at the start of a line of a paragraph. So the Markdown of a
+  plain text with an indent, and an edit of that Markdown, lose the indent. A code fence keeps it.
 - A mention is text: `@` and the handle of a principal. The handle is the part of the address
   before the `@`, or the full address when two principals have the same part. The room does not
   read mentions. It stores no mention, counts none and sends no notification of its own. A

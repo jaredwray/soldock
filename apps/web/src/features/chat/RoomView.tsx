@@ -745,7 +745,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 								rows={1}
 								placeholder={draftPlaceholder(room)}
 								value={draft}
-								maxLength={CHAT_LIMITS.messageChars}
+								maxLength={CHAT_LIMITS.markdownChars}
 								onValueChange={setDraft}
 								onKeyDown={onDraftKeyDown}
 								mentions={mentions}
@@ -941,7 +941,7 @@ function MessageItem({
 							id={editId}
 							className="input chat-edit-draft"
 							value={editing}
-							maxLength={CHAT_LIMITS.messageChars}
+							maxLength={CHAT_LIMITS.markdownChars}
 							onValueChange={onEditChange}
 							onKeyDown={(event) => {
 								if (event.key === "Escape") onEditCancel();

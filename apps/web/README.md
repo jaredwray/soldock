@@ -835,9 +835,14 @@ MCP clients. The app has no UI-only path.
     *italic*, ~~strike~~, `code`, links, bulleted and numbered lists, quotes and code blocks. A
     message without a body (from an older server, or an edit that waits for the server) shows its
     text as plain text, with its line breaks.
-  - The box sends its text as Markdown, so `**bold**` and `*italic*` show as formats. An edit opens
-    with the Markdown of the message, and saves Markdown. A message that waits for the server shows
-    its Markdown as text until the server gives its body. A toolbar for the formats is a later step.
+  - The box sends its text as Markdown, so `**bold**` and `*italic*` show as formats. A new line
+    (Shift+Enter) is a line break. The box and the edit box take 16,000 characters of Markdown
+    (`CHAT_LIMITS.markdownChars`). A toolbar for the formats is a later step.
+  - An edit opens with the Markdown of the message, and saves Markdown. The Markdown of a plain
+    text has escapes, for example `2\*3\*4` and a `\` at the end of a line.
+  - A message that waits for the server shows its Markdown as text until the server gives its
+    body. A message in the outbox from before the bodies goes out as Markdown: a plain text with
+    `*` or `_` can then show formats.
   - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
     `@captain`. The handle is the part of the address before the `@`. When two principals have the
     same part, on two mail domains, each of them has the full address as its handle, for example

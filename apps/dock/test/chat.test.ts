@@ -893,6 +893,30 @@ describe("rich text", () => {
 		expect(read).toEqual(edited);
 	});
 
+	// A person types lines with Shift+Enter in the box, which sends Markdown. Each line must stay a line.
+	it("keeps each new line of Markdown as a line break, out of code fences, and takes a list of three levels", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		const markdown = "line one\nline **two**\n\nnew paragraph\n\n```\na\n  b\n```\n\n- one\n  - two\n    - three";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, markdown });
+		expect(message.body?.content.slice(0, 3)).toEqual([
+			{
+				type: "paragraph",
+				content: [
+					{ type: "text", text: "line one" },
+					{ type: "hard_break" },
+					{ type: "text", text: "line " },
+					{ type: "text", text: "two", marks: [{ type: "strong" }] },
+				],
+			},
+			{ type: "paragraph", content: [{ type: "text", text: "new paragraph" }] },
+			{ type: "code_block", content: [{ type: "text", text: "a\n  b" }] },
+		]);
+		expect(message.text).toBe("line one\nline two\nnew paragraph\na\n  b\none\ntwo\nthree");
+		// The Markdown of the message reads back to the same body.
+		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
+		expect(again.body).toEqual(message.body);
+	});
+
 	it("shows plain text as it is, with its line breaks and its Markdown characters", async () => {
 		const room = await createRoom(ada, "private", "Launch");
 		const text = "2*3*4 is 24\n\n# not a heading";
@@ -915,6 +939,11 @@ describe("rich text", () => {
 		// The Markdown of a plain text keeps its characters as text.
 		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
 		expect(again.body).toEqual(message.body);
+		// New lines at the end show nothing, and go away. The Markdown then reads back the same.
+		const trailing = (await ada.call("chat.post_message", { room_id: room.id, text: "a\n\n\nb\n\n" })).message;
+		expect(trailing.text).toBe("a\n\n\nb");
+		const back = (await ada.call("chat.post_message", { room_id: room.id, markdown: trailing.markdown ?? "" })).message;
+		expect(back.body).toEqual(trailing.body);
 	});
 
 	it("takes a body that the schema has, and refuses each other content", async () => {
@@ -943,6 +972,18 @@ describe("rich text", () => {
 			paragraph({ type: "text", text: "U", marks: [{ type: "underline" }] }),
 			paragraph({ type: "text", text: "X", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }),
 			paragraph({ type: "html", text: "<b>x</b>" }),
+			// A new line in a text: a line break is a hard_break node.
+			paragraph({ type: "text", text: "a\nb" }),
+			// One mark of each type: two links would show one and report the other.
+			paragraph({
+				type: "text",
+				text: "X",
+				marks: [
+					{ type: "link", attrs: { href: "https://a.example" } },
+					{ type: "link", attrs: { href: "https://b.example" } },
+				],
+			}),
+			paragraph({ type: "text", text: "X", marks: [{ type: "strong" }, { type: "strong" }] }),
 			{ type: "doc", content: [{ type: "paragraph" }] },
 		];
 		let deep: unknown = { type: "paragraph", content: [{ type: "text", text: "deep" }] };
@@ -959,6 +1000,9 @@ describe("rich text", () => {
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text: "a", markdown: "a" }))).toBe("invalid");
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "   " }))).toBe("invalid");
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "---" }))).toBe("invalid");
+		// A list of more items than the limit of blocks fails before the schema reads it.
+		const items = "- a\n".repeat(CHAT_LIMITS.bodyBlocks);
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: items }))).toBe("invalid");
 	});
 
 	it("gives a message from before the bodies the body of its text", async () => {

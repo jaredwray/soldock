@@ -456,7 +456,7 @@ test("a message shows its formats, shows HTML as text, and the box sends Markdow
 	await openRoom(page, roomId);
 
 	const formatted = page.locator(".chat-message").filter({ hasText: "Ship today" });
-	await expect(formatted.locator("strong")).toHaveText("today");
+	await expect(formatted.locator(".chat-text strong")).toHaveText("today");
 	await expect(formatted.locator("em")).toHaveText("carefully");
 	await expect(formatted.locator("code")).toHaveText("make ship");
 	await expect(formatted.locator("s")).toHaveText("old plan");
@@ -469,11 +469,20 @@ test("a message shows its formats, shows HTML as text, and the box sends Markdow
 	await expect(raw.locator(".chat-text")).toContainText("<script>alert(1)</script> <b>not bold</b>");
 	await expect(raw.locator(".chat-text b, .chat-text script")).toHaveCount(0);
 
+	// Shift+Enter makes a new line in the box, and the message keeps it as a line break.
+	await composer(page, name).fill("line one");
+	await composer(page, name).press("Shift+Enter");
+	await composer(page, name).pressSequentially("line two");
+	await composer(page, name).press("Enter");
+	const lines = page.locator(".chat-message").filter({ hasText: "line one" });
+	await expect(lines.locator(".chat-text br")).toHaveCount(1);
+	await expect(lines.locator(".chat-text")).toHaveText("line oneline two");
+
 	// The box sends Markdown. An edit opens with the Markdown of the message, and keeps its format.
 	await composer(page, name).fill("I can do **that**");
 	await composer(page, name).press("Enter");
 	const mine = page.locator(".chat-message").filter({ hasText: "I can do that" });
-	await expect(mine.locator("strong")).toHaveText("that");
+	await expect(mine.locator(".chat-text strong")).toHaveText("that");
 	await mine.hover();
 	await mine.getByRole("button", { name: /^Change your message/ }).click();
 	const box = page.getByRole("textbox", { name: "New text of the message" });
@@ -481,6 +490,6 @@ test("a message shows its formats, shows HTML as text, and the box sends Markdow
 	await box.fill("I can do **that** *now*");
 	await page.getByRole("button", { name: "Save" }).click();
 	const edited = page.locator(".chat-message").filter({ hasText: "I can do that now" });
-	await expect(edited.locator("em")).toHaveText("now");
-	await expect(edited.locator("strong")).toHaveText("that");
+	await expect(edited.locator(".chat-text em")).toHaveText("now");
+	await expect(edited.locator(".chat-text strong")).toHaveText("that");
 });

@@ -28,8 +28,10 @@ export const CHAT_LIMITS = {
 	markdownChars: 16_000,
 	/** The JSON of the body of one message, in bytes of UTF-8. */
 	bodyBytes: 64 * 1024,
-	/** Blocks in blocks in the body of one message: a list in a quote, and so on. */
+	/** Blocks in blocks in the body of one message: a list in a quote, and so on. A list and its items are one level. */
 	bodyDepth: 6,
+	/** The blocks of the body of one message, with each list item. */
+	bodyBlocks: 1000,
 } as const;
 
 // The body of a message: a small tree of blocks in the JSON form of ProseMirror, the same form as the
@@ -46,8 +48,18 @@ const BodyMark = z.discriminatedUnion("type", [
 
 const BodyText = z.strictObject({
 	type: z.literal("text"),
-	text: z.string().min(1).max(CHAT_LIMITS.messageChars),
-	marks: z.array(BodyMark).max(5).optional(),
+	// A line break is a hard_break node, never a new line in a text.
+	text: z
+		.string()
+		.min(1)
+		.max(CHAT_LIMITS.messageChars)
+		.refine((text) => !/[\r\n]/.test(text), "a text has no new line: use hard_break"),
+	// Each type of mark one time: two links on one text would show one and report the other.
+	marks: z
+		.array(BodyMark)
+		.max(5)
+		.refine((marks) => new Set(marks.map((mark) => mark.type)).size === marks.length, "each mark one time")
+		.optional(),
 });
 
 const BodyInline = z.discriminatedUnion("type", [BodyText, z.strictObject({ type: z.literal("hard_break") })]);
