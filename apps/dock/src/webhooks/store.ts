@@ -122,6 +122,7 @@ export async function chatWebhookBoundary(db: D1Database): Promise<number> {
 export interface ActiveSubscription {
 	id: string;
 	target_id: string;
+	created_by: string;
 }
 
 /** Active subscriptions for one event and one target, whose endpoint is also active. */
@@ -132,7 +133,7 @@ export async function activeSubscriptions(
 ): Promise<ActiveSubscription[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT s.id, s.target_id FROM webhook_subscriptions s
+			`SELECT s.id, s.target_id, e.created_by FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
 			WHERE s.event_type = ? AND s.target_id = ? AND s.status = 'active' AND e.status = 'active'`,
 		)
@@ -172,6 +173,18 @@ export async function disableEndpoint(db: D1Database, row: EndpointRow, reason: 
 		result: "ok",
 		code: reason,
 	});
+}
+
+/** Stops each drive subscription that this principal created for one drive. */
+export async function loseDriveAccess(db: D1Database, spaceId: string, principalId: string): Promise<void> {
+	await db
+		.prepare(
+			`UPDATE webhook_subscriptions SET status = 'disabled', disabled_reason = 'access_lost'
+			WHERE domain = 'drive' AND target_id = ? AND status = 'active'
+			AND endpoint_id IN (SELECT id FROM webhook_endpoints WHERE created_by = ?)`,
+		)
+		.bind(spaceId, principalId)
+		.run();
 }
 
 /** Stops one subscription. The endpoint keeps its other subscriptions. */

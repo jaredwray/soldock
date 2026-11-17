@@ -83,10 +83,60 @@ export const chatRoom = defineResource({
 		"A new, changed or deleted message sends notifications/resources/updated. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
 });
 
+/** One item in a drive. The POST of a drive item event uses this URI. */
+export const driveItem = defineResource({
+	name: "drive.item",
+	title: "Drive item",
+	description:
+		"One item in a drive, as drive.get_item returns it. A webhook for an item event sends this URI. The POST has no file content.",
+	uriTemplate: "soldock://drive/{space_id}/items/{item_id}",
+	mimeType: "application/json",
+	read: {
+		operation: "drive.get_item",
+		input: (vars) => ({ space_id: vars.space_id as string, item_id: vars.item_id as string }),
+	},
+	list: {
+		operation: "drive.list_items",
+		input: {},
+		items: (output) =>
+			output.items.map((item) => ({
+				vars: { space_id: item.space_id, item_id: item.id },
+				title: item.name,
+			})),
+	},
+	updates: "A webhook sends the change. subscriptions/listen does not follow this resource yet.",
+});
+
+/** One shared drive. The POST of a drive-level event uses this URI. */
+export const driveSpace = defineResource({
+	name: "drive.space",
+	title: "Shared drive",
+	description:
+		"One shared drive, as drive.get_shared_drive returns it. A webhook for members or for a deleted drive sends this URI.",
+	uriTemplate: "soldock://drive/{drive_id}",
+	mimeType: "application/json",
+	read: {
+		operation: "drive.get_shared_drive",
+		input: (vars) => ({ drive_id: vars.drive_id as string }),
+	},
+	list: {
+		operation: "drive.list_shared_drives",
+		input: {},
+		items: (output) =>
+			output.shared_drives.map((drive) => ({
+				vars: { drive_id: drive.id },
+				title: drive.name,
+			})),
+	},
+	updates: "A webhook sends the change. subscriptions/listen does not follow this resource yet.",
+});
+
 /** Every resource kind, by name. */
 export const resources = {
 	"mail.inbox": mailInbox,
 	"chat.room": chatRoom,
+	"drive.item": driveItem,
+	"drive.space": driveSpace,
 } as const;
 
 export type ResourceName = keyof typeof resources;

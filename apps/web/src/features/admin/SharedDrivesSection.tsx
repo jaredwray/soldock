@@ -13,6 +13,7 @@ import { listSharedDrives } from "../drive/data.ts";
 import { SHARED_DRIVE_ICON } from "../drive/model.ts";
 import { SharedDriveMembersPart, SharedDriveNameForm } from "../drive/SharedDriveMembers.tsx";
 import { memberRoles, membersProblem, ROLE_HINT, ROLE_NAMES, roleOptions } from "../drive/sharedDrives.ts";
+import { WebhookManager } from "../settings/Webhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
 import { byName } from "./SharedMailboxPanel.tsx";
 
@@ -144,6 +145,13 @@ function SharedDrivePanel({ drive, principals, selfId, onChanged, onDeleted }: P
 				selfId={selfId}
 				canManage
 				onChanged={onChanged}
+			/>
+			<WebhookManager
+				domain="drive"
+				heading={`Subscriptions of ${drive.name}`}
+				mailboxId={drive.id}
+				canCreate={false}
+				note="Members add a subscription in Settings. You can delete one here."
 			/>
 			<div className="admin-card-meta">
 				<div>

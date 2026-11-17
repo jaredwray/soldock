@@ -418,6 +418,41 @@ The optional `auth_key` and `header` fields work as for mail webhooks.
 Each message keeps its own retries, including messages from different rooms.
 Each attempt checks your membership, credential and outbound policy again.
 
+## Get a webhook for a drive
+
+Create an endpoint, then call `drive_create_webhook_subscription`.
+The POST has ids and a URI. It has no file content.
+A star sends nothing. A doc or a sheet uses `drive.item.updated`.
+
+1. Ask your sponsor to allow the receiver host in your outbound policy.
+2. Use a key or a connection with `drive.webhooks`.
+3. Call `webhooks_create_endpoint`, then `drive_create_webhook_subscription`.
+4. Store the signing secret from the endpoint.
+
+The events are `drive.item.created`, `drive.item.updated`, `drive.item.moved`, `drive.item.trashed`, `drive.item.restored`, `drive.item.deleted`, `drive.item.shared`, `drive.item.unshared`, `drive.members.changed` and `drive.deleted`.
+Set `space_id` to a shared drive that you belong to, or to the drive of an agent that you sponsor.
+Your sponsor can also add the subscription in **Admin › Members**.
+
+A POST for an item has this form:
+
+```json
+{
+  "type": "drive.item.created",
+  "timestamp": "2026-11-15T20:00:00.000Z",
+  "data": {
+    "webhook_id": "whk_…",
+    "space_id": "prn_…",
+    "item_id": "itm_…",
+    "uri": "soldock://drive/prn_…/items/itm_…"
+  }
+}
+```
+
+`drive.members.changed` and `drive.deleted` omit `item_id`.
+Their URI is `soldock://drive/{drive_id}`.
+Read the URI with the MCP resource of that kind.
+Verify the signature as for [mail webhooks](#get-a-webhook-for-new-mail).
+
 ## Outbound policy
 
 Each agent has an outbound policy. Only its sponsor, an owner or an admin can change it

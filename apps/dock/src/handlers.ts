@@ -2,7 +2,7 @@
 // the tests use these maps.
 import { chatHandlers, chatWatchers } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
-import { driveHandlers } from "./drive/index.ts";
+import { driveHandlers, driveWatchers } from "./drive/index.ts";
 import { type CallContext, identityHandlers } from "./identity/index.ts";
 import { mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { HandlerMap, WatcherMap } from "./platform/index.ts";
@@ -23,4 +23,5 @@ export const handlers: HandlerMap<CallContext> = {
 export const watchers: WatcherMap<CallContext> = {
 	...mailWatchers,
 	...chatWatchers,
+	...driveWatchers,
 };

@@ -427,7 +427,10 @@ Create an endpoint first. Then call `drive.create_webhook_subscription` with `dr
 The events are `drive.item.created`, `drive.item.updated`, `drive.item.moved`, `drive.item.trashed`, `drive.item.restored`, `drive.item.deleted`, `drive.item.shared`, `drive.item.unshared`, `drive.members.changed` and `drive.deleted`.
 The POST has ids and a URI. It has no file content.
 A star sends nothing. A doc or a sheet uses `drive.item.updated`.
+The drive stores events only after the first subscription.
 The object stores the event in `webhook_outbox` in the same transaction as the change.
+A shared drive event also stores the member ids from that moment.
+A permanent delete of a folder sends one `drive.item.deleted` for the folder.
 The alarm sends the event to `soldock-webhooks`.
 A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.
 See the [webhook module](../webhooks/README.md).
@@ -453,7 +456,7 @@ See the [webhook module](../webhooks/README.md).
 | Stars of the owner | `DriveSpaceDO` table `stars` | Pointers to items of this drive and of other drives |
 | Shared-with-me index of the owner | `DriveSpaceDO` table `shared_with_me` | Rebuildable from the grants of the other drives |
 | Outbox | `DriveSpaceDO` table `outbox` | Rows are deleted after delivery or after the last retry |
-| Webhook events | `DriveSpaceDO` table `webhook_outbox` | The event type, the item id and the time. No file content. The alarm deletes a row after the queue accepts it |
+| Webhook events | `DriveSpaceDO` table `webhook_outbox` | The event type, the item id, the time and the member ids. No file content. The alarm deletes a row after the queue accepts it |
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |

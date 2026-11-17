@@ -45,15 +45,19 @@ The POST has ids and a URI. It has no mail, no message text and no file content.
 Migration `0013_webhook_endpoints.sql` creates `webhook_endpoints` and `webhook_subscriptions`.
 It copies each old row into one endpoint and one subscription. The subscription keeps the old id.
 The old tables `webhooks` and `chat_webhooks` stay. The previous Worker can still write them.
-Update and delete triggers copy a later change. There is no insert trigger.
+An update trigger copies a column only when that column changed.
+It does not set a disabled endpoint back to active.
+A delete trigger removes the subscription. There is no insert trigger.
 `adoptLegacyWebhooks` copies a row that the previous Worker inserts after the migration.
 A later change drops the old tables. A rollback after this Worker runs is a fix forward.
 
 The endpoint holds the URL, the label, the signing secret, the auth key and the custom header.
 The subscription holds the event, the target and its own credential.
 The secrets are plain text in D1, because the POST needs them. A result never shows a stored secret.
-One creator can have 20 endpoints. One creator can have 10 subscriptions for each product.
-One target can have 20 active subscriptions for each product. A disabled endpoint does not fill that count.
+One creator can have 20 endpoints.
+One creator can have 10 subscriptions of one event.
+One target can have 20 active subscriptions of one event.
+A disabled endpoint does not fill that count.
 
 `webhooks.create_endpoint`, `webhooks.list_endpoints`, `webhooks.update_endpoint` and `webhooks.delete_endpoint` need one of `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
 Only the creator can change or delete an endpoint.

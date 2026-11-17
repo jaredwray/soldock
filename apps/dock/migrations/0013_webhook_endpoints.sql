@@ -108,35 +108,68 @@ UPDATE chat_webhooks SET migrated = 1 WHERE migrated = 0;
 --> statement-breakpoint
 UPDATE webhooks SET migrated = 1 WHERE migrated = 0;
 --> statement-breakpoint
+-- Copy a column only when the old row changed it. Never set a disabled endpoint back to active.
 CREATE TRIGGER IF NOT EXISTS webhooks_mirror_update AFTER UPDATE ON webhooks
 WHEN OLD.migrated = 1 AND NEW.migrated = 1 BEGIN
-	UPDATE webhook_endpoints SET label = NEW.label, auth_key = NEW.auth_key, header_name = NEW.header_name,
-		header_value = NEW.header_value, consecutive_failures = NEW.consecutive_failures,
-		last_failed_delivery_id = CASE WHEN NEW.last_failed_event_id IS NULL THEN NULL
+	UPDATE webhook_endpoints SET
+		label = CASE WHEN NEW.label IS NOT OLD.label THEN NEW.label ELSE label END,
+		auth_key = CASE WHEN NEW.auth_key IS NOT OLD.auth_key THEN NEW.auth_key ELSE auth_key END,
+		header_name = CASE WHEN NEW.header_name IS NOT OLD.header_name THEN NEW.header_name ELSE header_name END,
+		header_value = CASE WHEN NEW.header_value IS NOT OLD.header_value THEN NEW.header_value ELSE header_value END,
+		consecutive_failures = CASE WHEN NEW.consecutive_failures IS NOT OLD.consecutive_failures
+			THEN NEW.consecutive_failures ELSE consecutive_failures END,
+		last_failed_delivery_id = CASE WHEN NEW.last_failed_event_id IS OLD.last_failed_event_id THEN last_failed_delivery_id
+			WHEN NEW.last_failed_event_id IS NULL THEN NULL
 			ELSE NEW.last_failed_event_id || '_' || NEW.id END,
-		last_delivery_at = NEW.last_delivery_at, last_failure_at = NEW.last_failure_at, last_error = NEW.last_error,
-		status = CASE WHEN NEW.disabled_reason = 'access_lost' THEN status ELSE NEW.status END,
-		disabled_reason = CASE WHEN NEW.disabled_reason = 'access_lost' THEN disabled_reason ELSE NEW.disabled_reason END
+		last_delivery_at = CASE WHEN NEW.last_delivery_at IS NOT OLD.last_delivery_at THEN NEW.last_delivery_at ELSE last_delivery_at END,
+		last_failure_at = CASE WHEN NEW.last_failure_at IS NOT OLD.last_failure_at THEN NEW.last_failure_at ELSE last_failure_at END,
+		last_error = CASE WHEN NEW.last_error IS NOT OLD.last_error THEN NEW.last_error ELSE last_error END,
+		status = CASE WHEN status = 'disabled' THEN status
+			WHEN NEW.disabled_reason = 'access_lost' THEN status
+			WHEN NEW.status IS NOT OLD.status THEN NEW.status ELSE status END,
+		disabled_reason = CASE WHEN status = 'disabled' THEN disabled_reason
+			WHEN NEW.disabled_reason = 'access_lost' THEN disabled_reason
+			WHEN NEW.disabled_reason IS NOT OLD.disabled_reason THEN NEW.disabled_reason ELSE disabled_reason END
 	WHERE id = 'whe_' || substr(NEW.id, 5);
-	UPDATE webhook_subscriptions SET retry_until = NEW.retry_until, retry_event_id = NEW.retry_event_id,
-		status = CASE WHEN NEW.disabled_reason = 'access_lost' THEN 'disabled' ELSE status END,
-		disabled_reason = CASE WHEN NEW.disabled_reason = 'access_lost' THEN 'access_lost' ELSE disabled_reason END
+	UPDATE webhook_subscriptions SET
+		retry_until = CASE WHEN NEW.retry_until IS NOT OLD.retry_until THEN NEW.retry_until ELSE retry_until END,
+		retry_event_id = CASE WHEN NEW.retry_event_id IS NOT OLD.retry_event_id THEN NEW.retry_event_id ELSE retry_event_id END,
+		status = CASE WHEN status = 'disabled' THEN status
+			WHEN NEW.disabled_reason = 'access_lost' THEN 'disabled' ELSE status END,
+		disabled_reason = CASE WHEN status = 'disabled' THEN disabled_reason
+			WHEN NEW.disabled_reason = 'access_lost' THEN 'access_lost' ELSE disabled_reason END
 	WHERE id = NEW.id;
 END;
 --> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS chat_webhooks_mirror_update AFTER UPDATE ON chat_webhooks
 WHEN OLD.migrated = 1 AND NEW.migrated = 1 BEGIN
-	UPDATE webhook_endpoints SET label = NEW.label, auth_key = NEW.auth_key, header_name = NEW.header_name,
-		header_value = NEW.header_value, consecutive_failures = NEW.consecutive_failures,
-		last_failed_delivery_id = CASE WHEN NEW.last_failed_event_id IS NULL THEN NULL
+	UPDATE webhook_endpoints SET
+		label = CASE WHEN NEW.label IS NOT OLD.label THEN NEW.label ELSE label END,
+		auth_key = CASE WHEN NEW.auth_key IS NOT OLD.auth_key THEN NEW.auth_key ELSE auth_key END,
+		header_name = CASE WHEN NEW.header_name IS NOT OLD.header_name THEN NEW.header_name ELSE header_name END,
+		header_value = CASE WHEN NEW.header_value IS NOT OLD.header_value THEN NEW.header_value ELSE header_value END,
+		consecutive_failures = CASE WHEN NEW.consecutive_failures IS NOT OLD.consecutive_failures
+			THEN NEW.consecutive_failures ELSE consecutive_failures END,
+		last_failed_delivery_id = CASE WHEN NEW.last_failed_event_id IS OLD.last_failed_event_id THEN last_failed_delivery_id
+			WHEN NEW.last_failed_event_id IS NULL THEN NULL
 			ELSE NEW.last_failed_event_id || '_' || NEW.id END,
-		last_delivery_at = NEW.last_delivery_at, last_failure_at = NEW.last_failure_at, last_error = NEW.last_error,
-		status = CASE WHEN NEW.disabled_reason = 'access_lost' THEN status ELSE NEW.status END,
-		disabled_reason = CASE WHEN NEW.disabled_reason = 'access_lost' THEN disabled_reason ELSE NEW.disabled_reason END
+		last_delivery_at = CASE WHEN NEW.last_delivery_at IS NOT OLD.last_delivery_at THEN NEW.last_delivery_at ELSE last_delivery_at END,
+		last_failure_at = CASE WHEN NEW.last_failure_at IS NOT OLD.last_failure_at THEN NEW.last_failure_at ELSE last_failure_at END,
+		last_error = CASE WHEN NEW.last_error IS NOT OLD.last_error THEN NEW.last_error ELSE last_error END,
+		status = CASE WHEN status = 'disabled' THEN status
+			WHEN NEW.disabled_reason = 'access_lost' THEN status
+			WHEN NEW.status IS NOT OLD.status THEN NEW.status ELSE status END,
+		disabled_reason = CASE WHEN status = 'disabled' THEN disabled_reason
+			WHEN NEW.disabled_reason = 'access_lost' THEN disabled_reason
+			WHEN NEW.disabled_reason IS NOT OLD.disabled_reason THEN NEW.disabled_reason ELSE disabled_reason END
 	WHERE id = 'whe_' || substr(NEW.id, 5);
-	UPDATE webhook_subscriptions SET retry_until = NEW.retry_until, retry_event_id = NEW.retry_event_id,
-		status = CASE WHEN NEW.disabled_reason = 'access_lost' THEN 'disabled' ELSE status END,
-		disabled_reason = CASE WHEN NEW.disabled_reason = 'access_lost' THEN 'access_lost' ELSE disabled_reason END
+	UPDATE webhook_subscriptions SET
+		retry_until = CASE WHEN NEW.retry_until IS NOT OLD.retry_until THEN NEW.retry_until ELSE retry_until END,
+		retry_event_id = CASE WHEN NEW.retry_event_id IS NOT OLD.retry_event_id THEN NEW.retry_event_id ELSE retry_event_id END,
+		status = CASE WHEN status = 'disabled' THEN status
+			WHEN NEW.disabled_reason = 'access_lost' THEN 'disabled' ELSE status END,
+		disabled_reason = CASE WHEN status = 'disabled' THEN disabled_reason
+			WHEN NEW.disabled_reason = 'access_lost' THEN 'access_lost' ELSE disabled_reason END
 	WHERE id = NEW.id;
 END;
 --> statement-breakpoint

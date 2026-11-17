@@ -1,5 +1,5 @@
 import { ALL_SCOPES } from "@soldock/contracts";
-import { useEffect, useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -16,6 +16,7 @@ export function SettingsPage() {
 	const toast = useToast();
 	const principal = whoami.principal;
 	const ids = { account: useId(), signOut: useId() };
+	const [endpointEpoch, setEndpointEpoch] = useState(0);
 
 	useEffect(() => {
 		document.title = "Settings – Soldock";
@@ -60,10 +61,10 @@ export function SettingsPage() {
 					note="A key lets a script or an MCP client act as you."
 					allowedScopes={ALL_SCOPES}
 				/>
-				<WebhookEndpoints />
-				<WebhookManager heading="Mail events" canCreate />
-				<WebhookManager domain="chat" heading="Chat events" canCreate />
-				<WebhookManager domain="drive" heading="Drive events" canCreate />
+				<WebhookEndpoints onChanged={() => setEndpointEpoch((epoch) => epoch + 1)} />
+				<WebhookManager heading="Mail events" canCreate epoch={endpointEpoch} />
+				<WebhookManager domain="chat" heading="Chat events" canCreate epoch={endpointEpoch} />
+				<WebhookManager domain="drive" heading="Drive events" canCreate epoch={endpointEpoch} />
 				<section className="panel" aria-labelledby={ids.signOut}>
 					<h2 id={ids.signOut} className="panel-title">
 						Sign out

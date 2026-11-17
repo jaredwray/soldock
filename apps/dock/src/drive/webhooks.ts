@@ -3,7 +3,10 @@ import type { CallContext } from "../identity/index.ts";
 import type { HandlerMap } from "../platform/index.ts";
 import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";
 
-const shared = createSubscriptionHandlers("drive");
+const shared = createSubscriptionHandlers("drive", async (call, targetId) => {
+	const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(targetId));
+	await space.enableWebhookEvents();
+});
 
 function forDrive(view: SubscriptionView): DriveWebhookSubscription {
 	const { target_id, event, ...rest } = view;

@@ -96,6 +96,8 @@ export interface DriveWebhookEventJob {
 	eventId: string;
 	itemId: string;
 	occurredAt: number;
+	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
+	memberIds?: string[];
 }
 
 interface DriveWebhookDeliveryJob {
@@ -107,6 +109,8 @@ interface DriveWebhookDeliveryJob {
 	eventId: string;
 	itemId: string;
 	occurredAt: number;
+	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
+	memberIds?: string[];
 	attempt?: number;
 }
 
@@ -295,9 +299,11 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 
 async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
 	const rows = await activeSubscriptions(env.DIRECTORY, job.eventType, job.spaceId);
-	if (rows.length === 0) return;
+	const allowed = job.memberIds === undefined ? null : new Set(job.memberIds);
+	const chosen = allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by));
+	if (chosen.length === 0) return;
 	await env.WEBHOOKS.sendBatch(
-		rows.map((row) => ({
+		chosen.map((row) => ({
 			body: {
 				v: 1,
 				kind: "drive_delivery",
@@ -307,6 +313,7 @@ async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
 				eventId: job.eventId,
 				itemId: job.itemId,
 				occurredAt: job.occurredAt,
+				...(job.memberIds !== undefined ? { memberIds: job.memberIds } : {}),
 			} satisfies DriveWebhookDeliveryJob,
 		})),
 	);
@@ -323,6 +330,7 @@ async function checkDelivery(
 	db: D1Database,
 	endpoint: EndpointRow,
 	subscription: SubscriptionRow,
+	memberIds: string[] | undefined,
 ): Promise<DeliveryCheck> {
 	const endpointState = await credentialState(db, {
 		principalId: endpoint.created_by,
@@ -342,24 +350,18 @@ async function checkDelivery(
 	}
 	const creator = endpointState.principal;
 	const target = subscription.target_id;
-	if (subscription.domain === "drive" && target.startsWith("drv_")) {
-		// A delete removes every member in the same step as the event. Those subscriptions still send.
-		const drive = await db
-			.prepare("SELECT deleted_at FROM shared_drives WHERE id = ?")
-			.bind(target)
-			.first<{ deleted_at: number | null }>();
-		const deletedDrive = subscription.event_type === "drive.deleted" && drive?.deleted_at != null;
-		if (!deletedDrive) {
-			const member = await db
-				.prepare(
-					`SELECT 1 AS found FROM shared_drive_members m
-					JOIN shared_drives d ON d.id = m.drive_id
-					WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
-				)
-				.bind(target, creator.id)
-				.first();
-			if (!member) return { action: "disable_subscription", reason: "access_lost" };
-		}
+	if (memberIds !== undefined) {
+		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
+	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
+		const member = await db
+			.prepare(
+				`SELECT 1 AS found FROM shared_drive_members m
+				JOIN shared_drives d ON d.id = m.drive_id
+				WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
+			)
+			.bind(target, creator.id)
+			.first();
+		if (!member) return { action: "disable_subscription", reason: "access_lost" };
 	} else if (target !== creator.id) {
 		if (subscription.domain === "mail" && isTeamMailboxId(target)) {
 			if (!(await isTeamMailboxMember(db, target, creator.id))) {
@@ -394,7 +396,8 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	if (pair.subscription.status !== "active" || pair.endpoint.status !== "active") return;
 	if (pair.subscription.target_id !== targetOf(job)) return;
 	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(pair.subscription, job.eventId, Date.now())) return;
-	const check = await checkDelivery(db, pair.endpoint, pair.subscription);
+	const memberIds = job.kind === "drive_delivery" ? job.memberIds : undefined;
+	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds);
 	if (check.action === "skip") return;
 	if (check.action === "disable_endpoint") {
 		await disableEndpoint(db, pair.endpoint, check.reason);
@@ -468,8 +471,8 @@ function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob):
 		webhook_id: subscription.id,
 		space_id: job.spaceId,
 		uri: itemEvent
-			? `soldock://drive/${encodeURIComponent(job.spaceId)}/items/${encodeURIComponent(job.itemId)}`
-			: `soldock://drive/${encodeURIComponent(job.spaceId)}`,
+			? expandTemplate(resources["drive.item"].uriTemplate, { space_id: job.spaceId, item_id: job.itemId })
+			: expandTemplate(resources["drive.space"].uriTemplate, { drive_id: job.spaceId }),
 	};
 	if (itemEvent) data.item_id = job.itemId;
 	return JSON.stringify({

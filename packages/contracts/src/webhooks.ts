@@ -12,9 +12,9 @@ export const WEBHOOK_LIMITS = {
 	labelChars: 100,
 	/** The endpoints that one principal created, active or disabled. */
 	endpointsPerCreator: 20,
-	/** The subscriptions of one kind that one principal created, active or disabled. */
+	/** The subscriptions of one event that one principal created, active or disabled. */
 	subscriptionsPerCreator: 10,
-	/** The active subscriptions of one kind for one target. This limits the POST requests of one event. */
+	/** The active subscriptions of one event for one target. This limits the POST requests of one event. */
 	perTarget: 20,
 	/** The POST attempts of one event to one subscription. */
 	attempts: 5,

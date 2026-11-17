@@ -3,7 +3,18 @@ import { env } from "cloudflare:workers";
 import { WEBHOOK_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import migration from "../migrations/0013_webhook_endpoints.sql?raw";
-import { type Actor, api, base64, codeOf, consumeWebhooks, receiveWebhooks, seedOrg } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	base64,
+	callTool,
+	codeOf,
+	consumeWebhooks,
+	createActor,
+	PASSWORD,
+	receiveWebhooks,
+	seedOrg,
+} from "./helpers.ts";
 
 const HOOK = "https://hooks.example.com/drive";
 
@@ -374,5 +385,176 @@ describe("drive.webhooks on a full human key", () => {
 			.bind(narrow.id)
 			.first("scopes");
 		expect(JSON.parse(stored as string)).toEqual(["mail.read"]);
+	});
+});
+
+describe("drive webhook rules from review", () => {
+	const events = [
+		"drive.item.created",
+		"drive.item.updated",
+		"drive.item.moved",
+		"drive.item.trashed",
+		"drive.item.restored",
+		"drive.item.deleted",
+		"drive.item.shared",
+		"drive.item.unshared",
+		"drive.members.changed",
+		"drive.deleted",
+	] as const;
+
+	it("stores no event before the first subscription", async () => {
+		const queue = await capture(ada.id);
+		await ada.call("drive.create_folder", { name: "Quiet" });
+		await queue.drain();
+		expect(queue.events).toEqual([]);
+	});
+
+	it("sends one delete event for a folder and the file inside it", async () => {
+		await subscribe(ada, "drive.item.deleted");
+		const queue = await capture(ada.id);
+		const folder = (await ada.call("drive.create_folder", { name: "Box" })).item;
+		await ada.call("drive.upload_file", {
+			name: "a.txt",
+			parent_id: folder.id,
+			content_base64: base64("a"),
+		});
+		await queue.drain();
+		queue.events.splice(0);
+		await ada.call("drive.trash_items", { item_ids: [folder.id] });
+		await queue.drain();
+		queue.events.splice(0);
+		await ada.call("drive.delete_items", { item_ids: [folder.id] });
+		await queue.drain();
+		const bodies = await posted(queue.events);
+		expect(bodies.map((body) => body.type)).toEqual(["drive.item.deleted"]);
+		expect(bodies[0]?.data.item_id).toBe(folder.id);
+	});
+
+	it("stops a member who left, and still tells a member who stayed", async () => {
+		const driveId = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Design",
+				members: [
+					{ principal_id: ada.id, role: "manager" },
+					{ principal_id: owner.id, role: "manager" },
+				],
+			})
+		).shared_drive.id;
+		const left = await subscribe(ada, "drive.deleted", driveId);
+		const stayed = await subscribe(owner, "drive.deleted", driveId);
+		await owner.call("drive.remove_shared_drive_member", { drive_id: driveId, principal_id: ada.id });
+		expect((await ada.call("drive.list_webhook_subscriptions")).subscriptions).toEqual([
+			expect.objectContaining({ id: left.id, status: "disabled", disabled_reason: "access_lost" }),
+		]);
+		const queue = await capture(driveId);
+		await owner.call("drive.delete_shared_drive", { drive_id: driveId });
+		await queue.drain();
+		const bodies = await posted(queue.events);
+		expect(bodies.map((body) => body.data.webhook_id)).toEqual([stayed.id]);
+	});
+
+	it("lets each event have its own limit", async () => {
+		const cy = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const driveId = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Limits",
+				members: [
+					{ principal_id: ada.id, role: "manager" },
+					{ principal_id: owner.id, role: "editor" },
+					{ principal_id: cy.id, role: "editor" },
+				],
+			})
+		).shared_drive.id;
+		for (const event of events) await subscribe(ada, event, driveId);
+		for (const event of events) await subscribe(owner, event, driveId);
+		expect((await subscribe(cy, "drive.item.created", driveId)).space_id).toBe(driveId);
+		expect((await subscribe(ada, "drive.item.created")).space_id).toBe(ada.id);
+	});
+
+	it("shows a manager only the origin of another endpoint", async () => {
+		const driveId = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Design",
+				members: [{ principal_id: ada.id, role: "manager" }],
+			})
+		).shared_drive.id;
+		const { endpoint } = await ada.call("webhooks.create_endpoint", {
+			url: "https://hooks.example.com/secret-path?token=abc",
+			auth_key: "hidden",
+		});
+		await ada.call("drive.create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			event: "drive.item.created",
+			space_id: driveId,
+		});
+		const seen = (await owner.call("drive.list_webhook_subscriptions", { space_id: driveId })).subscriptions[0];
+		expect(seen?.endpoint.url).toBe("https://hooks.example.com");
+		expect(seen?.endpoint).toMatchObject({ has_auth_key: false, header_name: null, last_error: null });
+		const own = (await ada.call("drive.list_webhook_subscriptions", { space_id: driveId })).subscriptions[0];
+		expect(own?.endpoint.url).toContain("secret-path");
+		expect(own?.endpoint.has_auth_key).toBe(true);
+	});
+
+	it("refuses a key without drive.webhooks and accepts the MCP tool", async () => {
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
+		const { api_key } = await ada.call("account.create_api_key", { label: "read", scopes: ["drive.read"] });
+		expect(
+			await codeOf(
+				api(api_key.secret)("drive.create_webhook_subscription", {
+					endpoint_id: endpoint.id,
+					event: "drive.item.created",
+				}),
+			),
+		).toBe("forbidden");
+		const tool = await callTool(ada.key, "drive_create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			event: "drive.item.created",
+		});
+		expect(tool.isError).toBeFalsy();
+	});
+
+	it("stops at the endpoint limit", async () => {
+		for (let index = 0; index < WEBHOOK_LIMITS.endpointsPerCreator; index++) {
+			await ada.call("webhooks.create_endpoint", { url: `${HOOK}/${index}` });
+		}
+		expect(await codeOf(ada.call("webhooks.create_endpoint", { url: `${HOOK}/over` }))).toBe("conflict");
+	});
+
+	it("does not turn a disabled endpoint back on from the old table", async () => {
+		const id = "whk_01CCCCCCCCCCCCCCCCCCCCCCCCCC";
+		await env.DIRECTORY.prepare(
+			`INSERT INTO webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at)
+			VALUES (?, ?, ?, 'api_key', ?, ?, 'Legacy', 'whsec_abc', ?)`,
+		)
+			.bind(id, ada.id, ada.id, "key_test", HOOK, new Date().toISOString())
+			.run();
+		await ada.call("mail.list_webhook_subscriptions");
+		const endpointId = `whe_${id.slice(4)}`;
+		await env.DIRECTORY.prepare(
+			"UPDATE webhook_endpoints SET label = 'Kept', auth_key = 'new-key', status = 'disabled', disabled_reason = 'failures' WHERE id = ?",
+		)
+			.bind(endpointId)
+			.run();
+		await env.DIRECTORY.prepare(
+			"UPDATE webhooks SET status = 'active', last_delivery_at = ?, consecutive_failures = 0 WHERE id = ?",
+		)
+			.bind(new Date().toISOString(), id)
+			.run();
+		const endpoint = await env.DIRECTORY.prepare(
+			"SELECT label, auth_key, status, disabled_reason FROM webhook_endpoints WHERE id = ?",
+		)
+			.bind(endpointId)
+			.first<{ label: string; auth_key: string | null; status: string; disabled_reason: string | null }>();
+		expect(endpoint).toEqual({
+			label: "Kept",
+			auth_key: "new-key",
+			status: "disabled",
+			disabled_reason: "failures",
+		});
 	});
 });

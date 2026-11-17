@@ -38,7 +38,7 @@ export interface SubscriptionView {
 	endpoint: WebhookEndpoint;
 }
 
-function toView(row: SubscriptionRow, endpoint: EndpointRow): SubscriptionView {
+function toView(row: SubscriptionRow, endpoint: WebhookEndpoint): SubscriptionView {
 	return {
 		id: row.id,
 		endpoint_id: row.endpoint_id,
@@ -47,7 +47,50 @@ function toView(row: SubscriptionRow, endpoint: EndpointRow): SubscriptionView {
 		status: row.status,
 		disabled_reason: row.disabled_reason,
 		created_at: row.created_at,
-		endpoint: toEndpoint(endpoint),
+		endpoint,
+	};
+}
+
+/** Columns of the endpoint that a list may return. Secrets stay out of this query. */
+const ENDPOINT_LIST_COLUMNS = `e.id AS ep_id, e.created_by AS ep_created_by, e.url AS ep_url, e.label AS ep_label,
+	e.status AS ep_status, e.disabled_reason AS ep_disabled_reason,
+	e.consecutive_failures AS ep_consecutive_failures, e.last_delivery_at AS ep_last_delivery_at,
+	e.last_failure_at AS ep_last_failure_at, e.last_error AS ep_last_error,
+	e.auth_key IS NOT NULL AS ep_has_auth_key, e.header_name AS ep_header_name, e.created_at AS ep_created_at`;
+
+interface ListedEndpoint {
+	ep_id: string;
+	ep_created_by: string;
+	ep_url: string;
+	ep_label: string;
+	ep_status: EndpointRow["status"];
+	ep_disabled_reason: EndpointRow["disabled_reason"];
+	ep_consecutive_failures: number;
+	ep_last_delivery_at: string | null;
+	ep_last_failure_at: string | null;
+	ep_last_error: string | null;
+	ep_has_auth_key: number | boolean;
+	ep_header_name: string | null;
+	ep_created_at: string;
+}
+
+/** The endpoint a viewer may see. Another person's URL path and delivery history stay hidden. */
+function listedEndpoint(row: ListedEndpoint, callerId: string): WebhookEndpoint {
+	const own = row.ep_created_by === callerId;
+	return {
+		id: row.ep_id,
+		url: own ? row.ep_url : new URL(row.ep_url).origin,
+		label: row.ep_label,
+		created_by: row.ep_created_by,
+		status: row.ep_status,
+		disabled_reason: row.ep_disabled_reason,
+		consecutive_failures: own ? row.ep_consecutive_failures : 0,
+		last_delivery_at: own ? row.ep_last_delivery_at : null,
+		last_failure_at: own ? row.ep_last_failure_at : null,
+		last_error: own ? row.ep_last_error : null,
+		has_auth_key: own ? Boolean(row.ep_has_auth_key) : false,
+		header_name: own ? row.ep_header_name : null,
+		created_at: row.ep_created_at,
 	};
 }
 
@@ -191,10 +234,11 @@ export function createSubscriptionHandlers(
 				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
 				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 					JOIN webhook_endpoints e ON e.id = s.endpoint_id
-					WHERE e.created_by = ?9 AND s.domain = ?3) < ?10
+					WHERE e.created_by = ?9 AND s.domain = ?3 AND s.event_type = ?4) < ?10
 				AND (SELECT COUNT(*) FROM webhook_subscriptions s2
 					JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
-					WHERE s2.domain = ?3 AND s2.target_id = ?5 AND s2.status = 'active' AND e2.status = 'active') < ?11
+					WHERE s2.domain = ?3 AND s2.event_type = ?4 AND s2.target_id = ?5
+					AND s2.status = 'active' AND e2.status = 'active') < ?11
 				ON CONFLICT (endpoint_id, event_type, target_id) DO NOTHING
 				RETURNING id`,
 			)
@@ -221,19 +265,19 @@ export function createSubscriptionHandlers(
 				if (existing) throw new OperationError("conflict", "The endpoint already has this subscription.");
 				throw new OperationError(
 					"conflict",
-					`You can have at most ${WEBHOOK_LIMITS.subscriptionsPerCreator} ${domain} subscriptions. A target can have at most ${WEBHOOK_LIMITS.perTarget} active subscriptions. Delete a subscription first.`,
+					`You can have at most ${WEBHOOK_LIMITS.subscriptionsPerCreator} subscriptions of one event. A target can have at most ${WEBHOOK_LIMITS.perTarget} active subscriptions of one event. Delete a subscription first.`,
 				);
 			}
 			const row = await getSubscription(call.env.DIRECTORY, id);
 			if (!row) throw new OperationError("internal", "The subscription was not stored.");
 			auditSubscription(call, `${domain}.create_webhook_subscription`, row);
-			return { subscription: toView(row, endpoint) };
+			return { subscription: toView(row, toEndpoint(endpoint)) };
 		},
 
 		async list(call: CallContext, input: { mailbox_id?: string }): Promise<{ subscriptions: SubscriptionView[] }> {
 			await adoptLegacyWebhooks(call.env.DIRECTORY);
 			const db = call.env.DIRECTORY;
-			const columns = subscriptionColumns("s");
+			const columns = `${subscriptionColumns("s")}, ${ENDPOINT_LIST_COLUMNS}`;
 			let statement: D1PreparedStatement;
 			if (input.mailbox_id === undefined) {
 				statement = db
@@ -247,6 +291,7 @@ export function createSubscriptionHandlers(
 				statement = db
 					.prepare(
 						`SELECT ${columns} FROM webhook_subscriptions s
+						JOIN webhook_endpoints e ON e.id = s.endpoint_id
 						WHERE s.domain = ? AND s.target_id = ? ORDER BY s.created_at DESC`,
 					)
 					.bind(domain, input.mailbox_id);
@@ -259,13 +304,10 @@ export function createSubscriptionHandlers(
 					)
 					.bind(domain, input.mailbox_id, call.caller.id);
 			}
-			const { results } = await statement.all<SubscriptionRow>();
-			const views: SubscriptionView[] = [];
-			for (const row of results) {
-				const endpoint = await getEndpoint(db, row.endpoint_id);
-				if (endpoint) views.push(toView(row, endpoint));
-			}
-			return { subscriptions: views };
+			const { results } = await statement.all<SubscriptionRow & ListedEndpoint>();
+			return {
+				subscriptions: results.map((row) => toView(row, listedEndpoint(row, call.caller.id))),
+			};
 		},
 
 		async delete(call: CallContext, input: { subscription_id: string }): Promise<{ deleted: true }> {

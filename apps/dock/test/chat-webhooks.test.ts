@@ -442,3 +442,83 @@ it("does not replay events to a webhook created after the message", async () => 
 	expect(posts).toHaveLength(1);
 	expect(JSON.parse(posts[0]?.body ?? "{}").data.message_id).toBe(message.id);
 });
+
+it("keeps two edits of one message, and a second delete finds the first", async () => {
+	const current = await room("private", []);
+	const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "Once" });
+	const edits = await Promise.all([
+		ada.call("chat.edit_message", { room_id: current.id, message_id: message.id, text: "One" }),
+		ada.call("chat.edit_message", { room_id: current.id, message_id: message.id, text: "Two" }),
+	]);
+	expect(new Set(edits.map((edit) => edit.message.version)).size).toBe(2);
+	const deletes = await Promise.all([
+		ada.call("chat.delete_message", { room_id: current.id, message_id: message.id }),
+		ada.call("chat.delete_message", { room_id: current.id, message_id: message.id }),
+	]);
+	expect(deletes.filter((result) => result.deleted)).toHaveLength(1);
+});
+
+it("tells the author when another member deletes the message", async () => {
+	await watchBot("chat.message.deleted");
+	const current = await room();
+	const queue = await capture(current.id);
+	const { message } = await bot.call("chat.post_message", { room_id: current.id, text: "Mine" });
+	await queue.drain();
+	queue.events.splice(0);
+	await ada.call("chat.delete_message", { room_id: current.id, message_id: message.id });
+	await queue.drain();
+	const posts = receiveWebhooks();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	expect(posts.map((post) => JSON.parse(post.body).type)).toEqual(["chat.message.deleted"]);
+});
+
+it("stops only the subscription when its key is revoked", async () => {
+	const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
+	const { api_key } = await ada.call("account.create_api_key", {
+		label: "chat hook",
+		scopes: ["chat.webhooks", "chat.read", "chat.write"],
+	});
+	const narrow = api(api_key.secret);
+	const { subscription } = await narrow("chat.create_webhook_subscription", {
+		endpoint_id: endpoint.id,
+		event: "chat.message.created",
+	});
+	await ada.call("account.revoke_api_key", { key_id: api_key.id });
+	const posts = receiveWebhooks();
+	await consumeWebhooks([
+		{
+			v: 1,
+			kind: "chat_delivery",
+			webhookId: subscription.id,
+			mailboxId: ada.id,
+			eventId: "evt_key",
+			occurredAt: Date.now(),
+			roomId: "rm_01AAAAAAAAAAAAAAAAAAAAAAAAAA",
+			membershipId: "mbr_01AAAAAAAAAAAAAAAAAAAAAAAAAA",
+			eventType: "chat.message.created",
+			messageId: "cmsg_01AAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+	]);
+	expect(posts).toHaveLength(0);
+	const stored = await env.DIRECTORY.prepare(
+		`SELECT s.status AS status, s.disabled_reason AS reason, e.status AS endpoint_status
+		FROM webhook_subscriptions s JOIN webhook_endpoints e ON e.id = s.endpoint_id WHERE s.id = ?`,
+	)
+		.bind(subscription.id)
+		.first<{ status: string; reason: string | null; endpoint_status: string }>();
+	expect(stored).toMatchObject({ status: "disabled", reason: "credential_revoked", endpoint_status: "active" });
+});
+
+it("copies a legacy chat row", async () => {
+	const id = "whk_01BBBBBBBBBBBBBBBBBBBBBBBBBB";
+	await env.DIRECTORY.prepare(
+		`INSERT INTO chat_webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at)
+		VALUES (?, ?, ?, 'api_key', ?, ?, 'Legacy chat', 'whsec_abc', ?)`,
+	)
+		.bind(id, ada.id, ada.id, "key_test", HOOK, new Date().toISOString())
+		.run();
+	const listed = await ada.call("chat.list_webhook_subscriptions");
+	expect(listed.subscriptions).toEqual([
+		expect.objectContaining({ id, principal_id: ada.id, event: "chat.message.created" }),
+	]);
+});

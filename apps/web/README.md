@@ -311,12 +311,15 @@ MCP clients. The app has no UI-only path.
     - The lists of new members do not offer an archived account.
   - **Shared drives** (`shared-drives`). Owners and admins see one card for each shared drive of the
     organization (`drive.list_shared_drives` with `all: "true"`). The card shows the name, the role
-    of the person in the drive, and the number of members. A click opens the card and shows three parts:
+    of the person in the drive, and the number of members. A click opens the card and shows four parts:
     - **Name**, a form that changes the name (`drive.update_shared_drive`).
     - **Members of …**, a table of the members (`drive.get_shared_drive`). Each row has a role menu
       (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
       agent with a role. The role menu of an agent has no Manager entry.
+    - **Subscriptions of …**, each drive subscription of that drive, with a Delete button
+      (`drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription`).
+      Members add a subscription in Settings.
     - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
       this while the drive holds an item, and the dialog shows that error.
     - The controls of the only manager are off, because a shared drive always keeps one manager. The

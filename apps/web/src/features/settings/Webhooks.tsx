@@ -41,6 +41,8 @@ interface WebhookManagerProps {
 	canCreate: boolean;
 	/** More text after the standard note. */
 	note?: string;
+	/** Changes when the endpoint list changes, so the form loads the new endpoints. */
+	epoch?: number;
 }
 
 const DOMAIN_NOTE: Record<WebhookDomain, string> = {
@@ -106,7 +108,14 @@ async function deleteSubscription(domain: WebhookDomain, subscriptionId: string)
  * Lists and deletes the subscriptions of one product, and adds one when `canCreate` is true.
  * Create an endpoint first. The endpoint holds the URL and the signing secret.
  */
-export function WebhookManager({ heading, mailboxId, canCreate, note, domain = "mail" }: WebhookManagerProps) {
+export function WebhookManager({
+	heading,
+	mailboxId,
+	canCreate,
+	note,
+	domain = "mail",
+	epoch = 0,
+}: WebhookManagerProps) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const [rows, setRows] = useState<ListedSubscription[] | null>(null);
@@ -117,13 +126,15 @@ export function WebhookManager({ heading, mailboxId, canCreate, note, domain = "
 	const headingId = useId();
 
 	const load = useCallback(async () => {
+		// `epoch` changes when an endpoint is created or deleted, so this list loads again.
+		if (epoch < 0) return;
 		try {
 			setRows(await listSubscriptions(domain, mailboxId));
 			setError(null);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		}
-	}, [mailboxId, domain]);
+	}, [mailboxId, domain, epoch]);
 
 	useEffect(() => {
 		void load();
@@ -246,6 +257,7 @@ export function WebhookManager({ heading, mailboxId, canCreate, note, domain = "
 						mailboxId={mailboxId}
 						mailboxes={mailboxes}
 						drives={drives}
+						epoch={epoch}
 						onCreated={() => {
 							toast({ message: "Subscription added." });
 							void load();
@@ -280,12 +292,14 @@ function CreateSubscriptionForm({
 	mailboxId: fixedTarget,
 	mailboxes,
 	drives,
+	epoch,
 	onCreated,
 }: {
 	domain: WebhookDomain;
 	mailboxId: string | undefined;
 	mailboxes: readonly Mailbox[];
 	drives: readonly SharedDrive[];
+	epoch: number;
 	onCreated: () => void;
 }) {
 	const events = eventsOf(domain);
@@ -298,6 +312,8 @@ function CreateSubscriptionForm({
 	const ids = { endpoint: useId(), event: useId(), target: useId() };
 
 	useEffect(() => {
+		// `epoch` changes when an endpoint is created or deleted, so this list loads again.
+		if (epoch < 0) return;
 		let active = true;
 		api.call("webhooks.list_endpoints").then(
 			(result) => {
@@ -313,7 +329,7 @@ function CreateSubscriptionForm({
 		return () => {
 			active = false;
 		};
-	}, []);
+	}, [epoch]);
 
 	async function submit(formEvent: FormEvent<HTMLFormElement>) {
 		formEvent.preventDefault();
@@ -368,7 +384,11 @@ function CreateSubscriptionForm({
 					Endpoint
 				</label>
 				{endpoints !== null && endpoints.length === 0 ? (
-					<p className="field-hint">Create an endpoint above. Then choose it here.</p>
+					<p className="field-hint">
+						{fixedTarget
+							? "Create an endpoint in Settings. Then choose it here."
+							: "Create an endpoint above. Then choose it here."}
+					</p>
 				) : (
 					<Select
 						id={ids.endpoint}
@@ -418,7 +438,7 @@ function CreateSubscriptionForm({
 }
 
 /** Lists, creates, changes and deletes the endpoints that you created. The signing secret is shown once. */
-export function WebhookEndpoints() {
+export function WebhookEndpoints({ onChanged }: { onChanged?: () => void }) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const [endpoints, setEndpoints] = useState<WebhookEndpoint[] | null>(null);
@@ -531,6 +551,7 @@ export function WebhookEndpoints() {
 					onCreated={(endpoint) => {
 						setCreated(endpoint);
 						void load();
+						onChanged?.();
 					}}
 				/>
 			</div>
@@ -556,6 +577,7 @@ export function WebhookEndpoints() {
 						await api.call("webhooks.delete_endpoint", { endpoint_id: deleting.id });
 						toast({ message: `Endpoint “${deleting.label}” deleted.` });
 						await load();
+						onChanged?.();
 					}}
 				>
 					<p>

@@ -100,6 +100,8 @@ gives the same data as REST.
 | --- | --- | --- | --- |
 | `mail.inbox` | `soldock://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
 | `chat.room` | `soldock://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
+| `drive.item` | `soldock://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
+| `drive.space` | `soldock://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
 
 - A credential sees a resource kind only when it can call the read operation and the list
   operation. A key without `mail.read` sees no inbox.
@@ -129,6 +131,7 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 2. Each change sends `notifications/resources/updated` with the URI. For `mail.inbox`, only a new
    message in the inbox is a change. A read, a label or an archive sends nothing. For `chat.room`, a
    new, changed or deleted message is a change. A read marker, a new name and a new member send nothing.
+   A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
 
 - With nothing to watch, the stream sends the acknowledgment and the result of the request, and ends.

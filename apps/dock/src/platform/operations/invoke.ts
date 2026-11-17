@@ -85,7 +85,8 @@ async function run<C extends { caller: Caller }>(
 	if (!holdsOperationScopes(operation, call.caller.scopes)) {
 		const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
 		const needed = missing.length > 0 ? missing : (operation.anyOfScopes ?? []);
-		throw new OperationError("forbidden", `The credential does not have the scope ${needed.join(", ")}.`);
+		const scopeText = missing.length > 0 ? needed.join(", ") : `one of ${needed.join(", ")}`;
+		throw new OperationError("forbidden", `The credential does not have the scope ${scopeText}.`);
 	}
 	if (isTooDeep(rawInput)) {
 		throw new OperationError("invalid", `The input has more than ${MAX_INPUT_DEPTH} levels of objects and lists.`);
