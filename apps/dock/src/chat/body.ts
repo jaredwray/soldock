@@ -20,10 +20,13 @@ export interface MessageContent {
 	text: string;
 }
 
-/** The body of a plain text: one paragraph, with a line break for each new line. */
+/**
+ * The body of a plain text: one paragraph, with a line break for each new line. A CR, or a CR and an
+ * LF, is a new line too: an old message can have them.
+ */
 export function textBody(text: string): ChatBody {
 	const content: ChatBodyInline[] = [];
-	text.split("\n").forEach((line, index) => {
+	text.split(/\r\n?|\n/).forEach((line, index) => {
 		if (index > 0) content.push({ type: "hard_break" });
 		if (line !== "") content.push({ type: "text", text: line });
 	});
@@ -146,28 +149,39 @@ function blockCount(list: readonly ChatBodyBlock[]): number {
 
 /**
  * A line that starts a new block in Markdown: a list item or a quote at each indent (a nested list), or
- * a heading, a fence or a rule.
+ * a heading, a fence or a rule. `markdownToDoc` reads no underline of a heading.
  */
 const BLOCK_START =
-	/^[ \t]*(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>)|^ {0,3}(?:#{1,6}(?:[ \t]|$)|```|~~~|(?:[-*_][ \t]*){3,}$|=+[ \t]*$)/;
-const FENCE = /^ {0,3}(?:```|~~~)/;
+	/^[ \t]*(?:[-+*][ \t]|\d{1,9}[.)][ \t]|>)|^ {0,3}(?:#{1,6}(?:[ \t]|$)|```|~~~|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
+/** A line that is a full block: a heading or a rule. No line of a paragraph follows it. */
+const LINE_BLOCK = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/;
+/** The line that opens a code fence, as `markdownToDoc` reads it. */
+const FENCE_OPEN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
 
 /**
  * Markdown as a chat writes it: a new line is a line break, as in each chat app. Markdown itself joins
  * two lines of a paragraph into one line, so this adds a hard break (a backslash) at the end of each
- * line that a line of the same paragraph follows. Lines in a code fence stay as they are.
+ * line that a line of the same paragraph follows. Lines in a code fence stay as they are. A fence ends
+ * only at a line of the same character, with at least the same length, as `markdownToDoc` reads it.
  */
 export function chatLineBreaks(markdown: string): string {
 	const lines = markdown.split("\n");
-	let fence = false;
-	for (let index = 0; index < lines.length - 1; index++) {
+	let close: RegExp | null = null;
+	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index] as string;
-		const next = lines[index + 1] as string;
-		if (FENCE.test(line)) {
-			fence = !fence;
+		if (close) {
+			if (close.test(line)) close = null;
 			continue;
 		}
-		if (fence || line.trim() === "" || next.trim() === "" || BLOCK_START.test(next)) continue;
+		const fence = FENCE_OPEN.exec(line);
+		if (fence) {
+			const marker = (fence[1] ?? fence[2]) as string;
+			close = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}[ \\t]*$`);
+			continue;
+		}
+		const next = lines[index + 1];
+		if (next === undefined || line.trim() === "" || next.trim() === "") continue;
+		if (LINE_BLOCK.test(line) || BLOCK_START.test(next)) continue;
 		// A line that ends with an odd number of backslashes, or with two spaces, has its hard break.
 		const backslashes = /\\*$/.exec(line)?.[0].length ?? 0;
 		if (backslashes % 2 === 1 || line.endsWith("  ")) continue;
@@ -178,8 +192,8 @@ export function chatLineBreaks(markdown: string): string {
 
 /**
  * The content of a message from the form that a call sent. Throws `invalid` for content with no text,
- * plain text above `CHAT_LIMITS.messageChars`, a body that is too deep or too large, or Markdown with
- * no text.
+ * plain text above `CHAT_LIMITS.messageChars`, a body that is too deep or too large, Markdown with
+ * no text, or a body with Markdown above `CHAT_LIMITS.markdownChars`.
  */
 export function messageContent(input: {
 	text?: string | undefined;
@@ -229,6 +243,13 @@ export function messageContent(input: {
 	}
 	if (new TextEncoder().encode(JSON.stringify(content.body)).length > CHAT_LIMITS.bodyBytes) {
 		throw new OperationError("payload_too_large", "The body of the message is too large.");
+	}
+	// An edit sends the Markdown of the message back. So the Markdown must be in the limit of the input.
+	if (bodyMarkdown(content.body).length > CHAT_LIMITS.markdownChars) {
+		throw new OperationError(
+			"invalid",
+			`The Markdown of a message has at most ${CHAT_LIMITS.markdownChars} characters, so that an edit can send it back.`,
+		);
 	}
 	return content;
 }

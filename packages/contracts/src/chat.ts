@@ -24,7 +24,10 @@ export const CHAT_LIMITS = {
 	messageRefillSeconds: 1,
 	/** The different emoji of the reactions of one message. */
 	reactionEmoji: 20,
-	/** The characters of the Markdown of one message. The plain text of the message has the limit of `messageChars`. */
+	/**
+	 * The characters of the Markdown of one message: the input, and the Markdown of each stored body, so an edit
+	 * can send it back. The plain text of the message has the limit of `messageChars`.
+	 */
 	markdownChars: 16_000,
 	/** The JSON of the body of one message, in bytes of UTF-8. */
 	bodyBytes: 64 * 1024,

@@ -105,8 +105,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A call sends the content in one of three forms, never two (`chat.post_message`,
   `chat.edit_message`):
   - `markdown`: the server reads it with the Markdown code of [`docs`](../docs/README.md), as a chat
-    writes it: a new line is a line break (`chatLineBreaks`), out of code fences and before a line
-    that starts a new block. A heading becomes a paragraph in bold, a rule goes away, and underline
+    writes it: a new line is a line break (`chatLineBreaks`), out of code fences, after no heading
+    or rule, and before no line that starts a new block. A fence ends at a fence of the same
+    character with at least the same length. A heading becomes a paragraph in bold, a rule goes away, and underline
     goes away: a message has none. An image becomes its `!` and a link to it.
   - `text`: plain text. It shows as it is: one paragraph, with a line break for each new line. New
     lines at the end go away. Its Markdown keeps its characters as text (with escapes), so it reads
@@ -116,8 +117,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   the plain text of the body, one line for each block. Search and notifications use `text`.
 - The plain text has at most 8,000 characters (`CHAT_LIMITS.messageChars`), and one character that
   is not a space. The Markdown has at most 16,000 characters, and the JSON of the body at most
-  64 KB.
-- A message from before the bodies has no stored body. Its body is the body of its text.
+  64 KB. The limit of the Markdown applies to the input and to the Markdown that the server makes
+  from each body. So an edit can always send the Markdown of a message back.
+- A message from before the bodies has no stored body. Its body is the body of its text. A CR, or
+  a CR and an LF, in that text is a line break.
 - Known limit: Markdown has no spaces at the start of a line of a paragraph. So the Markdown of a
   plain text with an indent, and an edit of that Markdown, lose the indent. A code fence keeps it.
 - A mention is text: `@` and the handle of a principal. The handle is the part of the address

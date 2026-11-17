@@ -362,6 +362,7 @@ app uses.
   links, lists, quotes and code fences), `text` (plain text that shows as it is) or `body` (a JSON
   tree), one of the three. In `markdown`, a new line is a line break. A message has no heading, no
   image and no table: a heading shows in bold, and an image as a link. Each message has `markdown`, `body`, and `text` as plain text.
+  The Markdown of a message has at most 16,000 characters, also when you send a `body`.
   Set `idempotency_key`, so a retry does not post the text two times. Each message has the key of its send as `idempotency_key`, so you can find
   the message of a send whose answer you did not get. Compare the author too. Each member of the
   room sees the key, so use a random value, not private data. `chat_mark_read` sets what you read.

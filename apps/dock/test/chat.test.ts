@@ -915,6 +915,21 @@ describe("rich text", () => {
 		// The Markdown of the message reads back to the same body.
 		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
 		expect(again.body).toEqual(message.body);
+
+		// A fence ends only at a fence of the same character and at least the same length. A heading and a
+		// rule end their line, so the next line is a new paragraph.
+		const blocks = async (markdown: string) =>
+			(await ada.call("chat.post_message", { room_id: room.id, markdown })).message.body?.content;
+		expect(await blocks("````\n```\nb\nc\n~~~\n````")).toEqual([
+			{ type: "code_block", content: [{ type: "text", text: "```\nb\nc\n~~~" }] },
+		]);
+		const text = (value: string) => ({ type: "paragraph", content: [{ type: "text", text: value }] });
+		const bold = (value: string) => ({
+			type: "paragraph",
+			content: [{ type: "text", text: value, marks: [{ type: "strong" }] }],
+		});
+		expect(await blocks("# Heading\nparagraph")).toEqual([bold("Heading"), text("paragraph")]);
+		expect(await blocks("a\n\n---\nb")).toEqual([text("a"), text("b")]);
 	});
 
 	it("shows plain text as it is, with its line breaks and its Markdown characters", async () => {
@@ -1000,6 +1015,14 @@ describe("rich text", () => {
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text: "a", markdown: "a" }))).toBe("invalid");
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "   " }))).toBe("invalid");
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "---" }))).toBe("invalid");
+		// An edit sends the Markdown back, so a body with Markdown above the limit of the input fails.
+		const href = `https://example.com/${"a".repeat(2000)}`;
+		const links = Array.from({ length: 10 }, (_, index) => [
+			...(index > 0 ? [{ type: "text" as const, text: " " }] : []),
+			{ type: "text" as const, text: "link", marks: [{ type: "link" as const, attrs: { href } }] },
+		]).flat();
+		const linkBody = { type: "doc" as const, content: [{ type: "paragraph" as const, content: links }] };
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, body: linkBody }))).toBe("invalid");
 		// A list of more items than the limit of blocks fails before the schema reads it.
 		const items = "- a\n".repeat(CHAT_LIMITS.bodyBlocks);
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: items }))).toBe("invalid");
@@ -1007,12 +1030,13 @@ describe("rich text", () => {
 
 	it("gives a message from before the bodies the body of its text", async () => {
 		const room = await createRoom(ada, "private", "Launch");
-		const { message } = await ada.call("chat.post_message", { room_id: room.id, text: "Old *text*" });
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, text: "Old *text*\nline two" });
+		// An old message kept its text as it came, also with CR and LF.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			state.storage.sql.exec("UPDATE messages SET body_json = NULL");
+			state.storage.sql.exec("UPDATE messages SET body_json = NULL, text = ?", "Old *text*\r\nline two");
 		});
 		const [old] = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
-		expect(old).toEqual(message);
+		expect(old).toEqual({ ...message, text: "Old *text*\r\nline two" });
 	});
 
 	it("lets an agent write Markdown through MCP, with the same result as REST", async () => {
