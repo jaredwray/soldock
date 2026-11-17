@@ -6,10 +6,12 @@ import { EditorState, Selection, TextSelection, type Transaction } from "prosemi
 import type { EditorView } from "prosemirror-view";
 import { describe, expect, it } from "vitest";
 import {
+	insertTypedEmoji,
 	insertTypedMention,
 	markdownRules,
 	newLine,
 	toggleCodeBlock,
+	typedEmoji,
 	typedMention,
 } from "../src/features/chat/composerCommands.ts";
 import {
@@ -352,6 +354,27 @@ describe("the Markdown shortcuts of the box", () => {
 		expect(inCodeMark.doc.rangeHasMark(0, inCodeMark.doc.content.size, marks.em)).toBe(false);
 		const inBlock = type(typingState(doc(nodes.code_block.create(null, chatSchema.text("a *b")))), "*");
 		expect(inBlock.doc.textContent).toBe("a *b*");
+	});
+});
+
+describe("an emoji code in the box", () => {
+	it("puts the emoji in place of the typed code, with a space when no space or mark follows", () => {
+		const end = insertTypedEmoji(stateAt(doc(p(t("ship :ta")))), "🎉") as Transaction;
+		expect(end.doc.textContent).toBe("ship 🎉 ");
+		expect(end.selection.from).toBe(end.doc.content.size - 1);
+		// "ship :ta|, now": a comma follows, so no space goes in.
+		const middle = insertTypedEmoji(stateAt(doc(p(t("ship :ta, now"))), 9), "🎉") as Transaction;
+		expect(middle.doc.textContent).toBe("ship 🎉, now");
+		expect(typedEmoji(stateAt(doc(p(t(":ta", "code")))))).toBeNull();
+		expect(typedEmoji(stateAt(doc(nodes.code_block.create(null, chatSchema.text(":ta")))))).toBeNull();
+	});
+
+	it("turns a full code into its emoji when the person types the closing ':', and keeps other text", () => {
+		expect(type(typingState(doc(p())), "done :tada: :+1:").doc.textContent).toBe("done 🎉 👍");
+		expect(type(typingState(doc(p())), "a :no_such_emoji: at 10:30:").doc.textContent).toBe(
+			"a :no_such_emoji: at 10:30:",
+		);
+		expect(type(typingState(doc(p(t("x", "code")))), ":tada:").doc.textContent).toBe("x:tada:");
 	});
 });
 

@@ -558,6 +558,33 @@ test("a message shows its formats, shows HTML as text, and the box makes formats
 	await expect(edited.locator(".chat-text strong")).toHaveText("that");
 });
 
+test("the box takes an emoji from its list, and turns a full code into its emoji", async ({ browser }) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const name = unique("Emoji");
+	const roomId = await createRoom(tomasz, name);
+	const page = await tomasz.newPage();
+	await openRoom(page, roomId);
+	const box = composer(page, name);
+
+	// ":" and two characters open the list. The arrow keys move in it, and Enter takes an emoji without a send.
+	await box.pressSequentially("ship it :par");
+	const list = page.getByRole("listbox", { name: "Emoji" });
+	await expect(list.getByRole("option").first()).toHaveAccessibleName("party popper");
+	await box.press("ArrowDown");
+	await expect(list.getByRole("option").nth(1)).toHaveAttribute("aria-selected", "true");
+	await box.press("ArrowUp");
+	await box.press("Enter");
+	await expect(list).toHaveCount(0);
+	await expect(box).toHaveText(/^ship it 🎉\s$/);
+
+	// A full code becomes its emoji. A time keeps its ":".
+	await box.pressSequentially(":+1: at 10:30");
+	await expect(list).toHaveCount(0);
+	await expect(box).toHaveText("ship it 🎉 👍 at 10:30");
+	await box.press("Enter");
+	await expect(page.locator(".chat-message .chat-text").filter({ hasText: "ship it 🎉 👍 at 10:30" })).toBeVisible();
+});
+
 test("the box makes lists, quotes and code blocks with Markdown shortcuts, and takes a mention from its list", async ({
 	browser,
 }) => {

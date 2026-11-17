@@ -6,6 +6,7 @@ import { liftListItem, sinkListItem, splitListItem } from "prosemirror-schema-li
 import { type Command, type EditorState, TextSelection, type Transaction } from "prosemirror-state";
 import { createRichTextCommands, keepKey, type RichTextSchema } from "../mail/richTextCommands.ts";
 import { chatSchema } from "./composerSchema.ts";
+import { emojiOfCode, emojiQueryAt, FULL_CODE } from "./emoji.ts";
 import { insertMention, mentionAt } from "./mentions.ts";
 
 // The commands, the keys and the Markdown shortcuts of the chat box. Each one works on an EditorState
@@ -158,6 +159,7 @@ function markRule(pattern: RegExp, delimiter: number, type: MarkType): InputRule
  * - `**bold**`, `*italic*` or `_italic_`, `~~strike~~` and `` `code` `` at the end of the text.
  * - `- `, `* ` or `+ ` at the start of a line: a bulleted list. `1. `: a numbered list. `> `: a quote.
  *   ```` ``` ````: a code block.
+ * - `:tada:`, the full code of an emoji: the emoji.
  * A mark in a word, such as `2*3*4`, stays text. Backspace right after a shortcut gives the text back.
  */
 export const markdownRules: readonly InputRule[] = [
@@ -175,6 +177,15 @@ export const markdownRules: readonly InputRule[] = [
 	),
 	wrappingInputRule(/^\s*>\s$/, nodes.blockquote),
 	textblockTypeInputRule(/^```$/, nodes.code_block),
+	// A full code such as `:tada:` becomes its emoji. A code that no emoji has stays text.
+	new InputRule(
+		FULL_CODE,
+		(state, match, start, end) => {
+			const choice = emojiOfCode(match[1] ?? "");
+			return choice ? state.tr.insertText(choice.emoji, start, end) : null;
+		},
+		{ inCodeMark: false },
+	),
 ];
 
 /** The mention that the person types: from its "@" (`from`) to the caret (`to`), in positions of the document. */
@@ -220,4 +231,41 @@ export function insertTypedMention(state: EditorState, handle: string): Transact
 	const lineStart = mention.from - start;
 	const tr = state.tr.insertText(inserted, mention.from, mention.to);
 	return tr.setSelection(TextSelection.create(tr.doc, lineStart + next.caret)).scrollIntoView();
+}
+
+/** The code of an emoji that the person types: from its ":" (`from`) to the caret (`to`). */
+export interface TypedEmoji {
+	from: number;
+	to: number;
+	query: string;
+	/** The text after the caret on its line. */
+	after: string;
+}
+
+/** The code of an emoji before the caret, or null. A code block and a code mark have no emoji. */
+export function typedEmoji(state: EditorState): TypedEmoji | null {
+	const { $head, empty } = state.selection;
+	if (!empty || !$head.parent.isTextblock || $head.parent.type.spec.code) return null;
+	if ($head.marks().some((mark) => mark.type === marks.code)) return null;
+	const parent = $head.parent;
+	const token = emojiQueryAt(parent.textBetween(0, $head.parentOffset, undefined, "\ufffc"));
+	if (!token) return null;
+	return {
+		from: $head.start() + token.start,
+		to: $head.pos,
+		query: token.query,
+		after: parent.textBetween($head.parentOffset, parent.content.size, undefined, "\ufffc"),
+	};
+}
+
+/**
+ * The change that puts `emoji` in place of the code that the person types, with the caret after it. A
+ * space follows the emoji, unless a space or a mark that ends a word follows it already.
+ */
+export function insertTypedEmoji(state: EditorState, emoji: string): Transaction | null {
+	const typed = typedEmoji(state);
+	if (!typed) return null;
+	const text = /^[\s,.;:!?)\]}'"’”]/u.test(typed.after) ? emoji : `${emoji} `;
+	const tr = state.tr.insertText(text, typed.from, typed.to);
+	return tr.setSelection(TextSelection.create(tr.doc, typed.from + text.length)).scrollIntoView();
 }

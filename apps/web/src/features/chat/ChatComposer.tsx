@@ -22,15 +22,18 @@ import { FormatToolbar, LinkDialog, placeholderPlugin, shortcut, type Tool } fro
 import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
 import {
 	composerKeys,
+	insertTypedEmoji,
 	insertTypedMention,
 	isCodeBlockActive,
 	markdownRules,
 	rich,
 	toggleCodeBlock,
+	typedEmoji,
 	typedMention,
 } from "./composerCommands.ts";
 import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
-import { type MentionContext, type MentionSuggestion, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
+import { emojiCode, emojiSuggestions } from "./emoji.ts";
+import { type MentionContext, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -192,39 +195,39 @@ export function ChatComposer({
 	// The newest state. React runs an effect twice in development, and the second view starts from it.
 	const stateRef = useRef(initialState);
 
-	// The mention at the caret. Null when the list is closed: a change of the text opens it, and a
-	// caret that leaves the mention, Escape and a blur close it.
-	const [mentionOpen, setMentionOpen] = useState(false);
+	// The list for the mention or the emoji code at the caret. A change of the text opens it, and a
+	// caret that leaves the mention or the code, Escape and a blur close it.
+	const [listOpen, setListOpen] = useState(false);
 	const [selected, setSelected] = useState<{ query: string; index: number } | null>(null);
-	const typed = mentionOpen ? typedMention(editorState) : null;
+	const typed = listOpen ? typedMention(editorState) : null;
+	const typedCode = listOpen && !typed ? typedEmoji(editorState) : null;
 	const { directory, memberIds, ownId } = mentions;
 	const suggestions = typed ? mentionSuggestions(directory, typed.query, { memberIds, ownId }) : [];
-	const open = suggestions.length > 0;
-	const active = selected && selected.query === typed?.query ? Math.min(selected.index, suggestions.length - 1) : 0;
+	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
+	const count = suggestions.length + emojiChoices.length;
+	const open = count > 0;
+	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
+	const query = typed ? `@${typed.query}` : typedCode ? `:${typedCode.query}` : "";
+	const active = selected && selected.query === query ? Math.min(selected.index, count - 1) : 0;
 	const optionId = (index: number) => `${listId}-${index}`;
 
-	function choose(suggestion: MentionSuggestion) {
+	function choose(index: number) {
 		const view = viewRef.current;
-		setMentionOpen(false);
-		const tr = view ? insertTypedMention(view.state, suggestion.handle) : null;
-		if (view && tr) view.dispatch(tr);
+		setListOpen(false);
+		if (!view) return;
+		const person = suggestions[index];
+		const emoji = emojiChoices[index];
+		const tr = person
+			? insertTypedMention(view.state, person.handle)
+			: emoji
+				? insertTypedEmoji(view.state, emoji.emoji)
+				: null;
+		if (tr) view.dispatch(tr);
 	}
 
 	// The keys of the list, for the handler of the view, which the first render makes.
-	const list = useRef({
-		open,
-		active,
-		count: suggestions.length,
-		query: typed?.query ?? "",
-		choose: (_index: number) => {},
-	});
-	list.current = {
-		open,
-		active,
-		count: suggestions.length,
-		query: typed?.query ?? "",
-		choose: (index) => choose(suggestions[index] as MentionSuggestion),
-	};
+	const list = useRef({ open, active, count, query, choose: (_index: number) => {} });
+	list.current = { open, active, count, query, choose };
 
 	// A layout effect makes the view before a dialog or a page looks for its focus.
 	useLayoutEffect(() => {
@@ -257,7 +260,7 @@ export function ChatComposer({
 					: mentionKeyAction(event.key, event.shiftKey, composing, current);
 				if (action.kind === "select") setSelected({ query: current.query, index: action.index });
 				else if (action.kind === "take") current.choose(action.index);
-				else if (action.kind === "close") setMentionOpen(false);
+				else if (action.kind === "close") setListOpen(false);
 				else if (event.key === "Escape" && !composing && callbacks.current.onCancel) {
 					callbacks.current.onCancel();
 					return true;
@@ -268,7 +271,7 @@ export function ChatComposer({
 			},
 			handleDOMEvents: {
 				blur: () => {
-					setMentionOpen(false);
+					setListOpen(false);
 					return false;
 				},
 			},
@@ -278,12 +281,12 @@ export function ChatComposer({
 				stateRef.current = next;
 				setEditorState(next);
 				if (tr.docChanged) {
-					// A change of the text opens the list for the mention at the caret.
-					setMentionOpen(typedMention(next) !== null);
+					// A change of the text opens the list for the mention or the emoji code at the caret.
+					setListOpen(typedMention(next) !== null || typedEmoji(next) !== null);
 					callbacks.current.onChange(docToBody(next.doc));
 				} else if (tr.selectionSet) {
-					// A caret that leaves the mention closes the list. The next character opens it again.
-					setMentionOpen((was) => was && typedMention(next) !== null);
+					// A caret that leaves the mention or the code closes the list. The next character opens it again.
+					setListOpen((was) => was && (typedMention(next) !== null || typedEmoji(next) !== null));
 				}
 			},
 		});
@@ -322,7 +325,7 @@ export function ChatComposer({
 			view.updateState(empty);
 			stateRef.current = empty;
 			setEditorState(empty);
-			setMentionOpen(false);
+			setListOpen(false);
 		},
 		focus() {
 			viewRef.current?.focus();
@@ -375,7 +378,7 @@ export function ChatComposer({
 					id={listId}
 					role="listbox"
 					className={`mention-list mention-list-${placement}`}
-					aria-label="People and agents to mention"
+					aria-label={typed ? "People and agents to mention" : "Emoji"}
 				>
 					{suggestions.map((suggestion, index) => (
 						// The box has the focus and the keys. A pointer selects and takes a suggestion.
@@ -389,9 +392,9 @@ export function ChatComposer({
 							className="mention-option"
 							onMouseDown={(event) => event.preventDefault()}
 							onMouseMove={() => {
-								if (index !== active) setSelected({ query: typed?.query ?? "", index });
+								if (index !== active) setSelected({ query, index });
 							}}
-							onClick={() => choose(suggestion)}
+							onClick={() => choose(index)}
 						>
 							<span
 								className={
@@ -405,6 +408,29 @@ export function ChatComposer({
 							{suggestion.person.kind === "agent" && <span className="kind kind-agent">agent</span>}
 							<span className="mention-handle">@{suggestion.handle}</span>
 							{!suggestion.member && <span className="mention-note">Not in this room</span>}
+						</div>
+					))}
+					{emojiChoices.map((choice, index) => (
+						// biome-ignore lint/a11y/useKeyWithClickEvents: the keys go to the box, as the ARIA combobox pattern asks.
+						<div
+							key={choice.emoji}
+							id={optionId(index)}
+							role="option"
+							tabIndex={-1}
+							aria-selected={index === active}
+							aria-label={choice.name}
+							className="mention-option"
+							onMouseDown={(event) => event.preventDefault()}
+							onMouseMove={() => {
+								if (index !== active) setSelected({ query, index });
+							}}
+							onClick={() => choose(index)}
+						>
+							<span className="emoji-option-glyph" aria-hidden="true">
+								{choice.emoji}
+							</span>
+							<span className="mention-name">{choice.name}</span>
+							<span className="mention-handle">:{emojiCode(choice)}:</span>
 						</div>
 					))}
 				</div>

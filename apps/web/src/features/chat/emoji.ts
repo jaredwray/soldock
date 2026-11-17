@@ -103,3 +103,45 @@ export function findEmoji(query: string): EmojiChoice[] {
 export function emojiName(emoji: string): string {
 	return EMOJI.find((choice) => choice.emoji === emoji)?.name ?? emoji;
 }
+
+/** The code of an emoji in a message box: its name in lowercase, with "_" for each space and "-". `:thumbs_up:` */
+export function emojiCode(choice: EmojiChoice): string {
+	return choice.name.toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+/**
+ * The emoji of a full code, such as "thumbs_up", or of a word, such as "tada" or "+1". A code comes
+ * before a word, and the first emoji of the list wins for a word that two emoji have. Null when no
+ * emoji has it.
+ */
+export function emojiOfCode(code: string): EmojiChoice | null {
+	const text = code.toLowerCase();
+	return (
+		EMOJI.find((choice) => emojiCode(choice) === text) ??
+		EMOJI.find((choice) => choice.words.includes(text.replace(/_/g, " "))) ??
+		null
+	);
+}
+
+/** The emoji that the list of the box shows at most. */
+const EMOJI_SUGGESTIONS = 8;
+
+/** The emoji for the code that the person types after ":". A "_" is a space of the name. */
+export function emojiSuggestions(query: string): EmojiChoice[] {
+	return findEmoji(query.replace(/_/g, " ")).slice(0, EMOJI_SUGGESTIONS);
+}
+
+/**
+ * The code that the person types: ":" and two or more characters of a code, at the end of the text
+ * before the caret. The ":" cannot come after a letter, a digit, "_", ":" or "/", so "10:30", "note:ab"
+ * and "https://" are not codes. `start` is the place of the ":".
+ */
+const TYPED_CODE = /(?<![\p{L}\p{N}_:/]):([a-z0-9_+-]{2,})$/iu;
+
+export function emojiQueryAt(textBefore: string): { start: number; query: string } | null {
+	const match = TYPED_CODE.exec(textBefore);
+	return match ? { start: match.index, query: match[1] as string } : null;
+}
+
+/** A full code with its closing ":", at the end of the typed text: `:tada:`. Group 1 is the code. */
+export const FULL_CODE = /(?<![\p{L}\p{N}_:/]):([a-z0-9_+-]{2,}):$/iu;

@@ -861,6 +861,13 @@ MCP clients. The app has no UI-only path.
       makes a bulleted list, `1. ` a numbered list, `> ` a quote, and ```` ``` ```` a code block. A
       mark in a word, such as `2*3*4`, stays text. Backspace right after a shortcut gives the text
       back.
+    - **Emoji** (`emoji.ts`): `:` and two characters of a code open a list of emoji, as `@` opens
+      the list of people. The code of an emoji is its name in lowercase, with `_` for each space
+      (`:thumbs_up:`). The other words of the emoji find it too (`:tada:`, `:+1:`). The arrow keys
+      move in the list, Enter and Tab take an emoji, and Escape closes the list. A full code with
+      its closing `:` becomes its emoji, as a Markdown shortcut does. A `:` after a letter, a digit
+      or a `/` starts no code, so `10:30` and `https://` stay text. The emoji are the about 70 of the
+      reaction list.
     - In a list, Shift+Enter makes the next item, and on an empty item it leaves the list. In a
       code block, Shift+Enter makes a new line of code. A second Shift+Enter at the end, after an
       empty line, leaves the block. On an empty line of a quote, Shift+Enter leaves the quote.
