@@ -570,6 +570,11 @@ test("the box takes an emoji from its list, and turns a full code into its emoji
 	await box.pressSequentially("ship it :par");
 	const list = page.getByRole("listbox", { name: "Emoji" });
 	await expect(list.getByRole("option").first()).toHaveAccessibleName("party popper");
+	// A screen reader hears the number of emoji in the list.
+	const count = await list.getByRole("option").count();
+	await expect(page.getByRole("status").filter({ hasText: "Use the arrow keys" })).toHaveText(
+		new RegExp(`^${count} emoji\\.`),
+	);
 	await box.press("ArrowDown");
 	await expect(list.getByRole("option").nth(1)).toHaveAttribute("aria-selected", "true");
 	await box.press("ArrowUp");

@@ -370,7 +370,7 @@ export function ChatComposer({
 			</div>
 			<span className="visually-hidden" role="status">
 				{open
-					? `${plural(suggestions.length, "suggestion")}. Use the arrow keys, Enter to take one, and Escape to close the list.`
+					? `${typedCode ? plural(count, "emoji", "emoji") : plural(count, "suggestion")}. Use the arrow keys, Enter to take one, and Escape to close the list.`
 					: ""}
 			</span>
 			{open && (
