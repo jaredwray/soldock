@@ -433,6 +433,40 @@ describe("drive webhook rules from review", () => {
 		expect(queue.events).toEqual([]);
 	});
 
+	it("does not deliver a shared drive event that has no member list", async () => {
+		const driveId = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Design",
+				members: [
+					{ principal_id: ada.id, role: "editor" },
+					{ principal_id: owner.id, role: "manager" },
+				],
+			})
+		).shared_drive.id;
+		const subscription = await subscribe(ada, "drive.item.created", driveId);
+		const posts = receiveWebhooks();
+		await consumeWebhooks(
+			(
+				await consumeWebhooks([
+					{
+						v: 1,
+						kind: "drive_event",
+						spaceId: driveId,
+						eventType: "drive.item.created",
+						eventId: "evt-no-members",
+						itemId: "itm_01AAAAAAAAAAAAAAAAAAAAAAAA",
+						occurredAt: Date.now(),
+					},
+				])
+			).sent,
+		);
+		expect(posts).toEqual([]);
+		const listed = await ada.call("drive.list_webhook_subscriptions", { space_id: driveId });
+		expect(listed.subscriptions.map((row) => ({ id: row.id, status: row.status }))).toEqual([
+			{ id: subscription.id, status: "active" },
+		]);
+	});
+
 	it("does not send an event that happened before the subscription", async () => {
 		const first = await subscribe(ada, "drive.item.created");
 		const queue = await capture(ada.id);

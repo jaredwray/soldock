@@ -1,7 +1,8 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import {
 	EVENTS_SOCKET_HEADER,
 	EVENTS_SOCKET_MAX_MS,
@@ -42,6 +43,15 @@ const checkedSockets = (principalId: string) =>
 			state.getWebSockets().filter((socket) => (socket.deserializeAttachment() as { checkedAt: number }).checkedAt > 0)
 				.length,
 	);
+
+/**
+ * With a fake clock, the alarm of a room is far in the future: the room sends the states of the other
+ * members after `MEMBER_DELAY_MS`. This moves the clock past it, and runs the alarm.
+ */
+async function sendToMembers(roomId: string): Promise<void> {
+	vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+	await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)));
+}
 
 const listed = async (actor: Actor, roomId: string) =>
 	(await actor.call("chat.list_rooms")).rooms.find((room) => room.id === roomId);
@@ -224,12 +234,14 @@ describe("the events socket", () => {
 		// The next event after EVENTS_SOCKET_RECHECK_MS makes the object check each credential first.
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" });
+		await sendToMembers(room.id);
 		expect(await expired.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 
 		// A socket older than EVENTS_SOCKET_MAX_MS closes at the next event. The client then opens a new one.
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_MAX_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "One hour later." });
+		await sendToMembers(room.id);
 		expect(await steady.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
 	});
 });

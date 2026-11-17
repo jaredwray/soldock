@@ -434,6 +434,7 @@ It stores that sequence with the event, in the same transaction.
 An event with no sequence goes to each active subscription.
 A subscription that starts after that sequence does not get the event.
 A shared drive event also stores the member ids from that moment.
+Delivery uses that list. A job with no list sends nothing.
 A permanent delete of a folder sends one `drive.item.deleted` for the folder.
 The alarm sends the event to `soldock-webhooks`.
 A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.

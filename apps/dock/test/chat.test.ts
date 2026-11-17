@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import type { ChatRoomState } from "../src/identity/index.ts";
 import { type Actor, api, callTool, codeOf, ORIGIN, PASSWORD, request, SETUP_TOKEN, seedOrg } from "./helpers.ts";
 
@@ -26,6 +27,12 @@ const joined = async (actor: Actor) => (await actor.call("chat.list_rooms")).roo
 
 const texts = async (actor: Actor, room_id: string) =>
 	(await actor.call("chat.list_messages", { room_id })).messages.map((message) => message.text);
+
+/**
+ * Waits for the state of a member that did not make the change. A room sends that state after
+ * `MEMBER_DELAY_MS`, with the alarm.
+ */
+const soon = (check: () => Promise<void>) => vi.waitFor(check, { timeout: 5000, interval: 50 });
 
 function roomStub(roomId: string) {
 	return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
@@ -241,7 +248,7 @@ describe("messages", () => {
 		]);
 		expect(changes.has_more).toBe(false);
 		// The version of the list is the same number, so a client that polls the list knows when to ask.
-		expect((await joined(ada))[0]?.version).toBe(changes.version);
+		await soon(async () => expect((await joined(ada))[0]?.version).toBe(changes.version));
 		// A page of changes continues from the version of its last message.
 		const page = await ada.call("chat.list_messages", { room_id: room.id, changed_after: version, limit: 1 });
 		expect(page.has_more).toBe(true);
@@ -366,9 +373,11 @@ describe("the list of joined rooms", () => {
 		const current = (await ada.call("chat.get_room", { room_id: room.id })).room;
 		expect(current.last_seq).toBe(9);
 		for (const member of authors) {
-			const [listed] = await joined(member);
 			const own = (await member.call("chat.get_room", { room_id: room.id })).room;
-			expect([listed?.last_seq, listed?.version, listed?.unread]).toEqual([9, current.version, own.unread]);
+			await soon(async () => {
+				const [listed] = await joined(member);
+				expect([listed?.last_seq, listed?.version, listed?.unread]).toEqual([9, current.version, own.unread]);
+			});
 		}
 	});
 });
@@ -382,17 +391,19 @@ describe("the state of each principal", () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		await post(ada, room.id, "One");
 		const two = await post(ada, room.id, "Two");
-		expect((await joined(bot))[0]).toMatchObject({ unread_count: 2, unread: true, last_read_seq: 0 });
-		// A post moves the marker of its author. So the agent has read the room, and Ada has one message.
+		await soon(async () =>
+			expect((await joined(bot))[0]).toMatchObject({ unread_count: 2, unread: true, last_read_seq: 0 }),
+		);
+		// A post moves the marker of its author at once. So the agent has read the room, and Ada has one message.
 		await post(bot, room.id, "Three");
 		expect((await joined(bot))[0]).toMatchObject({ unread_count: 0, unread: false, last_read_seq: 3 });
-		expect((await joined(ada))[0]).toMatchObject({ unread_count: 1, unread: true });
+		await soon(async () => expect((await joined(ada))[0]).toMatchObject({ unread_count: 1, unread: true }));
 
 		// The own message of the agent does not count.
 		await bot.call("chat.mark_read", { room_id: room.id, seq: 0 });
 		expect((await joined(bot))[0]).toMatchObject({ unread_count: 2, last_read_seq: 0 });
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: two.id });
-		expect((await joined(bot))[0]).toMatchObject({ unread_count: 1 });
+		await soon(async () => expect((await joined(bot))[0]).toMatchObject({ unread_count: 1 }));
 		expect((await bot.call("chat.get_room", { room_id: room.id })).room).toMatchObject({ unread_count: 1 });
 		// The public list has the state of the caller in each room that it joined.
 		const [listed] = (await bot.call("chat.list_rooms", { view: "public" })).rooms;
@@ -408,7 +419,7 @@ describe("the state of each principal", () => {
 		await post(bot, room.id, "Deploy at noon.");
 		const { api_key: laptop } = await ada.call("account.create_api_key", { label: "laptop", scopes: ["chat.read"] });
 		const onLaptop = api(laptop.secret);
-		expect((await onLaptop("chat.list_rooms")).rooms[0]).toMatchObject({ unread_count: 1 });
+		await soon(async () => expect((await onLaptop("chat.list_rooms")).rooms[0]).toMatchObject({ unread_count: 1 }));
 
 		await ada.call("chat.mark_read", { room_id: room.id });
 		// No wait and no poll: the other device has the marker when the call returns.
@@ -480,6 +491,50 @@ describe("the state of each principal", () => {
 		});
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect((await joined(bot))[0]).toMatchObject({ last_seq: 1, unread_count: 1 });
+	});
+
+	// A post must not wait for the object of each member: a room can have 500 members.
+	it("returns a post after the state of its author, and sends one state to each other member for the posts of that time", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id, owner.id]);
+		const stub = roomStub(room.id);
+		// Plain counters: the room calls the objects of the principals through this binding.
+		const sends = new Map<string, number>();
+		await runInDurableObject(stub, (instance) => {
+			const target = instance as unknown as { env: Env };
+			const real = target.env.PRINCIPAL;
+			const names = new Map<string, string>();
+			const counting = {
+				idFromName: (name: string) => {
+					const id = real.idFromName(name);
+					names.set(id.toString(), name);
+					return id;
+				},
+				get: (id: DurableObjectId) => {
+					const principal = real.get(id);
+					const name = names.get(id.toString()) ?? "";
+					return {
+						applyChatRoomStates: (states: ChatRoomState[]) => {
+							sends.set(name, (sends.get(name) ?? 0) + 1);
+							return principal.applyChatRoomStates(states);
+						},
+					};
+				},
+			} as unknown as Env["PRINCIPAL"];
+			target.env = { ...target.env, PRINCIPAL: counting };
+		});
+		// Only the clock is fake, so the three posts come in one moment.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		for (const text of ["One", "Two", "Three"]) await post(ada, room.id, text);
+		// The author has its state with each post. The other members wait.
+		expect([sends.get(ada.id), sends.get(bot.id), sends.get(owner.id)]).toEqual([3, undefined, undefined]);
+		expect((await joined(ada))[0]).toMatchObject({ last_read_seq: 3 });
+
+		vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		vi.useRealTimers();
+		// One state for each other member, with the three posts.
+		expect([sends.get(bot.id), sends.get(owner.id)]).toEqual([1, 1]);
+		expect((await joined(bot))[0]).toMatchObject({ last_seq: 3, unread_count: 3 });
 	});
 
 	// A principal that joined rooms before its object existed has those rooms in the index only.
@@ -582,7 +637,9 @@ describe("a direct message", () => {
 		expect(fromBot.peer?.principal_id).toBe(ada.id);
 
 		await post(bot, fromAda.id, "Your invoice is ready.");
-		expect((await joined(ada))[0]).toMatchObject({ id: fromAda.id, unread: true, peer: { principal_id: bot.id } });
+		await soon(async () =>
+			expect((await joined(ada))[0]).toMatchObject({ id: fromAda.id, unread: true, peer: { principal_id: bot.id } }),
+		);
 		expect(await texts(ada, fromAda.id)).toEqual(["Your invoice is ready."]);
 	});
 
@@ -748,8 +805,10 @@ describe("a room object", () => {
 			directory = readable;
 			const failing = {
 				prepare: (query: string) => readable.prepare(query),
-				batch: async () => {
-					throw new Error("D1 is not available");
+				// The webhook copy is one batch of seven statements. The index write is shorter.
+				batch: async (statements: D1PreparedStatement[]) => {
+					if (statements.length < 7) throw new Error("D1 is not available");
+					return readable.batch(statements);
 				},
 			} as unknown as D1Database;
 			target.env = { ...target.env, DIRECTORY: failing };
@@ -784,9 +843,12 @@ describe("a room object", () => {
 			const directory = target.env.DIRECTORY;
 			const slow = {
 				prepare: (query: string) => directory.prepare(query),
+				// The webhook copy is one batch of seven statements. The index write is shorter.
 				batch: async (statements: D1PreparedStatement[]) => {
-					gate.entered = true;
-					while (!gate.released) await scheduler.wait(5);
+					if (statements.length < 7) {
+						gate.entered = true;
+						while (!gate.released) await scheduler.wait(5);
+					}
 					return directory.batch(statements);
 				},
 			} as unknown as D1Database;
