@@ -1,5 +1,12 @@
 // MCP tools: one tool for each operation of the registry.
-import { type Operation, type OperationName, operationList, toolName, UNTRUSTED_NOTICE } from "@soldock/contracts";
+import {
+	holdsOperationScopes,
+	type Operation,
+	type OperationName,
+	operationList,
+	toolName,
+	UNTRUSTED_NOTICE,
+} from "@soldock/contracts";
 import { z } from "zod";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";
@@ -53,7 +60,7 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 
 /** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
-	return operation.callers.includes(caller.kind) && operation.scopes.every((scope) => caller.scopes.has(scope));
+	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
 }
 
 /** The tools that this credential can call, in the order of the registry. */

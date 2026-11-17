@@ -1,25 +1,40 @@
 import {
 	CHAT_LIMITS,
-	CHAT_WEBHOOK_EVENT_TYPE,
+	CHAT_WEBHOOK_EVENTS,
+	type ChatWebhookEvent,
+	DRIVE_WEBHOOK_EVENTS,
+	type DriveWebhookEvent,
 	expandTemplate,
 	resources,
 	WEBHOOK_EVENT_TYPE,
 	WEBHOOK_LIMITS,
 } from "@soldock/contracts";
-import { base64ToBytes, bytesToBase64, hmacSha256, log } from "../platform/index.ts";
 import {
-	activeWebhookIds,
-	checkWebhook,
-	disableWebhook,
-	getWebhook,
+	credentialState,
+	getPrincipal,
+	isTeamMailboxId,
+	isTeamMailboxMember,
+	type PrincipalRecord,
+} from "../identity/index.ts";
+import { base64ToBytes, bytesToBase64, hmacSha256, log } from "../platform/index.ts";
+import { adoptLegacyWebhooks, unmigratedCount } from "./legacy.ts";
+import {
+	activeSubscriptions,
+	disableEndpoint,
+	disableSubscription,
+	type EndpointDisabledReason,
+	type EndpointRow,
+	getDelivery,
 	joinsWaitingRetry,
 	recordDelivery,
 	recordFailedAttempt,
 	recordFailedEvent,
-	type WebhookRow,
-} from "./subscriptions.ts";
+	type SubscriptionDisabledReason,
+	type SubscriptionRow,
+} from "./store.ts";
+import { webhookHostAllowed } from "./url.ts";
 
-/** The queue that carries webhook events from the mailboxes, and one POST for each webhook. */
+/** The queue that carries webhook events, and one POST for each subscription. */
 export const WEBHOOK_QUEUE = "soldock-webhooks";
 
 /** New mail in the inbox of a mailbox. The `MailboxDO` sends it from its event outbox. Version 1. */
@@ -32,7 +47,7 @@ export interface WebhookEventJob {
 	occurredAt: number;
 }
 
-/** One POST of one event to one webhook. Version 1. */
+/** One POST of one mail event to one subscription. Version 1. `webhookId` is the subscription id. */
 export interface WebhookDeliveryJob {
 	v: 1;
 	kind: "delivery";
@@ -47,7 +62,7 @@ export interface WebhookDeliveryJob {
 	attempt?: number;
 }
 
-/** A committed message and the members at the time of the post, except its author. */
+/** A committed chat change and the members at that time, except the actor. */
 export interface ChatWebhookEventJob {
 	v: 1;
 	kind: "chat_event";
@@ -56,22 +71,74 @@ export interface ChatWebhookEventJob {
 	occurredAt: number;
 	subscriptionSequence: number;
 	recipients: { id: string; membershipId: string }[];
+	/**
+	 * Absent on a job from the previous Worker. Then the event is `chat.message.created` and `eventId`
+	 * is the message id.
+	 */
+	eventType?: ChatWebhookEvent;
+	messageId?: string;
 }
+
 interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind"> {
 	kind: "chat_delivery";
 	roomId: string;
 	membershipId: string;
+	eventType?: ChatWebhookEvent;
+	messageId?: string;
 }
-export type WebhookJob = WebhookEventJob | WebhookDeliveryJob | ChatWebhookEventJob | ChatWebhookDeliveryJob;
-type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob;
+
+/** A change in one drive. The `DriveSpaceDO` sends it from its webhook outbox. */
+export interface DriveWebhookEventJob {
+	v: 1;
+	kind: "drive_event";
+	spaceId: string;
+	eventType: DriveWebhookEvent;
+	eventId: string;
+	itemId: string;
+	occurredAt: number;
+	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
+	memberIds?: string[];
+}
+
+interface DriveWebhookDeliveryJob {
+	v: 1;
+	kind: "drive_delivery";
+	webhookId: string;
+	spaceId: string;
+	eventType: DriveWebhookEvent;
+	eventId: string;
+	itemId: string;
+	occurredAt: number;
+	/** Members of a shared drive at the time of the event. Absent for a personal drive. */
+	memberIds?: string[];
+	attempt?: number;
+}
+
+export type WebhookJob =
+	| WebhookEventJob
+	| WebhookDeliveryJob
+	| ChatWebhookEventJob
+	| ChatWebhookDeliveryJob
+	| DriveWebhookEventJob
+	| DriveWebhookDeliveryJob;
+
+type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob | DriveWebhookDeliveryJob;
 
 /** The delay in seconds before attempt 2, 3, 4 and 5 of a POST. */
 const RETRY_DELAYS_S = [10, 60, 300, 1800] as const;
 /** The delay before a job runs again after a failure of Soldock itself, such as D1. */
 const INTERNAL_RETRY_S = 30;
-/** The time after the planned retry while a new event still joins it, in case the retry job runs late. */
+/** The time after the planned retry while a new mail event still joins it, in case the retry job runs late. */
 const RETRY_GRACE_MS = 2 * WEBHOOK_LIMITS.timeoutMs + 60_000;
 const SECRET_PREFIX = "whsec_";
+const CHAT_EVENTS = new Set<string>(CHAT_WEBHOOK_EVENTS);
+const DRIVE_EVENTS = new Set<string>(DRIVE_WEBHOOK_EVENTS);
+
+type DeliveryCheck =
+	| { action: "deliver"; creator: PrincipalRecord }
+	| { action: "skip" }
+	| { action: "disable_endpoint"; reason: EndpointDisabledReason }
+	| { action: "disable_subscription"; reason: SubscriptionDisabledReason };
 
 function isWebhookJob(body: unknown): body is WebhookJob {
 	if (typeof body !== "object" || body === null) return false;
@@ -81,27 +148,46 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 		typeof job.eventId !== "string" ||
 		typeof job.occurredAt !== "number" ||
 		!Number.isFinite(job.occurredAt)
-	)
+	) {
 		return false;
-	if (job.kind === "chat_event")
+	}
+	if (job.kind === "drive_event" || job.kind === "drive_delivery") {
+		const attempt = job.attempt;
+		const validAttempt =
+			job.kind === "drive_event" ||
+			attempt === undefined ||
+			(typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 1);
+		return (
+			validAttempt &&
+			typeof job.spaceId === "string" &&
+			typeof job.itemId === "string" &&
+			typeof job.eventType === "string" &&
+			DRIVE_EVENTS.has(job.eventType) &&
+			(job.kind === "drive_event" || typeof job.webhookId === "string")
+		);
+	}
+	if (job.kind === "chat_event") {
 		return (
 			typeof job.roomId === "string" &&
 			typeof job.subscriptionSequence === "number" &&
 			Number.isSafeInteger(job.subscriptionSequence) &&
 			job.subscriptionSequence >= 0 &&
+			(job.eventType === undefined || (typeof job.eventType === "string" && CHAT_EVENTS.has(job.eventType))) &&
+			(job.messageId === undefined || typeof job.messageId === "string") &&
 			Array.isArray(job.recipients) &&
 			job.recipients.length <= CHAT_LIMITS.membersPerRoom &&
 			job.recipients.every(
-				(r: unknown) =>
-					typeof r === "object" &&
-					r !== null &&
-					"id" in r &&
-					typeof r.id === "string" &&
-					"membershipId" in r &&
-					typeof r.membershipId === "string" &&
-					r.membershipId.length > 0,
+				(recipient: unknown) =>
+					typeof recipient === "object" &&
+					recipient !== null &&
+					"id" in recipient &&
+					typeof recipient.id === "string" &&
+					"membershipId" in recipient &&
+					typeof recipient.membershipId === "string" &&
+					recipient.membershipId.length > 0,
 			)
 		);
+	}
 	if (typeof job.mailboxId !== "string") return false;
 	if (job.kind === "event") return true;
 	const attempt = job.attempt;
@@ -114,19 +200,20 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 			(job.kind === "chat_delivery" &&
 				typeof job.roomId === "string" &&
 				typeof job.membershipId === "string" &&
-				job.membershipId.length > 0))
+				job.membershipId.length > 0 &&
+				(job.eventType === undefined || (typeof job.eventType === "string" && CHAT_EVENTS.has(job.eventType))) &&
+				(job.messageId === undefined || typeof job.messageId === "string")))
 	);
 }
 
 /**
- * The consumer of `soldock-webhooks`. An event job becomes one delivery job for each active webhook of the
- * mailbox. A delivery job checks the access of the creator of the webhook again and sends one signed POST.
- * A failed POST puts a new job with the next attempt on the queue, with a delay. Jobs run in parallel, so
- * one slow receiver does not hold the others. A job that cannot be read goes to the dead-letter queue. A
- * job that fails in Soldock itself runs again, and after the `max_retries` of the consumer the queue moves
- * it to the dead-letter queue.
+ * The consumer of `soldock-webhooks`. An event job becomes one delivery job for each active subscription.
+ * A delivery job checks access again and sends one signed POST. A failed POST puts a new job with the next
+ * attempt on the queue, with a delay. Jobs run in parallel, so one slow receiver does not hold the others.
  */
 export async function handleWebhookBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+	const pending = await unmigratedCount(env.DIRECTORY).first<number>("n");
+	if (pending) await adoptLegacyWebhooks(env.DIRECTORY);
 	await Promise.all(batch.messages.map((message) => handleJob(message, env)));
 }
 
@@ -138,6 +225,8 @@ async function handleJob(message: Message<unknown>, env: Env): Promise<void> {
 			await env.WEBHOOKS_DLQ.send(job);
 		} else if (job.kind === "chat_event") {
 			await fanOutChat(env, job);
+		} else if (job.kind === "drive_event") {
+			await fanOutDrive(env, job);
 		} else if (job.kind === "event") {
 			await fanOut(env, job);
 		} else {
@@ -154,16 +243,16 @@ async function handleJob(message: Message<unknown>, env: Env): Promise<void> {
 	}
 }
 
-/** Sends one delivery job for each active webhook of the mailbox. A mailbox has at most `perMailbox` webhooks. */
+/** Sends one delivery job for each active mail subscription of the mailbox. */
 async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
-	const ids = await activeWebhookIds(env.DIRECTORY, job.mailboxId);
-	if (ids.length === 0) return;
+	const rows = await activeSubscriptions(env.DIRECTORY, WEBHOOK_EVENT_TYPE, job.mailboxId);
+	if (rows.length === 0) return;
 	await env.WEBHOOKS.sendBatch(
-		ids.map((webhookId) => ({
+		rows.map((row) => ({
 			body: {
 				v: 1,
 				kind: "delivery",
-				webhookId,
+				webhookId: row.id,
 				mailboxId: job.mailboxId,
 				eventId: job.eventId,
 				occurredAt: job.occurredAt,
@@ -172,17 +261,21 @@ async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
 	);
 }
 
-/** Split both the D1 query and queue batch to respect their limits. */
+/** One page stays within the D1 bind limit and the queue batch limit. */
 async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
+	const eventType = job.eventType ?? "chat.message.created";
+	if (!CHAT_EVENTS.has(eventType)) return;
 	for (let start = 0; start < job.recipients.length; start += 90) {
 		const recipients = job.recipients.slice(start, start + 90);
 		const memberships = new Map(recipients.map((member) => [member.id, member.membershipId]));
 		const { results } = await env.DIRECTORY.prepare(
-			`SELECT id, mailbox_id FROM chat_webhooks WHERE status = 'active' AND sequence <= ?
-    AND mailbox_id IN (${recipients.map(() => "?").join(",")})`,
+			`SELECT s.id, s.target_id FROM webhook_subscriptions s
+			JOIN webhook_endpoints e ON e.id = s.endpoint_id
+			WHERE s.status = 'active' AND e.status = 'active' AND s.domain = 'chat' AND s.event_type = '${eventType}'
+			AND s.sequence <= ? AND s.target_id IN (${recipients.map(() => "?").join(",")})`,
 		)
 			.bind(job.subscriptionSequence, ...recipients.map((member) => member.id))
-			.all<{ id: string; mailbox_id: string }>();
+			.all<{ id: string; target_id: string }>();
 		for (let offset = 0; offset < results.length; offset += 100) {
 			await env.WEBHOOKS.sendBatch(
 				results.slice(offset, offset + 100).map((row) => ({
@@ -190,11 +283,13 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 						v: 1,
 						kind: "chat_delivery",
 						webhookId: row.id,
-						mailboxId: row.mailbox_id,
+						mailboxId: row.target_id,
 						eventId: job.eventId,
 						occurredAt: job.occurredAt,
 						roomId: job.roomId,
-						membershipId: memberships.get(row.mailbox_id) as string,
+						membershipId: memberships.get(row.target_id) as string,
+						eventType,
+						messageId: job.messageId ?? job.eventId,
 					} satisfies ChatWebhookDeliveryJob,
 				})),
 			);
@@ -202,59 +297,149 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 	}
 }
 
+async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
+	const rows = await activeSubscriptions(env.DIRECTORY, job.eventType, job.spaceId);
+	const allowed = job.memberIds === undefined ? null : new Set(job.memberIds);
+	const chosen = allowed === null ? rows : rows.filter((row) => allowed.has(row.created_by));
+	if (chosen.length === 0) return;
+	await env.WEBHOOKS.sendBatch(
+		chosen.map((row) => ({
+			body: {
+				v: 1,
+				kind: "drive_delivery",
+				webhookId: row.id,
+				spaceId: job.spaceId,
+				eventType: job.eventType,
+				eventId: job.eventId,
+				itemId: job.itemId,
+				occurredAt: job.occurredAt,
+				...(job.memberIds !== undefined ? { memberIds: job.memberIds } : {}),
+			} satisfies DriveWebhookDeliveryJob,
+		})),
+	);
+}
+
+function sameCredential(endpoint: EndpointRow, subscription: SubscriptionRow): boolean {
+	return (
+		endpoint.credential_kind === subscription.credential_kind && endpoint.credential_id === subscription.credential_id
+	);
+}
+
+/** The access of the creator now. A lost target stops that subscription. A dead credential stops the endpoint. */
+async function checkDelivery(
+	db: D1Database,
+	endpoint: EndpointRow,
+	subscription: SubscriptionRow,
+	memberIds: string[] | undefined,
+): Promise<DeliveryCheck> {
+	const endpointState = await credentialState(db, {
+		principalId: endpoint.created_by,
+		kind: endpoint.credential_kind,
+		id: endpoint.credential_id,
+	});
+	if (endpointState.state === "ended") return { action: "disable_endpoint", reason: "credential_revoked" };
+	if (endpointState.state === "archived") return { action: "skip" };
+	if (!sameCredential(endpoint, subscription)) {
+		const subscriptionState = await credentialState(db, {
+			principalId: endpoint.created_by,
+			kind: subscription.credential_kind,
+			id: subscription.credential_id,
+		});
+		if (subscriptionState.state === "ended") return { action: "disable_subscription", reason: "credential_revoked" };
+		if (subscriptionState.state === "archived") return { action: "skip" };
+	}
+	const creator = endpointState.principal;
+	const target = subscription.target_id;
+	if (memberIds !== undefined) {
+		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
+	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
+		const member = await db
+			.prepare(
+				`SELECT 1 AS found FROM shared_drive_members m
+				JOIN shared_drives d ON d.id = m.drive_id
+				WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
+			)
+			.bind(target, creator.id)
+			.first();
+		if (!member) return { action: "disable_subscription", reason: "access_lost" };
+	} else if (target !== creator.id) {
+		if (subscription.domain === "mail" && isTeamMailboxId(target)) {
+			if (!(await isTeamMailboxMember(db, target, creator.id))) {
+				return { action: "disable_subscription", reason: "access_lost" };
+			}
+		} else {
+			const agent = await getPrincipal(db, target);
+			if (agent?.kind !== "agent" || creator.kind !== "human" || agent.sponsor_id !== creator.id) {
+				return { action: "disable_subscription", reason: "access_lost" };
+			}
+			if (agent.archived_at !== null) return { action: "skip" };
+		}
+	}
+	if (!webhookHostAllowed(creator, endpoint.url)) return { action: "disable_endpoint", reason: "policy_denied" };
+	return { action: "deliver", creator };
+}
+
+function targetOf(job: DeliveryJob): string {
+	return job.kind === "drive_delivery" ? job.spaceId : job.mailboxId;
+}
+
 /**
- * Sends one event to one webhook. A webhook that was deleted or disabled after the event gets nothing.
- * While a failed POST of the webhook waits for its retry, a new event joins that retry: a POST holds no
- * content, so the retry tells the receiver to read the inbox, and a receiver that is down gets one chain
- * of attempts, not one for each event.
+ * Sends one event to one subscription. A subscription or an endpoint that was deleted or disabled gets
+ * nothing. For mail, a new event joins a retry that already waits, so a receiver that is down gets one
+ * chain of attempts.
  */
 async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	const db = env.DIRECTORY;
 	const attempt = job.attempt ?? 1;
-	const table = job.kind === "chat_delivery" ? "chat_webhooks" : "webhooks";
-	const row = await getWebhook(db, job.webhookId, table);
-	if (row?.status !== "active" || row.mailbox_id !== job.mailboxId) return;
-	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(row, job.eventId, Date.now())) return;
-	const check = await checkWebhook(db, row);
+	const pair = await getDelivery(db, job.webhookId);
+	if (!pair) return;
+	if (pair.subscription.status !== "active" || pair.endpoint.status !== "active") return;
+	if (pair.subscription.target_id !== targetOf(job)) return;
+	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(pair.subscription, job.eventId, Date.now())) return;
+	const memberIds = job.kind === "drive_delivery" ? job.memberIds : undefined;
+	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds);
 	if (check.action === "skip") return;
-	if (check.action === "disable") {
-		await disableWebhook(db, row, check.reason, table);
+	if (check.action === "disable_endpoint") {
+		await disableEndpoint(db, pair.endpoint, check.reason);
+		return;
+	}
+	if (check.action === "disable_subscription") {
+		await disableSubscription(db, pair.subscription, check.reason);
 		return;
 	}
 	if (job.kind === "chat_delivery") {
 		const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
-		if (!(await room.canNotifyWebhook(row.mailbox_id, job.eventId, job.membershipId))) return;
+		const messageId = job.messageId ?? job.eventId;
+		const eventType = job.eventType ?? "chat.message.created";
+		if (!(await room.canNotifyWebhook(pair.subscription.target_id, messageId, job.membershipId, eventType))) return;
 	}
-	const result = await post(row, job);
+	const result = await post(pair.endpoint, pair.subscription, job);
 	if (result === "ok") {
-		await recordDelivery(db, row.id, table);
+		await recordDelivery(db, pair.subscription);
 		return;
 	}
-	// Standard Webhooks: a 410 Gone asks the sender to stop.
 	if (result === "gone") {
-		await disableWebhook(db, row, "gone", table);
+		await disableEndpoint(db, pair.endpoint, "gone");
 		return;
 	}
 	const delay = RETRY_DELAYS_S[attempt - 1];
 	if (attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
-		// The retry job first: when the send fails, the queue runs this job again, and nothing marks a retry
-		// that does not exist.
 		await env.WEBHOOKS.send({ ...job, attempt: attempt + 1 } satisfies DeliveryJob, { delaySeconds: delay });
 		await recordFailedAttempt(
 			db,
-			row.id,
+			pair.subscription,
 			job.eventId,
 			result,
 			new Date(Date.now() + delay * 1000 + RETRY_GRACE_MS),
-			table,
+			job.kind === "delivery",
 		);
 		return;
 	}
-	await recordFailedEvent(db, row, job.eventId, result, table);
+	await recordFailedEvent(db, pair.endpoint, pair.subscription, `${job.eventId}_${pair.subscription.id}`, result);
 }
 
-/** The body of a POST, as Standard Webhooks recommends: type, timestamp and data. It holds no mail content. */
-export function webhookBody(row: Pick<WebhookRow, "id" | "mailbox_id">, occurredAt: number): string {
+/** The body of a mail POST. It holds no mail content. The shape matches the previous Worker. */
+export function webhookBody(row: { id: string; mailbox_id: string }, occurredAt: number): string {
 	return JSON.stringify({
 		type: WEBHOOK_EVENT_TYPE,
 		timestamp: new Date(occurredAt).toISOString(),
@@ -266,6 +451,43 @@ export function webhookBody(row: Pick<WebhookRow, "id" | "mailbox_id">, occurred
 	});
 }
 
+function chatBody(subscription: SubscriptionRow, job: ChatWebhookDeliveryJob): string {
+	return JSON.stringify({
+		type: job.eventType ?? "chat.message.created",
+		timestamp: new Date(job.occurredAt).toISOString(),
+		data: {
+			webhook_id: subscription.id,
+			principal_id: subscription.target_id,
+			room_id: job.roomId,
+			message_id: job.messageId ?? job.eventId,
+			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
+		},
+	});
+}
+
+function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob): string {
+	const itemEvent = job.eventType.startsWith("drive.item.");
+	const data: Record<string, string> = {
+		webhook_id: subscription.id,
+		space_id: job.spaceId,
+		uri: itemEvent
+			? expandTemplate(resources["drive.item"].uriTemplate, { space_id: job.spaceId, item_id: job.itemId })
+			: expandTemplate(resources["drive.space"].uriTemplate, { drive_id: job.spaceId }),
+	};
+	if (itemEvent) data.item_id = job.itemId;
+	return JSON.stringify({
+		type: job.eventType,
+		timestamp: new Date(job.occurredAt).toISOString(),
+		data,
+	});
+}
+
+function bodyOf(subscription: SubscriptionRow, job: DeliveryJob): string {
+	if (job.kind === "delivery") return webhookBody({ id: subscription.id, mailbox_id: job.mailboxId }, job.occurredAt);
+	if (job.kind === "chat_delivery") return chatBody(subscription, job);
+	return driveBody(subscription, job);
+}
+
 /**
  * The `webhook-signature` header of Standard Webhooks: `v1,` and the base64 of the HMAC-SHA256 of
  * `<id>.<timestamp>.<body>`. The key is the bytes of the base64 after `whsec_`.
@@ -275,19 +497,18 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
 	return `v1,${bytesToBase64(await hmacSha256(key, `${id}.${timestamp}.${body}`))}`;
 }
 
-/**
- * The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets
- * always win. The contract refuses a custom header with a reserved name in any case.
- */
-async function postHeaders(row: WebhookRow, id: string, timestamp: string, body: string): Promise<Headers> {
+/** The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets always win. */
+async function postHeaders(endpoint: EndpointRow, id: string, timestamp: string, body: string): Promise<Headers> {
 	const headers = new Headers();
-	if (row.header_name !== null && row.header_value !== null) headers.set(row.header_name, row.header_value);
-	if (row.auth_key !== null) headers.set("authorization", `Bearer ${row.auth_key}`);
+	if (endpoint.header_name !== null && endpoint.header_value !== null) {
+		headers.set(endpoint.header_name, endpoint.header_value);
+	}
+	if (endpoint.auth_key !== null) headers.set("authorization", `Bearer ${endpoint.auth_key}`);
 	headers.set("content-type", "application/json");
 	headers.set("user-agent", "Soldock-Webhooks/1");
 	headers.set("webhook-id", id);
 	headers.set("webhook-timestamp", timestamp);
-	headers.set("webhook-signature", await webhookSignature(row.secret, id, timestamp, body));
+	headers.set("webhook-signature", await webhookSignature(endpoint.secret, id, timestamp, body));
 	return headers;
 }
 
@@ -295,29 +516,19 @@ async function postHeaders(row: WebhookRow, id: string, timestamp: string, body:
  * Sends the signed POST. `ok` for a 2xx answer, `gone` for 410, and otherwise the code of the failure. The
  * POST never follows a redirect, and the response body is never read.
  */
-async function post(row: WebhookRow, job: DeliveryJob): Promise<"ok" | "gone" | string> {
-	const body =
-		job.kind === "delivery"
-			? webhookBody(row, job.occurredAt)
-			: JSON.stringify({
-					type: CHAT_WEBHOOK_EVENT_TYPE,
-					timestamp: new Date(job.occurredAt).toISOString(),
-					data: {
-						webhook_id: row.id,
-						principal_id: row.mailbox_id,
-						room_id: job.roomId,
-						message_id: job.eventId,
-						uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
-					},
-				});
-	// The id of the event and the webhook: the same on each attempt, so a receiver can drop a repeat.
-	const id = `${job.eventId}_${row.id}`;
+async function post(
+	endpoint: EndpointRow,
+	subscription: SubscriptionRow,
+	job: DeliveryJob,
+): Promise<"ok" | "gone" | string> {
+	const body = bodyOf(subscription, job);
+	const id = `${job.eventId}_${subscription.id}`;
 	const timestamp = String(Math.floor(Date.now() / 1000));
 	let response: Response;
 	try {
-		response = await fetch(row.url, {
+		response = await fetch(endpoint.url, {
 			method: "POST",
-			headers: await postHeaders(row, id, timestamp, body),
+			headers: await postHeaders(endpoint, id, timestamp, body),
 			body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(WEBHOOK_LIMITS.timeoutMs),

@@ -86,6 +86,8 @@ describe("MCP resources", () => {
 		expect(templates.resourceTemplates).toEqual([
 			expect.objectContaining({ uriTemplate: "soldock://mail/{mailbox_id}/inbox", name: "mail.inbox" }),
 			expect.objectContaining({ uriTemplate: "soldock://chat/{room_id}/messages", name: "chat.room" }),
+			expect.objectContaining({ uriTemplate: "soldock://drive/{space_id}/items/{item_id}", name: "drive.item" }),
+			expect.objectContaining({ uriTemplate: "soldock://drive/{drive_id}", name: "drive.space" }),
 		]);
 
 		// Parity: the read runs mail.list_threads, so it returns what REST returns, after the untrusted notice.
@@ -114,7 +116,7 @@ describe("MCP resources", () => {
 			code: -32002,
 		});
 
-		// A credential without mail.read sees no inbox at all.
+		// A credential without mail.read sees no inbox. It still sees the drive templates of drive.read.
 		const { api_key } = await owner.call("account.create_api_key", {
 			principal_id: bot.id,
 			label: "Drive only",
@@ -122,7 +124,10 @@ describe("MCP resources", () => {
 		});
 		expect((await modern(api_key.secret, "resources/list")).body?.result).toMatchObject({ resources: [] });
 		expect((await modern(api_key.secret, "resources/templates/list")).body?.result).toMatchObject({
-			resourceTemplates: [],
+			resourceTemplates: [
+				expect.objectContaining({ name: "drive.item" }),
+				expect.objectContaining({ name: "drive.space" }),
+			],
 		});
 		expect((await modern(api_key.secret, "resources/read", { uri: inbox(bot.id) })).body?.error).toMatchObject({
 			code: -32602,

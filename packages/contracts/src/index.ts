@@ -8,8 +8,6 @@ export {
 	ChatMessage,
 	ChatRoom,
 	ChatSocketEvent,
-	ChatWebhook,
-	CreatedChatWebhook,
 	chatSocketPath,
 	ROOM_KINDS,
 	ROOM_ROLES,
@@ -55,7 +53,6 @@ export {
 	PrincipalEvent,
 } from "./events.ts";
 export {
-	CreatedWebhook,
 	DeliveryStatus,
 	Label,
 	LabelId,
@@ -71,19 +68,16 @@ export {
 	Thread,
 	ThreadSummary,
 	WEBHOOK_EVENT_TYPE,
-	WEBHOOK_LIMITS,
-	WEBHOOK_RESERVED_HEADER_PREFIXES,
-	WEBHOOK_RESERVED_HEADERS,
-	Webhook,
-	webhookHeaderNameProblem,
 } from "./mail.ts";
 export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {
 	COMMON_ERRORS,
 	defineOperation,
 	type HttpMethod,
+	holdsOperationScopes,
 	type Operation,
 	type OperationAnnotations,
+	operationNeedsScope,
 	type PrincipalKind,
 	pathParams,
 	toolName,
@@ -138,3 +132,25 @@ export {
 	TotpCode,
 } from "./signin.ts";
 export { TEAM_MAILBOX_LIMITS, TeamMailbox } from "./team-mailboxes.ts";
+export {
+	authorizationConflict,
+	CHAT_WEBHOOK_EVENTS,
+	type ChatWebhookEvent,
+	type ChatWebhookSubscription,
+	CreatedWebhookEndpoint,
+	DRIVE_WEBHOOK_EVENTS,
+	type DriveWebhookEvent,
+	type DriveWebhookSubscription,
+	MAIL_WEBHOOK_EVENTS,
+	type MailWebhookSubscription,
+	WEBHOOK_EVENTS,
+	WEBHOOK_LIMITS,
+	WEBHOOK_RESERVED_HEADER_PREFIXES,
+	WEBHOOK_RESERVED_HEADERS,
+	type WebhookDomain,
+	type WebhookEndpoint,
+	type WebhookEvent,
+	webhookDomain,
+	webhookHeaderNameProblem,
+	webhookScope,
+} from "./webhooks.ts";

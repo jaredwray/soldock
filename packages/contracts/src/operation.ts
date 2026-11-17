@@ -35,6 +35,11 @@ export interface Operation<I extends z.ZodType = z.ZodType, O extends z.ZodType 
 	http: { method: HttpMethod; path: string };
 	/** Every scope that the token must hold. */
 	scopes: readonly Scope[];
+	/**
+	 * The token must hold at least one of these scopes. Use it when several products share one
+	 * operation, such as a webhook endpoint. Leave it unset when `scopes` is enough.
+	 */
+	anyOfScopes?: readonly Scope[];
 	/** The principal kinds that can call the operation at all. */
 	callers: readonly PrincipalKind[];
 	annotations: OperationAnnotations;
@@ -46,6 +51,32 @@ export interface Operation<I extends z.ZodType = z.ZodType, O extends z.ZodType 
 
 export function defineOperation<I extends z.ZodType, O extends z.ZodType>(operation: Operation<I, O>): Operation<I, O> {
 	return operation;
+}
+
+/** True when the caller holds every scope in `scopes`, and one scope in `anyOfScopes` when that list is set. */
+export function holdsOperationScopes(
+	operation: Pick<Operation, "scopes" | "anyOfScopes">,
+	held: ReadonlySet<string>,
+): boolean {
+	if (!operation.scopes.every((scope) => held.has(scope))) return false;
+	const oneOf = operation.anyOfScopes;
+	return oneOf === undefined || oneOf.length === 0 || oneOf.some((scope) => held.has(scope));
+}
+
+/**
+ * True when a missing-scope list should name this operation under `scope`. An operation with
+ * `anyOfScopes` counts under each of those scopes while the caller holds none of them.
+ */
+export function operationNeedsScope(
+	operation: Pick<Operation, "callers" | "scopes" | "anyOfScopes">,
+	scope: Scope,
+	held: ReadonlySet<string>,
+	kind: PrincipalKind,
+): boolean {
+	if (!operation.callers.includes(kind)) return false;
+	if (operation.scopes.includes(scope)) return true;
+	const oneOf = operation.anyOfScopes;
+	return Boolean(oneOf?.includes(scope) && !oneOf.some((item) => held.has(item)));
 }
 
 /** The MCP tool name of an operation: `mail.list_threads` becomes `mail_list_threads`. */

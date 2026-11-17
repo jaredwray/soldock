@@ -46,10 +46,9 @@ type MailOperation =
 	| "mail.send"
 	| "mail.suggest_recipients"
 	| "mail.get_attachment"
-	| "mail.create_webhook"
-	| "mail.list_webhooks"
-	| "mail.update_webhook"
-	| "mail.delete_webhook";
+	| "mail.create_webhook_subscription"
+	| "mail.list_webhook_subscriptions"
+	| "mail.delete_webhook_subscription";
 
 const DEFAULT_QUERY = "in:inbox";
 const DEFAULT_PAGE = 25;

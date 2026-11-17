@@ -1,32 +1,34 @@
-import type { Webhook } from "@soldock/contracts";
+import type { ChatWebhookSubscription } from "@soldock/contracts";
 import type { CallContext } from "../identity/index.ts";
 import type { HandlerMap } from "../platform/index.ts";
-import { createWebhookHandlers } from "../webhooks/index.ts";
+import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";
 
-const shared = createWebhookHandlers("chat");
+const shared = createSubscriptionHandlers("chat");
 
-function forChat<T extends Webhook>(row: T) {
-	const { mailbox_id, ...rest } = row;
-	return { ...rest, principal_id: mailbox_id };
+function forChat(view: SubscriptionView): ChatWebhookSubscription {
+	const { target_id, event, ...rest } = view;
+	return {
+		...rest,
+		principal_id: target_id,
+		event: event as ChatWebhookSubscription["event"],
+	};
 }
 
-type Operation = "chat.create_webhook" | "chat.list_webhooks" | "chat.update_webhook" | "chat.delete_webhook";
-
-export const chatWebhookHandlers: Pick<HandlerMap<CallContext>, Operation> = {
-	async "chat.create_webhook"(call, input) {
+export const chatWebhookHandlers: Pick<
+	HandlerMap<CallContext>,
+	"chat.create_webhook_subscription" | "chat.list_webhook_subscriptions" | "chat.delete_webhook_subscription"
+> = {
+	async "chat.create_webhook_subscription"(call, input) {
 		const { principal_id, ...fields } = input;
 		const result = await shared.create(call, {
 			...fields,
 			...(principal_id ? { mailbox_id: principal_id } : {}),
 		});
-		return { webhook: forChat(result.webhook) };
+		return { subscription: forChat(result.subscription) };
 	},
-	async "chat.list_webhooks"(call, input) {
+	async "chat.list_webhook_subscriptions"(call, input) {
 		const result = await shared.list(call, input.principal_id ? { mailbox_id: input.principal_id } : {});
-		return { webhooks: result.webhooks.map(forChat) };
+		return { subscriptions: result.subscriptions.map(forChat) };
 	},
-	async "chat.update_webhook"(call, input) {
-		return { webhook: forChat((await shared.update(call, input)).webhook) };
-	},
-	"chat.delete_webhook": shared.delete,
+	"chat.delete_webhook_subscription": async (call, input) => shared.delete(call, input),
 };

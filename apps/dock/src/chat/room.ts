@@ -5,6 +5,7 @@ import {
 	CHAT_SOCKET_PROTOCOL,
 	type ChatMessage,
 	type ChatSocketEvent,
+	type ChatWebhookEvent,
 	type RoomKind,
 	type RoomRole,
 } from "@soldock/contracts";
@@ -834,27 +835,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 						now,
 					);
 				}
-				const recipients = this.all<{ principal_id: string; membership_id: string }>(
-					"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
+				this.queueChatEvent(
+					opened.room.room_id,
+					"chat.message.created",
+					input.id,
+					input.id,
 					call.actor.principal_id,
-				).map((member) => ({ id: member.principal_id, membershipId: member.membership_id }));
-				if (recipients.length > 0) {
-					const job: ChatWebhookEventJob = {
-						v: 1,
-						kind: "chat_event",
-						roomId: opened.room.room_id,
-						eventId: input.id,
-						occurredAt: now,
-						subscriptionSequence,
-						recipients,
-					};
-					this.sql.exec(
-						"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
-						input.id,
-						JSON.stringify(job),
-						now,
-					);
-				}
+					now,
+					subscriptionSequence,
+				);
 				this.roomChanged();
 			});
 			const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
@@ -872,62 +861,98 @@ export class ChatRoomDO extends DurableObject<Env> {
 		messageId: string,
 		text: string,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
-		const opened = this.openAsMember(call);
-		if ("error" in opened) return opened;
-		const row = this.message(messageId);
-		if (!row) return refuse("not_found", NO_MESSAGE);
-		if (row.author_id !== call.actor.principal_id) {
-			return refuse("forbidden", "You can change only a message that you wrote.");
-		}
-		if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
-		if (row.text === text) return { message: toMessage(opened.room.room_id, row), changed: false };
-		const limited = this.spendAllowance(call, Date.now());
-		if (limited) return limited;
-		const version = opened.room.version + 1;
-		this.ctx.storage.transactionSync(() => {
-			this.sql.exec(
-				"UPDATE messages SET text = ?, edited_at = ?, version = ? WHERE id = ?",
-				text,
-				Date.now(),
-				version,
-				messageId,
-			);
-			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-			this.roomChanged();
+		// Hold other room calls until the new version and the webhook event are stored.
+		const edited = await this.ctx.blockConcurrencyWhile(async () => {
+			const opened = this.openAsMember(call);
+			if ("error" in opened) return opened;
+			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
+			const row = this.message(messageId);
+			const room = this.room();
+			if (!row || !room) return refuse("not_found", NO_MESSAGE);
+			if (row.author_id !== call.actor.principal_id) {
+				return refuse("forbidden", "You can change only a message that you wrote.");
+			}
+			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
+			if (row.text === text) return { message: toMessage(room.room_id, row), changed: false as const };
+			const limited = this.spendAllowance(call, Date.now());
+			if (limited) return limited;
+			const version = room.version + 1;
+			const now = Date.now();
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					"UPDATE messages SET text = ?, edited_at = ?, version = ? WHERE id = ?",
+					text,
+					now,
+					version,
+					messageId,
+				);
+				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+				this.roomChanged();
+				this.queueChatEvent(
+					room.room_id,
+					"chat.message.updated",
+					messageId,
+					`${messageId}:${version}`,
+					call.actor.principal_id,
+					now,
+					subscriptionSequence,
+				);
+			});
+			const message = toMessage(room.room_id, this.message(messageId) as MessageRow);
+			return { message, changed: true as const };
 		});
-		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
-		await this.publish({ type: "message", message: messageOutput(message) });
-		return { message, changed: true };
+		if (!("error" in edited) && edited.changed) {
+			await this.publish({ type: "message", message: messageOutput(edited.message) });
+		}
+		return edited;
 	}
 
 	/** Deletes the text of a message. Its author and the owner of the room can do this. */
 	async deleteMessage(call: RoomCall, messageId: string): Promise<{ deleted: boolean } | Refusal> {
-		const opened = this.openAsMember(call);
-		if ("error" in opened) return opened;
-		const row = this.message(messageId);
-		if (!row) return refuse("not_found", NO_MESSAGE);
-		if (row.author_id !== call.actor.principal_id && opened.member.role !== "owner") {
-			return refuse(
-				"forbidden",
-				"You can delete a message that you wrote. The owner of the room can delete each message.",
-			);
-		}
-		if (row.deleted_at !== null) return { deleted: false };
-		const version = opened.room.version + 1;
-		this.ctx.storage.transactionSync(() => {
-			this.sql.exec(
-				// The key goes with the text: an author can make a key from the content of the message.
-				"UPDATE messages SET text = '', idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
-				Date.now(),
-				version,
-				messageId,
-			);
-			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-			this.roomChanged();
+		const deleted = await this.ctx.blockConcurrencyWhile(async () => {
+			const opened = this.openAsMember(call);
+			if ("error" in opened) return opened;
+			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
+			const row = this.message(messageId);
+			const room = this.room();
+			if (!row || !room) return refuse("not_found", NO_MESSAGE);
+			if (row.author_id !== call.actor.principal_id && opened.member.role !== "owner") {
+				return refuse(
+					"forbidden",
+					"You can delete a message that you wrote. The owner of the room can delete each message.",
+				);
+			}
+			if (row.deleted_at !== null) return { deleted: false as const };
+			const version = room.version + 1;
+			const now = Date.now();
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					// The key goes with the text: an author can make a key from the content of the message.
+					"UPDATE messages SET text = '', idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
+					now,
+					version,
+					messageId,
+				);
+				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+				this.roomChanged();
+				this.queueChatEvent(
+					room.room_id,
+					"chat.message.deleted",
+					messageId,
+					`${messageId}:${version}`,
+					call.actor.principal_id,
+					now,
+					subscriptionSequence,
+				);
+			});
+			const message = toMessage(room.room_id, this.message(messageId) as MessageRow);
+			return { deleted: true as const, message };
 		});
-		const message = toMessage(opened.room.room_id, this.message(messageId) as MessageRow);
-		await this.publish({ type: "message", message: messageOutput(message) });
-		return { deleted: true };
+		if (!("error" in deleted) && deleted.deleted) {
+			await this.publish({ type: "message", message: messageOutput(deleted.message) });
+		}
+		if ("error" in deleted) return deleted;
+		return { deleted: deleted.deleted };
 	}
 
 	/**
@@ -1184,15 +1209,53 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/** Checks current access at the authoritative room before each webhook attempt. */
-	canNotifyWebhook(principalId: string, messageId: string, membershipId: string): boolean {
+	canNotifyWebhook(
+		principalId: string,
+		messageId: string,
+		membershipId: string,
+		eventType: ChatWebhookEvent = "chat.message.created",
+	): boolean {
 		if (!this.hasTables) return false;
 		const member = this.one<MemberRow>("SELECT * FROM members WHERE principal_id = ?", principalId);
 		const message = this.message(messageId);
-		return (
-			member?.membership_id === membershipId &&
-			message !== null &&
-			message.deleted_at === null &&
-			message.author_id !== principalId
+		if (member?.membership_id !== membershipId || message === null) return false;
+		// A delete still goes to the author when another member deleted the message.
+		if (eventType === "chat.message.deleted") return message.deleted_at !== null;
+		if (message.author_id === principalId) return false;
+		return message.deleted_at === null;
+	}
+
+	/** Records one chat event for the members except the actor. Call this inside the room transaction. */
+	private queueChatEvent(
+		roomId: string,
+		eventType: ChatWebhookEvent,
+		messageId: string,
+		eventId: string,
+		actorId: string,
+		now: number,
+		subscriptionSequence: number,
+	): void {
+		const recipients = this.all<{ principal_id: string; membership_id: string }>(
+			"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
+			actorId,
+		).map((member) => ({ id: member.principal_id, membershipId: member.membership_id }));
+		if (recipients.length === 0) return;
+		const job: ChatWebhookEventJob = {
+			v: 1,
+			kind: "chat_event",
+			roomId,
+			eventId,
+			occurredAt: now,
+			subscriptionSequence,
+			recipients,
+			eventType,
+			messageId,
+		};
+		this.sql.exec(
+			"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
+			eventId,
+			JSON.stringify(job),
+			now,
 		);
 	}
 
