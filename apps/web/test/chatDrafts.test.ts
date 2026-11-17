@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bodyText, textToBody } from "../src/features/chat/composerSchema.ts";
+import { bodyText, bodyToDoc, docToBody, textToBody } from "../src/features/chat/composerSchema.ts";
 import { createDraftStore, type DraftStorage, forgetOtherDrafts } from "../src/features/chat/drafts.ts";
 
 const ADA = "prn_01JD0000000000000000000ADA";
@@ -193,7 +193,7 @@ describe("the drafts of the rooms", () => {
 	});
 
 	// The box keeps the formats of a draft. The storage of the browser is not checked by the contract.
-	it("keep the body of a draft with its formats, read a draft from before the formats, and drop a body that the contract does not take", () => {
+	it("keep the body of a draft with its formats and a draft above the limit, read a draft from before the formats, and drop a body that the contract does not take", () => {
 		const key = `soldock:chat-drafts:${ADA}`;
 		const body = {
 			type: "doc" as const,
@@ -226,6 +226,11 @@ describe("the drafts of the rooms", () => {
 				},
 			}),
 		});
+		// A draft above the limit of a message stays, so the person can shorten it. Only the send waits.
+		const long = docToBody(bodyToDoc(textToBody(`${"a".repeat(8000)}😀b`)));
+		createDraftStore(storage, ADA).set("rm_2", long);
+		const kept = createDraftStore(storage, ADA).get("rm_2");
+		expect(kept && bodyText(kept)).toBe(`${"a".repeat(8000)}😀b`);
 		const drafts = createDraftStore(old, ADA);
 		expect([drafts.get("rm_1"), drafts.get("rm_2"), drafts.get("rm_3")]).toEqual([
 			textToBody("Line one\nLine two"),

@@ -1,4 +1,4 @@
-import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatBodyBlock, type ChatBodyInline } from "@soldock/contracts";
 import { Fragment, type Mark, type Node, Schema, Slice } from "prosemirror-model";
 import { safeHref } from "../mail/richText.ts";
 
@@ -159,10 +159,30 @@ function inlineToBody(paragraph: Node): ChatBodyInline[] {
 		// A pasted text can hold a new line. In a message, a new line is a hard break.
 		child.text.split(/\r\n?|\n/).forEach((line, index) => {
 			if (index > 0) out.push({ type: "hard_break" });
-			if (line !== "")
-				out.push(bodyMarks.length > 0 ? { type: "text", text: line, marks: bodyMarks } : { type: "text", text: line });
+			for (const text of pieces(line)) {
+				out.push(bodyMarks.length > 0 ? { type: "text", text, marks: bodyMarks } : { type: "text", text });
+			}
 		});
 	});
+	return out;
+}
+
+/**
+ * A text in pieces of at most `CHAT_LIMITS.messageChars` characters: the limit of one text node. A long
+ * draft is then a body that the contract takes, so the store keeps it, and the person can shorten it.
+ * The send of a plain text above the limit stays blocked. A piece does not end inside a surrogate pair.
+ */
+function pieces(text: string): string[] {
+	const out: string[] = [];
+	let rest = text;
+	while (rest.length > CHAT_LIMITS.messageChars) {
+		let cut = CHAT_LIMITS.messageChars;
+		const code = rest.charCodeAt(cut - 1);
+		if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+		out.push(rest.slice(0, cut));
+		rest = rest.slice(cut);
+	}
+	if (rest !== "") out.push(rest);
 	return out;
 }
 
@@ -207,7 +227,9 @@ function blockToBody(block: Node): ChatBodyBlock | null {
 	if (block.type === nodes.code_block) {
 		// New lines at the end of a code block show nothing.
 		const text = block.textContent.replace(/\n+$/, "");
-		return text === "" ? null : { type: "code_block", content: [{ type: "text", text }] };
+		return text === ""
+			? null
+			: { type: "code_block", content: pieces(text).map((piece) => ({ type: "text", text: piece })) };
 	}
 	if (block.type === nodes.blockquote) {
 		const content = blocksToBody(block);
