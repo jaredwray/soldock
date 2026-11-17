@@ -397,8 +397,17 @@ test("the quick reactions add and remove a reaction, and the next room puts the 
 	await first.hover();
 	expect(await quick(first)).toEqual(["👍", "❤️", "😂"]);
 	const thumbs = first.getByRole("button", { name: "React with thumbs up" });
+	// A second click while the call runs does nothing: one call, and one use of the emoji.
+	const reactionCalls: string[] = [];
+	page.on("request", (request) => {
+		if (request.method() === "POST" && request.url().endsWith("/reactions")) reactionCalls.push(request.url());
+	});
+	const answer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/reactions", "POST");
 	await thumbs.click();
+	await thumbs.click();
+	answer.release();
 	await expect(first.getByRole("button", { name: "thumbs up: 1 reaction, with yours" })).toBeVisible();
+	expect(reactionCalls).toHaveLength(1);
 	await expect(thumbs).toHaveAttribute("aria-pressed", "true");
 	await thumbs.click();
 	await expect(first.getByRole("button", { name: /^thumbs up:/ })).toHaveCount(0);

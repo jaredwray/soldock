@@ -99,6 +99,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// of the time that the room opened, so a button does not move after a click on it.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new room reads the counts again.
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId, roomId]);
+	/** The reaction calls that run, as "message id" and "emoji". */
+	const reacting = useRef(new Set<string>());
 	const [draft, setDraftText] = useState(() => drafts.get(roomId));
 	function setDraft(text: string) {
 		setDraftText(text);
@@ -524,8 +526,15 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		});
 	}
 
-	/** Adds or removes a reaction of the person. The message shows the answer of the room. */
+	/**
+	 * Adds or removes a reaction of the person. The message shows the answer of the room. A second click
+	 * on the same emoji of a message while its call runs does nothing, so one reaction counts one time.
+	 */
 	function react(id: string, emoji: string, add: boolean) {
+		const call = `${id} ${emoji}`;
+		if (reacting.current.has(call)) return;
+		reacting.current.add(call);
+		const signedIn = accountChangeCount();
 		void (async () => {
 			try {
 				const { message } = await api.call(add ? "chat.add_reaction" : "chat.remove_reaction", {
@@ -534,10 +543,13 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					emoji,
 				});
 				view.apply(message);
-				// A reaction that the room took counts for the quick reactions of the person.
-				if (add) countEmoji(draftStorage(), ownId, emoji);
+				// A reaction that the room took counts for the quick reactions of the person. After a sign-out,
+				// the counts of the person are gone, and a late answer must not write them again.
+				if (add && accountChangeCount() === signedIn) countEmoji(draftStorage(), ownId, emoji);
 			} catch (caught) {
 				fail(caught);
+			} finally {
+				reacting.current.delete(call);
 			}
 		})();
 	}

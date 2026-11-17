@@ -585,6 +585,10 @@ a.chat-author:hover {
 	.chat-message-head .chat-message-actions {
 		top: -34px;
 		right: 12px;
+		/* A narrow screen has no room for each button in one row: the bar wraps. */
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		max-width: calc(100% - 24px);
 	}
 
 	.chat-message-actions .icon-button {

@@ -761,7 +761,10 @@ MCP clients. The app has no UI-only path.
       pressed. The browser counts each reaction that the person adds. The most uses come first,
       and the most recent use first for one count. Before the person has 3 counts, 👍, ❤️ and 😂
       fill the places. The buttons show the counts of the time that the room opened, so a button
-      does not move after a click. Known limit: the counts are in this browser only.
+      does not move after a click. A second click on the same emoji of a message while its call
+      runs does nothing, so one reaction counts one time. Known limit: the counts are in this
+      browser only. A browser that refuses `localStorage` keeps no counts and shows the default
+      emoji.
     - The action **Add a reaction** (an outline face) opens a list of common emoji with a search box. The
       search finds an emoji by its name and by other words. Enter takes the first result. Escape,
       a click outside and a second click on the button close the list. After a pick and after
@@ -1233,7 +1236,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   removes them.
 - A browser without IndexedDB, or that refuses it, keeps the messages in the memory of the page
   only, as before.
-- The counts of the emoji follow the same rule as the drafts.
+- The counts of the emoji go away at the same times as the drafts. A reaction answer that arrives
+  after a sign-out does not write the counts again.
 - The drafts follow the same rule: a sign-out, the end of the session, and a sign-in as a
   different person remove the drafts of the person from before. A browser that refuses
   `localStorage`, or a write to it, keeps the drafts in the memory of the page only.
