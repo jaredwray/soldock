@@ -378,6 +378,49 @@ test("the sidebar count of a room that is not open goes up and clears without a 
 });
 
 // Layer 4 (jaredwray/soldock#73): reactions.
+test("the quick reactions add and remove a reaction, and the next room puts the emoji that the person uses most first", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("Quick");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	await post(tomasz, roomId, "first message");
+	await post(tomasz, roomId, "second message");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+	const quick = (row: ReturnType<typeof page.locator>) =>
+		row.locator(".chat-quick-reaction").evaluateAll((buttons) => buttons.map((button) => button.textContent));
+
+	// A person without reactions gets the default emoji. A click adds the reaction, and a second click removes it.
+	const first = page.locator(".chat-message").filter({ hasText: "first message" });
+	await first.hover();
+	expect(await quick(first)).toEqual(["👍", "❤️", "😂"]);
+	const thumbs = first.getByRole("button", { name: "React with thumbs up" });
+	await thumbs.click();
+	await expect(first.getByRole("button", { name: "thumbs up: 1 reaction, with yours" })).toBeVisible();
+	await expect(thumbs).toHaveAttribute("aria-pressed", "true");
+	await thumbs.click();
+	await expect(first.getByRole("button", { name: /^thumbs up:/ })).toHaveCount(0);
+	await expect(thumbs).toHaveAttribute("aria-pressed", "false");
+
+	// Two reactions with 🎉 from the list. The buttons of this room stay as they are.
+	for (const row of [first, page.locator(".chat-message").filter({ hasText: "second message" })]) {
+		await row.hover();
+		await row.getByRole("button", { name: /^Add a reaction/ }).click();
+		await page.getByRole("searchbox", { name: "Find an emoji" }).fill("party");
+		await page.getByRole("searchbox", { name: "Find an emoji" }).press("Enter");
+		await expect(row.getByRole("button", { name: "party popper: 1 reaction, with yours" })).toBeVisible();
+	}
+	expect(await quick(first)).toEqual(["👍", "❤️", "😂"]);
+
+	// The next room: 🎉 (two uses) comes first, then 👍 (one use), then a default emoji.
+	await page.reload();
+	await expect(page.locator(".chat-composer")).toBeVisible();
+	await first.hover();
+	expect(await quick(first)).toEqual(["🎉", "👍", "❤️"]);
+});
+
 test("a reaction from the picker shows on the message, a reaction of a different person arrives live, and a click removes it", async ({
 	browser,
 }) => {
