@@ -1,15 +1,5 @@
-import { CHAT_LIMITS, type ChatMessage, type ChatRoom, type Principal } from "@soldock/contracts";
-import {
-	Fragment,
-	type KeyboardEvent,
-	useCallback,
-	useEffect,
-	useId,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@soldock/contracts";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -19,15 +9,16 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
+import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
 import { createCallLine } from "./callLine.ts";
+import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
 import { emojiName } from "./emoji.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
-import { type MentionContext, MentionTextarea } from "./MentionTextarea.tsx";
 import { MessageBody } from "./MessageBody.tsx";
-import type { MentionDirectory } from "./mentions.ts";
+import type { MentionContext, MentionDirectory } from "./mentions.ts";
 import {
 	chatRows,
 	dayLabel,
@@ -93,7 +84,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
-	// The text in the box stays for the room when the person opens a different room, and after a reload.
+	// The message in the box stays for the room when the person opens a different room, and after a reload.
 	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
 	// The emoji that the person uses most, for the quick reactions of each message. The list is the list
 	// of the time that the room opened, so a button does not move after a click on it.
@@ -101,17 +92,21 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId, roomId]);
 	/** The reaction calls that run, as "message id" and "emoji". */
 	const reacting = useRef(new Set<string>());
-	const [draft, setDraftText] = useState(() => drafts.get(roomId));
-	function setDraft(text: string) {
-		setDraftText(text);
-		drafts.set(roomId, text);
+	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
+	function setDraft(body: ChatBody | null) {
+		setDraftBody(body);
+		drafts.set(roomId, body);
 	}
+	const composer = useRef<ChatComposerHandle>(null);
+	/** The characters of the draft above the limit of the plain text, or 0. */
+	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
 	const [joining, setJoining] = useState(false);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
 	const refocus = useRef(false);
-	const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+	/** The message in edit: the body that the edit box opened with, and the body in it now (null without text). */
+	const [editing, setEditing] = useState<{ id: string; initial: ChatBody; body: ChatBody | null } | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// A path with a message opens the list at that message, not at its end.
 	const stick = useRef(focusSeq === null);
@@ -397,7 +392,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	}, [hasNewer]);
 
 	function send() {
-		if (!draft.trim()) return;
+		if (!draft || draftOver > 0) return;
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
 		// after a reload and after a different room opens.
@@ -420,8 +415,9 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			}
 		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
-		outbox.send(draft);
-		setDraft("");
+		outbox.send(bodyText(draft), draft);
+		setDraft(null);
+		composer.current?.clear();
 		setStick(true);
 		// The person answers: the messages above are not new for the person now.
 		setReading((current) => current && { ...current, newAfter: null, lineSeen: false });
@@ -476,13 +472,6 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		if (list) list.scrollTop = list.scrollHeight;
 	}
 
-	function onDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-		// Enter sends. Shift+Enter makes a new line. Enter during text composition belongs to the input method.
-		if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-		event.preventDefault();
-		send();
-	}
-
 	/** Shows a change of a message before the answer of the server. */
 	function showChange(id: string, change: LocalChange) {
 		latest.current.set(id, change);
@@ -498,29 +487,29 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	}
 
 	function saveEdit() {
-		if (!editing?.text.trim()) return;
-		const { id, text } = editing;
+		if (!editing?.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars) return;
+		const { id, body } = editing;
 		setEditing(null);
-		// The text that shows: the text of an edit that waits, or the text that the room has.
+		// The body that shows: the body of an edit that waits, or the body that the room has.
 		const waiting = latest.current.get(id);
 		const stored = messages.find((message) => message.id === id);
-		const shown = waiting?.kind === "edit" ? waiting.text : (stored?.markdown ?? stored?.text);
-		if (shown === text) return;
-		// The new text shows at once.
-		const change: LocalChange = { kind: "edit", text, at: new Date().toISOString() };
+		const shown = waiting?.kind === "edit" ? waiting.body : stored && (stored.body ?? textToBody(stored.text));
+		if (shown && sameInBox(shown, body)) return;
+		// The new body shows at once.
+		const change: LocalChange = { kind: "edit", body, text: bodyText(body), at: new Date().toISOString() };
 		showChange(id, change);
 		afterEarlierCalls(id, async () => {
 			// A newer change replaced this one before its call started. Only the newest change goes.
 			if (latest.current.get(id) !== change) return;
 			try {
-				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, markdown: text });
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, body });
 				view.apply(message);
 				endChange(id, change);
 			} catch (caught) {
-				// After a refusal, the old text shows again, and the edit box opens with the new text, so the
+				// After a refusal, the old message shows again, and the edit box opens with the new body, so the
 				// person does not write it again. A newer change of the message stays as it is.
 				if (!endChange(id, change)) return;
-				setEditing((current) => current ?? { id, text });
+				setEditing((current) => current ?? { id, initial: body, body });
 				fail(caught);
 			}
 		});
@@ -701,9 +690,12 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												head={isNew || startsGroup(previous, message)}
 												own={message.author.principal_id === ownId}
 												canDelete={message.author.principal_id === ownId || room.role === "owner"}
-												editing={editing?.id === message.id ? editing.text : null}
-												onEditStart={() => setEditing({ id: message.id, text: message.markdown ?? message.text })}
-												onEditChange={(text) => setEditing({ id: message.id, text })}
+												editing={editing?.id === message.id ? editing : null}
+												onEditStart={() => {
+													const initial = message.body ?? textToBody(message.text);
+													setEditing({ id: message.id, initial, body: initial });
+												}}
+												onEditChange={(body) => setEditing((current) => current && { ...current, body })}
 												onEditSave={saveEdit}
 												onEditCancel={() => setEditing(null)}
 												onDelete={() => setDialog({ type: "delete", message })}
@@ -756,34 +748,35 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 							send();
 						}}
 					>
-						<label htmlFor={draftId} className="visually-hidden">
-							Message to {title}
-						</label>
 						<div className="chat-composer-box">
-							<MentionTextarea
+							<ChatComposer
+								ref={composer}
 								id={draftId}
-								className="chat-draft"
-								rows={1}
+								label={`Message to ${title}`}
 								placeholder={draftPlaceholder(room)}
-								value={draft}
-								maxLength={CHAT_LIMITS.markdownChars}
-								onValueChange={setDraft}
-								onKeyDown={onDraftKeyDown}
+								initial={draft}
+								onChange={setDraft}
+								onSubmit={send}
 								mentions={mentions}
 								placement="above"
-							/>
-							<span className="chat-composer-bar">
+							>
 								<button
 									type="submit"
 									className="chat-send"
 									aria-label="Send the message"
 									title="Send (Enter)"
-									disabled={!draft.trim()}
+									disabled={!draft || draftOver > 0}
 								>
 									<Icon name="arrowUp" size={18} />
 								</button>
-							</span>
+							</ChatComposer>
 						</div>
+						{draftOver > 0 && (
+							<p className="chat-composer-limit" role="status">
+								The message has {plural(draftOver, "character")} more than the limit of{" "}
+								{CHAT_LIMITS.messageChars.toLocaleString()}.
+							</p>
+						)}
 					</form>
 				</>
 			) : (
@@ -852,10 +845,10 @@ interface MessageItemProps {
 	head: boolean;
 	own: boolean;
 	canDelete: boolean;
-	/** The text in the edit box, or null when the message is not in edit. */
-	editing: string | null;
+	/** The bodies of the edit box, or null when the message is not in edit. */
+	editing: { initial: ChatBody; body: ChatBody | null } | null;
 	onEditStart: () => void;
-	onEditChange: (text: string) => void;
+	onEditChange: (body: ChatBody | null) => void;
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
@@ -958,28 +951,29 @@ function MessageItem({
 							onEditSave();
 						}}
 					>
-						<label htmlFor={editId} className="visually-hidden">
-							New text of the message
-						</label>
-						<MentionTextarea
+						<ChatComposer
 							id={editId}
-							className="input chat-edit-draft"
-							value={editing}
-							maxLength={CHAT_LIMITS.markdownChars}
-							onValueChange={onEditChange}
-							onKeyDown={(event) => {
-								if (event.key === "Escape") onEditCancel();
-							}}
+							label="New text of the message"
+							placeholder="Write the message"
+							initial={editing.initial}
+							onChange={onEditChange}
+							onSubmit={onEditSave}
+							onCancel={onEditCancel}
 							mentions={mentions}
 							placement="below"
+							className="chat-edit-draft"
 							// The person asked for the edit box, so the focus goes to it.
-							autoFocus
+							autofocus
 						/>
 						<span className="chat-edit-actions">
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
 							</button>
-							<button type="submit" className="button button-small button-primary" disabled={!editing.trim()}>
+							<button
+								type="submit"
+								className="button button-small button-primary"
+								disabled={!editing.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars}
+							>
 								Save
 							</button>
 						</span>

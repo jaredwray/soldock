@@ -113,7 +113,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     lines at the end go away. Its Markdown keeps its characters as text (with escapes), so it reads
     back to the same body.
   - `body`: the tree.
-- Each message has `body`, `markdown` (the body as Markdown, for agents and for an edit) and `text`:
+- Each message has `body`, `markdown` (the body as Markdown, for agents and for an edit by an agent) and `text`:
   the plain text of the body, one line for each block. Search and notifications use `text`.
 - The plain text has at most 8,000 characters (`CHAT_LIMITS.messageChars`), and one character that
   is not a space. The Markdown has at most 16,000 characters, and the JSON of the body at most
@@ -123,6 +123,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   a CR and an LF, in that text is a line break.
 - Known limit: Markdown has no spaces at the start of a line of a paragraph. So the Markdown of a
   plain text with an indent, and an edit of that Markdown, lose the indent. A code fence keeps it.
+  The web app edits the body itself, so its edits keep the indent.
 - A mention is text: `@` and the handle of a principal. The handle is the part of the address
   before the `@`, or the full address when two principals have the same part. The room does not
   read mentions. It stores no mention, counts none and sends no notification of its own. A

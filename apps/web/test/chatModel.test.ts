@@ -1,5 +1,6 @@
 import type { ChatMessage } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
+import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
 	chatRows,
 	type LocalChange,
@@ -221,7 +222,7 @@ describe("the messages with the changes that wait for the server", () => {
 			sending,
 			ADA,
 			room,
-			new Map([["cmsg_2", { kind: "edit", text: "Hello all", at: AT }]]),
+			new Map([["cmsg_2", { kind: "edit", body: textToBody("Hello all"), text: "Hello all", at: AT }]]),
 		);
 		expect(edited.map((row) => [row.key, row.message.text, row.pending])).toEqual([
 			["cmsg_1", "message 1", null],
@@ -236,11 +237,15 @@ describe("the messages with the changes that wait for the server", () => {
 
 	// The person sees the result of an edit or a delete before the answer of the server.
 	it("show the new text of an edit with the edited mark, and a delete without its text", () => {
-		const messages = [message(1), message(2), message(3, { edited_at: "2026-01-01T09:30:00.000Z" })];
+		const messages = [
+			message(1, { markdown: "message 1", body: textToBody("message 1") }),
+			message(2),
+			message(3, { edited_at: "2026-01-01T09:30:00.000Z" }),
+		];
 		const shown = withLocalChanges(
 			messages,
 			new Map<string, LocalChange>([
-				["cmsg_1", { kind: "edit", text: "new text", at: AT }],
+				["cmsg_1", { kind: "edit", body: textToBody("new text"), text: "new text", at: AT }],
 				["cmsg_2", { kind: "delete" }],
 			]),
 		);
@@ -249,6 +254,9 @@ describe("the messages with the changes that wait for the server", () => {
 			["cmsg_2", "", null, true],
 			["cmsg_3", "message 3", "2026-01-01T09:30:00.000Z", false],
 		]);
+		// The new body shows. The server makes its Markdown, so the message has none until the answer.
+		expect(shown[0]?.body).toEqual(textToBody("new text"));
+		expect(shown[0]?.markdown).toBeUndefined();
 		// The position, the author and the version of a message do not change.
 		expect(shown[0]).toMatchObject({ seq: 1, author: ADA, version: 1 });
 	});
@@ -256,7 +264,10 @@ describe("the messages with the changes that wait for the server", () => {
 	// The owner of the room deleted the message while the author changed it. The room has no text of it.
 	it("keep a message deleted when the room deleted it, also with an edit that waits", () => {
 		const messages = [message(1, { deleted: true, text: "" })];
-		const shown = withLocalChanges(messages, new Map([["cmsg_1", { kind: "edit", text: "too late", at: AT }]]));
+		const shown = withLocalChanges(
+			messages,
+			new Map([["cmsg_1", { kind: "edit", body: textToBody("too late"), text: "too late", at: AT }]]),
+		);
 		expect(shown).toEqual(messages);
 	});
 

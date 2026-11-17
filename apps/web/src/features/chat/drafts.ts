@@ -1,5 +1,8 @@
-// The text that a person wrote in the box of a room and did not send. It stays when the person opens
-// a different room, and after a reload of the page. It has no DOM, so apps/web/test checks it.
+import { ChatBody } from "@soldock/contracts";
+import { textToBody } from "./composerSchema.ts";
+
+// The message that a person wrote in the box of a room and did not send. It stays when the person
+// opens a different room, and after a reload of the page. It has no DOM, so apps/web/test checks it.
 
 /** The part of `localStorage` that the drafts use. */
 export type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
@@ -11,16 +14,17 @@ const PREFIX = "soldock:chat-drafts:";
 const MAX_DRAFTS = 100;
 
 interface Draft {
-	text: string;
+	/** The body in the box. */
+	body: ChatBody;
 	/** The time of the last change, in milliseconds. */
 	at: number;
 }
 
 export interface DraftStore {
-	/** The draft of a room, or an empty text. */
-	get(roomId: string): string;
-	/** Keeps the draft of a room. An empty text removes it. */
-	set(roomId: string, text: string): void;
+	/** The draft of a room, or null. */
+	get(roomId: string): ChatBody | null;
+	/** Keeps the draft of a room. Null removes it. */
+	set(roomId: string, body: ChatBody | null): void;
 }
 
 /**
@@ -41,10 +45,17 @@ function stored(storage: DraftStorage | null, owner: string): Map<string, Draft>
 		const parsed: unknown = JSON.parse(storage.getItem(PREFIX + owner) ?? "{}");
 		if (typeof parsed !== "object" || parsed === null) return drafts;
 		for (const [roomId, value] of Object.entries(parsed)) {
-			const draft = value as Partial<Draft> | null;
-			if (typeof draft?.text === "string" && draft.text !== "" && typeof draft.at === "number") {
-				drafts.set(roomId, { text: draft.text, at: draft.at });
-			}
+			const draft = value as (Partial<Draft> & { text?: unknown }) | null;
+			if (typeof draft?.at !== "number") continue;
+			// The storage is not checked by the contract, so a body that the contract does not take goes.
+			// A draft from before the box had formats has the text that the person typed.
+			const body =
+				draft.body !== undefined
+					? ChatBody.safeParse(draft.body).data
+					: typeof draft.text === "string" && draft.text !== ""
+						? textToBody(draft.text)
+						: undefined;
+			if (body) drafts.set(roomId, { body, at: draft.at });
 		}
 	} catch {
 		// The browser refused the read, or the value is not from this app. The person has no drafts then.
@@ -75,7 +86,7 @@ function write(storage: DraftStorage | null, owner: string, drafts: Map<string, 
 		inMemory.delete(owner);
 	} catch {
 		// The browser has no storage, refused the write, or the storage is full. The changes stay in the
-		// memory of the page, so the text does not go away when the person opens a different room.
+		// memory of the page, so the draft does not go away when the person opens a different room.
 		const changes = inMemory.get(owner) ?? new Map<string, Draft | null>();
 		const inStorage = stored(storage, owner);
 		for (const roomId of changed) {
@@ -99,12 +110,12 @@ function write(storage: DraftStorage | null, owner: string, drafts: Map<string, 
  */
 export function createDraftStore(storage: DraftStorage | null, owner: string): DraftStore {
 	return {
-		get: (roomId) => read(storage, owner).get(roomId)?.text ?? "",
-		set(roomId, text) {
+		get: (roomId) => read(storage, owner).get(roomId)?.body ?? null,
+		set(roomId, body) {
 			const drafts = read(storage, owner);
 			const changed = [roomId];
-			if (text === "") drafts.delete(roomId);
-			else drafts.set(roomId, { text, at: Date.now() });
+			if (body === null) drafts.delete(roomId);
+			else drafts.set(roomId, { body, at: Date.now() });
 			while (drafts.size > MAX_DRAFTS) {
 				const oldest = [...drafts].reduce((first, entry) => (entry[1].at < first[1].at ? entry : first));
 				drafts.delete(oldest[0]);

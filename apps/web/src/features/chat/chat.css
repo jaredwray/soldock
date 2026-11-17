@@ -583,7 +583,10 @@ a.chat-author:hover {
 @media (hover: none) {
 	.chat-message-actions,
 	.chat-message-head .chat-message-actions {
-		top: -34px;
+		/* The bottom edge holds the place: one row is at top -34px, and a second row goes up, not
+		   over the text of the message. */
+		top: auto;
+		bottom: calc(100% - 18px);
 		right: 12px;
 		/* A narrow screen has no room for each button in one row: the bar wraps. */
 		flex-wrap: wrap;
@@ -614,15 +617,16 @@ a.chat-author:hover {
 	padding: 4px 0;
 }
 
+/* The edit box of a message: the editor of the box for a new message, with a border. */
 .chat-edit-draft {
-	min-height: 44px;
-	max-height: 40dvh;
-	padding: 10px 12px;
+	padding: 10px 12px 6px;
+	border: 1px solid var(--border);
 	border-radius: 12px;
-	font-size: 15px;
-	line-height: 22px;
-	resize: none;
-	field-sizing: content;
+	background: var(--surface);
+}
+
+.chat-edit-draft:has(.chat-composer-text:focus) {
+	border-color: var(--ring);
 }
 
 .chat-edit-actions {
@@ -651,28 +655,90 @@ a.chat-author:hover {
 	background: var(--surface);
 }
 
-/* The box shows the focus of its text field. */
-.chat-composer-box:has(.chat-draft:focus-visible) {
+/* The box shows the focus of its text. */
+.chat-composer-box:has(.chat-composer-text:focus) {
 	border-color: var(--ring);
 }
 
-.chat-draft {
+/* The editor: the text, then a bar with the formatting buttons and the send button. */
+.chat-composer-editor {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+
+.chat-composer-mount {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+}
+
+.chat-composer-text {
 	flex: 1;
 	min-height: 44px;
 	max-height: 40dvh;
-	padding: 0;
-	border: 0;
-	background: transparent;
+	overflow-y: auto;
 	color: var(--foreground);
-	font: inherit;
 	font-size: 15px;
 	line-height: 22px;
-	resize: none;
-	field-sizing: content;
+	overflow-wrap: anywhere;
+	outline: none;
 }
 
-.chat-draft:focus-visible {
-	outline: none;
+/* In the box, each line is a paragraph, so a paragraph has no space around it. The other blocks look
+   as they do in a message. */
+.chat-composer-text p {
+	margin: 0;
+}
+
+.chat-composer-text ul,
+.chat-composer-text ol {
+	margin: 2px 0;
+	padding-left: 24px;
+}
+
+.chat-composer-text blockquote {
+	margin: 2px 0;
+	padding-left: 10px;
+	border-left: 3px solid var(--border);
+	color: var(--muted-foreground);
+}
+
+.chat-composer-text pre {
+	margin: 2px 0;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 20px;
+	white-space: pre-wrap;
+}
+
+.chat-composer-text code {
+	font-family: var(--mono);
+	font-size: 0.9em;
+}
+
+.chat-composer-text :not(pre) > code {
+	padding: 1px 4px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--background);
+}
+
+.chat-composer-text a {
+	color: var(--link);
+	text-decoration: underline;
+}
+
+.chat-composer-limit {
+	margin: 6px 2px 0;
+	color: var(--destructive);
+	font-size: 13px;
 }
 
 /* The suggestions of a mention: above the box for a new message, and under the edit box of a message.
@@ -823,15 +889,16 @@ a.chat-author:hover {
 	overflow-wrap: anywhere;
 }
 
-.chat-draft::placeholder {
-	color: var(--muted-foreground);
-}
-
 .chat-composer-bar {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
+	justify-content: space-between;
 	flex: none;
+	gap: 8px;
+}
+
+.chat-format-toolbar {
+	padding: 0;
 }
 
 .chat-send {
@@ -1026,8 +1093,7 @@ a.chat-author:hover {
 
 /* Touch: the send button is 44px, and the text fields have 16px text, so that iOS does not zoom in. */
 @media (max-width: 900px), (pointer: coarse) {
-	.chat-draft,
-	.chat-edit-draft {
+	.chat-composer-text {
 		font-size: 16px;
 	}
 
@@ -1096,14 +1162,22 @@ a.chat-author:hover {
 	}
 }
 
-/* A phone on its side has little height: the composer is one line high until the text needs more. */
+/* A phone on its side has little height: the composer is one line high until the text needs more. The
+   formatting buttons do not show. The Markdown shortcuts and the keys still work. */
 @media (max-height: 500px) {
 	.chat-composer-box {
+		min-height: 0;
+		padding: 6px 6px 6px 12px;
+	}
+
+	.chat-composer-box .chat-composer-editor {
 		flex-direction: row;
 		align-items: flex-end;
 		gap: 8px;
-		min-height: 0;
-		padding: 6px 6px 6px 12px;
+	}
+
+	.chat-composer-box .chat-format-toolbar {
+		display: none;
 	}
 }
 

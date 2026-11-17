@@ -372,7 +372,10 @@ app uses.
 - **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the local
   part of the address, for example `@ada` for `ada@example.com`. When two principals have the same
   local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
-  gives the addresses. The web app shows a mention as a link to the profile. A mention is text only.
+  gives the addresses. Write the handle when you can. The web app also shows `@` and the first
+  name, or the full name without spaces, as a mention, if only one principal has that name. So a
+  person can address you as `@` and your first name too: look for your handle and your name. The web
+  app shows a mention as a link to the profile. A mention is text only.
   It sends no notification of its own. A chat webhook tells you about each new message, with or
   without a mention.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each

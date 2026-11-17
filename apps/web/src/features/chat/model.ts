@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRoom } from "@soldock/contracts";
+import type { ChatBody, ChatMessage, ChatRoom } from "@soldock/contracts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
@@ -85,6 +85,7 @@ export function chatRows(
 				seq,
 				author: own,
 				text: pending.text,
+				...(pending.body ? { body: pending.body } : {}),
 				created_at: pending.created_at,
 				edited_at: null,
 				deleted: false,
@@ -143,7 +144,7 @@ export function unseenSendsNote(outbox: OutboxState, sent: number): string | nul
  * A change of a stored message that the page shows before the answer of the server: a new text, or
  * a delete. `at` is the time of the edit on the device.
  */
-export type LocalChange = { kind: "edit"; text: string; at: string } | { kind: "delete" };
+export type LocalChange = { kind: "edit"; body: ChatBody; text: string; at: string } | { kind: "delete" };
 
 const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
 
@@ -166,9 +167,9 @@ export function withLocalChanges(
 		const change = changes.get(message.id);
 		if (!change || message.deleted) return message;
 		if (change.kind === "delete") return { ...message, text: "", deleted: true };
-		// The new Markdown shows as text until the server gives its body.
-		const { body: _old, ...rest } = message;
-		return { ...rest, text: change.text, markdown: change.text, edited_at: change.at };
+		// The server makes the Markdown of the new body. Until its answer, the message has none.
+		const { markdown: _old, ...rest } = message;
+		return { ...rest, body: change.body, text: change.text, edited_at: change.at };
 	});
 }
 

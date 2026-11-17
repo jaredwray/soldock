@@ -58,6 +58,41 @@ describe("the mentions in the text of a message", () => {
 		]);
 	});
 
+	// People and agents write the name of a person, not the part of the address: "@jared" for Jared Wray,
+	// whose address is me@example.com.
+	it("finds a principal by its first name, or its full name without spaces, when only it has that alias", () => {
+		const JARED = person("jared", "Jared Wray", "me@example.com");
+		const directory = mentionDirectory([...PEOPLE, JARED]);
+		expect(textParts("@jared Seattle today", directory)).toEqual([
+			{ text: "@jared", person: JARED },
+			plain(" Seattle today"),
+		]);
+		// The full name without spaces, in each letter case, and a name without its accents.
+		expect(textParts("@JaredWray and @elodie", directory)).toEqual([
+			{ text: "@JaredWray", person: JARED },
+			plain(" and "),
+			{ text: "@elodie", person: ELLE },
+		]);
+		// A new mention from the list uses the handle.
+		expect(directory.handleOf.get(JARED.id)).toBe("me");
+
+		// Two principals with one first name: neither of them has it. Each keeps its full name.
+		const SMITH = person("smith", "Jared Smith", "jsmith@example.com");
+		const shared = mentionDirectory([...PEOPLE, JARED, SMITH]);
+		expect(textParts("@jared", shared)).toEqual([plain("@jared")]);
+		expect(textParts("@jaredsmith", shared)).toEqual([{ text: "@jaredsmith", person: SMITH }]);
+		// A handle and a local part win over a name: "Captain Cook" does not take "@captain", and
+		// "Ada Lovelace" does not take "@ada", the local part of two addresses.
+		const COOK = person("cook", "Captain Cook", "cook@example.com");
+		const withCook = mentionDirectory([...PEOPLE, COOK]);
+		expect(textParts("@captain", withCook)).toEqual([{ text: "@captain", person: CAPTAIN }]);
+		expect(textParts("@ada", withCook)).toEqual([plain("@ada")]);
+		// A word for a group is never the name of one principal.
+		const groups = mentionDirectory([...PEOPLE, person("here", "Here Maps", "maps@example.com")]);
+		expect(textParts("@here", groups)).toEqual([plain("@here")]);
+		expect(textParts("@heremaps", groups)[0]?.person?.display_name).toBe("Here Maps");
+	});
+
 	// A wrong link would send a reader to a different person than the author meant.
 	it("leaves addresses, links, unknown handles and shared handles as plain text", () => {
 		for (const text of [

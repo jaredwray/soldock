@@ -2,8 +2,7 @@ import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@soldock/contracts
 import { Fragment, type ReactNode } from "react";
 import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";
-import type { MentionContext } from "./MentionTextarea.tsx";
-import { textParts } from "./mentions.ts";
+import { type MentionContext, textParts } from "./mentions.ts";
 
 // The body of a message as React nodes. The body is data, never HTML: each node of the schema has
 // one element here, and the text of a node is always text. A node that the schema does not have shows

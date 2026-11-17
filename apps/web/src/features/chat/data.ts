@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
-import { createOutbox, type Outbox } from "./outbox.ts";
+import { createOutbox, type Outbox, postContent } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
@@ -190,8 +190,14 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 	let outbox = outboxes.get(name);
 	if (!outbox) {
 		outbox = createOutbox({
-			post: async (text, key) =>
-				(await api.call("chat.post_message", { room_id: roomId, markdown: text, idempotency_key: key })).message,
+			post: async (message) =>
+				(
+					await api.call("chat.post_message", {
+						room_id: roomId,
+						...postContent(message),
+						idempotency_key: message.key,
+					})
+				).message,
 			describe: errorMessage,
 			active: () => currentAccount() === ownId,
 		});
