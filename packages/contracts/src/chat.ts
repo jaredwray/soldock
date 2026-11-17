@@ -1,4 +1,5 @@
 import { prefixedId, Timestamp } from "./common.ts";
+import { Href } from "./docs.ts";
 import { Actor } from "./drive.ts";
 import { defineOperation } from "./operation.ts";
 import { CHAT_WEBHOOK_EVENTS, ChatWebhookSubscription } from "./webhooks.ts";
@@ -23,7 +24,94 @@ export const CHAT_LIMITS = {
 	messageRefillSeconds: 1,
 	/** The different emoji of the reactions of one message. */
 	reactionEmoji: 20,
+	/**
+	 * The characters of the Markdown of one message: the input, and the Markdown of each stored body, so an edit
+	 * can send it back. The plain text of the message has the limit of `messageChars`.
+	 */
+	markdownChars: 16_000,
+	/** The JSON of the body of one message, in bytes of UTF-8. */
+	bodyBytes: 64 * 1024,
+	/** Blocks in blocks in the body of one message: a list in a quote, and so on. A list and its items are one level. */
+	bodyDepth: 6,
+	/** The blocks of the body of one message, with each list item. */
+	bodyBlocks: 1000,
 } as const;
+
+// The body of a message: a small tree of blocks in the JSON form of ProseMirror, the same form as the
+// content of a doc. It is data, never HTML. The schema is the allowlist: a node, a mark or a link
+// scheme that it does not have gets `invalid`.
+
+const BodyMark = z.discriminatedUnion("type", [
+	z.strictObject({ type: z.literal("strong") }),
+	z.strictObject({ type: z.literal("em") }),
+	z.strictObject({ type: z.literal("strike") }),
+	z.strictObject({ type: z.literal("code") }),
+	z.strictObject({ type: z.literal("link"), attrs: z.strictObject({ href: Href }) }),
+]);
+
+const BodyText = z.strictObject({
+	type: z.literal("text"),
+	// A line break is a hard_break node, never a new line in a text.
+	text: z
+		.string()
+		.min(1)
+		.max(CHAT_LIMITS.messageChars)
+		.refine((text) => !/[\r\n]/.test(text), "a text has no new line: use hard_break"),
+	// Each type of mark one time: two links on one text would show one and report the other.
+	marks: z
+		.array(BodyMark)
+		.max(5)
+		.refine((marks) => new Set(marks.map((mark) => mark.type)).size === marks.length, "each mark one time")
+		.optional(),
+});
+
+const BodyInline = z.discriminatedUnion("type", [BodyText, z.strictObject({ type: z.literal("hard_break") })]);
+
+const BodyParagraph = z.strictObject({ type: z.literal("paragraph"), content: z.array(BodyInline).optional() });
+
+const BodyCodeBlock = z.strictObject({
+	type: z.literal("code_block"),
+	content: z
+		.array(z.strictObject({ type: z.literal("text"), text: z.string().min(1).max(CHAT_LIMITS.messageChars) }))
+		.optional(),
+});
+
+const BodyBlockquote = z.strictObject({
+	type: z.literal("blockquote"),
+	get content() {
+		return z.array(BodyBlock).min(1);
+	},
+});
+
+const BodyListItem = z.strictObject({
+	type: z.literal("list_item"),
+	get content() {
+		return z.array(BodyBlock).min(1);
+	},
+});
+
+const BodyBulletList = z.strictObject({ type: z.literal("bullet_list"), content: z.array(BodyListItem).min(1) });
+
+const BodyOrderedList = z.strictObject({
+	type: z.literal("ordered_list"),
+	attrs: z.strictObject({ order: z.number().int().min(0).max(99_999) }).optional(),
+	content: z.array(BodyListItem).min(1),
+});
+
+const BodyBlock = z.union([BodyParagraph, BodyCodeBlock, BodyBlockquote, BodyBulletList, BodyOrderedList]);
+
+/**
+ * The body of a message: a tree of blocks in the JSON form of ProseMirror. Blocks: paragraph,
+ * code_block, blockquote, bullet_list, ordered_list and list_item. Inline: text and hard_break. Marks
+ * on text: strong, em, strike, code and link (http, https or mailto). An emoji is text.
+ */
+export const ChatBody = z.strictObject({
+	type: z.literal("doc"),
+	content: z.array(BodyBlock).min(1),
+});
+export type ChatBody = z.infer<typeof ChatBody>;
+export type ChatBodyBlock = z.infer<typeof BodyBlock>;
+export type ChatBodyInline = z.infer<typeof BodyInline>;
 
 /**
  * One emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍, 👍🏽, ❤️, 1️⃣, 🇳🇴
@@ -91,6 +179,28 @@ const MessageText = z
 	.max(CHAT_LIMITS.messageChars)
 	.refine((text) => text.trim().length > 0, "must have text");
 
+const MessageMarkdown = z
+	.string()
+	.max(CHAT_LIMITS.markdownChars)
+	.refine((text) => text.trim().length > 0, "must have text");
+
+/** The three forms of the content of a new or a changed message. A call sends one of them. */
+const MESSAGE_FORMS = {
+	text: MessageText.optional().describe("Plain text. The message shows it as it is: no format."),
+	markdown: MessageMarkdown.optional().describe(
+		"Markdown: **bold**, *italic*, ~~strikethrough~~, `code`, [links](https://example.com), lists, > quotes and code fences.",
+	),
+	body: ChatBody.optional().describe("The body as a ProseMirror JSON tree. See ChatBody."),
+};
+
+const ONE_FORM = "set one of text, markdown and body";
+
+function oneForm(input: { text?: unknown; markdown?: unknown; body?: unknown }): boolean {
+	return [input.text, input.markdown, input.body].filter((value) => value !== undefined).length === 1;
+}
+
+const FORMS_NOTE = `Send the content as markdown (formatted text), as text (plain text that shows as it is) or as body (a JSON tree), one of the three. The plain text of the message has at most ${CHAT_LIMITS.messageChars} characters.`;
+
 const IdempotencyKey = z
 	.string()
 	.min(1)
@@ -146,8 +256,15 @@ export const ChatMessage = z.object({
 	/** The position of the message in the room. It starts at 1 and never changes. */
 	seq: z.number().int(),
 	author: Actor,
-	/** Plain text. Empty for a deleted message. */
+	/** The plain text of the body, for search and for notifications. Empty for a deleted message. */
 	text: z.string(),
+	/**
+	 * The body: formatted text. Show it, not `text`. A message from before the bodies has a body of
+	 * its text. A reader that gets no value shows `text`.
+	 */
+	body: ChatBody.optional(),
+	/** The body as Markdown, for agents and for an edit. A reader that gets no value uses `text`. */
+	markdown: z.string().optional(),
 	created_at: Timestamp,
 	edited_at: Timestamp.nullable(),
 	deleted: z.boolean(),
@@ -412,12 +529,14 @@ export const listMessages = defineOperation({
 export const postMessage = defineOperation({
 	name: "chat.post_message",
 	summary: "Post a message in a room",
-	description: `Adds a message with plain text to the room, at most ${CHAT_LIMITS.messageChars} characters. The room is then read for you, and unread for each other member. ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	description: `Adds a message to the room. ${FORMS_NOTE} The room is then read for you, and unread for each other member. ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CREATE,
-	input: z.strictObject({ room_id: RoomId, text: MessageText, idempotency_key: IdempotencyKey }),
+	input: z
+		.strictObject({ room_id: RoomId, ...MESSAGE_FORMS, idempotency_key: IdempotencyKey })
+		.refine(oneForm, ONE_FORM),
 	output: z.object({ message: ChatMessage }),
 	errors: ["not_found", "conflict", "rate_limited"],
 });
@@ -425,12 +544,12 @@ export const postMessage = defineOperation({
 export const editMessage = defineOperation({
 	name: "chat.edit_message",
 	summary: "Change the text of your message",
-	description: `Replaces the text of a message that you wrote. The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. ${RATE_LIMIT}`,
+	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edit" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
-	input: z.strictObject({ room_id: RoomId, message_id: MessageId, text: MessageText }),
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, ...MESSAGE_FORMS }).refine(oneForm, ONE_FORM),
 	output: z.object({ message: ChatMessage }),
 	errors: ["not_found", "invalid", "rate_limited"],
 });

@@ -92,8 +92,37 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 
 ## Messages
 
-- A message has plain text, at most 8,000 characters (`CHAT_LIMITS.messageChars`). The text must
-  have one character that is not a space. Clients show the text as text, never as HTML.
+- A message has a body: formatted text, as a tree of nodes in the JSON form of ProseMirror
+  (`ChatBody` of the contracts, `body.ts`). The schema is the allowlist:
+  - Blocks: paragraph, code_block, blockquote, bullet_list, ordered_list and list_item, at most 6
+    levels deep (`CHAT_LIMITS.bodyDepth`; a list and its items are one level), and at most 1,000
+    blocks with each list item (`CHAT_LIMITS.bodyBlocks`).
+  - Inline: text and hard_break. A text has no new line: a line break is a hard_break. Marks:
+    strong, em, strike, code and link (http, https or mailto), each type one time on a text. An
+    emoji is text.
+  - A node, a mark or a link scheme that the schema does not have gets `invalid`. Clients show the
+    body as elements of the schema, never as HTML.
+- A call sends the content in one of three forms, never two (`chat.post_message`,
+  `chat.edit_message`):
+  - `markdown`: the server reads it with the Markdown code of [`docs`](../docs/README.md), as a chat
+    writes it: each new line in a paragraph is a line break (the `lineBreaks` option of
+    `markdownToDoc`), also in a quote and in a list item. A line that ends a quote or a list item
+    without its `>` or its indent starts a new paragraph. A heading becomes a paragraph in bold, a rule goes away, and underline
+    goes away: a message has none. An image becomes its `!` and a link to it.
+  - `text`: plain text. It shows as it is: one paragraph, with a line break for each new line. New
+    lines at the end go away. Its Markdown keeps its characters as text (with escapes), so it reads
+    back to the same body.
+  - `body`: the tree.
+- Each message has `body`, `markdown` (the body as Markdown, for agents and for an edit) and `text`:
+  the plain text of the body, one line for each block. Search and notifications use `text`.
+- The plain text has at most 8,000 characters (`CHAT_LIMITS.messageChars`), and one character that
+  is not a space. The Markdown has at most 16,000 characters, and the JSON of the body at most
+  64 KB. The limit of the Markdown applies to the input and to the Markdown that the server makes
+  from each body. So an edit can always send the Markdown of a message back.
+- A message from before the bodies has no stored body. Its body is the body of its text. A CR, or
+  a CR and an LF, in that text is a line break.
+- Known limit: Markdown has no spaces at the start of a line of a paragraph. So the Markdown of a
+  plain text with an indent, and an edit of that Markdown, lose the indent. A code fence keeps it.
 - A mention is text: `@` and the handle of a principal. The handle is the part of the address
   before the `@`, or the full address when two principals have the same part. The room does not
   read mentions. It stores no mention, counts none and sends no notification of its own. A
@@ -476,7 +505,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
-| Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
+| Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |

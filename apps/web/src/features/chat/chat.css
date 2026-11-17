@@ -452,6 +452,70 @@ a.chat-author:hover {
 	white-space: pre-wrap;
 }
 
+/* The body of a message: paragraphs, lists, quotes and code (MessageBody.tsx). */
+.chat-paragraph {
+	margin: 0;
+}
+
+.chat-paragraph + .chat-paragraph,
+.chat-text > :is(.chat-list, .chat-quote, .chat-code-block) {
+	margin-top: 4px;
+}
+
+/* "(edited)" follows the last paragraph on its line. */
+.chat-text > .chat-paragraph:has(+ .chat-edited) {
+	display: inline;
+}
+
+.chat-text > .chat-edited {
+	margin-left: 4px;
+}
+
+.chat-list {
+	margin: 0;
+	padding-left: 24px;
+	white-space: normal;
+}
+
+.chat-list li > .chat-paragraph {
+	white-space: pre-wrap;
+}
+
+.chat-quote {
+	margin: 0;
+	padding-left: 12px;
+	border-left: 3px solid var(--border);
+	color: var(--muted-foreground);
+}
+
+.chat-code {
+	padding: 1px 4px;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	background: var(--surface);
+	font-family: var(--mono);
+	font-size: 13px;
+}
+
+.chat-code-block {
+	margin: 0;
+	padding: 8px 12px;
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 20px;
+	white-space: pre;
+}
+
+.chat-link {
+	color: var(--link);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
 .chat-text-deleted,
 .chat-edited {
 	color: var(--muted-foreground);

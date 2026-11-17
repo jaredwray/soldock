@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { messageContent } from "../src/chat/body.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import type { ChatRoomState } from "../src/identity/index.ts";
 import {
@@ -818,6 +819,250 @@ describe("chat through MCP", () => {
 	});
 });
 
+describe("rich text", () => {
+	it("takes Markdown, stores the body and its plain text, and gives the Markdown back", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id]);
+		const markdown =
+			"We ship on **Friday**. See *the plan* and `make ship`.\n\n- one\n- [two](https://example.com/two)";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, markdown });
+		expect(message.body).toEqual({
+			type: "doc",
+			content: [
+				{
+					type: "paragraph",
+					content: [
+						{ type: "text", text: "We ship on " },
+						{ type: "text", text: "Friday", marks: [{ type: "strong" }] },
+						{ type: "text", text: ". See " },
+						{ type: "text", text: "the plan", marks: [{ type: "em" }] },
+						{ type: "text", text: " and " },
+						{ type: "text", text: "make ship", marks: [{ type: "code" }] },
+						{ type: "text", text: "." },
+					],
+				},
+				{
+					type: "bullet_list",
+					content: [
+						{ type: "list_item", content: [{ type: "paragraph", content: [{ type: "text", text: "one" }] }] },
+						{
+							type: "list_item",
+							content: [
+								{
+									type: "paragraph",
+									content: [
+										{
+											type: "text",
+											text: "two",
+											marks: [{ type: "link", attrs: { href: "https://example.com/two" } }],
+										},
+									],
+								},
+							],
+						},
+					],
+				},
+			],
+		});
+		// The plain text is for search and notifications. The Markdown comes back as it went in.
+		expect(message.text).toBe("We ship on Friday. See the plan and make ship.\none\ntwo");
+		expect(message.markdown).toBe(markdown);
+		// A heading has no place in a message: it is a paragraph in bold.
+		const heading = (await ada.call("chat.post_message", { room_id: room.id, markdown: "# Release" })).message;
+		expect(heading.body).toEqual({
+			type: "doc",
+			content: [{ type: "paragraph", content: [{ type: "text", text: "Release", marks: [{ type: "strong" }] }] }],
+		});
+
+		// An edit with the same body changes nothing. An edit with new Markdown changes the body and the text.
+		const target = { room_id: room.id, message_id: message.id };
+		const same = (await ada.call("chat.edit_message", { ...target, markdown })).message;
+		expect([same.version, same.edited_at]).toEqual([message.version, null]);
+		const edited = (await ada.call("chat.edit_message", { ...target, markdown: "We ship on ~~Friday~~ Monday." }))
+			.message;
+		expect(edited.text).toBe("We ship on Friday Monday.");
+		expect(edited.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "We ship on " },
+				{ type: "text", text: "Friday", marks: [{ type: "strike" }] },
+				{ type: "text", text: " Monday." },
+			],
+		});
+		// The agent reads the same body and Markdown.
+		const [read] = (await bot.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(read).toEqual(edited);
+	});
+
+	// A person types lines with Shift+Enter in the box, which sends Markdown. Each line must stay a line.
+	it("keeps each new line of Markdown as a line break, out of code fences, and takes a list of three levels", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		const markdown = "line one\nline **two**\n\nnew paragraph\n\n```\na\n  b\n```\n\n- one\n  - two\n    - three";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, markdown });
+		expect(message.body?.content.slice(0, 3)).toEqual([
+			{
+				type: "paragraph",
+				content: [
+					{ type: "text", text: "line one" },
+					{ type: "hard_break" },
+					{ type: "text", text: "line " },
+					{ type: "text", text: "two", marks: [{ type: "strong" }] },
+				],
+			},
+			{ type: "paragraph", content: [{ type: "text", text: "new paragraph" }] },
+			{ type: "code_block", content: [{ type: "text", text: "a\n  b" }] },
+		]);
+		expect(message.text).toBe("line one\nline two\nnew paragraph\na\n  b\none\ntwo\nthree");
+		// The Markdown of the message reads back to the same body.
+		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
+		expect(again.body).toEqual(message.body);
+
+		// A fence ends only at a fence of the same character and at least the same length. A heading and a
+		// rule end their line, so the next line is a new paragraph.
+		const blocks = async (markdown: string) =>
+			(await ada.call("chat.post_message", { room_id: room.id, markdown })).message.body?.content;
+		expect(await blocks("````\n```\nb\nc\n~~~\n````")).toEqual([
+			{ type: "code_block", content: [{ type: "text", text: "```\nb\nc\n~~~" }] },
+		]);
+		const text = (value: string) => ({ type: "paragraph", content: [{ type: "text", text: value }] });
+		const bold = (value: string) => ({
+			type: "paragraph",
+			content: [{ type: "text", text: value, marks: [{ type: "strong" }] }],
+		});
+		expect(await blocks("# Heading\nparagraph")).toEqual([bold("Heading"), text("paragraph")]);
+		expect(await blocks("a\n\n---\nb")).toEqual([text("a"), text("b")]);
+		// The lines of a quote are lines too. A line without the `>` or the indent of an item ends the block.
+		const lines = {
+			type: "paragraph",
+			content: [{ type: "text", text: "a" }, { type: "hard_break" }, { type: "text", text: "b" }],
+		};
+		expect(await blocks("> a\n> b")).toEqual([{ type: "blockquote", content: [lines] }]);
+		expect(await blocks("> a\nb")).toEqual([{ type: "blockquote", content: [text("a")] }, text("b")]);
+		expect(await blocks("- a\n  b\nc")).toEqual([
+			{ type: "bullet_list", content: [{ type: "list_item", content: [lines] }] },
+			text("c"),
+		]);
+	});
+
+	it("shows plain text as it is, with its line breaks and its Markdown characters", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		const text = "2*3*4 is 24\n\n# not a heading";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, text });
+		expect(message.text).toBe(text);
+		expect(message.body).toEqual({
+			type: "doc",
+			content: [
+				{
+					type: "paragraph",
+					content: [
+						{ type: "text", text: "2*3*4 is 24" },
+						{ type: "hard_break" },
+						{ type: "hard_break" },
+						{ type: "text", text: "# not a heading" },
+					],
+				},
+			],
+		});
+		// The Markdown of a plain text keeps its characters as text.
+		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
+		expect(again.body).toEqual(message.body);
+		// New lines at the end show nothing, and go away. The Markdown then reads back the same.
+		const trailing = (await ada.call("chat.post_message", { room_id: room.id, text: "a\n\n\nb\n\n" })).message;
+		expect(trailing.text).toBe("a\n\n\nb");
+		const back = (await ada.call("chat.post_message", { room_id: room.id, markdown: trailing.markdown ?? "" })).message;
+		expect(back.body).toEqual(trailing.body);
+	});
+
+	it("takes a body that the schema has, and refuses each other content", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		const body = {
+			type: "doc" as const,
+			content: [
+				{
+					type: "blockquote" as const,
+					content: [{ type: "paragraph" as const, content: [{ type: "text" as const, text: "Quote" }] }],
+				},
+				{ type: "code_block" as const, content: [{ type: "text" as const, text: "make ship" }] },
+			],
+		};
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, body });
+		expect([message.body, message.text, message.markdown]).toEqual([
+			body,
+			"Quote\nmake ship",
+			"> Quote\n\n```\nmake ship\n```",
+		]);
+
+		const paragraph = (inline: unknown) => ({ type: "doc", content: [{ type: "paragraph", content: [inline] }] });
+		const refused: unknown[] = [
+			{ type: "doc", content: [{ type: "heading", attrs: { level: 1 }, content: [{ type: "text", text: "H" }] }] },
+			{ type: "doc", content: [{ type: "image", attrs: { src: "https://example.com/a.png" } }] },
+			paragraph({ type: "text", text: "U", marks: [{ type: "underline" }] }),
+			paragraph({ type: "text", text: "X", marks: [{ type: "link", attrs: { href: "javascript:alert(1)" } }] }),
+			paragraph({ type: "html", text: "<b>x</b>" }),
+			// A new line in a text: a line break is a hard_break node.
+			paragraph({ type: "text", text: "a\nb" }),
+			// One mark of each type: two links would show one and report the other.
+			paragraph({
+				type: "text",
+				text: "X",
+				marks: [
+					{ type: "link", attrs: { href: "https://a.example" } },
+					{ type: "link", attrs: { href: "https://b.example" } },
+				],
+			}),
+			paragraph({ type: "text", text: "X", marks: [{ type: "strong" }, { type: "strong" }] }),
+			{ type: "doc", content: [{ type: "paragraph" }] },
+		];
+		let deep: unknown = { type: "paragraph", content: [{ type: "text", text: "deep" }] };
+		for (let level = 0; level < 6; level++) deep = { type: "blockquote", content: [deep] };
+		refused.push({ type: "doc", content: [deep] });
+		for (const one of refused) {
+			expect(
+				await codeOf(ada.call("chat.post_message", { room_id: room.id, body: one as typeof body })),
+				JSON.stringify(one),
+			).toBe("invalid");
+		}
+		// One form, not none and not two. Markdown needs text too.
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id }))).toBe("invalid");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text: "a", markdown: "a" }))).toBe("invalid");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "   " }))).toBe("invalid");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: "---" }))).toBe("invalid");
+		// An edit sends the Markdown back, so a body with Markdown above the limit of the input fails.
+		const href = `https://example.com/${"a".repeat(2000)}`;
+		const links = Array.from({ length: 10 }, (_, index) => [
+			...(index > 0 ? [{ type: "text" as const, text: " " }] : []),
+			{ type: "text" as const, text: "link", marks: [{ type: "link" as const, attrs: { href } }] },
+		]).flat();
+		const linkBody = { type: "doc" as const, content: [{ type: "paragraph" as const, content: links }] };
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, body: linkBody }))).toBe("invalid");
+		// A list of more items than the limit of blocks fails before the schema reads it.
+		const items = "- a\n".repeat(CHAT_LIMITS.bodyBlocks);
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, markdown: items }))).toBe("invalid");
+	});
+
+	it("gives a message from before the bodies the body of its text", async () => {
+		const room = await createRoom(ada, "private", "Launch");
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, text: "Old *text*\nline two" });
+		// An old message kept its text as it came, also with CR and LF.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			state.storage.sql.exec("UPDATE messages SET body_json = NULL, text = ?", "Old *text*\r\nline two");
+		});
+		const [old] = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(old).toEqual({ ...message, text: "Old *text*\r\nline two" });
+	});
+
+	it("lets an agent write Markdown through MCP, with the same result as REST", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id]);
+		const posted = await callTool(bot.key, "chat_post_message", {
+			room_id: room.id,
+			markdown: "Deploy **42** is done.",
+		});
+		expect(posted.isError).toBeUndefined();
+		const [read] = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(posted.structuredContent).toEqual({ message: read });
+		expect(read?.text).toBe("Deploy 42 is done.");
+	});
+});
+
 describe("reactions", () => {
 	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
@@ -1063,7 +1308,7 @@ describe("a room object", () => {
 		// The old room writes its rows again, as after a write that failed before the fresh start.
 		const posted = await roomStub(room.id).postMessage(
 			{ roomId: room.id, actor: { principal_id: ada.id, kind: "human", display_name: "Ada Lovelace" } },
-			{ id: UNKNOWN_MESSAGE, text: "A late write.", clientKey: null },
+			{ id: UNKNOWN_MESSAGE, content: messageContent({ text: "A late write." }), clientKey: null },
 		);
 		expect(posted).toMatchObject({ duplicate: false });
 		expect((await fresh("chat.list_rooms", { view: "public" })).rooms.map((listed) => listed.id)).toEqual([created.id]);

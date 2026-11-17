@@ -54,6 +54,13 @@ export async function createRoom(owner: BrowserContext, name: string, members: B
 	return room.id;
 }
 
+/** Posts a message as Markdown. */
+export async function postMarkdown(context: BrowserContext, roomId: string, markdown: string): Promise<Message> {
+	return (
+		await call<{ message: Message }>(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages`, { markdown })
+	).message;
+}
+
 export async function post(context: BrowserContext, roomId: string, text: string): Promise<Message> {
 	return (await call<{ message: Message }>(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages`, { text }))
 		.message;

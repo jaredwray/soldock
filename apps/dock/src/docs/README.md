@@ -58,6 +58,8 @@ Markdown is the form for agents and for the download in the web app.
   `**strong**`, `*em*`, `~~strike~~`, `` `code` ``, `[text](url)`, `<url>`, bulleted and numbered
   lists with levels, `>` quotes, code fences, `---` rules, and hard breaks (two spaces or a
   backslash at the end of a line).
+- With the option `lineBreaks`, each new line in a paragraph is a hard break, as in a chat. The
+  `chat` module uses it. Without it, Markdown joins the lines of a paragraph with a space.
 - Text that is not Markdown of this subset stays text: HTML, tables and images are not read.
 - The handler checks the result against `DocContent` before it stores it. Markdown that makes
   content over a limit, for example one text of more than 100,000 characters, gets `invalid`. A

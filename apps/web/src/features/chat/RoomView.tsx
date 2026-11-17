@@ -24,7 +24,8 @@ import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
 import { type MentionContext, MentionTextarea } from "./MentionTextarea.tsx";
-import { type MentionDirectory, textParts } from "./mentions.ts";
+import { MessageBody } from "./MessageBody.tsx";
+import type { MentionDirectory } from "./mentions.ts";
 import {
 	chatRows,
 	dayLabel,
@@ -494,7 +495,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		setEditing(null);
 		// The text that shows: the text of an edit that waits, or the text that the room has.
 		const waiting = latest.current.get(id);
-		const shown = waiting?.kind === "edit" ? waiting.text : messages.find((message) => message.id === id)?.text;
+		const stored = messages.find((message) => message.id === id);
+		const shown = waiting?.kind === "edit" ? waiting.text : (stored?.markdown ?? stored?.text);
 		if (shown === text) return;
 		// The new text shows at once.
 		const change: LocalChange = { kind: "edit", text, at: new Date().toISOString() };
@@ -503,7 +505,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			// A newer change replaced this one before its call started. Only the newest change goes.
 			if (latest.current.get(id) !== change) return;
 			try {
-				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, text });
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, markdown: text });
 				view.apply(message);
 				endChange(id, change);
 			} catch (caught) {
@@ -680,7 +682,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												own={message.author.principal_id === ownId}
 												canDelete={message.author.principal_id === ownId || room.role === "owner"}
 												editing={editing?.id === message.id ? editing.text : null}
-												onEditStart={() => setEditing({ id: message.id, text: message.text })}
+												onEditStart={() => setEditing({ id: message.id, text: message.markdown ?? message.text })}
 												onEditChange={(text) => setEditing({ id: message.id, text })}
 												onEditSave={saveEdit}
 												onEditCancel={() => setEditing(null)}
@@ -743,7 +745,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 								rows={1}
 								placeholder={draftPlaceholder(room)}
 								value={draft}
-								maxLength={CHAT_LIMITS.messageChars}
+								maxLength={CHAT_LIMITS.markdownChars}
 								onValueChange={setDraft}
 								onKeyDown={onDraftKeyDown}
 								mentions={mentions}
@@ -882,7 +884,6 @@ function MessageItem({
 	const failed = pending?.state === "failed";
 	// A message that the server does not have yet cannot change, and it has no id to delete or to link to.
 	const hasActions = pending === null && !message.deleted && editing === null;
-	const parts = useMemo(() => textParts(message.text, mentions.directory), [message.text, mentions.directory]);
 	return (
 		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
 		<li
@@ -940,7 +941,7 @@ function MessageItem({
 							id={editId}
 							className="input chat-edit-draft"
 							value={editing}
-							maxLength={CHAT_LIMITS.messageChars}
+							maxLength={CHAT_LIMITS.markdownChars}
 							onValueChange={onEditChange}
 							onKeyDown={(event) => {
 								if (event.key === "Escape") onEditCancel();
@@ -962,31 +963,14 @@ function MessageItem({
 				) : message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
-					<p className="chat-text">
-						{parts.map((part, index) =>
-							part.person ? (
-								<Link
-									// The parts of one text keep their order, so the index is a stable key.
-									// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
-									key={index}
-									to={profilePath(part.person.id)}
-									className={part.person.id === mentions.ownId ? "chat-mention chat-mention-own" : "chat-mention"}
-									title={part.person.display_name}
-								>
-									{part.text}
-								</Link>
-							) : (
-								// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
-								<Fragment key={index}>{part.text}</Fragment>
-							),
-						)}
+					<div className="chat-text">
+						<MessageBody body={message.body} text={message.text} mentions={mentions} />
 						{message.edited_at && (
 							<span className="chat-edited" title={fullDate(message.edited_at)}>
-								{" "}
 								(edited)
 							</span>
 						)}
-					</p>
+					</div>
 				)}
 				{pending === null && !message.deleted && (
 					<Reactions reactions={message.reactions} ownId={ownId} nameOf={nameOf} onToggle={onReact} />

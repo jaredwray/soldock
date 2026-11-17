@@ -166,7 +166,9 @@ export function withLocalChanges(
 		const change = changes.get(message.id);
 		if (!change || message.deleted) return message;
 		if (change.kind === "delete") return { ...message, text: "", deleted: true };
-		return { ...message, text: change.text, edited_at: change.at };
+		// The new Markdown shows as text until the server gives its body.
+		const { body: _old, ...rest } = message;
+		return { ...rest, text: change.text, markdown: change.text, edited_at: change.at };
 	});
 }
 
