@@ -5,6 +5,7 @@ import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
+import { endEventSockets } from "./principal.ts";
 import { confirmPassword } from "./signin.ts";
 import {
 	addMailDomain,
@@ -417,6 +418,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
 		await credentialOwner(call, key.principal_id);
 		await revokeApiKey(call.env.DIRECTORY, key.id);
+		await endEventSockets(call.env, key.principal_id, { kind: "api_key", id: key.id });
 		auditOk(call, "account.revoke_api_key", key.id);
 		return { revoked: true };
 	},

@@ -64,7 +64,7 @@ describe("unknown Worker paths", () => {
 		"/oauth/nope",
 		"/.well-known/nope",
 		"/auth/sign-in",
-		"/ws/events",
+		"/ws/nope",
 		"/blob/upload",
 		"/dl/token",
 		"/hooks/email",

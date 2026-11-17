@@ -1,8 +1,15 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_SOCKET_CLOSE, SCOPES, UNTRUSTED_NOTICE } from "@soldock/contracts";
+import {
+	CHAT_SOCKET_CLOSE,
+	EVENTS_SOCKET_CLOSE,
+	EVENTS_SOCKET_PATH,
+	SCOPES,
+	UNTRUSTED_NOTICE,
+} from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SOCKET_RECHECK_MS } from "../src/chat/room.ts";
+import { EVENTS_SOCKET_RECHECK_MS } from "../src/identity/principal.ts";
 import {
 	type Actor,
 	api,
@@ -16,6 +23,7 @@ import {
 	ORIGIN,
 	PASSWORD,
 	racing,
+	readSocket,
 	receiveWebhooks,
 	request,
 	SETUP_TOKEN,
@@ -638,6 +646,35 @@ describe("OAuth tokens", () => {
 		await post("The connection is revoked.");
 		// A revoked connection gives no new token: the client must not open a new socket.
 		expect(await last.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
+	});
+
+	it("opens the events socket of its own agent, and closes it after a refresh and at once after a revoke", async () => {
+		const owner = await setupOwner();
+		const { clientId, agent, tokens: firstTokens } = await connectNewAgent(owner);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const replaced = readSocket(
+			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(firstTokens.access_token) } }),
+		);
+		expect(await replaced.next()).toMatchObject({ type: "hello" });
+		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." });
+		// The token acts as its agent: the event has the room of the agent, with its count.
+		expect(await replaced.next()).toMatchObject({ type: "chat.room", room: { id: room.id, unread_count: 1 } });
+
+		const tokens = (await (await refresh(clientId, firstTokens.refresh_token)).json()) as Tokens;
+		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
+		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 43 is done." });
+		// The connection works, so the code tells the client to open a new socket with its new token.
+		expect(await replaced.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
+
+		// A revoke of the connection closes each socket of its tokens at once, without an event.
+		const current = readSocket(
+			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(tokens.access_token) } }),
+		);
+		expect(await current.next()).toMatchObject({ type: "hello" });
+		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
+		expect(await current.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 	});
 
 	it("stops each token at once when the sponsor revokes the connection", async () => {

@@ -17,6 +17,7 @@ import {
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
+import { endEventSockets } from "./principal.ts";
 import {
 	assertPrimaryAddress,
 	createPrincipal,
@@ -175,6 +176,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		if (!grant) throw new OperationError("not_found", "No OAuth connection has that id.");
 		await credentialOwner(call, grant.principal_id);
 		await revokeGrant(call.env.DIRECTORY, grant.id);
+		await endEventSockets(call.env, grant.principal_id, { grantId: grant.id });
 		auditOk(call, "oauth.revoke_grant", grant.id);
 		return { revoked: true };
 	},

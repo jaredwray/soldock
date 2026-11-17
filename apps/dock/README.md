@@ -44,6 +44,8 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   metadata.
 - `/ws/chat/rooms/{room_id}`: the WebSocket of a chat room, for its members
   ([`src/chat/`](src/chat/README.md#the-socket-of-a-room)). It carries events from the room only.
+- `/ws/events`: the WebSocket of a principal, with each change of its rooms
+  ([`src/identity/`](src/identity/README.md#the-events-socket)). It carries events only.
   Each other path under `/ws/` gets `404`.
 - `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server`,
   `/oauth/register`, `/oauth/authorize` and `/oauth/token`: the OAuth server for MCP clients. A

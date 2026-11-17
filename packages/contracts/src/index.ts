@@ -48,6 +48,13 @@ export {
 } from "./drive.ts";
 export { ERRORS, type ErrorCode, isErrorCode } from "./errors.ts";
 export {
+	EVENTS_LIMITS,
+	EVENTS_SOCKET_CLOSE,
+	EVENTS_SOCKET_PATH,
+	EVENTS_SOCKET_PROTOCOL,
+	PrincipalEvent,
+} from "./events.ts";
+export {
 	CreatedWebhook,
 	DeliveryStatus,
 	Label,

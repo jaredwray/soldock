@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): table `chat_rooms` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, and `chat_seeded` after the first fill). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): table `chat_rooms` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, and `chat_seeded` after the first fill), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -28,12 +28,59 @@ to it, so a list of that state reads one object and not the directory.
   [`chat`](../chat/README.md#the-state-of-a-principal) module has the rules of the delivery.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.
-- The object has no operation of its own, and checks no access. Only the Worker and other objects
-  call it. A handler calls the object of its caller only.
+- The object has no operation of its own. Its methods check no access: only the Worker and other
+  objects call them. A handler and the events socket call the object of their caller only. The object
+  checks the credentials of its sockets (see below).
 - The data of the object stays when its principal is deleted. Nobody can read it, because only a
   credential of the principal reads it.
-- Later layers add the settings, the event feed, notifications, agent counters and the
-  `/ws/events` socket.
+- Later layers add the settings, the event feed, notifications and agent counters.
+
+### The events socket
+
+A principal can open a WebSocket to its own object: `GET /ws/events` with an upgrade
+(`events-socket.ts`). The object sends each change of the state of the principal to its sockets
+after the write. A socket whose credential check is due gets it after that check. `EVENTS_SOCKET_PATH`, `PrincipalEvent` and `EVENTS_SOCKET_CLOSE` of the contracts are the
+contract of the socket.
+
+| Event | When | Fields |
+| --- | --- | --- |
+| `hello` | The first event of a socket | `protocol`. The client then calls `chat.list_rooms`, to get what changed while it had no socket |
+| `chat.room` | The object kept a new state of a joined room | `room`: the room as `chat.list_rooms` returns it |
+| `chat.room_removed` | The principal is not a member of the room now | `room_id` |
+
+- The socket carries events only. Each change is an operation, with REST and MCP. A message from a
+  client closes the socket with code `1008`. The text `ping` is the exception: the runtime answers
+  `pong`, and the object stays asleep.
+- A state that the object does not keep (the same stamp, or a lower one) sends no event. A state
+  without the room sends `chat.room_removed` only for a room that was joined before.
+- A write of a state does not wait for the sockets. So a change of a room never waits for the
+  credential check of a socket, and a failure of an event never fails the write.
+- The object accepts the socket with `acceptWebSocket`, so it can sleep while its sockets wait.
+- The Worker authenticates the request as REST does: a bearer token, or the session cookie. A
+  session needs the `Origin` of this host. The credential must be able to call `chat.list_rooms`
+  (the scope `chat.read`), because each event now is Chat. A later event type adds its own check.
+- The socket ends in the object of the principal of the credential, and nowhere else.
+- One principal has at most 20 sockets (`EVENTS_LIMITS.socketsPerPrincipal`). At the limit, a new
+  socket closes the oldest one with `4002` (`replaced`).
+- The access rules after the open are the rules of the room socket
+  ([`chat`](../chat/README.md#access-after-the-open)): a check of all credentials of the sockets
+  with one D1 query, before an event, when the last check is 60 seconds old or more; `4003`
+  (`ended`) for a credential that stopped; `4001` (`reconnect`) at the next event after one hour, for
+  an OAuth access token that stopped while its connection works, and when the check fails. A socket
+  without events stays open, and gets nothing.
+- Known limit: the limit of 20 sockets is for all credentials of the principal together. A key or an
+  OAuth client of the principal can open 20 sockets, and so close the sockets of the browser tabs
+  of its person. The room socket has the same rule for each member.
+- A new socket starts without a check of the object. Its first check starts at the accept, and an
+  event waits for it. So a sign-out or a revoke between the check of the Worker and the accept
+  closes the socket too, and only `hello` reaches it.
+- A sign-out, `account.revoke_api_key` and `oauth.revoke_grant` close the sockets of that
+  credential at once with `4003` (`endEventSockets`). A tab learns of its sign-out this way, because
+  it does not poll while its socket is live. If that call fails, the check closes the socket.
+- Known limit: other ends of a credential reach the socket only with the check, at most 60 seconds
+  after its last check: the expiry of a session, a new password that ends the other sessions, and
+  a principal that is archived or deleted. The room socket has this limit for each end.
+- The log line `events socket opened` has the principal and the kind of the credential.
 
 ## Principals
 
