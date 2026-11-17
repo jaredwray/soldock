@@ -355,8 +355,8 @@ app uses.
   - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Follow all of your rooms.** Open a WebSocket to `/ws/events` with your token as a bearer token.
   The first event is `hello`: then call `chat_list_rooms`. Each later `chat.room` event has one of
-  your rooms as `chat_list_rooms` returns it, after a new message, a read marker or a change of
-  the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
+  your rooms as `chat_list_rooms` returns it, after a new message, a read marker, a star or a
+  change of the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
   the codes of the room socket. You can have 20 sockets.
 - **Write.** `chat_post_message` takes `markdown` (formatted text: **bold**, *italic*, `code`,
   links, lists, quotes and code fences), `text` (plain text that shows as it is) or `body` (a JSON

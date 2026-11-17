@@ -1136,11 +1136,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * `PrincipalDO` of the caller has the new state before the call returns, and the room sends no
 	 * socket event: the events socket of the caller has the change.
 	 */
-	async star(call: RoomCall, starred: boolean): Promise<{ room: RoomRecord; changed: boolean } | Refusal> {
+	async star(call: RoomCall, starred: boolean): Promise<RoomRecord | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
-		const changed = (opened.member.starred === 1) !== starred;
-		if (changed) {
+		if ((opened.member.starred === 1) !== starred) {
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
 					"UPDATE members SET starred = ? WHERE principal_id = ?",
@@ -1151,7 +1150,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			});
 			await this.flush();
 		}
-		return { room: this.record(call.actor.principal_id), changed };
+		return this.record(call.actor.principal_id);
 	}
 
 	// --- Live sockets ---------------------------------------------------------------------------

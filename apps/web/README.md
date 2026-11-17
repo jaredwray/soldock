@@ -691,14 +691,15 @@ MCP clients. The app has no UI-only path.
   message, or one profile.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
-    with the name of the other member. A room or a direct message with a star of the person is in
-    the **Starred** part at the top, and not in its other part. The Starred part shows only when
-    the person has a star. Each list has the name of its heading for a screen reader. A room with a message that the person did not read shows in
+    with the name of the other member. A room with a message that the person did not read shows in
     bold with the number of unread messages at the right ("99+" above 99). A screen reader reads
     "2 unread messages". A direct message row shows a round avatar with the initials of
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.
+  - A room or a direct message with a star of the person is in the **Starred** part at the top of
+    the sidebar, and not in its other part. The Starred part shows only when the person has a
+    star. Each list of the sidebar has the name of its heading for a screen reader.
   - The open room has a WebSocket to its room (`/ws/chat/rooms/<room_id>`), for a member. The
     socket brings each new, changed and deleted message, and the page shows it at once. The page
     sends nothing on the socket but pings: each change is an operation.
@@ -714,11 +715,15 @@ MCP clients. The app has no UI-only path.
   - **Stars.** The header of a room has a star button for a member: **Star** puts the star of the
     person on the room (`chat.star_room`), and **Remove star** removes it. The button changes at
     once and is pressed (`aria-pressed`) while the star is set. After a refusal, it goes back and a
-    toast shows the problem. The events socket brings the star to each other page of the person.
+    toast shows the problem. A click while a call runs does nothing. The events socket brings the
+    star to each other page of the person.
+    - Known limit: for a person with more than 100 rooms, a room after the first 100 leaves the list
+      when its star goes away. The open room then loads again, and its list goes back to the newest
+      messages.
   - The room list comes from `chat.list_rooms`, and then from the events socket of the person
     (`/ws/events`, `roomList.ts`). The sidebar shows the first 100 rooms. When the person has more
-    rooms, the page also reads `chat.list_rooms` with `view: "starred"`, and keeps each room with
-    a star after the first 100. The socket sends each changed room as `chat.list_rooms` returns
+    rooms, the page also reads the first page of `chat.list_rooms` with `view: "starred"`. It then
+    keeps those rooms (at most 100) after the first 100. The socket sends each changed room as `chat.list_rooms` returns
     it, and the page puts it at its place. After each connect (`hello`), the page reads the list
     again. A read can answer after an event, so the page keeps each change of the socket that came
     after the start of the read.
@@ -997,7 +1002,7 @@ MCP clients. The app has no UI-only path.
     members, adds a person or an agent, lets the owner remove a member, and has **Leave the room**.
     The owner changes the name and the topic in a second dialog.
   - A public room that the person did not join shows **Join the room**, not its messages.
-  - This layer shows the first 100 rooms of the person.
+  - This layer shows the first 100 rooms of the person, and at most 100 rooms with a star after them.
   - Chat is a separate chunk, as Drive is.
 - **Dialogs.** A confirm dialog for a dangerous action, for example "Revoke key", puts the first
   focus on Cancel.

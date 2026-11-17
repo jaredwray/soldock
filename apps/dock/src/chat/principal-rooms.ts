@@ -138,7 +138,7 @@ export async function listJoinedRooms(
 
 /**
  * The rooms of a page with the state of the principal in each room that it joined: the role, the read
- * marker and the unread count. The index in D1 has no read marker. A room that the `PrincipalDO` does
+ * marker, the unread count and the star. The index in D1 has no read marker and no star. A room that the `PrincipalDO` does
  * not have yet keeps the values of the index. The first fill of the object runs here too, as for the
  * joined list.
  */

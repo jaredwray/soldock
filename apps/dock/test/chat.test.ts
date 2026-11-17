@@ -368,8 +368,10 @@ describe("stars", () => {
 		const starredIds = async () =>
 			(await ada.call("chat.list_rooms", { view: "starred" })).rooms.map((room) => room.id);
 
+		const before = (await ada.call("chat.get_room", { room_id: launch.id })).room;
 		const set = await ada.call("chat.star_room", { room_id: launch.id, starred: true });
-		expect(set.room).toMatchObject({ id: launch.id, starred: true });
+		// A star is not a change of the messages: the version stays, so no client gets the changes again.
+		expect(set.room).toMatchObject({ id: launch.id, starred: true, version: before.version });
 		await ada.call("chat.star_room", { room_id: dm.id, starred: true });
 		// The list has the star when the call returns. The starred view keeps the order of the list.
 		expect((await joined(ada)).map((room) => [room.id, room.starred])).toEqual([

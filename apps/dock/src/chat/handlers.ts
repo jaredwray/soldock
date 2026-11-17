@@ -260,7 +260,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	// for the read marker.
 	async "chat.star_room"(call, input) {
 		const opened = openRoom(call, input.room_id);
-		const result = accept(await opened.room.star(opened.ctx, input.starred));
-		return { room: toRoom(result.room) };
+		const room = accept(await opened.room.star(opened.ctx, input.starred));
+		return { room: toRoom(room) };
 	},
 };
