@@ -28,6 +28,17 @@ MCP clients. The app has no UI-only path.
   - After a deploy, an open tab can run an older SPA than the Worker. If the setup status then has
     an unknown shape, the boot error tells the person to reload.
   - "Try again" on the boot error reloads the page, so the tab gets the current SPA.
+  - Drive, Chat, Docs, Sheets and the OAuth approval page are separate chunks
+    ([`lazyPage.tsx`](src/lib/lazyPage.tsx)). A deploy removes the chunks of the previous build. So
+    an open tab of that build cannot load these pages, and the server sends index.html in place of
+    the chunk.
+  - When a page chunk does not load, the page reads `/` from the server
+    ([`newVersion.ts`](src/lib/newVersion.ts)). If index.html names a different entry script, a new
+    version is available, and the page reloads one time. The reload gets the new version, so the
+    page cannot reload again in a loop.
+  - If the server serves the same version, or the request fails, the page does not reload. It asks
+    the person to reload. The rest of the app continues to work. The composer of Mail does not
+    reload by itself, because a reload loses the draft.
 - **Setup.** The page first asks for the setup token. The server verifies it without a new session.
   - Only a correct token reveals two choices: setup without a reset, or a fresh start.
   - If the directory already has accounts, the first choice is **Continue with the existing accounts**.
@@ -1151,7 +1162,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, and the page chunks with the reload after a deploy |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
