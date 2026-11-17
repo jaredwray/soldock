@@ -3,7 +3,7 @@ import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
 import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { credentialRef } from "./access.ts";
-import { authenticate, isSameOrigin } from "./auth.ts";
+import { type AuthContext, authenticate, isSameOrigin } from "./auth.ts";
 import { EVENTS_SOCKET_HEADER, type EventsSocketOpen } from "./principal.ts";
 
 type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
@@ -13,6 +13,26 @@ type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
  * when it can call that operation. A later event type that is not Chat needs its own check.
  */
 const READ_OPERATION = operations["chat.list_rooms"];
+
+/**
+ * Asks the `PrincipalDO` of the caller for an events socket. The caller must be authenticated, and
+ * able to call `chat.list_rooms`. A refusal for too many sockets comes back as `conflict`: a feed is
+ * never refused for another reason.
+ */
+export async function openEventsSocket(
+	env: Pick<Env, "PRINCIPAL">,
+	caller: AuthContext,
+	options: { feed: boolean },
+): Promise<Response> {
+	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
+	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
+	const response = await principal.fetch("https://principal.internal/events", {
+		headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },
+	});
+	if (response.status === 101 && response.webSocket) return response;
+	if (response.status === 409) throw new OperationError("conflict", "You have too many sockets open.");
+	throw new Error(`The principal object refused the socket with status ${response.status}.`);
+}
 
 /**
  * Mounts the events socket of a principal: `GET /ws/events` with a WebSocket upgrade.
@@ -40,14 +60,7 @@ export function mountEventsSocket(app: Hono<SocketEnv>): void {
 		if (missing.length > 0) {
 			throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
 		}
-		const open: EventsSocketOpen = { credential: credentialRef(caller) };
-		const principal = c.env.PRINCIPAL.get(c.env.PRINCIPAL.idFromName(caller.principal.id));
-		const response = await principal.fetch("https://principal.internal/events", {
-			headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },
-		});
-		if (response.status !== 101 || !response.webSocket) {
-			throw new Error(`The principal object refused the socket with status ${response.status}.`);
-		}
+		const response = await openEventsSocket(c.env, caller, { feed: false });
 		log("info", "events socket opened", {
 			principalId: caller.principal.id,
 			credential: caller.credential,

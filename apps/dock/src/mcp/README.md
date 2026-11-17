@@ -100,6 +100,7 @@ gives the same data as REST.
 | --- | --- | --- | --- |
 | `mail.inbox` | `soldock://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
 | `chat.room` | `soldock://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
+| `chat.rooms` | `soldock://chat/rooms` | `chat.list_rooms`, the first 100 rooms of the caller | One resource for each caller that can call `chat.list_rooms` |
 | `drive.item` | `soldock://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
 | `drive.space` | `soldock://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
 
@@ -131,6 +132,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 2. Each change sends `notifications/resources/updated` with the URI. For `mail.inbox`, only a new
    message in the inbox is a change. A read, a label or an archive sends nothing. For `chat.room`, a
    new, changed or deleted message is a change. A read marker, a new name and a new member send nothing.
+   For `chat.rooms`, each change of a room of the caller is a change, also a read marker, a join and
+   a leave.
    A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
 
@@ -154,7 +157,7 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   notifications within about one minute. The scopes of a credential do not change, so the check does
   not read them again.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
-  for all chat rooms, and one socket for each mailbox and each room (at most 100). Each later access
+  for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the
   credential, one query for all team mailboxes, and one query for all chat rooms. With one check each
   minute, one stream makes at most about 400 subrequests in its hour.
@@ -168,7 +171,9 @@ resources with the rules of its domain, and its `open` opens the feed of one all
 returns nothing when the resource refuses the caller at that time, and the acknowledgment then
 leaves that resource out. The [`mail`](../mail/README.md#notifications-of-new-mail) module gives the feed of
 `mail.inbox`. The [`chat`](../chat/README.md#agents) module gives the feed of `chat.room`: a room
-socket. The room closes that socket when it removes the member, so the stream ends at once.
+socket. The room closes that socket when it removes the member, so the stream ends at once. It also
+gives the feed of `chat.rooms`: the events socket of the caller. A sign-out or a revoke closes that
+socket at once, so the stream ends.
 
 Known limits:
 
@@ -177,5 +182,7 @@ Known limits:
   on one team mailbox can fill it. A limit for each principal needs shared state, and is not built yet.
 - A chat room has a limit: one principal has at most 8 sockets to one room, with the feeds of its
   streams. A stream that asks for a room at that limit gets an acknowledgment without the room.
+- The events socket has a limit too: one principal has at most 20, with the feeds of its streams.
+  A stream that asks for `chat.rooms` at that limit gets an acknowledgment without it.
 - Mail that arrives before the acknowledgment can send no notification. Read the inbox after the
   acknowledgment.

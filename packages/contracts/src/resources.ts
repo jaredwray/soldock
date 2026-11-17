@@ -83,6 +83,27 @@ export const chatRoom = defineResource({
 		"A new, changed or deleted message sends notifications/resources/updated. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
 });
 
+/**
+ * The rooms and the direct messages of the caller, with the unread count of each. One subscription
+ * follows each room of the caller, also a room that the caller joins later.
+ */
+export const chatRooms = defineResource({
+	name: "chat.rooms",
+	title: "Your rooms",
+	description:
+		"Your rooms and direct messages, newest message first, with the unread count of each, as chat.list_rooms returns them. Subscribe to it with subscriptions/listen to follow all of your rooms with one subscription, also the rooms that you join later. Then call chat.list_rooms, and chat.list_messages for each room with a new version.",
+	uriTemplate: "soldock://chat/rooms",
+	mimeType: "application/json",
+	read: { operation: "chat.list_rooms", input: () => ({ view: "joined", limit: CHAT_LIMITS.pageSize }) },
+	list: {
+		operation: "chat.list_rooms",
+		input: { view: "joined", limit: 1 },
+		items: () => [{ vars: {}, title: "Your rooms" }],
+	},
+	updates:
+		"A change of one of your rooms sends notifications/resources/updated: a new, changed or deleted message, a read marker, a new name or topic, a change of the members, a room that you join, and a room that you leave.",
+});
+
 /** One item in a drive. The POST of a drive item event uses this URI. */
 export const driveItem = defineResource({
 	name: "drive.item",
@@ -135,6 +156,7 @@ export const driveSpace = defineResource({
 export const resources = {
 	"mail.inbox": mailInbox,
 	"chat.room": chatRoom,
+	"chat.rooms": chatRooms,
 	"drive.item": driveItem,
 	"drive.space": driveSpace,
 } as const;

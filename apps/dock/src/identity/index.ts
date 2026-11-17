@@ -14,7 +14,7 @@ export {
 	missingScopes,
 } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
-export { mountEventsSocket } from "./events-socket.ts";
+export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
