@@ -239,8 +239,10 @@ MCP clients. The app has no UI-only path.
   - `/admin/agents` redirects to `/admin/members`. People and agents share that section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
-  - The page loads the directory one time. The directory stays when the section changes. Each
-    section starts at its top. The page has no link back to Mail: the rail links to each product.
+  - The page loads the directory at the start. It loads again when a card opens, when the window
+    gets focus, and when the tab becomes visible. A failed refresh keeps the list. The directory
+    stays when the section changes. Each section starts at its top. The page has no link back to
+    Mail: the rail links to each product.
   - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
   - Each section is a column of 960px at most. A section starts with a muted line of text. Its lists
     and its forms are in cards on the surface (`.panel-card`). A table in a card shows as list rows.
@@ -249,6 +251,7 @@ MCP clients. The app has no UI-only path.
     A click opens the card and shows its parts, with a line between the parts.
     The parts load their data, so the card renders them only after the first open.
     The parts stay after the card closes, so a form keeps its text.
+    A policy choice that is not saved shows a status line. The chip keeps the saved policy.
     A person shows initials in the avatar. An agent shows the agent icon.
     The chips show the role of a person, or **Agent** and the outbound policy.
     An archived account has an **Archived** chip. Your name shows **(you)**.

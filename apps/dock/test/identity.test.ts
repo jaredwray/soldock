@@ -1,7 +1,7 @@
 import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ALL_SCOPES, ApiError } from "@soldock/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
@@ -941,7 +941,37 @@ describe("directory authorization", () => {
 			password: PASSWORD,
 		});
 		const change = (mode: "any" | "internal-only") => ({ principal_id: bot.id, mode });
+		const spy = vi.spyOn(console, "log");
+		await ada.call("directory.update_agent_policy", {
+			principal_id: bot.id,
+			mode: "allowlist",
+			allowlist: ["example.org", "partner@vendor.example"],
+		});
+		const lines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+		spy.mockRestore();
+		const policyLine = lines.find((line) => line.op === "directory.update_agent_policy");
+		expect(policyLine).toMatchObject({
+			result: "ok",
+			outboundMode: "allowlist",
+			previousOutboundMode: "internal-only",
+			allowlistSize: 2,
+		});
+		expect(JSON.stringify(policyLine)).not.toContain("example.org");
+		expect(JSON.stringify(policyLine)).not.toContain("partner@vendor.example");
+		const again = vi.spyOn(console, "log");
 		await ada.call("directory.update_agent_policy", change("any"));
+		const second = again.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true)
+			.find((line) => line.op === "directory.update_agent_policy");
+		again.mockRestore();
+		expect(second).toMatchObject({
+			outboundMode: "any",
+			previousOutboundMode: "allowlist",
+			allowlistSize: 0,
+		});
 		await owner.call("directory.update_agent_policy", change("internal-only"));
 		expect(await denied(other.call("directory.update_agent_policy", change("any")))).toBe("forbidden");
 		expect(await denied(bot.call("directory.update_agent_policy", change("any")))).toBe("forbidden");

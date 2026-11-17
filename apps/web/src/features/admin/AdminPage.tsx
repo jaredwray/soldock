@@ -29,7 +29,9 @@ interface AdminPageProps {
 /**
  * Owners and admins see the directory. They create, change, archive and delete people and agents, and
  * they manage each agent, in one list. A member who sponsors an agent sees only those agents. The side
- * navigation selects one section. The page loads the directory once and keeps it while the section changes.
+ * navigation selects one section. The page loads the directory at the start, and again when a card
+ * opens, when the window gets focus, or when the tab becomes visible. It keeps the list while the
+ * section changes. A failed refresh keeps a list that is already shown.
  */
 export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminPageProps) {
 	const { whoami } = useSession();
@@ -38,20 +40,39 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	const section = routeSection ?? defaultSection();
 	const title = sectionTitle(section, elevated);
 	const mainRef = useRef<HTMLElement>(null);
+	const loadGeneration = useRef(0);
 	const [state, setState] = useState<DirectoryState>({ status: "loading" });
 	const [created, setCreated] = useState<{ principal: Principal; key: CreatedApiKey } | null>(null);
 
 	const load = useCallback(async () => {
+		const generation = ++loadGeneration.current;
 		try {
 			const result = await api.call("directory.list_principals");
+			if (generation !== loadGeneration.current) return;
 			setState({ status: "ready", principals: result.principals });
 		} catch (error) {
-			setState({ status: "error", error: errorMessage(error) });
+			if (generation !== loadGeneration.current) return;
+			// A later refresh keeps the list. The first load still shows the error.
+			setState((current) => (current.status === "ready" ? current : { status: "error", error: errorMessage(error) }));
 		}
 	}, []);
 
 	useEffect(() => {
 		void load();
+	}, [load]);
+
+	// Another tab can change a policy. Load again when this window is shown.
+	useEffect(() => {
+		const refresh = () => void load();
+		const onVisibility = () => {
+			if (document.visibilityState === "visible") refresh();
+		};
+		window.addEventListener("focus", refresh);
+		document.addEventListener("visibilitychange", onVisibility);
+		return () => {
+			window.removeEventListener("focus", refresh);
+			document.removeEventListener("visibilitychange", onVisibility);
+		};
 	}, [load]);
 
 	useEffect(() => {

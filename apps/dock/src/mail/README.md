@@ -24,6 +24,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
 | `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
+| `outbound.ts` | The outbound policy rule for an agent. `mail.send` and the outbox both use it |
 | `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
 | `webhooks.ts` | The Mail adapter for the [shared webhook module](../webhooks/README.md) |
 | `search.ts` | Gmail-style query parser, and the compiler to SQL with bound values |
@@ -269,8 +270,11 @@ web app uses it to complete an address while the person types it.
      A directory error uses the normal retry path and sends no mail.
    - a local recipient: a copy of the raw bytes in R2 for that mailbox, then `MailboxDO.deliver()`.
      Local mail never reaches Email Service.
-   - an external recipient: `EMAIL.send(new EmailMessage(sender, recipient, raw))`, one message
-     for each recipient, with the same bytes.
+   - an external recipient: the alarm reads `sent_by` on the message. For an agent, it reads the
+     current policy. An archived agent, a deleted agent, or a policy that does not allow the address
+     fails that row with no retry. A human has no policy. A directory error retries and sends no mail.
+     Then `EMAIL.send(new EmailMessage(sender, recipient, raw))`, one message for each recipient, with
+     the same bytes. Mail that Email Service already accepted stays sent.
 6. A failed delivery is retried with backoff (1 minute, doubled, at most 1 hour), 8 times. Then
    the recipient is `failed`. Delivery is at least once: a crash after a send and before the outbox
    row is deleted sends again.

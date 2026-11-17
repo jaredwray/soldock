@@ -172,7 +172,7 @@ export const updateAgentPolicy = defineOperation({
 	name: "directory.update_agent_policy",
 	summary: "Change who an agent can send mail to and which hosts its webhooks can use",
 	description:
-		"The sponsor of the agent, an owner or an admin only. An agent can never change its own policy. Mode allowlist needs at least one domain or address. The policy also limits the webhooks that the agent creates: mode any allows each host, mode allowlist allows a host that is a domain in the list, and mode internal-only allows no webhook. A change does not stop a webhook at once: the next POST checks the policy again.",
+		"The sponsor of the agent, an owner or an admin only. An agent can never change its own policy. Mode allowlist needs at least one domain or address. The policy also limits the webhooks that the agent creates: mode any allows each host, mode allowlist allows a host that is a domain in the list, and mode internal-only allows no webhook. A change does not stop a webhook at once: the next POST checks the policy again. Delivery checks queued external mail again. A policy that no longer allows the address, or an archived agent, fails that delivery with no retry. Mail that already left stays sent.",
 	http: { method: "POST", path: "/api/v1/directory/agents/{principal_id}/policy" },
 	scopes: ["directory.write"],
 	callers: ["human"],

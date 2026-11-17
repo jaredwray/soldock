@@ -475,8 +475,12 @@ Each call passes three checks:
      knew the old password.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
    `policy_denied`, before anything is stored. The policy belongs to the agent, so it also applies
-   to mail that the agent sends from a team mailbox. `webhooks.create_endpoint` refuses a host outside the
-   policy in the same way.
+   to mail that the agent sends from a team mailbox. Delivery checks queued external mail again. A
+   policy that no longer allows the address, or an archived agent, fails that delivery with no retry.
+   Mail that already left stays sent. `webhooks.create_endpoint` refuses a host outside the policy in
+   the same way. The audit line of `directory.update_agent_policy` records the old mode, the new mode
+   and the allowlist size. The entries stay out of the log. The audit line of an agent `mail.send`
+   records the mode and the external recipient count.
 
 A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the
 API key, the OAuth grant (`AuthContext.grantId`) or a session. `credentialState` tells if that

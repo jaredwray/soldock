@@ -26,6 +26,7 @@ import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
+import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { sanitizeHtml } from "./sanitize.ts";
 import { compileQuery, parseQuery, QueryError } from "./search.ts";
 import { htmlToText, replySubject } from "./threading.ts";
@@ -105,7 +106,13 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function auditOk(call: CallContext, mailbox: MailboxRecord, op: string, target: string): void {
+function auditOk(
+	call: CallContext,
+	mailbox: MailboxRecord,
+	op: string,
+	target: string,
+	extra?: { outboundMode: string; externalRecipients: number },
+): void {
 	audit({
 		op,
 		actor: call.caller.id,
@@ -115,6 +122,7 @@ function auditOk(call: CallContext, mailbox: MailboxRecord, op: string, target: 
 		...(mailbox.kind === "personal" ? {} : { mailbox: mailbox.id }),
 		result: "ok",
 		requestId: call.requestId,
+		...extra,
 	});
 }
 
@@ -225,18 +233,10 @@ async function resolveRecipients(call: CallContext, sender: MailboxRecord, addre
  */
 function checkOutboundPolicy(call: CallContext, recipients: Recipient[]): void {
 	const { principal } = call.caller;
-	if (principal.kind !== "agent") return;
 	const external = recipients.filter((r) => r.kind === "external").map((r) => r.address.toLowerCase());
-	if (external.length === 0) return;
-	const mode = principal.outbound_mode ?? "internal-only";
-	if (mode === "any") return;
-	const allowed = new Set(mode === "allowlist" ? principal.outbound_allowlist : []);
-	const denied = external.filter((address) => !allowed.has(address) && !allowed.has(domainOf(address)));
+	const denied = deniedOutboundAddresses(principal, external);
 	if (denied.length > 0) {
-		throw new OperationError(
-			"policy_denied",
-			`The outbound policy of this agent (${mode}) does not allow mail to ${denied.join(", ")}. Ask its sponsor to change the policy.`,
-		);
+		throw new OperationError("policy_denied", outboundPolicyDenial(outboundMode(principal), denied));
 	}
 }
 
@@ -489,7 +489,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		}
 		const sent = answer;
 		if (sent.duplicate) await call.env.BLOBS.delete(rawKey);
-		else auditOk(call, record, "mail.send", sent.result.message_id);
+		else if (principal.kind === "agent") {
+			auditOk(call, record, "mail.send", sent.result.message_id, {
+				outboundMode: outboundMode(principal),
+				externalRecipients: recipients.filter((recipient) => recipient.kind === "external").length,
+			});
+		} else auditOk(call, record, "mail.send", sent.result.message_id);
 		return sent.result;
 	},
 

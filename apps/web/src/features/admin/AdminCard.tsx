@@ -13,6 +13,8 @@ interface AdminCardProps {
 	chips: ReactNode;
 	/** The parts of the open card. Each part is a direct child, so it gets a line above it. */
 	children: ReactNode;
+	/** Called when the card opens, so the parent can load the current record. */
+	onOpen?: () => void;
 }
 
 /**
@@ -21,13 +23,15 @@ interface AdminCardProps {
  * their own data, so the card renders them at the first open only. The parts stay after the card closes,
  * so a form keeps its text.
  */
-export function AdminCard({ icon, mark, name, address, muted = false, chips, children }: AdminCardProps) {
+export function AdminCard({ icon, mark, name, address, muted = false, chips, children, onOpen }: AdminCardProps) {
 	const [opened, setOpened] = useState(false);
 	return (
 		<details
 			className={muted ? "admin-card admin-card-muted" : "admin-card"}
 			onToggle={(event) => {
-				if (event.currentTarget.open) setOpened(true);
+				if (!event.currentTarget.open) return;
+				setOpened(true);
+				onOpen?.();
 			}}
 		>
 			<summary className="admin-card-summary">

@@ -470,6 +470,8 @@ Each agent has an outbound policy. Only its sponsor, an owner or an admin can ch
 
 A send or a webhook outside the policy fails with `policy_denied`, and nothing is stored or sent. Mail from an
 agent carries the header `X-Soldock-Agent: true`. The policy also applies in a team mailbox.
+Delivery checks queued external mail again. A policy that no longer allows the address, or an archived
+agent, fails that delivery with no retry. Mail that already left stays sent.
 
 ## Untrusted content
 

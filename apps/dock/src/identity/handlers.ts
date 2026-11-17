@@ -1,5 +1,5 @@
 import { AGENT_SCOPES, ALL_SCOPES, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
-import { type HandlerMap, OperationError } from "../platform/index.ts";
+import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
@@ -251,7 +251,18 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			);
 		}
 		await updateOutboundPolicy(call.env.DIRECTORY, target.id, input.mode, input.allowlist);
-		auditOk(call, "directory.update_agent_policy", target.id);
+		audit({
+			op: "directory.update_agent_policy",
+			actor: call.caller.principal.id,
+			actorKind: call.caller.kind,
+			credential: call.caller.credential,
+			target: target.id,
+			result: "ok",
+			requestId: call.requestId,
+			outboundMode: input.mode,
+			previousOutboundMode: target.outbound_mode ?? "internal-only",
+			allowlistSize: input.mode === "allowlist" ? input.allowlist.length : 0,
+		});
 		const updated = await getPrincipal(call.env.DIRECTORY, target.id);
 		if (!updated) throw new Error(`agent ${target.id} missing after update`);
 		return { principal: toPrincipalOutput(updated) };
