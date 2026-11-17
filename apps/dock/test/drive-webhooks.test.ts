@@ -500,6 +500,41 @@ describe("drive webhook rules from review", () => {
 		expect(own?.endpoint.has_auth_key).toBe(true);
 	});
 
+	it("refuses a subscription after the drive object removes the member", async () => {
+		const driveId = (
+			await owner.call("drive.create_shared_drive", {
+				name: "Design",
+				members: [
+					{ principal_id: ada.id, role: "editor" },
+					{ principal_id: owner.id, role: "manager" },
+				],
+			})
+		).shared_drive.id;
+		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
+		await runInDurableObject(stub, (instance) => {
+			(instance as unknown as { sql: { exec: (query: string, id: string) => void } }).sql.exec(
+				"DELETE FROM members WHERE principal_id = ?",
+				ada.id,
+			);
+		});
+		const indexed = await env.DIRECTORY.prepare(
+			"SELECT 1 AS found FROM shared_drive_members WHERE drive_id = ? AND principal_id = ?",
+		)
+			.bind(driveId, ada.id)
+			.first();
+		expect(indexed).not.toBeNull();
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
+		expect(
+			await codeOf(
+				ada.call("drive.create_webhook_subscription", {
+					endpoint_id: endpoint.id,
+					event: "drive.item.created",
+					space_id: driveId,
+				}),
+			),
+		).toBe("not_found");
+	});
+
 	it("refuses a key without drive.webhooks and accepts the MCP tool", async () => {
 		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
 		const { api_key } = await ada.call("account.create_api_key", { label: "read", scopes: ["drive.read"] });

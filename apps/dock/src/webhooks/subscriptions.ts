@@ -107,14 +107,10 @@ async function creatableTarget(
 	const { caller } = call;
 	if (targetId === undefined || targetId === caller.id) return caller.id;
 	if (domain === "drive" && targetId.startsWith("drv_")) {
-		const member = await call.env.DIRECTORY.prepare(
-			`SELECT 1 AS found FROM shared_drive_members m
-			JOIN shared_drives d ON d.id = m.drive_id
-			WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
-		)
-			.bind(targetId, caller.id)
-			.first();
-		if (!member) throw new OperationError("not_found", "No shared drive has that id, or you are not a member.");
+		const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(targetId));
+		if (!(await space.hasMember(caller.id))) {
+			throw new OperationError("not_found", "No shared drive has that id, or you are not a member.");
+		}
 		return targetId;
 	}
 	if (isTeamMailboxId(targetId) && domain === "mail") {

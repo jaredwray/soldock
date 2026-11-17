@@ -49,6 +49,8 @@ An update trigger copies a column only when that column changed.
 It does not set a disabled endpoint back to active.
 A delete trigger removes the subscription. There is no insert trigger.
 `adoptLegacyWebhooks` copies a row that the previous Worker inserts after the migration.
+A chat message adopts those rows before it records the subscription boundary.
+A shared drive subscription asks the drive object for membership. The index can be behind.
 A later change drops the old tables. A rollback after this Worker runs is a fix forward.
 
 The endpoint holds the URL, the label, the signing secret, the auth key and the custom header.

@@ -1,6 +1,7 @@
 import { WEBHOOK_LIMITS, type WebhookDomain, type WebhookEndpoint, type WebhookEvent } from "@soldock/contracts";
 import type { CredentialBinding } from "../identity/index.ts";
 import { audit, bytesToBase64, log } from "../platform/index.ts";
+import { adoptLegacyWebhooks } from "./legacy.ts";
 
 export type EndpointDisabledReason = NonNullable<WebhookEndpoint["disabled_reason"]>;
 export type SubscriptionDisabledReason = "access_lost" | "credential_revoked";
@@ -111,8 +112,12 @@ export async function subscriptionIdsForEndpoint(db: D1Database, endpointId: str
 	return results.map((row) => row.id);
 }
 
-/** The last committed chat subscription. A message records this boundary before its room transaction. */
+/**
+ * The last committed chat subscription. A message records this boundary before its room transaction.
+ * Copy an old chat row first. A copy after this read gets a new sequence, and the message skips it.
+ */
 export async function chatWebhookBoundary(db: D1Database): Promise<number> {
+	await adoptLegacyWebhooks(db);
 	const row = await db
 		.prepare("SELECT COALESCE(MAX(sequence), 0) AS boundary FROM webhook_subscriptions WHERE domain = 'chat'")
 		.first<{ boundary: number }>();

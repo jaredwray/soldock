@@ -703,6 +703,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return call.actor.principal_id === call.spaceId;
 	}
 
+	/** True when the principal is a member of this shared drive now. The index in D1 can be behind. */
+	hasMember(principalId: string): boolean {
+		const spaceId = this.meta("space_id");
+		if (!spaceId || !isSharedDriveId(spaceId)) return false;
+		return this.memberRole(principalId) !== null;
+	}
+
 	/** The role of a principal as a member of this shared drive, or null. A personal drive has no member. */
 	private memberRole(principalId: string): SharedDriveRole | null {
 		return (

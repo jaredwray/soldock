@@ -509,6 +509,27 @@ it("stops only the subscription when its key is revoked", async () => {
 	expect(stored).toMatchObject({ status: "disabled", reason: "credential_revoked", endpoint_status: "active" });
 });
 
+it("sends a new message to a chat webhook that the previous Worker stored", async () => {
+	const id = "whk_01DDDDDDDDDDDDDDDDDDDDDDDDDD";
+	const secretBytes = new Uint8Array(32).fill(7);
+	const secret = `whsec_${btoa(String.fromCharCode(...secretBytes))}`;
+	const keyId = (await ada.call("account.list_api_keys")).api_keys[0]?.id ?? "";
+	await env.DIRECTORY.prepare(
+		`INSERT INTO chat_webhooks (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at)
+		VALUES (?, ?, ?, 'api_key', ?, ?, 'Legacy chat', ?, ?)`,
+	)
+		.bind(id, bot.id, ada.id, keyId, HOOK, secret, new Date().toISOString())
+		.run();
+	const current = await room();
+	const queue = await capture(current.id);
+	const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "After the old row" });
+	await queue.drain();
+	const posts = receiveWebhooks();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	expect(posts.map((post) => JSON.parse(post.body).data.webhook_id)).toEqual([id]);
+	expect(JSON.parse(posts[0]?.body ?? "{}").data.message_id).toBe(message.id);
+});
+
 it("copies a legacy chat row", async () => {
 	const id = "whk_01BBBBBBBBBBBBBBBBBBBBBBBBBB";
 	await env.DIRECTORY.prepare(
