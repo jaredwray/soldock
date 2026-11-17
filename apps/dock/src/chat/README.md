@@ -133,8 +133,11 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A member reacts to a message with one emoji (`chat.add_reaction`), and removes its reaction
   (`chat.remove_reaction`). Each principal has at most one reaction for each message and emoji. A
   second add, and a remove of a reaction that is not there, change nothing.
-- An emoji is one grapheme with a pictographic character, such as 👍, 👍🏽 or 🇳🇴 (`Emoji` of the
-  contracts). A name such as `:thumbsup:`, two emoji or text get `invalid`.
+- An emoji is one emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍,
+  👍🏽, ❤️, 1️⃣, 🇳🇴 or 👨‍👩‍👧 (`Emoji` of the contracts). Each emoji has one form only, so two
+  values never show the same emoji. A name such as `:thumbsup:`, text, two emoji, a form without
+  U+FE0F (❤), a text symbol (©), a flag of no country, and an emoji with a joiner, marks or tags
+  after it get `invalid`.
 - A message has reactions with 20 different emoji at most (`CHAT_LIMITS.reactionEmoji`). A new emoji
   above that gets `conflict`. An emoji that the message has takes more principals.
 - `reactions` of a message has one entry for each emoji: the emoji, the count and the principal ids,
@@ -143,8 +146,11 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   so `changed_after` returns the message, and the sockets get it. It uses the allowance of the rate
   limit, as an edit does. It does not make the room unread, and it sends no webhook event.
 - A deleted message takes no reaction (`invalid`), and a delete removes its reactions.
-- Known limit: a message lists each principal of each emoji. A message with many reactions in a room
-  with many members is larger.
+- The reactions of a member that leaves the room stay, as its messages stay. It cannot change them
+  while it is not a member.
+- Known limit: a message lists each principal of each emoji. With 500 members and 20 emoji, one
+  message can carry about 300 KB of ids, in each page and in each socket event. A later change can
+  send the first ids only, with the exact count.
 
 ### The rate limit
 

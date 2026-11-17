@@ -869,7 +869,14 @@ function MessageItem({
 }: MessageItemProps) {
 	const editId = useId();
 	const [picking, setPicking] = useState(false);
-	const closePicker = useCallback(() => setPicking(false), []);
+	const pickerId = useId();
+	const reactButton = useRef<HTMLButtonElement>(null);
+	// After Escape and after a pick, the focus goes back to the button that opened the list, so a
+	// keyboard keeps its place. After a click outside the list, it stays where the person clicked.
+	const closePicker = useCallback((focusBack: boolean) => {
+		setPicking(false);
+		if (focusBack) reactButton.current?.focus();
+	}, []);
 	const nameOf = (principalId: string) => mentions.directory.byId.get(principalId)?.display_name ?? "A member";
 	const author = message.author.display_name;
 	const failed = pending?.state === "failed";
@@ -998,8 +1005,10 @@ function MessageItem({
 			</div>
 			{picking && (
 				<ReactionPicker
+					id={pickerId}
+					trigger={reactButton}
 					onPick={(emoji) => {
-						setPicking(false);
+						closePicker(true);
 						if (
 							!message.reactions.some((reaction) => reaction.emoji === emoji && reaction.principal_ids.includes(ownId))
 						) {
@@ -1013,9 +1022,12 @@ function MessageItem({
 				<span className="chat-message-actions">
 					<button
 						type="button"
+						ref={reactButton}
 						className="icon-button icon-button-small chat-react-button"
 						aria-label={`Add a reaction to the message of ${author} from ${shortDate(message.created_at)}`}
+						aria-haspopup="dialog"
 						aria-expanded={picking}
+						aria-controls={picking ? pickerId : undefined}
 						title="Add a reaction"
 						onClick={() => setPicking((open) => !open)}
 					>

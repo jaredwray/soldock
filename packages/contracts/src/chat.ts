@@ -25,19 +25,24 @@ export const CHAT_LIMITS = {
 	reactionEmoji: 20,
 } as const;
 
-/** True for one emoji: one grapheme with a pictographic character, such as 👍, 🎉 or 👍🏽. */
-function isOneEmoji(value: string): boolean {
-	const graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)];
-	return graphemes.length === 1 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(value);
-}
+/**
+ * One emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍, 👍🏽, ❤️, 1️⃣, 🇳🇴
+ * or 👨‍👩‍👧. Each emoji has one form only, so two values never show the same emoji. A form without
+ * U+FE0F (❤), a text symbol (©), a lone flag letter, an extra joiner and marks after the emoji fail.
+ */
+const RGI_EMOJI = /^\p{RGI_Emoji}$/v;
 
 /** One emoji, as the reactions store it. */
 export const Emoji = z
 	.string()
 	.min(1)
 	.max(32)
-	.refine(isOneEmoji, { message: "Send one emoji, such as 👍." })
-	.describe("One emoji character, such as 👍 or 🎉. Not a name such as :thumbsup:.");
+	.refine((value) => RGI_EMOJI.test(value), {
+		message: "Send one emoji in its full form, such as 👍 or ❤️ (with U+FE0F).",
+	})
+	.describe(
+		"One emoji in its full form, such as 👍, 🎉 or ❤️ (with U+FE0F). Not a name such as :thumbsup:, and not text.",
+	);
 
 /** The reactions of one emoji on a message. */
 export const ChatReaction = z.object({
@@ -157,8 +162,9 @@ export const ChatMessage = z.object({
 	 */
 	idempotency_key: z.string().nullable().default(null),
 	/**
-	 * The reactions of the message, one entry for each emoji, in the order of the first reaction of
-	 * each. A deleted message has none. A reader that gets no value takes an empty list.
+	 * The reactions of the message, one entry for each emoji, in the order of the oldest reaction of
+	 * each emoji that stays. So an entry can move when a reaction goes away. A deleted message has
+	 * none. A reader that gets no value takes an empty list.
 	 */
 	reactions: z.array(ChatReaction).default([]),
 });
@@ -462,7 +468,7 @@ export const addReaction = defineOperation({
 export const removeReaction = defineOperation({
 	name: "chat.remove_reaction",
 	summary: "Remove your reaction from a message",
-	description: `Removes your reaction with one emoji from a message. A call for a reaction that you do not have changes nothing. ${MEMBERS_ONLY}`,
+	description: `Removes your reaction with one emoji from a message. A call for a reaction that you do not have changes nothing. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

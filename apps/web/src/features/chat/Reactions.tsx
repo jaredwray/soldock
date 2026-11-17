@@ -1,5 +1,5 @@
 import type { ChatReaction } from "@soldock/contracts";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { emojiName, findEmoji } from "./emoji.ts";
 
 /** The names in the title of a reaction. More names than this show as "and N more". */
@@ -55,33 +55,64 @@ export function Reactions({
 }
 
 /**
- * A small list of emoji with a search box. A choice calls `onPick`. Escape, and a click outside the
- * list, call `onClose`.
+ * A small list of emoji with a search box. A choice calls `onPick`. Escape calls `onClose(true)`:
+ * the focus goes back to the button. A click outside the list calls `onClose(false)`: the focus stays
+ * where the person clicked. A click on `trigger`, the button that opens the list, is for that button:
+ * it closes the list with its own click.
+ *
+ * The list opens below its message, or above it when the scroll area has more room there. So the
+ * list of the newest message is not cut off at the end of the scroll area.
  */
-export function ReactionPicker({ onPick, onClose }: { onPick: (emoji: string) => void; onClose: () => void }) {
+export function ReactionPicker({
+	id,
+	trigger,
+	onPick,
+	onClose,
+}: {
+	id: string;
+	trigger: RefObject<HTMLElement | null>;
+	onPick: (emoji: string) => void;
+	onClose: (focusBack: boolean) => void;
+}) {
 	const [query, setQuery] = useState("");
+	const [up, setUp] = useState(false);
 	const searchId = useId();
 	const root = useRef<HTMLDivElement>(null);
 	const choices = useMemo(() => findEmoji(query), [query]);
 
+	useLayoutEffect(() => {
+		const picker = root.current;
+		const row = picker?.parentElement;
+		const area = picker?.closest(".chat-scroll");
+		if (!picker || !row || !area) return;
+		const box = area.getBoundingClientRect();
+		const place = row.getBoundingClientRect();
+		const below = box.bottom - place.top;
+		const above = place.bottom - box.top;
+		setUp(below < picker.offsetHeight + 24 && above > below);
+	}, []);
+
 	useEffect(() => {
 		const outside = (event: PointerEvent) => {
-			if (root.current && !root.current.contains(event.target as Node)) onClose();
+			const target = event.target as Node;
+			if (root.current?.contains(target) || trigger.current?.contains(target)) return;
+			onClose(false);
 		};
 		document.addEventListener("pointerdown", outside);
 		return () => document.removeEventListener("pointerdown", outside);
-	}, [onClose]);
+	}, [onClose, trigger]);
 
 	return (
 		<div
 			ref={root}
-			className="chat-picker"
+			id={id}
+			className={up ? "chat-picker chat-picker-up" : "chat-picker"}
 			role="dialog"
 			aria-label="Add a reaction"
 			onKeyDown={(event) => {
 				if (event.key === "Escape") {
 					event.stopPropagation();
-					onClose();
+					onClose(true);
 				}
 			}}
 		>

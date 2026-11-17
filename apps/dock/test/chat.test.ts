@@ -4,7 +4,19 @@ import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import type { ChatRoomState } from "../src/identity/index.ts";
-import { type Actor, api, callTool, codeOf, ORIGIN, PASSWORD, request, SETUP_TOKEN, seedOrg } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	bearer,
+	callTool,
+	codeOf,
+	connectRoomSocket,
+	ORIGIN,
+	PASSWORD,
+	request,
+	SETUP_TOKEN,
+	seedOrg,
+} from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -793,6 +805,16 @@ describe("chat through MCP", () => {
 		expect((await ada.call("chat.list_messages", { room_id: roomId })).messages[0]?.reactions).toEqual([
 			{ emoji: "🎉", count: 1, principal_ids: [bot.id] },
 		]);
+		// A person reacts and removes the reaction through MCP too.
+		await callTool(ada.key, "chat_add_reaction", { room_id: roomId, message_id: message?.id, emoji: "🎉" });
+		const removed = await callTool(ada.key, "chat_remove_reaction", {
+			room_id: roomId,
+			message_id: message?.id,
+			emoji: "🎉",
+		});
+		expect(removed.structuredContent).toMatchObject({
+			message: { reactions: [{ emoji: "🎉", count: 1, principal_ids: [bot.id] }] },
+		});
 	});
 });
 
@@ -833,12 +855,20 @@ describe("reactions", () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		const message = await post(ada, room.id, "Hello");
 		const target = { room_id: room.id, message_id: message.id };
-		for (const emoji of [":thumbsup:", "ab", "👍👍", ""]) {
-			expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji }))).toBe("invalid");
+		// Text, two emoji, and each value that shows like an emoji but is not its one full form: without
+		// U+FE0F, with a text selector, with an extra U+FE0F, with a joiner or marks after it, with tag
+		// characters, a lone flag letter, a flag of no country, and a text symbol.
+		const refused = [":thumbsup:", "ab", "👍👍", "", "❤", "❤\uFE0E", "👍\uFE0F", "👍\u200D", "👍\u0301\u0301"];
+		refused.push("🏴\u{E0061}\u{E0062}", "🇳", "🇽🇽", "©", "\u0600👍");
+		for (const emoji of refused) {
+			expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji })), JSON.stringify(emoji)).toBe("invalid");
 		}
-		// A skin tone and a flag are one emoji each.
-		await bot.call("chat.add_reaction", { ...target, emoji: "👍🏽" });
-		await bot.call("chat.add_reaction", { ...target, emoji: "🇳🇴" });
+		// A skin tone, a flag, a keycap, a text symbol in its emoji form and a family are one emoji each.
+		for (const emoji of ["👍🏽", "🇳🇴"]) await bot.call("chat.add_reaction", { ...target, emoji });
+		for (const emoji of ["1️⃣", "©️", "👨‍👩‍👧"]) {
+			await bot.call("chat.add_reaction", { ...target, emoji });
+			await bot.call("chat.remove_reaction", { ...target, emoji });
+		}
 
 		const emoji = [
 			"😀",
@@ -871,6 +901,21 @@ describe("reactions", () => {
 		await ada.call("chat.delete_message", target);
 		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages[0]?.reactions).toEqual([]);
 		expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji: "👍" }))).toBe("invalid");
+	});
+
+	// A client shows a reaction of a different member when its socket gets the message.
+	it("sends the message with its reactions to the sockets of the room", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "We ship on Friday.");
+		const socket = await connectRoomSocket(room.id, bearer(ada.key));
+		const reacted = (await bot.call("chat.add_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" }))
+			.message;
+		expect(await socket.next()).toEqual({ type: "message", message: reacted });
+		// A call that changes nothing sends nothing: the next event is the remove.
+		await bot.call("chat.add_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" });
+		const removed = (await bot.call("chat.remove_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" }))
+			.message;
+		expect(await socket.next()).toEqual({ type: "message", message: removed });
 	});
 
 	it("is for the members of the room only", async () => {

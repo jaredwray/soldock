@@ -1101,6 +1101,11 @@ a.chat-author:hover {
 	box-shadow: var(--shadow-menu);
 }
 
+.chat-picker-up {
+	top: auto;
+	bottom: calc(100% - 4px);
+}
+
 .chat-picker-list {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));

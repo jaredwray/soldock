@@ -744,18 +744,21 @@ MCP clients. The app has no UI-only path.
     - A room that does not have the message shows its newest messages.
     - Each message that the room has, and that is not deleted, has the action **Copy a link**,
       which puts the link on the clipboard.
+    - The link has no access of its own. The server gives the messages only to a member, as for
+      each other read.
   - **Reactions** (`Reactions.tsx`, `emoji.ts`). The reactions of a message show under its text:
     one button for each emoji, with its count. A button of an emoji that the person used is
     pressed. A click adds or removes the reaction of the person. The title of a button has the
     names of the first 10 principals.
     - The action **Add a reaction** (🙂) opens a list of common emoji with a search box. The
-      search finds an emoji by its name and by other words. Enter takes the first result. Escape
-      and a click outside close the list.
+      search finds an emoji by its name and by other words. Enter takes the first result. Escape,
+      a click outside and a second click on the button close the list. After a pick and after
+      Escape, the focus goes back to the button.
+    - The list opens below its message, or above it when the scroll area has more room there, so
+      the list of the newest message is not cut off.
     - The message shows the answer of the server. The reactions of other members come through
       the socket of the room.
     - The list has about 70 common emoji. A full list of each emoji is a later step.
-    - The link has no access of its own. The server gives the messages only to a member, as for
-      each other read.
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a
