@@ -43,6 +43,7 @@ const FILES: Record<IconName, string> = {
 	underline: "underline",
 	strikethrough: "strikethrough",
 	link: "link",
+	emoji: "emoji",
 	listBulleted: "list",
 	listNumbered: "numbered-list-left",
 	quote: "quote",

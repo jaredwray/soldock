@@ -756,7 +756,16 @@ MCP clients. The app has no UI-only path.
     one button for each emoji, with its count. A button of an emoji that the person used is
     pressed. A click adds or removes the reaction of the person. The title of a button has the
     names of the first 10 principals.
-    - The action **Add a reaction** (🙂) opens a list of common emoji with a search box. The
+    - **Quick reactions** (`frequentEmoji.ts`): the actions of a message start with the 3 emoji
+      that the person uses most. A click adds the reaction, or removes it when the button is
+      pressed. The browser counts each reaction that the person adds. The most uses come first,
+      and the most recent use first for one count. Before the person has 3 counts, 👍, ❤️ and 😂
+      fill the places. The buttons show the counts of the time that the room opened, so a button
+      does not move after a click. A second click on the same emoji of a message while its call
+      runs does nothing, so one reaction counts one time. Known limit: the counts are in this
+      browser only. A browser that refuses `localStorage` keeps no counts and shows the default
+      emoji.
+    - The action **Add a reaction** (an outline face) opens a list of common emoji with a search box. The
       search finds an emoji by its name and by other words. Enter takes the first result. Escape,
       a click outside and a second click on the button close the list. After a pick and after
       Escape, the focus goes back to the button.
@@ -1247,6 +1256,7 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the body and its text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
 | `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the body in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
+| `localStorage` | `soldock:chat-emoji:` and the id of the person | The counts of the reactions of the signed-in person: for each emoji, the number of uses and the time of the last use. 50 emoji at most. It gives the quick reactions of a message |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a
   sign-in as a different person remove the records of the person from before. This runs also when
@@ -1256,6 +1266,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   removes them.
 - A browser without IndexedDB, or that refuses it, keeps the messages in the memory of the page
   only, as before.
+- The counts of the emoji go away at the same times as the drafts. A reaction answer that arrives
+  after a sign-out does not write the counts again.
 - The drafts follow the same rule: a sign-out, the end of the session, and a sign-in as a
   different person remove the drafts of the person from before. A browser that refuses
   `localStorage`, or a write to it, keeps the drafts in the memory of the page only.

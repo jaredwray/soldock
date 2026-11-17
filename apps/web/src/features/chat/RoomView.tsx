@@ -15,6 +15,8 @@ import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
+import { emojiName } from "./emoji.ts";
+import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import type { MentionContext, MentionDirectory } from "./mentions.ts";
 import {
@@ -84,6 +86,12 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [dialog, setDialog] = useState<RoomDialog>(null);
 	// The message in the box stays for the room when the person opens a different room, and after a reload.
 	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
+	// The emoji that the person uses most, for the quick reactions of each message. The list is the list
+	// of the time that the room opened, so a button does not move after a click on it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new room reads the counts again.
+	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId, roomId]);
+	/** The reaction calls that run, as "message id" and "emoji". */
+	const reacting = useRef(new Set<string>());
 	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
 	function setDraft(body: ChatBody | null) {
 		setDraftBody(body);
@@ -507,8 +515,15 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		});
 	}
 
-	/** Adds or removes a reaction of the person. The message shows the answer of the room. */
+	/**
+	 * Adds or removes a reaction of the person. The message shows the answer of the room. A second click
+	 * on the same emoji of a message while its call runs does nothing, so one reaction counts one time.
+	 */
 	function react(id: string, emoji: string, add: boolean) {
+		const call = `${id} ${emoji}`;
+		if (reacting.current.has(call)) return;
+		reacting.current.add(call);
+		const signedIn = accountChangeCount();
 		void (async () => {
 			try {
 				const { message } = await api.call(add ? "chat.add_reaction" : "chat.remove_reaction", {
@@ -517,8 +532,13 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					emoji,
 				});
 				view.apply(message);
+				// A reaction that the room took counts for the quick reactions of the person. After a sign-out,
+				// the counts of the person are gone, and a late answer must not write them again.
+				if (add && accountChangeCount() === signedIn) countEmoji(draftStorage(), ownId, emoji);
 			} catch (caught) {
 				fail(caught);
+			} finally {
+				reacting.current.delete(call);
 			}
 		})();
 	}
@@ -682,6 +702,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
 												ownId={ownId}
+												quickEmoji={quickEmoji}
 												onReact={(emoji, add) => react(message.id, emoji, add)}
 											/>
 										</Fragment>
@@ -837,6 +858,8 @@ interface MessageItemProps {
 	onSendCancel: () => void;
 	/** The id of the person, to show the reactions of the person. */
 	ownId: string;
+	/** The emoji of the quick reactions: the emoji that the person uses most. */
+	quickEmoji: readonly string[];
 	/** Adds or removes the reaction of the person with one emoji. */
 	onReact: (emoji: string, add: boolean) => void;
 }
@@ -860,6 +883,7 @@ function MessageItem({
 	onSendAgain,
 	onSendCancel,
 	ownId,
+	quickEmoji,
 	onReact,
 }: MessageItemProps) {
 	const editId = useId();
@@ -998,10 +1022,29 @@ function MessageItem({
 			)}
 			{hasActions && (
 				<span className="chat-message-actions">
+					{quickEmoji.map((emoji) => {
+						const mine = message.reactions.some(
+							(reaction) => reaction.emoji === emoji && reaction.principal_ids.includes(ownId),
+						);
+						return (
+							<button
+								key={emoji}
+								type="button"
+								className="icon-button icon-button-small chat-quick-reaction"
+								aria-label={`React with ${emojiName(emoji)}`}
+								aria-pressed={mine}
+								title={emojiName(emoji)}
+								onClick={() => onReact(emoji, !mine)}
+							>
+								<span aria-hidden="true">{emoji}</span>
+							</button>
+						);
+					})}
+					<span className="chat-actions-divider" aria-hidden="true" />
 					<button
 						type="button"
 						ref={reactButton}
-						className="icon-button icon-button-small chat-react-button"
+						className="icon-button icon-button-small"
 						aria-label={`Add a reaction to the message of ${author} from ${shortDate(message.created_at)}`}
 						aria-haspopup="dialog"
 						aria-expanded={picking}
@@ -1009,7 +1052,7 @@ function MessageItem({
 						title="Add a reaction"
 						onClick={() => setPicking((open) => !open)}
 					>
-						<span aria-hidden="true">🙂</span>
+						<Icon name="emoji" size={16} />
 					</button>
 					<button
 						type="button"

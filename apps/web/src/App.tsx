@@ -4,6 +4,7 @@ import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { draftStorage, forgetOtherDrafts } from "./features/chat/drafts.ts";
+import { forgetOtherEmoji } from "./features/chat/frequentEmoji.ts";
 import { forgetOthers } from "./features/chat/outboxStore.ts";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
 import { currentAccount, onAccountChange, setAccount } from "./lib/account.ts";
@@ -11,12 +12,13 @@ import { api, onUnauthenticated } from "./lib/api.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
 
-// The browser keeps the chat messages of a person that wait for the server, and the drafts of the
-// person. They go away when the person signs out, and when a different person signs in. This runs
+// The browser keeps the chat messages of a person that wait for the server, the drafts of the person,
+// and the counts of the emoji of the person. They go away when the person signs out, and when a different person signs in. This runs
 // also when the Chat page did not load.
 function forgetOtherPeople(): void {
 	void forgetOthers(currentAccount());
 	forgetOtherDrafts(draftStorage(), currentAccount());
+	forgetOtherEmoji(draftStorage(), currentAccount());
 }
 onAccountChange(forgetOtherPeople);
 
