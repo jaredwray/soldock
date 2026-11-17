@@ -778,9 +778,10 @@ MCP clients. The app has no UI-only path.
     the part that shows. For a list that is not at the newest messages, it has "New messages"
     when the room list tells that the room is unread.
   - The box for a new message has a border with round corners. Its empty text is "Message #room",
-    or "Message" and the name of the other member. The round send button is at its bottom right.
-  - Enter sends the message. Shift+Enter makes a new line.
-  - The text in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
+    or "Message" and the name of the other member. The formatting buttons are at its bottom left,
+    and the round send button is at its bottom right.
+  - Enter sends the message. Shift+Enter makes a new line. `Ctrl+Enter` (`⌘Enter`) sends too.
+  - The message in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
     different room, and after a reload of the page. A send, and an empty box, remove it. The page
     keeps the drafts in `localStorage` ([Data inventory](#data-inventory)). The drafts are for
     this browser only: a different device does not have them.
@@ -838,14 +839,34 @@ MCP clients. The app has no UI-only path.
     *italic*, ~~strike~~, `code`, links, bulleted and numbered lists, quotes and code blocks. A
     message without a body (from an older server, or an edit that waits for the server) shows its
     text as plain text, with its line breaks.
-  - The box sends its text as Markdown, so `**bold**` and `*italic*` show as formats. A new line
-    (Shift+Enter) is a line break. The box and the edit box take 16,000 characters of Markdown
-    (`CHAT_LIMITS.markdownChars`). A toolbar for the formats is a later step.
-  - An edit opens with the Markdown of the message, and saves Markdown. The Markdown of a plain
-    text has escapes, for example `2\*3\*4` and a `\` at the end of a line.
-  - A message that waits for the server shows its Markdown as text until the server gives its
-    body. A message in the outbox from before the bodies goes out as Markdown: a plain text with
-    `*` or `_` can then show formats.
+  - **The message box** (`ChatComposer.tsx`) is a ProseMirror editor with the schema of a message
+    body (`composerSchema.ts`). It sends the body (`body`), not Markdown. The edit box of a message
+    is the same editor, and opens with the body of the message.
+    - The toolbar has Bold (`Ctrl+B`), Italic (`Ctrl+I`), Strikethrough (`Ctrl+Shift+X`), Code
+      (`Ctrl+E`), Link (`Ctrl+K`), Bulleted list (`Ctrl+Shift+8`), Numbered list (`Ctrl+Shift+7`),
+      Quote (`Ctrl+Shift+9`) and Code block (`Ctrl+Alt+C`). On a Mac, ⌘ replaces Ctrl. The toolbar
+      is one tab stop, as in Mail. The toolbar, the commands and the link dialog are the code of
+      the Mail editor (`createRichTextCommands`, `FormatToolbar`, `LinkDialog`).
+    - Markdown shortcuts (`composerCommands.ts`): `**bold**`, `*italic*` or `_italic_`,
+      `~~strike~~` and `` `code` `` at the closing mark. `- `, `* ` or `+ ` at the start of a line
+      makes a bulleted list, `1. ` a numbered list, `> ` a quote, and ```` ``` ```` a code block. A
+      mark in a word, such as `2*3*4`, stays text. Backspace right after a shortcut gives the text
+      back.
+    - In a list, Shift+Enter makes the next item, and on an empty item it leaves the list. In a
+      code block, Shift+Enter makes a new line of code. A second Shift+Enter at the end, after an
+      empty line, leaves the block. On an empty line of a quote, Shift+Enter leaves the quote.
+    - In the box, each line is a paragraph, so the shortcuts work at the start of each line. In the
+      body, the lines of one paragraph are hard breaks, as in the plain text form. An empty line
+      stays an empty line, and empty lines at the start and at the end go. A message with two
+      paragraphs (from Markdown) opens with an empty line between them.
+    - A paste of HTML keeps only the nodes and marks of the schema, and links that are http, https
+      or mailto. A paste of plain text keeps its lines.
+    - The box refuses a send when the plain text has more than 8,000 characters
+      (`CHAT_LIMITS.messageChars`), and tells how many characters are too many. The server checks
+      the other limits of a body.
+  - A message that waits for the server shows its body at once. A message in the outbox from
+    before the box had formats goes out as Markdown: a plain text with `*` or `_` can then show
+    formats. A draft from before the box had formats opens as its text.
   - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
     `@captain`. The handle is the part of the address before the `@`. When two principals have the
     same part, on two mail domains, each of them has the full address as its handle, for example
@@ -855,7 +876,12 @@ MCP clients. The app has no UI-only path.
       does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
       is a link, and its mentions stay text. A known handle at the start of a longer word
       (`@adaé`, `@ada_`, `@ada@other`) is not a mention.
-    - The box for a new message and the edit box of a message suggest people and agents while the
+    - A name alias finds a principal too: the first word of the display name, or the full name
+      without spaces, in lowercase and without accents. For example, `@jared` and `@jaredwray` find
+      "Jared Wray", also when the address is `me@example.com`. Only an alias of one principal
+      counts. An alias that is a handle or the local part of an address is not an alias, so a
+      handle always wins. The list puts the handle in a new mention.
+    - The message box and the edit box of a message suggest people and agents while the
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
@@ -892,7 +918,7 @@ MCP clients. The app has no UI-only path.
   - A change and a delete show at once, before the answer of the server. The new text shows with
     the edited mark. A deleted message shows as deleted, and the confirmation closes.
   - After a refusal, the message shows as before, with a notice of the reason. For a change, the
-    edit box opens again with the new text, so the person does not write it again.
+    edit box opens again with the new body, so the person does not write it again.
   - A change or a delete has one attempt. It does not wait in an outbox, and it does not stay
     after a reload of the page.
   - The calls for one message run one at a time, in the order of the changes. When the person
@@ -1140,7 +1166,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
@@ -1215,8 +1241,8 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
 | Where | Key | What |
 | --- | --- | --- |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
-| IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
-| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the text in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
+| IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the body and its text, the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
+| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the body in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a
   sign-in as a different person remove the records of the person from before. This runs also when

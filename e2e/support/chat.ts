@@ -108,7 +108,7 @@ export async function openRoom(page: Page, roomId: string): Promise<void> {
 
 /** The box for a new message of a room with the name `name`. */
 export function composer(page: Page, name: string) {
-	return page.getByPlaceholder(`Message #${name}`);
+	return page.getByRole("textbox", { name: `Message to ${name}` });
 }
 
 /**

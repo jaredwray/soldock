@@ -75,6 +75,25 @@ describe("the messages that wait, after a reload of the page", () => {
 		expect(message).toMatchObject({ state: "failed", error: "No connection.", uncertain: true });
 	});
 
+	// The record is in the storage of the browser, which the contract does not check.
+	it("keep the body of a message, and drop a body that the contract does not take", () => {
+		const body = {
+			type: "doc" as const,
+			content: [{ type: "paragraph" as const, content: [{ type: "text" as const, text: "Hi" }] }],
+		};
+		expect(toSaved(pending("k1", { body }), "prn_ada", "rm_1").body).toEqual(body);
+		const [kept, dropped] = fromSaved(
+			[
+				saved("k1", { body, created_at: minutesAgo(3) }),
+				saved("k2", { body: { type: "doc", content: [{ type: "heading" }] } as never, created_at: minutesAgo(1) }),
+			],
+			NOW,
+		);
+		expect(kept?.body).toEqual(body);
+		expect(dropped).toMatchObject({ key: "k2", text: "text k2" });
+		expect(dropped?.body).toBeUndefined();
+	});
+
 	it("have the person and the room of the message in their record", () => {
 		expect(toSaved(pending("k1", { state: "sending" }), "prn_ada", "rm_1")).toEqual({
 			key: "k1",

@@ -190,8 +190,15 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 	let outbox = outboxes.get(name);
 	if (!outbox) {
 		outbox = createOutbox({
-			post: async (text, key) =>
-				(await api.call("chat.post_message", { room_id: roomId, markdown: text, idempotency_key: key })).message,
+			// A message from before the box had formats has no body: its text is the Markdown that the person typed.
+			post: async ({ text, body, key }) =>
+				(
+					await api.call("chat.post_message", {
+						room_id: roomId,
+						...(body ? { body } : { markdown: text }),
+						idempotency_key: key,
+					})
+				).message,
 			describe: errorMessage,
 			active: () => currentAccount() === ownId,
 		});

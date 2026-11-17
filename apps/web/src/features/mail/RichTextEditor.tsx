@@ -33,7 +33,7 @@ import {
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
-interface Tool {
+export interface Tool {
 	name: string;
 	icon: IconName;
 	/** The value of aria-keyshortcuts. */
@@ -47,7 +47,7 @@ interface Tool {
 	groupStart?: boolean;
 }
 
-function shortcut(key: string, shift = false): Pick<Tool, "keys" | "hint"> {
+export function shortcut(key: string, shift = false): Pick<Tool, "keys" | "hint"> {
 	return {
 		keys: [MAC ? "Meta" : "Control", ...(shift ? ["Shift"] : []), key].join("+"),
 		hint: MAC ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`,
@@ -106,7 +106,7 @@ const TOOLS: readonly Tool[] = [
 ];
 
 /** Shows the placeholder in the first paragraph while the document is empty. */
-function placeholderPlugin(text: string): Plugin {
+export function placeholderPlugin(text: string): Plugin {
 	return new Plugin({
 		props: {
 			decorations(state) {
@@ -138,11 +138,9 @@ interface RichTextEditorProps {
 export function RichTextEditor({ initialDoc, onChange, disabled, label, placeholder, autofocus }: RichTextEditorProps) {
 	const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
 	const [refocus, setRefocus] = useState(0);
-	const [focusIndex, setFocusIndex] = useState(0);
 	const editorId = useId();
 	const mountRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
-	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const onChangeRef = useRef(onChange);
 	const disabledRef = useRef(disabled);
 	// The first props make the view once. Later changes to them do not make a new view.
@@ -239,54 +237,10 @@ export function RichTextEditor({ initialDoc, onChange, disabled, label, placehol
 		closeLink();
 	}
 
-	function onToolbarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-		const last = TOOLS.length - 1;
-		const moves: Record<string, number> = {
-			ArrowRight: focusIndex === last ? 0 : focusIndex + 1,
-			ArrowLeft: focusIndex === 0 ? last : focusIndex - 1,
-			Home: 0,
-			End: last,
-		};
-		const next = moves[event.key];
-		if (next === undefined) return;
-		event.preventDefault();
-		setFocusIndex(next);
-		buttonRefs.current[next]?.focus();
-	}
-
 	return (
 		<div className="rich-editor">
 			<div ref={mountRef} className="rich-editor-mount" />
-			<div
-				role="toolbar"
-				aria-label="Formatting"
-				aria-controls={editorId}
-				className="format-toolbar"
-				onKeyDown={onToolbarKeyDown}
-			>
-				{TOOLS.map((tool, index) => (
-					<button
-						key={tool.name}
-						ref={(element) => {
-							buttonRefs.current[index] = element;
-						}}
-						type="button"
-						className={`icon-button icon-button-small format-button${tool.groupStart ? " format-group-start" : ""}`}
-						aria-label={tool.name}
-						aria-pressed={tool.pressed ? tool.pressed(editorState) : undefined}
-						aria-keyshortcuts={tool.keys}
-						title={`${tool.name} (${tool.hint})`}
-						tabIndex={index === focusIndex ? 0 : -1}
-						disabled={disabled}
-						// A click must not take the focus, so the selection in the editor stays.
-						onMouseDown={(event) => event.preventDefault()}
-						onFocus={() => setFocusIndex(index)}
-						onClick={() => run(tool)}
-					>
-						<Icon name={tool.icon} size={18} />
-					</button>
-				))}
-			</div>
+			<FormatToolbar tools={TOOLS} state={editorState} editorId={editorId} disabled={disabled} onRun={run} />
 			{linkTarget &&
 				createPortal(
 					<LinkDialog
@@ -301,14 +255,82 @@ export function RichTextEditor({ initialDoc, onChange, disabled, label, placehol
 	);
 }
 
-interface LinkDialogProps {
+interface FormatToolbarProps {
+	tools: readonly Tool[];
+	/** The state of the editor, for the pressed buttons. */
+	state: EditorState;
+	/** The id of the editor that the toolbar controls. */
+	editorId: string;
+	disabled: boolean;
+	onRun: (tool: Tool) => void;
+	className?: string;
+}
+
+/**
+ * The formatting buttons of an editor. The toolbar is one tab stop: the arrow keys, Home and End move
+ * between its buttons. A click does not take the focus, so the selection in the editor stays.
+ */
+export function FormatToolbar({ tools, state, editorId, disabled, onRun, className }: FormatToolbarProps) {
+	const [focusIndex, setFocusIndex] = useState(0);
+	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+	function onToolbarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+		const last = tools.length - 1;
+		const moves: Record<string, number> = {
+			ArrowRight: focusIndex === last ? 0 : focusIndex + 1,
+			ArrowLeft: focusIndex === 0 ? last : focusIndex - 1,
+			Home: 0,
+			End: last,
+		};
+		const next = moves[event.key];
+		if (next === undefined) return;
+		event.preventDefault();
+		setFocusIndex(next);
+		buttonRefs.current[next]?.focus();
+	}
+
+	return (
+		<div
+			role="toolbar"
+			aria-label="Formatting"
+			aria-controls={editorId}
+			className={className ? `format-toolbar ${className}` : "format-toolbar"}
+			onKeyDown={onToolbarKeyDown}
+		>
+			{tools.map((tool, index) => (
+				<button
+					key={tool.name}
+					ref={(element) => {
+						buttonRefs.current[index] = element;
+					}}
+					type="button"
+					className={`icon-button icon-button-small format-button${tool.groupStart ? " format-group-start" : ""}`}
+					aria-label={tool.name}
+					aria-pressed={tool.pressed ? tool.pressed(state) : undefined}
+					aria-keyshortcuts={tool.keys}
+					title={`${tool.name} (${tool.hint})`}
+					tabIndex={index === focusIndex ? 0 : -1}
+					disabled={disabled}
+					// A click must not take the focus, so the selection in the editor stays.
+					onMouseDown={(event) => event.preventDefault()}
+					onFocus={() => setFocusIndex(index)}
+					onClick={() => onRun(tool)}
+				>
+					<Icon name={tool.icon} size={18} />
+				</button>
+			))}
+		</div>
+	);
+}
+
+export interface LinkDialogProps {
 	target: LinkTarget;
 	onApply: (href: string, text: string) => void;
 	onRemove: () => void;
 	onClose: () => void;
 }
 
-function LinkDialog({ target, onApply, onRemove, onClose }: LinkDialogProps) {
+export function LinkDialog({ target, onApply, onRemove, onClose }: LinkDialogProps) {
 	const [text, setText] = useState(target.text);
 	const [address, setAddress] = useState(target.href ?? "");
 	const [error, setError] = useState<string | null>(null);

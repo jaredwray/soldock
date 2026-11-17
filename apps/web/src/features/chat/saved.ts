@@ -1,3 +1,4 @@
+import { ChatBody } from "@soldock/contracts";
 import type { PendingMessage } from "./outbox.ts";
 
 // The rules for the messages that wait for the server, across a reload of the page. It has no DOM
@@ -14,6 +15,8 @@ export interface SavedMessage {
 	owner: string;
 	roomId: string;
 	text: string;
+	/** The body of the message. A record from before the box had formats has none. */
+	body?: ChatBody;
 	created_at: string;
 	state: PendingMessage["state"];
 	error: string | null;
@@ -36,6 +39,7 @@ export function toSaved(message: PendingMessage, owner: string, roomId: string):
 		owner,
 		roomId,
 		text: message.text,
+		...(message.body ? { body: message.body } : {}),
 		created_at: message.created_at,
 		state: message.state,
 		error: message.error,
@@ -57,9 +61,13 @@ export function fromSaved(saved: readonly SavedMessage[], now: number): PendingM
 	return [...saved]
 		.sort((a, b) => a.created_at.localeCompare(b.created_at))
 		.map((record) => {
+			// The record is from the storage of the browser: a body that the contract does not take goes, and
+			// the text goes out as Markdown, as for a record from before the box had formats.
+			const body = record.body === undefined ? undefined : ChatBody.safeParse(record.body).data;
 			const message: PendingMessage = {
 				key: record.key,
 				text: record.text,
+				...(body ? { body } : {}),
 				created_at: record.created_at,
 				state: "waiting",
 				error: null,

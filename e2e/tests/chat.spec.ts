@@ -52,7 +52,7 @@ test("a send shows at once, and the room stores it one time", async ({ browser }
 	await composer(page, name).press("Enter");
 	// The row shows, and the box is empty, while the server has not answered.
 	await expect(page.locator(".chat-message-pending").filter({ hasText: text })).toHaveCount(1);
-	await expect(composer(page, name)).toHaveValue("");
+	await expect(composer(page, name)).toHaveText("");
 	answer.release();
 	await expect
 		.poll(async () => (await newest(nadia, roomId)).filter((message) => message.text === text).length)
@@ -150,15 +150,16 @@ test("a change and a delete show at once, and come back after a refusal", async 
 	await page.route("**/api/v1/chat/rooms/*/messages/*/edit", (route) => route.abort());
 	await row.hover();
 	await row.getByRole("button", { name: /Change your message/ }).click();
-	await page.locator(".chat-edit-draft").fill("refused text");
+	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editBox.fill("refused text");
 	await page.getByRole("button", { name: "Save" }).click();
-	await expect(page.locator(".chat-edit-draft")).toHaveValue("refused text");
+	await expect(editBox).toHaveText("refused text");
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
 
 	// The change goes through: the new text shows at once, with the edited mark.
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 	const editAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/edit", "POST");
-	await page.locator(".chat-edit-draft").fill("changed text");
+	await editBox.fill("changed text");
 	await page.getByRole("button", { name: "Save" }).click();
 	const changed = page.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(changed.locator(".chat-edited")).toBeVisible();
@@ -273,19 +274,19 @@ test("the draft of a room stays after a change of room and a reload, and a sign-
 
 	await composer(page, first).fill("a draft that stays");
 	await page.getByRole("link", { name: second }).first().click();
-	await expect(composer(page, second)).toHaveValue("");
+	await expect(composer(page, second)).toHaveText("");
 	await page.getByRole("link", { name: first }).first().click();
-	await expect(composer(page, first)).toHaveValue("a draft that stays");
+	await expect(composer(page, first)).toHaveText("a draft that stays");
 	await page.reload();
-	await expect(composer(page, first)).toHaveValue("a draft that stays");
+	await expect(composer(page, first)).toHaveText("a draft that stays");
 
 	// A send removes the draft.
 	await openRoom(page, secondId);
 	await composer(page, second).fill("a draft to send");
 	await composer(page, second).press("Enter");
-	await expect(composer(page, second)).toHaveValue("");
+	await expect(composer(page, second)).toHaveText("");
 	await page.reload();
-	await expect(composer(page, second)).toHaveValue("");
+	await expect(composer(page, second)).toHaveText("");
 
 	// A sign-out removes each draft from the browser.
 	await page.evaluate(() => fetch("/auth/sign-out", { method: "POST" }));
@@ -439,7 +440,7 @@ test("a reaction from the picker shows on the message, a reaction of a different
 });
 
 // Layer 4 (jaredwray/soldock#73): rich text.
-test("a message shows its formats, shows HTML as text, and the box sends Markdown that an edit keeps", async ({
+test("a message shows its formats, shows HTML as text, and the box makes formats that an edit keeps", async ({
 	browser,
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
@@ -478,18 +479,81 @@ test("a message shows its formats, shows HTML as text, and the box sends Markdow
 	await expect(lines.locator(".chat-text br")).toHaveCount(1);
 	await expect(lines.locator(".chat-text")).toHaveText("line oneline two");
 
-	// The box sends Markdown. An edit opens with the Markdown of the message, and keeps its format.
-	await composer(page, name).fill("I can do **that**");
-	await composer(page, name).press("Enter");
+	// Markdown shortcuts work while the person types: **that** becomes bold.
+	const box = composer(page, name);
+	await box.pressSequentially("I can do **that**");
+	await expect(box.locator("strong")).toHaveText("that");
+	await box.press("Enter");
 	const mine = page.locator(".chat-message").filter({ hasText: "I can do that" });
 	await expect(mine.locator(".chat-text strong")).toHaveText("that");
+
+	// An edit opens with the formats of the message, not with Markdown. The toolbar changes the formats.
 	await mine.hover();
 	await mine.getByRole("button", { name: /^Change your message/ }).click();
-	const box = page.getByRole("textbox", { name: "New text of the message" });
-	await expect(box).toHaveValue("I can do **that**");
-	await box.fill("I can do **that** *now*");
+	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await expect(editBox).toHaveText("I can do that");
+	await expect(editBox.locator("strong")).toHaveText("that");
+	await editBox.press("End");
+	const tools = page.locator(".chat-edit").getByRole("toolbar", { name: "Formatting" });
+	await expect(tools.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+	await tools.getByRole("button", { name: "Bold" }).click();
+	await editBox.pressSequentially(" ");
+	await tools.getByRole("button", { name: "Italic" }).click();
+	await editBox.pressSequentially("now");
 	await page.getByRole("button", { name: "Save" }).click();
 	const edited = page.locator(".chat-message").filter({ hasText: "I can do that now" });
 	await expect(edited.locator(".chat-text em")).toHaveText("now");
 	await expect(edited.locator(".chat-text strong")).toHaveText("that");
+});
+
+test("the box makes lists, quotes and code blocks with Markdown shortcuts, and takes a mention from its list", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("Box");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+	const box = composer(page, name);
+
+	// "- " makes a list. Shift+Enter makes the next item, and Enter sends.
+	await box.pressSequentially("- first");
+	await box.press("Shift+Enter");
+	await box.pressSequentially("second");
+	await expect(box.locator("ul li")).toHaveCount(2);
+	await box.press("Enter");
+	const list = page.locator(".chat-message").filter({ hasText: "first" });
+	await expect(list.locator(".chat-text ul li")).toHaveText(["first", "second"]);
+	await expect(box).toHaveText("");
+
+	// "> " makes a quote. "```" makes a code block, which keeps its lines.
+	await box.pressSequentially("> quoted words");
+	await box.press("Enter");
+	await expect(page.locator(".chat-message blockquote").filter({ hasText: "quoted words" })).toBeVisible();
+	await box.pressSequentially("```");
+	await expect(box.locator("pre")).toHaveCount(1);
+	await box.pressSequentially("make a");
+	await box.press("Shift+Enter");
+	await box.pressSequentially("make b");
+	await box.press("Enter");
+	await expect(page.locator(".chat-message pre").filter({ hasText: "make a" })).toHaveText("make a\nmake b");
+
+	// A mark in a word stays text: 2*3*4 is not italic.
+	await box.pressSequentially("2*3*4 = 24");
+	await expect(box.locator("em")).toHaveCount(0);
+
+	// "@" opens the list of people. Enter takes a suggestion, and does not send.
+	await box.press("Control+a");
+	await box.press("Delete");
+	await box.pressSequentially("thanks @tom");
+	const suggestion = page.getByRole("option", { name: /Tomasz/ });
+	await expect(suggestion).toBeVisible();
+	await box.press("Enter");
+	await expect(page.getByRole("listbox", { name: "People and agents to mention" })).toHaveCount(0);
+	await expect(box).toHaveText(/^thanks @tomasz\s$/);
+	await box.pressSequentially("for the review");
+	await box.press("Enter");
+	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
+	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
 });

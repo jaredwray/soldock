@@ -1,4 +1,4 @@
-import { ApiError, type ChatMessage } from "@soldock/contracts";
+import { ApiError, type ChatBody, type ChatMessage } from "@soldock/contracts";
 
 // The messages of one room that the person sent and that the server does not have yet. It has no DOM
 // and no network of its own, so apps/web/test checks it.
@@ -16,7 +16,10 @@ export interface PendingMessage {
 	 * the key of the row, from the send to the stored message.
 	 */
 	key: string;
+	/** The plain text of the message. Without a body (a message from before the box had formats), the Markdown that the person typed. */
 	text: string;
+	/** The body of the message. A message from before the box had formats has none. */
+	body?: ChatBody;
 	/** The time of the send on the device. */
 	created_at: string;
 	/** `waiting`: a message before it is in the line. `sending`: the call runs, or waits for a new attempt. */
@@ -51,8 +54,8 @@ export interface OutboxState {
 }
 
 export interface OutboxOptions {
-	/** Posts the text with the idempotency key, and returns the stored message. */
-	post(text: string, key: string): Promise<ChatMessage>;
+	/** Posts the message with the idempotency key, and returns the stored message. */
+	post(message: Pick<PendingMessage, "text" | "body" | "key">): Promise<ChatMessage>;
 	/** The text of a failure for the person. */
 	describe(error: unknown): string;
 	/**
@@ -69,7 +72,7 @@ export interface Outbox {
 	/** The list that shows the room now. Null while no list shows it. */
 	attach(view: OutboxView | null): void;
 	/** Adds a message to the end of the line. */
-	send(text: string): void;
+	send(text: string, body?: ChatBody): void;
 	/**
 	 * Puts the messages from before a reload of the page at the start of the line, in their order.
 	 * They are older than each message that the person sent after the reload. A message that the
@@ -158,7 +161,7 @@ export function createOutbox(options: OutboxOptions): Outbox {
 			stop();
 			return;
 		}
-		options.post(message.text, message.key).then(
+		options.post(message).then(
 			(stored) => {
 				// An outbox that stopped shows nothing. The server has the message, and the next load of the room gets it.
 				if (stopped) return;
@@ -209,11 +212,12 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		attach(next) {
 			view = next;
 		},
-		send(text) {
+		send(text, body) {
 			if (stopped) return;
 			const message: PendingMessage = {
 				key: crypto.randomUUID(),
 				text,
+				...(body ? { body } : {}),
 				created_at: new Date().toISOString(),
 				state: "waiting",
 				error: null,

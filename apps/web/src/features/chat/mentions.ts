@@ -6,7 +6,8 @@ import { recipientKeyAction } from "../mail/compose.ts";
 // A mention is plain text in a message: "@" and the handle of a person or an agent. The handle is the
 // part of the address before the "@", for example "@ada" for ada@example.com. When two principals have
 // the same part (on two mail domains), each of them has the full address as its handle, for example
-// "@ada@example.org". The room stores the text only. Each client finds the principal of a handle in
+// "@ada@example.org". A name alias (the first name, or the full name without spaces) finds a principal
+// too, when only one principal has it and it is no handle. The room stores the text only. Each client finds the principal of a handle in
 // the directory, so a person and an agent write and read the same mention.
 
 /** The fields of a principal that a mention uses. */
@@ -14,7 +15,9 @@ export type MentionPerson = Pick<Principal, "id" | "kind" | "display_name" | "ad
 
 /** The handles of the directory: the principal of each handle, and the handle of each principal. */
 export interface MentionDirectory<P extends MentionPerson = MentionPerson> {
-	/** The principal of each handle, by the handle in lowercase. A full address is always a handle. */
+	/**
+	 * The principal of each handle and each name alias, in lowercase. A full address is always a handle.
+	 */
 	byHandle: ReadonlyMap<string, P>;
 	/** The handle that a new mention of a principal uses, by the id of the principal. */
 	handleOf: ReadonlyMap<string, string>;
@@ -74,7 +77,47 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 			handleOf.set(person.id, address);
 		}
 	}
+	// A name alias finds a principal too, so "@ada" for "Ada Lovelace" is a mention when only she has
+	// that name. An alias that a different principal has, or that is a handle or a local part, is not
+	// an alias: a handle always wins. A new mention from the list uses the handle.
+	const aliasCount = new Map<string, number>();
+	const aliasesOf = new Map<string, string[]>();
+	for (const person of people) {
+		const aliases = nameAliases(person.display_name).filter((alias) => !locals.has(alias) && !byHandle.has(alias));
+		aliasesOf.set(person.id, aliases);
+		for (const alias of aliases) aliasCount.set(alias, (aliasCount.get(alias) ?? 0) + 1);
+	}
+	for (const person of people) {
+		for (const alias of aliasesOf.get(person.id) ?? []) {
+			if (aliasCount.get(alias) === 1) byHandle.set(alias, person);
+		}
+	}
 	return { byHandle, handleOf, byId, people };
+}
+
+const LOCAL_ONLY = new RegExp(`^${LOCAL}$`);
+
+/**
+ * The name aliases of a display name: the first word, and the full name without spaces, in lowercase
+ * and without accents. "Ada Lovelace" has "ada" and "adalovelace". An alias must have the form of a
+ * handle, so a name in a different script has no alias.
+ */
+function nameAliases(displayName: string): string[] {
+	const words = displayName
+		.normalize("NFD")
+		.replace(/\p{M}/gu, "")
+		.toLowerCase()
+		.split(/\s+/)
+		.filter((word) => word !== "");
+	const aliases = new Set([words[0] ?? "", words.join("")]);
+	return [...aliases].filter((alias) => LOCAL_ONLY.test(alias));
+}
+
+/** What the suggestions of a mention need: the handles of the directory, the members of the room, and the writer. */
+export interface MentionContext {
+	directory: MentionDirectory;
+	memberIds: ReadonlySet<string>;
+	ownId: string;
 }
 
 /** One part of the text of a message: plain text, or a mention with its principal. */
