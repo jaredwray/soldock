@@ -1,12 +1,16 @@
 import {
+	ApiError,
 	type ChatWebhookEvent,
 	type DriveWebhookEvent,
+	type MAIL_WEBHOOK_EVENTS,
 	type WebhookDomain,
 	type WebhookEndpoint,
 	webhookDomain,
 } from "@soldock/contracts";
 import { api, errorMessage } from "../../lib/api.ts";
-import { type EventChoice, type ListedSubscription, planChanges } from "./webhookModel.ts";
+import { applyPlan, type EventChoice, type ListedSubscription } from "./webhookModel.ts";
+
+type MailWebhookEvent = (typeof MAIL_WEBHOOK_EVENTS)[number];
 
 /**
  * The subscriptions of one product. With a target, the subscriptions of that target that the person can see.
@@ -56,7 +60,7 @@ async function createSubscription(endpoint: WebhookEndpoint, choice: EventChoice
 		domain === "mail"
 			? await api.call("mail.create_webhook_subscription", {
 					...input,
-					event: "mail.inbox.updated",
+					event: choice.event as MailWebhookEvent,
 					mailbox_id: choice.targetId,
 				})
 			: domain === "chat"
@@ -89,33 +93,22 @@ export interface AppliedChanges {
 }
 
 /**
- * Changes the subscriptions of one endpoint to the selected events. The deletes run first, because a
- * delete makes room under the limits. A call that fails does not stop the calls that follow it.
+ * Changes the subscriptions of one endpoint to the selected events. See `applyPlan`.
+ * A subscription that a different person or tab deleted first counts as deleted.
  */
 export async function applyEvents(
 	endpoint: WebhookEndpoint,
 	current: readonly ListedSubscription[],
 	selected: ReadonlySet<string>,
 ): Promise<AppliedChanges> {
-	const plan = planChanges(current, selected);
-	let subscriptions = [...current];
-	const failures: string[] = [];
-	for (const row of plan.remove) {
-		try {
-			await deleteSubscription(row);
-			subscriptions = subscriptions.filter((candidate) => candidate.id !== row.id);
-		} catch (caught) {
-			failures.push(errorMessage(caught));
-		}
-	}
-	for (const choice of plan.add) {
-		try {
-			subscriptions.push(await createSubscription(endpoint, choice));
-		} catch (caught) {
-			failures.push(errorMessage(caught));
-		}
-	}
-	return { subscriptions, failures };
+	const { subscriptions, errors } = await applyPlan(current, selected, {
+		remove: (row) =>
+			deleteSubscription(row).catch((caught) => {
+				if (!(caught instanceof ApiError && caught.code === "not_found")) throw caught;
+			}),
+		add: (choice) => createSubscription(endpoint, choice),
+	});
+	return { subscriptions, failures: errors.map(errorMessage) };
 }
 
 /** One text for the calls that failed. The same message shows one time. */

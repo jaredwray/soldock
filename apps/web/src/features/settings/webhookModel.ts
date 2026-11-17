@@ -16,6 +16,16 @@ export function eventsOf(domain: WebhookDomain): readonly WebhookEvent[] {
 	return DRIVE_WEBHOOK_EVENTS;
 }
 
+/** Only a shared drive sends these events. Your drive and the drive of an agent have no members. */
+const SHARED_DRIVE_EVENTS: readonly WebhookEvent[] = ["drive.members.changed", "drive.deleted"];
+
+/** The events that one target can send. The id of a shared drive starts with `drv_`. */
+export function eventsFor(domain: WebhookDomain, targetId: string): readonly WebhookEvent[] {
+	const events = eventsOf(domain);
+	if (domain !== "drive" || targetId.startsWith("drv_")) return events;
+	return events.filter((event) => !SHARED_DRIVE_EVENTS.includes(event));
+}
+
 /** The name of an event next to its check box. */
 export const EVENT_LABELS: Record<WebhookEvent, string> = {
 	"mail.inbox.updated": "New mail in the inbox",
@@ -142,11 +152,45 @@ export function groupByTarget(subscriptions: readonly ListedSubscription[]): Tar
 	return groups;
 }
 
-/** A short text for the selected events of one product: the names of a few events, or their number. */
-export function eventSummary(domain: WebhookDomain, events: readonly WebhookEvent[]): string {
-	const all = eventsOf(domain);
-	const chosen = all.filter((event) => events.includes(event));
-	if (all.length > 1 && chosen.length === all.length) return "All events";
+/**
+ * A short text for the selected events of one target: "All events" when the target can send no more,
+ * the names of a few events, or their number.
+ */
+export function eventSummary(domain: WebhookDomain, targetId: string, events: readonly WebhookEvent[]): string {
+	const all = eventsFor(domain, targetId);
+	const chosen = eventsOf(domain).filter((event) => events.includes(event));
+	if (all.length > 1 && all.every((event) => chosen.includes(event))) return "All events";
 	if (chosen.length <= 3) return chosen.map((event) => EVENT_LABELS[event]).join(", ");
-	return `${chosen.length} of ${all.length} events`;
+	return `${chosen.length} events`;
+}
+
+/**
+ * Changes the subscriptions of one endpoint to the selected events, with the calls of the caller.
+ * The deletes run first, because a delete makes room under the limits. A call that fails does not
+ * stop the calls that follow it. The result has the subscriptions after the calls, and each error.
+ */
+export async function applyPlan<T extends EventChoice & { id: string }>(
+	current: readonly T[],
+	selected: ReadonlySet<string>,
+	calls: { remove: (row: T) => Promise<void>; add: (choice: EventChoice) => Promise<T> },
+): Promise<{ subscriptions: T[]; errors: unknown[] }> {
+	const plan = planChanges(current, selected);
+	let subscriptions = [...current];
+	const errors: unknown[] = [];
+	for (const row of plan.remove) {
+		try {
+			await calls.remove(row);
+			subscriptions = subscriptions.filter((candidate) => candidate.id !== row.id);
+		} catch (caught) {
+			errors.push(caught);
+		}
+	}
+	for (const choice of plan.add) {
+		try {
+			subscriptions.push(await calls.add(choice));
+		} catch (caught) {
+			errors.push(caught);
+		}
+	}
+	return { subscriptions, errors };
 }

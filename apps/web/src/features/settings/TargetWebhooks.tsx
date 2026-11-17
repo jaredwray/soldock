@@ -7,7 +7,7 @@ import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { EventPicker } from "./EventPicker.tsx";
-import { EventLines, keysOf, LastDelivery, useWebhookDomains } from "./Webhooks.tsx";
+import { EventLines, keysOf, LastDelivery, stoppedKeysOf, useLatest, useWebhookDomains } from "./Webhooks.tsx";
 import { applyEvents, failureText, listSubscriptions } from "./webhookApi.ts";
 import { type ListedSubscription, stoppedText } from "./webhookModel.ts";
 
@@ -56,19 +56,25 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 	const [dialog, setDialog] = useState<{ row: TargetRow | null } | null>(null);
 	const headingId = useId();
 
-	const load = useCallback(async () => {
-		try {
-			const [rows, endpoints] = await Promise.all([
-				Promise.all(allowed.map((domain) => listSubscriptions(domain, targetId))),
-				canCreate ? api.call("webhooks.list_endpoints").then((result) => result.endpoints) : [],
-			]);
-			setSubscriptions(rows.flat());
+	const listAll = useCallback(
+		async () => (await Promise.all(allowed.map((domain) => listSubscriptions(domain, targetId)))).flat(),
+		[allowed, targetId],
+	);
+	const fetchAll = useCallback(
+		() =>
+			Promise.all([listAll(), canCreate ? api.call("webhooks.list_endpoints").then((result) => result.endpoints) : []]),
+		[listAll, canCreate],
+	);
+	// The buttons are off while the list loads, so a dialog never opens with the events of an old list.
+	const { load, loading } = useLatest(
+		fetchAll,
+		([listed, endpoints]) => {
+			setSubscriptions(listed);
 			setOwn(endpoints);
 			setError(null);
-		} catch (caught) {
-			setError(errorMessage(caught));
-		}
-	}, [allowed, targetId, canCreate]);
+		},
+		(caught) => setError(errorMessage(caught)),
+	);
 
 	useEffect(() => {
 		void load();
@@ -97,7 +103,7 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 						type="button"
 						className="button button-small"
 						onClick={() => setDialog({ row: null })}
-						disabled={rows === null}
+						disabled={rows === null || loading}
 					>
 						<Icon name="plus" size={16} />
 						Add webhook
@@ -145,13 +151,14 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 													</div>
 												)}
 											</td>
-											<LastDelivery endpoint={endpoint} />
+											<LastDelivery endpoint={endpoint} unknown={endpoint.created_by !== me} />
 											<td className="cell-actions">
 												<button
 													type="button"
 													className="button button-small"
 													onClick={() => setDialog({ row })}
 													aria-label={`Edit events of ${endpoint.label}`}
+													disabled={loading}
 												>
 													Edit events
 												</button>
@@ -172,6 +179,7 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 					targetName={targetName}
 					domains={allowed}
 					canAdd={(endpoint) => canCreate && endpoint.created_by === me && endpoint.status === "active"}
+					refresh={async (id) => (await listAll()).filter((row) => row.endpoint.id === id)}
 					onClose={() => {
 						setDialog(null);
 						// A save that failed in part changed some events, so the list loads again.
@@ -199,6 +207,7 @@ function TargetEventsDialog({
 	targetName,
 	domains,
 	canAdd,
+	refresh,
 	onClose,
 	onSaved,
 }: {
@@ -208,6 +217,8 @@ function TargetEventsDialog({
 	targetName: string;
 	domains: readonly WebhookDomain[];
 	canAdd: (endpoint: WebhookEndpoint) => boolean;
+	/** Gets the subscriptions of an endpoint for this target from the server again. */
+	refresh: (endpointId: string) => Promise<ListedSubscription[]>;
 	onClose: () => void;
 	onSaved: (endpoint: WebhookEndpoint) => void;
 }) {
@@ -215,9 +226,12 @@ function TargetEventsDialog({
 	// The subscriptions as the server has them. A save that fails in part changes them.
 	const [current, setCurrent] = useState<readonly ListedSubscription[]>(row?.subscriptions ?? []);
 	const [selected, setSelected] = useState(() => keysOf(row?.subscriptions ?? []));
+	// After a save that failed in part, the webhook has some of the events. The menu then stays on it.
+	const [started, setStarted] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const selectId = useId();
+	const hintId = useId();
 	const endpoint = row?.endpoint ?? addable.find((candidate) => candidate.id === endpointId);
 	const adds = endpoint ? canAdd(endpoint) : false;
 
@@ -227,8 +241,10 @@ function TargetEventsDialog({
 		setBusy(true);
 		setError(null);
 		const applied = await applyEvents(endpoint, current, selected);
-		setCurrent(applied.subscriptions);
 		if (applied.failures.length > 0) {
+			// A different person or tab can change the events. The next save starts from the server state.
+			setCurrent(await refresh(endpoint.id).catch(() => applied.subscriptions));
+			setStarted(true);
 			setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
 			setBusy(false);
 			return;
@@ -264,25 +280,30 @@ function TargetEventsDialog({
 									label: candidate.label,
 									description: candidate.url,
 								}))}
-								onChange={(id) => {
-									setEndpointId(id);
-									setCurrent([]);
-								}}
-								disabled={busy}
+								onChange={setEndpointId}
+								disabled={busy || started}
+								data-autofocus
 							/>
 							<p className="field-hint">Add a different webhook in Settings.</p>
 						</div>
 					)}
 					{endpoint && (
 						<>
-							{!adds && <p className="field-hint">You can clear an event here. You cannot add one.</p>}
+							{!adds && (
+								<p id={hintId} className="field-hint">
+									You can clear an event here. You cannot set it again.
+								</p>
+							)}
 							<EventPicker
 								groups={domains.map((domain) => ({ domain, targets: [{ id: targetId, name: targetName }] }))}
 								selected={selected}
 								onChange={setSelected}
 								canAdd={adds}
 								saved={keysOf(current)}
+								stopped={stoppedKeysOf(current)}
 								disabled={busy}
+								describedBy={adds ? undefined : hintId}
+								autofocus={row !== null}
 							/>
 						</>
 					)}

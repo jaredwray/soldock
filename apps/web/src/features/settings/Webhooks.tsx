@@ -9,7 +9,7 @@ import {
 	webhookHeaderNameProblem,
 	webhookScope,
 } from "@soldock/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -53,6 +53,38 @@ export function keysOf(subscriptions: readonly ListedSubscription[]): Set<string
 	return new Set(subscriptions.map((row) => choiceKey(row.event, row.targetId)));
 }
 
+/** The keys of the subscriptions that stopped. */
+export function stoppedKeysOf(subscriptions: readonly ListedSubscription[]): Set<string> {
+	return keysOf(subscriptions.filter((row) => row.status === "disabled"));
+}
+
+/**
+ * Runs `fetch` and gives its result to `apply`, only when no later run started in that time. A list
+ * that loads two times at once then keeps the newer answer. `loading` is true while a run waits.
+ */
+export function useLatest<T>(fetch: () => Promise<T>, apply: (result: T) => void, fail: (error: unknown) => void) {
+	const sequence = useRef(0);
+	const [loading, setLoading] = useState(true);
+	const handlers = useRef({ apply, fail });
+	useEffect(() => {
+		handlers.current = { apply, fail };
+	});
+	const load = useCallback(async () => {
+		sequence.current += 1;
+		const run = sequence.current;
+		setLoading(true);
+		try {
+			const result = await fetch();
+			if (run === sequence.current) handlers.current.apply(result);
+		} catch (caught) {
+			if (run === sequence.current) handlers.current.fail(caught);
+		} finally {
+			if (run === sequence.current) setLoading(false);
+		}
+	}, [fetch]);
+	return { load, loading };
+}
+
 /**
  * The events that a webhook sends, as one line for each product and target. `targetName` gives the
  * name of a target. Leave it out when each line is for the same target.
@@ -75,7 +107,7 @@ export function EventLines({
 						{targetName && ` · ${targetName(group.domain, group.targetId)}`}
 					</span>
 					<span>
-						{eventSummary(group.domain, group.events)}
+						{eventSummary(group.domain, group.targetId, group.events)}
 						{group.stoppedCount > 0 && (
 							<span className="event-line-stopped">
 								{" "}
@@ -90,8 +122,19 @@ export function EventLines({
 	);
 }
 
-/** The cell of the last delivery of an endpoint. A narrow screen does not show this column. */
-export function LastDelivery({ endpoint }: { endpoint: WebhookEndpoint }) {
+/**
+ * The cell of the last delivery of an endpoint. A narrow screen does not show this column.
+ * `unknown`: the server shows the deliveries only to the creator of the webhook.
+ */
+export function LastDelivery({ endpoint, unknown }: { endpoint: WebhookEndpoint; unknown?: boolean }) {
+	if (unknown) {
+		return (
+			<td className="cell-date col-optional">
+				<span aria-hidden="true">—</span>
+				<span className="visually-hidden">Only the creator of the webhook sees its deliveries</span>
+			</td>
+		);
+	}
 	return (
 		<td
 			className="cell-date col-optional"
@@ -119,22 +162,24 @@ export function WebhookSettings() {
 	const [error, setError] = useState<string | null>(null);
 	const [dialog, setDialog] = useState<{ endpoint: WebhookEndpoint | null } | null>(null);
 	const [deleting, setDeleting] = useState<WebhookEndpoint | null>(null);
-	const [created, setCreated] = useState<CreatedWebhookEndpoint | null>(null);
+	const [created, setCreated] = useState<{ endpoint: CreatedWebhookEndpoint; problem: string | null } | null>(null);
 	const headingId = useId();
 
-	const load = useCallback(async () => {
-		try {
-			const [listed, ...rows] = await Promise.all([
-				api.call("webhooks.list_endpoints"),
-				...domains.map((domain) => listSubscriptions(domain)),
-			]);
+	const listAll = useCallback(
+		async () => (await Promise.all(domains.map((domain) => listSubscriptions(domain)))).flat(),
+		[domains],
+	);
+	const fetchAll = useCallback(() => Promise.all([api.call("webhooks.list_endpoints"), listAll()]), [listAll]);
+	// Add and Edit are off while the list loads, so a dialog never opens with the events of an old list.
+	const { load, loading } = useLatest(
+		fetchAll,
+		([listed, rows]) => {
 			setEndpoints(listed.endpoints);
-			setSubscriptions(rows.flat());
+			setSubscriptions(rows);
 			setError(null);
-		} catch (caught) {
-			setError(errorMessage(caught));
-		}
-	}, [domains]);
+		},
+		(caught) => setError(errorMessage(caught)),
+	);
 
 	useEffect(() => {
 		void load();
@@ -206,7 +251,7 @@ export function WebhookSettings() {
 					type="button"
 					className="button button-primary"
 					onClick={() => setDialog({ endpoint: null })}
-					disabled={endpoints === null}
+					disabled={endpoints === null || loading}
 				>
 					<Icon name="plus" size={18} />
 					Add webhook
@@ -267,6 +312,7 @@ export function WebhookSettings() {
 													className="button button-small"
 													onClick={() => setDialog({ endpoint })}
 													aria-label={`Edit webhook ${endpoint.label}`}
+													disabled={loading}
 												>
 													Edit
 												</button>
@@ -292,6 +338,7 @@ export function WebhookSettings() {
 					endpoint={dialog.endpoint}
 					subscriptions={subscriptionsOf(dialog.endpoint)}
 					groups={groupsFor(subscriptionsOf(dialog.endpoint))}
+					refresh={async (id) => (await listAll()).filter((row) => row.endpoint.id === id)}
 					onClose={() => {
 						setDialog(null);
 						// A save that failed in part changed some events, so the list loads again.
@@ -304,18 +351,21 @@ export function WebhookSettings() {
 					}}
 					onCreated={(endpoint, failures) => {
 						setDialog(null);
-						setCreated(endpoint);
-						if (failures.length > 0) {
-							toast({
-								message: `Soldock created the webhook, but did not add each event. ${failureText(failures)} Edit the webhook to try again.`,
-								tone: "error",
-							});
-						}
+						// The secret dialog covers the page, so the problem shows in it and not in a toast.
+						setCreated({
+							endpoint,
+							problem:
+								failures.length > 0
+									? `Soldock created the webhook, but did not add each event. ${failureText(failures)} Edit the webhook to try again.`
+									: null,
+						});
 						void load();
 					}}
 				/>
 			)}
-			{created && <WebhookSecretDialog endpoint={created} onClose={() => setCreated(null)} />}
+			{created && (
+				<WebhookSecretDialog endpoint={created.endpoint} problem={created.problem} onClose={() => setCreated(null)} />
+			)}
 			{deleting && (
 				<ConfirmDialog
 					title="Delete this webhook?"
@@ -346,6 +396,7 @@ function WebhookDialog({
 	endpoint,
 	subscriptions,
 	groups,
+	refresh,
 	onClose,
 	onSaved,
 	onCreated,
@@ -354,6 +405,8 @@ function WebhookDialog({
 	endpoint: WebhookEndpoint | null;
 	subscriptions: readonly ListedSubscription[];
 	groups: readonly PickerGroup[];
+	/** Gets the subscriptions of an endpoint from the server again. */
+	refresh: (endpointId: string) => Promise<ListedSubscription[]>;
 	onClose: () => void;
 	onSaved: (endpoint: WebhookEndpoint) => void;
 	onCreated: (endpoint: CreatedWebhookEndpoint, failures: string[]) => void;
@@ -422,8 +475,9 @@ function WebhookDialog({
 				setDraft(EMPTY_AUTH);
 			}
 			const applied = await applyEvents(changed, current, selected);
-			setCurrent(applied.subscriptions);
 			if (applied.failures.length > 0) {
+				// A different person or tab can change the events. The next save starts from the server state.
+				setCurrent(await refresh(changed.id).catch(() => applied.subscriptions));
 				setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
 				setBusy(false);
 				return;
@@ -497,6 +551,7 @@ function WebhookDialog({
 							placeholder="For example: support bot"
 							onChange={(event) => setLabel(event.target.value)}
 							disabled={busy}
+							data-autofocus={base ? true : undefined}
 						/>
 					</div>
 					<section className="dialog-section" aria-labelledby={ids.events}>
@@ -510,6 +565,7 @@ function WebhookDialog({
 							onChange={setSelected}
 							canAdd={!stopped}
 							saved={keysOf(current)}
+							stopped={stoppedKeysOf(current)}
 							disabled={busy}
 						/>
 					</section>

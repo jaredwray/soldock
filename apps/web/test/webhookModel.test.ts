@@ -1,8 +1,10 @@
 import type { WebhookEndpoint } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import {
+	applyPlan,
 	choiceKey,
 	eventSummary,
+	eventsFor,
 	eventsOf,
 	groupByTarget,
 	type ListedSubscription,
@@ -74,13 +76,49 @@ describe("webhook event check boxes", () => {
 	});
 
 	it("names a few events, and counts many events", () => {
-		expect(eventSummary("chat", ["chat.message.deleted", "chat.message.created"])).toBe(
+		expect(eventSummary("chat", "prn_me", ["chat.message.deleted", "chat.message.created"])).toBe(
 			"A new message, A deleted message",
 		);
-		expect(eventSummary("chat", eventsOf("chat"))).toBe("All events");
-		expect(eventSummary("drive", eventsOf("drive").slice(0, 4))).toBe("4 of 10 events");
+		expect(eventSummary("chat", "prn_me", eventsOf("chat"))).toBe("All events");
+		expect(eventSummary("drive", "drv_plans", eventsOf("drive").slice(0, 4))).toBe("4 events");
 		// Mail has one event. Its name says more than "All events".
-		expect(eventSummary("mail", ["mail.inbox.updated"])).toBe("New mail in the inbox");
+		expect(eventSummary("mail", "prn_me", ["mail.inbox.updated"])).toBe("New mail in the inbox");
+	});
+
+	// Your drive has no members and no delete, so a subscription to those events never sends.
+	it("offers the member events and the drive delete only for a shared drive", () => {
+		expect(eventsFor("drive", "drv_plans")).toEqual(eventsOf("drive"));
+		expect(eventsFor("drive", "prn_me")).toEqual(eventsOf("drive").slice(0, 8));
+		expect(eventSummary("drive", "prn_me", eventsOf("drive").slice(0, 8))).toBe("All events");
+		expect(eventSummary("drive", "drv_plans", eventsOf("drive").slice(0, 8))).toBe("8 events");
+	});
+
+	// The dialog stays open after a failed call. A second save must send only the calls that remain.
+	it("continues after a call that fails, and returns the subscriptions after the calls", async () => {
+		const saved = [
+			subscription("whk_1", "chat.message.created", "prn_me"),
+			subscription("whk_2", "chat.message.updated", "prn_me"),
+		];
+		const selected = new Set([choiceKey("chat.message.deleted", "prn_me"), choiceKey("mail.inbox.updated", "prn_me")]);
+		const calls: string[] = [];
+		const applied = await applyPlan(saved, selected, {
+			remove: async (row) => {
+				calls.push(`remove ${row.id}`);
+				if (row.id === "whk_1") throw new Error("no delete");
+			},
+			add: async (choice) => {
+				calls.push(`add ${choice.event}`);
+				if (choice.event === "mail.inbox.updated") throw new Error("limit");
+				return subscription("whk_3", choice.event, choice.targetId);
+			},
+		});
+		// The deletes run first, because a delete makes room under the limits.
+		expect(calls).toEqual(["remove whk_1", "remove whk_2", "add chat.message.deleted", "add mail.inbox.updated"]);
+		expect(applied.subscriptions.map((row) => row.id)).toEqual(["whk_1", "whk_3"]);
+		expect(applied.errors).toHaveLength(2);
+		const again = planChanges(applied.subscriptions, selected);
+		expect(again.remove.map((row) => row.id)).toEqual(["whk_1"]);
+		expect(again.add).toEqual([{ event: "mail.inbox.updated", targetId: "prn_me" }]);
 	});
 
 	it("makes one line for each product and target, and counts the stopped events of that line", () => {

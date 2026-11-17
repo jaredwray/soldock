@@ -31,7 +31,16 @@ export function SecretDialog({
 }
 
 /** Shows the signing secret of a new webhook. The server returns it once and never again. */
-export function WebhookSecretDialog({ endpoint, onClose }: { endpoint: CreatedWebhookEndpoint; onClose: () => void }) {
+export function WebhookSecretDialog({
+	endpoint,
+	problem,
+	onClose,
+}: {
+	endpoint: CreatedWebhookEndpoint;
+	/** A problem with the events of the new webhook. It shows here, because this dialog covers the page. */
+	problem?: string | null;
+	onClose: () => void;
+}) {
 	return (
 		<OneTimeSecretDialog
 			title="Copy the signing secret"
@@ -41,6 +50,11 @@ export function WebhookSecretDialog({ endpoint, onClose }: { endpoint: CreatedWe
 			onClose={onClose}
 		>
 			<p className="field-hint">URL: {endpoint.url}</p>
+			{problem && (
+				<p className="form-error" role="alert">
+					{problem}
+				</p>
+			)}
 		</OneTimeSecretDialog>
 	);
 }

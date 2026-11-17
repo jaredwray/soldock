@@ -294,6 +294,7 @@ MCP clients. The app has no UI-only path.
       A save calls the create operation for each new check mark and the delete operation for each removed one.
       Only the sponsor sees **Add webhook**, which sends events of the agent to a webhook that the sponsor created in Settings.
       An owner or an admin can clear an event, but cannot add one.
+      The Last delivery column shows a dash for the webhook of a different person, because only its creator sees its deliveries.
       An owner or an admin also gets **Read the mail of …**.
       A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
@@ -358,6 +359,7 @@ MCP clients. The app has no UI-only path.
   - **Webhooks** is one list. A row is one webhook: an endpoint (`webhooks.list_endpoints`) and the events that
     it sends. The row shows one line for each product and target, for example **Mail · Your mailbox**.
     A line names three events or fewer. For more events, it shows their number.
+    A line says **All events** when the target can send no more events.
     A stopped webhook and a stopped event show the reason.
   - **Add webhook** and **Edit** open the same dialog. The dialog has the URL, the label, and one group of
     check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events.
@@ -365,12 +367,18 @@ MCP clients. The app has no UI-only path.
     A star sends nothing. Chat creates no browser storage.
   - A product with more than one target has a menu above its check boxes. Mail offers your mailbox and each
     team mailbox of yours. Drive offers your drive and each shared drive of yours. The menu shows the
-    number of events of each target.
+    number of events of each target. Only a shared drive offers the member change and the drive deletion,
+    because your drive never sends them.
   - A save changes the endpoint (`webhooks.create_endpoint` or `webhooks.update_endpoint`). Then it deletes the
     subscription of each cleared check box and creates one for each new check mark (`mail.`, `chat.` and
     `drive.create_webhook_subscription` and `delete_webhook_subscription`). No operation is only for the UI.
-    When a call fails, the dialog stays open with the message, and a second save sends only the remaining changes.
-  - The signing secret shows once, after **Add webhook**. The URL of a webhook cannot change.
+    A subscription that a different person or tab deleted first counts as deleted.
+  - When a call fails in **Edit**, the dialog stays open with the message. It gets the events from the server again,
+    and a second save sends only the remaining changes.
+  - The signing secret shows once, after **Add webhook**. When an event of the new webhook fails, the
+    problem shows in the secret dialog, and **Edit** adds the event later. The URL of a webhook cannot change.
+  - **Add webhook** and **Edit** are off while the list loads, so the dialog never opens with old events.
+  - A stopped event has the text **Stopped** under its check box. To start it again, clear it, save, and set it.
   - The dialog also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
     is set and the name of the header. **Edit** keeps, replaces or removes the auth key and the header.
