@@ -585,6 +585,10 @@ a.chat-author:hover {
 	.chat-message-head .chat-message-actions {
 		top: -34px;
 		right: 12px;
+		/* A narrow screen has no room for each button in one row: the bar wraps. */
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		max-width: calc(100% - 24px);
 	}
 
 	.chat-message-actions .icon-button {
@@ -1143,9 +1147,22 @@ a.chat-author:hover {
 	font-weight: 600;
 }
 
-.chat-react-button {
+/* The quick reactions: the emoji that the person uses most, before the button of the list. A line
+   after them shows where the other actions start. */
+.chat-quick-reaction {
 	font-size: 15px;
 	line-height: 1;
+}
+
+.chat-quick-reaction[aria-pressed="true"] {
+	background: color-mix(in srgb, var(--link) 12%, transparent);
+}
+
+.chat-actions-divider {
+	align-self: stretch;
+	width: 1px;
+	margin: 4px 2px;
+	background: var(--border);
 }
 
 /* The list of emoji for a new reaction. It opens above the actions of its message. */
