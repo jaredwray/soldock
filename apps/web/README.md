@@ -288,11 +288,12 @@ MCP clients. The app has no UI-only path.
       **Add scopes** shows on a live connection when the session can give one more agent scope.
       Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
       To remove a scope, revoke the connection and connect again.
-      Mail, chat and drive subscriptions use `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
-      Each has a Delete button.
-      Only the sponsor sees the form that adds a subscription for the agent.
-      The call is `mail.create_webhook_subscription`, `chat.create_webhook_subscription` or `drive.create_webhook_subscription`, with the id of the agent.
-      An owner or an admin can delete a subscription.
+      **Webhooks of …** shows one row for each webhook that gets an event of the agent.
+      The rows come from `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
+      **Edit events** opens a dialog with a check box for each mail, chat and drive event.
+      A save calls the create operation for each new check mark and the delete operation for each removed one.
+      Only the sponsor sees **Add webhook**, which sends events of the agent to a webhook that the sponsor created in Settings.
+      An owner or an admin can clear an event, but cannot add one.
       An owner or an admin also gets **Read the mail of …**.
       A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
@@ -303,9 +304,10 @@ MCP clients. The app has no UI-only path.
     - **Members of …**, a list of the members with a **Remove** button for each member, with a
       confirmation (`directory.remove_team_mailbox_member`). A control below the list adds a member
       (`directory.add_team_mailbox_member`).
-    - **Webhooks of …**, each mail subscription of the shared mailbox with a Delete button (`mail.list_webhook_subscriptions`,
-      `mail.delete_webhook_subscription`). Members add subscriptions in Settings. An owner or an admin can delete
-      one, for example when the mailbox reaches its limit of active subscriptions.
+    - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
+      **Edit events** opens the check box of that event. An owner or an admin can clear it
+      (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.
+      Members add a webhook in Settings.
     - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - The lists of new members do not offer an archived account.
@@ -317,9 +319,9 @@ MCP clients. The app has no UI-only path.
       (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
       agent with a role. The role menu of an agent has no Manager entry.
-    - **Subscriptions of …**, each drive subscription of that drive, with a Delete button
-      (`drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription`).
-      Members add a subscription in Settings.
+    - **Webhooks of …**, each webhook that gets a drive event of that drive (`drive.list_webhook_subscriptions`).
+      **Edit events** opens the check boxes of the drive events. An owner or an admin can clear an event
+      (`drive.delete_webhook_subscription`). Members add a webhook in Settings.
     - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
       this while the drive holds an item, and the dialog shows that error.
     - The controls of the only manager are off, because a shared drive always keeps one manager. The
@@ -349,26 +351,35 @@ MCP clients. The app has no UI-only path.
   - An expired or decided request shows a message to start again in the app.
   - The page shows one card in the center, on the surface, as the sign-in page does.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
-  (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
+  (list, create, revoke), your webhooks (list, add, edit, delete) and sign out. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
   of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them.
-  - **Webhook endpoints** creates the URL. The signing secret shows once. **Edit** (`webhooks.update_endpoint`) changes the label, the auth key and the custom header.
-  - **Mail events**, **Chat events** and **Drive events** add a subscription to one of your endpoints.
+  - **Webhooks** is one list. A row is one webhook: an endpoint (`webhooks.list_endpoints`) and the events that
+    it sends. The row shows one line for each product and target, for example **Mail · Your mailbox**.
+    A line names three events or fewer. For more events, it shows their number.
+    A stopped webhook and a stopped event show the reason.
+  - **Add webhook** and **Edit** open the same dialog. The dialog has the URL, the label, and one group of
+    check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events.
     Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
-    A star sends nothing. The agent panel lists the same subscriptions for an agent. Only the sponsor can add one.
-    Owners, admins and sponsors can delete an agent's subscription. Chat creates no browser storage.
-  - A new mail subscription watches your mailbox or a team mailbox that you select. A disabled endpoint shows the reason.
-  - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
+    A star sends nothing. Chat creates no browser storage.
+  - A product with more than one target has a menu above its check boxes. Mail offers your mailbox and each
+    team mailbox of yours. Drive offers your drive and each shared drive of yours. The menu shows the
+    number of events of each target.
+  - A save changes the endpoint (`webhooks.create_endpoint` or `webhooks.update_endpoint`). Then it deletes the
+    subscription of each cleared check box and creates one for each new check mark (`mail.`, `chat.` and
+    `drive.create_webhook_subscription` and `delete_webhook_subscription`). No operation is only for the UI.
+    When a call fails, the dialog stays open with the message, and a second save sends only the remaining changes.
+  - The signing secret shows once, after **Add webhook**. The URL of a webhook cannot change.
+  - The dialog also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
-    is set and the name of the header.
-  - **Edit** shows on the endpoints that you created (`webhooks.update_endpoint`). It changes the label, and
-    keeps, replaces or removes the auth key and the header.
+    is set and the name of the header. **Edit** keeps, replaces or removes the auth key and the header.
+  - A stopped webhook does not start again. Its dialog lets you clear an event, but not set one.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
     at the right. A key shows its label above its scopes. A webhook shows its label above its URL.
     At 900px and below, the table of keys has no Created and Last used columns, and the table of
-    webhooks shows the mailbox under the URL in place of its Mailbox column.
+    webhooks has no Last delivery column. At 500px and below, Edit and Delete are one above the other.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
@@ -1090,7 +1101,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the text field with the suggestions of a mention, the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook manager and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, and the hook for the people and agents of the organization |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |

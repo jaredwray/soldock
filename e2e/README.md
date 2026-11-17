@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request, and the Chat flows of layer 2 have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2 and the webhook check boxes have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -26,7 +26,7 @@ pnpm e2e
   ([`tools/seed`](../tools/seed)). A Worker with a setup token shows the setup page, so it then starts
   the Worker again without the token. After the run, it stops the Worker and removes the state.
 - Port 8799 is not the port of `pnpm dev`, so the two can run at the same time.
-- Each test makes its own room, so the tests run at the same time against one Worker. A test signs
+- Each test makes its own room or its own webhook, so the tests run at the same time against one Worker. A test signs
   in as a person of the seed data ([`support/chat.ts`](support/chat.ts)).
 - No test is tried again after a failure. A test that fails some of the time is a defect to fix.
 - In CI, the job installs Chromium with `playwright install --with-deps chromium`. Cloud sessions
@@ -37,6 +37,8 @@ pnpm e2e
 | File | Flows |
 | --- | --- |
 | [`tests/chat.spec.ts`](tests/chat.spec.ts) | A send shows at once and goes out one time. A send with lost answers shows one time. A failed send shows "Not sent", and **Try again** sends it. A message that waits stays after a reload. A change and a delete show at once, and come back after a refusal. A page of older messages keeps the place of the list. The **New messages** line and the button to the newest messages. The draft of a room after a change of room, a reload and a sign-out. A room from the cache before the answer of the server. A link to one message. The unread count of the sidebar from the events socket, without a read of the list, and its end after a read on a different device |
+
+| [`tests/webhooks.spec.ts`](tests/webhooks.spec.ts) | A new webhook with its events from check boxes. **Edit** shows the saved events, and a save adds and removes only the difference. A delete. A sponsor sends the events of an agent to a webhook. An admin can clear an event of that agent, but cannot set one |
 
 The first flows to cover, because they are tested by hand only:
 

@@ -1,5 +1,5 @@
 import { ALL_SCOPES } from "@soldock/contracts";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -7,7 +7,7 @@ import { SIGN_OUT_FAILED } from "../auth/auth.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "./ApiKeys.tsx";
 import { PasswordCard, TwoStepCard } from "./SignInSettings.tsx";
-import { WebhookEndpoints, WebhookManager } from "./Webhooks.tsx";
+import { WebhookSettings } from "./Webhooks.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -16,7 +16,6 @@ export function SettingsPage() {
 	const toast = useToast();
 	const principal = whoami.principal;
 	const ids = { account: useId(), signOut: useId() };
-	const [endpointEpoch, setEndpointEpoch] = useState(0);
 
 	useEffect(() => {
 		document.title = "Settings – Soldock";
@@ -61,10 +60,7 @@ export function SettingsPage() {
 					note="A key lets a script or an MCP client act as you."
 					allowedScopes={ALL_SCOPES}
 				/>
-				<WebhookEndpoints onChanged={() => setEndpointEpoch((epoch) => epoch + 1)} />
-				<WebhookManager heading="Mail events" canCreate epoch={endpointEpoch} />
-				<WebhookManager domain="chat" heading="Chat events" canCreate epoch={endpointEpoch} />
-				<WebhookManager domain="drive" heading="Drive events" canCreate epoch={endpointEpoch} />
+				<WebhookSettings />
 				<section className="panel" aria-labelledby={ids.signOut}>
 					<h2 id={ids.signOut} className="panel-title">
 						Sign out
