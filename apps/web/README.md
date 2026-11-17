@@ -36,6 +36,9 @@ MCP clients. The app has no UI-only path.
     ([`newVersion.ts`](src/lib/newVersion.ts)). If index.html names a different entry script, a new
     version is available, and the page reloads one time. The reload gets the new version, so the
     page cannot reload again in a loop.
+  - The reload starts only while the page of the chunk shows. A person who goes to a different page
+    before the check ends stays there, so a draft is not lost. The reload starts when the page shows
+    again.
   - If the server serves the same version, or the request fails, the page does not reload. It asks
     the person to reload. The rest of the app continues to work. The composer of Mail does not
     reload by itself, because a reload loses the draft.

@@ -1,4 +1,4 @@
-import { type ComponentType, lazy, Suspense } from "react";
+import { type ComponentType, lazy, Suspense, useEffect } from "react";
 import { newVersionAvailable } from "./newVersion.ts";
 
 // A page that is a separate chunk, so the first load of the app is smaller.
@@ -34,6 +34,17 @@ function PageLoading() {
 	);
 }
 
+/**
+ * The page of a chunk that a deploy removed. It reloads the page into the new version when it shows. A person
+ * who left the page before the version check ended does not see it, so a draft on a different page stays.
+ */
+function ReloadForNewVersion() {
+	useEffect(() => {
+		window.location.reload();
+	}, []);
+	return <PageLoading />;
+}
+
 /** The entry script of this page, as index.html names it. */
 function currentEntryScript(): string | null {
 	return document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.getAttribute("src") ?? null;
@@ -46,12 +57,8 @@ function currentEntryScript(): string | null {
  */
 async function afterLoadFailure<P>(): Promise<{ default: ComponentType<P> }> {
 	const current = currentEntryScript();
-	if (current !== null && (await newVersionAvailable(current))) {
-		window.location.reload();
-		// The loading state stays until the new version replaces the page.
-		return new Promise(() => {});
-	}
-	return { default: PageUnavailable as ComponentType<P> };
+	const page = current !== null && (await newVersionAvailable(current)) ? ReloadForNewVersion : PageUnavailable;
+	return { default: page as ComponentType<P> };
 }
 
 /** A page component from a chunk that loads when the page first shows. */
