@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
 	CHAT_SOCKET_CLOSE,
@@ -8,7 +8,7 @@ import {
 	UNTRUSTED_NOTICE,
 } from "@soldock/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SOCKET_RECHECK_MS } from "../src/chat/room.ts";
+import { MEMBER_DELAY_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import { EVENTS_SOCKET_RECHECK_MS } from "../src/identity/principal.ts";
 import {
 	type Actor,
@@ -657,13 +657,21 @@ describe("OAuth tokens", () => {
 			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(firstTokens.access_token) } }),
 		);
 		expect(await replaced.next()).toMatchObject({ type: "hello" });
+		// The clock is fake, so the alarm of the room does not come by itself. Move the clock past the time
+		// that the states of the other members wait, and run the alarm.
+		const sendToMembers = async () => {
+			vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+			await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)));
+		};
 		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." });
+		await sendToMembers();
 		// The token acts as its agent: the event has the room of the agent, with its count.
 		expect(await replaced.next()).toMatchObject({ type: "chat.room", room: { id: room.id, unread_count: 1 } });
 
 		const tokens = (await (await refresh(clientId, firstTokens.refresh_token)).json()) as Tokens;
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 43 is done." });
+		await sendToMembers();
 		// The connection works, so the code tells the client to open a new socket with its new token.
 		expect(await replaced.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
 
