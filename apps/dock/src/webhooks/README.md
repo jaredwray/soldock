@@ -50,6 +50,8 @@ It does not set a disabled endpoint back to active.
 A delete trigger removes the subscription. There is no insert trigger.
 `adoptLegacyWebhooks` copies a row that the previous Worker inserts after the migration.
 A chat message adopts those rows before it records the subscription boundary.
+A drive change stores the last subscription sequence before the change commits.
+A subscription that starts later does not get that event.
 A shared drive subscription asks the drive object for membership. The index can be behind.
 A later change drops the old tables. A rollback after this Worker runs is a fix forward.
 

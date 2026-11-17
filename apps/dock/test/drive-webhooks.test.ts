@@ -409,6 +409,20 @@ describe("drive webhook rules from review", () => {
 		expect(queue.events).toEqual([]);
 	});
 
+	it("does not send an event that happened before the subscription", async () => {
+		const first = await subscribe(ada, "drive.item.created");
+		const queue = await capture(ada.id);
+		await ada.call("drive.create_folder", { name: "Before" });
+		const second = await subscribe(ada, "drive.item.created");
+		await queue.drain();
+		const early = await posted(queue.events);
+		expect(early.map((body) => body.data.webhook_id)).toEqual([first.id]);
+		await ada.call("drive.create_folder", { name: "After" });
+		await queue.drain();
+		const later = await posted(queue.events);
+		expect(later.map((body) => body.data.webhook_id).sort()).toEqual([first.id, second.id].sort());
+	});
+
 	it("sends one delete event for a folder and the file inside it", async () => {
 		await subscribe(ada, "drive.item.deleted");
 		const queue = await capture(ada.id);
