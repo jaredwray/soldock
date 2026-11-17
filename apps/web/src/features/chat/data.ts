@@ -15,7 +15,7 @@ import { createOutbox, type Outbox, postContent } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
-import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom } from "./roomList.ts";
+import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom, withStarred } from "./roomList.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createLiveSocket, createRoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
@@ -61,8 +61,10 @@ function connectEvents(handlers: SocketHandlers): Connection {
 
 /**
  * The rooms and the direct messages of the person, newest message first. This first layer shows the
- * first 100 rooms.
+ * first 100 rooms, and each room with a star of the first 100 of the starred view.
  *
+ * - When the person has more rooms than the first page, the list also reads the starred view. So a
+ *   room with a star and an old message stays in the sidebar.
  * - The events socket of the person sends each change of a room at once. After each connect
  *   (`hello`), the list comes again, for the changes from the time without a socket.
  * - While the socket is not connected, the list comes again each few seconds while the tab shows,
@@ -89,12 +91,20 @@ export function useRooms() {
 		lastRead.current = Date.now();
 		try {
 			const result = await api.call("chat.list_rooms", { limit: CHAT_LIMITS.pageSize });
+			// Without a next page, the first page has each room, also each room with a star.
+			const page =
+				result.next_cursor === null
+					? result.rooms
+					: withStarred(
+							result.rooms,
+							(await api.call("chat.list_rooms", { view: "starred", limit: CHAT_LIMITS.pageSize })).rooms,
+						);
 			// An answer applies when it is newer than the one that shows. On a slow connection, the next
 			// poll starts before an answer arrives, and that answer must still show.
 			if (request < applied.current) return;
 			applied.current = request;
 			// An event that came during the read is newer than the room in the answer.
-			const rooms = withChangesSince(result.rooms, changes.current, since);
+			const rooms = withChangesSince(page, changes.current, since);
 			forgetChangesUpTo(changes.current, since);
 			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
 		} catch (caught) {

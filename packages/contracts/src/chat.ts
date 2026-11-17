@@ -238,6 +238,12 @@ export const ChatRoom = z.object({
 	unread_count: z.number().int().nonnegative(),
 	/** A number that grows with each new, changed or deleted message. Compare it to find out if you must get the changes. */
 	version: z.number().int(),
+	/**
+	 * True when you put your star on the room (chat.star_room). Only you see your star. False when you
+	 * are not a member. A reader that gets no value takes false, so a client reads a room of a server
+	 * from before this field.
+	 */
+	starred: z.boolean().default(false),
 });
 export type ChatRoom = z.infer<typeof ChatRoom>;
 
@@ -349,8 +355,9 @@ export const listRooms = defineOperation({
 	description: [
 		"Returns the rooms of one view. The default view is joined: the rooms and the direct messages that you are a member of, with the newest message first.",
 		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you can join with chat.join_room.",
+		"The starred view has the rooms and the direct messages of the joined view that have your star (chat.star_room), with the newest message first.",
 		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
-		"Each room has unread, unread_count and version. Compare version with the value that you have to find out if the messages of a room changed.",
+		"Each room has unread, unread_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
 		"Each room sends its changes to the lists after the change. A list can be a moment behind a change.",
 		"Pass next_cursor as cursor to get the next page.",
 	].join(" "),
@@ -359,7 +366,7 @@ export const listRooms = defineOperation({
 	callers: ["human", "agent"],
 	annotations: READ,
 	input: z.strictObject({
-		view: z.enum(["joined", "public"]).default("joined"),
+		view: z.enum(["joined", "public", "starred"]).default("joined"),
 		query: z.string().trim().min(1).max(CHAT_LIMITS.queryChars).optional(),
 		// A cursor of the public view holds a room name. NFC can make a name three times as long.
 		cursor: z.string().max(2000).optional(),
@@ -611,6 +618,25 @@ export const markRead = defineOperation({
 	errors: ["not_found"],
 });
 
+export const starRoom = defineOperation({
+	name: "chat.star_room",
+	summary: "Add or remove your star on a room",
+	description: [
+		"With starred: true, puts your star on a room or a direct message. With starred: false, removes it.",
+		"A star is yours only: nobody else sees it. The web app shows the rooms with your star at the top of the sidebar.",
+		"chat.list_rooms with view: starred returns them. A second call with the same value changes nothing.",
+		"When you leave a room, its star goes away.",
+		MEMBERS_ONLY,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/star" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, starred: z.boolean() }),
+	output: z.object({ room: ChatRoom }),
+	errors: ["not_found"],
+});
+
 /** The event type for a new chat message. Edits and deletes have their own event types. */
 export const CHAT_WEBHOOK_EVENT_TYPE = CHAT_WEBHOOK_EVENTS[0];
 
@@ -684,4 +710,5 @@ export const chatOperations = {
 	"chat.add_reaction": addReaction,
 	"chat.remove_reaction": removeReaction,
 	"chat.mark_read": markRead,
+	"chat.star_room": starRoom,
 } as const;

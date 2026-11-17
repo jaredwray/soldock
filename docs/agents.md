@@ -366,6 +366,10 @@ app uses.
   Set `idempotency_key`, so a retry does not post the text two times. Each message has the key of its send as `idempotency_key`, so you can find
   the message of a send whose answer you did not get. Compare the author too. Each member of the
   room sees the key, so use a random value, not private data. `chat_mark_read` sets what you read.
+- **Star.** `chat_star_room` with `starred: true` puts your star on a room or a direct message, and
+  `starred: false` removes it. Only you see your star. Each room has `starred`, and
+  `chat_list_rooms` with `view: "starred"` returns the rooms with your star. When you leave a room,
+  its star goes away.
 - **React.** `chat_add_reaction` adds your reaction with one emoji in its full form, such as `👍` or
   `❤️` (with U+FE0F), not a name such as `:thumbsup:`. `chat_remove_reaction` removes it. The two are safe to repeat. Each
   message has `reactions`: the emoji, the count and the ids of the principals.

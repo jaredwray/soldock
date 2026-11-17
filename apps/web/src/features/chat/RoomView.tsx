@@ -101,6 +101,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	/** The characters of the draft above the limit of the plain text, or 0. */
 	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
 	const [joining, setJoining] = useState(false);
+	/** The star that the person set, until the room list has it. Null when no call runs. */
+	const [starring, setStarring] = useState<boolean | null>(null);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
@@ -559,6 +561,19 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		});
 	}
 
+	/** Sets or removes the star of the person. The button changes at once, and goes back after a refusal. */
+	async function setStar(starred: boolean) {
+		setStarring(starred);
+		try {
+			await api.call("chat.star_room", { room_id: roomId, starred });
+			// The list puts the room in its part of the sidebar. The events socket brings it too.
+			await onRoomsChanged();
+		} catch (caught) {
+			fail(caught);
+		}
+		setStarring(null);
+	}
+
 	async function join() {
 		setJoining(true);
 		try {
@@ -605,6 +620,9 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					{title}
 				</h1>
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
+				{room.role !== null && (
+					<StarButton starred={starring ?? room.starred} onChange={(next) => void setStar(next)} />
+				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
 					<button
@@ -862,6 +880,23 @@ interface MessageItemProps {
 	quickEmoji: readonly string[];
 	/** Adds or removes the reaction of the person with one emoji. */
 	onReact: (emoji: string, add: boolean) => void;
+}
+
+/** The star of the person on the room, as in the header of a Drive item. A set star is solid. */
+function StarButton({ starred, onChange }: { starred: boolean; onChange: (starred: boolean) => void }) {
+	const label = starred ? "Remove star" : "Star";
+	return (
+		<button
+			type="button"
+			className={starred ? "icon-button icon-button-star" : "icon-button"}
+			aria-label={label}
+			aria-pressed={starred}
+			title={label}
+			onClick={() => onChange(!starred)}
+		>
+			<Icon name="star" filled={starred} />
+		</button>
+	);
 }
 
 function MessageItem({

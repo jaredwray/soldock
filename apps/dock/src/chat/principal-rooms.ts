@@ -32,6 +32,7 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
 		unread: entry.unread_count > 0,
 		unread_count: entry.unread_count,
 		version: entry.version,
+		starred: entry.starred,
 	};
 }
 
@@ -98,10 +99,15 @@ function isAfter(a: Position, b: Position): boolean {
 }
 
 /**
- * The rooms that a principal is a member of, with the newest message first. Returns null for a cursor
- * that is not from this list.
+ * The rooms that a principal is a member of, with the newest message first. With `starred`, only the
+ * rooms with the star of the principal. Returns null for a cursor that is not from this list.
  */
-export async function listJoinedRooms(env: Env, principalId: string, input: ListInput): Promise<RoomPage | null> {
+export async function listJoinedRooms(
+	env: Env,
+	principalId: string,
+	input: ListInput,
+	starred = false,
+): Promise<RoomPage | null> {
 	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
 	if (input.cursor !== null && cursor === null) return null;
 	const principal = principalStub(env, principalId);
@@ -110,6 +116,7 @@ export async function listJoinedRooms(env: Env, principalId: string, input: List
 		nameKey: input.query === null ? null : nameKey(input.query),
 		after,
 		until: null,
+		starred,
 		limit: input.limit,
 	};
 	let listed = await principal.listChatRooms(query);

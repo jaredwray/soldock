@@ -378,6 +378,44 @@ test("the sidebar count of a room that is not open goes up and clears without a 
 	expect(reads).toBe(0);
 });
 
+// Layer 8 (jaredwray/soldock#77): stars. No other test uses Ingrid, so her Starred part has only this room.
+test("a star moves a room to Starred, a second page of the person gets it without a poll, and Remove star moves it back", async ({
+	browser,
+}) => {
+	const ingrid = await signIn(browser, "ingrid");
+	const name = unique("Favorite");
+	const roomId = await createRoom(ingrid, name);
+	const page = await ingrid.newPage();
+	const other = await ingrid.newPage();
+	const live = other
+		.waitForEvent("websocket", (socket) => socket.url().endsWith("/ws/events"))
+		.then((socket) => socket.waitForEvent("framereceived", (frame) => String(frame.payload).includes('"hello"')));
+	await other.goto("/chat");
+	await live;
+	await expect(other.getByRole("list", { name: "Rooms" }).getByRole("link", { name })).toBeVisible();
+	let reads = 0;
+	other.on("request", (request) => {
+		if (request.method() === "GET" && new URL(request.url()).pathname === "/api/v1/chat/rooms") reads += 1;
+	});
+	await openRoom(page, roomId);
+
+	await page.getByRole("button", { name: "Star", exact: true }).click();
+	await expect(page.getByRole("button", { name: "Remove star" })).toHaveAttribute("aria-pressed", "true");
+	for (const shown of [page, other]) {
+		await expect(shown.getByRole("list", { name: "Starred" }).getByRole("link", { name })).toBeVisible();
+		await expect(shown.getByRole("list", { name: "Rooms" }).getByRole("link", { name })).toHaveCount(0);
+	}
+	// The second page got the star from the events socket, not from a read of the list.
+	expect(reads).toBe(0);
+
+	await page.getByRole("button", { name: "Remove star" }).click();
+	await expect(page.getByRole("button", { name: "Star", exact: true })).toHaveAttribute("aria-pressed", "false");
+	for (const shown of [page, other]) {
+		await expect(shown.getByRole("list", { name: "Rooms" }).getByRole("link", { name })).toBeVisible();
+		await expect(shown.getByRole("heading", { name: "Starred" })).toHaveCount(0);
+	}
+});
+
 // Layer 4 (jaredwray/soldock#73): reactions.
 test("the quick reactions add and remove a reaction, and the next room puts the emoji that the person uses most first", async ({
 	browser,

@@ -35,6 +35,8 @@ export interface ChatRoomView {
 	/** The other member of a direct message, as JSON. */
 	peer_json: string | null;
 	version: number;
+	/** True when the principal put its star on the room. */
+	starred: boolean;
 }
 
 /**
@@ -61,6 +63,8 @@ export interface ChatRoomQuery {
 	after: { activityAt: number; roomId: string } | null;
 	/** Keep the rooms up to this room, with it. Null for no end. */
 	until: { activityAt: number; roomId: string } | null;
+	/** Keep only the rooms with the star of the principal. */
+	starred: boolean;
 	limit: number;
 }
 
@@ -137,6 +141,7 @@ export function chatRoomOutput(entry: ChatRoomEntry): ChatRoom {
 		unread: entry.unread_count > 0,
 		unread_count: entry.unread_count,
 		version: entry.version,
+		starred: entry.starred,
 	};
 }
 
@@ -166,10 +171,23 @@ const MIGRATIONS: string[][] = [
 		) WITHOUT ROWID`,
 		"CREATE INDEX chat_rooms_activity ON chat_rooms (joined, activity_at DESC, room_id DESC)",
 	],
+	[
+		// The star of the principal, from the room. A room from before has no star.
+		"ALTER TABLE chat_rooms ADD COLUMN starred INTEGER NOT NULL DEFAULT 0",
+		`CREATE INDEX chat_rooms_starred ON chat_rooms (activity_at DESC, room_id DESC)
+			WHERE joined = 1 AND starred = 1`,
+	],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
-	last_message_at, activity_at, last_read_seq, unread_count, peer_json, version`;
+	last_message_at, activity_at, last_read_seq, unread_count, peer_json, version, starred`;
+
+/** A row of `chat_rooms` as SQLite returns it: the star is 0 or 1. */
+type EntryRow = Omit<ChatRoomEntry, "starred"> & { starred: number } & Row;
+
+function toEntry(row: EntryRow): ChatRoomEntry {
+	return { ...row, starred: row.starred === 1 };
+}
 
 /**
  * One object for each principal. It keeps the state that other objects send to it, and sends each
@@ -227,15 +245,16 @@ export class PrincipalDO extends DurableObject<Env> {
 				const view = state.view;
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
 					`INSERT INTO chat_rooms (room_id, stamp, joined, kind, name, name_key, topic, created_at, created_by_json,
-						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version)
-					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version,
+						starred)
+					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
 					ON CONFLICT (room_id) DO UPDATE SET stamp = excluded.stamp, joined = excluded.joined, kind = excluded.kind,
 						name = excluded.name, name_key = excluded.name_key, topic = excluded.topic,
 						created_at = excluded.created_at, created_by_json = excluded.created_by_json,
 						member_count = excluded.member_count, role = excluded.role, last_seq = excluded.last_seq,
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
 						last_read_seq = excluded.last_read_seq, unread_count = excluded.unread_count,
-						peer_json = excluded.peer_json, version = excluded.version
+						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred
 					WHERE excluded.stamp > chat_rooms.stamp
 					RETURNING room_id, joined`,
 					state.room_id,
@@ -256,6 +275,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.unread_count ?? null,
 					view?.peer_json ?? null,
 					view?.version ?? null,
+					view?.starred ? 1 : 0,
 				);
 				kept.push(...row.toArray());
 			}
@@ -288,10 +308,11 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * next page exists. `seeded` is false until the first fill: see `seedChat`.
 	 */
 	listChatRooms(query: ChatRoomQuery): { seeded: boolean; rooms: ChatRoomEntry[] } {
+		// The filter of the star is in the text of the query, so SQLite can use the partial index of the stars.
 		const rooms = this.sql
-			.exec<ChatRoomEntry & Row>(
+			.exec<EntryRow>(
 				`SELECT ${COLUMNS} FROM chat_rooms
-				WHERE joined = 1
+				WHERE joined = 1 ${query.starred ? "AND starred = 1" : ""}
 					AND (?1 IS NULL OR instr(name_key, ?1) > 0)
 					AND (?2 IS NULL OR activity_at < ?2 OR (activity_at = ?2 AND room_id < ?3))
 					AND (?5 IS NULL OR activity_at > ?5 OR (activity_at = ?5 AND room_id >= ?6))
@@ -303,7 +324,8 @@ export class PrincipalDO extends DurableObject<Env> {
 				query.until?.activityAt ?? null,
 				query.until?.roomId ?? null,
 			)
-			.toArray();
+			.toArray()
+			.map(toEntry);
 		return { seeded: this.chatSeeded(), rooms };
 	}
 
@@ -312,12 +334,13 @@ export class PrincipalDO extends DurableObject<Env> {
 		const seeded = this.chatSeeded();
 		if (roomIds.length === 0) return { seeded, rooms: [] };
 		const rooms = this.sql
-			.exec<ChatRoomEntry & Row>(
+			.exec<EntryRow>(
 				`SELECT ${COLUMNS} FROM chat_rooms JOIN json_each(?1) wanted ON wanted.value = chat_rooms.room_id
 				WHERE joined = 1`,
 				JSON.stringify([...new Set(roomIds)]),
 			)
-			.toArray();
+			.toArray()
+			.map(toEntry);
 		return { seeded, rooms };
 	}
 
