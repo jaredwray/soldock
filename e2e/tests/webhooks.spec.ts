@@ -88,6 +88,23 @@ test("a person selects the events of a webhook with check boxes, then changes th
 	expect(driveEvents).toContain("shared drive.members.changed");
 	expect(driveEvents).not.toContain("drive.members.changed");
 
+	// A different tab deletes an event first. The clear of the same event is then good, with no error.
+	await row.getByRole("button", { name: `Edit webhook ${label}` }).click();
+	const listed = (await (await context.request.get("/api/v1/chat/webhook-subscriptions")).json()) as {
+		subscriptions: (Subscription & { id: string })[];
+	};
+	const stale = listed.subscriptions.find(
+		(subscription) => subscription.endpoint_id === id && subscription.event === "chat.message.created",
+	);
+	const removed = await context.request.delete(`/api/v1/chat/webhook-subscriptions/${stale?.id}`, {
+		headers: { origin: BASE_URL },
+	});
+	expect(removed.ok(), "delete from a different tab").toBe(true);
+	await edit.getByLabel("A new message").uncheck();
+	await edit.getByRole("button", { name: "Save" }).click();
+	await expect(edit).toHaveCount(0);
+	await expect(row).toContainText("An edited message, A deleted message");
+
 	await row.getByRole("button", { name: `Delete webhook ${label}` }).click();
 	await page
 		.getByRole("dialog", { name: "Delete this webhook?" })

@@ -21,7 +21,7 @@ import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { EventPicker, type PickerGroup, type PickerTarget } from "./EventPicker.tsx";
 import { WebhookSecretDialog } from "./SecretDialog.tsx";
-import { applyEvents, failureText, listSubscriptions } from "./webhookApi.ts";
+import { failureText, listSubscriptions, saveEvents } from "./webhookApi.ts";
 import {
 	choiceKey,
 	DOMAIN_LABELS,
@@ -451,7 +451,7 @@ function WebhookDialog({
 				...(draft.key.trim() ? { auth_key: draft.key.trim() } : {}),
 				...(header ? { header } : {}),
 			});
-			const applied = await applyEvents(made.endpoint, [], selected);
+			const applied = await saveEvents(made.endpoint, [], selected, refresh);
 			onCreated(made.endpoint, applied.failures);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -486,10 +486,10 @@ function WebhookDialog({
 				setHeaderChange(changed.header_name ? "keep" : "replace");
 				setDraft(EMPTY_AUTH);
 			}
-			const applied = await applyEvents(changed, current, selected);
+			const applied = await saveEvents(changed, current, selected, refresh);
 			if (applied.failures.length > 0) {
 				// A different person or tab can change the events. The next save starts from the server state.
-				setCurrent(await refresh(changed.id).catch(() => applied.subscriptions));
+				setCurrent(applied.subscriptions);
 				setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
 				setBusy(false);
 				return;

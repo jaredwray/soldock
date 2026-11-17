@@ -8,7 +8,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { EventPicker } from "./EventPicker.tsx";
 import { EventLines, keysOf, LastDelivery, stoppedKeysOf, useLatest, useWebhookDomains } from "./Webhooks.tsx";
-import { applyEvents, failureText, listSubscriptions } from "./webhookApi.ts";
+import { failureText, listSubscriptions, saveEvents } from "./webhookApi.ts";
 import { type ListedSubscription, stoppedText } from "./webhookModel.ts";
 
 interface TargetWebhooksProps {
@@ -252,10 +252,10 @@ function TargetEventsDialog({
 		if (!endpoint) return;
 		setBusy(true);
 		setError(null);
-		const applied = await applyEvents(endpoint, current, selected);
+		const applied = await saveEvents(endpoint, current, selected, refresh);
 		if (applied.failures.length > 0) {
 			// A different person or tab can change the events. The next save starts from the server state.
-			setCurrent(await refresh(endpoint.id).catch(() => applied.subscriptions));
+			setCurrent(applied.subscriptions);
 			setStarted(true);
 			setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
 			setBusy(false);

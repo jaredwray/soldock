@@ -78,9 +78,10 @@ function EventGroup({
 	// A target offers the events that it can send. A saved event of a different kind stays, so the person can clear it.
 	const offered = eventsFor(domain, target.id);
 	const events = eventsOf(domain).filter((event) => offered.includes(event) || saved.has(choiceKey(event, target.id)));
-	const all = events.length > 1 && canAdd;
+	const all = offered.length > 1 && canAdd;
 	const locked = (key: string) => disabled || (!canAdd && !saved.has(key));
-	const keys = events.map((event) => choiceKey(event, target.id));
+	// The check box for all events sets only the events that the target can send.
+	const keys = offered.map((event) => choiceKey(event, target.id));
 	const set = keys.filter((key) => selected.has(key)).length;
 
 	function toggle(key: string) {

@@ -372,9 +372,9 @@ MCP clients. The app has no UI-only path.
   - A save changes the endpoint (`webhooks.create_endpoint` or `webhooks.update_endpoint`). Then it deletes the
     subscription of each cleared check box and creates one for each new check mark (`mail.`, `chat.` and
     `drive.create_webhook_subscription` and `delete_webhook_subscription`). No operation is only for the UI.
-    A subscription that a different person or tab deleted first counts as deleted.
-  - When a call fails in **Edit**, the dialog stays open with the message. It gets the events from the server again,
-    and a second save sends only the remaining changes.
+  - When a call fails, the dialog gets the events from the server again. The save is good when the server
+    then has only the selected events, for example after a different tab made the same change first.
+    If not, the **Edit** dialog stays open with the message, and a second save sends only the remaining changes.
   - The signing secret shows once, after **Add webhook**. When an event of the new webhook fails, the
     problem shows in the secret dialog, and **Edit** adds the event later. The URL of a webhook cannot change.
   - **Add webhook** and **Edit** are off while the list loads, so the dialog never opens with old events.
