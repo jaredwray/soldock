@@ -288,10 +288,11 @@ MCP clients. The app has no UI-only path.
       **Add scopes** shows on a live connection when the session can give one more agent scope.
       Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
       To remove a scope, revoke the connection and connect again.
-      Mail webhooks use `mail.list_webhooks`. Chat webhooks use `chat.list_webhooks`. Each has a Delete button.
-      Only the sponsor sees the form that creates a webhook for the agent.
-      The call is `mail.create_webhook` or `chat.create_webhook`, with the id of the agent.
-      An owner or an admin can delete a webhook.
+      Mail, chat and drive subscriptions use `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
+      Each has a Delete button.
+      Only the sponsor sees the form that adds a subscription for the agent.
+      The call is `mail.create_webhook_subscription`, `chat.create_webhook_subscription` or `drive.create_webhook_subscription`, with the id of the agent.
+      An owner or an admin can delete a subscription.
       An owner or an admin also gets **Read the mail of …**.
       A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
@@ -302,20 +303,23 @@ MCP clients. The app has no UI-only path.
     - **Members of …**, a list of the members with a **Remove** button for each member, with a
       confirmation (`directory.remove_team_mailbox_member`). A control below the list adds a member
       (`directory.add_team_mailbox_member`).
-    - **Webhooks of …**, each webhook of the shared mailbox with a Delete button (`mail.list_webhooks`,
-      `mail.delete_webhook`). Members create webhooks in Settings. An owner or an admin can delete
-      one, for example when the mailbox reaches its limit of active webhooks.
+    - **Webhooks of …**, each mail subscription of the shared mailbox with a Delete button (`mail.list_webhook_subscriptions`,
+      `mail.delete_webhook_subscription`). Members add subscriptions in Settings. An owner or an admin can delete
+      one, for example when the mailbox reaches its limit of active subscriptions.
     - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - The lists of new members do not offer an archived account.
   - **Shared drives** (`shared-drives`). Owners and admins see one card for each shared drive of the
     organization (`drive.list_shared_drives` with `all: "true"`). The card shows the name, the role
-    of the person in the drive, and the number of members. A click opens the card and shows three parts:
+    of the person in the drive, and the number of members. A click opens the card and shows four parts:
     - **Name**, a form that changes the name (`drive.update_shared_drive`).
     - **Members of …**, a table of the members (`drive.get_shared_drive`). Each row has a role menu
       (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
       agent with a role. The role menu of an agent has no Manager entry.
+    - **Subscriptions of …**, each drive subscription of that drive, with a Delete button
+      (`drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription`).
+      Members add a subscription in Settings.
     - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
       this while the drive holds an item, and the dialog shows that error.
     - The controls of the only manager are off, because a shared drive always keeps one manager. The
@@ -347,18 +351,18 @@ MCP clients. The app has no UI-only path.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
   (list, create, revoke), your webhooks (list, create, delete) and sign out. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks` or `chat.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them.
-  - **Your chat webhooks** manages notifications from all joined rooms and direct messages with the four `chat.*_webhook` operations.
-    The agent panel has the same controls with `principal_id`. Only the sponsor can create an agent's webhook.
-    Owners, admins and sponsors can list and delete the agent's webhooks. Only a creator can edit their webhook.
-    Both kinds share the URL, auth key, header and secret controls. Chat creates no browser storage.
-  - A new mail webhook watches your mailbox or a team mailbox that you select. Its signing secret shows
-    once, in the same one-time secret dialog as a new key. A disabled webhook shows the reason.
+  - **Webhook endpoints** creates the URL. The signing secret shows once. **Edit** (`webhooks.update_endpoint`) changes the label, the auth key and the custom header.
+  - **Mail events**, **Chat events** and **Drive events** add a subscription to one of your endpoints.
+    Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
+    A star sends nothing. The agent panel lists the same subscriptions for an agent. Only the sponsor can add one.
+    Owners, admins and sponsors can delete an agent's subscription. Chat creates no browser storage.
+  - A new mail subscription watches your mailbox or a team mailbox that you select. A disabled endpoint shows the reason.
   - The form also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
     custom header (a name and a value). Both are password fields, and the list shows only that a key
     is set and the name of the header.
-  - **Edit** shows on the webhooks that you created (`mail.update_webhook`). It changes the label, and
+  - **Edit** shows on the endpoints that you created (`webhooks.update_endpoint`). It changes the label, and
     keeps, replaces or removes the auth key and the header.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
@@ -662,7 +666,8 @@ MCP clients. The app has no UI-only path.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
-    bold with a dot at the right. A direct message row shows a round avatar with the initials of
+    bold with the number of unread messages at the right ("99+" above 99). A screen reader reads
+    "2 unread messages". A direct message row shows a round avatar with the initials of
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.
@@ -678,10 +683,19 @@ MCP clients. The app has no UI-only path.
     tests the socket at once.
   - The page opens no new socket when the server ends it: the person signed out, or is not a member
     of the room now. The page then reads the room list again.
-  - The room list comes from `chat.list_rooms` each 4 seconds while the tab is visible, and on
-    window focus. It gives the sidebar its unread dots. When the `version` of the open room is
-    higher than the version of the page, the page calls `chat.list_messages` with `changed_after`.
-    So the open room is current also while its socket is not connected.
+  - The room list comes from `chat.list_rooms`, and then from the events socket of the person
+    (`/ws/events`, `roomList.ts`). The socket sends each changed room as `chat.list_rooms` returns
+    it, and the page puts it at its place. After each connect (`hello`), the page reads the list
+    again. A read can answer after an event, so the page keeps each change of the socket that came
+    after the start of the read.
+  - While the events socket is connected, the page reads the list each minute only, as a net for
+    a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
+    is visible, and on window focus.
+  - A sign-out closes the events socket at once. The page then reads the list, gets the refusal,
+    and shows the sign-in page.
+  - When the `version` of the open room in the list is higher than the version of the page, the
+    page calls `chat.list_messages` with `changed_after`. So the open room is current also while
+    its socket is not connected.
   - A sync that fails runs again after the next room list, also when the version did not change.
   - An open room is read while the person looks at its newest messages: the tab shows, the list
     is at its end, and the list is at the newest messages of the room. The page then calls

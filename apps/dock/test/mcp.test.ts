@@ -69,7 +69,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(104);
+		expect(all).toHaveLength(109);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
@@ -81,21 +81,20 @@ describe("the MCP endpoint", () => {
 			"account_whoami",
 			"chat_add_members",
 			"chat_create_room",
-			"chat_create_webhook",
+			"chat_create_webhook_subscription",
 			"chat_delete_message",
-			"chat_delete_webhook",
+			"chat_delete_webhook_subscription",
 			"chat_edit_message",
 			"chat_get_room",
 			"chat_join_room",
 			"chat_list_messages",
 			"chat_list_rooms",
-			"chat_list_webhooks",
+			"chat_list_webhook_subscriptions",
 			"chat_mark_read",
 			"chat_open_dm",
 			"chat_post_message",
 			"chat_remove_member",
 			"chat_update_room",
-			"chat_update_webhook",
 			"directory_list_principals",
 			"directory_list_team_mailboxes",
 			"docs_create",
@@ -103,7 +102,9 @@ describe("the MCP endpoint", () => {
 			"docs_update",
 			"drive_copy_item",
 			"drive_create_folder",
+			"drive_create_webhook_subscription",
 			"drive_delete_items",
+			"drive_delete_webhook_subscription",
 			"drive_download_file",
 			"drive_empty_trash",
 			"drive_get_about",
@@ -113,6 +114,7 @@ describe("the MCP endpoint", () => {
 			"drive_list_permissions",
 			"drive_list_shared_drives",
 			"drive_list_versions",
+			"drive_list_webhook_subscriptions",
 			"drive_move_items",
 			"drive_move_to_drive",
 			"drive_rename_item",
@@ -125,9 +127,9 @@ describe("the MCP endpoint", () => {
 			"drive_upload_file",
 			"drive_upload_version",
 			"mail_create_label",
-			"mail_create_webhook",
+			"mail_create_webhook_subscription",
 			"mail_delete_label",
-			"mail_delete_webhook",
+			"mail_delete_webhook_subscription",
 			"mail_get_attachment",
 			"mail_get_message",
 			"mail_get_profile",
@@ -135,11 +137,10 @@ describe("the MCP endpoint", () => {
 			"mail_list_labels",
 			"mail_list_mailboxes",
 			"mail_list_threads",
-			"mail_list_webhooks",
+			"mail_list_webhook_subscriptions",
 			"mail_modify_threads",
 			"mail_send",
 			"mail_suggest_recipients",
-			"mail_update_webhook",
 			"sheets_add_tab",
 			"sheets_create",
 			"sheets_delete_tab",
@@ -149,6 +150,10 @@ describe("the MCP endpoint", () => {
 			"sheets_move_tab",
 			"sheets_rename_tab",
 			"sheets_update_cells",
+			"webhooks_create_endpoint",
+			"webhooks_delete_endpoint",
+			"webhooks_list_endpoints",
+			"webhooks_update_endpoint",
 		]);
 		const { tools } = ((await mcp(bot.key, "tools/list")).body?.result ?? { tools: [] }) as {
 			tools: { name: string; inputSchema: Record<string, unknown>; annotations: Record<string, unknown> }[];

@@ -9,8 +9,8 @@
 | --- | --- |
 | **Purpose** | Drive backend: spaces (My Drive and shared drives), item tree, uploads/downloads, versions, trash, permissions and inheritance, link sharing, shared-with-me fan-out, previews, search, access checks for native items. |
 | **Owns** | `DriveSpaceDO` (items, versions, permissions, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
-| **Depends on** | `platform`, `identity`, `collab` (the content of a doc or a sheet, for a copy). |
-| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive` |
+| **Depends on** | `platform`, `identity`, `webhooks`, `collab` (the content of a doc or a sheet, for a copy). |
+| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive`, `drive.create_webhook_subscription`, `drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -420,6 +420,21 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
   give the same state. A second `drive.move_to_drive` joins the move in progress, or finds that the
   items moved.
 
+## Webhooks
+
+A subscription sends a signed POST when an item or a shared drive changes.
+Create an endpoint first. Then call `drive.create_webhook_subscription` with `drive.webhooks`.
+The events are `drive.item.created`, `drive.item.updated`, `drive.item.moved`, `drive.item.trashed`, `drive.item.restored`, `drive.item.deleted`, `drive.item.shared`, `drive.item.unshared`, `drive.members.changed` and `drive.deleted`.
+The POST has ids and a URI. It has no file content.
+A star sends nothing. A doc or a sheet uses `drive.item.updated`.
+The drive stores events only after the first subscription.
+The object stores the event in `webhook_outbox` in the same transaction as the change.
+A shared drive event also stores the member ids from that moment.
+A permanent delete of a folder sends one `drive.item.deleted` for the folder.
+The alarm sends the event to `soldock-webhooks`.
+A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.
+See the [webhook module](../webhooks/README.md).
+
 ## Safety
 
 - File bytes never go to a browser from this origin as a page. A download is base64 in JSON, and
@@ -441,6 +456,7 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
 | Stars of the owner | `DriveSpaceDO` table `stars` | Pointers to items of this drive and of other drives |
 | Shared-with-me index of the owner | `DriveSpaceDO` table `shared_with_me` | Rebuildable from the grants of the other drives |
 | Outbox | `DriveSpaceDO` table `outbox` | Rows are deleted after delivery or after the last retry |
+| Webhook events | `DriveSpaceDO` table `webhook_outbox` | The event type, the item id, the time and the member ids. No file content. The alarm deletes a row after the queue accepts it |
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |

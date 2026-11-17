@@ -12,3 +12,4 @@ export {
 } from "./access.ts";
 export { driveHandlers } from "./handlers.ts";
 export { DriveSpaceDO, type ItemRecord } from "./space.ts";
+export { driveWatchers } from "./watch.ts";

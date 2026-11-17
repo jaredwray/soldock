@@ -1,4 +1,10 @@
-import type { Operation, OperationName, Operations, PrincipalKind } from "@soldock/contracts";
+import {
+	holdsOperationScopes,
+	type Operation,
+	type OperationName,
+	type Operations,
+	type PrincipalKind,
+} from "@soldock/contracts";
 import { z } from "zod";
 import { audit } from "../log/log.ts";
 import { OperationError } from "./errors.ts";
@@ -76,9 +82,11 @@ async function run<C extends { caller: Caller }>(
 	if (!operation.callers.includes(call.caller.kind)) {
 		throw new OperationError("forbidden", `An ${call.caller.kind} cannot call ${operation.name}.`);
 	}
-	const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
-	if (missing.length > 0) {
-		throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
+	if (!holdsOperationScopes(operation, call.caller.scopes)) {
+		const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
+		const needed = missing.length > 0 ? missing : (operation.anyOfScopes ?? []);
+		const scopeText = missing.length > 0 ? needed.join(", ") : `one of ${needed.join(", ")}`;
+		throw new OperationError("forbidden", `The credential does not have the scope ${scopeText}.`);
 	}
 	if (isTooDeep(rawInput)) {
 		throw new OperationError("invalid", `The input has more than ${MAX_INPUT_DEPTH} levels of objects and lists.`);

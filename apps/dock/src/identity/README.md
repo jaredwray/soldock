@@ -134,8 +134,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
   deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
-  The same transaction deletes the webhooks that the principal created and the webhooks of its
-  mailbox and chats (tables `webhooks` and `chat_webhooks` of the [shared webhook module](../webhooks/README.md)).
+  The same transaction deletes the subscriptions for that target, then the endpoints that the principal created
+  (tables `webhook_subscriptions` and `webhook_endpoints` of the [shared webhook module](../webhooks/README.md)).
+  It also deletes the old rows in `webhooks` and `chat_webhooks`.
   Each record holds a signature secret that nobody can access after deletion.
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
@@ -239,8 +240,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
-  (`0001`, then `0003` to `0012`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0012` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  (`0001`, then `0003` to `0013`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records `0001` to `0013` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
@@ -474,7 +475,7 @@ Each call passes three checks:
      knew the old password.
 3. **Agent policy**: `mail.send` refuses external recipients outside the policy with
    `policy_denied`, before anything is stored. The policy belongs to the agent, so it also applies
-   to mail that the agent sends from a team mailbox. `mail.create_webhook` and `chat.create_webhook` refuse a host outside the
+   to mail that the agent sends from a team mailbox. `webhooks.create_endpoint` refuses a host outside the
    policy in the same way.
 
 A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the
@@ -513,9 +514,11 @@ Each change and each refused change writes an `audit: true` line to Workers Logs
 `actorKind`, `credential`, `target`, `result`, `requestId`). The hash-chained audit log in R2
 replaces this later.
 
-## Chat webhook scope
+## Webhook scopes
 
-`chat.webhooks` permits webhook management for a principal's joined chats, including the chats of agents that they sponsor.
-Migration `0011` adds this scope only to live human API keys that already hold every previous human scope.
-Narrow keys and OAuth grants keep their existing scopes. A sponsor can add the scope to an OAuth grant with `oauth.add_grant_scopes`.
-The fresh directory reset replays `0011`. Principal deletion removes both kinds of webhook records in the same transaction.
+`mail.webhooks`, `chat.webhooks` and `drive.webhooks` let a caller manage subscriptions for that product.
+Endpoint operations accept any one of those scopes.
+Migration `0011` adds `chat.webhooks` only to a live human key that already holds every human scope of that time.
+Migration `0013` adds `drive.webhooks` the same way, for the 14 human scopes that exist before it.
+A narrow key and an OAuth grant keep their scopes. A sponsor can add a scope with `oauth.add_grant_scopes`.
+The fresh directory reset replays `0013`. Principal deletion removes the endpoint rows and the subscription rows in the same transaction.

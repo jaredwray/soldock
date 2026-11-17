@@ -1,12 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import {
 	DRIVE_LIMITS,
+	DRIVE_WEBHOOK_EVENTS,
 	type DriveRole,
+	type DriveWebhookEvent,
 	type ItemKind,
 	SHARED_DRIVE_LIMITS,
 	type SharedDriveRole,
 } from "@soldock/contracts";
 import { audit, log } from "../platform/index.ts";
+import type { DriveWebhookEventJob } from "../webhooks/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = { error: { code: "invalid" | "not_found" | "conflict" | "forbidden"; message: string } };
@@ -41,6 +44,18 @@ export function blobKeyFor(spaceId: string, itemId: string, versionId: string): 
 /** True for the id of a shared drive. A personal drive has the id of its owner. */
 export function isSharedDriveId(spaceId: string): boolean {
 	return spaceId.startsWith("drv_");
+}
+
+/** The member ids stored with a drive event. Null means a personal drive. */
+function memberIdsOf(stored: string | null): string[] | undefined {
+	if (stored === null) return undefined;
+	try {
+		const parsed = JSON.parse(stored) as unknown;
+		if (!Array.isArray(parsed)) return undefined;
+		return parsed.filter((id): id is string => typeof id === "string");
+	} catch {
+		return undefined;
+	}
 }
 
 /** One member of a shared drive. Times are in milliseconds. */
@@ -454,6 +469,18 @@ const MIGRATIONS: string[][] = [
 		"DROP TABLE outbox",
 		"ALTER TABLE outbox_next RENAME TO outbox",
 	],
+	[
+		`CREATE TABLE webhook_outbox (
+			id TEXT PRIMARY KEY,
+			event_type TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			occurred_at INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL
+		)`,
+	],
+	// The members at the time of the event. A later membership change does not change this list.
+	["ALTER TABLE webhook_outbox ADD COLUMN members_json TEXT"],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -627,7 +654,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			const pending =
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0) +
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM transfers")?.n ?? 0) +
-				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n ?? 0);
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n ?? 0) +
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM webhook_outbox")?.n ?? 0);
 			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
 	}
@@ -673,6 +701,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	private isOwner(call: SpaceCall): boolean {
 		return call.actor.principal_id === call.spaceId;
+	}
+
+	/** True when the principal is a member of this shared drive now. The index in D1 can be behind. */
+	hasMember(principalId: string): boolean {
+		const spaceId = this.meta("space_id");
+		if (!spaceId || !isSharedDriveId(spaceId)) return false;
+		return this.memberRole(principalId) !== null;
 	}
 
 	/** The role of a principal as a member of this shared drive, or null. A personal drive has no member. */
@@ -1218,7 +1253,42 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	private async schedule(): Promise<void> {
-		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n) await this.ctx.storage.setAlarm(Date.now());
+		const pending =
+			(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0) +
+			(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM webhook_outbox")?.n ?? 0);
+		if (pending > 0) await this.ctx.storage.setAlarm(Date.now());
+	}
+
+	/** Turns webhook events on for this drive. The Worker calls this when it creates a subscription. */
+	enableWebhookEvents(): void {
+		if (this.meta("webhook_events") !== "1") this.setMeta("webhook_events", "1");
+	}
+
+	/** The members of a shared drive now. A personal drive has no member list. */
+	private webhookMemberIds(): string[] | null {
+		const spaceId = this.meta("space_id");
+		if (!spaceId || !isSharedDriveId(spaceId)) return null;
+		return this.all<{ principal_id: string }>("SELECT principal_id FROM members").map((row) => row.principal_id);
+	}
+
+	/**
+	 * Records one drive event. Call this inside the transaction that stores the change.
+	 * Pass `members` when the transaction deletes the members before this call.
+	 */
+	private noteWebhook(eventType: DriveWebhookEvent, itemId: string, members?: string[] | null): void {
+		if (this.meta("webhook_events") !== "1") return;
+		const now = Date.now();
+		const ids = members === undefined ? this.webhookMemberIds() : members;
+		this.sql.exec(
+			`INSERT INTO webhook_outbox (id, event_type, item_id, occurred_at, next_attempt_at, members_json)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			crypto.randomUUID(),
+			eventType,
+			itemId,
+			now,
+			now,
+			ids === null ? null : JSON.stringify(ids),
+		);
 	}
 
 	/**
@@ -1303,7 +1373,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				);
 			}
 			this.bump();
+			this.noteWebhook("drive.item.created", input.id);
 		});
+		await this.schedule();
 		return { item: this.recordOf(call, input.id), duplicate: false };
 	}
 
@@ -1362,6 +1434,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				this.enqueue("blob", version.blob_key, {});
 			}
 			this.bump();
+			this.noteWebhook("drive.item.updated", itemId);
 		});
 		await this.schedule();
 		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", input.id) as VersionRow;
@@ -1392,7 +1465,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					itemId,
 				);
 				this.bump();
+				this.noteWebhook("drive.item.updated", itemId);
 			});
+			this.ctx.waitUntil(this.schedule());
 		}
 		return { item: this.recordOf(call, itemId), version: this.versionRecord(version, versionId) };
 	}
@@ -1414,7 +1489,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				);
 				this.sql.exec("UPDATE items_fts SET name = ? WHERE rowid = ?", name, found.item.seq);
 				this.bump();
+				this.noteWebhook("drive.item.updated", itemId);
 			});
+			this.ctx.waitUntil(this.schedule());
 		}
 		return this.recordOf(call, itemId);
 	}
@@ -1453,10 +1530,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					parentId,
 					id,
 				).rowsWritten;
+				if (moved > 0) this.noteWebhook("drive.item.moved", id);
 				changed ||= moved > 0;
 			}
 			if (changed) this.bump();
 		});
+		this.ctx.waitUntil(this.schedule());
 		return ids.map((id) => this.recordOf(call, id));
 	}
 
@@ -1529,9 +1608,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					`${DOWN} UPDATE items SET trash_root = ?1 WHERE trash_root IS NULL AND id IN (SELECT id FROM down)`,
 					item.id,
 				);
+				this.noteWebhook("drive.item.trashed", item.id);
 			}
 			this.bump();
 		});
+		this.ctx.waitUntil(this.schedule());
 		return { items_changed: changed.length };
 	}
 
@@ -1565,9 +1646,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					item.id,
 				);
 				this.sql.exec("UPDATE items SET trash_root = NULL WHERE trash_root = ?", item.id);
+				this.noteWebhook("drive.item.restored", item.id);
 			}
 			this.bump();
 		});
+		this.ctx.waitUntil(this.schedule());
 		return { items_changed: rows.length };
 	}
 
@@ -1630,6 +1713,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM items_fts WHERE rowid = ?", row.seq);
 			this.sql.exec("DELETE FROM items WHERE id = ?", row.id);
 		}
+		this.noteWebhook("drive.item.deleted", itemId);
 	}
 
 	// --- Share ----------------------------------------------------------------------------------
@@ -1659,6 +1743,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			);
 			this.enqueue("share", principalId, { itemId, role, sharedAt: now });
 			this.bump();
+			this.noteWebhook("drive.item.shared", itemId);
 		});
 		await this.schedule();
 		const row = this.one<{ granted_by_json: string | null; created_at: number }>(
@@ -1694,6 +1779,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (!removed) return;
 			this.enqueue("unshare", principalId, { itemId });
 			this.bump();
+			this.noteWebhook("drive.item.unshared", itemId);
 		});
 		await this.schedule();
 		return { removed };
@@ -1904,8 +1990,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				const now = Date.now();
 				for (const member of changed) this.putMember(member, actor, now);
 				this.bump();
+				this.noteWebhook("drive.members.changed", call.spaceId);
 			});
 		}
+		await this.schedule();
 		await this.flush();
 		return { drive: this.driveRecord(call, facts), changed };
 	}
@@ -1931,7 +2019,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
 			this.bump();
+			this.noteWebhook("drive.members.changed", call.spaceId);
 		});
+		await this.schedule();
 		await this.flush();
 		return { removed: true };
 	}
@@ -1958,13 +2048,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				"The shared drive holds items. Move them to a different drive, or delete them permanently, also the items in its trash.",
 			);
 		}
+		const members = this.memberRows().map((member) => member.principal_id);
 		this.ctx.storage.transactionSync(() => {
 			this.setMeta("drive", JSON.stringify({ ...facts, deleted_at: Date.now() }));
 			for (const member of this.memberRows()) this.touch(`member:${member.principal_id}`);
+			this.noteWebhook("drive.deleted", call.spaceId, members);
 			this.sql.exec("DELETE FROM members");
 			this.touch("drive");
 			this.bump();
 		});
+		await this.schedule();
 		await this.flush();
 		return { deleted: true };
 	}
@@ -2428,6 +2521,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			// The stars of the owner of a personal drive are in this drive.
 			this.repoint("stars", spaceId, row.target, list);
 			for (const principalId of notified) this.enqueue("moved", principalId, { to: row.target, itemIds });
+			for (const top of this.all<{ item_id: string }>(
+				"SELECT item_id FROM transfer_items WHERE transfer_id = ? AND top = 1",
+				row.id,
+			)) {
+				this.noteWebhook("drive.item.moved", top.item_id);
+			}
 			this.sql.exec("DELETE FROM transfer_items WHERE transfer_id = ?", row.id);
 			this.sql.exec("DELETE FROM transfers WHERE id = ?", row.id);
 			this.forget(now);
@@ -2635,6 +2734,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 						input.transferId,
 						now,
 					);
+					for (const id of tops) this.noteWebhook("drive.item.created", id);
 					this.forget(now);
 					this.bump();
 				});
@@ -3031,7 +3131,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * access before the move. This drive sends such a change on to the drive that holds the item.
 	 */
 	async applyDocumentChange(change: DocumentChange): Promise<void> {
-		this.applyChange(change);
+		this.applyChange(change, false, true);
+		this.ctx.waitUntil(this.schedule());
 		// Before the commit of a move, the target has no row for the item. The `refresh` step of the move
 		// sends the state of this drive then.
 		const next =
@@ -3058,7 +3159,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/** Stores a change with a newer revision. With `same`, also a change with the revision of the item. */
-	private applyChange(change: DocumentChange, same = false): void {
+	private applyChange(change: DocumentChange, same = false, notify = false): void {
 		const item = this.one<{ seq: number; content_revision: number }>(
 			"SELECT seq, content_revision FROM items WHERE id = ? AND kind IN ('doc', 'sheet')",
 			change.itemId,
@@ -3080,6 +3181,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				item.seq,
 			);
 			this.bump();
+			if (notify) this.noteWebhook("drive.item.updated", change.itemId);
 		});
 	}
 
@@ -3096,14 +3198,74 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 	}
 
+	/** Sends drive events to the webhook queue. A second call sends the events that a move stored. */
+	private async drainWebhooks(): Promise<void> {
+		const spaceId = this.meta("space_id");
+		if (!spaceId) return;
+		const rows = this.all<{
+			id: string;
+			event_type: string;
+			item_id: string;
+			occurred_at: number;
+			attempts: number;
+			members_json: string | null;
+		}>(
+			"SELECT id, event_type, item_id, occurred_at, attempts, members_json FROM webhook_outbox WHERE next_attempt_at <= ? ORDER BY occurred_at LIMIT ?",
+			Date.now(),
+			OUTBOX_BATCH,
+		);
+		for (const row of rows) {
+			if (!(DRIVE_WEBHOOK_EVENTS as readonly string[]).includes(row.event_type)) {
+				this.sql.exec("DELETE FROM webhook_outbox WHERE id = ?", row.id);
+				continue;
+			}
+			const memberIds = memberIdsOf(row.members_json);
+			const job: DriveWebhookEventJob = {
+				v: 1,
+				kind: "drive_event",
+				spaceId,
+				eventType: row.event_type as DriveWebhookEvent,
+				eventId: row.id,
+				itemId: row.item_id,
+				occurredAt: row.occurred_at,
+				...(memberIds !== undefined ? { memberIds } : {}),
+			};
+			try {
+				await this.env.WEBHOOKS.send(job);
+				this.sql.exec("DELETE FROM webhook_outbox WHERE id = ?", row.id);
+			} catch (error) {
+				const attempts = row.attempts + 1;
+				this.sql.exec(
+					"UPDATE webhook_outbox SET attempts = ?, next_attempt_at = ? WHERE id = ?",
+					attempts,
+					Date.now() + backoff(attempts),
+					row.id,
+				);
+				log("warn", "drive webhook queue send failed", {
+					eventId: row.id,
+					attempts,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+		const waiting = this.one<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM webhook_outbox");
+		if (waiting?.at != null) {
+			const set = await this.ctx.storage.getAlarm();
+			const next = Math.max(waiting.at, Date.now());
+			if (set === null || set > next) await this.ctx.storage.setAlarm(next);
+		}
+	}
+
 	/** The work of one alarm: the writes to the index in D1, then the moves between drives, then the outbox. */
 	private async runAlarm(): Promise<void> {
+		await this.drainWebhooks();
 		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n) await this.flush();
 		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM transfers")?.n) {
 			await this.runMoves({ deadline: Date.now() + MOVE_BUDGET_MS, calls: 0 });
 		}
 		this.forget(Date.now());
 		await this.drain();
+		await this.drainWebhooks();
 		await this.scheduleIndex();
 		await this.scheduleTransfers();
 	}

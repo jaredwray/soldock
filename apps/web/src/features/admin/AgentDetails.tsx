@@ -48,13 +48,19 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 			<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
 			<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
 			<WebhookManager
-				heading={`Mail webhooks of ${agent.display_name}`}
+				heading={`Mail events of ${agent.display_name}`}
 				mailboxId={agent.id}
 				canCreate={agent.sponsor_id === whoami.principal.id}
 			/>
 			<WebhookManager
 				domain="chat"
-				heading={`Chat webhooks of ${agent.display_name}`}
+				heading={`Chat events of ${agent.display_name}`}
+				mailboxId={agent.id}
+				canCreate={agent.sponsor_id === whoami.principal.id}
+			/>
+			<WebhookManager
+				domain="drive"
+				heading={`Drive events of ${agent.display_name}`}
 				mailboxId={agent.id}
 				canCreate={agent.sponsor_id === whoami.principal.id}
 			/>

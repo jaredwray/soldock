@@ -73,7 +73,9 @@ describe("the operation registry", () => {
 	it("lists agents as callers only where an agent token can hold every scope", () => {
 		for (const op of operationList) {
 			if (!op.callers.includes("agent")) continue;
-			for (const scope of op.scopes) expect(AGENT_SCOPES, `${op.name} needs ${scope}`).toContain(scope);
+			for (const scope of [...op.scopes, ...(op.anyOfScopes ?? [])]) {
+				expect(AGENT_SCOPES, `${op.name} needs ${scope}`).toContain(scope);
+			}
 		}
 	});
 

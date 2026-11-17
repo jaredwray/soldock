@@ -9,6 +9,7 @@ import webhookSchema from "../../migrations/0009_webhooks.sql";
 import webhookAuthSchema from "../../migrations/0010_webhook_auth.sql";
 import chatWebhookSchema from "../../migrations/0011_chat_webhooks.sql";
 import sharedDriveSchema from "../../migrations/0012_shared_drives.sql";
+import webhookEndpointSchema from "../../migrations/0013_webhook_endpoints.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -79,7 +80,13 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// no operation opens them.
 		"DROP TABLE IF EXISTS shared_drive_members",
 		"DROP TABLE IF EXISTS shared_drives",
-		// The webhooks act for the old principals.
+		// The webhooks act for the old principals. Drop the mirror triggers before the old tables.
+		"DROP TRIGGER IF EXISTS webhooks_mirror_update",
+		"DROP TRIGGER IF EXISTS chat_webhooks_mirror_update",
+		"DROP TRIGGER IF EXISTS webhooks_mirror_delete",
+		"DROP TRIGGER IF EXISTS chat_webhooks_mirror_delete",
+		"DROP TABLE IF EXISTS webhook_subscriptions",
+		"DROP TABLE IF EXISTS webhook_endpoints",
 		"DROP TABLE IF EXISTS webhooks",
 		"DROP TABLE IF EXISTS chat_webhooks",
 		// The OAuth connections act as the old principals. The clients go too: each must register again.
@@ -106,6 +113,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...webhookAuthSchema.split("--> statement-breakpoint"),
 		...chatWebhookSchema.split("--> statement-breakpoint"),
 		...sharedDriveSchema.split("--> statement-breakpoint"),
+		...webhookEndpointSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -129,4 +137,5 @@ const BUNDLED_MIGRATIONS = [
 	"0010_webhook_auth.sql",
 	"0011_chat_webhooks.sql",
 	"0012_shared_drives.sql",
+	"0013_webhook_endpoints.sql",
 ] as const;

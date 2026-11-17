@@ -2,11 +2,12 @@
 // the tests use these maps.
 import { chatHandlers, chatWatchers } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
-import { driveHandlers } from "./drive/index.ts";
+import { driveHandlers, driveWatchers } from "./drive/index.ts";
 import { type CallContext, identityHandlers } from "./identity/index.ts";
 import { mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { HandlerMap, WatcherMap } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
+import { endpointHandlers } from "./webhooks/index.ts";
 
 export const handlers: HandlerMap<CallContext> = {
 	...identityHandlers,
@@ -15,10 +16,12 @@ export const handlers: HandlerMap<CallContext> = {
 	...docsHandlers,
 	...sheetsHandlers,
 	...chatHandlers,
+	...endpointHandlers,
 };
 
 /** The change feed of each resource kind, for `subscriptions/listen` on MCP. */
 export const watchers: WatcherMap<CallContext> = {
 	...mailWatchers,
 	...chatWatchers,
+	...driveWatchers,
 };

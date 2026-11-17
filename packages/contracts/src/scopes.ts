@@ -3,8 +3,7 @@
  * only limit what a token can do: the owner's role and the resource still decide the rest.
  */
 export const SCOPES = {
-	"chat.webhooks":
-		"Create, change, list and delete webhooks for new messages in your joined chats or those of agents that you sponsor",
+	"chat.webhooks": "Create a webhook endpoint and choose which chat message events Soldock sends to it",
 	"account.read": "Read your own account",
 	"account.keys":
 		"Create, list and revoke API keys and OAuth connections for yourself and for the agents that you sponsor, approve OAuth requests, and change passwords and two-step verification",
@@ -15,8 +14,8 @@ export const SCOPES = {
 		"Read your mail and labels, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
 	"mail.modify": "Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes",
 	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
-	"mail.webhooks":
-		"Create, list and delete webhooks that tell a URL outside Soldock when new mail arrives in your mailbox, your team mailboxes and the mailboxes of the agents that you sponsor",
+	"mail.webhooks": "Create a webhook endpoint and choose which mailboxes send new mail to it",
+	"drive.webhooks": "Create a webhook endpoint and choose which drives send item events to it",
 	"drive.read":
 		"Read your drive, the items that others shared with you and the shared drives that you are a member of: folders, files, docs and sheets",
 	"drive.write":
@@ -47,6 +46,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"drive.read",
 	"drive.write",
 	"drive.share",
+	"drive.webhooks",
 	"chat.read",
 	"chat.write",
 ];

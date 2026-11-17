@@ -1,6 +1,7 @@
 import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@soldock/contracts";
 import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
+import { loseDriveAccess } from "../webhooks/store.ts";
 import {
 	accept,
 	auditOk,
@@ -25,6 +26,7 @@ import {
 	type SharedDriveRecord,
 	type VersionRecord,
 } from "./space.ts";
+import { driveWebhookHandlers } from "./webhooks.ts";
 
 type DriveOperation = Extract<OperationName, `drive.${string}`>;
 
@@ -178,6 +180,7 @@ async function memberInputs(
 }
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
+	...driveWebhookHandlers,
 	async "drive.get_about"(call, input) {
 		const own = await openSpace(call, input.space_id);
 		const about = accept(await own.space.about(own.ctx));
@@ -613,7 +616,10 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	async "drive.remove_shared_drive_member"(call, input) {
 		const opened = await openSpace(call, input.drive_id);
 		const result = accept(await opened.space.removeMember(opened.ctx, input.principal_id));
-		if (result.removed) auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
+		if (result.removed) {
+			auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
+			await loseDriveAccess(call.env.DIRECTORY, input.drive_id, input.principal_id);
+		}
 		return result;
 	},
 

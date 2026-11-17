@@ -784,12 +784,22 @@ describe("OAuth scope changes", () => {
 		expect((await agentApi("account.whoami")).missing_scopes).toContainEqual({
 			scope: "mail.webhooks",
 			description: SCOPES["mail.webhooks"],
-			operations: ["mail.create_webhook", "mail.list_webhooks", "mail.update_webhook", "mail.delete_webhook"],
+			operations: [
+				"mail.create_webhook_subscription",
+				"mail.list_webhook_subscriptions",
+				"mail.delete_webhook_subscription",
+				"webhooks.create_endpoint",
+				"webhooks.list_endpoints",
+				"webhooks.update_endpoint",
+				"webhooks.delete_endpoint",
+			],
 		});
 		const before = await instructions(tokens.access_token);
-		expect(before).toContain("mail.webhooks (4 tools)");
+		expect(before).toContain("mail.webhooks (7 tools)");
 		expect(before).toContain("Admin › Members");
-		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).not.toContain("mail_create_webhook");
+		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).not.toContain(
+			"mail_create_webhook_subscription",
+		);
 
 		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
 		const grantId = grant?.id ?? "";
@@ -797,7 +807,9 @@ describe("OAuth scope changes", () => {
 		expect(added.grant.scopes).toEqual(["account.read", "mail.read", "mail.webhooks", "chat.read"]);
 
 		// The token that the client holds gets the new tools at once: no refresh and no new approval.
-		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).toContain("mail_create_webhook");
+		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).toContain(
+			"mail_create_webhook_subscription",
+		);
 		expect((await agentApi("account.whoami")).missing_scopes.map((missing) => missing.scope)).not.toContain(
 			"mail.webhooks",
 		);
@@ -935,14 +947,22 @@ describe("OAuth and webhooks", () => {
 		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
 		const agent = approved.principal;
 		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
-		const created = await callTool(tokens.access_token, `${domain}_create_webhook`, {
+		const created = await callTool(tokens.access_token, "webhooks_create_endpoint", {
 			url: "https://hooks.example.com/a",
 		});
-		const webhook = created.structuredContent?.webhook as { id: string; mailbox_id: string };
+		const createdBody = created.structuredContent as { endpoint: { id: string } } | undefined;
+		if (!createdBody) throw new Error("the endpoint was not created");
+		const subscribed = await callTool(tokens.access_token, `${domain}_create_webhook_subscription`, {
+			endpoint_id: createdBody.endpoint.id,
+			event: domain === "mail" ? "mail.inbox.updated" : "chat.message.created",
+		});
+		const subscribedBody = subscribed.structuredContent as { subscription: { id: string } } | undefined;
+		if (!subscribedBody) throw new Error("the subscription was not created");
+		const subscription = subscribedBody.subscription;
 		let job: unknown = {
 			v: 1,
 			kind: "delivery",
-			webhookId: webhook.id,
+			webhookId: subscription.id,
 			mailboxId: agent.id,
 			eventId: "evt_01JC0000000000000000000000",
 			occurredAt: Date.now(),
@@ -960,10 +980,12 @@ describe("OAuth and webhooks", () => {
 			job = {
 				v: 1,
 				kind: "chat_delivery",
-				webhookId: webhook.id,
+				webhookId: subscription.id,
 				mailboxId: agent.id,
 				roomId: room.id,
 				eventId: message.id,
+				messageId: message.id,
+				eventType: "chat.message.created",
 				occurredAt: Date.now(),
 				membershipId,
 			};
@@ -976,10 +998,10 @@ describe("OAuth and webhooks", () => {
 		await owner.call("oauth.revoke_grant", { grant_id: grant?.id ?? "" });
 		await consumeWebhooks([job]);
 		expect(posts).toHaveLength(1);
-		expect(
+		const listed =
 			domain === "mail"
-				? (await owner.call("mail.list_webhooks", { mailbox_id: agent.id })).webhooks
-				: (await owner.call("chat.list_webhooks", { principal_id: agent.id })).webhooks,
-		).toMatchObject([{ status: "disabled", disabled_reason: "credential_revoked" }]);
+				? (await owner.call("mail.list_webhook_subscriptions", { mailbox_id: agent.id })).subscriptions
+				: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions;
+		expect(listed).toMatchObject([{ endpoint: { status: "disabled", disabled_reason: "credential_revoked" } }]);
 	});
 });

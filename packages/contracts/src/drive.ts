@@ -1,5 +1,6 @@
 import { prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { DRIVE_WEBHOOK_EVENTS, DriveWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 export const DRIVE_LIMITS = {
@@ -729,6 +730,56 @@ export const moveToDrive = defineOperation({
 	errors: ["not_found", "invalid", "conflict"],
 });
 
+const createDriveWebhookSubscription = defineOperation({
+	name: "drive.create_webhook_subscription",
+	summary: "Send drive events to an endpoint",
+	description: [
+		"Adds a subscription for your drive, a shared drive that you belong to, or the drive of an agent that you sponsor.",
+		"Choose the event. A doc change and a sheet change use drive.item.updated.",
+		"The POST has no file content. Read the item with your own credential.",
+		"The endpoint must be yours and active.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/drive/webhook-subscriptions" },
+	scopes: ["drive.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
+	input: z.strictObject({
+		endpoint_id: prefixedId("whe"),
+		event: z.enum(DRIVE_WEBHOOK_EVENTS),
+		space_id: SpaceParam,
+	}),
+	output: z.object({ subscription: DriveWebhookSubscription }),
+	errors: ["not_found", "policy_denied", "conflict", "forbidden"],
+});
+
+const listDriveWebhookSubscriptions = defineOperation({
+	name: "drive.list_webhook_subscriptions",
+	summary: "List drive webhook subscriptions",
+	description:
+		"Lists your drive subscriptions. With space_id, a sponsor, an owner or an admin can list the subscriptions of that agent's drive. A member sees only their own subscriptions of a shared drive.",
+	http: { method: "GET", path: "/api/v1/drive/webhook-subscriptions" },
+	scopes: ["drive.webhooks"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({ space_id: SpaceParam }),
+	output: z.object({ subscriptions: z.array(DriveWebhookSubscription) }),
+	errors: ["not_found"],
+});
+
+const deleteDriveWebhookSubscription = defineOperation({
+	name: "drive.delete_webhook_subscription",
+	summary: "Delete a drive webhook subscription",
+	description:
+		"Deletes a subscription. The endpoint stays. Its creator can delete it. A manager of a shared drive, or the sponsor of an agent, can delete a subscription for that target.",
+	http: { method: "DELETE", path: "/api/v1/drive/webhook-subscriptions/{subscription_id}" },
+	scopes: ["drive.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ subscription_id: prefixedId("whk") }),
+	output: z.object({ deleted: z.boolean() }),
+	errors: ["not_found"],
+});
+
 export const driveOperations = {
 	"drive.get_about": getAbout,
 	"drive.list_items": listItems,
@@ -758,4 +809,7 @@ export const driveOperations = {
 	"drive.remove_shared_drive_member": removeSharedDriveMember,
 	"drive.delete_shared_drive": deleteSharedDrive,
 	"drive.move_to_drive": moveToDrive,
+	"drive.create_webhook_subscription": createDriveWebhookSubscription,
+	"drive.list_webhook_subscriptions": listDriveWebhookSubscriptions,
+	"drive.delete_webhook_subscription": deleteDriveWebhookSubscription,
 } as const;

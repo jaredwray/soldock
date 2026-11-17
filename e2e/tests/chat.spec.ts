@@ -3,6 +3,7 @@ import {
 	composer,
 	createRoom,
 	fill,
+	markRead,
 	newest,
 	openRoom,
 	post,
@@ -335,4 +336,41 @@ test("a link to one message opens the room at that message and marks it", async 
 	// The list is at older messages now. The button goes to the newest messages.
 	await page.locator(".chat-jump").click();
 	await expect(rowsWithText(page, "m70")).toBeInViewport();
+});
+
+// Layer 3 (jaredwray/soldock#72): the sidebar follows the events socket of the person, without a poll.
+test("the sidebar count of a room that is not open goes up and clears without a poll of the list", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const open = unique("Open");
+	const busy = unique("Busy");
+	const openId = await createRoom(tomasz, open, [nadia]);
+	const busyId = await createRoom(tomasz, busy, [nadia]);
+	const page = await nadia.newPage();
+	// The events socket is live after its hello. The test counts the reads of the list after that.
+	const live = page
+		.waitForEvent("websocket", (socket) => socket.url().endsWith("/ws/events"))
+		.then((socket) => socket.waitForEvent("framereceived", (frame) => String(frame.payload).includes('"hello"')));
+	await openRoom(page, openId);
+	await live;
+	let reads = 0;
+	page.on("request", (request) => {
+		if (request.method() === "GET" && new URL(request.url()).pathname === "/api/v1/chat/rooms") reads += 1;
+	});
+	// The hello asks for the list one time. Wait for that read, then count from zero.
+	await expect(page.getByRole("link", { name: busy })).toBeVisible();
+	reads = 0;
+
+	await post(tomasz, busyId, "One");
+	await post(tomasz, busyId, "Two");
+	const link = page.getByRole("link", { name: busy });
+	await expect(link.locator(".chat-nav-count")).toContainText("2");
+	await expect(link).toContainText("2 unread messages");
+
+	// A different device of the same person reads the room. The count goes away on this page.
+	await markRead(nadia, busyId);
+	await expect(link.locator(".chat-nav-count")).toHaveCount(0);
+	expect(reads).toBe(0);
 });

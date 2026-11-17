@@ -1,5 +1,6 @@
 import { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription, WEBHOOK_LIMITS } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 /** System labels. Every mailbox has them, and nobody can rename or delete them. */
@@ -532,274 +533,63 @@ export const updateSettings = defineOperation({
 	errors: [],
 });
 
-export const WEBHOOK_LIMITS = {
-	urlChars: 2000,
-	labelChars: 100,
-	/** The webhooks that one principal created, active or disabled. */
-	perCreator: 10,
-	/** The active webhooks of one mailbox, from all creators. This limits the POST requests of one event. */
-	perMailbox: 20,
-	/** The POST attempts of one event to one webhook. */
-	attempts: 5,
-	/** The events in a row whose last attempt failed. Then the webhook is disabled. */
-	failedEventsBeforeDisable: 5,
-	/** The time that the receiver has to answer one POST. */
-	timeoutMs: 15_000,
-	/** One mailbox sends at most one event in this time. Mail in that time gives one event. */
-	eventGapMs: 5_000,
-	authKeyChars: 1024,
-	headerNameChars: 64,
-	headerValueChars: 2048,
-} as const;
+export { WEBHOOK_LIMITS } from "./webhooks.ts";
 
-/** The event type of the only webhook event: new mail in the inbox of the mailbox. */
-export const WEBHOOK_EVENT_TYPE = "mail.inbox.updated";
+/** The event type for new mail in the inbox of a mailbox. */
+export const WEBHOOK_EVENT_TYPE = MAIL_WEBHOOK_EVENTS[0];
 
-/**
- * An absolute https URL. The server also refuses an IP address, a user name, a port, a fragment, a host
- * name that cannot be public, and the host of the deployment.
- */
-const WebhookUrl = z
-	.url({ protocol: /^https$/, error: "must be an absolute https URL, such as https://hooks.example.com/soldock" })
-	.max(WEBHOOK_LIMITS.urlChars);
-
-/**
- * Header names that a webhook cannot set: Soldock sets them itself, the HTTP layer owns them, they
- * claim a client address or a different method, or Cloudflare uses them. A name that starts with one of `WEBHOOK_RESERVED_HEADER_PREFIXES` is refused too.
- */
-export const WEBHOOK_RESERVED_HEADERS = [
-	"accept-encoding",
-	"cdn-loop",
-	"connection",
-	"content-encoding",
-	"content-length",
-	"content-type",
-	"expect",
-	"forwarded",
-	"host",
-	"keep-alive",
-	"te",
-	"trailer",
-	"transfer-encoding",
-	"true-client-ip",
-	"upgrade",
-	"user-agent",
-	"via",
-	"x-client-ip",
-	"x-cluster-client-ip",
-	"x-http-method-override",
-	"x-method-override",
-	"x-real-ip",
-] as const;
-export const WEBHOOK_RESERVED_HEADER_PREFIXES = ["cf-", "proxy-", "sec-", "webhook-", "x-forwarded-"] as const;
-
-/**
- * The problem with the name of a custom webhook header, or null. `withAuthKey`: the webhook also has an
- * auth key, which uses `Authorization`, so the header cannot.
- */
-export function webhookHeaderNameProblem(name: string, withAuthKey: boolean): string | null {
-	const lower = name.toLowerCase();
-	if (
-		(WEBHOOK_RESERVED_HEADERS as readonly string[]).includes(lower) ||
-		WEBHOOK_RESERVED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix))
-	) {
-		return `Soldock sets the header ${name} itself, so a webhook cannot set it.`;
-	}
-	if (withAuthKey && lower === "authorization") {
-		return "The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.";
-	}
-	return null;
-}
-
-/**
- * A token that the receiver checks. Soldock sends it as `Authorization: Bearer <key>` on each POST. It
- * is write-only: no result shows it after the call that sets it.
- */
-const WebhookAuthKey = z
-	.string()
-	.trim()
-	.min(1)
-	.max(WEBHOOK_LIMITS.authKeyChars)
-	.regex(/^[\x21-\x7E]+$/, "must be printable ASCII without spaces")
-	.describe("A token that your receiver checks. Soldock sends it as Authorization: Bearer <key> on each POST.");
-
-/** One custom header that Soldock sends on each POST. The value is write-only. */
-const WebhookHeader = z
-	.strictObject({
-		name: z
-			.string()
-			.trim()
-			.min(1)
-			.max(WEBHOOK_LIMITS.headerNameChars)
-			.regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, "must be an HTTP header name, such as X-Api-Key"),
-		value: z
-			.string()
-			.trim()
-			.min(1)
-			.max(WEBHOOK_LIMITS.headerValueChars)
-			.regex(/^[\x20-\x7E]+$/, "must be printable ASCII"),
-	})
-	.superRefine((header, ctx) => {
-		const problem = webhookHeaderNameProblem(header.name, false);
-		if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["name"] });
-	})
-	.describe("A custom header that Soldock sends on each POST, for example X-Api-Key for your receiver.");
-
-/** The auth key and the custom header may not both use `Authorization`. */
-function authorizationConflict(input: {
-	auth_key?: string | null | undefined;
-	header?: { name: string } | null | undefined;
-}): boolean {
-	return Boolean(input.auth_key) && input.header?.name.toLowerCase() === "authorization";
-}
-
-/**
- * A webhook: a URL outside Soldock that gets a signed POST when new mail arrives in the inbox of a
- * mailbox. The POST holds no mail content: the receiver reads the inbox with its own credential.
- */
-export const Webhook = z.object({
-	id: z.string(),
-	/** The mailbox that the webhook watches. */
-	mailbox_id: z.string(),
-	url: z.string(),
-	label: z.string(),
-	/** The person or agent that created the webhook. Its access is checked again before each POST. */
-	created_by: z.string(),
-	/** `disabled`: Soldock sends nothing more. Delete the webhook and create a new one. */
-	status: z.enum(["active", "disabled"]),
-	/**
-	 * Why the webhook stopped. `failures`: too many events failed in a row. `gone`: the receiver answered
-	 * 410. `credential_revoked`: the key or the OAuth connection that created it stopped, or its creator
-	 * was deleted. `access_lost`: its creator lost access to the mailbox. `policy_denied`: the outbound
-	 * policy of the agent that created it no longer allows the host.
-	 */
-	disabled_reason: z.enum(["failures", "gone", "credential_revoked", "access_lost", "policy_denied"]).nullable(),
-	/** The events in a row whose last attempt failed. A success sets it to 0. */
-	consecutive_failures: z.number().int(),
-	last_delivery_at: Timestamp.nullable(),
-	last_failure_at: Timestamp.nullable(),
-	/**
-	 * Why the last attempt failed: `http_<status>`, `redirect`, `timeout` or `network`. The response body
-	 * of the receiver is never stored.
-	 */
-	last_error: z.string().nullable(),
-	/** True when Soldock sends an auth key (`Authorization: Bearer`). The key itself is never returned. */
-	has_auth_key: z.boolean(),
-	/** The name of the custom header that Soldock sends, or null. Its value is never returned. */
-	header_name: z.string().nullable(),
-	created_at: Timestamp,
-});
-export type Webhook = z.infer<typeof Webhook>;
-
-/** A new webhook. The signing secret is returned once. */
-export const CreatedWebhook = Webhook.extend({ secret: z.string() });
-export type CreatedWebhook = z.infer<typeof CreatedWebhook>;
-
-const WebhookLabel = z
-	.string()
-	.trim()
-	.max(WEBHOOK_LIMITS.labelChars)
-	.refine((label) => !/[\p{Cc}]/u.test(label), "must not contain control characters");
-
-const WEBHOOK_MAILBOXES =
-	"Use your own mailbox (the default), a team mailbox that you are a member of, or, for a person, the mailbox of an agent that you sponsor.";
-
-export const WebhookCreateInput = z
-	.strictObject({
-		url: WebhookUrl,
-		label: WebhookLabel.optional(),
-		auth_key: WebhookAuthKey.optional(),
-		header: WebhookHeader.optional(),
-	})
-	.refine((input) => !authorizationConflict(input), {
-		message: "The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.",
-		path: ["header", "name"],
-	});
-
-export const createWebhook = defineOperation({
-	name: "mail.create_webhook",
-	summary: "Get a POST at a URL when new mail arrives",
+const createWebhookSubscription = defineOperation({
+	name: "mail.create_webhook_subscription",
+	summary: "Send new mail to an endpoint",
 	description: [
-		"Creates a webhook: Soldock sends a POST to the URL when new mail arrives in the inbox of the mailbox.",
-		WEBHOOK_MAILBOXES,
-		`The body is JSON: {"type": "${WEBHOOK_EVENT_TYPE}", "timestamp", "data": {"webhook_id", "mailbox_id", "uri"}}. It holds no mail content: read the inbox with mail.list_threads, or read the resource at data.uri on MCP.`,
-		"Mail in the same few seconds gives one POST. Spam, a read, a label and an archive send nothing.",
-		"Each POST is signed as Standard Webhooks specifies: the headers webhook-id, webhook-timestamp and webhook-signature.",
-		"The result holds the signing secret (whsec_...). It is shown only once. Use it to verify each POST.",
-		"The URL must use https and a public host name. A POST that fails is retried up to 5 times, and mail while a retry waits sends no POST of its own. After 5 events in a row fail, the webhook is disabled.",
-		"An agent can use only a host that its outbound policy allows: mode any, or a host in its allowlist. Otherwise the call fails with policy_denied. Its sponsor can create the webhook for it.",
-		"For a receiver that checks a token, set auth_key: Soldock sends it as Authorization: Bearer <key>. Set header to send one more header, such as X-Api-Key. The key and the header value are write-only: change them with mail.update_webhook.",
-		"The webhook stops when the credential that created it is revoked, or when its creator loses access to the mailbox.",
+		"Adds a subscription. Soldock sends a signed POST when new mail arrives in the inbox.",
+		"Use your own mailbox, a team mailbox that you belong to, or the mailbox of an agent that you sponsor.",
+		"The POST has no mail content. Read the inbox with your own credential.",
+		"The endpoint must be yours and active. One endpoint can watch more than one mailbox.",
 	].join(" "),
-	http: { method: "POST", path: "/api/v1/mail/webhooks" },
+	http: { method: "POST", path: "/api/v1/mail/webhook-subscriptions" },
 	scopes: ["mail.webhooks"],
 	callers: ["human", "agent"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
-	input: WebhookCreateInput.safeExtend({
+	input: z.strictObject({
+		endpoint_id: prefixedId("whe"),
+		event: z.enum(MAIL_WEBHOOK_EVENTS).default(WEBHOOK_EVENT_TYPE),
 		mailbox_id: MailboxId.optional().describe(
-			"The mailbox to watch: an id from mail.list_mailboxes, or the id of an agent that you sponsor. The default is your own mailbox.",
+			"The mailbox to watch. The default is your own mailbox. You can also name a team mailbox or an agent that you sponsor.",
 		),
 	}),
-	output: z.object({ webhook: CreatedWebhook }),
-	errors: ["not_found", "policy_denied", "conflict"],
+	output: z.object({ subscription: MailWebhookSubscription }),
+	errors: ["not_found", "policy_denied", "conflict", "forbidden"],
 });
 
-export const updateWebhook = defineOperation({
-	name: "mail.update_webhook",
-	summary: "Change the label, the auth key or the custom header of a webhook",
+const listWebhookSubscriptions = defineOperation({
+	name: "mail.list_webhook_subscriptions",
+	summary: "List mail webhook subscriptions",
 	description: [
-		"Changes the fields that the request names, and keeps the others. Only the creator of the webhook can change it.",
-		"auth_key replaces the auth key, and null removes it. header replaces the custom header (its name and its value), and null removes it.",
-		"The key and the header value are write-only: the result shows has_auth_key and header_name only.",
-		"A change does not restart a disabled webhook.",
+		"Lists your mail subscriptions. With mailbox_id, lists the subscriptions of that mailbox that you can see.",
+		"In your mailbox and in a team mailbox, you see only your subscriptions.",
+		"An owner or an admin sees each subscription of a team mailbox.",
+		"The sponsor of an agent, an owner or an admin sees each subscription of that agent.",
 	].join(" "),
-	http: { method: "POST", path: "/api/v1/mail/webhooks/{webhook_id}" },
-	scopes: ["mail.webhooks"],
-	callers: ["human", "agent"],
-	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
-	input: z
-		.strictObject({
-			webhook_id: prefixedId("whk"),
-			label: WebhookLabel.optional(),
-			auth_key: WebhookAuthKey.nullable().optional(),
-			header: WebhookHeader.nullable().optional(),
-		})
-		.refine(
-			(input) => input.label !== undefined || input.auth_key !== undefined || input.header !== undefined,
-			"send label, auth_key or header",
-		),
-	output: z.object({ webhook: Webhook }),
-	errors: ["not_found"],
-});
-
-export const listWebhooks = defineOperation({
-	name: "mail.list_webhooks",
-	summary: "List webhooks",
-	description: [
-		"Without mailbox_id: the webhooks that you created.",
-		"With mailbox_id: the webhooks of that mailbox that you can see. In your own mailbox and in a team mailbox, you see only your own webhooks.",
-		"An owner and an admin see each webhook of a team mailbox. The sponsor of an agent, an owner and an admin see each webhook of the mailbox of the agent.",
-		"The secrets are never returned again.",
-	].join(" "),
-	http: { method: "GET", path: "/api/v1/mail/webhooks" },
+	http: { method: "GET", path: "/api/v1/mail/webhook-subscriptions" },
 	scopes: ["mail.webhooks"],
 	callers: ["human", "agent"],
 	annotations: READ,
 	input: z.strictObject({ mailbox_id: MailboxId.optional() }),
-	output: z.object({ webhooks: z.array(Webhook) }),
+	output: z.object({ subscriptions: z.array(MailWebhookSubscription) }),
 	errors: ["not_found"],
 });
 
-export const deleteWebhook = defineOperation({
-	name: "mail.delete_webhook",
-	summary: "Delete a webhook",
+const deleteWebhookSubscription = defineOperation({
+	name: "mail.delete_webhook_subscription",
+	summary: "Delete a mail webhook subscription",
 	description:
-		"Deletes a webhook. No POST goes to its URL after this. You can delete a webhook that you created. An owner or an admin can delete each webhook of a team mailbox. The sponsor of an agent, an owner and an admin can delete each webhook of the mailbox of the agent.",
-	http: { method: "DELETE", path: "/api/v1/mail/webhooks/{webhook_id}" },
+		"Deletes a subscription. The endpoint stays. You can delete a subscription that you created. An owner or an admin can delete each subscription of a team mailbox. The sponsor of an agent can delete each subscription of that agent.",
+	http: { method: "DELETE", path: "/api/v1/mail/webhook-subscriptions/{subscription_id}" },
 	scopes: ["mail.webhooks"],
 	callers: ["human", "agent"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
-	input: z.strictObject({ webhook_id: prefixedId("whk") }),
+	input: z.strictObject({ subscription_id: prefixedId("whk") }),
 	output: z.object({ deleted: z.boolean() }),
 	errors: ["not_found"],
 });
@@ -819,8 +609,7 @@ export const mailOperations = {
 	"mail.send": send,
 	"mail.suggest_recipients": suggestRecipients,
 	"mail.get_attachment": getAttachment,
-	"mail.create_webhook": createWebhook,
-	"mail.list_webhooks": listWebhooks,
-	"mail.update_webhook": updateWebhook,
-	"mail.delete_webhook": deleteWebhook,
+	"mail.create_webhook_subscription": createWebhookSubscription,
+	"mail.list_webhook_subscriptions": listWebhookSubscriptions,
+	"mail.delete_webhook_subscription": deleteWebhookSubscription,
 } as const;

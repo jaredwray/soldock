@@ -1,518 +1,324 @@
-import { type CreatedWebhook, WEBHOOK_LIMITS, type Webhook, webhookHeaderNameProblem } from "@soldock/contracts";
+import {
+	WEBHOOK_LIMITS,
+	type WebhookDomain,
+	type WebhookEndpoint,
+	type WebhookEvent,
+	webhookDomain,
+} from "@soldock/contracts";
 import {
 	type CallContext,
-	type CredentialBinding,
 	canManageCredentialsOf,
 	canReadAgentMailboxes,
 	credentialBinding,
-	credentialState,
 	getPrincipal,
 	isTeamMailboxId,
-	isTeamMailboxMember,
 	teamMailboxFor,
 } from "../identity/index.ts";
-import { audit, bytesToBase64, type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
-import { webhookHostAllowed, webhookUrlProblem } from "./url.ts";
+import { audit, newId, OperationError } from "../platform/index.ts";
+import { adoptLegacyWebhooks } from "./legacy.ts";
+import {
+	deleteLegacyRow,
+	type EndpointRow,
+	getEndpoint,
+	getSubscription,
+	type SubscriptionRow,
+	subscriptionColumns,
+	toEndpoint,
+} from "./store.ts";
+import { webhookHostAllowed } from "./url.ts";
 
-// Mail and Chat share access, URL, secret and delivery rules. Each domain has its own subscription table.
-
-export type WebhookDomain = "mail" | "chat";
-export type WebhookTable = "webhooks" | "chat_webhooks";
-
-export type DisabledReason = NonNullable<Webhook["disabled_reason"]>;
-
-/**
- * A webhook as the directory stores it. The secret, the auth key, the header value and the credential
- * never leave this module, except in the POST to the receiver.
- */
-export interface WebhookRow {
+export interface SubscriptionView {
 	id: string;
-	mailbox_id: string;
-	created_by: string;
-	credential_kind: CredentialBinding["kind"];
-	credential_id: string | null;
-	url: string;
-	label: string;
-	secret: string;
-	status: "active" | "disabled";
-	disabled_reason: DisabledReason | null;
-	consecutive_failures: number;
-	last_failed_event_id: string | null;
-	retry_until: string | null;
-	retry_event_id: string | null;
-	last_delivery_at: string | null;
-	last_failure_at: string | null;
-	last_error: string | null;
-	auth_key: string | null;
-	header_name: string | null;
-	header_value: string | null;
+	endpoint_id: string;
+	event: WebhookEvent;
+	target_id: string;
+	status: SubscriptionRow["status"];
+	disabled_reason: SubscriptionRow["disabled_reason"];
 	created_at: string;
+	endpoint: WebhookEndpoint;
 }
 
-const WEBHOOK_COLUMNS = `id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, status,
-	disabled_reason, consecutive_failures, last_failed_event_id, retry_until, retry_event_id, last_delivery_at, last_failure_at,
-	last_error, auth_key, header_name, header_value, created_at`;
-
-function toWebhook(row: WebhookRow): Webhook {
+function toView(row: SubscriptionRow, endpoint: WebhookEndpoint): SubscriptionView {
 	return {
 		id: row.id,
-		mailbox_id: row.mailbox_id,
-		url: row.url,
-		label: row.label,
-		created_by: row.created_by,
+		endpoint_id: row.endpoint_id,
+		event: row.event_type,
+		target_id: row.target_id,
 		status: row.status,
 		disabled_reason: row.disabled_reason,
-		consecutive_failures: row.consecutive_failures,
-		last_delivery_at: row.last_delivery_at,
-		last_failure_at: row.last_failure_at,
-		last_error: row.last_error,
-		has_auth_key: row.auth_key !== null,
-		header_name: row.header_name,
 		created_at: row.created_at,
+		endpoint,
 	};
 }
 
-/** A signing secret as Standard Webhooks specifies: `whsec_` and the base64 of 32 random bytes. */
-function newSecret(): string {
-	const bytes = new Uint8Array(32);
-	crypto.getRandomValues(bytes);
-	return `whsec_${bytesToBase64(bytes)}`;
+/** Columns of the endpoint that a list may return. Secrets stay out of this query. */
+const ENDPOINT_LIST_COLUMNS = `e.id AS ep_id, e.created_by AS ep_created_by, e.url AS ep_url, e.label AS ep_label,
+	e.status AS ep_status, e.disabled_reason AS ep_disabled_reason,
+	e.consecutive_failures AS ep_consecutive_failures, e.last_delivery_at AS ep_last_delivery_at,
+	e.last_failure_at AS ep_last_failure_at, e.last_error AS ep_last_error,
+	e.auth_key IS NOT NULL AS ep_has_auth_key, e.header_name AS ep_header_name, e.created_at AS ep_created_at`;
+
+interface ListedEndpoint {
+	ep_id: string;
+	ep_created_by: string;
+	ep_url: string;
+	ep_label: string;
+	ep_status: EndpointRow["status"];
+	ep_disabled_reason: EndpointRow["disabled_reason"];
+	ep_consecutive_failures: number;
+	ep_last_delivery_at: string | null;
+	ep_last_failure_at: string | null;
+	ep_last_error: string | null;
+	ep_has_auth_key: number | boolean;
+	ep_header_name: string | null;
+	ep_created_at: string;
+}
+
+/** The endpoint a viewer may see. Another person's URL path and delivery history stay hidden. */
+function listedEndpoint(row: ListedEndpoint, callerId: string): WebhookEndpoint {
+	const own = row.ep_created_by === callerId;
+	return {
+		id: row.ep_id,
+		url: own ? row.ep_url : new URL(row.ep_url).origin,
+		label: row.ep_label,
+		created_by: row.ep_created_by,
+		status: row.ep_status,
+		disabled_reason: row.ep_disabled_reason,
+		consecutive_failures: own ? row.ep_consecutive_failures : 0,
+		last_delivery_at: own ? row.ep_last_delivery_at : null,
+		last_failure_at: own ? row.ep_last_failure_at : null,
+		last_error: own ? row.ep_last_error : null,
+		has_auth_key: own ? Boolean(row.ep_has_auth_key) : false,
+		header_name: own ? row.ep_header_name : null,
+		created_at: row.ep_created_at,
+	};
 }
 
 /**
- * The mailbox in which the caller can create a webhook: the own mailbox, a team mailbox that the caller
- * is a member of, or, for a person, the mailbox of an agent that the person sponsors. An owner or an
- * admin who is not the sponsor can read the mail of an agent, but cannot watch it: a webhook would tell
- * when the agent gets mail, without the audit line of a read.
+ * The target the caller can subscribe to. Mail: own mailbox, a team mailbox, or a sponsored agent.
+ * Chat: self or a sponsored agent. Drive: own drive, a shared drive the caller belongs to, or the
+ * drive of a sponsored agent.
  */
-async function creatableMailbox(
+async function creatableTarget(
 	call: CallContext,
-	mailboxId: string | undefined,
+	targetId: string | undefined,
 	domain: WebhookDomain,
 ): Promise<string> {
 	const { caller } = call;
-	if (mailboxId === undefined || mailboxId === caller.id) return caller.id;
-	if (isTeamMailboxId(mailboxId) && domain === "mail")
-		return (await teamMailboxFor(call.env.DIRECTORY, mailboxId, caller.id)).id;
-	const target = await getPrincipal(call.env.DIRECTORY, mailboxId);
+	if (targetId === undefined || targetId === caller.id) return caller.id;
+	if (domain === "drive" && targetId.startsWith("drv_")) {
+		const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(targetId));
+		if (!(await space.hasMember(caller.id))) {
+			throw new OperationError("not_found", "No shared drive has that id, or you are not a member.");
+		}
+		return targetId;
+	}
+	if (isTeamMailboxId(targetId) && domain === "mail") {
+		return (await teamMailboxFor(call.env.DIRECTORY, targetId, caller.id)).id;
+	}
+	const target = await getPrincipal(call.env.DIRECTORY, targetId);
 	if (!target) throw new OperationError("not_found", "No principal has that id.");
 	if (target.kind === "agent" && caller.kind === "human" && target.sponsor_id === caller.id) return target.id;
 	throw new OperationError(
 		"forbidden",
 		domain === "chat"
-			? "You can create a chat webhook only for yourself or an agent that you sponsor."
-			: "You can create a webhook only for your own mailbox, a team mailbox that you are a member of, and the mailbox of an agent that you sponsor.",
+			? "You can subscribe only for yourself or an agent that you sponsor."
+			: domain === "drive"
+				? "You can subscribe only for your own drive, a shared drive that you belong to, or the drive of an agent that you sponsor."
+				: "You can subscribe only for your own mailbox, a team mailbox that you belong to, or the mailbox of an agent that you sponsor.",
 	);
 }
 
-/**
- * Which webhooks of a mailbox the caller can see. `all`: an owner or an admin in a team mailbox, and the
- * sponsor of an agent, an owner or an admin in the mailbox of the agent. They manage these mailboxes, so
- * they can remove a webhook that blocks the limit. `own`: the own mailbox and a team mailbox of a
- * member. The members of a team mailbox do not see the webhooks of the other members, and an agent does
- * not see the webhooks that its sponsor created for it.
- */
-async function visibleWebhooks(call: CallContext, mailboxId: string): Promise<"all" | "own"> {
-	const { caller } = call;
-	if (mailboxId === caller.id) return "own";
-	if (isTeamMailboxId(mailboxId)) {
-		if (canReadAgentMailboxes(caller)) return "all";
-		await teamMailboxFor(call.env.DIRECTORY, mailboxId, caller.id);
-		return "own";
-	}
-	if (await managesAgentMailbox(call, mailboxId)) return "all";
-	const exists = await getPrincipal(call.env.DIRECTORY, mailboxId);
-	if (!exists) throw new OperationError("not_found", "No mailbox has that id.");
-	throw new OperationError(
-		"forbidden",
-		"You can see your own webhooks, the webhooks of the agents that you manage and, as an owner or an admin, the webhooks of team mailboxes.",
-	);
-}
-
-/**
- * True when the caller can delete each webhook of the mailbox: an owner or an admin in a team mailbox,
- * and the sponsor of an agent, an owner or an admin in the mailbox of the agent.
- */
-async function managesWebhooksOf(call: CallContext, mailboxId: string): Promise<boolean> {
-	if (isTeamMailboxId(mailboxId)) return canReadAgentMailboxes(call.caller);
-	return managesAgentMailbox(call, mailboxId);
-}
-
-/** True when the mailbox is the mailbox of an agent whose credentials the caller manages: its sponsor, an owner or an admin. */
-async function managesAgentMailbox(call: CallContext, mailboxId: string): Promise<boolean> {
-	if (isTeamMailboxId(mailboxId)) return false;
-	const target = await getPrincipal(call.env.DIRECTORY, mailboxId);
+async function managesAgent(call: CallContext, targetId: string): Promise<boolean> {
+	if (isTeamMailboxId(targetId) || targetId.startsWith("drv_")) return false;
+	const target = await getPrincipal(call.env.DIRECTORY, targetId);
 	return target?.kind === "agent" && canManageCredentialsOf(call.caller, target);
 }
 
-function auditWebhook(
+/** `all` when the caller manages the target. `own` when the caller may see only their subscriptions. */
+async function visibleSubscriptions(
 	call: CallContext,
-	op: string,
-	row: Pick<WebhookRow, "id" | "mailbox_id">,
-	/** The names of the changed fields, never their values. */
-	code?: string,
-): void {
+	targetId: string,
+	domain: WebhookDomain,
+): Promise<"all" | "own"> {
+	const { caller } = call;
+	if (targetId === caller.id) return "own";
+	if (domain === "drive" && targetId.startsWith("drv_")) {
+		if (canReadAgentMailboxes(caller)) return "all";
+		const member = await call.env.DIRECTORY.prepare(
+			`SELECT role FROM shared_drive_members m JOIN shared_drives d ON d.id = m.drive_id
+			WHERE m.drive_id = ? AND m.principal_id = ? AND d.deleted_at IS NULL`,
+		)
+			.bind(targetId, caller.id)
+			.first<{ role: string }>();
+		if (!member) throw new OperationError("not_found", "No shared drive has that id, or you are not a member.");
+		return member.role === "manager" ? "all" : "own";
+	}
+	if (isTeamMailboxId(targetId)) {
+		if (canReadAgentMailboxes(caller)) return "all";
+		await teamMailboxFor(call.env.DIRECTORY, targetId, caller.id);
+		return "own";
+	}
+	if (await managesAgent(call, targetId)) return "all";
+	const exists = await getPrincipal(call.env.DIRECTORY, targetId);
+	if (!exists) throw new OperationError("not_found", "No target has that id.");
+	throw new OperationError(
+		"forbidden",
+		"You can see your own subscriptions and the subscriptions of the agents that you manage.",
+	);
+}
+
+async function managesSubscriptionsOf(call: CallContext, targetId: string, domain: WebhookDomain): Promise<boolean> {
+	if (domain === "drive" && targetId.startsWith("drv_")) {
+		if (canReadAgentMailboxes(call.caller)) return true;
+		const member = await call.env.DIRECTORY.prepare(
+			"SELECT role FROM shared_drive_members WHERE drive_id = ? AND principal_id = ?",
+		)
+			.bind(targetId, call.caller.id)
+			.first<{ role: string }>();
+		return member?.role === "manager";
+	}
+	if (isTeamMailboxId(targetId)) return canReadAgentMailboxes(call.caller);
+	return managesAgent(call, targetId);
+}
+
+function auditSubscription(call: CallContext, op: string, row: Pick<SubscriptionRow, "id" | "target_id">): void {
 	audit({
 		op,
 		actor: call.caller.id,
 		actorKind: call.caller.kind,
 		credential: call.caller.credential,
 		target: row.id,
-		...(row.mailbox_id === call.caller.id ? {} : { mailbox: row.mailbox_id }),
+		...(row.target_id === call.caller.id ? {} : { mailbox: row.target_id }),
 		result: "ok",
 		requestId: call.requestId,
-		...(code ? { code } : {}),
 	});
 }
 
-type WebhookHandlers = {
-	create: HandlerMap<CallContext>["mail.create_webhook"];
-	list: HandlerMap<CallContext>["mail.list_webhooks"];
-	update: HandlerMap<CallContext>["mail.update_webhook"];
-	delete: HandlerMap<CallContext>["mail.delete_webhook"];
-};
-
-/** Shared storage and access rules. Chat maps the internal mailbox id to its principal id. */
-export function createWebhookHandlers(
+export function createSubscriptionHandlers(
 	domain: WebhookDomain,
 	beforeCreate?: (call: CallContext, targetId: string) => Promise<void>,
-): WebhookHandlers {
-	const table: WebhookTable = domain === "mail" ? "webhooks" : "chat_webhooks";
+) {
 	return {
-		async create(call, input) {
-			const mailboxId = await creatableMailbox(call, input.mailbox_id, domain);
-			const problem = webhookUrlProblem(input.url, call.origin);
-			if (problem) throw new OperationError("invalid", problem);
-			const { principal } = call.caller;
-			if (!webhookHostAllowed(principal, input.url)) {
+		async create(
+			call: CallContext,
+			input: { endpoint_id: string; event: WebhookEvent; mailbox_id?: string },
+		): Promise<{ subscription: SubscriptionView }> {
+			await adoptLegacyWebhooks(call.env.DIRECTORY);
+			if (webhookDomain(input.event) !== domain) {
+				throw new OperationError("invalid", "That event does not belong to this product.");
+			}
+			const endpoint = await getEndpoint(call.env.DIRECTORY, input.endpoint_id);
+			if (endpoint?.created_by !== call.caller.id) throw new OperationError("not_found", "No endpoint has that id.");
+			if (endpoint.status !== "active") {
+				throw new OperationError("conflict", "The endpoint is disabled. Create a new endpoint.");
+			}
+			const targetId = await creatableTarget(call, input.mailbox_id, domain);
+			if (!webhookHostAllowed(call.caller.principal, endpoint.url)) {
 				throw new OperationError(
 					"policy_denied",
-					`The outbound policy of this agent (${principal.outbound_mode ?? "internal-only"}) does not allow a webhook to ${new URL(input.url).hostname}. Ask its sponsor to add the host to the allowlist, or to create the webhook for you.`,
+					`The outbound policy of this agent (${call.caller.principal.outbound_mode ?? "internal-only"}) does not allow a webhook to ${new URL(endpoint.url).hostname}. Ask its sponsor to add the host to the allowlist.`,
 				);
 			}
-			// The mailbox sends events from now on. It turns this on before the insert: an event with no webhook
-			// costs one queue message, but a webhook whose mailbox sends no events would miss mail.
-			await beforeCreate?.(call, mailboxId);
+			await beforeCreate?.(call, targetId);
 			const binding = credentialBinding(call.caller);
-			const row: WebhookRow = {
-				id: newId("whk"),
-				mailbox_id: mailboxId,
-				created_by: principal.id,
-				credential_kind: binding.kind,
-				credential_id: binding.id,
-				url: input.url,
-				label: input.label || new URL(input.url).hostname,
-				secret: newSecret(),
-				status: "active",
-				disabled_reason: null,
-				consecutive_failures: 0,
-				last_failed_event_id: null,
-				retry_until: null,
-				retry_event_id: null,
-				last_delivery_at: null,
-				last_failure_at: null,
-				last_error: null,
-				auth_key: input.auth_key ?? null,
-				header_name: input.header?.name ?? null,
-				header_value: input.header?.value ?? null,
-				created_at: new Date().toISOString(),
-			};
-			// The limits are part of the insert, so two parallel creates cannot both pass them. The limit of a
-			// mailbox counts only active webhooks, so a disabled webhook of another member cannot block it.
-			const result = await call.env.DIRECTORY.prepare(
-				`INSERT INTO ${table} (id, mailbox_id, created_by, credential_kind, credential_id, url, label, secret, created_at,
-				auth_key, header_name, header_value)
-			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12, ?13, ?14
-			WHERE (SELECT COUNT(*) FROM ${table} WHERE created_by = ?3) < ?10
-			AND (SELECT COUNT(*) FROM ${table} WHERE mailbox_id = ?2 AND status = 'active') < ?11`,
+			const id = newId("whk");
+			const createdAt = new Date().toISOString();
+			const inserted = await call.env.DIRECTORY.prepare(
+				`INSERT INTO webhook_subscriptions (
+					id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at)
+				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
+					JOIN webhook_endpoints e ON e.id = s.endpoint_id
+					WHERE e.created_by = ?9 AND s.domain = ?3 AND s.event_type = ?4) < ?10
+				AND (SELECT COUNT(*) FROM webhook_subscriptions s2
+					JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
+					WHERE s2.domain = ?3 AND s2.event_type = ?4 AND s2.target_id = ?5
+					AND s2.status = 'active' AND e2.status = 'active') < ?11
+				ON CONFLICT (endpoint_id, event_type, target_id) DO NOTHING
+				RETURNING id`,
 			)
 				.bind(
-					row.id,
-					row.mailbox_id,
-					row.created_by,
-					row.credential_kind,
-					row.credential_id,
-					row.url,
-					row.label,
-					row.secret,
-					row.created_at,
-					WEBHOOK_LIMITS.perCreator,
-					WEBHOOK_LIMITS.perMailbox,
-					row.auth_key,
-					row.header_name,
-					row.header_value,
+					id,
+					endpoint.id,
+					domain,
+					input.event,
+					targetId,
+					binding.kind,
+					binding.id,
+					createdAt,
+					call.caller.id,
+					WEBHOOK_LIMITS.subscriptionsPerCreator,
+					WEBHOOK_LIMITS.perTarget,
 				)
-				.run();
-			if (result.meta.changes !== 1) {
+				.first<{ id: string }>();
+			if (!inserted) {
+				const existing = await call.env.DIRECTORY.prepare(
+					"SELECT id FROM webhook_subscriptions WHERE endpoint_id = ? AND event_type = ? AND target_id = ?",
+				)
+					.bind(endpoint.id, input.event, targetId)
+					.first();
+				if (existing) throw new OperationError("conflict", "The endpoint already has this subscription.");
 				throw new OperationError(
 					"conflict",
-					`You can have at most ${WEBHOOK_LIMITS.perCreator} ${domain} webhooks. A target can have at most ${WEBHOOK_LIMITS.perMailbox} active webhooks. Delete a webhook first.`,
+					`You can have at most ${WEBHOOK_LIMITS.subscriptionsPerCreator} subscriptions of one event. A target can have at most ${WEBHOOK_LIMITS.perTarget} active subscriptions of one event. Delete a subscription first.`,
 				);
 			}
-			auditWebhook(call, `${domain}.create_webhook`, row);
-			const webhook: CreatedWebhook = { ...toWebhook(row), secret: row.secret };
-			return { webhook };
+			const row = await getSubscription(call.env.DIRECTORY, id);
+			if (!row) throw new OperationError("internal", "The subscription was not stored.");
+			auditSubscription(call, `${domain}.create_webhook_subscription`, row);
+			return { subscription: toView(row, toEndpoint(endpoint)) };
 		},
 
-		async list(call, input) {
+		async list(call: CallContext, input: { mailbox_id?: string }): Promise<{ subscriptions: SubscriptionView[] }> {
+			await adoptLegacyWebhooks(call.env.DIRECTORY);
 			const db = call.env.DIRECTORY;
-			const callerId = call.caller.id;
+			const columns = `${subscriptionColumns("s")}, ${ENDPOINT_LIST_COLUMNS}`;
 			let statement: D1PreparedStatement;
 			if (input.mailbox_id === undefined) {
 				statement = db
-					.prepare(`SELECT ${WEBHOOK_COLUMNS} FROM ${table} WHERE created_by = ? ORDER BY created_at DESC`)
-					.bind(callerId);
-			} else if ((await visibleWebhooks(call, input.mailbox_id)) === "all") {
+					.prepare(
+						`SELECT ${columns} FROM webhook_subscriptions s
+						JOIN webhook_endpoints e ON e.id = s.endpoint_id
+						WHERE s.domain = ? AND e.created_by = ? ORDER BY s.created_at DESC`,
+					)
+					.bind(domain, call.caller.id);
+			} else if ((await visibleSubscriptions(call, input.mailbox_id, domain)) === "all") {
 				statement = db
-					.prepare(`SELECT ${WEBHOOK_COLUMNS} FROM ${table} WHERE mailbox_id = ? ORDER BY created_at DESC`)
-					.bind(input.mailbox_id);
+					.prepare(
+						`SELECT ${columns} FROM webhook_subscriptions s
+						JOIN webhook_endpoints e ON e.id = s.endpoint_id
+						WHERE s.domain = ? AND s.target_id = ? ORDER BY s.created_at DESC`,
+					)
+					.bind(domain, input.mailbox_id);
 			} else {
 				statement = db
 					.prepare(
-						`SELECT ${WEBHOOK_COLUMNS} FROM ${table} WHERE mailbox_id = ? AND created_by = ? ORDER BY created_at DESC`,
+						`SELECT ${columns} FROM webhook_subscriptions s
+						JOIN webhook_endpoints e ON e.id = s.endpoint_id
+						WHERE s.domain = ? AND s.target_id = ? AND e.created_by = ? ORDER BY s.created_at DESC`,
 					)
-					.bind(input.mailbox_id, callerId);
+					.bind(domain, input.mailbox_id, call.caller.id);
 			}
-			const { results } = await statement.all<WebhookRow>();
-			return { webhooks: results.map(toWebhook) };
+			const { results } = await statement.all<SubscriptionRow & ListedEndpoint>();
+			return {
+				subscriptions: results.map((row) => toView(row, listedEndpoint(row, call.caller.id))),
+			};
 		},
 
-		async update(call, input) {
-			const row = await getWebhook(call.env.DIRECTORY, input.webhook_id, table);
-			// Only the creator changes a webhook. Another caller learns nothing about the id.
-			if (row?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
-			const authorizationConflict =
-				"The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.";
-			// A first check gives a clear error. The update checks the rule again, against the row as it is then.
-			const keyAfter = input.auth_key === undefined ? row.auth_key : input.auth_key;
-			const headerAfter = input.header === undefined ? row.header_name : (input.header?.name ?? null);
-			if (headerAfter !== null) {
-				const problem = webhookHeaderNameProblem(headerAfter, keyAfter !== null);
-				if (problem) throw new OperationError("invalid", problem);
+		async delete(call: CallContext, input: { subscription_id: string }): Promise<{ deleted: true }> {
+			await adoptLegacyWebhooks(call.env.DIRECTORY);
+			const row = await getSubscription(call.env.DIRECTORY, input.subscription_id);
+			const endpoint = row ? await getEndpoint(call.env.DIRECTORY, row.endpoint_id) : null;
+			const creator = endpoint?.created_by === call.caller.id;
+			const manager = row !== null && (await managesSubscriptionsOf(call, row.target_id, domain));
+			if (!row || row.domain !== domain || (!creator && !manager)) {
+				throw new OperationError("not_found", "No subscription has that id.");
 			}
-			const label = input.label === undefined ? null : input.label || new URL(row.url).hostname;
-			const setKey = input.auth_key !== undefined;
-			const setHeader = input.header !== undefined;
-			// Only the fields of the request change, so two updates at the same time do not undo each other.
-			const updated = await call.env.DIRECTORY.prepare(
-				`UPDATE ${table} SET label = COALESCE(?1, label),
-				auth_key = CASE WHEN ?2 THEN ?3 ELSE auth_key END,
-				header_name = CASE WHEN ?4 THEN ?5 ELSE header_name END,
-				header_value = CASE WHEN ?4 THEN ?6 ELSE header_value END
-			WHERE id = ?7 AND created_by = ?8
-			AND NOT ((CASE WHEN ?2 THEN ?3 ELSE auth_key END) IS NOT NULL
-				AND lower(COALESCE(CASE WHEN ?4 THEN ?5 ELSE header_name END, '')) = 'authorization')
-			RETURNING ${WEBHOOK_COLUMNS}`,
-			)
-				.bind(
-					label,
-					setKey ? 1 : 0,
-					input.auth_key ?? null,
-					setHeader ? 1 : 0,
-					input.header?.name ?? null,
-					input.header?.value ?? null,
-					row.id,
-					call.caller.id,
-				)
-				.first<WebhookRow>();
-			if (!updated) {
-				// The webhook went away, or a parallel update gave it the other half of the Authorization pair.
-				const current = await getWebhook(call.env.DIRECTORY, input.webhook_id, table);
-				if (current?.created_by !== call.caller.id) throw new OperationError("not_found", "No webhook has that id.");
-				throw new OperationError("invalid", authorizationConflict);
-			}
-			const changed = [
-				...(input.label !== undefined ? ["label"] : []),
-				...(setKey ? [input.auth_key === null ? "auth_key_removed" : "auth_key"] : []),
-				...(setHeader ? [input.header === null ? "header_removed" : "header"] : []),
-			];
-			auditWebhook(call, `${domain}.update_webhook`, row, changed.join(","));
-			return { webhook: toWebhook(updated) };
-		},
-
-		async delete(call, input) {
-			const row = await getWebhook(call.env.DIRECTORY, input.webhook_id, table);
-			const callerId = call.caller.id;
-			const allowed = row !== null && (row.created_by === callerId || (await managesWebhooksOf(call, row.mailbox_id)));
-			// A webhook that the caller cannot delete is not found, so its id tells nothing.
-			if (!row || !allowed) throw new OperationError("not_found", "No webhook has that id.");
-			await call.env.DIRECTORY.prepare(`DELETE FROM ${table} WHERE id = ?`).bind(row.id).run();
-			auditWebhook(call, `${domain}.delete_webhook`, row);
+			await call.env.DIRECTORY.prepare("DELETE FROM webhook_subscriptions WHERE id = ?").bind(row.id).run();
+			await deleteLegacyRow(call.env.DIRECTORY, row.id);
+			auditSubscription(call, `${domain}.delete_webhook_subscription`, row);
 			return { deleted: true };
 		},
 	};
-}
-
-// --- Delivery ------------------------------------------------------------------------------------
-
-/** The last committed Chat subscription. A message records this boundary before its room transaction. */
-export async function chatWebhookBoundary(db: D1Database): Promise<number> {
-	const row = await db
-		.prepare("SELECT COALESCE(MAX(sequence), 0) AS boundary FROM chat_webhooks")
-		.first<{ boundary: number }>();
-	return row?.boundary ?? 0;
-}
-
-export async function getWebhook(
-	db: D1Database,
-	id: string,
-	table: WebhookTable = "webhooks",
-): Promise<WebhookRow | null> {
-	return db.prepare(`SELECT ${WEBHOOK_COLUMNS} FROM ${table} WHERE id = ?`).bind(id).first<WebhookRow>();
-}
-
-/** The ids of the active webhooks of a mailbox. */
-export async function activeWebhookIds(
-	db: D1Database,
-	mailboxId: string,
-	table: WebhookTable = "webhooks",
-): Promise<string[]> {
-	const { results } = await db
-		.prepare(`SELECT id FROM ${table} WHERE mailbox_id = ? AND status = 'active'`)
-		.bind(mailboxId)
-		.all<{ id: string }>();
-	return results.map((row) => row.id);
-}
-
-/**
- * What to do with an event for a webhook, from the access of its creator now. `deliver`: send the POST.
- * `skip`: send nothing and keep the webhook, because its creator or the agent of the mailbox is archived
- * and a restore makes it work again. `disable`: stop the webhook.
- */
-export type WebhookCheck = { action: "deliver" } | { action: "skip" } | { action: "disable"; reason: DisabledReason };
-
-/**
- * Checks the access of the creator of a webhook again, with the rules of the create: its credential, its
- * access to the mailbox, and the outbound policy of an agent. Each event checks again, so a revoked key, a
- * removed team member or a new sponsor stops the POST requests at the next event.
- */
-export async function checkWebhook(db: D1Database, row: WebhookRow): Promise<WebhookCheck> {
-	const state = await credentialState(db, {
-		principalId: row.created_by,
-		kind: row.credential_kind,
-		id: row.credential_id,
-	});
-	if (state.state === "ended") return { action: "disable", reason: "credential_revoked" };
-	if (state.state === "archived") return { action: "skip" };
-	const creator = state.principal;
-	if (row.mailbox_id !== creator.id) {
-		if (isTeamMailboxId(row.mailbox_id)) {
-			if (!(await isTeamMailboxMember(db, row.mailbox_id, creator.id))) {
-				return { action: "disable", reason: "access_lost" };
-			}
-		} else {
-			const agent = await getPrincipal(db, row.mailbox_id);
-			if (agent?.kind !== "agent" || creator.kind !== "human" || agent.sponsor_id !== creator.id) {
-				return { action: "disable", reason: "access_lost" };
-			}
-			if (agent.archived_at !== null) return { action: "skip" };
-		}
-	}
-	if (!webhookHostAllowed(creator, row.url)) return { action: "disable", reason: "policy_denied" };
-	return { action: "deliver" };
-}
-
-/** Stops an active webhook. A webhook that is disabled already keeps its first reason. */
-export async function disableWebhook(
-	db: D1Database,
-	row: WebhookRow,
-	reason: DisabledReason,
-	table: WebhookTable = "webhooks",
-): Promise<void> {
-	await db
-		.prepare(`UPDATE ${table} SET status = 'disabled', disabled_reason = ? WHERE id = ? AND status = 'active'`)
-		.bind(reason, row.id)
-		.run();
-	recordDisable(row, reason, table);
-}
-
-/** The log line and the audit line of a webhook that the system disabled. The log holds the host only, never the path. */
-function recordDisable(row: WebhookRow, reason: DisabledReason, table: WebhookTable): void {
-	log("warn", "webhook disabled", {
-		webhookId: row.id,
-		mailboxId: row.mailbox_id,
-		host: new URL(row.url).hostname,
-		reason,
-	});
-	audit({
-		op: `${table === "webhooks" ? "mail" : "chat"}.disable_webhook`,
-		actor: "system",
-		actorKind: "system",
-		credential: "none",
-		target: row.id,
-		mailbox: row.mailbox_id,
-		result: "ok",
-		code: reason,
-	});
-}
-
-/** Records a POST that the receiver accepted. A success ends a series of failed events and a retry. */
-export async function recordDelivery(db: D1Database, id: string, table: WebhookTable = "webhooks"): Promise<void> {
-	await db
-		.prepare(
-			`UPDATE ${table} SET last_delivery_at = ?, consecutive_failures = 0, last_error = NULL, retry_until = NULL, retry_event_id = NULL WHERE id = ?`,
-		)
-		.bind(new Date().toISOString(), id)
-		.run();
-}
-
-/**
- * Records one failed attempt of an event whose retry is on the queue. Until `retryUntil`, a different
- * event joins this retry and sends no POST of its own.
- */
-export async function recordFailedAttempt(
-	db: D1Database,
-	id: string,
-	eventId: string,
-	error: string,
-	retryUntil: Date,
-	table: WebhookTable = "webhooks",
-): Promise<void> {
-	await db
-		.prepare(
-			`UPDATE ${table} SET last_failure_at = ?, last_error = ?, retry_until = ?, retry_event_id = ? WHERE id = ?`,
-		)
-		.bind(new Date().toISOString(), error, retryUntil.toISOString(), eventId, id)
-		.run();
-}
-
-/**
- * True when the event joins a retry of a different event that waits. A redelivery of the event of the
- * retry itself does not join it, so a lost retry job cannot end the attempts of its event.
- */
-export function joinsWaitingRetry(
-	row: Pick<WebhookRow, "retry_until" | "retry_event_id">,
-	eventId: string,
-	now: number,
-): boolean {
-	return row.retry_until !== null && Date.parse(row.retry_until) > now && row.retry_event_id !== eventId;
-}
-
-/**
- * Records an event whose last attempt failed, and ends its retry. An event counts one time, also when a
- * redelivery repeats its jobs. After `failedEventsBeforeDisable` such events in a row, the webhook is
- * disabled. Returns true when this event disabled it.
- */
-export async function recordFailedEvent(
-	db: D1Database,
-	row: WebhookRow,
-	eventId: string,
-	error: string,
-	table: WebhookTable = "webhooks",
-): Promise<boolean> {
-	const limit = WEBHOOK_LIMITS.failedEventsBeforeDisable;
-	const updated = await db
-		.prepare(
-			`UPDATE ${table} SET consecutive_failures = consecutive_failures + 1, last_failed_event_id = ?5,
-				last_failure_at = ?1, last_error = ?2, retry_until = NULL, retry_event_id = NULL,
-				status = CASE WHEN consecutive_failures + 1 >= ?3 THEN 'disabled' ELSE status END,
-				disabled_reason = CASE WHEN consecutive_failures + 1 >= ?3 AND status = 'active' THEN 'failures'
-					ELSE disabled_reason END
-			WHERE id = ?4 AND status = 'active' AND last_failed_event_id IS NOT ?5 RETURNING status`,
-		)
-		.bind(new Date().toISOString(), error, limit, row.id, eventId)
-		.first<{ status: string }>();
-	const disabled = updated?.status === "disabled";
-	if (disabled) recordDisable(row, "failures", table);
-	return disabled;
 }

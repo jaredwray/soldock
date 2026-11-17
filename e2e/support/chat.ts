@@ -59,6 +59,11 @@ export async function post(context: BrowserContext, roomId: string, text: string
 		.message;
 }
 
+/** Sets the read marker of the person of the context to the newest message of a room. */
+export async function markRead(context: BrowserContext, roomId: string): Promise<void> {
+	await call(context.request, "POST", `/api/v1/chat/rooms/${roomId}/read`, {});
+}
+
 /** Posts `count` messages "m1" to "m<count>", from the people in turn, inside the rate limit of each. */
 export async function fill(people: BrowserContext[], roomId: string, count: number): Promise<void> {
 	for (let index = 0; index < count; index++) {

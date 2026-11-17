@@ -95,7 +95,10 @@ function fakeSoldock(options: { ownerExists?: boolean } = {}) {
 			if (!caller) problems.push(`${name}: the credential is not one that Soldock returned`);
 			else if (!(operation.callers as readonly string[]).includes(caller.kind)) {
 				problems.push(`${name}: a caller of the kind ${caller.kind} cannot call it`);
-			} else if (!operation.scopes.every((scope) => caller.scopes.includes(scope))) {
+			} else if (
+				!operation.scopes.every((scope) => caller.scopes.includes(scope)) ||
+				(operation.anyOfScopes !== undefined && !operation.anyOfScopes.some((scope) => caller.scopes.includes(scope)))
+			) {
 				problems.push(`${name}: the credential does not hold ${operation.scopes.join(", ")}`);
 			}
 			return (outputs[name]?.(input as Record<string, unknown>) ?? {}) as never;
