@@ -185,8 +185,14 @@ role, `last_read_seq`, `unread_count` and the other member of a `dm` room.
   which targets are behind: `principal:<principal id>`.
 - A change to the room or to its messages makes each member a target: a post, an edit, a delete, a
   new name or topic, and a change to the members. A read marker makes only its member a target.
-- The room sends the current state of the room to each target (`sendStates`), before it answers.
-  So a list that comes after a change has that change.
+- The room sends the current state of the room to the object of the member that made the change
+  (`sendStates`), before it answers. So a list of that member that comes after the change has it.
+- The objects of the other members wait `MEMBER_DELAY_MS` (500 ms), and the alarm sends them. So a
+  post in a room with 500 members does not wait for 500 calls. A target that waits keeps its
+  earlier time, so the changes of one window go out as one state for each member: at 10 messages
+  each second, a member gets 2 states each second, not 10.
+- The sidebar of a different member is at most `MEMBER_DELAY_MS` behind, also on its events
+  socket. The socket of the open room sends each message at once.
 - Each state has a `stamp` from the room. The stamp grows with each state that the room makes. The
   `PrincipalDO` keeps a state only when its stamp is higher than the stamp of the kept state. So a
   second delivery changes nothing, and an older state that arrives late changes nothing.
@@ -222,9 +228,10 @@ Known limits:
   that request can then skip it. The next list from the start has it.
 - The fill does not see a room whose member row in D1 waits in the outbox of the room. Such a row
   can be from before this layer. The room shows in the list after its next change.
-- A post in a room with 500 members makes 500 calls to `PrincipalDO`s, in passes of 100 targets.
-  The post waits for them. The `/ws/events` layer will send a state only to a principal whose
-  sidebar changes ([jaredwray/soldock#72](https://github.com/jaredwray/soldock/issues/72)).
+- A change still makes one call to the `PrincipalDO` of each member in each window of
+  `MEMBER_DELAY_MS`: in a room with 500 members at 10 messages each second, about 1,000 calls each
+  second. A room does not skip a member, because the list of each member has an exact count and
+  the order of the newest activity. A member without a socket would keep an old count.
 - An edit and a delete also go to each member, because the list has the `version` of the room.
 
 ### The index in D1

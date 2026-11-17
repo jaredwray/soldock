@@ -237,6 +237,11 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const ALARM_GUARD_MS = 30_000;
 /** The start of an outbox target for the `PrincipalDO` of a member: `principal:<principal id>`. */
 const PRINCIPAL_TARGET = "principal:";
+/**
+ * The time that the state for the `PrincipalDO` of a member waits after a change of a different
+ * member. The changes of that time go out as one state.
+ */
+export const MEMBER_DELAY_MS = 500;
 
 const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
@@ -523,7 +528,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A dm room has no owner: its two members are equal.
 			this.insertMember(call.actor, kind === "dm" ? "member" : "owner", now, 0);
 			for (const actor of others) this.insertMember(actor, "member", now, 0);
-			this.roomChanged();
+			this.roomChanged(call.actor.principal_id);
 		});
 	}
 
@@ -588,7 +593,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				input.name ?? null,
 				input.topic ?? null,
 			);
-			this.roomChanged();
+			this.roomChanged(call.actor.principal_id);
 		});
 		await this.publish({ type: "room" });
 		return this.record(call.actor.principal_id);
@@ -607,7 +612,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const lastSeq = (this.room() as RoomRow).last_seq;
 		this.ctx.storage.transactionSync(() => {
 			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq);
-			this.roomChanged();
+			this.roomChanged(call.actor.principal_id);
 		});
 		await this.publish({ type: "room" });
 		return { room: this.record(call.actor.principal_id), joined: true };
@@ -640,7 +645,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				const now = Date.now();
 				for (const actor of fresh.values()) this.insertMember(actor, "member", now, opened.room.last_seq);
-				this.roomChanged();
+				this.roomChanged(call.actor.principal_id);
 			});
 			await this.publish({ type: "room" });
 		}
@@ -677,7 +682,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.touch(`member:${next.principal_id}`);
 				}
 			}
-			this.roomChanged();
+			this.roomChanged(call.actor.principal_id);
 		});
 		// The sockets of the removed member close in the same step, so no later event reaches them.
 		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
@@ -844,7 +849,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					now,
 					subscriptionSequence,
 				);
-				this.roomChanged();
+				this.roomChanged(call.actor.principal_id);
 			});
 			const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
 			return { message, duplicate: false };
@@ -887,7 +892,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					messageId,
 				);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-				this.roomChanged();
+				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
 					room.room_id,
 					"chat.message.updated",
@@ -934,7 +939,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					messageId,
 				);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-				this.roomChanged();
+				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
 					room.room_id,
 					"chat.message.deleted",
@@ -1147,14 +1152,24 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Records a change that each member sees in its list: the room row of the index, and the
 	 * `PrincipalDO` of each member. Call it after the change to the members, in the same transaction.
+	 *
+	 * The `PrincipalDO` of the actor is due at once, so the call returns after its write. The objects of
+	 * the other members wait `MEMBER_DELAY_MS`, and the alarm sends them. So a call does not wait for
+	 * the objects of all members, and the changes of that time go out as one state for each member. A
+	 * target that waits already keeps its earlier time.
 	 */
-	private roomChanged(): void {
+	private roomChanged(actorId: string): void {
 		this.touch("room");
+		const now = Date.now();
 		this.sql.exec(
-			`INSERT INTO outbox (target, gen, next_attempt_at) SELECT ? || principal_id, 1, ? FROM members WHERE true
-			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
+			`INSERT INTO outbox (target, gen, next_attempt_at)
+				SELECT ?1 || principal_id, 1, CASE WHEN principal_id = ?2 THEN ?3 ELSE ?4 END FROM members WHERE true
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0,
+				next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at)`,
 			PRINCIPAL_TARGET,
-			Date.now(),
+			actorId,
+			now,
+			now + MEMBER_DELAY_MS,
 		);
 	}
 
