@@ -7,6 +7,7 @@ import {
 	newest,
 	openRoom,
 	post,
+	react,
 	rowsWithText,
 	signIn,
 	unique,
@@ -373,4 +374,65 @@ test("the sidebar count of a room that is not open goes up and clears without a 
 	await markRead(nadia, busyId);
 	await expect(link.locator(".chat-nav-count")).toHaveCount(0);
 	expect(reads).toBe(0);
+});
+
+// Layer 4 (jaredwray/soldock#73): reactions.
+test("a reaction from the picker shows on the message, a reaction of a different person arrives live, and a click removes it", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("React");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	// Earlier messages put the message at the end of a full scroll area, where a list that opens
+	// downward is cut off.
+	await fill([tomasz, nadia], roomId, 14);
+	const message = await post(tomasz, roomId, "We ship on Friday.");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+
+	const row = page.locator(".chat-message").filter({ hasText: "We ship on Friday." });
+	await row.hover();
+	await row.getByRole("button", { name: /^Add a reaction/ }).click();
+	await page.getByRole("searchbox", { name: "Find an emoji" }).fill("party");
+	await page.getByRole("searchbox", { name: "Find an emoji" }).press("Enter");
+	const party = row.getByRole("button", { name: "party popper: 1 reaction, with yours" });
+	await expect(party).toHaveAttribute("aria-pressed", "true");
+	const opener = row.getByRole("button", { name: /^Add a reaction/ });
+	// After a pick, the focus is on the button that opened the list again.
+	await expect(opener).toBeFocused();
+
+	// The message is the newest one, at the end of the list. The emoji of the list must show, not be
+	// cut off by the end of the scroll area, and a click takes one.
+	await opener.click();
+	const picker = page.getByRole("dialog", { name: "Add a reaction" });
+	await expect(picker).toBeInViewport({ ratio: 1 });
+	const thumbs = picker.getByRole("button", { name: "thumbs up" });
+	await thumbs.click();
+	await expect(row.getByRole("button", { name: "thumbs up: 1 reaction, with yours" })).toBeVisible();
+
+	// The button closes the list it opened. Escape closes it too, and gives the focus back.
+	await opener.click();
+	await expect(page.getByRole("dialog", { name: "Add a reaction" })).toBeVisible();
+	await opener.click();
+	await expect(page.getByRole("dialog", { name: "Add a reaction" })).toHaveCount(0);
+	await opener.click();
+	await page.keyboard.press("Escape");
+	await expect(page.getByRole("dialog", { name: "Add a reaction" })).toHaveCount(0);
+	await expect(opener).toBeFocused();
+
+	// The reaction of a different person comes through the socket of the room.
+	await react(tomasz, roomId, message.id, "🎉");
+	await expect(row.getByRole("button", { name: "party popper: 2 reactions, with yours" })).toBeVisible();
+
+	await row.getByRole("button", { name: "party popper: 2 reactions, with yours" }).click();
+	await expect(row.getByRole("button", { name: "party popper: 1 reaction" })).toHaveAttribute("aria-pressed", "false");
+	const stored = (await newest(nadia, roomId)).find((one) => one.id === message.id) as unknown as {
+		reactions: { emoji: string; count: number }[];
+	};
+	// The oldest reaction that stays is the 👍 of Nadia, so it comes first.
+	expect(stored.reactions).toEqual([
+		expect.objectContaining({ emoji: "👍", count: 1 }),
+		expect.objectContaining({ emoji: "🎉", count: 1 }),
+	]);
 });

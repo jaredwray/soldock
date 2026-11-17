@@ -13,7 +13,7 @@
 | **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the table `chat_rooms` in each `PrincipalDO` (the joined rooms of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.mark_read`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -126,7 +126,31 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   the same value. A delete removes the key with the text, because an author can make a key from
   the content.
 - The other changes are safe to repeat: a join, an add, a removal, an edit with the same text, a
-  delete and a read marker give the same state.
+  delete, a reaction and a read marker give the same state.
+
+### Reactions
+
+- A member reacts to a message with one emoji (`chat.add_reaction`), and removes its reaction
+  (`chat.remove_reaction`). Each principal has at most one reaction for each message and emoji. A
+  second add, and a remove of a reaction that is not there, change nothing.
+- An emoji is one emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍,
+  👍🏽, ❤️, 1️⃣, 🇳🇴 or 👨‍👩‍👧 (`Emoji` of the contracts). Each emoji has one form only, so two
+  values never show the same emoji. A name such as `:thumbsup:`, text, two emoji, a form without
+  U+FE0F (❤), a text symbol (©), a flag of no country, and an emoji with a joiner, marks or tags
+  after it get `invalid`.
+- A message has reactions with 20 different emoji at most (`CHAT_LIMITS.reactionEmoji`). A new emoji
+  above that gets `conflict`. An emoji that the message has takes more principals.
+- `reactions` of a message has one entry for each emoji: the emoji, the count and the principal ids,
+  oldest first. The entries come in the order of the oldest reaction of each emoji.
+- A reaction is a change of the message. It adds 1 to the `version` of the room and of the message,
+  so `changed_after` returns the message, and the sockets get it. It uses the allowance of the rate
+  limit, as an edit does. It does not make the room unread, and it sends no webhook event.
+- A deleted message takes no reaction (`invalid`), and a delete removes its reactions.
+- The reactions of a member that leaves the room stay, as its messages stay. It cannot change them
+  while it is not a member.
+- Known limit: a message lists each principal of each emoji. With 500 members and 20 emoji, one
+  message can carry about 300 KB of ids, in each page and in each socket event. A later change can
+  send the first ids only, with the exact count.
 
 ### The rate limit
 
@@ -453,6 +477,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
 | Messages | `ChatRoomDO` table `messages` | The text of a deleted message is gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
+| Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |

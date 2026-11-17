@@ -22,6 +22,7 @@ function fakeRoom(count: number) {
 			deleted: false,
 			version,
 			idempotency_key: null,
+			reactions: [],
 		};
 		messages.push(message);
 		return message;

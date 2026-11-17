@@ -14,6 +14,7 @@ function message(seq: number, version: number): ChatMessage {
 		deleted: false,
 		version,
 		idempotency_key: null,
+		reactions: [],
 	};
 }
 

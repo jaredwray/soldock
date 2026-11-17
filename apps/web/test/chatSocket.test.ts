@@ -76,6 +76,7 @@ describe("the socket of an open room", () => {
 			deleted: false,
 			version: 8,
 			idempotency_key: "k1",
+			reactions: [],
 		};
 		const { handlers } = server.last();
 		handlers.message(HELLO);

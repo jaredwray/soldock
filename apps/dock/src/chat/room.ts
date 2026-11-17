@@ -4,6 +4,7 @@ import {
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	type ChatMessage,
+	type ChatReaction,
 	type ChatSocketEvent,
 	type ChatWebhookEvent,
 	type RoomKind,
@@ -77,6 +78,7 @@ export interface MessageRecord {
 	version: number;
 	/** The idempotency key of the send of the message, as its author gave it, or null. */
 	idempotency_key: string | null;
+	reactions: ChatReaction[];
 }
 
 /**
@@ -224,6 +226,18 @@ const MIGRATIONS: string[][] = [
 	],
 	// The key of the send of a message, so a client finds the message of its send.
 	["ALTER TABLE messages ADD COLUMN idempotency_key TEXT"],
+	// One row for each reaction: a principal, a message and an emoji. `version` is the version of the
+	// room at the reaction, so it gives the order of the reactions, also in one millisecond.
+	[
+		`CREATE TABLE reactions (
+			message_id TEXT NOT NULL,
+			emoji TEXT NOT NULL,
+			principal_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			version INTEGER NOT NULL,
+			PRIMARY KEY (message_id, emoji, principal_id)
+		) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -267,7 +281,7 @@ export function nameKey(name: string): string {
 	return name.normalize("NFC").toLowerCase();
 }
 
-function toMessage(roomId: string, row: MessageRow): MessageRecord {
+function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): MessageRecord {
 	return {
 		id: row.id,
 		room_id: roomId,
@@ -279,6 +293,7 @@ function toMessage(roomId: string, row: MessageRow): MessageRecord {
 		deleted: row.deleted_at !== null,
 		version: row.version,
 		idempotency_key: row.idempotency_key,
+		reactions,
 	};
 }
 
@@ -731,7 +746,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		// A page of the newest messages, and a page before a message, come newest first from the table.
 		if (input.changedAfter === null && input.after === null) page.reverse();
 		return {
-			messages: page.map((row) => toMessage(opened.room.room_id, row)),
+			messages: this.messageRecords(opened.room.room_id, page),
 			version: opened.room.version,
 			hasMore,
 		};
@@ -780,6 +795,115 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return this.one<MessageRow>("SELECT * FROM messages WHERE id = ?", messageId);
 	}
 
+	/**
+	 * The reactions of each message of the list, by message id: one entry for each emoji, in the order
+	 * of the first reaction of each emoji, with the principals oldest first.
+	 */
+	private reactionsOf(messageIds: readonly string[]): Map<string, ChatReaction[]> {
+		const byMessage = new Map<string, ChatReaction[]>();
+		if (messageIds.length === 0) return byMessage;
+		const rows = this.all<{ message_id: string; emoji: string; principal_id: string }>(
+			`SELECT message_id, emoji, principal_id FROM reactions JOIN json_each(?) wanted ON wanted.value = message_id
+			ORDER BY version`,
+			JSON.stringify(messageIds),
+		);
+		for (const row of rows) {
+			const reactions = byMessage.get(row.message_id) ?? [];
+			let reaction = reactions.find((entry) => entry.emoji === row.emoji);
+			if (!reaction) {
+				reaction = { emoji: row.emoji, count: 0, principal_ids: [] };
+				reactions.push(reaction);
+			}
+			reaction.count += 1;
+			reaction.principal_ids.push(row.principal_id);
+			byMessage.set(row.message_id, reactions);
+		}
+		return byMessage;
+	}
+
+	/** One message with its reactions. */
+	private messageRecord(roomId: string, row: MessageRow): MessageRecord {
+		return toMessage(roomId, row, this.reactionsOf([row.id]).get(row.id) ?? []);
+	}
+
+	/** The messages of a page with their reactions, with one read of the reactions. */
+	private messageRecords(roomId: string, rows: readonly MessageRow[]): MessageRecord[] {
+		const reactions = this.reactionsOf(rows.map((row) => row.id));
+		return rows.map((row) => toMessage(roomId, row, reactions.get(row.id) ?? []));
+	}
+
+	/**
+	 * Adds or removes the reaction of the caller with one emoji. A call that changes nothing returns the
+	 * message, and sends no event. A change gives the message and the room a new version, so a client
+	 * gets it with `changed_after`, and the sockets get the message.
+	 */
+	async react(
+		call: RoomCall,
+		messageId: string,
+		emoji: string,
+		add: boolean,
+	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const row = this.message(messageId);
+		if (!row) return refuse("not_found", NO_MESSAGE);
+		const roomId = opened.room.room_id;
+		const principalId = call.actor.principal_id;
+		const has =
+			this.one(
+				"SELECT 1 AS found FROM reactions WHERE message_id = ? AND emoji = ? AND principal_id = ?",
+				messageId,
+				emoji,
+				principalId,
+			) !== null;
+		if (add && row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it takes no reaction.");
+		if (add === has) return { message: this.messageRecord(roomId, row), changed: false };
+		if (add) {
+			const emojiCount =
+				this.one<{ n: number }>(
+					"SELECT COUNT(DISTINCT emoji) AS n FROM reactions WHERE message_id = ? AND emoji <> ?",
+					messageId,
+					emoji,
+				)?.n ?? 0;
+			const known =
+				this.one("SELECT 1 AS found FROM reactions WHERE message_id = ? AND emoji = ?", messageId, emoji) !== null;
+			if (!known && emojiCount >= CHAT_LIMITS.reactionEmoji) {
+				return refuse(
+					"conflict",
+					`A message can have reactions with ${CHAT_LIMITS.reactionEmoji} different emoji at most.`,
+				);
+			}
+		}
+		const limited = this.spendAllowance(call, Date.now());
+		if (limited) return limited;
+		const version = opened.room.version + 1;
+		this.ctx.storage.transactionSync(() => {
+			if (add) {
+				this.sql.exec(
+					"INSERT INTO reactions (message_id, emoji, principal_id, created_at, version) VALUES (?, ?, ?, ?, ?)",
+					messageId,
+					emoji,
+					principalId,
+					Date.now(),
+					version,
+				);
+			} else {
+				this.sql.exec(
+					"DELETE FROM reactions WHERE message_id = ? AND emoji = ? AND principal_id = ?",
+					messageId,
+					emoji,
+					principalId,
+				);
+			}
+			this.sql.exec("UPDATE messages SET version = ? WHERE id = ?", version, messageId);
+			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+			this.roomChanged(principalId);
+		});
+		const message = this.messageRecord(roomId, this.message(messageId) as MessageRow);
+		await this.publish({ type: "message", message: messageOutput(message) });
+		return { message, changed: true };
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,
@@ -808,7 +932,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 						return refuse("conflict", "The idempotency key was used with a different request.");
 					}
 					const row = this.message(earlier.message_id) as MessageRow;
-					return { message: toMessage(opened.room.room_id, row), duplicate: true };
+					return { message: this.messageRecord(opened.room.room_id, row), duplicate: true };
 				}
 			}
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
@@ -851,7 +975,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				);
 				this.roomChanged(call.actor.principal_id);
 			});
-			const message = toMessage(opened.room.room_id, this.message(input.id) as MessageRow);
+			const message = this.messageRecord(opened.room.room_id, this.message(input.id) as MessageRow);
 			return { message, duplicate: false };
 		});
 		if (!("error" in posted) && !posted.duplicate) {
@@ -878,7 +1002,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
-			if (row.text === text) return { message: toMessage(room.room_id, row), changed: false as const };
+			if (row.text === text) return { message: this.messageRecord(room.room_id, row), changed: false as const };
 			const limited = this.spendAllowance(call, Date.now());
 			if (limited) return limited;
 			const version = room.version + 1;
@@ -903,7 +1027,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					subscriptionSequence,
 				);
 			});
-			const message = toMessage(room.room_id, this.message(messageId) as MessageRow);
+			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
 			return { message, changed: true as const };
 		});
 		if (!("error" in edited) && edited.changed) {
@@ -938,6 +1062,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
+				// A deleted message keeps no reaction.
+				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
@@ -950,7 +1076,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					subscriptionSequence,
 				);
 			});
-			const message = toMessage(room.room_id, this.message(messageId) as MessageRow);
+			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
 			return { deleted: true as const, message };
 		});
 		if (!("error" in deleted) && deleted.deleted) {

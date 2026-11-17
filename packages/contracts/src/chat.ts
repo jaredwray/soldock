@@ -21,7 +21,37 @@ export const CHAT_LIMITS = {
 	messageBurst: 20,
 	/** After that, the member can send one new or changed message to that room in each of these seconds. */
 	messageRefillSeconds: 1,
+	/** The different emoji of the reactions of one message. */
+	reactionEmoji: 20,
 } as const;
+
+/**
+ * One emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍, 👍🏽, ❤️, 1️⃣, 🇳🇴
+ * or 👨‍👩‍👧. Each emoji has one form only, so two values never show the same emoji. A form without
+ * U+FE0F (❤), a text symbol (©), a lone flag letter, an extra joiner and marks after the emoji fail.
+ */
+const RGI_EMOJI = /^\p{RGI_Emoji}$/v;
+
+/** One emoji, as the reactions store it. */
+export const Emoji = z
+	.string()
+	.min(1)
+	.max(32)
+	.refine((value) => RGI_EMOJI.test(value), {
+		message: "Send one emoji in its full form, such as 👍 or ❤️ (with U+FE0F).",
+	})
+	.describe(
+		"One emoji in its full form, such as 👍, 🎉 or ❤️ (with U+FE0F). Not a name such as :thumbsup:, and not text.",
+	);
+
+/** The reactions of one emoji on a message. */
+export const ChatReaction = z.object({
+	emoji: z.string(),
+	count: z.number().int(),
+	/** Each principal that reacted with this emoji, oldest first. */
+	principal_ids: z.array(z.string()),
+});
+export type ChatReaction = z.infer<typeof ChatReaction>;
 
 /**
  * The kinds of a room. Each person and each agent can find and join a `public` room. Only its
@@ -131,6 +161,12 @@ export const ChatMessage = z.object({
 	 * that gets no value takes null, so a client reads a message of a server from before this field.
 	 */
 	idempotency_key: z.string().nullable().default(null),
+	/**
+	 * The reactions of the message, one entry for each emoji, in the order of the oldest reaction of
+	 * each emoji that stays. So an entry can move when a reaction goes away. A deleted message has
+	 * none. A reader that gets no value takes an empty list.
+	 */
+	reactions: z.array(ChatReaction).default([]),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -416,6 +452,32 @@ export const deleteMessage = defineOperation({
 	errors: ["not_found"],
 });
 
+export const addReaction = defineOperation({
+	name: "chat.add_reaction",
+	summary: "React to a message",
+	description: `Adds your reaction with one emoji to a message. A second call with the same emoji changes nothing. A message can have reactions with ${CHAT_LIMITS.reactionEmoji} different emoji at most. A deleted message takes no reaction. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
+	output: z.object({ message: ChatMessage }),
+	errors: ["not_found", "invalid", "conflict", "rate_limited"],
+});
+
+export const removeReaction = defineOperation({
+	name: "chat.remove_reaction",
+	summary: "Remove your reaction from a message",
+	description: `Removes your reaction with one emoji from a message. A call for a reaction that you do not have changes nothing. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
+	output: z.object({ message: ChatMessage }),
+	errors: ["not_found", "rate_limited"],
+});
+
 export const markRead = defineOperation({
 	name: "chat.mark_read",
 	summary: "Set what you read in a room",
@@ -500,5 +562,7 @@ export const chatOperations = {
 	"chat.post_message": postMessage,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
+	"chat.add_reaction": addReaction,
+	"chat.remove_reaction": removeReaction,
 	"chat.mark_read": markRead,
 } as const;

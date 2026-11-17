@@ -4,7 +4,19 @@ import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import type { ChatRoomState } from "../src/identity/index.ts";
-import { type Actor, api, callTool, codeOf, ORIGIN, PASSWORD, request, SETUP_TOKEN, seedOrg } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	bearer,
+	callTool,
+	codeOf,
+	connectRoomSocket,
+	ORIGIN,
+	PASSWORD,
+	request,
+	SETUP_TOKEN,
+	seedOrg,
+} from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -686,6 +698,10 @@ describe("the scopes of a key", () => {
 		expect((await read("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
 		expect(await codeOf(read("chat.post_message", { room_id: room.id, text: "Hello" }))).toBe("forbidden");
 		expect(await codeOf(read("chat.mark_read", { room_id: room.id }))).toBe("forbidden");
+		const [first] = (await read("chat.list_messages", { room_id: room.id })).messages;
+		expect(
+			await codeOf(read("chat.add_reaction", { room_id: room.id, message_id: first?.id ?? "", emoji: "👍" })),
+		).toBe("forbidden");
 		expect(await codeOf(read("chat.create_room", { kind: "public", name: "Mine" }))).toBe("forbidden");
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
@@ -775,6 +791,166 @@ describe("chat through MCP", () => {
 		const refused = await callTool(owner.key, "chat_list_messages", { room_id: roomId });
 		expect(refused.isError).toBe(true);
 		expect(JSON.parse(refused.content[0]?.text ?? "{}")).toMatchObject({ code: "not_found" });
+
+		// An agent reacts through MCP, and the person sees the reaction through REST.
+		const [message] = rest.messages;
+		const reacted = await callTool(bot.key, "chat_add_reaction", {
+			room_id: roomId,
+			message_id: message?.id,
+			emoji: "🎉",
+		});
+		expect(reacted.structuredContent).toMatchObject({
+			message: { reactions: [{ emoji: "🎉", count: 1, principal_ids: [bot.id] }] },
+		});
+		expect((await ada.call("chat.list_messages", { room_id: roomId })).messages[0]?.reactions).toEqual([
+			{ emoji: "🎉", count: 1, principal_ids: [bot.id] },
+		]);
+		// A person reacts and removes the reaction through MCP too.
+		await callTool(ada.key, "chat_add_reaction", { room_id: roomId, message_id: message?.id, emoji: "🎉" });
+		const removed = await callTool(ada.key, "chat_remove_reaction", {
+			room_id: roomId,
+			message_id: message?.id,
+			emoji: "🎉",
+		});
+		expect(removed.structuredContent).toMatchObject({
+			message: { reactions: [{ emoji: "🎉", count: 1, principal_ids: [bot.id] }] },
+		});
+	});
+});
+
+describe("reactions", () => {
+	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
+		const message = await post(ada, room.id, "We ship on Friday.");
+		const target = { room_id: room.id, message_id: message.id };
+		const first = (await bot.call("chat.add_reaction", { ...target, emoji: "👍" })).message;
+		expect(first.reactions).toEqual([{ emoji: "👍", count: 1, principal_ids: [bot.id] }]);
+		expect(first.version).toBeGreaterThan(message.version);
+		await ada.call("chat.add_reaction", { ...target, emoji: "🎉" });
+		const both = (await owner.call("chat.add_reaction", { ...target, emoji: "👍" })).message;
+		expect(both.reactions).toEqual([
+			{ emoji: "👍", count: 2, principal_ids: [bot.id, owner.id] },
+			{ emoji: "🎉", count: 1, principal_ids: [ada.id] },
+		]);
+
+		// A second add and a remove of a reaction that is not there change nothing, also not the version.
+		const again = (await bot.call("chat.add_reaction", { ...target, emoji: "👍" })).message;
+		expect(again).toEqual(both);
+		expect((await bot.call("chat.remove_reaction", { ...target, emoji: "🎉" })).message).toEqual(both);
+
+		// A remove is a change: a client gets the message with changed_after.
+		const removed = (await bot.call("chat.remove_reaction", { ...target, emoji: "👍" })).message;
+		// The oldest reaction that stays is 🎉 now, so it comes first.
+		expect(removed.reactions).toEqual([
+			{ emoji: "🎉", count: 1, principal_ids: [ada.id] },
+			{ emoji: "👍", count: 1, principal_ids: [owner.id] },
+		]);
+		const changes = await ada.call("chat.list_messages", { room_id: room.id, changed_after: both.version });
+		expect(changes.messages).toEqual([removed]);
+		// A reaction does not make the room unread.
+		expect((await bot.call("chat.get_room", { room_id: room.id })).room.unread_count).toBe(1);
+	});
+
+	it("takes one emoji only, has a limit of emoji for each message, and goes away with a deleted message", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "Hello");
+		const target = { room_id: room.id, message_id: message.id };
+		// Text, two emoji, and each value that shows like an emoji but is not its one full form: without
+		// U+FE0F, with a text selector, with an extra U+FE0F, with a joiner or marks after it, with tag
+		// characters, a lone flag letter, a flag of no country, and a text symbol.
+		const refused = [":thumbsup:", "ab", "👍👍", "", "❤", "❤\uFE0E", "👍\uFE0F", "👍\u200D", "👍\u0301\u0301"];
+		refused.push("🏴\u{E0061}\u{E0062}", "🇳", "🇽🇽", "©", "\u0600👍");
+		for (const emoji of refused) {
+			expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji })), JSON.stringify(emoji)).toBe("invalid");
+		}
+		// A skin tone, a flag, a keycap, a text symbol in its emoji form and a family are one emoji each.
+		for (const emoji of ["👍🏽", "🇳🇴"]) await bot.call("chat.add_reaction", { ...target, emoji });
+		for (const emoji of ["1️⃣", "©️", "👨‍👩‍👧"]) {
+			await bot.call("chat.add_reaction", { ...target, emoji });
+			await bot.call("chat.remove_reaction", { ...target, emoji });
+		}
+
+		const emoji = [
+			"😀",
+			"😂",
+			"😍",
+			"🤔",
+			"😎",
+			"😢",
+			"😡",
+			"🙏",
+			"👏",
+			"🔥",
+			"💯",
+			"✅",
+			"❤️",
+			"🚀",
+			"👀",
+			"🎉",
+			"⭐",
+			"🍕",
+		];
+		for (const one of emoji) await ada.call("chat.add_reaction", { ...target, emoji: one });
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages[0]?.reactions).toHaveLength(
+			CHAT_LIMITS.reactionEmoji,
+		);
+		expect(await codeOf(ada.call("chat.add_reaction", { ...target, emoji: "🌮" }))).toBe("conflict");
+		// An emoji that the message has already takes one more principal.
+		await ada.call("chat.add_reaction", { ...target, emoji: "👍🏽" });
+
+		await ada.call("chat.delete_message", target);
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages[0]?.reactions).toEqual([]);
+		expect(await codeOf(bot.call("chat.add_reaction", { ...target, emoji: "👍" }))).toBe("invalid");
+	});
+
+	// The order is the order of the reactions, also for reactions in one millisecond.
+	it("keeps the order of reactions that come in the same millisecond", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "Hello");
+		const target = { room_id: room.id, message_id: message.id };
+		vi.useFakeTimers({ toFake: ["Date"] });
+		// The id of Ada sorts before the id of the agent. The agent reacts first.
+		expect(ada.id < bot.id).toBe(true);
+		await bot.call("chat.add_reaction", { ...target, emoji: "👍" });
+		await ada.call("chat.add_reaction", { ...target, emoji: "🎉" });
+		const both = (await ada.call("chat.add_reaction", { ...target, emoji: "👍" })).message;
+		vi.useRealTimers();
+		expect(both.reactions).toEqual([
+			{ emoji: "👍", count: 2, principal_ids: [bot.id, ada.id] },
+			{ emoji: "🎉", count: 1, principal_ids: [ada.id] },
+		]);
+	});
+
+	// A client shows a reaction of a different member when its socket gets the message.
+	it("sends the message with its reactions to the sockets of the room", async () => {
+		const room = await createRoom(ada, "private", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "We ship on Friday.");
+		const socket = await connectRoomSocket(room.id, bearer(ada.key));
+		const reacted = (await bot.call("chat.add_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" }))
+			.message;
+		expect(await socket.next()).toEqual({ type: "message", message: reacted });
+		// A call that changes nothing sends nothing: the next event is the remove.
+		await bot.call("chat.add_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" });
+		const removed = (await bot.call("chat.remove_reaction", { room_id: room.id, message_id: message.id, emoji: "👍" }))
+			.message;
+		expect(await socket.next()).toEqual({ type: "message", message: removed });
+	});
+
+	it("is for the members of the room only", async () => {
+		const room = await createRoom(ada, "private", "Salaries");
+		const open = await createRoom(ada, "public", "Town hall");
+		const secret = await post(ada, room.id, "Numbers for this year.");
+		const visible = await post(ada, open.id, "Welcome.");
+		// A private room does not exist for a principal that is not a member. A public room needs a join.
+		expect(await codeOf(bot.call("chat.add_reaction", { room_id: room.id, message_id: secret.id, emoji: "👍" }))).toBe(
+			"not_found",
+		);
+		expect(await codeOf(bot.call("chat.add_reaction", { room_id: open.id, message_id: visible.id, emoji: "👍" }))).toBe(
+			"forbidden",
+		);
+		expect(
+			await codeOf(ada.call("chat.add_reaction", { room_id: open.id, message_id: UNKNOWN_MESSAGE, emoji: "👍" })),
+		).toBe("not_found");
 	});
 });
 
