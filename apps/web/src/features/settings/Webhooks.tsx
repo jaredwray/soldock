@@ -318,7 +318,7 @@ export function WebhookSettings() {
 										</td>
 										<LastDelivery endpoint={endpoint} />
 										<td className="cell-actions">
-											<div className="row-actions webhook-actions">
+											<div className="row-actions row-actions-text">
 												<button
 													type="button"
 													className="button button-small"

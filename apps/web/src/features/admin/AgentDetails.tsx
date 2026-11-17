@@ -68,6 +68,7 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 				principalId={agent.id}
 				allowedScopes={AGENT_SCOPES}
 				heading={`API keys of ${agent.display_name}`}
+				note={`A key lets a script or an MCP client without OAuth act as ${agent.display_name}.`}
 			/>
 		</>
 	);
