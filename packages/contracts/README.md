@@ -11,7 +11,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | --- | --- |
 | `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, callers, annotations, input and output schemas, errors |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
-| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox` and `chat.room` |
+| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox`, `chat.room` and `chat.rooms` |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the webhook operations, `Webhook`, `WEBHOOK_LIMITS` and `WEBHOOK_EVENT_TYPE` |
 | `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |

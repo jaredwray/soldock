@@ -339,6 +339,10 @@ app uses.
   changed or deleted message sends `notifications/resources/updated`. Then call
   `chat_list_messages` with `changed_after`. The stream ends when a member removes you from a
   watched room.
+- **Wait for a message in any of your rooms.** Subscribe to `soldock://chat/rooms` with
+  `subscriptions/listen`. One subscription follows each of your rooms, also a room that you join
+  later. A change of one of your rooms sends `notifications/resources/updated`. Then call
+  `chat_list_rooms`, and `chat_list_messages` for each room with a higher `version`.
 - **Open a socket.** A client that is not an MCP client can open a WebSocket to
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.

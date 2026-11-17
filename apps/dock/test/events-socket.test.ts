@@ -192,7 +192,10 @@ describe("the events socket", () => {
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
 		await ada.call("account.revoke_api_key", { key_id: second.id });
 		// The Worker authenticated the key before the revoke, and asks the object for the socket now.
-		const open: EventsSocketOpen = { credential: { principalId: ada.id, kind: "api_key", id: second.id } };
+		const open: EventsSocketOpen = {
+			credential: { principalId: ada.id, kind: "api_key", id: second.id },
+			feed: false,
+		};
 		const late = readSocket(
 			await env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id)).fetch("https://principal.internal/events", {
 				headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },

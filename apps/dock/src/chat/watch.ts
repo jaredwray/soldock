@@ -1,4 +1,4 @@
-import type { CallContext } from "../identity/index.ts";
+import { type CallContext, openEventsSocket } from "../identity/index.ts";
 import { OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
 import { joinedRoomIds } from "./room-index.ts";
 import { openRoomSocket } from "./socket.ts";
@@ -80,4 +80,61 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 	},
 };
 
-export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room"> = { "chat.room": roomWatcher };
+/** The events of the events socket that change the `chat.rooms` resource. */
+const ROOM_EVENTS: ReadonlySet<string> = new Set(["chat.room", "chat.room_removed"]);
+
+/**
+ * The change feed of the `chat.rooms` resource: each room of the caller. The feed is the events socket
+ * of the caller, the same socket that the web app opens, so the `PrincipalDO` makes the same credential
+ * checks for the two. Each `chat.room` and `chat.room_removed` event is one change.
+ *
+ * The resource has no variables, and each caller that can call `chat.list_rooms` can watch it. A feed
+ * counts for the limit of sockets of the principal. The object never closes a feed for that limit. At
+ * the limit, it refuses a new feed, and the stream leaves the resource out.
+ */
+const roomsWatcher: ResourceWatcher<CallContext> = {
+	async allowed(_call, resources) {
+		return resources.map(() => true);
+	},
+
+	async open(call, _vars, listener) {
+		let response: Response;
+		try {
+			response = await openEventsSocket(call.env, call.caller, { feed: true });
+		} catch (error) {
+			if (error instanceof OperationError && error.code === "conflict") return null;
+			throw error;
+		}
+		const socket = response.webSocket as WebSocket;
+		socket.accept();
+		let closed = false;
+		const ended = () => {
+			if (closed) return;
+			closed = true;
+			listener.end();
+		};
+		socket.addEventListener("message", (event) => {
+			if (closed || typeof event.data !== "string") return;
+			const type = eventType(event.data);
+			if (type !== null && ROOM_EVENTS.has(type)) listener.change();
+		});
+		socket.addEventListener("close", ended);
+		socket.addEventListener("error", ended);
+		return {
+			close() {
+				if (closed) return;
+				closed = true;
+				try {
+					socket.close(1000, "The subscription ended.");
+				} catch {
+					// Closed already.
+				}
+			},
+		};
+	},
+};
+
+export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room" | "chat.rooms"> = {
+	"chat.room": roomWatcher,
+	"chat.rooms": roomsWatcher,
+};
