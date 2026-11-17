@@ -126,9 +126,23 @@ export function emojiOfCode(code: string): EmojiChoice | null {
 /** The emoji that the list of the box shows at most. */
 const EMOJI_SUGGESTIONS = 8;
 
-/** The emoji for the code that the person types after ":". A "_" is a space of the name. */
+/**
+ * The emoji for the code that the person types after ":". An emoji whose code starts with the typed
+ * text comes first, then an emoji whose code or one of its words has it. A word is compared in the form
+ * of a code too, with "_" for each space.
+ */
 export function emojiSuggestions(query: string): EmojiChoice[] {
-	return findEmoji(query.replace(/_/g, " ")).slice(0, EMOJI_SUGGESTIONS);
+	const typed = query.toLowerCase();
+	const starts: EmojiChoice[] = [];
+	const others: EmojiChoice[] = [];
+	for (const choice of EMOJI) {
+		const code = emojiCode(choice);
+		if (code.startsWith(typed)) starts.push(choice);
+		else if (code.includes(typed) || choice.words.some((word) => word.replace(/\s+/g, "_").includes(typed))) {
+			others.push(choice);
+		}
+	}
+	return [...starts, ...others].slice(0, EMOJI_SUGGESTIONS);
 }
 
 /**
