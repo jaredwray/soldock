@@ -369,11 +369,9 @@ caller, and wakes no room object. Each room in the result has `unread`, `unread_
 `version`. When the `version` of the open room is higher than the
 version that the client has, the client calls `chat.list_messages` with `changed_after`.
 
-The web app still does this each 4 seconds while its tab shows. The list gives the sidebar its
-unread dots, and it keeps the open room current while its socket is not connected. The poll stops
-when the web app uses the events socket of the `PrincipalDO` (`/ws/events`,
-[`identity`](../identity/README.md#the-events-socket)), which sends each change of the rooms of a
-principal.
+The web app does this each 4 seconds only while its events socket (`/ws/events`,
+[`identity`](../identity/README.md#the-events-socket)) is not connected. While the socket is
+connected, the socket sends each changed room, and the web app reads the list each minute only.
 
 ## Webhooks for chat messages
 
@@ -450,7 +448,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 ## Later layers
 
 Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
-(through Drive), search, the use of the events socket (`/ws/events`) in the web app, presence, typing,
+(through Drive), search, the MCP resource for the events of a principal, presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
 admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.

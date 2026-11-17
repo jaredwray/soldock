@@ -666,7 +666,8 @@ MCP clients. The app has no UI-only path.
   - Chat has no search yet, so its pages show no search box.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
-    bold with a dot at the right. A direct message row shows a round avatar with the initials of
+    bold with the number of unread messages at the right ("99+" above 99). A screen reader reads
+    "2 unread messages". A direct message row shows a round avatar with the initials of
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.
@@ -682,10 +683,19 @@ MCP clients. The app has no UI-only path.
     tests the socket at once.
   - The page opens no new socket when the server ends it: the person signed out, or is not a member
     of the room now. The page then reads the room list again.
-  - The room list comes from `chat.list_rooms` each 4 seconds while the tab is visible, and on
-    window focus. It gives the sidebar its unread dots. When the `version` of the open room is
-    higher than the version of the page, the page calls `chat.list_messages` with `changed_after`.
-    So the open room is current also while its socket is not connected.
+  - The room list comes from `chat.list_rooms`, and then from the events socket of the person
+    (`/ws/events`, `roomList.ts`). The socket sends each changed room as `chat.list_rooms` returns
+    it, and the page puts it at its place. After each connect (`hello`), the page reads the list
+    again. A read can answer after an event, so the page keeps each change of the socket that came
+    after the start of the read.
+  - While the events socket is connected, the page reads the list each minute only, as a net for
+    a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
+    is visible, and on window focus.
+  - A sign-out closes the events socket at once. The page then reads the list, gets the refusal,
+    and shows the sign-in page.
+  - When the `version` of the open room in the list is higher than the version of the page, the
+    page calls `chat.list_messages` with `changed_after`. So the open room is current also while
+    its socket is not connected.
   - A sync that fails runs again after the next room list, also when the version did not change.
   - An open room is read while the person looks at its newest messages: the tab shows, the list
     is at its end, and the list is at the newest messages of the room. The page then calls

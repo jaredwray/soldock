@@ -1,6 +1,13 @@
-import { CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, type ChatSocketEvent } from "@soldock/contracts";
+import {
+	CHAT_SOCKET_CLOSE,
+	CHAT_SOCKET_PROTOCOL,
+	type ChatSocketEvent,
+	EVENTS_SOCKET_PROTOCOL,
+	PrincipalEvent,
+} from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	createLiveSocket,
 	createRoomSocket,
 	PING_MS,
 	PONG_MS,
@@ -197,5 +204,35 @@ describe("the socket of an open room", () => {
 		server.socket.wake();
 		vi.advanceTimersByTime(10 * RETRY_MAX_MS);
 		expect(server.connections).toHaveLength(1);
+	});
+});
+
+describe("the events socket of the person", () => {
+	// The room list polls only while the socket is not live, so the live state must follow the connection.
+	it("is live after each hello, and not live from the end of that connection", () => {
+		const connections: SocketHandlers[] = [];
+		const states: boolean[] = [];
+		const events: PrincipalEvent[] = [];
+		createLiveSocket<PrincipalEvent>({
+			connect(handlers) {
+				connections.push(handlers);
+				return { send: () => {}, close: () => {} };
+			},
+			parse: (value) => {
+				const event = PrincipalEvent.safeParse(value);
+				return event.success ? event.data : null;
+			},
+			protocol: EVENTS_SOCKET_PROTOCOL,
+			onEvent: (event) => void events.push(event),
+			onLive: (live) => void states.push(live),
+		});
+		const hello = JSON.stringify({ type: "hello", protocol: EVENTS_SOCKET_PROTOCOL });
+		connections[0]?.message(hello);
+		connections[0]?.message(JSON.stringify({ type: "chat.room_removed", room_id: ROOM }));
+		connections[0]?.close(1006);
+		vi.advanceTimersByTime(RETRY_MIN_MS);
+		connections[1]?.message(hello);
+		expect(states).toEqual([true, false, true]);
+		expect(events.map((event) => event.type)).toEqual(["hello", "chat.room_removed", "hello"]);
 	});
 });
