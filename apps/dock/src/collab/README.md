@@ -46,8 +46,8 @@ One object for each doc and each sheet. Its name is the id of the Drive item (`i
     move: the name of the object is the item id.
   - A failed send is tried again with backoff (1 minute, doubled, at most 1 hour), 8 times. Then
     the message is dropped and logged. The next change sends the newer state.
-- **Delete.** `destroy()` deletes the bytes of each attachment from R2, then all storage of the
-  object. The drive calls it from its outbox after the item is deleted permanently. A failed R2
+- **Delete.** `destroy()` deletes the bytes of each attachment from R2, also an object under the
+  prefix of the document that no row names, then all storage of the object. The drive calls it from its outbox after the item is deleted permanently. A failed R2
   delete throws, and the outbox calls again.
 - **Empty objects.** An object that nobody wrote has no tables. A read of it creates nothing.
 

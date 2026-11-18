@@ -2,7 +2,7 @@ import { DOC_LIMITS, DocContent, type DocImage } from "@soldock/contracts";
 import { history, redo, undo } from "prosemirror-history";
 import type { Node } from "prosemirror-model";
 import { type Command, EditorState, NodeSelection, type TextSelection } from "prosemirror-state";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	insertImages,
 	pendingImage,
@@ -288,10 +288,11 @@ describe("new images in the editor", () => {
 		expect(JSON.stringify(next.doc.toJSON())).toContain('"pending":"job:1"');
 	});
 
-	it("start an upload for a pasted address, and a copy for an image of a different doc", () => {
+	// A save has only the images that the store holds. A pasted image that the store does not hold
+	// must get a job, also when it is an image of this doc from a second tab, or the save loses it.
+	it("start an upload for a pasted address, and a copy for an image that the store does not hold", () => {
 		const started: ImageSource[] = [];
 		const store = {
-			target: { itemId: "itm_this" },
 			holds: (id: string) => id === OTHER,
 			start: (source: ImageSource) => {
 				started.push(source);
@@ -301,8 +302,7 @@ describe("new images in the editor", () => {
 		const pasted = doc(
 			p(
 				nodes.image.create({ id: "", pending: "src:https://example.com/a.png", alt: "Web" }),
-				// An image of this doc, and an image that this doc holds from an earlier copy: no work.
-				image({ pending: "doc:prn_1:itm_this" }),
+				// An image that the store holds: no work.
 				image({ id: OTHER, pending: "doc:prn_1:itm_other" }),
 				// An image of a different doc.
 				image({ pending: "doc:prn_2:itm_other", width: 240 }),
@@ -324,7 +324,6 @@ describe("new images in the editor", () => {
 		});
 		expect(found).toEqual([
 			["", "job:2"],
-			[ID, null],
 			[OTHER, null],
 			[ID, "job:1"],
 		]);
@@ -447,6 +446,34 @@ describe("the image store of a doc", () => {
 		// No download of bytes that are here.
 		expect(await store.load(ID)).toBe(done.preview);
 		expect(calls).toHaveLength(1);
+		store.dispose();
+	});
+
+	// While an upload runs, the page must not replace the document of the editor with content from
+	// the server: that content has no node for the image.
+	it("is busy while an upload runs, also when the upload fails", async () => {
+		let answer: ((value: unknown) => void) | null = null;
+		const { store } = storeWith({
+			"docs.upload_image": () =>
+				new Promise((resolve) => {
+					answer = resolve;
+				}),
+		});
+		const ends: string[] = [];
+		store.subscribe((job) => {
+			if (job) ends.push(job.status);
+		});
+		expect(store.busy).toBe(false);
+		store.start({ kind: "file", file: new File([PNG], "a.png", { type: "image/png" }), name: null });
+		// This import has no answer in the fake server, so it fails.
+		store.start({ kind: "address", src: "https://example.com/a.png" });
+		expect(store.busy).toBe(true);
+		await vi.waitFor(() => expect(ends).toEqual(["failed"]));
+		expect(store.busy).toBe(true);
+		await vi.waitFor(() => expect(answer).not.toBeNull());
+		(answer as unknown as (value: unknown) => void)({ image: meta(ID) });
+		await vi.waitFor(() => expect(ends).toEqual(["failed", "done"]));
+		expect(store.busy).toBe(false);
 		store.dispose();
 	});
 

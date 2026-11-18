@@ -69,7 +69,8 @@ follow the doc.
   use. One image has at most 10 MiB, 16,384 pixels on a side and 64 million pixels.
 - The file is a PNG, JPEG, GIF or WebP image. `image.ts` reads the type and the pixels from the
   bytes. The server never uses the type that a client or a web server gave. For a JPEG file, the
-  EXIF orientation is applied, because a browser shows the image that way. An SVG image is refused:
+  EXIF orientation is applied, because a browser shows the image that way. For a GIF file, the
+  size is the larger of the screen and the first picture. An SVG image is refused:
   it can hold a script.
 - `docs.get` returns `images`: each image that the doc holds. `docs.get_image` returns the bytes
   of one image as base64. The bytes never go to a browser from this origin as a page or as an image
@@ -88,7 +89,9 @@ The `image` node is in the text of a paragraph or a heading. It has no bytes and
 | `caption` | The line below the image. One line, at most 500 characters |
 | `crop` | The part that shows: `x`, `y`, `width`, `height`, each a part of the file from 0 to 1. The doc keeps the whole file |
 
-- The handler stores each number of a crop with 4 decimals. A crop of the whole image goes away.
+- The handler stores each number of a crop with 4 decimals, and keeps the crop in the image with
+  each side at 1% or more. A crop of the whole image goes away. The completed content gets the
+  check of the schema again before it goes into storage.
 - `docs.create` refuses content with an image, because a new doc holds no image.
 
 ### Add an image

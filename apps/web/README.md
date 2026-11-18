@@ -608,7 +608,11 @@ MCP clients. The app has no UI-only path.
       bytes win. A paste with text and pictures keeps the text.
     - **A copy between docs.** The clipboard has the id of the image and its doc, and no address.
       A paste into a different doc copies the image with `docs.copy_image`. The image keeps its
-      options.
+      options. A paste of an image that this tab does not know yet, for example from a second tab
+      of the same doc, asks the server for the image in the same way. An image that still uploads
+      does not go to the clipboard.
+    - While an image uploads, the page does not load new content from the server, because that
+      content has no place for the image.
     - **A selected image.** A click selects an image. The image toolbar then takes the place of the
       formatting toolbar, so the page does not move. It has **In line**, **Wrap text** and **Break
       text**, the side (left, center, right), the size (25% to 100% of the text width, or the

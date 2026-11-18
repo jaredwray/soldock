@@ -76,6 +76,12 @@ async function write(call: CallContext, opened: OpenSpace, itemId: string, conte
 		const held = new Map((await imagesOf(call, itemId)).map((image) => [image.id, image]));
 		const problem = completeImages(content, held);
 		if (problem) throw new OperationError("invalid", problem);
+		// The completed content goes into storage, so it gets the check of the schema again. Content
+		// that the schema refuses would fail each later read of the doc.
+		const checked = DocContent.safeParse(content);
+		if (!checked.success) {
+			throw new OperationError("invalid", `An image of the content is over a limit. ${z.prettifyError(checked.error)}`);
+		}
 	}
 	return writeDocument(call, opened, itemId, {
 		content: stored(content),

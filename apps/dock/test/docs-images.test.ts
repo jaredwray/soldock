@@ -4,7 +4,7 @@ import { DOC_LIMITS, type InputOf, UNTRUSTED_NOTICE } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENT_KEEP_MS } from "../src/collab/index.ts";
 import { readImageInfo } from "../src/docs/image.ts";
-import { type Actor, callTool, codeOf, drainDrive, seedOrg } from "./helpers.ts";
+import { type Actor, api, callTool, codeOf, drainDrive, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -40,8 +40,33 @@ function gif(width: number, height: number): Uint8Array {
 	return bytesOf("GIF89a", le16(width), le16(height), [0, 0, 0]);
 }
 
-/** A JPEG header: an optional EXIF segment with an orientation, then the frame header. */
-function jpeg(width: number, height: number, orientation?: number): Uint8Array {
+/**
+ * A GIF file whose first picture is larger than its screen: a screen of 1 by 1 with a color table of
+ * two colors, a comment, then the picture.
+ */
+function gifWithFrame(width: number, height: number): Uint8Array {
+	const comment = [0x21, 0xfe, 2, 0x68, 0x69, 0];
+	return bytesOf(
+		"GIF89a",
+		le16(1),
+		le16(1),
+		[0x80, 0, 0],
+		[0, 0, 0, 255, 255, 255],
+		comment,
+		[0x2c],
+		le16(0),
+		le16(0),
+		le16(width),
+		le16(height),
+		[0],
+	);
+}
+
+/**
+ * A JPEG header: an optional EXIF segment with an orientation, then the frame header. With `xmp`, a
+ * second APP1 segment that is not EXIF comes after the EXIF segment, as in the photos of many phones.
+ */
+function jpeg(width: number, height: number, orientation?: number, xmp = false): Uint8Array {
 	const exif =
 		orientation === undefined
 			? []
@@ -49,7 +74,9 @@ function jpeg(width: number, height: number, orientation?: number): Uint8Array {
 					...bytesOf([0xff, 0xe1], be16(2 + 6 + 8 + 2 + 12), "Exif\0\0", "MM", be16(42), be32(8), be16(1)),
 					...bytesOf(be16(0x0112), be16(3), be32(1), be16(orientation), [0, 0]),
 				];
-	return bytesOf([0xff, 0xd8], exif, [0xff, 0xc0], be16(17), [8], be16(height), be16(width), [3, 1, 0x22, 0, 2, 0x11]);
+	const more = xmp ? [...bytesOf([0xff, 0xe1], be16(2 + 29 + 4), "http://ns.adobe.com/xap/1.0/\0", "<x/>")] : [];
+	const frame = bytesOf([0xff, 0xc0], be16(17), [8], be16(height), be16(width), [3, 1, 0x22, 0, 2, 0x11]);
+	return bytesOf([0xff, 0xd8], exif, more, [...frame]);
 }
 
 const riff = (chunk: Uint8Array) => bytesOf("RIFF", le32(4 + chunk.length), "WEBP", [...chunk]);
@@ -79,6 +106,21 @@ async function imageKeys(itemId: string): Promise<string[]> {
 	return (await env.BLOBS.list({ prefix: `document/${itemId}/` })).objects.map((object) => object.key);
 }
 
+/** Runs the alarm of a document until the drive has its message. */
+async function drainDocument(itemId: string): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(documentOf(itemId));
+			const waiting = await runInDurableObject(
+				documentOf(itemId),
+				(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n,
+			);
+			if (waiting !== 0) throw new Error("the message for the drive waits");
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
 /** Makes each image that the content does not use older by `ms`. */
 async function ageUnused(itemId: string, ms: number): Promise<void> {
 	await runInDurableObject(documentOf(itemId), (_instance, state) => {
@@ -94,6 +136,11 @@ describe("the type and the size of an image file", () => {
 		expect(readImageInfo(jpeg(4000, 3000))).toEqual({ type: "image/jpeg", width: 4000, height: 3000 });
 		expect(readImageInfo(jpeg(4000, 3000, 1))).toEqual({ type: "image/jpeg", width: 4000, height: 3000 });
 		expect(readImageInfo(jpeg(4000, 3000, 6))).toEqual({ type: "image/jpeg", width: 3000, height: 4000 });
+		// A segment that is not EXIF does not change the orientation of the EXIF segment before it.
+		expect(readImageInfo(jpeg(4000, 3000, 6, true))).toEqual({ type: "image/jpeg", width: 3000, height: 4000 });
+		expect(readImageInfo(jpeg(4000, 3000, undefined, true))).toEqual({ type: "image/jpeg", width: 4000, height: 3000 });
+		// A browser can show the first picture of a GIF file larger than the screen of the file.
+		expect(readImageInfo(gifWithFrame(60_000, 500))).toEqual({ type: "image/gif", width: 60_000, height: 500 });
 		expect(readImageInfo(WEBP.lossy(800, 600))).toEqual({ type: "image/webp", width: 800, height: 600 });
 		expect(readImageInfo(WEBP.lossless(801, 601))).toEqual({ type: "image/webp", width: 801, height: 601 });
 		expect(readImageInfo(WEBP.extended(5000, 70))).toEqual({ type: "image/webp", width: 5000, height: 70 });
@@ -137,6 +184,7 @@ describe("docs.upload_image and docs.get_image", () => {
 		expect(await codeOf(upload(ada, item.id, png(DOC_LIMITS.imageSide + 1, 10)))).toBe("invalid");
 		expect(await codeOf(upload(ada, item.id, png(10_000, 10_000)))).toBe("invalid");
 		expect(await codeOf(upload(ada, item.id, png(0, 10)))).toBe("invalid");
+		expect(await codeOf(upload(ada, item.id, gifWithFrame(60_000, 60_000)))).toBe("invalid");
 		expect(await imageKeys(item.id)).toEqual([]);
 	});
 
@@ -160,6 +208,36 @@ describe("docs.upload_image and docs.get_image", () => {
 		const added = await bot.call("docs.upload_image", { ...asViewer, content_base64: toBase64(gif(20, 20)) });
 		expect(added.image.mime_type).toBe("image/gif");
 		expect((await ada.call("docs.get", { item_id: item.id })).images).toHaveLength(2);
+	});
+
+	// A key or a token with a part of the scopes of its principal: the scopes of each operation apply.
+	it("follow the scopes of the credential", async () => {
+		const { item } = await ada.call("docs.create", { name: "Report" });
+		const other = await ada.call("docs.create", { name: "Other" });
+		const { image } = await upload(ada, item.id, png(10, 10));
+		const keyWith = async (scopes: ("drive.read" | "drive.write")[]) =>
+			api((await ada.call("account.create_api_key", { label: scopes.join(" "), scopes })).api_key.secret);
+		const content_base64 = toBase64(png(10, 10));
+		const copy = { item_id: other.item.id, from_item_id: item.id, from_image_id: image.id };
+		const web = { item_id: item.id, url: "https://images.example.com/a.png" };
+		const requests = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(png(10, 10)));
+
+		const reader = await keyWith(["drive.read"]);
+		expect((await reader("docs.get_image", { item_id: item.id, image_id: image.id })).image.id).toBe(image.id);
+		expect(await codeOf(reader("docs.upload_image", { item_id: item.id, content_base64 }))).toBe("forbidden");
+		expect(await codeOf(reader("docs.copy_image", copy))).toBe("forbidden");
+		expect(await codeOf(reader("docs.import_image", web))).toBe("forbidden");
+		expect(requests).not.toHaveBeenCalled();
+
+		// A copy reads the source and writes the doc, so it needs the two scopes.
+		const writer = await keyWith(["drive.write"]);
+		expect((await writer("docs.upload_image", { item_id: item.id, content_base64 })).image.width).toBe(10);
+		expect(await codeOf(writer("docs.get_image", { item_id: item.id, image_id: image.id }))).toBe("forbidden");
+		expect(await codeOf(writer("docs.copy_image", copy))).toBe("forbidden");
+		expect((await ada.call("docs.get", { item_id: other.item.id })).images).toEqual([]);
+
+		const both = await keyWith(["drive.read", "drive.write"]);
+		expect((await both("docs.copy_image", copy)).image.id).toBe(image.id);
 	});
 
 	it("refuse a doc in the trash, a sheet, and an image id that the doc does not hold", async () => {
@@ -237,6 +315,25 @@ describe("an image in the content of a doc", () => {
 				{ type: "image", attrs: { id: small.id, layout: "inline", width: 200 } },
 			],
 		});
+	});
+
+	// A crop at the edge of the image, in the limits of the input, must not become a crop that the
+	// schema refuses when the server makes it complete. Each later read of the doc would fail.
+	it("keeps a crop at the edge of the image in the limits, so the doc stays readable", async () => {
+		const { item } = await ada.call("docs.create", { name: "Report" });
+		const { image } = await upload(ada, item.id, png(1000, 1000));
+		const edge = { x: 0.99, y: 0.99, width: 0.01, height: 0.01 };
+		await ada.call("docs.update", {
+			item_id: item.id,
+			content: imageIn({ id: image.id, crop: { x: 0.9901, y: 0.9901, width: 0.01, height: 0.01 } }),
+		});
+		expect((await ada.call("docs.get", { item_id: item.id })).content).toEqual(
+			imageIn({ id: image.id, layout: "inline", width: 16, crop: edge }),
+		);
+		await ada.call("docs.update", { item_id: item.id, markdown: `![](image:${image.id}?crop=0.9901,0,0.01,1)` });
+		expect((await ada.call("docs.get", { item_id: item.id })).content).toEqual(
+			imageIn({ id: image.id, layout: "inline", width: 16, crop: { x: 0.99, y: 0, width: 0.01, height: 1 } }),
+		);
 	});
 
 	it("is refused when the doc does not hold the image, or an option has a bad value", async () => {
@@ -367,13 +464,115 @@ describe("an image that the content does not use", () => {
 	});
 });
 
+/** The bindings of the document object, with `overrides` in place of some of them, until the returned function runs. */
+async function withDocumentEnv(itemId: string, overrides: Record<string, unknown>): Promise<() => Promise<void>> {
+	const patch = (next: unknown) =>
+		runInDurableObject(documentOf(itemId), (instance) => {
+			const holder = instance as unknown as { env: unknown };
+			const before = holder.env;
+			holder.env = next ?? before;
+			return before;
+		});
+	const original = await patch(null);
+	await patch({ ...(original as object), ...overrides });
+	return async () => {
+		await patch(original);
+	};
+}
+
+const documentRows = (itemId: string, sql: string) =>
+	runInDurableObject(documentOf(itemId), (_instance, state) => state.storage.sql.exec(sql).toArray());
+
+describe("the alarm of a document with images", () => {
+	// R2 can fail. The image must not come back, and its bytes must leave R2 at a later attempt.
+	it("tries the delete of the bytes again after a failure of R2, and refuses the same image in that time", async () => {
+		const source = (await ada.call("docs.create", { name: "Source" })).item;
+		const target = (await ada.call("docs.create", { name: "Target" })).item;
+		const { image } = await upload(ada, source.id, png(10, 10));
+		const copy = { item_id: target.id, from_item_id: source.id, from_image_id: image.id };
+		await ada.call("docs.copy_image", copy);
+		await ageUnused(target.id, ATTACHMENT_KEEP_MS + 60_000);
+		const restore = await withDocumentEnv(target.id, {
+			BLOBS: { delete: () => Promise.reject(new Error("R2 is not available")) },
+		});
+		const before = Date.now();
+		await runDurableObjectAlarm(documentOf(target.id));
+		await restore();
+		// The doc does not hold the image. R2 still has the bytes, and the object knows their key.
+		expect((await ada.call("docs.get", { item_id: target.id })).images).toEqual([]);
+		expect(await imageKeys(target.id)).toEqual([`document/${target.id}/${image.id}`]);
+		expect(await documentRows(target.id, "SELECT blob_key FROM attachment_deletes")).toEqual([
+			{ blob_key: `document/${target.id}/${image.id}` },
+		]);
+		const alarm = await runInDurableObject(documentOf(target.id), (_instance, state) => state.storage.getAlarm());
+		expect(alarm).toBeGreaterThanOrEqual(before + 4 * 60_000);
+		expect(alarm).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+		// A copy of the same image now would lose its bytes to the delete that waits.
+		expect(await codeOf(ada.call("docs.copy_image", copy))).toBe("unavailable");
+		expect(await runDurableObjectAlarm(documentOf(target.id))).toBe(true);
+		expect(await imageKeys(target.id)).toEqual([]);
+		expect(await documentRows(target.id, "SELECT blob_key FROM attachment_deletes")).toEqual([]);
+		expect((await ada.call("docs.copy_image", copy)).image.id).toBe(image.id);
+	});
+
+	// One alarm does two jobs. A failed message for the drive must keep its retry when the same alarm
+	// deletes an image, and the delete must not wait for the message.
+	it("keeps the retry of the message for the drive when it also deletes an image", async () => {
+		const { item } = await ada.call("docs.create", { name: "Report", markdown: "first" });
+		const { image } = await upload(ada, item.id, png(10, 10));
+		await drainDocument(item.id);
+		const restore = await withDocumentEnv(item.id, {
+			DRIVE_SPACE: {
+				idFromName: (name: string) => name,
+				get: () => ({ applyDocumentChange: () => Promise.reject(new Error("the drive is not available")) }),
+			},
+		});
+		await ageUnused(item.id, ATTACHMENT_KEEP_MS + 60_000);
+		await runInDurableObject(documentOf(item.id), (instance) =>
+			instance.write({
+				spaceId: ada.id,
+				itemId: item.id,
+				content: '{"type":"doc","content":[{"type":"paragraph"}]}',
+				text: "",
+				baseRevision: null,
+				author: { principal_id: ada.id, kind: "human", display_name: "Ada" },
+				attachmentIds: [],
+			}),
+		);
+		// The write sets the alarm for now, and the runtime can run it before this test does. Thus the
+		// message can have more than one failed attempt here.
+		let attempts = 0;
+		await vi.waitFor(
+			async () => {
+				await runDurableObjectAlarm(documentOf(item.id));
+				const rows = await documentRows(item.id, "SELECT attempts FROM pending");
+				attempts = Number(rows[0]?.attempts ?? 0);
+				if (attempts < 1) throw new Error("the alarm did not try the message");
+			},
+			{ timeout: 5000, interval: 20 },
+		);
+		await restore();
+		// The same alarm deleted the image, and the message waits for its retry.
+		expect(await imageKeys(item.id)).toEqual([]);
+		expect(await codeOf(ada.call("docs.get_image", { item_id: item.id, image_id: image.id }))).toBe("not_found");
+		const alarm = await runInDurableObject(documentOf(item.id), (_instance, state) => state.storage.getAlarm());
+		expect(alarm).toBeGreaterThan(Date.now());
+		expect(alarm).toBeLessThanOrEqual(Date.now() + 60_000 * 2 ** (attempts - 1));
+		// With the drive available again, the retry delivers the message.
+		await drainDocument(item.id);
+		expect((await ada.call("drive.get_item", { item_id: item.id })).item.size).toBe(47);
+	});
+});
+
 describe("the images of a deleted doc and of a copy", () => {
 	it("leave R2 when the doc is deleted permanently", async () => {
 		const { item } = await ada.call("docs.create", { name: "Report" });
 		const { image } = await upload(ada, item.id, png(10, 10));
 		await upload(ada, item.id, png(20, 20));
+		// An upload that stopped after its bytes went to R2: an object that no row of the doc names.
+		await env.BLOBS.put(`document/${item.id}/img_stopped`, png(5, 5));
 		await ada.call("docs.update", { item_id: item.id, content: imageIn({ id: image.id }) });
-		expect(await imageKeys(item.id)).toHaveLength(2);
+		expect(await imageKeys(item.id)).toHaveLength(3);
 		await ada.call("drive.trash_items", { item_ids: [item.id] });
 		await ada.call("drive.delete_items", { item_ids: [item.id] });
 		await drainDrive(ada.id);
@@ -450,6 +649,14 @@ describe("docs.copy_image", () => {
 		expect(first.image).toMatchObject({ id: image.id, width: 64, height: 64, size: bytes.byteLength });
 		await ada.call("docs.copy_image", input);
 		expect((await ada.call("docs.get", { item_id: target.id })).images).toHaveLength(1);
+		// A copy from the doc itself adds nothing. The editor uses it for an image that a second tab added.
+		const same = await ada.call("docs.copy_image", {
+			item_id: source.id,
+			from_item_id: source.id,
+			from_image_id: image.id,
+		});
+		expect(same.image).toEqual(image);
+		expect((await ada.call("docs.get", { item_id: source.id })).images).toHaveLength(1);
 		// Content that names the image is good in the target now.
 		await ada.call("docs.update", { item_id: target.id, content: imageIn({ id: image.id }) });
 		expect((await ada.call("docs.get_image", { item_id: target.id, image_id: image.id })).content_base64).toBe(
@@ -616,6 +823,16 @@ describe("docs.import_image", () => {
 		vi.restoreAllMocks();
 		vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("network"));
 		expect(await codeOf(ada.call("docs.import_image", { item_id: item.id, url }))).toBe("unavailable");
+		vi.restoreAllMocks();
+		// The download has a time limit: the request gets a signal, and its end is not an internal error.
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			expect(init?.signal).toBeInstanceOf(AbortSignal);
+			throw new DOMException("The operation timed out.", "TimeoutError");
+		});
+		await expect(ada.call("docs.import_image", { item_id: item.id, url })).rejects.toMatchObject({
+			code: "unavailable",
+			message: expect.stringContaining("in time"),
+		});
 		expect((await ada.call("docs.get", { item_id: item.id })).images).toEqual([]);
 		expect(await imageKeys(item.id)).toEqual([]);
 	});

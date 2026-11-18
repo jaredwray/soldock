@@ -80,6 +80,7 @@ export class DocImages {
 	private readonly listeners = new Set<(job: ImageJob | null) => void>();
 	private readonly waiting: (() => void)[] = [];
 	private loading = 0;
+	private running = 0;
 	private disposed = false;
 
 	constructor(doc: { spaceId: string; itemId: string }, call: Call = api.call) {
@@ -114,6 +115,14 @@ export class DocImages {
 
 	job(key: string): ImageJob | undefined {
 		return this.jobs.get(key);
+	}
+
+	/**
+	 * True while an upload, a copy or an import runs. The page then keeps the document of the editor:
+	 * new content from the server has no node for the image, and the image would be lost.
+	 */
+	get busy(): boolean {
+		return this.running > 0;
 	}
 
 	/** Calls `listener` when a job ends (with the job) and when the list of the images changes (with null). */
@@ -248,13 +257,16 @@ export class DocImages {
 			error: null,
 		};
 		this.jobs.set(job.key, job);
+		this.running += 1;
 		this.run(job, source).then(
 			(image) => {
+				this.running -= 1;
 				job.status = "done";
 				job.image = image;
 				this.emit(job);
 			},
 			(error: unknown) => {
+				this.running -= 1;
 				job.status = "failed";
 				job.error = errorMessage(error);
 				this.emit(job);

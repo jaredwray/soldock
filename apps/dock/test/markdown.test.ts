@@ -205,6 +205,11 @@ describe("docToMarkdown and markdownToDoc", () => {
 		const hostile = [
 			`${"[".repeat(n / 2)}${"]".repeat(n / 2)}`,
 			`${"[a".repeat(n / 4)}${"](b".repeat(n / 4)}`,
+			// A target that never ends, after a long run of spaces, for a link and for an image: 1 MB, the
+			// most Markdown of one request. A scan that reads a run of spaces again for each start is slow here.
+			`[a](${" ".repeat(3140)}x `.repeat(317),
+			`![a](${" ".repeat(3140)}x `.repeat(317),
+			`[a](b${" ".repeat(3100)}"t `.repeat(317),
 			`# x${" ".repeat(n)}x`,
 			`a${" ".repeat(n)}x\nb`,
 			`a${"\\".repeat(n)}x\nb`,
@@ -217,7 +222,7 @@ describe("docToMarkdown and markdownToDoc", () => {
 		];
 		const start = Date.now();
 		for (const markdown of hostile) {
-			const read = markdownToDoc(markdown);
+			const read = markdownToDoc(markdown, { images: true });
 			docToMarkdown(read);
 			docText(read);
 		}
@@ -294,6 +299,22 @@ describe("an image in Markdown", () => {
 	// The chat module reads Markdown without images. A chat message must not get a node that it cannot show.
 	it("stays text for a reader without images", () => {
 		expect(markdownToDoc(`a ![alt](image:${ID}) b`)).toEqual(doc(p(text("a !alt b"))));
+	});
+
+	// CommonMark lets a target and a title have spaces around them, a target in angle brackets, a
+	// parenthesis with its pair, and an escaped quote in a title.
+	it("reads each form of a target and a title", () => {
+		const link = (markdown: string) => markdownToDoc(markdown, { images: true }).content[0];
+		expect(link('[a](  https://example.com/x_(1)   "The \\"title\\""  )')).toEqual(
+			p(text("a", "https://example.com/x_(1)")),
+		);
+		expect(link("[a](<https://example.com/a b>)")).toEqual(p(text("a", "https://example.com/a%20b")));
+		expect(link("[a](https://example.com/ 'it''s')")).toEqual(p(text("[a](https://example.com/ 'it''s')")));
+		expect(link('[a](https://example.com/"t")')).toEqual(p(text("a", "https://example.com/%22t%22")));
+		expect(link("[a](https://example.com/(b c))")).toEqual(p(text("[a](https://example.com/(b c))")));
+		expect(link(`![x](  image:${ID}?width=40   'It\\'s'  )`)).toEqual(
+			p(image({ width: 40, alt: "x", caption: "It's" })),
+		);
 	});
 
 	it("gives a bad option to the check of the content, which refuses it", () => {

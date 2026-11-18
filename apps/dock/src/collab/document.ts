@@ -338,6 +338,16 @@ export class DocumentDO extends DurableObject<Env> {
 			for (let start = 0; start < keys.length; start += DELETE_BATCH) {
 				await this.env.BLOBS.delete(keys.slice(start, start + DELETE_BATCH));
 			}
+			// A caller writes the bytes before it records the attachment. When it stopped between the two,
+			// R2 has an object without a row. Each key of a document has one prefix, so a list finds it.
+			const first = keys[0];
+			const prefix = first?.slice(0, first.lastIndexOf("/") + 1);
+			for (let cursor: string | undefined; prefix; ) {
+				const listed = await this.env.BLOBS.list({ prefix, limit: DELETE_BATCH, ...(cursor ? { cursor } : {}) });
+				if (listed.objects.length > 0) await this.env.BLOBS.delete(listed.objects.map((object) => object.key));
+				if (!listed.truncated) break;
+				cursor = listed.cursor;
+			}
 		}
 		await this.ctx.storage.deleteAlarm();
 		await this.ctx.storage.deleteAll();

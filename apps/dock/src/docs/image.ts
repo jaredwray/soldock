@@ -31,10 +31,34 @@ function png(bytes: Uint8Array): ImageInfo | null {
 	return { type: "image/png", width: data.getUint32(16), height: data.getUint32(20) };
 }
 
+/**
+ * The size of a GIF file: its screen, or its first picture when that is larger. A browser can make the
+ * screen as large as the first picture, so the limits of a doc count the larger of the two.
+ */
 function gif(bytes: Uint8Array): ImageInfo | null {
-	if (bytes.length < 10 || !(ascii(bytes, 0, "GIF87a") || ascii(bytes, 0, "GIF89a"))) return null;
+	if (bytes.length < 13 || !(ascii(bytes, 0, "GIF87a") || ascii(bytes, 0, "GIF89a"))) return null;
 	const data = view(bytes);
-	return { type: "image/gif", width: data.getUint16(6, true), height: data.getUint16(8, true) };
+	let width = data.getUint16(6, true);
+	let height = data.getUint16(8, true);
+	const packed = bytes[10] as number;
+	// The blocks start after the screen and the global color table.
+	let at = 13 + (packed & 0x80 ? 3 * 2 ** ((packed & 7) + 1) : 0);
+	while (at < bytes.length) {
+		const block = bytes[at] as number;
+		if (block === 0x21) {
+			// An extension: a label, then parts with a length each. A part of length 0 ends it.
+			at += 2;
+			while (at < bytes.length && bytes[at] !== 0) at += (bytes[at] as number) + 1;
+			at += 1;
+			continue;
+		}
+		if (block === 0x2c && at + 9 <= bytes.length) {
+			width = Math.max(width, data.getUint16(at + 1, true) + data.getUint16(at + 5, true));
+			height = Math.max(height, data.getUint16(at + 3, true) + data.getUint16(at + 7, true));
+		}
+		break;
+	}
+	return { type: "image/gif", width, height };
 }
 
 function webp(bytes: Uint8Array): ImageInfo | null {
@@ -64,10 +88,13 @@ function webp(bytes: Uint8Array): ImageInfo | null {
 	return null;
 }
 
-/** The EXIF orientation (1 to 8) of an APP1 segment, or 1 when the segment has none. */
-function exifOrientation(bytes: Uint8Array, start: number, length: number): number {
+/**
+ * The EXIF orientation (1 to 8) of an APP1 segment. Null for an APP1 segment that is not EXIF, for
+ * example XMP: such a segment does not change the orientation.
+ */
+function exifOrientation(bytes: Uint8Array, start: number, length: number): number | null {
 	const end = Math.min(start + length, bytes.length);
-	if (!ascii(bytes, start, "Exif\0\0")) return 1;
+	if (!ascii(bytes, start, "Exif\0\0")) return null;
 	const tiff = start + 6;
 	if (tiff + 8 > end) return 1;
 	const little = ascii(bytes, tiff, "II");
@@ -108,7 +135,7 @@ function jpeg(bytes: Uint8Array): ImageInfo | null {
 		if (marker === 0xd9 || marker === 0xda) return null;
 		const length = data.getUint16(at + 2);
 		if (length < 2) return null;
-		if (marker === 0xe1) orientation = exifOrientation(bytes, at + 4, length - 2);
+		if (marker === 0xe1) orientation = exifOrientation(bytes, at + 4, length - 2) ?? orientation;
 		// A frame header (SOF0 to SOF15). C4, C8 and CC are tables, not frames.
 		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
 			if (at + 9 > bytes.length) return null;

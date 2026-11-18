@@ -299,7 +299,7 @@ export const uploadDocImage = defineOperation({
 		content_base64: ContentBase64,
 	}),
 	output: z.object({ image: DocImage }),
-	errors: ["not_found", "payload_too_large"],
+	errors: ["not_found", "invalid", "payload_too_large"],
 });
 
 export const copyDocImage = defineOperation({
@@ -325,7 +325,7 @@ export const copyDocImage = defineOperation({
 		from_image_id: DocImageId.optional(),
 	}),
 	output: z.object({ image: DocImage }),
-	errors: ["not_found", "payload_too_large"],
+	errors: ["not_found", "invalid", "payload_too_large", "unavailable"],
 });
 
 export const importDocImage = defineOperation({
@@ -350,7 +350,7 @@ export const importDocImage = defineOperation({
 		name: ImageName.optional(),
 	}),
 	output: z.object({ image: DocImage }),
-	errors: ["not_found", "payload_too_large", "policy_denied", "unavailable"],
+	errors: ["not_found", "invalid", "payload_too_large", "policy_denied", "unavailable"],
 });
 
 export const getDocImage = defineOperation({

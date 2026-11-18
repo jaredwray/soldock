@@ -109,18 +109,75 @@ interface LinkSyntax {
 /** A target is at most a link and a title. The title of an image is its caption, with an escape for each character at most. */
 const TARGET_CHARS = DOC_LIMITS.hrefChars + 2 * DOC_LIMITS.imageCaptionChars + 100;
 
-/** The link that starts with `[` at `start` and has its `]` at `close`: its label, its target, its title and its end. */
+function isBlankChar(ch: string | undefined): boolean {
+	return ch !== undefined && /\s/.test(ch);
+}
+
+/**
+ * The link that starts with `[` at `start` and has its `]` at `close`: its label, its target, its title
+ * and its end. The scan reads each character one time, so a long run of spaces costs no more than its
+ * length. A regular expression with two parts that read spaces would read such a run many times.
+ */
 function readLink(src: string, start: number, close: number): LinkSyntax | null {
 	if (src[close + 1] !== "(") return null;
-	const target =
-		/^\(\s*(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\([^\s()]*\))*))(?:\s+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'))?\s*\)/.exec(
-			// The slice has a limit, so many links cost no more than their text.
-			src.slice(close + 1, close + 1 + TARGET_CHARS),
-		);
-	if (!target) return null;
-	const href = (target[1] ?? target[2] ?? "").replace(/\\(.)/g, "$1");
-	const title = target[3] ?? target[4] ?? null;
-	return { label: src.slice(start + 1, close), href, title, end: close + 1 + target[0].length };
+	// The slice has a limit, so many links cost no more than their text.
+	const limit = Math.min(src.length, close + 1 + TARGET_CHARS);
+	let i = close + 2;
+	const skipBlank = () => {
+		while (i < limit && isBlankChar(src[i])) i++;
+	};
+	skipBlank();
+	// The target: `<…>` on one line, or text without spaces. A parenthesis in it needs its pair.
+	let href: string | null = null;
+	if (src[i] === "<") {
+		let end = i + 1;
+		while (end < limit && src[end] !== ">" && src[end] !== "<" && src[end] !== "\n") end++;
+		if (end < limit && src[end] === ">") {
+			href = src.slice(i + 1, end);
+			i = end + 1;
+		}
+	}
+	if (href === null) {
+		const from = i;
+		while (i < limit) {
+			const ch = src[i] as string;
+			if (ch === "\\") {
+				if (i + 1 >= limit || src[i + 1] === "\n") break;
+				i += 2;
+			} else if (ch === "(") {
+				let end = i + 1;
+				while (end < limit && !isBlankChar(src[end]) && src[end] !== "(" && src[end] !== ")") end++;
+				if (end >= limit || src[end] !== ")") break;
+				i = end + 1;
+			} else if (ch === ")" || isBlankChar(ch)) {
+				break;
+			} else {
+				i++;
+			}
+		}
+		href = src.slice(from, i);
+	}
+	// The title: text in quotes, after one space or more.
+	const afterTarget = i;
+	skipBlank();
+	let title: string | null = null;
+	const quote = src[i];
+	if (i > afterTarget && (quote === '"' || quote === "'")) {
+		let end = i + 1;
+		while (end < limit && src[end] !== quote) {
+			if (src[end] === "\\") {
+				if (end + 1 >= limit || src[end + 1] === "\n") return null;
+				end++;
+			}
+			end++;
+		}
+		if (end >= limit) return null;
+		title = src.slice(i + 1, end);
+		i = end + 1;
+		skipBlank();
+	}
+	if (i >= limit || src[i] !== ")") return null;
+	return { label: src.slice(start + 1, close), href: href.replace(/\\(.)/g, "$1"), title, end: i + 1 };
 }
 
 const IMAGE_TARGET = /^image:(img_[0-9A-HJKMNP-TV-Z]{26})(?:\?([^#]*))?$/;

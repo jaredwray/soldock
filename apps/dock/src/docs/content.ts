@@ -89,11 +89,16 @@ export function completeImages(doc: DocContent, held: ReadonlyMap<string, DocIma
 			return `The doc does not hold the image ${attrs.id}. Add an image with docs.upload_image, docs.copy_image or docs.import_image, then use the id that the call returns. An image that the content did not use for 24 hours is deleted.`;
 		}
 		if (attrs.crop) {
+			// The crop stays in the image, and each side stays at the smallest side or more. A crop at the
+			// edge of the image must not get a side that the schema refuses: no read could return the doc.
+			const min = DOC_LIMITS.imageMinCrop;
+			const x = part(Math.min(attrs.crop.x, 1 - min));
+			const y = part(Math.min(attrs.crop.y, 1 - min));
 			const crop = {
-				x: part(attrs.crop.x),
-				y: part(attrs.crop.y),
-				width: part(Math.min(attrs.crop.width, 1 - attrs.crop.x)),
-				height: part(Math.min(attrs.crop.height, 1 - attrs.crop.y)),
+				x,
+				y,
+				width: part(Math.max(min, Math.min(attrs.crop.width, 1 - x))),
+				height: part(Math.max(min, Math.min(attrs.crop.height, 1 - y))),
 			};
 			if (crop.x === 0 && crop.y === 0 && crop.width === 1 && crop.height === 1) delete attrs.crop;
 			else attrs.crop = crop;

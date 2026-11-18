@@ -126,12 +126,15 @@ function changeEach(
 /**
  * Starts the work for each image that a paste or a drop of HTML brought in. An image of a web page
  * has `src:<address>`: the store uploads it or asks the server to download it. An image of a
- * different doc has `doc:<space id>:<item id>`: the store copies it, with the same id. An image of
- * this doc needs no work. Returns the transaction that gives each node its job, or null.
+ * doc has `doc:<space id>:<item id>`: the store copies it, with the same id. An image that the store
+ * holds needs no work. An image of this doc that the store does not hold yet, for example from a
+ * second tab, also gets a copy: the server answers with the image, and the store then holds it.
+ * Without that, a save would leave the image out. Returns the transaction that gives each node its
+ * job, or null.
  */
 export function startPastedImages(
 	state: EditorState,
-	store: { target: { itemId: string }; holds: (id: string) => boolean; start: (source: ImageSource) => ImageJob },
+	store: { holds: (id: string) => boolean; start: (source: ImageSource) => ImageJob },
 ): Transaction | null {
 	const found = pendingImages(state.doc).filter((image) => !image.attrs.pending?.startsWith("job:"));
 	return changeEach(state, found, ({ attrs }) => {
@@ -141,7 +144,7 @@ export function startPastedImages(
 		}
 		const [kind, spaceId, itemId] = pending.split(":");
 		if (kind !== "doc" || attrs.id === "" || !itemId) return "remove";
-		if (itemId === store.target.itemId || store.holds(attrs.id)) return { pending: null };
+		if (store.holds(attrs.id)) return { pending: null };
 		return {
 			pending: store.start({ kind: "doc", spaceId: spaceId || null, itemId, imageId: attrs.id }).key,
 		};

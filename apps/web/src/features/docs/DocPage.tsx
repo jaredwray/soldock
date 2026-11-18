@@ -138,13 +138,15 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		let active = true;
 		const refresh = async () => {
 			const saver = saverRef.current;
-			if (!active || !saver || saver.busy || document.visibilityState !== "visible") return;
+			// An image that still uploads is only in the editor. New content from the server would remove it.
+			const uploading = () => imagesRef.current?.busy === true;
+			if (!active || !saver || saver.busy || uploading() || document.visibilityState !== "visible") return;
 			const request = ++requestRef.current;
 			const before = saver.revision;
 			try {
 				const result = await api.call("docs.get", { space_id: spaceId, item_id: itemId });
 				// A change in the editor during the request wins: the save then reports a conflict.
-				if (!active || request !== requestRef.current || saver.busy) return;
+				if (!active || request !== requestRef.current || saver.busy || uploading()) return;
 				// A save can start and end during the request. The answer is then older than the text on
 				// screen, and it must not replace that text.
 				if (isStalePoll(before, saver.revision, result.revision)) return;
