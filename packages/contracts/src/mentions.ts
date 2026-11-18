@@ -161,9 +161,10 @@ const AFTER_MENTION = /^(?:[\p{L}\p{N}_@]|[._+-][\p{L}\p{N}_@])/u;
 
 /**
  * True when "@" and a label between the text `before` and the text `after` read back as a mention: no
- * letter, digit or mark of an address touches it. A mention node that does not fit would become a
- * different mention, or text, in its Markdown.
+ * letter, digit or mark of an address touches it, and it is not in a link (a word with "://", as
+ * `textParts` reads it). `before` is the text of the line before the mention. A mention node that does
+ * not fit would become a different mention, or text, in its Markdown.
  */
 export function mentionFits(before: string, after: string): boolean {
-	return !BEFORE_MENTION.test(before) && !AFTER_MENTION.test(after);
+	return !BEFORE_MENTION.test(before) && !AFTER_MENTION.test(after) && !inLink(before, before.length);
 }

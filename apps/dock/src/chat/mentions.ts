@@ -87,12 +87,15 @@ function shown(node: ChatBodyInline | undefined): string {
  */
 function fitMentions(content: ChatBodyInline[]): ChatBodyInline[] {
 	const out: ChatBodyInline[] = [];
+	// The text of the line before the node: a link can start in an earlier node.
+	let before = "";
 	content.forEach((node, index) => {
-		if (node.type === "mention" && !mentionFits(shown(out.at(-1)), shown(content[index + 1]))) {
-			out.push({ type: "text", text: shown(node) });
-		} else {
-			out.push(node);
-		}
+		const kept: ChatBodyInline =
+			node.type === "mention" && !mentionFits(before, shown(content[index + 1]))
+				? { type: "text", text: shown(node) }
+				: node;
+		out.push(kept);
+		before = node.type === "hard_break" ? "" : before + shown(kept);
 	});
 	return out;
 }

@@ -52,7 +52,9 @@ export const toggleCodeBlock: Command = (state, dispatch) => {
 	if (blocks.length === 0 || blocks.some((block) => block.type !== nodes.paragraph)) return false;
 	if (!range.parent.canReplaceWith(range.startIndex, range.endIndex, nodes.code_block)) return false;
 	if (dispatch) {
-		const text = blocks.map((block) => block.textBetween(0, block.content.size, "\n", "\n")).join("\n");
+		// A line break is a new line. A mention keeps its text: "@" and its label.
+		const leaf = (node: Node) => (node.type === nodes.mention ? `@${node.attrs.label}` : "\n");
+		const text = blocks.map((block) => block.textBetween(0, block.content.size, "\n", leaf)).join("\n");
 		const tr = state.tr.replaceWith(
 			range.start,
 			range.end,

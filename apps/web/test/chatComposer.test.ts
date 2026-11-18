@@ -239,6 +239,14 @@ describe("the commands of the box", () => {
 		expect(code.doc.child(0).textContent).toBe("make a\nmake b");
 		const back = run(code, toggleCodeBlock);
 		expect(back.doc.eq(box)).toBe(true);
+		// A mention keeps its text in the code block.
+		const mentioned = doc(p(t("Hi "), nodes.mention.create({ id: "prn_01JD0000000000000000000ADA", label: "ada" })));
+		const mentionState = EditorState.create({ doc: mentioned });
+		const inCode = run(
+			mentionState.apply(mentionState.tr.setSelection(TextSelection.create(mentioned, 1))),
+			toggleCodeBlock,
+		);
+		expect(inCode.doc.child(0).textContent).toBe("Hi @ada");
 		// A list is not lines of text: the button does nothing there.
 		const list = stateAt(
 			doc(nodes.bullet_list.create(null, [nodes.list_item.create(null, p(t("item")))]), p(t("x"))),
