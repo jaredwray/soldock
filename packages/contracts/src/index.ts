@@ -75,6 +75,9 @@ export {
 	WEBHOOK_EVENT_TYPE,
 } from "./mail.ts";
 export {
+	GROUP_MENTIONS,
+	type GroupMention,
+	groupMentionOf,
 	hasMentionSyntax,
 	MENTION_NOT_AFTER,
 	type MentionDirectory,

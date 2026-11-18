@@ -1,6 +1,7 @@
 import { prefixedId, Timestamp } from "./common.ts";
 import { Href } from "./docs.ts";
 import { Actor } from "./drive.ts";
+import { GROUP_MENTIONS } from "./mentions.ts";
 import { defineOperation } from "./operation.ts";
 import { CHAT_WEBHOOK_EVENTS, ChatWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
@@ -35,6 +36,11 @@ export const CHAT_LIMITS = {
 	bodyDepth: 6,
 	/** The mention nodes of the body of one message. */
 	mentions: 50,
+	/**
+	 * The members of a room in which each member can mention a group ("@here", "@channel"). In a room
+	 * with more members, only an owner of the room can.
+	 */
+	groupMentionMembers: 50,
 	/** The blocks of the body of one message, with each list item. */
 	bodyBlocks: 1000,
 } as const;
@@ -84,10 +90,20 @@ const BodyMention = z.strictObject({
 	}),
 });
 
+/**
+ * A mention of a group: "@here" or "@channel". It mentions each member of the room, except the author.
+ * Until presence (layer 7 of Chat), "@here" mentions each member too.
+ */
+const BodyGroupMention = z.strictObject({
+	type: z.literal("group_mention"),
+	attrs: z.strictObject({ group: z.enum(GROUP_MENTIONS) }),
+});
+
 const BodyInline = z.discriminatedUnion("type", [
 	BodyText,
 	z.strictObject({ type: z.literal("hard_break") }),
 	BodyMention,
+	BodyGroupMention,
 ]);
 
 const BodyParagraph = z.strictObject({ type: z.literal("paragraph"), content: z.array(BodyInline).optional() });
@@ -125,7 +141,8 @@ const BodyBlock = z.union([BodyParagraph, BodyCodeBlock, BodyBlockquote, BodyBul
 
 /**
  * The body of a message: a tree of blocks in the JSON form of ProseMirror. Blocks: paragraph,
- * code_block, blockquote, bullet_list, ordered_list and list_item. Inline: text, hard_break and mention.
+ * code_block, blockquote, bullet_list, ordered_list and list_item. Inline: text, hard_break, mention and
+ * group_mention.
  * Marks on text: strong, em, strike, code and link (http, https or mailto). An emoji is text.
  */
 export const ChatBody = z.strictObject({
@@ -260,8 +277,8 @@ export const ChatRoom = z.object({
 	 */
 	unread_count: z.number().int().nonnegative(),
 	/**
-	 * The messages after `last_read_seq` that mention you, without deleted messages and your own
-	 * messages. The count stops at 100. 0 when you are not a member.
+	 * The messages after `last_read_seq` that mention you or a group ("@here", "@channel"), without
+	 * deleted messages and your own messages. The count stops at 100. 0 when you are not a member.
 	 */
 	mention_count: z.number().int().nonnegative(),
 	/** A number that grows with each new, changed or deleted message. Compare it to find out if you must get the changes. */
@@ -323,6 +340,12 @@ export const ChatMessage = z.object({
 	 * deleted message has none. A reader that gets no value takes an empty list.
 	 */
 	mentions: z.array(z.string()).default([]),
+	/**
+	 * The groups that the body mentions ("here", "channel"), each one time, in the order of the body. A
+	 * group mentions each member of the room, except the author. A deleted message has none. A reader
+	 * that gets no value takes an empty list.
+	 */
+	group_mentions: z.array(z.enum(GROUP_MENTIONS)).default([]),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -378,8 +401,7 @@ const CHANGE = { readOnly: false, destructive: false, idempotent: true, openWorl
 const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld: false } as const;
 
 const MEMBERS_ONLY = "You must be a member of the room.";
-const MENTIONS =
-	"To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }.";
+const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
 export const listRooms = defineOperation({
@@ -584,7 +606,7 @@ export const postMessage = defineOperation({
 export const editMessage = defineOperation({
 	name: "chat.edit_message",
 	summary: "Change the text of your message",
-	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. ${RATE_LIMIT}`,
+	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. An edit keeps the mentions of a group (@here, @channel) that the message has. A new mention of a group follows the rule of chat.post_message. ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edit" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

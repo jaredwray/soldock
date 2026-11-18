@@ -1,3 +1,4 @@
+import type { GroupMention } from "@soldock/contracts";
 import { chainCommands, liftEmptyBlock, newlineInCode, splitBlock, toggleMark } from "prosemirror-commands";
 import { redo, undo } from "prosemirror-history";
 import { InputRule, textblockTypeInputRule, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";
@@ -52,8 +53,13 @@ export const toggleCodeBlock: Command = (state, dispatch) => {
 	if (blocks.length === 0 || blocks.some((block) => block.type !== nodes.paragraph)) return false;
 	if (!range.parent.canReplaceWith(range.startIndex, range.endIndex, nodes.code_block)) return false;
 	if (dispatch) {
-		// A line break is a new line. A mention keeps its text: "@" and its label.
-		const leaf = (node: Node) => (node.type === nodes.mention ? `@${node.attrs.label}` : "\n");
+		// A line break is a new line. A mention keeps its text: "@" and its label, or "@" and its group.
+		const leaf = (node: Node) =>
+			node.type === nodes.mention
+				? `@${node.attrs.label}`
+				: node.type === nodes.group_mention
+					? `@${node.attrs.group}`
+					: "\n";
 		const text = blocks.map((block) => block.textBetween(0, block.content.size, "\n", leaf)).join("\n");
 		const tr = state.tr.replaceWith(
 			range.start,
@@ -225,16 +231,25 @@ export function typedMention(state: EditorState): TypedMention | null {
  * mark that ends a word. The label is the handle.
  */
 export function insertTypedMention(state: EditorState, person: { id: string; handle: string }): Transaction | null {
+	return replaceTypedMention(state, person.handle, nodes.mention.create({ id: person.id, label: person.handle }));
+}
+
+/** The change that puts a mention of a group ("@here", "@channel") in place of the mention that the person types. */
+export function insertTypedGroupMention(state: EditorState, group: GroupMention): Transaction | null {
+	return replaceTypedMention(state, group, nodes.group_mention.create({ group }));
+}
+
+/** The typed mention replaced by `node`, which shows "@" and `label`, with a space and the caret after it. */
+function replaceTypedMention(state: EditorState, label: string, node: Node): Transaction | null {
 	const mention = typedMention(state);
 	if (!mention) return null;
 	const text = mention.before + mention.after;
 	const start = mention.before.length - mention.query.length - 1;
-	const next = insertMention(text, { start, end: mention.before.length, query: mention.query }, person.handle);
+	const next = insertMention(text, { start, end: mention.before.length, query: mention.query }, label);
 	const typed = next.value.slice(start, next.value.length - mention.after.length);
 	const space = typed.endsWith(" ");
 	// insertMention puts the caret after the mention, and after one space that follows it.
-	const afterMention = next.caret - start - `@${person.handle}`.length;
-	const node = nodes.mention.create({ id: person.id, label: person.handle });
+	const afterMention = next.caret - start - `@${label}`.length;
 	const tr = state.tr.replaceWith(mention.from, mention.to, space ? [node, chatSchema.text(" ")] : [node]);
 	return tr.setSelection(TextSelection.create(tr.doc, mention.from + 1 + afterMention)).scrollIntoView();
 }

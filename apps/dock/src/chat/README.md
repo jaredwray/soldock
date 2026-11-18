@@ -163,9 +163,33 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     principal, without the author. A post and an edit write the rows of the message again, and a
     delete removes them. `mention_count` of a member counts its rows after its read marker (see
     [The read marker](#the-read-marker)).
-  - The room sends no notification of its own yet. `@here` / `@channel` are the next part of layer 4
-    of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69). A webhook for new
-    messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about each new message.
+  - The room sends no notification of its own yet. A webhook for new messages
+    ([Webhooks for new messages](#webhooks-for-new-messages)) tells about each new message.
+- **Mentions of a group.** `@here` and `@channel` mention each member of the room, except the
+  author. A mention of a group is a node: `{ type: "group_mention", attrs: { group } }`.
+  - The room makes the node from `@here` and `@channel` in the text of each form, in each letter
+    case. The rules of a mention apply: the node is not in code or in a link, and does not touch a
+    letter. `@room`, `@all` and `@everyone` stay text.
+  - A group word is never a handle. A principal with the address `here@example.com` has its full
+    address as its handle.
+  - Each message returns `group_mentions`: its groups, each one time. The plain text and the
+    Markdown have `@` and the group.
+  - Until presence (layer 7, [jaredwray/soldock#76](https://github.com/jaredwray/soldock/issues/76)),
+    `@here` mentions each member too, as `@channel` does.
+  - The limit by role: in a room with more than 50 members (`CHAT_LIMITS.groupMentionMembers`), only
+    an owner of the room can add a mention of a group. A different member gets `forbidden`. An edit
+    can keep the groups that the message has already, so its author can still change the text of a
+    message from a smaller room. A message from before the group nodes has `@here` as text, and an
+    edit keeps that group too (`storedGroups`). The room checks the limit after the allowance of the
+    rate limit, for a post and for an edit, as it does for the limit of mentions.
+  - Known limit: before this change, a principal with the address `here@example.com` had the handle
+    `here`. Its old mention nodes keep the label `here`, so their Markdown is `@here`. An edit from
+    that Markdown makes a mention of the group. An edit of the body keeps the mention of the
+    principal: the room changes its label to the full address.
+  - The table `mentions` has one row for each group of a message: `group:here` or `group:channel`
+    in place of the id of a principal. An id of a principal starts with `prn_`, so the two never
+    meet. `mention_count` counts these rows for each member, except on the messages of that member.
+    A message with a mention of the member and a group counts one time.
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message
@@ -245,7 +269,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   has a limit. A room is `unread` for a member while the count is more than 0.
 - `mention_count` is the number of messages after the marker that mention the member, without
   deleted messages. The author of a message does not count its own mention. It stops at 100 too. A
-  mention before a join does not count: the join sets the marker to the newest message.
+  mention before a join does not count: the join sets the marker to the newest message. A mention of
+  a group (`@here`, `@channel`) counts for each member, except the author.
   - The migration that adds the table `mentions` fills it from the bodies of the stored messages
     (`MENTIONS_BACKFILL`). So a mention from before the table counts too.
   - A lower marker (`chat.mark_read` with `seq`) counts the older mentions again, as `unread_count`
@@ -577,7 +602,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
-| Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
+| Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |

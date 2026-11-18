@@ -8,6 +8,7 @@ import {
 	type ChatReaction,
 	type ChatSocketEvent,
 	type ChatWebhookEvent,
+	type GroupMention,
 	type RoomKind,
 	type RoomRole,
 } from "@soldock/contracts";
@@ -20,8 +21,8 @@ import {
 } from "../identity/index.ts";
 import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
-import { bodyMarkdown, type MessageContent, mentionIds, textBody } from "./body.ts";
-import { withMentions } from "./mentions.ts";
+import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
+import { storedGroups, withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -311,6 +312,14 @@ const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
 const MAX_ALLOWANCES = 2 * CHAT_LIMITS.membersPerRoom;
 const TOO_MANY_SOCKETS = `One member can have ${CHAT_LIMITS.socketsPerMember} sockets to a room at most.`;
 
+/**
+ * The row of a mention of a group in the table `mentions`, in place of the id of a principal. The id of a
+ * principal starts with "prn_", so the two never meet.
+ */
+function groupRow(group: GroupMention): string {
+	return `group:${group}`;
+}
+
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 	return { error: { code, message } };
 }
@@ -351,6 +360,7 @@ export function messageOutput(record: MessageRecord): ChatMessage {
 		...record,
 		markdown: record.deleted ? "" : bodyMarkdown(record.body),
 		mentions: record.deleted ? [] : mentionIds(record.body),
+		group_mentions: record.deleted ? [] : groupMentions(record.body),
 		created_at: iso(record.created_at),
 		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
@@ -490,28 +500,50 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * The messages after the read marker of a member that mention it. A delete of a message removes its
-	 * mentions. The count stops at `UNREAD_COUNT_MAX`.
+	 * The messages after the read marker of a member that mention it or a group. A message of the member
+	 * does not count. A message with a mention and a mention of a group counts one time. A delete of a
+	 * message removes its mentions. The count stops at `UNREAD_COUNT_MAX`.
 	 */
 	private mentionCount(member: MemberRow | null): number {
 		if (!member) return 0;
 		return (
 			this.one<{ n: number }>(
-				"SELECT COUNT(*) AS n FROM (SELECT 1 FROM mentions WHERE principal_id = ? AND seq > ? LIMIT ?)",
+				`SELECT COUNT(*) AS n FROM (
+					SELECT DISTINCT seq FROM mentions
+					WHERE seq > ?4 AND (principal_id = ?1 OR (principal_id IN (?2, ?3) AND NOT EXISTS (
+						SELECT 1 FROM messages WHERE messages.seq = mentions.seq AND messages.author_id = ?1)))
+					LIMIT ?5)`,
 				member.principal_id,
+				groupRow("here"),
+				groupRow("channel"),
 				member.last_read_seq,
 				UNREAD_COUNT_MAX,
 			)?.n ?? 0
 		);
 	}
 
-	/** Keeps the mentions of a message: each principal of its body, except its author. */
+	/**
+	 * Keeps the mentions of a message: each principal of its body, except its author, and a row for each
+	 * group (`groupRow`).
+	 */
 	private setMentions(seq: number, authorId: string, body: ChatBody): void {
 		this.sql.exec("DELETE FROM mentions WHERE seq = ?", seq);
-		for (const principalId of mentionIds(body)) {
-			if (principalId !== authorId)
-				this.sql.exec("INSERT INTO mentions (principal_id, seq) VALUES (?, ?)", principalId, seq);
-		}
+		const rows = [...mentionIds(body).filter((id) => id !== authorId), ...groupMentions(body).map(groupRow)];
+		for (const row of rows) this.sql.exec("INSERT INTO mentions (principal_id, seq) VALUES (?, ?)", row, seq);
+	}
+
+	/**
+	 * Refuses a new mention of a group in a large room, from a member that is not an owner. A mention of
+	 * a group that the message has already (`kept`) stays, so its author can still change its text.
+	 */
+	private groupMentionRefusal(principalId: string, body: ChatBody, kept: readonly GroupMention[]): Refusal | null {
+		const added = groupMentions(body).filter((group) => !kept.includes(group));
+		if (added.length === 0 || this.memberCount() <= CHAT_LIMITS.groupMentionMembers) return null;
+		if (this.member(principalId)?.role === "owner") return null;
+		return refuse(
+			"forbidden",
+			`In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention @${added[0]}.`,
+		);
 	}
 
 	/** The room as one principal sees it. */
@@ -1035,6 +1067,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (limited) return limited;
 			const content = await this.mentionedContent(opened.room, input.content);
 			if ("error" in content) return content;
+			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, []);
+			if (groupRefusal) return groupRefusal;
 			const version = opened.room.version + 1;
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
@@ -1107,6 +1141,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };
 			const limited = this.spendAllowance(call, Date.now());
 			if (limited) return limited;
+			const stored = row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody);
+			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, storedGroups(stored));
+			if (groupRefusal) return groupRefusal;
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {

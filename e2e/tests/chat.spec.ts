@@ -720,6 +720,17 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	const stored = (await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
 	expect(stored?.mentions).toHaveLength(1);
 
+	// "@he" offers the group @here after the people. The box sends a group node, which mentions each member.
+	await box.pressSequentially("standup @he");
+	await page.getByRole("option", { name: /^@here/ }).click();
+	await expect(box).toHaveText(/^standup @here\s$/);
+	await box.press("Enter");
+	await expect(page.locator(".chat-message .chat-mention").filter({ hasText: "@here" })).toBeVisible();
+	// The row shows before the room stores the message, so wait for the stored message.
+	await expect
+		.poll(async () => (await newest(nadia, roomId)).find((one) => one.text.startsWith("standup"))?.group_mentions)
+		.toEqual(["here"]);
+
 	// A paste keeps a mention of the app as a node. A mention chip with a wrong id is no node.
 	const tomaszId = stored?.mentions[0] as string;
 	await box.evaluate((element, id) => {

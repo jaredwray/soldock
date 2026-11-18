@@ -1,4 +1,12 @@
-import { MENTION_NOT_AFTER, type MentionDirectory, type MentionPerson } from "@soldock/contracts";
+import {
+	CHAT_LIMITS,
+	GROUP_MENTIONS,
+	type GroupMention,
+	MENTION_NOT_AFTER,
+	type MentionDirectory,
+	type MentionPerson,
+	type RoomRole,
+} from "@soldock/contracts";
 import { recipientKeyAction } from "../mail/compose.ts";
 
 export {
@@ -31,6 +39,26 @@ export interface MentionContext {
 	directory: MentionDirectory;
 	memberIds: ReadonlySet<string>;
 	ownId: string;
+	/** True when the writer can mention a group ("@here", "@channel") in the room: see `canMentionGroups`. */
+	groups: boolean;
+}
+
+/**
+ * True when a member with `role` can mention a group in a room of `memberCount` members. In a room
+ * with more than `CHAT_LIMITS.groupMentionMembers` members, only an owner can, as the room checks.
+ */
+export function canMentionGroups(role: RoomRole | null, memberCount: number): boolean {
+	return role === "owner" || (role !== null && memberCount <= CHAT_LIMITS.groupMentionMembers);
+}
+
+/**
+ * The groups for a typed mention: each group that starts with the query, when the writer can mention a
+ * group. Until presence (layer 7 of Chat), "@here" mentions each member too.
+ */
+export function groupSuggestions(query: string, allowed: boolean): GroupMention[] {
+	if (!allowed) return [];
+	const typed = fold(query);
+	return GROUP_MENTIONS.filter((group) => group.startsWith(typed));
 }
 
 /**

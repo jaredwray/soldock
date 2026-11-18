@@ -7,6 +7,7 @@ import type { EditorView } from "prosemirror-view";
 import { describe, expect, it } from "vitest";
 import {
 	insertTypedEmoji,
+	insertTypedGroupMention,
 	insertTypedMention,
 	markdownRules,
 	newLine,
@@ -419,10 +420,22 @@ describe("a mention in the box", () => {
 		expect(second.doc.child(0).textContent).toBe("bold");
 		expect(second.doc.child(1).textContent).toBe("x @captain ");
 		expect(second.selection.$from.parent).toBe(second.doc.child(1));
+
+		// A group from the list is a node too, so the server reads it as a group and not as a handle.
+		const group = insertTypedGroupMention(at(doc(p(t("all: @he")))), "here") as Transaction;
+		expect(group.doc.textContent).toBe("all: @here ");
+		expect(docToBody(group.doc)?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "all: " },
+				{ type: "group_mention", attrs: { group: "here" } },
+				{ type: "text", text: " " },
+			],
+		});
 	});
 
 	// An edit opens a message with its mention nodes. A save must keep them.
-	it("opens a body with a mention node and gives the same body back", () => {
+	it("opens a body with a mention node and a mention of a group, and gives the same body back", () => {
 		const body: ChatBody = {
 			type: "doc",
 			content: [
@@ -430,7 +443,8 @@ describe("a mention in the box", () => {
 					type: "paragraph",
 					content: [
 						{ type: "mention", attrs: { id: "prn_01JD0000000000000000000ADA", label: "ada" } },
-						{ type: "text", text: " thanks" },
+						{ type: "text", text: " thanks, " },
+						{ type: "group_mention", attrs: { group: "channel" } },
 					],
 				},
 			],
