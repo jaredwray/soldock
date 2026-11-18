@@ -161,7 +161,16 @@ export async function uploadImage(context: BrowserContext, itemId: string, file:
 export async function openDoc(page: Page, doc: DocRef) {
 	await page.goto(`/docs/${doc.spaceId}/${doc.id}`);
 	const body = page.locator(".doc-body");
-	await expect(body).toBeVisible();
+	try {
+		await body.waitFor({ state: "visible", timeout: 10_000 });
+	} catch {
+		// The error has the text of the page, for example the message of a doc that did not load.
+		const shown = await page
+			.locator("body")
+			.innerText()
+			.catch(() => "no page");
+		throw new Error(`The doc did not open at ${page.url()}. The page shows: ${shown.slice(0, 600)}`);
+	}
 	return body;
 }
 

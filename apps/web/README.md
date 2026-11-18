@@ -571,8 +571,8 @@ MCP clients. The app has no UI-only path.
     `DocContent` of the contracts: `docs.get` gives the content, and `docs.update` gets it back.
     The app writes no HTML into the page.
   - The toolbar has undo, redo, the text style (Normal text, Heading 1 to 3), bold, italic,
-    underline, strikethrough, code, link, bulleted list, numbered list, quote, code block,
-    horizontal rule and remove formatting. The tooltip of each button shows its shortcut.
+    underline, strikethrough, code, link, insert image, bulleted list, numbered list, quote, code
+    block, horizontal rule and remove formatting. The tooltip of each button shows its shortcut.
   - Shortcuts: `Ctrl` (`⌘` on a Mac) with `B`, `I`, `U`, `E`, `K` or `\`, `Ctrl+Shift` with `X`,
     `E`, `7`, `8` or `9`, and `Ctrl+Alt` with `0` to `3` for the text style. In a list, `Tab` and
     `Shift+Tab` change the level of an item. Outside a list, `Tab` moves the focus.
@@ -592,7 +592,43 @@ MCP clients. The app has no UI-only path.
     window focus, and shows the changes of other people and agents.
   - A viewer gets the text without the toolbar, and cannot change it. A link opens in a new tab.
   - **Download as Markdown** saves the `markdown` of `docs.get` as `<name>.md`, after the save of
-    the last changes.
+    the last changes. The file names each image by its id, and has no image files.
+  - **Images.** A doc holds its own images ([`docs`](../dock/src/docs/README.md#images)).
+    - **Add.** A person drops image files on the page, pastes a picture, or uses **Insert image**:
+      **Upload from this computer**, **From Drive** (a dialog with the folders and the image files
+      of My Drive and of each shared drive) or **From a web address**. The file is a PNG, JPEG, GIF
+      or WebP image of at most 10 MB. The page tells the reason for a file that it refuses.
+    - A new image shows at once from its own bytes, with "Uploading…". When the upload ends, the
+      image gets its id. When it fails, the image goes away and a message shows the reason. A save
+      has no image that still uploads. One Undo removes a new image.
+    - A line shows where a dragged image or file goes. A drag moves an image in the text.
+    - **Pasted HTML.** A picture with a `data:` address is uploaded. A picture with an https
+      address goes to `docs.import_image`: the server downloads it one time. The page never loads a
+      pasted address. A copy of one picture has its bytes and, often, HTML with its address: the
+      bytes win. A paste with text and pictures keeps the text.
+    - **A copy between docs.** The clipboard has the id of the image and its doc, and no address.
+      A paste into a different doc copies the image with `docs.copy_image`. The image keeps its
+      options.
+    - **A selected image.** A click selects an image. The image toolbar then takes the place of the
+      formatting toolbar, so the page does not move. It has **In line**, **Wrap text** and **Break
+      text**, the side (left, center, right), the size (25% to 100% of the text width, or the
+      original size), **Crop**, **Alt text**, **Caption** and **Remove image**. Each change is one
+      step of Undo.
+    - **Size.** The four corners of a selected image change its width. The image keeps its shape,
+      and shows its size in pixels while a corner moves.
+    - **Crop.** The dialog shows the whole image with a frame. A person drags the frame or its 8
+      handles. With the keyboard, the frame and each handle are buttons: the arrow keys move them
+      by 1% of the image, or by 10% with Shift. The doc keeps the whole file. After a crop, the
+      picture keeps its scale.
+    - **Caption.** The caption is a line below the picture. The person types in it. Enter and
+      Escape go back to the text. A caption line without text goes away.
+    - **Layout.** An image in the line is a character of the text. With **Wrap text**, the image
+      floats at the left or the right. With **Break text**, the image is on its own line. At 600px
+      and below, an image at one side is on its own line.
+    - The picture of an image comes from `docs.get_image` as base64, and shows from a `blob:`
+      address of a raster type. An image gets its bytes when it is near the screen, and at most 4
+      requests run at one time.
+    - A viewer sees the images and the captions, and cannot change them.
   - The editor does not make blocks deeper than `DOC_LIMITS.depth` minus 2, because the server
     refuses a doc that is too deep.
   - The editor is a separate chunk. A person who uses only Mail does not load it.
@@ -1237,13 +1273,13 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
-| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page |
+| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, and the page chunks with the reload after a deploy |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands and autosave, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions and the room sync of Chat, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 

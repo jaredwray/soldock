@@ -74,6 +74,10 @@ keys.
 - The handler checks the access before it writes to R2. When the drive then refuses the item, or
   answers that the idempotency key was used, the handler deletes the object of that attempt.
   After an error the drive can still have committed, so the object stays.
+- `drive.copy_item` of a doc also copies the images that its content uses
+  ([`docs`](../docs/README.md#images)). A second call with the same idempotency key copies only the
+  images that the copy does not hold yet. A copy with many images needs 3 calls for each image, so
+  it can stop at the subrequest limit of one invocation. Use an idempotency key, and call again.
 - `drive.copy_item` copies the current version of a file to a new R2 object, or the content of a
   doc or a sheet to a new `DocumentDO`. The copy is in the own drive of the caller, or in the shared
   drive `target_space_id`, where the caller needs the editor role.
@@ -448,7 +452,10 @@ See the [webhook module](../webhooks/README.md).
   the own drive of the actor. A shared drive always has the field. A refused change is audited by the operation invoker.
 - Drive holds content that principals of this organization put there. No operation brings in
   content from outside yet, so no output has `untrusted: true`. When mail attachments can go to
-  Drive, such items must get the mark.
+  Drive, such items must get the mark. `docs.copy_image` must then give the mark to the image that
+  it makes from such a file.
+- The images of a doc are not items of Drive. A doc can hold an image from a web address, which
+  has the mark ([`docs`](../docs/README.md#an-image-from-a-web-address)).
 
 ## Data inventory
 

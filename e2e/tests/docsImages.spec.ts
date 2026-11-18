@@ -13,8 +13,6 @@ import {
 } from "../support/docs.ts";
 import { BASE_URL } from "../support/server.ts";
 
-const SHOTS = process.env.SHOTS;
-
 test("a dropped image file shows at once, goes into the doc, and stays after a reload", async ({ browser }) => {
 	const context = await signIn(browser, "nadia");
 	const page = await context.newPage();
@@ -30,14 +28,12 @@ test("a dropped image file shows at once, goes into the doc, and stays after a r
 	const [saved] = await savedImages(context, doc.id, (images) => images.length === 1);
 	expect(saved).toMatchObject({ layout: "inline", width: 640 });
 	expect((await getDoc(context, doc.id)).images).toMatchObject([{ mime_type: "image/png", width: 640, height: 400 }]);
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/1-dropped.png` });
 
 	await page.reload();
 	await expect(body.locator(".doc-image")).toHaveClass(/doc-image-loaded/);
 	const box = await body.locator(".doc-image-frame").boundingBox();
 	expect(Math.round(box?.width ?? 0)).toBe(640);
 	expect(Math.round(box?.height ?? 0)).toBe(400);
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/2-reloaded.png` });
 	await context.close();
 });
 
@@ -77,7 +73,6 @@ test("the image toolbar changes the layout, the size, the alt text and the capti
 	const frame = await image.locator(".doc-image-frame").boundingBox();
 	const paragraph = await body.locator("p").first().boundingBox();
 	expect(frame && paragraph && paragraph.height > frame.height).toBe(true);
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/3-wrap-left.png` });
 
 	await toolbar.getByRole("button", { name: "Image at the right" }).click();
 	await expect(image).toHaveCSS("float", "right");
@@ -104,7 +99,6 @@ test("the image toolbar changes the layout, the size, the alt text and the capti
 	await page.keyboard.type("Sales by quarter");
 	await page.keyboard.press("Enter");
 	await expect(body).toBeFocused();
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/4-wrap-right-caption.png` });
 
 	const [saved] = await savedImages(context, doc.id, (images) => images[0]?.caption === "Sales by quarter");
 	expect(saved).toMatchObject({
@@ -117,7 +111,6 @@ test("the image toolbar changes the layout, the size, the alt text and the capti
 	await toolbar.getByRole("button", { name: "Break text" }).click();
 	await toolbar.getByRole("button", { name: "Image in the center" }).click();
 	await expect(image).toHaveCSS("float", "none");
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/5-break-center.png` });
 	await savedImages(context, doc.id, (images) => images[0]?.layout === "break_center");
 
 	// Undo brings back the layout of before.
@@ -150,7 +143,6 @@ test("a corner of a selected image changes its size, and the image keeps its sha
 	await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2 - 60, { steps: 5 });
 	// While the corner moves, the image shows its size in pixels.
 	await expect(body.locator(".doc-image-size")).toHaveText("300 × 225");
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/6-resizing.png` });
 	await page.mouse.up();
 	const resized = await frame.boundingBox();
 	expect([Math.round(resized?.width ?? 0), Math.round(resized?.height ?? 0)]).toEqual([300, 225]);
@@ -182,7 +174,6 @@ test("the crop dialog selects the part of the image that shows, with the keyboar
 	await top.focus();
 	for (let press = 0; press < 5; press++) await page.keyboard.press("Shift+ArrowDown");
 	await expect(dialog.getByText("400 × 300 pixels of the image show.")).toBeVisible();
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/7-crop-dialog.png` });
 	await dialog.getByRole("button", { name: "Apply" }).click();
 
 	// The picture keeps its scale: the half of the width shows, so the image has the half of its width.
@@ -190,7 +181,6 @@ test("the crop dialog selects the part of the image that shows, with the keyboar
 	expect([Math.round(cropped?.width ?? 0), Math.round(cropped?.height ?? 0)]).toEqual([200, 150]);
 	const [saved] = await savedImages(context, doc.id, (images) => images[0]?.crop !== undefined);
 	expect(saved).toMatchObject({ width: 200, crop: { x: 0.5, y: 0.5, width: 0.5, height: 0.5 } });
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/8-cropped.png` });
 
 	// The doc keeps the whole file, so a later crop can show it all again.
 	await page.getByRole("toolbar", { name: "Image" }).getByRole("button", { name: "Crop" }).click();
@@ -317,7 +307,6 @@ test("the Insert image menu adds an image from this computer and from Drive", as
 	await page.getByRole("menuitem", { name: "From Drive" }).click();
 	const dialog = page.getByRole("dialog", { name: "Image from Drive" });
 	await dialog.getByRole("button", { name }).click();
-	if (SHOTS) await page.screenshot({ path: `${SHOTS}/9-drive-dialog.png` });
 	await dialog.getByRole("button", { name: "Insert image" }).click();
 	await expect(body.locator(".doc-image-loaded:not(.doc-image-pending)")).toHaveCount(2);
 	await savedImages(context, doc.id, (images) => images.length === 2);
