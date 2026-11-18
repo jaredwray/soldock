@@ -43,6 +43,11 @@ export function inThread(message: Pick<ChatMessage, "id" | "parent_id">, parentI
 	return message.id === parentId || message.parent_id === parentId;
 }
 
+/** The wait before the first retry of a failed catch-up for a room version that the view has, in ms. */
+export const THREAD_RETRY_MS = 1_000;
+/** The longest wait before a retry. Each failure doubles the wait up to this value. */
+export const THREAD_RETRY_MAX_MS = 60_000;
+
 /** One page of `chat.list_replies`. */
 export interface RepliesPage {
 	parent: ChatMessage;
@@ -63,7 +68,7 @@ export interface ThreadView {
 	 * Tells the view to read the changes that it missed. A new connect of the socket gives no version, and
 	 * the view always reads. A new room list gives the version of the room: the view reads only when the
 	 * room is after the version of the thread and after each version that a catch-up asked for before, or
-	 * when its last catch-up failed.
+	 * when its last catch-up failed and the wait before a retry is over.
 	 */
 	catchUp(roomVersion?: number): void;
 	/** The thread that shows, or null before the first load. */
@@ -75,14 +80,19 @@ export interface ThreadView {
  * comes during the load waits, and goes into the thread after it. The load reads the changes after the
  * version of its first page, so a change during the read of a later page shows too. One catch-up runs at
  * a time. A call during a catch-up makes it run one more time. A failed catch-up keeps the version, so the
- * next catch-up asks for the same changes again.
+ * next catch-up asks for the same changes again. For the same room version, it waits first: 1 s, then
+ * twice as long after each failure, up to 60 s.
  */
 export function createThreadView(read: ReadReplies, show: (thread: ThreadState) => void): ThreadView {
 	let thread: ThreadState | null = null;
 	let waiting: ChatMessage[] = [];
 	let running = false;
-	/** True after a catch-up that failed: the next catch-up reads, also for the same version of the room. */
+	/** True after a catch-up that failed: a catch-up after `retryAt` reads, also for the same version of the room. */
 	let failed = false;
+	/** The failures after the last catch-up that did not fail. */
+	let failures = 0;
+	/** The time (ms) after which a room list for a version that the view has tries a failed catch-up again. */
+	let retryAt = 0;
 	/** The highest version of the room that a catch-up asked for. A read that runs or ran covers it. */
 	let asked = 0;
 	let again = false;
@@ -116,9 +126,12 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 				}
 			} while (again);
 			failed = false;
+			failures = 0;
 		} catch {
-			// The version did not move. The next catch-up (a connect or a room list) reads again.
+			// The version did not move. A connect, a new room version, or a room list after the wait reads again.
 			failed = true;
+			failures += 1;
+			retryAt = Date.now() + Math.min(THREAD_RETRY_MAX_MS, THREAD_RETRY_MS * 2 ** (failures - 1));
 		} finally {
 			running = false;
 		}
@@ -150,9 +163,10 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 			// Before the end of the load there is nothing to do: the load reads the changes at its end.
 			if (thread === null) return;
 			if (roomVersion !== undefined) {
-				// A read that runs covers each version up to `asked`. If it fails, the next room list reads again.
+				// A read that runs covers each version up to `asked`. After a failure, a room list for a covered
+				// version waits for `retryAt`, so the room lists of other rooms do not repeat a read that fails.
 				const covered = roomVersion <= Math.max(thread.version, asked);
-				if (covered && (running || !failed)) return;
+				if (covered && (running || !failed || Date.now() < retryAt)) return;
 				asked = Math.max(asked, roomVersion);
 			}
 			void readChanges();
