@@ -523,7 +523,7 @@ export function useRoom(
 				if (event.type === "hello") {
 					void sync.notice(event.version);
 					if (connects++ > 0) void loadMembers();
-				} else if (event.type === "message") sync.push(event.message);
+				} else if (event.type === "message" || event.type === "reply") sync.push(event.message);
 				else {
 					roomChanged.current();
 					void loadMembers();

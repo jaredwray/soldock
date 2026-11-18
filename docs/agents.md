@@ -399,7 +399,8 @@ app uses.
   `also_in_room: true` when each member must see the reply in the room too. A message with replies
   has `thread`, with the number of replies. Read the replies with `chat_list_replies`. A thread has
   one level: reply to the first message of a thread, not to a reply. A chat webhook for a reply has
-  `parent_id`.
+  `parent_id`. A mention in a reply that is not in the room gives no `mention_count` yet, and
+  `chat_list_messages` with `changed_after` does not show an edit or a reaction of such a reply.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not
   remove words. To remove a message and its earlier versions, delete it.
@@ -446,6 +447,7 @@ A POST has this form:
     "principal_id": "prn_…",
     "room_id": "rm_…",
     "message_id": "cmsg_…",
+    "parent_id": "cmsg_…",
     "uri": "soldock://chat/rm_…/messages"
   }
 }
@@ -453,6 +455,8 @@ A POST has this form:
 
 Verify the signature and reject duplicate `webhook-id` values as for [mail webhooks](#get-a-webhook-for-new-mail).
 Then read the room with `chat_list_messages` or the MCP resource URI. The POST contains no message text.
+`parent_id` is only in the event of a reply in a thread. Read that reply with `chat_list_replies` of the
+parent: `chat_list_messages` does not have it.
 The optional `auth_key` and `header` fields work as for mail webhooks.
 Each message keeps its own retries, including messages from different rooms.
 Each attempt checks your membership, credential and outbound policy again.

@@ -85,6 +85,7 @@ Only the creator can delete a subscription of their own mailbox or their own dri
 The queue `soldock-webhooks` carries version 1 jobs. `webhookId` in a delivery job is the subscription id.
 A job from the previous Worker has no `eventType`. That job is `chat.message.created`, and its event id is the message id.
 An edit or a delete uses the event id `<message id>:<version>`. The body `message_id` stays the message id.
+A reply in a thread has `parentId` in its jobs, and its body has `parent_id`: the message that it replies to.
 Mail jobs stay the same. The mail body has no `endpoint_id`.
 
 Five failed deliveries in a row disable the endpoint. One success sets the count to 0.

@@ -63,7 +63,7 @@ export const chatRoom = defineResource({
 	name: "chat.room",
 	title: "Room messages",
 	description:
-		"The newest messages of a room or a direct message that you are a member of, as chat.list_messages returns them. Subscribe to it with subscriptions/listen to get a notification when a message is new, changed or deleted. Then call chat.list_messages with changed_after and the version that you have.",
+		"The newest messages of a room or a direct message that you are a member of, as chat.list_messages returns them. Subscribe to it with subscriptions/listen to get a notification when a message is new, changed or deleted. Then call chat.list_messages with changed_after and the version that you have. A reply in a thread is not in this list: read it with chat.list_replies.",
 	uriTemplate: "soldock://chat/{room_id}/messages",
 	mimeType: "application/json",
 	read: { operation: "chat.list_messages", input: (vars) => ({ room_id: vars.room_id as string }) },
@@ -80,7 +80,7 @@ export const chatRoom = defineResource({
 			})),
 	},
 	updates:
-		"A new, changed or deleted message sends notifications/resources/updated. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
+		"A new, changed or deleted message sends notifications/resources/updated, also a reply in a thread. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
 });
 
 /**

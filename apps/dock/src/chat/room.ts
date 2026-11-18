@@ -312,10 +312,15 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE messages ADD COLUMN last_reply_at INTEGER",
 		"ALTER TABLE messages ADD COLUMN reply_authors_json TEXT",
 		"CREATE INDEX messages_parent ON messages (parent_id, seq) WHERE parent_id IS NOT NULL",
+		// The room list and the unread count read this index, so a long thread adds nothing to their reads.
+		"CREATE INDEX messages_room_list ON messages (seq) WHERE parent_id IS NULL OR also_in_room = 1",
 	],
 ];
 
-/** The messages of the room list: the messages of the room, and the replies that also went to the room. */
+/**
+ * The messages of the room list: the messages of the room, and the replies that also went to the room. The
+ * text is the condition of the index `messages_room_list`, so SQLite uses that index.
+ */
 const IN_ROOM_LIST = "(parent_id IS NULL OR also_in_room = 1)";
 /** The most authors that the summary of a thread keeps. */
 const THREAD_AUTHORS = 3;
@@ -398,6 +403,16 @@ function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): 
 
 function iso(ms: number): string {
 	return new Date(ms).toISOString();
+}
+
+/**
+ * The socket event of a new, changed or deleted message: `message` for a message of the room list, and
+ * `reply` for a reply that is not in it. A client from before threads ignores `reply`, so it never puts
+ * a reply in its room list.
+ */
+function messageEvent(record: MessageRecord): ChatSocketEvent {
+	const message = messageOutput(record);
+	return record.parent_id !== null && !record.also_in_room ? { type: "reply", message } : { type: "message", message };
 }
 
 /** An earlier version of a message. Times are in milliseconds. */
@@ -996,9 +1011,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * Writes the summary of the replies of a message again: the count and the time of the newest reply
-	 * that stays, and the authors of the newest replies. The parent gets `version`, so a client of the
-	 * room list gets the new summary.
+	 * Adds a new reply to the summary of its parent, without a read of the other replies: one more reply,
+	 * the time of the reply, and its author first. The parent gets `version`.
+	 */
+	private addToThread(parent: MessageRow, author: ActorRecord, at: number, version: number): void {
+		const earlier = JSON.parse(parent.reply_authors_json ?? "[]") as ActorRecord[];
+		const authors = [author, ...earlier.filter((one) => one.principal_id !== author.principal_id)].slice(
+			0,
+			THREAD_AUTHORS,
+		);
+		this.sql.exec(
+			`UPDATE messages SET reply_count = reply_count + 1, last_reply_at = ?, reply_authors_json = ?, version = ?
+			WHERE id = ?`,
+			at,
+			JSON.stringify(authors),
+			version,
+			parent.id,
+		);
+	}
+
+	/**
+	 * Writes the summary of the replies of a message again, from its replies: the count and the time of the
+	 * newest reply that stays, and the authors of the newest replies. A delete of a reply uses it. The parent
+	 * gets `version`, so a client of the room list gets the new summary.
 	 */
 	private refreshThread(parentId: string, version: number): void {
 		const summary = this.one<{ n: number; last: number | null }>(
@@ -1133,7 +1168,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.roomChanged(principalId);
 		});
 		const message = this.messageRecord(roomId, this.message(messageId) as MessageRow);
-		await this.publish({ type: "message", message: messageOutput(message) });
+		await this.publish(messageEvent(message));
 		return { message, changed: true };
 	}
 
@@ -1235,7 +1270,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
 				}
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-				if (parent) this.refreshThread(parent.id, version - 1);
+				if (parent) this.addToThread(parent, call.actor, now, version - 1);
 				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
@@ -1267,8 +1302,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		});
 		if (!("error" in posted) && !posted.duplicate) {
 			// The parent first: its version comes before the version of the reply.
-			if (posted.parent) await this.publish({ type: "message", message: messageOutput(posted.parent) });
-			await this.publish({ type: "message", message: messageOutput(posted.message) });
+			if (posted.parent) await this.publish(messageEvent(posted.parent));
+			await this.publish(messageEvent(posted.message));
 		}
 		return posted;
 	}
@@ -1331,7 +1366,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return { message, changed: true as const };
 		});
 		if (!("error" in edited) && edited.changed) {
-			await this.publish({ type: "message", message: messageOutput(edited.message) });
+			await this.publish(messageEvent(edited.message));
 		}
 		return edited;
 	}
@@ -1440,8 +1475,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return { deleted: true as const, message, parent };
 		});
 		if (!("error" in deleted) && deleted.deleted) {
-			await this.publish({ type: "message", message: messageOutput(deleted.message) });
-			if (deleted.parent) await this.publish({ type: "message", message: messageOutput(deleted.parent) });
+			await this.publish(messageEvent(deleted.message));
+			if (deleted.parent) await this.publish(messageEvent(deleted.parent));
 		}
 		if ("error" in deleted) return deleted;
 		return { deleted: deleted.deleted };

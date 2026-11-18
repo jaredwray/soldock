@@ -406,6 +406,9 @@ export const CHAT_SOCKET_CLOSE = {
  *   older version calls chat.list_messages with changed_after.
  * - `message` has a new, changed or deleted message, as chat.list_messages returns it. Its `version` is
  *   the version of the room after the change, so a client that misses a version gets the changes.
+ * - `reply` has a new, changed or deleted reply that is not in the room list, as chat.list_replies
+ *   returns it. Its `version` is a version of the room too. A client without threads ignores it, and
+ *   its sync gets the changes of the room list.
  * - `room` tells that the name, the topic or the members changed. Call chat.get_room.
  */
 export const ChatSocketEvent = z.discriminatedUnion("type", [
@@ -416,6 +419,7 @@ export const ChatSocketEvent = z.discriminatedUnion("type", [
 		version: z.number().int(),
 	}),
 	z.object({ type: z.literal("message"), message: ChatMessage }),
+	z.object({ type: z.literal("reply"), message: ChatMessage }),
 	z.object({ type: z.literal("room") }),
 ]);
 export type ChatSocketEvent = z.infer<typeof ChatSocketEvent>;
@@ -633,11 +637,11 @@ export const postMessage = defineOperation({
 			also_in_room: z.boolean().optional(),
 		})
 		.refine(oneForm, ONE_FORM)
-		.refine((input) => input.also_in_room === undefined || input.parent_id !== undefined, {
+		.refine((input) => input.also_in_room !== true || input.parent_id !== undefined, {
 			message: "also_in_room needs parent_id: only a reply can also go to the room",
 		}),
 	output: z.object({ message: ChatMessage }),
-	errors: ["not_found", "conflict", "rate_limited"],
+	errors: ["not_found", "invalid", "conflict", "rate_limited"],
 });
 
 export const listReplies = defineOperation({
@@ -647,6 +651,8 @@ export const listReplies = defineOperation({
 		"Returns the message (parent) and its replies, oldest first.",
 		"Without after and changed_after, returns the first replies. has_more is true when more replies exist: pass the seq of the last reply as after to get them.",
 		"With changed_after, returns each reply that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
+		"When has_more is true with changed_after, call again with the version of the last reply as changed_after.",
+		"The replies of a deleted message stay, and this operation returns them.",
 		MEMBERS_ONLY,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/replies" },

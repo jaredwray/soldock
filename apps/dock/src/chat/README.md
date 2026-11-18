@@ -221,8 +221,14 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     replies that changed after a version of the room (`changed_after`).
   - The webhook event of a reply has `parent_id`, so a receiver reads the reply with
     `chat.list_replies`.
+  - The index `messages_room_list` has the messages of the room list only. So the room list and the
+    unread count read no reply, also after a long thread. A new reply changes the summary of its
+    parent by one (`addToThread`). Only a delete of a reply reads the replies again.
   - Known limits, for the next parts of threads: a mention in a reply that is not in the room list
-    gives no mention count. Nobody follows a thread yet, and a thread has no read marker.
+    gives no mention count. Nobody follows a thread yet, and a thread has no read marker. An edit or a
+    reaction of such a reply changes the version of the room, and `chat.list_messages` with
+    `changed_after` returns nothing for it: a reader of the room finds it with `chat.list_replies`
+    only.
 - **The earlier versions of a message.** An edit keeps the content before it in the table
   `message_edits`: the text, the body, the version of the room, the time of the write and the time
   of the edit (`keepEarlierVersion`). An edit with the same content keeps nothing.
@@ -481,9 +487,13 @@ sends each change to its sockets at once. `chatSocketPath`, `ChatSocketEvent` an
 | Event | When | Fields |
 | --- | --- | --- |
 | `hello` | The first event of a socket | `protocol`, `room_id`, and `version`: the version of the room at that time |
-| `message` | A message is new, changed or deleted | `message`: the message as `chat.list_messages` returns it |
+| `message` | A message of the room list is new, changed or deleted | `message`: the message as `chat.list_messages` returns it |
+| `reply` | A reply that is not in the room list is new, changed or deleted | `message`: the reply as `chat.list_replies` returns it |
 | `room` | The name, the topic or the members changed | None. Call `chat.get_room` |
 
+- A client from before threads ignores `reply`, which its parse does not know. The missing version
+  starts its sync, and `chat.list_messages` leaves the reply out. So an old client never shows a reply
+  in its room list.
 - The `version` of a `message` event is the version of the room after the change. A client shows the
   message at once. When a version is missing, the client calls `chat.list_messages` with
   `changed_after`. So a lost event does no harm.

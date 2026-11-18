@@ -58,7 +58,7 @@ describe("a public room", () => {
 	it("shows in the public list for each principal, and a principal reads and posts after it joins", async () => {
 		const room = await createRoom(ada, "public", "Launch");
 		expect(room).toMatchObject({ kind: "public", name: "Launch", role: "owner", member_count: 1, unread: false });
-		await post(ada, room.id, "We ship on Friday.");
+		const first = await post(ada, room.id, "We ship on Friday.");
 
 		for (const other of [owner, bot]) {
 			const [listed] = (await other.call("chat.list_rooms", { view: "public" })).rooms;
@@ -70,6 +70,11 @@ describe("a public room", () => {
 			expect(seen.members[0]).toMatchObject({ principal_id: ada.id, role: "owner" });
 			expect(await codeOf(other.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.post_message", { room_id: room.id, text: "Hello" }))).toBe("forbidden");
+			// The replies of a thread are messages too.
+			const thread = { room_id: room.id, message_id: first.id };
+			expect(await codeOf(other.call("chat.list_replies", thread))).toBe("forbidden");
+			const replyInput = { room_id: room.id, parent_id: first.id, text: "Hello" };
+			expect(await codeOf(other.call("chat.post_message", replyInput))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.mark_read", { room_id: room.id }))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.star_room", { room_id: room.id, starred: true }))).toBe("forbidden");
 
@@ -111,6 +116,10 @@ describe("a private room", () => {
 			expect(await codeOf(other.call("chat.join_room", target))).toBe("not_found");
 			expect(await codeOf(other.call("chat.list_messages", target))).toBe("not_found");
 			expect(await codeOf(other.call("chat.post_message", { ...target, text: "Hello" }))).toBe("not_found");
+			expect(await codeOf(other.call("chat.list_replies", { ...target, message_id: message.id }))).toBe("not_found");
+			expect(await codeOf(other.call("chat.post_message", { ...target, parent_id: message.id, text: "x" }))).toBe(
+				"not_found",
+			);
 			expect(await codeOf(other.call("chat.update_room", { ...target, name: "Mine" }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.add_members", { ...target, principal_ids: [other.id] }))).toBe("not_found");
 			// The answer is the same for an id that no principal has, so the call tells nothing about an id.
@@ -752,10 +761,17 @@ describe("the scopes of a key", () => {
 			await codeOf(read("chat.add_reaction", { room_id: room.id, message_id: first?.id ?? "", emoji: "👍" })),
 		).toBe("forbidden");
 		expect(await codeOf(read("chat.create_room", { kind: "public", name: "Mine" }))).toBe("forbidden");
+		// The key reads a thread, and cannot reply in it.
+		const thread = { room_id: room.id, message_id: first?.id ?? "" };
+		expect((await read("chat.list_replies", thread)).replies).toEqual([]);
+		expect(await codeOf(read("chat.post_message", { room_id: room.id, parent_id: thread.message_id, text: "x" }))).toBe(
+			"forbidden",
+		);
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
 		expect(await codeOf(api(mailOnly.secret)("chat.list_rooms"))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
+		expect(await codeOf(api(mailOnly.secret)("chat.list_replies", thread))).toBe("forbidden");
 
 		// An agent key can hold the two Chat scopes, and a narrower agent key has the same limit.
 		const { api_key: agentReader } = await ada.call("account.create_api_key", {
@@ -1412,6 +1428,7 @@ describe("the mention count", () => {
 			sql.exec("DROP TABLE mentions");
 			sql.exec("DROP TABLE message_edits");
 			sql.exec("DROP INDEX messages_parent");
+			sql.exec("DROP INDEX messages_room_list");
 			for (const column of ["parent_id", "also_in_room", "reply_count", "last_reply_at", "reply_authors_json"]) {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
@@ -1694,6 +1711,21 @@ describe("threads", () => {
 			changed_after: thread.version,
 		});
 		expect(edited.replies.map((message) => message.text)).toEqual(["Looks great"]);
+		// A page of changes continues from the version of its last reply, so it loses no change.
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: second.id, text: "Ship it now" });
+		const changedPage = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			changed_after: thread.version,
+			limit: 1,
+		});
+		expect([changedPage.replies.map((message) => message.text), changedPage.has_more]).toEqual([["Looks great"], true]);
+		const nextChanges = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			changed_after: changedPage.replies[0]?.version ?? 0,
+		});
+		expect(nextChanges.replies.map((message) => message.text)).toEqual(["Ship it now"]);
 
 		// A delete of a reply takes it out of the summary. Without replies, the parent has no thread.
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: second.id });
@@ -1722,19 +1754,33 @@ describe("threads", () => {
 		expect((await ada.call("chat.get_room", { room_id: room.id })).room.mention_count).toBe(0);
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: parent.id });
 		expect(await codeOf(reply(bot, room.id, parent.id, "Late"))).toBe("invalid");
+		// The replies of a deleted message stay.
+		const kept = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id });
+		expect([kept.parent.deleted, kept.replies.length]).toEqual([true, 3]);
 	});
 
 	// The client counts each version of the room. A reply changes two messages, so the two events come in order.
-	it("sends the new summary of the parent, then the reply, with one version each, to the sockets of the room", async () => {
+	it("sends the new summary of the parent and the reply, with one version each and in order, to the sockets of the room", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		const parent = await post(ada, room.id, "Plan");
 		const socket = await connectRoomSocket(room.id, bearer(ada.key));
 		const posted = await reply(bot, room.id, parent.id, "Done");
-		const events: { message: ChatMessageEvent }[] = [];
-		for (let index = 0; index < 2; index++) events.push((await socket.next()) as { message: ChatMessageEvent });
-		expect(events.map((event) => [event.message.id, event.message.version])).toEqual([
-			[parent.id, socket.version + 1],
-			[posted.id, socket.version + 2],
+		const events: { type: string; message: ChatMessageEvent }[] = [];
+		const next = async () => events.push((await socket.next()) as { type: string; message: ChatMessageEvent });
+		await next();
+		await next();
+		// A client from before threads ignores the type reply, so it never shows a reply in its room list.
+		expect(events.map((event) => [event.type, event.message.id, event.message.version])).toEqual([
+			["message", parent.id, socket.version + 1],
+			["reply", posted.id, socket.version + 2],
+		]);
+		// A delete of the reply gives the reply the next version, then the parent the version after it.
+		await bot.call("chat.delete_message", { room_id: room.id, message_id: posted.id });
+		await next();
+		await next();
+		expect(events.slice(2).map((event) => [event.type, event.message.id, event.message.version])).toEqual([
+			["reply", posted.id, socket.version + 3],
+			["message", parent.id, socket.version + 4],
 		]);
 		socket.socket.close();
 	});
