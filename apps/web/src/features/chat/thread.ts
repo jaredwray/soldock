@@ -60,10 +60,11 @@ export interface ThreadView {
 	/** Takes one message from the socket of the room. A message before the end of the load waits for it. */
 	receive(message: ChatMessage): void;
 	/**
-	 * Tells the view to read the changes that it missed: after a new connect of the socket, or with a new
-	 * room list, which also tries a failed catch-up again.
+	 * Tells the view to read the changes that it missed. A new connect of the socket gives no version, and
+	 * the view always reads. A new room list gives the version of the room: the view reads only when the
+	 * room is after the version of the thread, or when its last catch-up failed.
 	 */
-	catchUp(): void;
+	catchUp(roomVersion?: number): void;
 	/** The thread that shows, or null before the first load. */
 	current(): ThreadState | null;
 }
@@ -79,6 +80,8 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 	let thread: ThreadState | null = null;
 	let waiting: ChatMessage[] = [];
 	let running = false;
+	/** True after a catch-up that failed: the next catch-up reads, also for the same version of the room. */
+	let failed = false;
 	let again = false;
 
 	const set = (next: ThreadState) => {
@@ -109,8 +112,10 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 					if (!more) break;
 				}
 			} while (again);
+			failed = false;
 		} catch {
 			// The version did not move. The next catch-up (a connect or a room list) reads again.
+			failed = true;
 		} finally {
 			running = false;
 		}
@@ -138,7 +143,8 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 			if (thread === null) waiting.push(message);
 			else set(mergeThread(thread, [message]));
 		},
-		catchUp() {
+		catchUp(roomVersion) {
+			if (roomVersion !== undefined && !failed && thread !== null && roomVersion <= thread.version) return;
 			void readChanges();
 		},
 		current: () => thread,

@@ -507,7 +507,10 @@ export function useRoom(
 		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
 		// The view of a thread reads its changes too: without a socket, after a socket that stopped, or after a
 		// catch-up that failed, the room list is its next chance.
-		if (tick > 0) for (const watcher of watchers.current) watcher({ type: "catch-up" });
+		// The version of this room goes with it, so a list after a change of a different room reads nothing.
+		if (tick > 0 && listedVersion !== null) {
+			for (const watcher of watchers.current) watcher({ type: "catch-up", roomVersion: listedVersion });
+		}
 	}, [tick, listedVersion, sync]);
 
 	/** Gets the members again after the socket told that they changed. */
@@ -588,4 +591,6 @@ export function useRoom(
  * What a view of a thread gets from the room: a message of the socket, or a time to read the changes that
  * it missed (a new connect of the socket, or a new room list).
  */
-export type MessageWatch = { type: "message"; message: ChatMessage } | { type: "catch-up" };
+export type MessageWatch =
+	| { type: "message"; message: ChatMessage }
+	| { type: "catch-up"; roomVersion?: number | undefined };

@@ -738,9 +738,11 @@ MCP clients. The app has no UI-only path.
       (`watchMessages`) starts before the load. A change that comes during the load waits, and goes
       into the thread after it. The load reads each page of `chat.list_replies`, then the changes
       after the version of its first page, so a change during the read of a later page shows too.
-      After a new connect of the socket, and with each new room list, the view reads the changes after
-      its version, in pages. So the view stays current without a socket too, and a failed read tries
-      again with the next room list. A failed read keeps the version, so it reads the same changes.
+      After a new connect of the socket, the view reads the changes after its version, in pages. A new
+      room list gives the version of the open room. The view reads only when that version is after
+      its own version, or when its last read failed. So a change in a different room makes no read,
+      the view stays current without a socket too, and a failed read tries again with the next room
+      list. A failed read keeps the version, so it reads the same changes.
     - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).
       A reply that fails stays in the box, with the reason. A second Enter with the same reply keeps
       the key, so it posts one time. A changed reply, or a changed "Also send to <room>", gets a new

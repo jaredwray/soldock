@@ -89,7 +89,8 @@ describe("the data of the view of a thread", () => {
 		expect(view.current()?.version).toBe(12);
 	});
 
-	// After a gap with no socket, the view must get each change of the gap, also in pages.
+	// After a gap with no socket, the view must get each change of the gap, also in pages. A room list after
+	// a change of a different room must not read the thread.
 	it("reads the changes of a gap after a catch-up from the version of the last reply of each page, and again after a failure", async () => {
 		const pages: (RepliesPage | Error)[] = [
 			page([], 5),
@@ -107,10 +108,13 @@ describe("the data of the view of a thread", () => {
 		};
 		const view = createThreadView(read, () => {});
 		await view.load();
-		view.catchUp();
+		// The room is not after the thread, so the catch-up of a room list reads nothing.
+		view.catchUp(5);
+		expect(calls).toHaveLength(2);
+		view.catchUp(6);
 		await vi.waitFor(() => expect(calls).toHaveLength(3));
-		// The failed read kept the version, so the next catch-up asks for the same changes.
-		view.catchUp();
+		// The failed read kept the version, so the next catch-up asks for the same changes, also for the same room version.
+		view.catchUp(5);
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
 		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);

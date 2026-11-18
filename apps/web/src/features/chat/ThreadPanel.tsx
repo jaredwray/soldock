@@ -86,7 +86,7 @@ export function ThreadPanel({
 		view.current = thread;
 		// The watch starts before the load, so a change during the load waits in the view and is not lost.
 		const stop = watch((event) => {
-			if (event.type === "catch-up") thread.catchUp();
+			if (event.type === "catch-up") thread.catchUp(event.roomVersion);
 			else if (inThread(event.message, parentId)) thread.receive(event.message);
 		});
 		load();
