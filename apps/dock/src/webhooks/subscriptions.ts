@@ -23,6 +23,7 @@ import {
 	getSubscription,
 	type SubscriptionRow,
 	subscriptionColumns,
+	targetLoadSql,
 	toEndpoint,
 } from "./store.ts";
 import { webhookHostAllowed } from "./url.ts";
@@ -233,11 +234,7 @@ export function createSubscriptionHandlers(
 				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 					JOIN webhook_endpoints e ON e.id = s.endpoint_id
 					WHERE e.created_by = ?9 AND e.protocol = 'webhook' AND s.domain = ?3 AND s.event_type = ?4) < ?10
-				AND (SELECT COUNT(*) FROM webhook_subscriptions s2
-					JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
-					WHERE s2.domain = ?3 AND s2.event_type = ?4 AND s2.target_id = ?5
-					AND s2.status = 'active' AND e2.status = 'active'
-					AND (s2.expires_at IS NULL OR s2.expires_at > ?8)) < ?11
+				AND ${targetLoadSql({ event: "?4", target: "?5", now: "?8" })} < ?11
 				ON CONFLICT (endpoint_id, event_type, target_id) DO NOTHING
 				RETURNING id`,
 			)

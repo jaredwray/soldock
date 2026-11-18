@@ -193,10 +193,21 @@ describe("events/subscribe", () => {
 	it("verifies the callback, then sends each new message of the room as a signed event", async () => {
 		const room = await privateRoom("Launch");
 		const { posts, verifications, events } = receiver();
+		const logged = vi.spyOn(console, "log");
 		const answer = await subscribe(bot.key, "chat.message.created", { arguments: { room_id: room.id } });
 		// The default policy of an agent allows no host outside the organization.
 		expect(errorOf(answer)).toMatchObject({ code: -32603, data: { code: "policy_denied" } });
 		expect(posts).toEqual([]);
+		// A sponsor finds an agent that tries hosts in the audit lines, as for a refused operation.
+		expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)))).toContainEqual(
+			expect.objectContaining({
+				audit: true,
+				op: "mcp.events_subscribe",
+				actor: bot.id,
+				result: "denied",
+				code: "policy_denied",
+			}),
+		);
 		await ada.call("directory.update_agent_policy", {
 			principal_id: bot.id,
 			mode: "allowlist",
@@ -261,12 +272,18 @@ describe("events/subscribe", () => {
 			["unreachable", () => Promise.reject(new TypeError("connection refused"))],
 			["timeout", () => Promise.reject(new DOMException("too slow", "TimeoutError"))],
 		];
+		const redirects: string[] = [];
 		for (const [reason, respond] of cases) {
-			vi.spyOn(globalThis, "fetch").mockImplementation(async () => respond());
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+				redirects.push(new Request(input, init).redirect);
+				return respond();
+			});
 			const answer = await subscribe(ada.key, "chat.message.created");
 			expect(errorOf(answer), reason).toMatchObject({ code: -32015, data: { reason } });
 			vi.restoreAllMocks();
 		}
+		// The runtime must not follow a redirect to a host that the URL rules did not examine.
+		expect(redirects).toEqual(cases.map(() => "manual"));
 		expect(await rows()).toEqual([]);
 	});
 
@@ -321,7 +338,7 @@ describe("events/subscribe", () => {
 			.bind(new Date(Date.now() + 1000).toISOString(), first.id)
 			.run();
 
-		// The same arguments, also in a different form, name the same subscription.
+		// The same arguments name the same subscription.
 		const second = resultOf(await subscribe(ada.key, "chat.message.created", { arguments: { room_id: room.id } }));
 		expect(second.id).toBe(first.id);
 		expect(Date.parse(second.refreshBefore)).toBeGreaterThan(Date.now() + MCP_EVENT_LIMITS.ttlMs - 60_000);
@@ -373,7 +390,7 @@ describe("events/subscribe", () => {
 	});
 
 	/** Stored subscriptions of MCP Events for Ada, without a call for each one. A limit counts the stored rows. */
-	async function fill(count: number, domain: "chat" | "drive", event: string) {
+	async function fill(count: number, domain: "chat" | "drive", event: string, roomOf?: (index: number) => string) {
 		const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
 		for (let i = 0; i < count; i++) {
 			await env.DIRECTORY.batch([
@@ -383,8 +400,8 @@ describe("events/subscribe", () => {
 				).bind(`whe_fill_${i}`, ada.id, `${CALLBACK}/${i}`, SECRET, expiresAt),
 				env.DIRECTORY.prepare(
 					`INSERT INTO webhook_subscriptions (id, endpoint_id, domain, event_type, target_id, credential_kind,
-						created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'api_key', ?, ?)`,
-				).bind(`sub_fill_${i}`, `whe_fill_${i}`, domain, event, ada.id, expiresAt, expiresAt),
+						created_at, expires_at, room_id) VALUES (?, ?, ?, ?, ?, 'api_key', ?, ?, ?)`,
+				).bind(`sub_fill_${i}`, `whe_fill_${i}`, domain, event, ada.id, expiresAt, expiresAt, roomOf?.(i) ?? null),
 			]);
 		}
 	}
@@ -425,6 +442,42 @@ describe("events/subscribe", () => {
 		await expire("id LIKE 'sub_fill_%'");
 		expect((await add()).subscription.status).toBe("active");
 		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(old.id);
+	});
+	// One message goes to the subscriptions for all rooms and to those for its room. Subscriptions for
+	// other rooms add no POST, so they must not stop the refresh of a subscription for all rooms.
+	it("counts a subscription for one room only against that room", async () => {
+		receiver();
+		const launch = await privateRoom("Launch", bot, [ada.id]);
+		const design = await privateRoom("Design", bot, [ada.id]);
+		await fill(WEBHOOK_LIMITS.perTarget, "chat", "chat.message.created", (i) => (i % 2 ? launch.id : design.id));
+		const every = resultOf(await subscribe(ada.key, "chat.message.created"));
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(every.id);
+
+		// Now one room has the most subscriptions that one message can go to.
+		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET room_id = ? WHERE id LIKE 'sub_fill_%'")
+			.bind(launch.id)
+			.run();
+		await refused(subscribe(ada.key, "chat.message.created", { arguments: { room_id: launch.id } }));
+		const other = await subscribe(ada.key, "chat.message.created", { arguments: { room_id: design.id } });
+		expect(resultOf(other).id).toMatch(/^sub_/);
+	});
+
+	// The secret of a client must not stay after its subscription.
+	it("deletes a subscription one day after its end, and an endpoint without a subscription", async () => {
+		receiver();
+		await fill(3, "drive", "drive.item.created");
+		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET expires_at = ? WHERE id = 'sub_fill_0'")
+			.bind(new Date(Date.now() - MCP_EVENT_LIMITS.expiredKeepMs - 1000).toISOString())
+			.run();
+		await expire("id = 'sub_fill_1'");
+		// The target of a subscription was deleted, so only the endpoint stays.
+		await env.DIRECTORY.prepare("DELETE FROM webhook_subscriptions WHERE id = 'sub_fill_2'").run();
+		const { id } = resultOf(await subscribe(ada.key, "chat.message.created"));
+		expect((await rows()).map((row) => row.id)).toEqual(["sub_fill_1", id]);
+		const endpoints = await env.DIRECTORY.prepare(
+			"SELECT COUNT(*) AS n FROM webhook_endpoints WHERE protocol = 'mcp_events'",
+		).first<number>("n");
+		expect(endpoints).toBe(2);
 	});
 });
 
@@ -525,6 +578,9 @@ describe("event delivery", () => {
 		expect(mcpEvents.get("mail.inbox.updated")?.payload.safeParse(body.data).success).toBe(true);
 		expect(post?.headers.get("x-mcp-subscription-id")).toBe(id);
 		expect(post?.body).not.toContain("Secret plans");
+
+		// The default mailbox and its id name the same subscription.
+		expect(resultOf(await subscribe(ada.key, "mail.inbox.updated", { arguments: { mailbox_id: ada.id } })).id).toBe(id);
 
 		// The mailbox of a different person is not a target.
 		const refused = await subscribe(ada.key, "mail.inbox.updated", { arguments: { mailbox_id: owner.id } });

@@ -149,6 +149,29 @@ export interface ActiveSubscription {
 	sequence: number;
 }
 
+/**
+ * SQL for the most POST requests that one event of one target can make: the active subscriptions for
+ * all rooms, and the largest group of active subscriptions for one room. Each argument is the SQL of a
+ * value, such as `?4`. With `room`, only that room counts, for a subscription of that room. `except`
+ * leaves out one subscription, for a refresh of that subscription. Mail and Drive have no room.
+ */
+export function targetLoadSql(value: {
+	event: string;
+	target: string;
+	now: string;
+	room?: string;
+	except?: string;
+}): string {
+	const active = `FROM webhook_subscriptions s2 JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
+		WHERE s2.event_type = ${value.event} AND s2.target_id = ${value.target}
+		AND s2.status = 'active' AND e2.status = 'active'
+		AND (s2.expires_at IS NULL OR s2.expires_at > ${value.now})${value.except ? ` AND s2.id != ${value.except}` : ""}`;
+	const room = value.room ? ` AND (${value.room} IS NULL OR s2.room_id = ${value.room})` : "";
+	return `((SELECT COUNT(*) ${active} AND s2.room_id IS NULL)
+		+ COALESCE((SELECT MAX(n) FROM (
+			SELECT COUNT(*) AS n ${active} AND s2.room_id IS NOT NULL${room} GROUP BY s2.room_id)), 0))`;
+}
+
 /** True when the subscription has an end and the end is not after `now`. */
 export function isExpired(row: Pick<SubscriptionRow, "expires_at">, now: number): boolean {
 	return row.expires_at !== null && Date.parse(row.expires_at) <= now;

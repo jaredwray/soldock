@@ -139,19 +139,24 @@ retries and the rules that disable an endpoint are those of each webhook. These 
 - **Life.** A subscription lives 24 hours, or `ttlMs` when the client asks for less. The shortest life
   is one minute. `ttlMs: null` asks for no end, and gets 24 hours. `refreshBefore` is the end. After
   the end, the fan-out makes no job and a retry sends nothing. A refresh starts a subscription again,
-  also one that an endpoint rule disabled, because the receiver passed the verification again. A later
-  `events/subscribe` of any client deletes each subscription that expired more than one day before.
+  also one that an endpoint rule disabled, because the receiver passed the verification again. An
+  `events/subscribe` that creates a subscription also deletes each subscription of MCP Events that
+  expired more than one day before, and each endpoint of MCP Events that has no subscription. A
+  refresh deletes nothing.
 - **New secret.** A refresh with a different secret needs a new verification. For 5 minutes, each POST
-  has the signature of the new secret and of the old secret, with a space between them.
+  has the signature of the new secret and of the old secret, with a space between them. The first
+  refresh after that time deletes the old secret.
 - **POST.** The body is `{"eventId", "name", "timestamp", "data", "cursor": null}`. `eventId` is
   `<event id>_<subscription id>`, and `webhook-id` has the same value. `X-MCP-Subscription-Id` has
   the subscription id. A retry keeps the `eventId` and has a new time and a new signature. An answer
   of 413 ends that event without a retry. An answer of 410 disables the endpoint, as for a webhook.
-- **Limits.** One principal can have 50 subscriptions that did not expire. One target can have 20
-  active subscriptions of one event, with its webhook subscriptions. For Chat, that limit counts the
-  subscriptions for all rooms and those for the same room. A subscription that expired fills no
-  limit, also not the limit of a target for a webhook subscription. A refresh examines the two limits
-  again, so a subscription that expired cannot start again above a limit.
+- **Limits.** One principal can have 50 subscriptions that did not expire. One event of one target
+  can make 20 POST requests, with its webhook subscriptions. For Chat, one message goes to the
+  subscriptions for all rooms and to those for its room. So the limit counts the subscriptions for all
+  rooms and the largest group for one room (`targetLoadSql`). A subscription for a different room
+  fills nothing. A subscription that expired fills no limit, also not the limit of a target for a
+  webhook subscription. A refresh examines the two limits again, so a subscription that expired
+  cannot start again above a limit.
 - **Events from your own changes.** A chat event does not go to its author. A drive event also goes to
   the principal that made the change, and mail to your own address is new mail. A client that changes
   a drive when it gets a drive event can make a loop.
@@ -162,7 +167,8 @@ panel do not show these subscriptions yet. To stop one, the client calls `events
 person revokes the key or the OAuth connection. `directory.delete_principal` deletes them.
 
 `events/subscribe` and `events/unsubscribe` write an audit line (`mcp.events_subscribe`,
-`mcp.events_unsubscribe`). During a deploy, the previous Worker can run a queue job. It sends a row of
+`mcp.events_unsubscribe`). An `events/subscribe` that gets `forbidden` or `policy_denied` writes a
+line with `result: "denied"`, as a refused operation does. During a deploy, the previous Worker can run a queue job. It sends a row of
 MCP Events in the webhook form, and it does not read the end of a subscription.
 
 ## Data inventory

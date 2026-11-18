@@ -28,7 +28,7 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { webhookSignature } from "./delivery.ts";
-import { getDelivery } from "./store.ts";
+import { getDelivery, targetLoadSql } from "./store.ts";
 import { creatableTarget } from "./subscriptions.ts";
 import { webhookHostAllowed, webhookUrlProblem } from "./url.ts";
 
@@ -268,11 +268,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						AND (SELECT COUNT(*) FROM webhook_subscriptions s
 							JOIN webhook_endpoints e ON e.id = s.endpoint_id
 							WHERE e.created_by = ?4 AND e.protocol = 'mcp_events' AND s.expires_at > ?5 AND s.id != ?2) < ?6
-						AND (SELECT COUNT(*) FROM webhook_subscriptions s2
-							JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
-							WHERE s2.event_type = ?7 AND s2.target_id = ?8 AND s2.status = 'active' AND e2.status = 'active'
-							AND (s2.expires_at IS NULL OR s2.expires_at > ?5) AND s2.id != ?2
-							AND (?9 IS NULL OR s2.room_id IS NULL OR s2.room_id = ?9)) < ?10
+						AND ${targetLoadSql({ event: "?7", target: "?8", now: "?5", room: "?9", except: "?2" })} < ?10
 						RETURNING id`,
 					)
 					.bind(
@@ -290,8 +286,10 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				db
 					.prepare(
 						`UPDATE webhook_endpoints SET
-							previous_secret = CASE WHEN secret IS NOT ?1 THEN secret ELSE previous_secret END,
-							previous_secret_until = CASE WHEN secret IS NOT ?1 THEN ?2 ELSE previous_secret_until END,
+							previous_secret = CASE WHEN secret IS NOT ?1 THEN secret
+								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret END,
+							previous_secret_until = CASE WHEN secret IS NOT ?1 THEN ?2
+								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret_until END,
 							consecutive_failures = CASE WHEN status = 'disabled' THEN 0 ELSE consecutive_failures END,
 							secret = ?1, status = 'active', disabled_reason = NULL, verified_at = ?3
 						WHERE id = ?4 AND created_by = ?5 AND protocol = 'mcp_events'
@@ -305,6 +303,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						principal.id,
 						id,
 						expiresAt,
+						nowText,
 					),
 			]);
 			return (results[0]?.results.length ?? 0) > 0;
@@ -316,11 +315,13 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 			const binding = credentialBinding(call.caller);
 			const endpointId = newId("whe");
 			const results = await db.batch<{ id: string }>([
-				// An expired subscription stays for a time, so a late refresh keeps its place. Then it goes.
+				// An expired subscription stays for a time, so a late refresh keeps its place. Then it goes, with
+				// its secret. An endpoint also goes when its subscription went with the target of the subscription.
 				db
 					.prepare(
-						`DELETE FROM webhook_endpoints WHERE protocol = 'mcp_events' AND id IN (
-							SELECT endpoint_id FROM webhook_subscriptions WHERE expires_at IS NOT NULL AND expires_at <= ?)`,
+						`DELETE FROM webhook_endpoints WHERE protocol = 'mcp_events' AND (
+							id IN (SELECT endpoint_id FROM webhook_subscriptions WHERE expires_at IS NOT NULL AND expires_at <= ?)
+							OR NOT EXISTS (SELECT 1 FROM webhook_subscriptions s WHERE s.endpoint_id = webhook_endpoints.id))`,
 					)
 					.bind(new Date(now - MCP_EVENT_LIMITS.expiredKeepMs).toISOString()),
 				db
@@ -331,11 +332,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 							JOIN webhook_endpoints e ON e.id = s.endpoint_id
 							WHERE e.created_by = ?2 AND e.protocol = 'mcp_events' AND s.expires_at > ?8) < ?10
-						AND (SELECT COUNT(*) FROM webhook_subscriptions s2
-							JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
-							WHERE s2.event_type = ?11 AND s2.target_id = ?12 AND s2.status = 'active' AND e2.status = 'active'
-							AND (s2.expires_at IS NULL OR s2.expires_at > ?8)
-							AND (?13 IS NULL OR s2.room_id IS NULL OR s2.room_id = ?13)) < ?14
+						AND ${targetLoadSql({ event: "?11", target: "?12", now: "?8", room: "?13" })} < ?14
 						RETURNING id`,
 					)
 					.bind(
@@ -425,7 +422,25 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				return definition ? [definition] : [];
 			});
 		},
-		subscribe,
+		async subscribe(call, input) {
+			try {
+				return await subscribe(call, input);
+			} catch (error) {
+				// The audit of a refused change, as for each operation.
+				if (error instanceof OperationError && (error.code === "forbidden" || error.code === "policy_denied")) {
+					audit({
+						op: "mcp.events_subscribe",
+						actor: call.caller.id,
+						actorKind: call.caller.kind,
+						credential: call.caller.credential,
+						result: "denied",
+						code: error.code,
+						requestId: call.requestId,
+					});
+				}
+				throw error;
+			}
+		},
 		unsubscribe,
 	};
 }
