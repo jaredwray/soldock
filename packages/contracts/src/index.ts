@@ -26,6 +26,8 @@ export {
 	AllowlistEntry,
 	ApiKey,
 	CreatedApiKey,
+	DIRECTORY_LIMITS,
+	DirectoryEntry,
 	DisplayName,
 	OutboundPolicy,
 	Principal,
@@ -84,6 +86,7 @@ export {
 	type MentionPerson,
 	mentionDirectory,
 	mentionFits,
+	mentionHandle,
 	type TextPart,
 	textParts,
 } from "./mentions.ts";

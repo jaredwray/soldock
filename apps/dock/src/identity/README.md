@@ -102,6 +102,20 @@ contract of the socket.
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
   `agentMailboxes` lists the mailboxes of the agents, and `agentMailboxFor` finds one by the agent id.
+- `directory.list_principals` gives the directory in pages: the agents first, then the humans, each
+  in the order of the names, then the ids. A page has 100 principals, or `limit`, at most 200
+  (`DIRECTORY_LIMITS`). `next_cursor` holds the kind, the name and the id of the last principal of
+  the page (`listPrincipalPage`).
+  - `query` keeps the principals whose display name or address has the text. The match is in each
+    letter case of A to Z only: `lower` of SQLite changes no other letter, so `elodie` does not find
+    "Élodie".
+  - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
+    `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full
+    address when a different principal has the same part or the part is a group word (`here`,
+    `channel`). The count of the same part reads the index of the addresses: an address with the
+    part `ada` sorts from `ada@` to `adaA`.
+  - The web app reads each page (`listAllPrincipals`). The room of a Chat message reads the whole
+    directory for its mentions (`listPrincipals`).
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`. The
   [`mail`](../mail/README.md#tags) module uses the tag to apply a label.

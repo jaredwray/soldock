@@ -118,17 +118,46 @@ export const whoami = defineOperation({
 	errors: [],
 });
 
+export const DIRECTORY_LIMITS = {
+	/** The principals of one page of `directory.list_principals`, at most. */
+	pageSize: 200,
+	/** The principals of a page when the call gives no limit. */
+	defaultPageSize: 100,
+	/** The characters of a query. */
+	queryChars: 100,
+} as const;
+
+/** A principal in the directory list, with the handle that a mention in Chat uses. */
+export const DirectoryEntry = Principal.extend({
+	/**
+	 * The handle of a mention in Chat: write "@" and the handle. It is the part of the address before the
+	 * "@", or the full address when a different principal has the same part. Null when the address has
+	 * no form of a handle.
+	 */
+	handle: z.string().nullable(),
+});
+export type DirectoryEntry = z.infer<typeof DirectoryEntry>;
+
 export const listPrincipals = defineOperation({
 	name: "directory.list_principals",
-	summary: "List the people and agents of the organization",
-	description:
-		"Returns each human and agent with its address, role, sponsor and, for an agent, its outbound mail policy.",
+	summary: "List or find the people and agents of the organization",
+	description: [
+		"Returns the humans and agents with their address, role, sponsor, the handle for a mention in Chat and, for an agent, its outbound mail policy.",
+		"The agents come first, then the humans, each in the order of the names.",
+		"Set query to get only the principals whose name or address has that text, in each letter case of A to Z.",
+		`A page has ${DIRECTORY_LIMITS.defaultPageSize} principals, or limit, at most ${DIRECTORY_LIMITS.pageSize}. Pass next_cursor as cursor to get the next page.`,
+	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/principals" },
 	scopes: ["directory.read"],
 	callers: ["human", "agent"],
 	annotations: READ,
-	input: z.strictObject({}),
-	output: z.object({ principals: z.array(Principal) }),
+	input: z.strictObject({
+		query: z.string().trim().min(1).max(DIRECTORY_LIMITS.queryChars).optional(),
+		// A cursor holds a display name, which NFC can make three times as long.
+		cursor: z.string().max(2000).optional(),
+		limit: z.coerce.number().int().min(1).max(DIRECTORY_LIMITS.pageSize).optional(),
+	}),
+	output: z.object({ principals: z.array(DirectoryEntry), next_cursor: z.string().nullable() }),
 	errors: [],
 });
 

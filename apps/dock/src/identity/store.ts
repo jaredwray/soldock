@@ -172,8 +172,55 @@ export async function unknownPrincipalIds(db: D1Database, ids: readonly string[]
 }
 
 export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]> {
-	const { results } = await db.prepare(`${PRINCIPAL_SELECT} ORDER BY p.kind, p.display_name`).all<PrincipalRow>();
+	const { results } = await db.prepare(`${PRINCIPAL_SELECT} ORDER BY p.kind, p.display_name, p.id`).all<PrincipalRow>();
 	return results.map(toPrincipal);
+}
+
+/** The place in the directory list: the kind, the display name and the id of the last principal of a page. */
+export type DirectoryPosition = [kind: string, displayName: string, id: string];
+
+/** A page of the directory list, with the number of principals that share the local part of each address. */
+export interface DirectoryPage {
+	principals: (PrincipalRecord & { sharedLocal: boolean })[];
+	/** The place after the last principal, or null for the last page. */
+	next: DirectoryPosition | null;
+}
+
+/**
+ * One page of the directory, in the order of `listPrincipals`. `query` is lowercase text that the name or
+ * the address has: `lower` of SQLite changes only A to Z. Each principal also gets `sharedLocal`: true
+ * when a different principal has the same part of its address before the "@", for its mention handle.
+ * The count reads the index of the addresses: an address with that part sorts from "part@" to "partA".
+ */
+export async function listPrincipalPage(
+	db: D1Database,
+	options: { query: string | null; after: DirectoryPosition | null; limit: number },
+): Promise<DirectoryPage> {
+	const { results } = await db
+		.prepare(
+			`SELECT ${PRINCIPAL_COLUMNS}, a.address,
+				(SELECT COUNT(*) FROM addresses b WHERE b.is_primary = 1
+					AND b.address >= substr(a.address, 1, instr(a.address, '@'))
+					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1 AS shared_local
+			FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
+			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0)
+				AND (?2 IS NULL OR (p.kind, p.display_name, p.id) > (?2, ?3, ?4))
+			ORDER BY p.kind, p.display_name, p.id LIMIT ?5`,
+		)
+		.bind(
+			options.query,
+			options.after?.[0] ?? null,
+			options.after?.[1] ?? null,
+			options.after?.[2] ?? null,
+			options.limit + 1,
+		)
+		.all<PrincipalRow & { shared_local: number }>();
+	const page = results.slice(0, options.limit);
+	const last = page[page.length - 1];
+	return {
+		principals: page.map((row) => ({ ...toPrincipal(row), sharedLocal: row.shared_local === 1 })),
+		next: results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
+	};
 }
 
 /** The principal that receives mail for an address, or null when the address is unknown. */

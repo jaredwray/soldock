@@ -64,6 +64,18 @@ function localPart(address: string): string {
 }
 
 /**
+ * The handle that a new mention of a principal uses: the part of its address before the "@", or the full
+ * address when a different principal has the same part (`shared`) or the part is a group word. Null for
+ * an address without the form of a handle: nobody can mention that principal.
+ */
+export function mentionHandle(address: string, shared: boolean): string | null {
+	const lower = address.toLowerCase();
+	if (!HANDLE.test(lower)) return null;
+	const local = localPart(lower);
+	return shared || GROUP_MENTION_WORDS.has(local) ? lower : local;
+}
+
+/**
  * The handles of the people and the agents of the directory. A principal whose address has no valid
  * handle form gets no handle: nobody can mention it.
  */
@@ -78,15 +90,11 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 	const byId = new Map(people.map((person) => [person.id, person]));
 	for (const person of people) {
 		const address = person.address.toLowerCase();
-		const local = localPart(address);
-		if (!HANDLE.test(address)) continue;
+		const handle = mentionHandle(address, locals.get(localPart(address)) !== 1);
+		if (handle === null) continue;
 		byHandle.set(address, person);
-		if (locals.get(local) === 1 && !GROUP_MENTION_WORDS.has(local)) {
-			byHandle.set(local, person);
-			handleOf.set(person.id, local);
-		} else {
-			handleOf.set(person.id, address);
-		}
+		byHandle.set(handle, person);
+		handleOf.set(person.id, handle);
 	}
 	// A name alias finds a principal too, so "@ada" for "Ada Lovelace" is a mention when only she has
 	// that name. An alias that a different principal has, or that is a handle or a local part, is not

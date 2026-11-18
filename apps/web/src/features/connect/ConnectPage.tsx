@@ -12,6 +12,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { Select } from "../../lib/Select.tsx";
+import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { INBOX_PATH } from "../../routes.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -47,9 +48,9 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 	const load = useCallback(async () => {
 		setState({ status: "loading" });
 		try {
-			const [{ authorization }, { principals }, domains] = await Promise.all([
+			const [{ authorization }, principals, domains] = await Promise.all([
 				api.call("oauth.get_authorization", { request_id: requestId }),
-				api.call("directory.list_principals"),
+				listAllPrincipals(),
 				canCreate ? api.call("directory.list_mail_domains").then((result) => result.mail_domains) : [],
 			]);
 			const agents = principals.filter(

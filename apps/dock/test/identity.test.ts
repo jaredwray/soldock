@@ -1067,6 +1067,51 @@ describe("directory authorization", () => {
 	});
 });
 
+describe("the directory list", () => {
+	// A large organization needs a bounded list, and an agent needs to find a principal and its handle.
+	it("finds principals by a part of the name or the address, in pages, with the mention handle of each", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const person = (display_name: string, address: string) =>
+			createActor(owner, { kind: "human", display_name, address, password: PASSWORD });
+		const adaOther = await person("Ada Byron", "ada@second.test");
+		const here = await person("Hera Box", "here@dock.test");
+		const zed = await person("Zed Adams", "zed@dock.test");
+
+		// The pages give the order of the full list: the agents, then the humans by name.
+		const ids: string[] = [];
+		let cursor: string | null = null;
+		do {
+			const page: { principals: { id: string }[]; next_cursor: string | null } = await owner.call(
+				"directory.list_principals",
+				cursor === null ? { limit: 2 } : { limit: 2, cursor },
+			);
+			expect(page.principals.length).toBeLessThanOrEqual(2);
+			ids.push(...page.principals.map((p) => p.id));
+			cursor = page.next_cursor;
+		} while (cursor !== null);
+		expect(ids).toEqual([bot.id, adaOther.id, ada.id, here.id, owner.id, zed.id]);
+
+		// A query finds a part of the name or of the address, in each letter case.
+		const found = await bot.call("directory.list_principals", { query: "ADA" });
+		expect(found.principals.map((p) => [p.id, p.handle])).toEqual([
+			// Two principals have "ada" before the "@", so each has its full address as its handle.
+			[adaOther.id, "ada@second.test"],
+			[ada.id, "ada@dock.test"],
+			[zed.id, "zed"],
+		]);
+		expect(found.next_cursor).toBeNull();
+		// A group word of Chat is never a handle. An agent finds the same through MCP.
+		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });
+		const listed = (tool.structuredContent as { principals: { id: string; handle: string }[] }).principals;
+		expect(listed.map((p) => [p.id, p.handle])).toEqual([[here.id, "here@dock.test"]]);
+		expect((await owner.call("directory.list_principals", { query: "bill" })).principals[0]?.handle).toBe("bot");
+
+		// A cursor that is not from the list is refused.
+		const refused = await owner.call("directory.list_principals", { cursor: "not-a-cursor" }).catch((error) => error);
+		expect(refused).toMatchObject({ status: 400 });
+	});
+});
+
 describe("changes to people and agents", () => {
 	it("lets owners and admins change a name, a role and a sponsor, and keeps the owner and each own role", async () => {
 		const { owner, ada, bot } = await seedOrg();
