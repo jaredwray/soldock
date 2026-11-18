@@ -6,6 +6,8 @@ import type { Node } from "prosemirror-model";
 import { type Command, EditorState, Plugin, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import {
+	type ChangeEvent,
+	type DragEvent,
 	type FormEvent,
 	type KeyboardEvent,
 	type MouseEvent,
@@ -19,6 +21,8 @@ import { createPortal } from "react-dom";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";
+import { useToast } from "../../lib/toast.tsx";
+import { Menu, type MenuItem } from "../drive/Menu.tsx";
 import { normalizeLink } from "../mail/richText.ts";
 import {
 	type BlockType,
@@ -41,7 +45,13 @@ import {
 	toggleList,
 	toggleQuote,
 } from "./commands.ts";
-import { docHref, plainTextSlice, schema } from "./schema.ts";
+import { AltTextDialog, CropDialog, DriveImageDialog, ImageUrlDialog } from "./ImageDialogs.tsx";
+import { ImageToolbar } from "./ImageToolbar.tsx";
+import { removeImage, selectedImage, setImageAttrs } from "./imageCommands.ts";
+import { widthAfterCrop } from "./imageModel.ts";
+import { fileSources, imagePlugins, insertSources } from "./imagePlugin.ts";
+import { DOC_IMAGE_ACCEPT, type DocImages, fileProblem, type ImageSource } from "./images.ts";
+import { docHref, type ImageAttrs, plainTextSlice, schema } from "./schema.ts";
 
 // Security rules for the editor:
 // - The editor DOM holds only the nodes and marks of the schema in schema.ts. ProseMirror parses
@@ -49,6 +59,8 @@ import { docHref, plainTextSlice, schema } from "./schema.ts";
 //   only what the parse rules of the schema accept.
 // - Each link is http, https or mailto (docHref), from the parse rules or from the link dialog.
 // - The app writes no HTML into the page. The editor makes its DOM with createElement.
+// - An image shows from a `blob:` address of a raster type, which the image store makes from the bytes
+//   of `docs.get_image`. A pasted `<img>` never loads: imagePlugin.ts brings its bytes into the doc.
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
@@ -58,7 +70,7 @@ interface Tool {
 	/** The value of aria-keyshortcuts, and the shortcut in the tooltip. A tool can have no shortcut. */
 	keys?: string;
 	hint?: string;
-	run: Command | "link";
+	run: Command | "link" | "image";
 	/** For a toggle button: true when it is on. */
 	pressed?: (state: EditorState) => boolean;
 	/** False when the tool can do nothing now. The button stays in the tab order. */
@@ -116,6 +128,7 @@ const TOOLS: readonly Tool[] = [
 		pressed: (s) => isMarkActive(s, marks.code),
 	},
 	{ name: "Link", icon: "link", ...shortcut("K"), run: "link", enabled: canLink, groupStart: true },
+	{ name: "Insert image", icon: "image", run: "image" },
 	{
 		name: "Bulleted list",
 		icon: "listBulleted",
@@ -179,23 +192,37 @@ interface DocEditorProps {
 	editable: boolean;
 	/** The accessible name of the text area. */
 	label: string;
+	/** The images of the doc. The editor gets the bytes of each image from it, and uploads new images with it. */
+	images: DocImages;
 	onChange: (doc: Node) => void;
 }
+
+/** The dialog of the editor that is open. */
+type Panel =
+	| { kind: "link"; target: LinkTarget }
+	| { kind: "image-url" }
+	| { kind: "image-drive" }
+	| { kind: "alt"; alt: string }
+	| { kind: "crop"; id: string };
 
 /**
  * The Docs editor on ProseMirror: the formatting toolbar, then the text on a sheet of paper. The
  * buttons of the toolbar are one tab stop: the arrow keys, Home and End move between them. Each
  * button also has a shortcut.
  */
-export function DocEditor({ doc, version, editable, label, onChange }: DocEditorProps) {
-	const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
+export function DocEditor({ doc, version, editable, label, images, onChange }: DocEditorProps) {
+	const toast = useToast();
+	const [panel, setPanel] = useState<Panel | null>(null);
+	const [dropping, setDropping] = useState(false);
 	const [refocus, setRefocus] = useState(0);
 	const [focusIndex, setFocusIndex] = useState(0);
 	const editorId = useId();
 	const mountRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
-	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const toolbarRef = useRef<HTMLDivElement>(null);
+	const fileRef = useRef<HTMLInputElement>(null);
 	const onChangeRef = useRef(onChange);
+	const toastRef = useRef(toast);
 	const editableRef = useRef(editable);
 	// The first props make the view once. Later changes to them do not make a new view.
 	const [config] = useState(() => ({ label, editorId }));
@@ -203,13 +230,14 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 		history(),
 		keymap(
 			docKeys((state) => {
-				if (editableRef.current && canLink(state)) setLinkTarget(linkTargetAt(state));
+				if (editableRef.current && canLink(state)) setPanel({ kind: "link", target: linkTargetAt(state) });
 				return true;
 			}),
 		),
 		keymap(baseKeymap),
 		depthLimit(),
 		placeholderPlugin(PLACEHOLDER),
+		...imagePlugins({ images, notify: (message) => toastRef.current({ message, tone: "error" }) }),
 	]);
 	const [initialState] = useState(() => EditorState.create({ doc, plugins }));
 	const [editorState, setEditorState] = useState(initialState);
@@ -219,6 +247,7 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 
 	useEffect(() => {
 		onChangeRef.current = onChange;
+		toastRef.current = toast;
 	});
 
 	useLayoutEffect(() => {
@@ -238,9 +267,6 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 			editable: () => editableRef.current,
 			clipboardTextParser: (text, $context) =>
 				plainTextSlice(text, $context.parent.type.spec.code === true, $context.marks()),
-			// A paste with nothing to parse (only an image, for example) would go to the fallback of
-			// ProseMirror, which lets the browser paste into a live element. Nothing can be inserted, so stop it.
-			handlePaste: (_view, _event, slice) => slice.content.size === 0,
 			dispatchTransaction(tr) {
 				const next = view.state.apply(tr);
 				view.updateState(next);
@@ -292,11 +318,85 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 		const view = viewRef.current;
 		if (!view || !editable || !isEnabled(tool)) return;
 		if (tool.run === "link") {
-			setLinkTarget(linkTargetAt(view.state));
+			setPanel({ kind: "link", target: linkTargetAt(view.state) });
 			return;
 		}
+		// The image button is a menu, which opens itself.
+		if (tool.run === "image") return;
 		tool.run(view.state, view.dispatch, view);
 		view.focus();
+	}
+
+	/** Runs a command of the image toolbar. The image stays selected, and the editor keeps the focus. */
+	function runCommand(command: Command) {
+		const view = viewRef.current;
+		if (!view || !editable) return;
+		command(view.state, view.dispatch, view);
+		view.focus();
+	}
+
+	/** Puts new images at the selection. Each one shows at once, and gets its id when its upload ends. */
+	function insertImagesFrom(sources: readonly ImageSource[], pos?: number) {
+		const view = viewRef.current;
+		if (!view || !editable) return;
+		insertSources(view, images, sources, pos);
+		view.focus();
+	}
+
+	/** The image files of a list. The person gets the reason for each file that cannot go into a doc. */
+	function usableFiles(list: FileList | null | undefined): File[] {
+		const files: File[] = [];
+		const problems = new Set<string>();
+		for (const file of list ?? []) {
+			const problem = fileProblem(file);
+			if (problem === null) files.push(file);
+			else problems.add(problem);
+		}
+		for (const problem of problems) toast({ message: problem, tone: "error" });
+		return files;
+	}
+
+	function onFilesChosen(event: ChangeEvent<HTMLInputElement>) {
+		insertImagesFrom(fileSources(usableFiles(event.target.files)));
+		// The same file can be chosen again.
+		event.target.value = "";
+	}
+
+	function hasFiles(event: DragEvent): boolean {
+		return event.dataTransfer.types.includes("Files");
+	}
+
+	/** A file over the page of the doc. Without this, the browser opens a dropped file in the tab. */
+	function onDragOver(event: DragEvent<HTMLDivElement>) {
+		if (!hasFiles(event)) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = editable ? "copy" : "none";
+		if (editable) setDropping(true);
+	}
+
+	/** A drop on the paper around the text. The editor handles a drop on the text itself. */
+	function onDrop(event: DragEvent<HTMLDivElement>) {
+		setDropping(false);
+		if (!hasFiles(event) || event.defaultPrevented) return;
+		event.preventDefault();
+		const view = viewRef.current;
+		if (!view || !editable) return;
+		const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.doc.content.size;
+		insertImagesFrom(fileSources(usableFiles(event.dataTransfer.files)), pos);
+	}
+
+	function toggleCaption() {
+		const view = viewRef.current;
+		const image = view ? selectedImage(view.state) : null;
+		if (!view || !image || !editable) return;
+		if (image.attrs.caption !== null) {
+			runCommand(setImageAttrs({ caption: null }));
+			return;
+		}
+		setImageAttrs({ caption: "" })(view.state, view.dispatch, view);
+		// The caption line is in the view of the image. The person types the caption there.
+		const dom = view.nodeDOM(image.pos);
+		if (dom instanceof HTMLElement) dom.querySelector<HTMLElement>(".doc-image-caption")?.focus();
 	}
 
 	function setBlock(value: string) {
@@ -307,21 +407,25 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 		view.focus();
 	}
 
-	function closeLink() {
-		setLinkTarget(null);
+	function closePanel() {
+		setPanel(null);
 		setRefocus((count) => count + 1);
 	}
 
-	function editLink(command: Command) {
+	/** Runs the command of a dialog, then closes the dialog. */
+	function applyPanel(command: Command) {
 		const view = viewRef.current;
-		if (view) command(view.state, view.dispatch, view);
-		closeLink();
+		if (view && editable) command(view.state, view.dispatch, view);
+		closePanel();
 	}
 
 	function onToolbarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-		// The block type control is a select, which uses the arrow keys, Home and End itself.
-		if (event.target instanceof HTMLElement && event.target.getAttribute("role") === "combobox") return;
-		const last = TOOLS.length - 1;
+		// The block type control is a select, which uses the arrow keys, Home and End itself. An open
+		// menu is in the toolbar, and it uses those keys too.
+		if (!(event.target instanceof HTMLElement)) return;
+		if (event.target.getAttribute("role") === "combobox" || event.target.closest('[role="menu"]')) return;
+		const buttons = [...(toolbarRef.current?.querySelectorAll<HTMLElement>(":scope > button") ?? [])];
+		const last = buttons.length - 1;
 		const moves: Record<string, number> = {
 			ArrowRight: focusIndex === last ? 0 : focusIndex + 1,
 			ArrowLeft: focusIndex === 0 ? last : focusIndex - 1,
@@ -332,7 +436,7 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 		if (next === undefined) return;
 		event.preventDefault();
 		setFocusIndex(next);
-		buttonRefs.current[next]?.focus();
+		buttons[next]?.focus();
 	}
 
 	/** A click on the paper around the text puts the cursor in the text. */
@@ -344,11 +448,43 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 
 	const blockType = blockTypeAt(editorState);
 	const knownBlock = BLOCK_TYPES.some((entry) => entry.value === blockType);
+	// The toolbar of a selected image. An image that still uploads has no options yet.
+	const selected = editable ? selectedImage(editorState) : null;
+	const image = selected && selected.attrs.pending === null && selected.attrs.id !== "" ? selected : null;
+	const imageMeta = image ? images.meta(image.attrs.id) : undefined;
+	const textWidth = viewRef.current?.dom.clientWidth ?? 0;
+	const imageItems: MenuItem[] = [
+		{ key: "upload", label: "Upload from this computer", icon: "upload", onSelect: () => fileRef.current?.click() },
+		{ key: "drive", label: "From Drive", icon: "drive", onSelect: () => setPanel({ kind: "image-drive" }) },
+		{ key: "url", label: "From a web address", icon: "link", onSelect: () => setPanel({ kind: "image-url" }) },
+	];
+	const historyTools = TOOLS.slice(0, 2).map((tool) => ({
+		name: tool.name,
+		icon: tool.icon,
+		keys: tool.keys ?? "",
+		hint: tool.hint ?? "",
+		run: isEnabled(tool) ? () => run(tool) : null,
+	}));
 
 	return (
 		<div className="doc-editor">
-			{editable && (
+			{editable && image && (
+				<ImageToolbar
+					editorId={editorId}
+					image={image}
+					natural={imageMeta ?? null}
+					available={textWidth}
+					history={historyTools}
+					onAttrs={(patch: Partial<ImageAttrs>) => runCommand(setImageAttrs(patch))}
+					onCrop={() => setPanel({ kind: "crop", id: image.attrs.id })}
+					onAlt={() => setPanel({ kind: "alt", alt: image.attrs.alt })}
+					onCaption={toggleCaption}
+					onRemove={() => runCommand(removeImage)}
+				/>
+			)}
+			{editable && !image && (
 				<div
+					ref={toolbarRef}
 					role="toolbar"
 					aria-label="Formatting"
 					aria-controls={editorId}
@@ -366,12 +502,24 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 					/>
 					{TOOLS.map((tool, index) => {
 						const enabled = isEnabled(tool);
+						if (tool.run === "image") {
+							return (
+								<Menu
+									key={tool.name}
+									label={tool.name}
+									className="icon-button icon-button-small format-button"
+									items={imageItems}
+									align="start"
+									tabIndex={index === focusIndex ? 0 : -1}
+									onFocus={() => setFocusIndex(index)}
+								>
+									<Icon name={tool.icon} size={18} />
+								</Menu>
+							);
+						}
 						return (
 							<button
 								key={tool.name}
-								ref={(element) => {
-									buttonRefs.current[index] = element;
-								}}
 								type="button"
 								className={`icon-button icon-button-small format-button${tool.groupStart ? " format-group-start" : ""}`}
 								aria-label={tool.name}
@@ -392,19 +540,80 @@ export function DocEditor({ doc, version, editable, label, onChange }: DocEditor
 					})}
 				</div>
 			)}
-			<div className="doc-scroll">
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: a drop of image files on the page puts them in the text box in it. */}
+			<div className="doc-scroll" onDragOver={onDragOver} onDragLeave={() => setDropping(false)} onDrop={onDrop}>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: the click only moves the focus to the text box in it. */}
-				<div className="doc-paper" onMouseDown={onPaperMouseDown}>
+				<div className={dropping ? "doc-paper doc-paper-drop" : "doc-paper"} onMouseDown={onPaperMouseDown}>
 					<div ref={mountRef} className="doc-mount" />
 				</div>
 			</div>
-			{linkTarget &&
+			<input
+				ref={fileRef}
+				type="file"
+				accept={DOC_IMAGE_ACCEPT}
+				multiple
+				hidden
+				tabIndex={-1}
+				aria-hidden="true"
+				onChange={onFilesChosen}
+			/>
+			{panel?.kind === "link" &&
 				createPortal(
 					<LinkDialog
-						target={linkTarget}
-						onApply={(href, text) => editLink(setLink(href, text))}
-						onRemove={() => editLink(removeLink)}
-						onClose={closeLink}
+						target={panel.target}
+						onApply={(href, text) => applyPanel(setLink(href, text))}
+						onRemove={() => applyPanel(removeLink)}
+						onClose={closePanel}
+					/>,
+					document.body,
+				)}
+			{panel?.kind === "image-url" &&
+				createPortal(
+					<ImageUrlDialog
+						onApply={(src) => {
+							closePanel();
+							insertImagesFrom([{ kind: "address", src }]);
+						}}
+						onClose={closePanel}
+					/>,
+					document.body,
+				)}
+			{panel?.kind === "image-drive" &&
+				createPortal(
+					<DriveImageDialog
+						onPick={(items) => {
+							closePanel();
+							insertImagesFrom(items.map((item) => ({ kind: "drive", spaceId: item.space_id, itemId: item.id })));
+						}}
+						onClose={closePanel}
+					/>,
+					document.body,
+				)}
+			{panel?.kind === "alt" &&
+				createPortal(
+					<AltTextDialog alt={panel.alt} onApply={(alt) => applyPanel(setImageAttrs({ alt }))} onClose={closePanel} />,
+					document.body,
+				)}
+			{panel?.kind === "crop" &&
+				imageMeta &&
+				image &&
+				createPortal(
+					<CropDialog
+						load={() => images.load(panel.id)}
+						natural={imageMeta}
+						crop={image.attrs.crop}
+						onApply={(crop) =>
+							applyPanel(
+								setImageAttrs({
+									crop,
+									// The picture keeps its scale: a narrower crop makes a narrower image.
+									...(image.attrs.width === null
+										? {}
+										: { width: widthAfterCrop(image.attrs.width, image.attrs.crop, crop) }),
+								}),
+							)
+						}
+						onClose={closePanel}
 					/>,
 					document.body,
 				)}

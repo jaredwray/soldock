@@ -1,4 +1,14 @@
-import { DOC_LIMITS, type DocBlock, type DocContent, type DocInline, type DocMark } from "@soldock/contracts";
+import {
+	DOC_IMAGE_LAYOUTS,
+	DOC_LIMITS,
+	type DocBlock,
+	type DocContent,
+	type DocImageCrop,
+	type DocImageLayout,
+	type DocImageNode,
+	type DocInline,
+	type DocMark,
+} from "@soldock/contracts";
 import { Fragment, type Mark, type Node, Schema, Slice } from "prosemirror-model";
 import { safeHref } from "../mail/richText.ts";
 
@@ -39,6 +49,133 @@ export function headingLevel(value: unknown): HeadingLevel {
 export function listOrder(value: unknown): number {
 	const order = typeof value === "string" ? Number.parseInt(value, 10) : value;
 	return typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order <= 99_999 ? order : 1;
+}
+
+// --- Images ---------------------------------------------------------------------------------------
+//
+// An image node names an image that the doc holds (`id`). It never has an address: the editor gets
+// the bytes with `docs.get_image`. The attributes have no schema validation, for the same reason as
+// the level of a heading. Each reader uses `imageAttrs`, so only good values reach the page and the
+// server.
+
+const IMAGE_ID = /^img_[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** True for the id of an image that a doc can hold. A new image has no id until its upload ends. */
+export function isImageId(value: unknown): value is string {
+	return typeof value === "string" && IMAGE_ID.test(value);
+}
+
+export interface ImageAttrs {
+	/** The id of the image in the doc, or "" while the image uploads. */
+	id: string;
+	/** The shown width in CSS pixels, or null for the width of the file. */
+	width: number | null;
+	layout: DocImageLayout;
+	alt: string;
+	/** Null for no caption. "" for a caption line that has no text yet. */
+	caption: string | null;
+	crop: DocImageCrop | null;
+	/**
+	 * For an image that the doc does not hold yet. `job:<key>` names an upload of this editor.
+	 * `src:<address>` and `doc:<space id>:<item id>` come from a paste, before the upload starts.
+	 */
+	pending: string | null;
+}
+
+/** One line of text for a person, without control characters, at most `max` characters. */
+export function oneLine(value: unknown, max: number): string {
+	if (typeof value !== "string") return "";
+	return value
+		.replace(/\p{Cc}+/gu, " ")
+		.trim()
+		.slice(0, max)
+		.trim();
+}
+
+/** The layout of an image. A value that is not a layout is `inline`. */
+export function imageLayout(value: unknown): DocImageLayout {
+	return (DOC_IMAGE_LAYOUTS as readonly unknown[]).includes(value) ? (value as DocImageLayout) : "inline";
+}
+
+/** The shown width of an image in the limits of the server, or null. */
+export function imageWidth(value: unknown): number | null {
+	const width = typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) : value;
+	if (typeof width !== "number" || !Number.isFinite(width)) return null;
+	return Math.max(DOC_LIMITS.imageMinWidth, Math.min(Math.round(width), DOC_LIMITS.imageMaxWidth));
+}
+
+/** A part of an image with 4 decimals, as the server stores it. */
+function part(value: number): number {
+	return Math.round(value * 10_000) / 10_000;
+}
+
+/** The crop of an image, in the image. Null for a value that is not a crop, and for the whole image. */
+export function imageCrop(value: unknown): DocImageCrop | null {
+	if (typeof value !== "object" || value === null) return null;
+	const { x, y, width, height } = value as Record<string, unknown>;
+	if (![x, y, width, height].every((number) => typeof number === "number" && Number.isFinite(number))) return null;
+	const min = DOC_LIMITS.imageMinCrop;
+	const left = part(Math.max(0, Math.min(x as number, 1 - min)));
+	const top = part(Math.max(0, Math.min(y as number, 1 - min)));
+	const crop = {
+		x: left,
+		y: top,
+		width: part(Math.max(min, Math.min(width as number, 1 - left))),
+		height: part(Math.max(min, Math.min(height as number, 1 - top))),
+	};
+	return crop.x === 0 && crop.y === 0 && crop.width === 1 && crop.height === 1 ? null : crop;
+}
+
+/** The attributes of an image node, each one made safe. */
+export function imageAttrs(node: Node): ImageAttrs {
+	const { id, width, layout, alt, caption, crop, pending } = node.attrs;
+	return {
+		id: isImageId(id) ? id : "",
+		width: imageWidth(width),
+		layout: imageLayout(layout),
+		alt: oneLine(alt, DOC_LIMITS.imageAltChars),
+		caption: typeof caption === "string" ? oneLine(caption, DOC_LIMITS.imageCaptionChars) : null,
+		crop: imageCrop(crop),
+		pending: typeof pending === "string" && pending !== "" ? pending : null,
+	};
+}
+
+/** The crop as text for an attribute of the clipboard: `x,y,width,height`. */
+function cropText(crop: DocImageCrop | null): string | null {
+	return crop ? [crop.x, crop.y, crop.width, crop.height].join(",") : null;
+}
+
+function cropFromText(text: string | null): DocImageCrop | null {
+	const [x, y, width, height] = (text ?? "").split(",").map(Number);
+	return imageCrop({ x, y, width, height });
+}
+
+/** The attributes of the `<img>` that the clipboard gets for an image. It has no address. */
+export function imageDomAttrs(node: Node): Record<string, string> {
+	const attrs = imageAttrs(node);
+	const dom: Record<string, string> = { "data-doc-image": attrs.id, "data-layout": attrs.layout, alt: attrs.alt };
+	if (attrs.width !== null) dom["data-width"] = String(attrs.width);
+	if (attrs.caption !== null) dom["data-caption"] = attrs.caption;
+	const crop = cropText(attrs.crop);
+	if (crop !== null) dom["data-crop"] = crop;
+	return dom;
+}
+
+/** The image types of a `data:` address that a paste can hold. */
+const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,/i;
+
+/**
+ * The address of a pasted image when the editor can bring it into the doc: an image as a `data:`
+ * address, or an https address that the server downloads one time. Null for each other address.
+ */
+export function importableSrc(src: string): string | null {
+	if (DATA_IMAGE.test(src)) return src;
+	if (src.length > DOC_LIMITS.imageUrlChars || /\s/.test(src)) return null;
+	try {
+		return new URL(src).protocol === "https:" ? src : null;
+	} catch {
+		return null;
+	}
 }
 
 /** True when a CSS text-decoration value has the line. */
@@ -116,6 +253,62 @@ export const schema = new Schema({
 			toDOM: () => ["hr"],
 		},
 		text: { group: "inline" },
+		image: {
+			inline: true,
+			group: "inline",
+			atom: true,
+			draggable: true,
+			attrs: {
+				id: { default: "" },
+				width: { default: null },
+				layout: { default: "inline" },
+				alt: { default: "" },
+				caption: { default: null },
+				crop: { default: null },
+				pending: { default: null },
+			},
+			// The plain text of a copy has the alt text of the image.
+			leafText: (node) => oneLine(node.attrs.alt, DOC_LIMITS.imageAltChars),
+			parseDOM: [
+				// An image that this editor wrote to the clipboard. The paste handler brings an image of a
+				// different doc into this doc.
+				{
+					tag: "img[data-doc-image]",
+					getAttrs: (dom) => {
+						const id = dom.getAttribute("data-doc-image");
+						if (!isImageId(id)) return false;
+						const item = dom.getAttribute("data-doc-item");
+						return {
+							id,
+							width: imageWidth(dom.getAttribute("data-width")),
+							layout: imageLayout(dom.getAttribute("data-layout")),
+							alt: oneLine(dom.getAttribute("alt"), DOC_LIMITS.imageAltChars),
+							caption: dom.hasAttribute("data-caption")
+								? oneLine(dom.getAttribute("data-caption"), DOC_LIMITS.imageCaptionChars)
+								: null,
+							crop: cropFromText(dom.getAttribute("data-crop")),
+							pending: item ? `doc:${dom.getAttribute("data-doc-space") ?? ""}:${item}` : null,
+						};
+					},
+				},
+				// An image of a web page or of a different app. It has no id: the paste handler uploads it.
+				{
+					tag: "img[src]",
+					getAttrs: (dom) => {
+						const src = importableSrc(dom.getAttribute("src") ?? "");
+						if (src === null) return false;
+						return {
+							id: "",
+							width: imageWidth(dom.getAttribute("width")),
+							alt: oneLine(dom.getAttribute("alt"), DOC_LIMITS.imageAltChars),
+							pending: `src:${src}`,
+						};
+					},
+				},
+			],
+			// For the clipboard. The editor shows an image with a node view, which gets the bytes.
+			toDOM: (node) => ["img", imageDomAttrs(node)],
+		},
 		hard_break: {
 			inline: true,
 			group: "inline",
@@ -267,11 +460,41 @@ function markJson(mark: Mark): DocMark | null {
 	}
 }
 
-function inlineJson(node: Node): DocInline[] {
+/** How `docToContent` reads a document. */
+export interface ContentOptions {
+	/**
+	 * True for an image that the doc holds. An image that the doc does not hold is not in the content:
+	 * the server refuses content with such an image. Without this function, each image with an id is in.
+	 */
+	holdsImage?: (id: string) => boolean;
+}
+
+/** The image for the server, or null for an image that the doc does not hold yet. */
+function imageJson(node: Node, options: ContentOptions): DocImageNode | null {
+	const attrs = imageAttrs(node);
+	if (attrs.id === "" || attrs.pending !== null) return null;
+	if (options.holdsImage && !options.holdsImage(attrs.id)) return null;
+	return {
+		type: "image",
+		attrs: {
+			id: attrs.id,
+			...(attrs.width === null ? {} : { width: attrs.width }),
+			layout: attrs.layout,
+			...(attrs.alt === "" ? {} : { alt: attrs.alt }),
+			...(attrs.caption ? { caption: attrs.caption } : {}),
+			...(attrs.crop ? { crop: attrs.crop } : {}),
+		},
+	};
+}
+
+function inlineJson(node: Node, options: ContentOptions): DocInline[] {
 	const content: DocInline[] = [];
 	node.forEach((child) => {
 		if (child.type === nodes.hard_break) {
 			content.push({ type: "hard_break" });
+		} else if (child.type === nodes.image) {
+			const image = imageJson(child, options);
+			if (image) content.push(image);
 		} else if (child.isText && child.text) {
 			const marksJson = child.marks.map(markJson).filter((mark): mark is DocMark => mark !== null);
 			content.push(
@@ -284,35 +507,39 @@ function inlineJson(node: Node): DocInline[] {
 	return content;
 }
 
-function blocksJson(node: Node): DocBlock[] {
+function blocksJson(node: Node, options: ContentOptions): DocBlock[] {
 	const blocks: DocBlock[] = [];
 	node.forEach((child) => {
-		blocks.push(blockJson(child));
+		blocks.push(blockJson(child, options));
 	});
 	return blocks;
 }
 
-function listItemsJson(list: Node) {
+function listItemsJson(list: Node, options: ContentOptions) {
 	const items: { type: "list_item"; content: DocBlock[] }[] = [];
 	list.forEach((item) => {
-		items.push({ type: "list_item", content: blocksJson(item) });
+		items.push({ type: "list_item", content: blocksJson(item, options) });
 	});
 	return items;
 }
 
-function blockJson(node: Node): DocBlock {
+function blockJson(node: Node, options: ContentOptions): DocBlock {
 	switch (node.type) {
 		case nodes.heading: {
-			const content = inlineJson(node);
+			const content = inlineJson(node, options);
 			const attrs = { level: headingLevel(node.attrs.level) };
 			return content.length > 0 ? { type: "heading", attrs, content } : { type: "heading", attrs };
 		}
 		case nodes.blockquote:
-			return { type: "blockquote", content: blocksJson(node) };
+			return { type: "blockquote", content: blocksJson(node, options) };
 		case nodes.bullet_list:
-			return { type: "bullet_list", content: listItemsJson(node) };
+			return { type: "bullet_list", content: listItemsJson(node, options) };
 		case nodes.ordered_list:
-			return { type: "ordered_list", attrs: { order: listOrder(node.attrs.order) }, content: listItemsJson(node) };
+			return {
+				type: "ordered_list",
+				attrs: { order: listOrder(node.attrs.order) },
+				content: listItemsJson(node, options),
+			};
 		case nodes.code_block:
 			return node.textContent === ""
 				? { type: "code_block" }
@@ -320,17 +547,17 @@ function blockJson(node: Node): DocBlock {
 		case nodes.horizontal_rule:
 			return { type: "horizontal_rule" };
 		default: {
-			const content = inlineJson(node);
+			const content = inlineJson(node, options);
 			return content.length > 0 ? { type: "paragraph", content } : { type: "paragraph" };
 		}
 	}
 }
 
 /**
- * The content that `docs.update` gets. For a document that the editor made, it is the same as
- * `doc.toJSON()`. It also makes each attribute safe: a heading level from 1 to 3, a list number in
- * range, and no link that is not http, https or mailto.
+ * The content that `docs.update` gets. It makes each attribute safe: a heading level from 1 to 3, a
+ * list number in range, no link that is not http, https or mailto, and each option of an image in its
+ * limits. An image that still uploads is not in the content: a later save has it.
  */
-export function docToContent(doc: Node): DocContent {
-	return { type: "doc", content: blocksJson(doc) };
+export function docToContent(doc: Node, options: ContentOptions = {}): DocContent {
+	return { type: "doc", content: blocksJson(doc, options) };
 }

@@ -11,6 +11,7 @@ import { DRIVE_PATH } from "../../routes.ts";
 import { DocumentHeader, type SaveState } from "../drive/DocumentHeader.tsx";
 import { Autosaver, isStalePoll } from "./autosave.ts";
 import { DocEditor } from "./DocEditor.tsx";
+import { DocImages } from "./images.ts";
 import { contentToDoc, docToContent } from "./schema.ts";
 
 export interface DocPageProps {
@@ -55,6 +56,9 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [reloading, setReloading] = useState(false);
 	const [downloading, setDownloading] = useState(false);
+	/** The images of the doc that is open. The page makes one store for each doc, and releases it at the end. */
+	const [images, setImages] = useState<DocImages | null>(null);
+	const imagesRef = useRef<DocImages | null>(null);
 	/** The newest document of the editor. A save sends it. */
 	const docRef = useRef<Node | null>(null);
 	const saverRef = useRef<Autosaver | null>(null);
@@ -69,6 +73,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 			try {
 				const result = await api.call("docs.get", { space_id: spaceId, item_id: itemId });
 				if (request !== requestRef.current) return;
+				imagesRef.current?.setAll(result.images);
 				const doc = contentToDoc(result.content);
 				docRef.current = doc;
 				saverRef.current?.reset(result.revision);
@@ -84,8 +89,11 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		[spaceId, itemId],
 	);
 
-	// One saver for each doc. When the page closes, it sends the last changes.
+	// One saver and one image store for each doc. When the page closes, the saver sends the last changes.
 	useEffect(() => {
+		const store = new DocImages({ spaceId, itemId });
+		imagesRef.current = store;
+		setImages(store);
 		const saver = new Autosaver({
 			save: async (baseRevision) => {
 				const doc = docRef.current;
@@ -93,7 +101,8 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 				const result = await api.call("docs.update", {
 					space_id: spaceId,
 					item_id: itemId,
-					content: docToContent(doc),
+					// An image that the doc does not hold stays out: the server refuses such content.
+					content: docToContent(doc, { holdsImage: store.holds }),
 					base_revision: baseRevision,
 				});
 				setLoaded((current) => (current ? { ...current, item: result.item } : current));
@@ -113,6 +122,8 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 			void saver.flush();
 			saver.dispose();
 			saverRef.current = null;
+			store.dispose();
+			imagesRef.current = null;
 		};
 	}, [spaceId, itemId, open]);
 
@@ -137,6 +148,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 				// A save can start and end during the request. The answer is then older than the text on
 				// screen, and it must not replace that text.
 				if (isStalePoll(before, saver.revision, result.revision)) return;
+				imagesRef.current?.setAll(result.images);
 				if (result.revision === saver.revision) {
 					setLoaded((current) => (current ? { ...current, item: result.item } : current));
 					return;
@@ -215,7 +227,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		}
 	}
 
-	if (load.status === "loading" || (load.status === "ready" && loaded === null)) {
+	if (load.status === "loading" || (load.status === "ready" && (loaded === null || images === null))) {
 		return (
 			<main id="main" className="doc-page" tabIndex={-1}>
 				<p className="list-state" role="status">
@@ -226,7 +238,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		);
 	}
 
-	if (load.status === "error" || loaded === null) {
+	if (load.status === "error" || loaded === null || images === null) {
 		const missing = load.status === "error" && load.missing;
 		const message = load.status === "error" ? load.message : "";
 		return (
@@ -302,6 +314,9 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 				</p>
 			)}
 			<DocEditor
+				// A different doc gets a new editor, with the image store of that doc.
+				key={images.target.itemId}
+				images={images}
 				doc={loaded.doc}
 				version={loaded.version}
 				editable={editable && saveState !== "conflict"}

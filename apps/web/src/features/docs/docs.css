@@ -230,8 +230,423 @@
 	text-decoration: underline;
 }
 
+/* Images. The node of an image is in a paragraph, so each of its boxes is a span with a display. */
+
+/* The text holds its images that float, and a list, a quote or a code block goes next to such an
+   image: its marks and its border do not go below the image. */
+.doc-body,
+.doc-body :is(ul, ol, blockquote, pre) {
+	display: flow-root;
+}
+
+.doc-image {
+	position: relative;
+	display: inline-block;
+	max-width: 100%;
+	line-height: 0;
+	vertical-align: bottom;
+}
+
+/* At one side: the text goes around the image. */
+.doc-image-wrap-left {
+	float: left;
+	margin: 4px 18px 8px 0;
+}
+
+.doc-image-wrap-right {
+	float: right;
+	margin: 4px 0 8px 18px;
+}
+
+/* On its own line: the text stops above the image and continues below it. */
+.doc-image-break-left,
+.doc-image-break-center,
+.doc-image-break-right {
+	display: block;
+	width: fit-content;
+	margin: 12px 0;
+	clear: both;
+}
+
+.doc-image-break-center {
+	margin-right: auto;
+	margin-left: auto;
+}
+
+.doc-image-break-right {
+	margin-left: auto;
+}
+
+.doc-image-frame {
+	position: relative;
+	display: block;
+	max-width: 100%;
+	border-radius: 3px;
+	background: var(--surface);
+}
+
+.doc-image-clip {
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	overflow: hidden;
+}
+
+/* The picture has the size of the whole file. The clip shows the crop. */
+.doc-image-picture {
+	position: absolute;
+	max-width: none;
+	opacity: 0;
+	user-select: none;
+	transition: opacity 0.15s;
+}
+
+.doc-image-loaded .doc-image-picture {
+	opacity: 1;
+}
+
+.doc-image-pending .doc-image-picture {
+	opacity: 0.45;
+}
+
+/* A line of text over the image: an upload in progress, or an image that the doc does not have. */
+.doc-image-status {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 8px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 1.4;
+	text-align: center;
+	pointer-events: none;
+}
+
+.doc-image-status:empty {
+	display: none;
+}
+
+.doc-image-pending .doc-image-status {
+	color: var(--foreground);
+	font-weight: 500;
+}
+
+.doc-image-missing .doc-image-frame {
+	outline: 1px dashed var(--border);
+	outline-offset: -1px;
+}
+
+/* The frame shows that an image is selected, not the node with its caption. */
+.doc-image.ProseMirror-selectednode {
+	outline: none;
+}
+
+.doc-image.ProseMirror-selectednode .doc-image-frame {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+/* The corners change the size of a selected image. A viewer has no corners. */
+.doc-image-handle {
+	position: absolute;
+	z-index: 1;
+	display: none;
+	width: 12px;
+	height: 12px;
+	border: 2px solid var(--background);
+	border-radius: 50%;
+	background: var(--focus);
+	touch-action: none;
+}
+
+/* A larger area for a finger. */
+.doc-image-handle::after {
+	position: absolute;
+	inset: -10px;
+	content: "";
+}
+
+@media screen {
+	.doc-body[contenteditable="true"] .doc-image.ProseMirror-selectednode:not(.doc-image-pending) .doc-image-handle {
+		display: block;
+	}
+}
+
+.doc-image-handle-nw {
+	top: -8px;
+	left: -8px;
+	cursor: nwse-resize;
+}
+
+.doc-image-handle-ne {
+	top: -8px;
+	right: -8px;
+	cursor: nesw-resize;
+}
+
+.doc-image-handle-sw {
+	bottom: -8px;
+	left: -8px;
+	cursor: nesw-resize;
+}
+
+.doc-image-handle-se {
+	right: -8px;
+	bottom: -8px;
+	cursor: nwse-resize;
+}
+
+/* The size in pixels, while a corner moves. */
+.doc-image-size {
+	position: absolute;
+	right: 8px;
+	bottom: 8px;
+	z-index: 1;
+	display: none;
+	padding: 2px 7px;
+	border-radius: 5px;
+	background: var(--foreground);
+	color: var(--background);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.5;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+.doc-image-resizing .doc-image-size {
+	display: block;
+}
+
+/* The caption: one line of text below the picture, as wide as the picture. The width of 0 keeps a
+   long caption from making the image wider. */
+.doc-image-caption {
+	display: block;
+	box-sizing: border-box;
+	width: 0;
+	min-width: 100%;
+	margin: 4px 0 0;
+	padding: 2px 4px;
+	border: 0;
+	border-radius: 4px;
+	background: none;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: center;
+	overflow: hidden;
+	resize: none;
+	field-sizing: content;
+}
+
+.doc-image-caption:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 0;
+}
+
+.doc-image-caption:read-only {
+	cursor: default;
+}
+
+/* The paper while a person holds image files over it. */
+.doc-paper-drop {
+	outline: 2px dashed var(--focus);
+	outline-offset: -8px;
+}
+
+/* The toolbar of a selected image: buttons with a word, between the icon buttons. */
+.doc-image-toolbar .doc-image-tool {
+	flex: none;
+	width: auto;
+	height: 30px;
+	padding: 0 9px;
+	border: 0;
+	background: transparent;
+	color: var(--muted-foreground);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.doc-image-toolbar .doc-image-tool:hover {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+.doc-image-toolbar .doc-image-tool[aria-pressed="true"] {
+	background: var(--border);
+	color: var(--foreground);
+}
+
+.doc-image-toolbar .doc-image-size-select {
+	width: 208px;
+	margin: 0 0 0 13px;
+	font-weight: 500;
+}
+
+/* The dialogs of an image. */
+
+.doc-alt-input {
+	min-height: 84px;
+	resize: vertical;
+}
+
+.doc-crop {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	padding: 8px;
+}
+
+.doc-crop-stage {
+	position: relative;
+	display: inline-block;
+	max-width: 100%;
+	line-height: 0;
+	touch-action: none;
+	user-select: none;
+}
+
+.doc-crop-picture {
+	display: block;
+	max-width: 100%;
+	max-height: min(56vh, 520px);
+}
+
+.doc-crop-shade {
+	position: absolute;
+	inset: 0;
+	background: rgb(0 0 0 / 60%);
+	pointer-events: none;
+}
+
+.doc-crop-frame {
+	position: absolute;
+	box-sizing: border-box;
+	border: 1px solid #fff;
+	outline: 1px solid rgb(0 0 0 / 50%);
+	cursor: move;
+	touch-action: none;
+}
+
+.doc-crop-frame:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.doc-crop-handle {
+	position: absolute;
+	width: 14px;
+	height: 14px;
+	padding: 0;
+	border: 2px solid #fff;
+	border-radius: 50%;
+	background: #171717;
+	touch-action: none;
+}
+
+.doc-crop-handle::after {
+	position: absolute;
+	inset: -9px;
+	content: "";
+}
+
+.doc-crop-handle:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.doc-crop-handle-nw,
+.doc-crop-handle-n,
+.doc-crop-handle-ne {
+	top: -7px;
+}
+
+.doc-crop-handle-sw,
+.doc-crop-handle-s,
+.doc-crop-handle-se {
+	bottom: -7px;
+}
+
+.doc-crop-handle-nw,
+.doc-crop-handle-w,
+.doc-crop-handle-sw {
+	left: -7px;
+}
+
+.doc-crop-handle-ne,
+.doc-crop-handle-e,
+.doc-crop-handle-se {
+	right: -7px;
+}
+
+.doc-crop-handle-n,
+.doc-crop-handle-s {
+	left: calc(50% - 7px);
+	cursor: ns-resize;
+}
+
+.doc-crop-handle-e,
+.doc-crop-handle-w {
+	top: calc(50% - 7px);
+	cursor: ew-resize;
+}
+
+.doc-crop-handle-nw,
+.doc-crop-handle-se {
+	cursor: nwse-resize;
+}
+
+.doc-crop-handle-ne,
+.doc-crop-handle-sw {
+	cursor: nesw-resize;
+}
+
+.doc-crop-size {
+	margin: 0;
+}
+
+.dialog-actions .doc-crop-reset {
+	margin-right: auto;
+}
+
+/* An image file in the Drive dialog: a click selects it, and a second click clears it. */
+.doc-picker-image[aria-pressed="true"] {
+	background: var(--hover);
+}
+
+.doc-picker-check {
+	display: inline-flex;
+	visibility: hidden;
+}
+
+.doc-picker-image[aria-pressed="true"] .doc-picker-check {
+	visibility: visible;
+}
+
+.doc-picker-image[aria-pressed="true"] .doc-picker-check .icon {
+	color: var(--foreground);
+}
+
 .doc-body[contenteditable="false"] a {
 	cursor: pointer;
+}
+
+/* A narrow page has no room for text next to an image: the image goes on its own line. */
+@media (max-width: 600px) {
+	.doc-image-wrap-left,
+	.doc-image-wrap-right {
+		display: block;
+		float: none;
+		width: fit-content;
+		margin: 12px auto;
+	}
 }
 
 @media (max-width: 900px) {
@@ -255,12 +670,26 @@
 	.doc-notice {
 		display: none;
 	}
+
+	.doc-image.ProseMirror-selectednode .doc-image-frame {
+		outline: none;
+	}
 }
 
 /* Touch: the text style control has the height of the toolbar buttons. */
 @media (max-width: 900px), (pointer: coarse) {
 	.doc-block-type {
 		height: 44px;
+		font-size: 16px;
+	}
+
+	.doc-image-toolbar .doc-image-tool {
+		height: 44px;
+		padding: 0 12px;
+		font-size: 15px;
+	}
+
+	.doc-image-caption {
 		font-size: 16px;
 	}
 }

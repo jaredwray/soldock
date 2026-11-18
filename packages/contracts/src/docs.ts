@@ -23,7 +23,7 @@ export const DOC_LIMITS = {
 	imageMinWidth: 16,
 	imageMaxWidth: 4096,
 	/** The width of the text of a doc in the web app, in CSS pixels. An image without a width is not wider. */
-	imageTextWidth: 656,
+	imageTextWidth: 654,
 	/** The smallest side of a crop, as a part of the side of the image. */
 	imageMinCrop: 0.01,
 	imageAltChars: 1000,
