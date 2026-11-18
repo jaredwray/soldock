@@ -26,6 +26,13 @@ export interface EndpointRow {
 	header_name: string | null;
 	header_value: string | null;
 	created_at: string;
+	/** `mcp_events`: an MCP client created the row with events/subscribe. The webhook operations do not show it. */
+	protocol: "webhook" | "mcp_events";
+	/** The secret that a refresh replaced. A POST has its signature too until `previous_secret_until`. */
+	previous_secret: string | null;
+	previous_secret_until: string | null;
+	/** The time of the last callback verification that the receiver passed. */
+	verified_at: string | null;
 }
 
 /** A subscription as the directory stores it. `target_id` is a mailbox, a principal or a drive. */
@@ -43,14 +50,18 @@ export interface SubscriptionRow {
 	retry_until: string | null;
 	retry_event_id: string | null;
 	created_at: string;
+	/** Null: no end. After this time the subscription sends nothing. */
+	expires_at: string | null;
+	/** Chat only. Null: each room of the target. Else only this room. */
+	room_id: string | null;
 }
 
 export const ENDPOINT_COLUMNS = `id, created_by, credential_kind, credential_id, url, label, secret, status,
 	disabled_reason, consecutive_failures, last_failed_delivery_id, last_delivery_at, last_failure_at, last_error,
-	auth_key, header_name, header_value, created_at`;
+	auth_key, header_name, header_value, created_at, protocol, previous_secret, previous_secret_until, verified_at`;
 
 export const SUBSCRIPTION_COLUMNS = `sequence, id, endpoint_id, domain, event_type, target_id, credential_kind,
-	credential_id, status, disabled_reason, retry_until, retry_event_id, created_at`;
+	credential_id, status, disabled_reason, retry_until, retry_event_id, created_at, expires_at, room_id`;
 
 /** The subscription columns with a table alias, for a query that joins the endpoint. */
 export function subscriptionColumns(alias: string): string {
@@ -138,7 +149,35 @@ export interface ActiveSubscription {
 	sequence: number;
 }
 
-/** Active subscriptions for one event and one target, whose endpoint is also active. */
+/**
+ * SQL for the most POST requests that one event of one target can make: the active subscriptions for
+ * all rooms, and the largest group of active subscriptions for one room. Each argument is the SQL of a
+ * value, such as `?4`. With `room`, only that room counts, for a subscription of that room. `except`
+ * leaves out one subscription, for a refresh of that subscription. Mail and Drive have no room.
+ */
+export function targetLoadSql(value: {
+	event: string;
+	target: string;
+	now: string;
+	room?: string;
+	except?: string;
+}): string {
+	const active = `FROM webhook_subscriptions s2 JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
+		WHERE s2.event_type = ${value.event} AND s2.target_id = ${value.target}
+		AND s2.status = 'active' AND e2.status = 'active'
+		AND (s2.expires_at IS NULL OR s2.expires_at > ${value.now})${value.except ? ` AND s2.id != ${value.except}` : ""}`;
+	const room = value.room ? ` AND (${value.room} IS NULL OR s2.room_id = ${value.room})` : "";
+	return `((SELECT COUNT(*) ${active} AND s2.room_id IS NULL)
+		+ COALESCE((SELECT MAX(n) FROM (
+			SELECT COUNT(*) AS n ${active} AND s2.room_id IS NOT NULL${room} GROUP BY s2.room_id)), 0))`;
+}
+
+/** True when the subscription has an end and the end is not after `now`. */
+export function isExpired(row: Pick<SubscriptionRow, "expires_at">, now: number): boolean {
+	return row.expires_at !== null && Date.parse(row.expires_at) <= now;
+}
+
+/** Active subscriptions for one event and one target, whose endpoint is also active. An expired one is not active. */
 export async function activeSubscriptions(
 	db: D1Database,
 	eventType: WebhookEvent,
@@ -148,9 +187,10 @@ export async function activeSubscriptions(
 		.prepare(
 			`SELECT s.id, s.target_id, s.sequence, e.created_by FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
-			WHERE s.event_type = ? AND s.target_id = ? AND s.status = 'active' AND e.status = 'active'`,
+			WHERE s.event_type = ? AND s.target_id = ? AND s.status = 'active' AND e.status = 'active'
+			AND (s.expires_at IS NULL OR s.expires_at > ?)`,
 		)
-		.bind(eventType, targetId)
+		.bind(eventType, targetId, new Date().toISOString())
 		.all<ActiveSubscription>();
 	return results;
 }

@@ -3,16 +3,17 @@
 > Status: **started**. Tools come from the operation registry, and resources come from the resource
 > registry. The endpoint speaks protocol 2026-07-28 and the older protocols with an `initialize`
 > handshake. A client of protocol 2026-07-28 can subscribe to the inbox of a mailbox and get a
-> notification for new mail. Prompts and toolsets are not built yet. Keep this README current as
-> the module grows. It is the module's contract.
+> notification for new mail. A client of each protocol can subscribe to an event with MCP Events, and
+> get a signed POST for each event. Prompts and toolsets are not built yet. Keep this README current
+> as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | MCP adapter: the `/mcp` Streamable HTTP endpoint. It makes tools from the operation registry and resources from the resource registry. It filters them by scopes, agent policy and toolsets. |
 | **Owns** | No data. |
-| **Depends on** | `platform`, `identity`. Domain handlers and change feeds are injected by the composition root (`src/index.ts`). This adapter never imports product domains. |
+| **Depends on** | `platform`, `identity`. Domain handlers, change feeds and the subscriptions of MCP Events are injected by the composition root (`src/index.ts`). This adapter never imports product domains. |
 | **Operations** | Exposes every operation as a `<domain>_<verb>` tool, and every resource kind as a resource template. |
-| **Data inventory** | None. A `subscriptions/listen` stream keeps its state in memory only, for the life of the request. |
+| **Data inventory** | None. A `subscriptions/listen` stream keeps its state in memory only, for the life of the request. The [`webhooks`](../webhooks/README.md#mcp-events) module keeps the subscriptions of MCP Events. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -23,6 +24,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `tools.ts` | One tool for each operation, and the tool call |
 | `resources.ts` | The resource templates, the resource list and the resource read, from the resource registry |
 | `listen.ts` | The `subscriptions/listen` stream |
+| `events.ts` | `events/list`, `events/subscribe` and `events/unsubscribe` of MCP Events |
 
 ## Transport
 
@@ -43,19 +45,22 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   - `Mcp-Method` is the method. `Mcp-Name` is `params.name` for `tools/call` and `params.uri` for
     `resources/read`. A `Mcp-Name` in the form `=?base64?…?=` is decoded first (error `-32020`).
 - Modern methods: `server/discover`, `tools/list`, `tools/call`, `resources/list`,
-  `resources/templates/list`, `resources/read` and `subscriptions/listen`. Another method gets `404`
-  with error `-32601`, also `initialize` and `ping`.
+  `resources/templates/list`, `resources/read`, `subscriptions/listen`, `events/list`,
+  `events/subscribe` and `events/unsubscribe`. Another method gets `404` with error `-32601`, also
+  `initialize` and `ping`.
 - Legacy methods: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`,
-  `resources/templates/list` and `resources/read`. `initialize` echoes a supported legacy version, or
-  offers `2025-11-25`. Another method gets error `-32601`.
+  `resources/templates/list`, `resources/read`, `events/list`, `events/subscribe` and
+  `events/unsubscribe`. `initialize` echoes a supported legacy version, or offers `2025-11-25`.
+  Another method gets error `-32601`.
 - A modern result has `resultType: "complete"` and the server identity in
   `_meta["io.modelcontextprotocol/serverInfo"]`. The results of `server/discover`, the lists and
   `resources/read` have `ttlMs` and `cacheScope`. Each `cacheScope` is `private`, because each result
   depends on the credential. `resources/read` has `ttlMs: 0`.
-- Capabilities: `tools` and `resources`. `resources.subscribe` is true for a modern request only. A
-  legacy client has no session, so no stream can carry its notifications. Such a client can get a
-  POST for new mail from a [webhook](../mail/README.md#webhooks): `mail_create_webhook_subscription` is a tool of
-  each protocol era.
+- Capabilities: `tools`, `resources` and `events`. `resources.subscribe` is true for a modern request
+  only. A legacy client has no session, so no stream can carry its notifications. Such a client can
+  use [MCP Events](#events), or get a POST for new mail from a
+  [webhook](../mail/README.md#webhooks): `mail_create_webhook_subscription` is a tool of each
+  protocol era.
 - Authentication: a bearer OAuth access token (`sdo_`) or API key (`sdk_`) only. The session cookie
   is never accepted, so a web page cannot drive MCP with a person's session. A request with a
   different `Origin` gets `403`.
@@ -164,6 +169,35 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - When the client closes the connection, the stream ends at once and closes its change feeds. The
   `enable_request_signal` compatibility flag makes `request.signal` abort on the disconnect.
 - One request can name at most 100 URIs. A filter that is not valid gets error `-32602`.
+
+## Events
+
+MCP Events sends an event to a URL of the client. It needs no open stream, so it works in each
+protocol era. ChatGPT uses it for Work chats and for dots: see
+[MCP Events](https://developers.openai.com/plugins/build/mcp-events). The endpoint implements the
+webhook delivery of that integration. It has no polling, no stream and no replay.
+
+- `initialize` and `server/discover` name the capability `events: {}`.
+- `events/list` gives the events that the credential can subscribe to. Each event has `name`,
+  `description`, `delivery: ["webhook"]`, `inputSchema` (the arguments of a subscription) and
+  `payloadSchema` (`data` of each POST). An event shows only when the credential holds the webhook
+  scope of its product: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`. The catalog is one
+  page, so a `cursor` other than `null` gets error `-32602`.
+- `events/subscribe` takes `name`, `arguments`, `delivery` (`mode: "webhook"`, `url`, `secret`),
+  `cursor` and `ttlMs`. The result has `id`, `refreshBefore`, `cursor: null` and `truncated: false`.
+  The same call again refreshes the subscription. A `cursor` other than `null` gets `-32602`,
+  because the events have no replay.
+- `events/unsubscribe` takes `name`, `arguments` and `delivery` (`mode`, `url`). The result is `{}`,
+  also when no such subscription exists.
+- Errors: params that are not valid, an unknown event and an event without its scope get `-32602`.
+  A callback URL that is not accepted gets `-32015` with `data.reason`: `invalid_url`,
+  `challenge_failed`, `timeout` or `unreachable`. Each other refusal gets `-32603` with the error
+  code in `data.code`: `policy_denied`, `forbidden`, `not_found` or `conflict`.
+- The adapter ignores each other field of `params`, so a client can send fields of a later draft.
+
+The adapter checks only the form of the params. The [`webhooks`](../webhooks/README.md#mcp-events)
+module has the events, the rules of a subscription, the verification of the callback and the POST
+(`EventSubscriptions` in [`platform`](../platform/README.md)).
 
 A domain module gives the change feed of each resource kind (`ResourceWatcher` in
 [`platform`](../platform/README.md)). Its `allowed` checks the access of the caller to a list of

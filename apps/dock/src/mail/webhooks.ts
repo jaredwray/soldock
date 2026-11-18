@@ -4,9 +4,12 @@ import type { HandlerMap } from "../platform/index.ts";
 import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";
 import { mailboxStub } from "./delivery.ts";
 
-const shared = createSubscriptionHandlers("mail", async (call, mailboxId) => {
+/** Tells the mailbox object that a subscription exists. Then the object records an event for new mail. */
+export async function enableMailEvents(call: CallContext, mailboxId: string): Promise<void> {
 	await mailboxStub(call.env, mailboxId).enableWebhookEvents(mailboxId);
-});
+}
+
+const shared = createSubscriptionHandlers("mail", enableMailEvents);
 
 function forMail(view: SubscriptionView): MailWebhookSubscription {
 	const { target_id, ...rest } = view;

@@ -1,6 +1,6 @@
 # `platform` module
 
-> Status: **started** (HTTP plumbing, ids, crypto helpers, logs, the operation invoker and the change-feed types). The rest is not built yet. Keep this README current as the module grows; it is the module's contract.
+> Status: **started** (HTTP plumbing, ids, crypto helpers, logs, the operation invoker, the change-feed types and the event subscription types). The rest is not built yet. Keep this README current as the module grows; it is the module's contract.
 
 | | |
 | --- | --- |
@@ -22,4 +22,5 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`.
+- `events/subscriptions.ts`: `EventSubscriptions`, the subscriptions of MCP Events, and `EventCallbackError`. The `webhooks` module implements it, and the MCP adapter uses it for `events/list`, `events/subscribe` and `events/unsubscribe`.
 - `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, refuses input with more than 64 levels of objects and lists (a schema reads its input with recursion), validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes, and the refused calls of an operation with `auditDenied` (a read of sensitive data).
