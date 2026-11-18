@@ -61,8 +61,9 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 		};
 		socket.addEventListener("message", (event) => {
 			if (closed || typeof event.data !== "string") return;
-			// Only a change of a message is a change of this resource. `hello` and `room` are not.
-			if (eventType(event.data) === "message") listener.change();
+			// Only a change of a message or a reply is a change of this resource. `hello` and `room` are not.
+			const type = eventType(event.data);
+			if (type === "message" || type === "reply") listener.change();
 		});
 		socket.addEventListener("close", ended);
 		socket.addEventListener("error", ended);

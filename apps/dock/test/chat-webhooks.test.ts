@@ -198,6 +198,28 @@ it("keeps one event per new message and none for a replay, edit, delete or read"
 	expect(queue.events).toHaveLength(3);
 });
 
+// A reply is not in the room list, so the receiver needs the parent to find it.
+it("names the parent of a reply in the event of a new message, and no parent for a message of the room", async () => {
+	await watchBot();
+	const current = await room();
+	const queue = await capture(current.id);
+	const { message: parent } = await ada.call("chat.post_message", { room_id: current.id, text: "Plan" });
+	const { message: reply } = await ada.call("chat.post_message", {
+		room_id: current.id,
+		parent_id: parent.id,
+		text: "Detail",
+	});
+	await queue.drain();
+	const posts = receiveWebhooks();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	const bodies = posts.map((post) => JSON.parse(post.body).data as Record<string, string>);
+	expect(bodies.map((data) => [data.message_id, data.parent_id])).toEqual([
+		[parent.id, undefined],
+		[reply.id, parent.id],
+	]);
+	expect(posts[1]?.body).not.toContain("Detail");
+});
+
 it("sends an edit and a delete to those subscriptions, and nothing for a read", async () => {
 	const updated = await watchBot("chat.message.updated");
 	const deleted = await watchBot("chat.message.deleted");
