@@ -184,7 +184,7 @@ interface OutboxRow extends Row {
  * except a mention of the author. A deleted message has no body. The row of the "type" key of a node
  * finds the node, and its id is beside it, at the path of that row.
  */
-export const MENTIONS_BACKFILL = `INSERT OR IGNORE INTO mentions (principal_id, seq)
+const MENTIONS_BACKFILL = `INSERT OR IGNORE INTO mentions (principal_id, seq)
 	SELECT json_extract(messages.body_json, node.path || '.attrs.id'), messages.seq
 	FROM messages, json_tree(messages.body_json) AS node
 	WHERE messages.body_json IS NOT NULL AND messages.deleted_at IS NULL

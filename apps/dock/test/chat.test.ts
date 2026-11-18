@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { CHAT_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { messageContent } from "../src/chat/body.ts";
-import { MEMBER_DELAY_MS, MENTIONS_BACKFILL } from "../src/chat/room.ts";
+import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import type { ChatRoomState } from "../src/identity/index.ts";
 import {
 	type Actor,
@@ -1386,18 +1386,23 @@ describe("the mention count", () => {
 	});
 
 	// A message with a mention node from before the table must count after the change of the schema.
-	it("fills the table of mentions from the bodies of the messages from before it", async () => {
+	it("fills the table of mentions from the bodies of the messages from before it, at the start of the object", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		await post(ada, room.id, "> quoted @bot and @ada");
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
+		// The room goes back to the schema before the table. The table is the last migration.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			state.storage.sql.exec("DELETE FROM mentions");
-			state.storage.sql.exec(MENTIONS_BACKFILL);
-			// The node in a quote counts. The mention of the author and a deleted message give no row.
-			const rows = state.storage.sql.exec<{ principal_id: string }>("SELECT principal_id FROM mentions").toArray();
-			expect(rows.map((row) => row.principal_id)).toEqual([bot.id]);
+			state.storage.sql.exec("DROP TABLE mentions");
+			state.storage.sql.exec(
+				"UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'",
+			);
 		});
+		// A new start of the object runs the migration.
+		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
+		// The node in a quote counts. The mention of the author and a deleted message do not count.
+		const count = async (actor: Actor) => (await actor.call("chat.get_room", { room_id: room.id })).room.mention_count;
+		expect([await count(bot), await count(ada)]).toEqual([1, 0]);
 	});
 });
 
