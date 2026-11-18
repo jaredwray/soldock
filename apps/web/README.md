@@ -741,7 +741,8 @@ MCP clients. The app has no UI-only path.
       After a new connect of the socket, the view reads the changes after its version, in pages. A new
       room list gives the version of the open room. The view reads only when that version is after
       its own version and after each version that it asked for before, or when its last read failed.
-      A room list during a read for the same version adds no read. So a change in a different room
+      A room list during a read for the same version adds no read. A room that is not in the room list
+      has no version, so its thread reads with each room list. So a change in a different room
       makes no read,
       the view stays current without a socket too, and a failed read tries again with the next room
       list. A failed read keeps the version, so it reads the same changes.
