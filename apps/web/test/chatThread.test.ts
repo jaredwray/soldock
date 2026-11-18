@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@soldock/contracts";
-import { describe, expect, it } from "vitest";
-import { mergeThread, type ThreadState } from "../src/features/chat/thread.ts";
+import { describe, expect, it, vi } from "vitest";
+import { createThreadView, mergeThread, type RepliesPage, type ThreadState } from "../src/features/chat/thread.ts";
 
 function message(seq: number, version: number, parentId: string | null, text = `message ${seq}`): ChatMessage {
 	return {
@@ -46,5 +46,67 @@ describe("the view of a thread", () => {
 		expect(mergeThread(merged, [message(3, 3, "cmsg_1"), { ...parent, version: 2 }])).toBe(merged);
 		// The read of a catch-up keeps the version of the thread: the panel sets it.
 		expect(merged.version).toBe(3);
+	});
+});
+
+/** A page of replies of the parent above. */
+const page = (replies: ChatMessage[], version: number, has_more = false): RepliesPage => ({
+	parent,
+	replies,
+	version,
+	has_more,
+});
+
+describe("the data of the view of a thread", () => {
+	// A reply can come on the socket while the first read runs. It must show after the load.
+	it("keeps a change of the socket during the load, and reads the changes after the version of the first page", async () => {
+		const calls: unknown[] = [];
+		let release: (value: RepliesPage) => void = () => {};
+		const read = (range: { after?: number; changed_after?: number }) => {
+			calls.push(range);
+			if (calls.length === 1) return new Promise<RepliesPage>((resolve) => (release = resolve));
+			if (calls.length === 2) return Promise.resolve(page([message(3, 9, "cmsg_1", "second page")], 9));
+			return Promise.resolve(page([message(2, 11, "cmsg_1", "changed during the load")], 12));
+		};
+		const shown: ThreadState[] = [];
+		const view = createThreadView(read, (thread) => shown.push(thread));
+		const loading = view.load();
+		view.receive(message(4, 13, "cmsg_1", "from the socket"));
+		release(page([message(2, 8, "cmsg_1", "first page")], 10, true));
+		await loading;
+		expect(calls).toEqual([{}, { after: 2 }, { changed_after: 10 }]);
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual([
+			"changed during the load",
+			"second page",
+			"from the socket",
+		]);
+		expect(view.current()?.version).toBe(12);
+	});
+
+	// After a gap with no socket, the view must get each change of the gap, also in pages.
+	it("reads the changes of a gap after a connect from the version of the last reply of each page, and again after a failure", async () => {
+		const pages: (RepliesPage | Error)[] = [
+			page([], 5),
+			page([], 5),
+			new Error("offline"),
+			page([message(2, 6, "cmsg_1", "one")], 6, true),
+			page([message(3, 7, "cmsg_1", "two")], 8),
+		];
+		const calls: unknown[] = [];
+		const read = async (range: { after?: number; changed_after?: number }) => {
+			calls.push(range);
+			const next = pages.shift();
+			if (!next || next instanceof Error) throw next ?? new Error("no page");
+			return next;
+		};
+		const view = createThreadView(read, () => {});
+		await view.load();
+		view.connect();
+		await vi.waitFor(() => expect(calls).toHaveLength(3));
+		// The failed read kept the version, so the next connect asks for the same changes.
+		view.connect();
+		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
+		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
 	});
 });

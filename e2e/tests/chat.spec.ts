@@ -105,6 +105,10 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await parentRow.getByRole("button", { name: /1 reply/ }).click();
 	const panel = page.getByRole("complementary", { name: "Thread" });
 	await expect(panel.locator(".chat-thread-replies li")).toHaveText([new RegExp(first)]);
+	// On a wide screen the room makes room for the view, so the actions of a message stay usable.
+	await parentRow.hover();
+	await parentRow.getByRole("button", { name: /Reply in a thread/ }).click();
+	await expect(panel).toBeVisible();
 
 	// A reply of a different member shows at once, in the thread and in the summary.
 	const second = unique("second reply");
@@ -127,11 +131,21 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(sharedRow).toHaveCount(1);
 	await expect(sharedRow.getByRole("button", { name: "Replied in a thread" })).toBeVisible();
 
-	await panel.getByRole("button", { name: "Close the thread" }).click();
+	// Escape keeps a typed reply. With an empty box, it closes the view, and the focus goes back to the opener.
+	await box.pressSequentially("not yet");
+	await box.press("Escape");
+	await expect(panel).toBeVisible();
+	await box.press("Control+a");
+	await box.press("Delete");
+	await box.press("Escape");
 	await expect(panel).toHaveCount(0);
+	// The last opener was the action "Reply in a thread" of the message.
+	await expect(parentRow.getByRole("button", { name: /Reply in a thread/ })).toBeFocused();
 	// The note of the shared reply opens its thread again.
 	await sharedRow.getByRole("button", { name: "Replied in a thread" }).click();
 	await expect(page.getByRole("complementary", { name: "Thread" }).locator(".chat-thread-replies li")).toHaveCount(4);
+	await page.getByRole("button", { name: "Close the thread" }).click();
+	await expect(page.getByRole("complementary", { name: "Thread" })).toHaveCount(0);
 });
 
 test("a send whose answers get lost shows one time, with no Not sent row", async ({ browser }) => {

@@ -129,6 +129,12 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [editing, setEditing] = useState<{ id: string; initial: ChatBody; body: ChatBody | null } | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
 	const [threadId, setThreadId] = useState<string | null>(null);
+	/** The element that opened the thread. It gets the focus back when the thread closes. */
+	const threadOpener = useRef<HTMLElement | null>(null);
+	const openThread = useCallback((id: string) => {
+		threadOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		setThreadId(id);
+	}, []);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// A path with a message opens the list at that message, not at its end.
 	const stick = useRef(focusSeq === null);
@@ -344,6 +350,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
 	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	// A person who is no longer a member sees no thread, and a later join does not open it again.
+	useEffect(() => {
+		if (!isMember) setThreadId(null);
+	}, [isMember]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
 	useEffect(() => {
 		const list = scrollRef.current;
@@ -759,7 +769,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onDelete={() => setDialog({ type: "delete", message })}
 												onShowEdits={readsEdits ? () => setDialog({ type: "edits", message }) : null}
 												// A reply that also went to the room opens the thread of its parent.
-												onOpenThread={pending === null ? () => setThreadId(message.parent_id ?? message.id) : null}
+												onOpenThread={pending === null ? () => openThread(message.parent_id ?? message.id) : null}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
 												ownId={ownId}
@@ -862,7 +872,13 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					mentions={mentions}
 					watch={view.watchMessages}
 					onSentToRoom={view.apply}
-					onClose={() => setThreadId(null)}
+					onClose={() => {
+						setThreadId(null);
+						// The focus goes back to the button that opened the thread, or to the box of the room.
+						const opener = threadOpener.current;
+						if (opener?.isConnected) opener.focus();
+						else composer.current?.focus();
+					}}
 				/>
 			)}
 			{dialog?.type === "members" && (

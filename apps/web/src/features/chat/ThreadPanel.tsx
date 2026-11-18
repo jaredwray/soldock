@@ -1,5 +1,5 @@
 import { CHAT_LIMITS, type ChatBody, type ChatMessage } from "@soldock/contracts";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -8,50 +8,17 @@ import { bodyText } from "./composerSchema.ts";
 import type { MessageWatch } from "./data.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import type { MentionContext } from "./mentions.ts";
-import { inThread, mergeThread, type ThreadState } from "./thread.ts";
+import { createThreadView, inThread, type ThreadState, type ThreadView } from "./thread.ts";
 
 type LoadState = { status: "loading" } | { status: "ready"; thread: ThreadState } | { status: "error"; error: string };
 
-/** The parent and each reply of a thread: all pages of `chat.list_replies`. */
-async function readThread(roomId: string, parentId: string): Promise<ThreadState> {
-	const input = { room_id: roomId, message_id: parentId, limit: CHAT_LIMITS.pageSize };
-	let page = await api.call("chat.list_replies", input);
-	// The changes after the first page come with the next catch-up, so the thread keeps its version.
-	const version = page.version;
-	const replies = [...page.replies];
-	while (page.has_more) {
-		const last = replies[replies.length - 1];
-		if (!last) break;
-		page = await api.call("chat.list_replies", { ...input, after: last.seq });
-		replies.push(...page.replies);
-	}
-	return { parent: page.parent, replies, version };
-}
-
-/**
- * The messages of a thread that changed after `version`, with the parent, and the version to keep. A
- * page that is not the last one continues from the version of its last reply.
- */
-async function threadChanges(
-	roomId: string,
-	parentId: string,
-	version: number,
-): Promise<{ messages: ChatMessage[]; version: number }> {
-	const messages: ChatMessage[] = [];
-	let after = version;
-	for (;;) {
-		const page = await api.call("chat.list_replies", { room_id: roomId, message_id: parentId, changed_after: after });
-		messages.push(page.parent, ...page.replies);
-		const last = page.replies[page.replies.length - 1];
-		if (!page.has_more || !last) return { messages, version: page.version };
-		after = last.version;
-	}
-}
+/** The distance from the end of the replies, in pixels, under which a new reply moves the list to its end. */
+const STICK_PX = 80;
 
 /**
  * The view of one thread, beside the messages of the room: the message that starts it, its replies, and
- * a box for a reply. The socket of the room brings each change (`watch`). After a new connect, the view
- * reads what changed while it had no socket.
+ * a box for a reply. The socket of the room brings each change (`watch`), and `createThreadView` keeps
+ * the thread: a change during the load, and the changes of a gap after a new connect, show too.
  */
 export function ThreadPanel({
 	roomId,
@@ -73,88 +40,117 @@ export function ThreadPanel({
 }) {
 	const [state, setState] = useState<LoadState>({ status: "loading" });
 	const [draft, setDraft] = useState<ChatBody | null>(null);
+	/** The body in the box now, for the end of a send: text typed during the send stays. */
+	const draftNow = useRef<ChatBody | null>(null);
+	const changeDraft = useCallback((next: ChatBody | null) => {
+		draftNow.current = next;
+		setDraft(next);
+	}, []);
 	const [alsoInRoom, setAlsoInRoom] = useState(false);
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
+	/** The key of the send of the reply in the box. A second send after a lost answer posts it one time. */
+	const sendKey = useRef(crypto.randomUUID());
 	const composer = useRef<ChatComposerHandle>(null);
+	const body = useRef<HTMLDivElement>(null);
+	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
+	const stick = useRef(true);
+	const view = useRef<ThreadView | null>(null);
+	const retry = useRef<HTMLButtonElement>(null);
 	const boxId = useId();
 	const headingId = useId();
 
-	useEffect(() => {
-		let alive = true;
-		/** The thread of the last load or catch-up, for a catch-up that starts later. */
-		let current: ThreadState | null = null;
-		const merge = (messages: readonly ChatMessage[], version?: number) =>
-			setState((shown) => {
-				if (shown.status !== "ready") return shown;
-				const merged = mergeThread(shown.thread, messages);
-				const next = version !== undefined && version > merged.version ? { ...merged, version } : merged;
-				current = next;
-				return next === shown.thread ? shown : { status: "ready", thread: next };
-			});
+	const load = useCallback(() => {
+		const current = view.current;
+		if (!current) return;
 		setState({ status: "loading" });
-		readThread(roomId, parentId).then(
-			(thread) => {
-				if (!alive) return;
-				current = thread;
-				setState({ status: "ready", thread });
-			},
-			(error: unknown) => {
-				if (alive) setState({ status: "error", error: errorMessage(error) });
+		current.load().catch((error: unknown) => {
+			if (view.current === current) setState({ status: "error", error: errorMessage(error) });
+		});
+	}, []);
+
+	useEffect(() => {
+		const thread = createThreadView(
+			(range) => api.call("chat.list_replies", { room_id: roomId, message_id: parentId, ...range }),
+			(next) => {
+				if (view.current === thread) setState({ status: "ready", thread: next });
 			},
 		);
+		view.current = thread;
+		// The watch starts before the load, so a change during the load waits in the view and is not lost.
 		const stop = watch((event) => {
-			if (event.type === "message") {
-				if (inThread(event.message, parentId)) merge([event.message]);
-				return;
-			}
-			// A new connect: the socket did not bring the changes of the gap.
-			const since = current?.version;
-			if (since === undefined) return;
-			threadChanges(roomId, parentId, since).then(
-				(changes) => {
-					if (alive) merge(changes.messages, changes.version);
-				},
-				() => {
-					// The next connect tries again.
-				},
-			);
+			if (event.type === "connect") thread.connect();
+			else if (inThread(event.message, parentId)) thread.receive(event.message);
 		});
+		load();
 		return () => {
-			alive = false;
+			view.current = null;
 			stop();
 		};
-	}, [roomId, parentId, watch]);
+	}, [roomId, parentId, watch, load]);
+
+	// The focus goes to the one action of an error, so a keyboard can try again at once.
+	useEffect(() => {
+		if (state.status === "error") retry.current?.focus();
+	}, [state.status]);
+
+	// A new reply moves the list to its end when the list showed its end.
+	const replyCount = state.status === "ready" ? state.thread.replies.length : 0;
+	useLayoutEffect(() => {
+		const element = body.current;
+		if (element && replyCount > 0 && stick.current) element.scrollTop = element.scrollHeight;
+	}, [replyCount]);
+
+	/** Closes the view, unless the box has a reply: one key must not delete a reply. */
+	const closeUnlessTyped = () => {
+		if (draft === null) onClose();
+	};
 
 	async function send() {
-		if (!draft || sending || state.status !== "ready") return;
+		const thread = view.current?.current();
+		if (!draft || sending || !thread || thread.parent.deleted) return;
 		if (bodyText(draft).length > CHAT_LIMITS.messageChars) return;
+		const sent = draft;
 		setSending(true);
 		setSendError(null);
 		try {
 			const { message } = await api.call("chat.post_message", {
 				room_id: roomId,
 				parent_id: parentId,
-				body: draft,
+				body: sent,
+				idempotency_key: sendKey.current,
 				...(alsoInRoom ? { also_in_room: true } : {}),
 			});
-			setState((shown) =>
-				shown.status === "ready" ? { status: "ready", thread: mergeThread(shown.thread, [message]) } : shown,
-			);
+			view.current?.receive(message);
 			if (message.also_in_room) onSentToRoom(message);
-			composer.current?.clear();
-			setDraft(null);
+			sendKey.current = crypto.randomUUID();
+			stick.current = true;
 			setAlsoInRoom(false);
+			// Text that the person typed during the send stays in the box.
+			if (draftNow.current === sent) {
+				composer.current?.clear();
+				changeDraft(null);
+			}
 		} catch (error) {
-			// The box keeps the reply, so the person can send it again.
+			// The box keeps the reply and its key, so a second send posts it one time.
 			setSendError(errorMessage(error));
 		} finally {
 			setSending(false);
 		}
 	}
 
+	const thread = state.status === "ready" ? state.thread : null;
 	return (
-		<aside className="chat-thread" aria-labelledby={headingId}>
+		<aside
+			className="chat-thread"
+			aria-labelledby={headingId}
+			onKeyDown={(event) => {
+				if (event.key === "Escape" && !event.defaultPrevented) {
+					event.preventDefault();
+					closeUnlessTyped();
+				}
+			}}
+		>
 			<header className="chat-thread-header">
 				<h2 id={headingId}>Thread</h2>
 				<span className="chat-thread-room">{roomTitle}</span>
@@ -168,69 +164,83 @@ export function ThreadPanel({
 				</p>
 			)}
 			{state.status === "error" && (
-				<p className="list-state" role="alert">
-					{state.error}
-				</p>
+				<div className="list-state" role="alert">
+					<p>{state.error}</p>
+					<button type="button" className="button" onClick={load} ref={retry}>
+						Try again
+					</button>
+				</div>
 			)}
-			{state.status === "ready" && (
+			{thread && (
 				<>
-					<div className="chat-thread-body">
-						<ThreadMessage message={state.thread.parent} mentions={mentions} />
-						<p className="chat-thread-count">
-							{state.thread.replies.length === 0
-								? "No replies yet"
-								: plural(state.thread.replies.length, "reply", "replies")}
-						</p>
-						<ol className="chat-thread-replies" role="log" aria-label="Replies">
-							{state.thread.replies.map((reply) => (
-								<li key={reply.id}>
-									<ThreadMessage message={reply} mentions={mentions} />
-								</li>
-							))}
-						</ol>
-					</div>
-					<form
-						className="chat-thread-composer"
-						onSubmit={(event) => {
-							event.preventDefault();
-							void send();
+					<div
+						className="chat-thread-body"
+						ref={body}
+						onScroll={(event) => {
+							const element = event.currentTarget;
+							stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX;
 						}}
 					>
-						<div className="chat-composer-box">
-							<ChatComposer
-								ref={composer}
-								id={boxId}
-								label="Reply in the thread"
-								placeholder="Reply…"
-								initial={null}
-								onChange={setDraft}
-								onSubmit={() => void send()}
-								onCancel={onClose}
-								mentions={mentions}
-								placement="above"
-								autofocus
-							>
-								<button
-									type="submit"
-									className="chat-send"
-									aria-label="Send the reply"
-									title="Send (Enter)"
-									disabled={!draft || sending}
-								>
-									<Icon name="arrowUp" size={18} />
-								</button>
-							</ChatComposer>
+						<ThreadMessage message={thread.parent} mentions={mentions} />
+						<p className="chat-thread-count">
+							{thread.replies.length === 0 ? "No replies yet" : plural(thread.replies.length, "reply", "replies")}
+						</p>
+						<div role="log" aria-label="Replies">
+							<ol className="chat-thread-replies">
+								{thread.replies.map((reply) => (
+									<li key={reply.id}>
+										<ThreadMessage message={reply} mentions={mentions} />
+									</li>
+								))}
+							</ol>
 						</div>
-						<label className="chat-thread-also">
-							<input type="checkbox" checked={alsoInRoom} onChange={(event) => setAlsoInRoom(event.target.checked)} />
-							Also send to {roomTitle}
-						</label>
-						{sendError && (
-							<p className="chat-send-failed" role="alert">
-								Not sent. {sendError}
-							</p>
-						)}
-					</form>
+					</div>
+					{thread.parent.deleted ? (
+						<p className="chat-thread-closed">The message was deleted, so the thread takes no new reply.</p>
+					) : (
+						<form
+							className="chat-thread-composer"
+							onSubmit={(event) => {
+								event.preventDefault();
+								void send();
+							}}
+						>
+							<div className="chat-composer-box">
+								<ChatComposer
+									ref={composer}
+									id={boxId}
+									label="Reply in the thread"
+									placeholder="Reply…"
+									initial={null}
+									onChange={changeDraft}
+									onSubmit={() => void send()}
+									onCancel={closeUnlessTyped}
+									mentions={mentions}
+									placement="above"
+									autofocus
+								>
+									<button
+										type="submit"
+										className="chat-send"
+										aria-label="Send the reply"
+										title="Send (Enter)"
+										disabled={!draft || sending}
+									>
+										<Icon name="arrowUp" size={18} />
+									</button>
+								</ChatComposer>
+							</div>
+							<label className="chat-thread-also">
+								<input type="checkbox" checked={alsoInRoom} onChange={(event) => setAlsoInRoom(event.target.checked)} />
+								Also send to {roomTitle}
+							</label>
+							{sendError && (
+								<p className="chat-send-failed" role="alert">
+									Not sent. {sendError} Press Enter to send it again.
+								</p>
+							)}
+						</form>
+					)}
 				</>
 			)}
 		</aside>
