@@ -90,7 +90,7 @@ describe("the data of the view of a thread", () => {
 	});
 
 	// After a gap with no socket, the view must get each change of the gap, also in pages.
-	it("reads the changes of a gap after a connect from the version of the last reply of each page, and again after a failure", async () => {
+	it("reads the changes of a gap after a catch-up from the version of the last reply of each page, and again after a failure", async () => {
 		const pages: (RepliesPage | Error)[] = [
 			page([], 5),
 			page([], 5),
@@ -107,10 +107,10 @@ describe("the data of the view of a thread", () => {
 		};
 		const view = createThreadView(read, () => {});
 		await view.load();
-		view.connect();
+		view.catchUp();
 		await vi.waitFor(() => expect(calls).toHaveLength(3));
-		// The failed read kept the version, so the next connect asks for the same changes.
-		view.connect();
+		// The failed read kept the version, so the next catch-up asks for the same changes.
+		view.catchUp();
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
 		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);

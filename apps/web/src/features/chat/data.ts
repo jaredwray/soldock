@@ -490,11 +490,24 @@ export function useRoom(
 		roomCache.put(owner, roomId, { room, messages, hasOlder }, loadMark.current);
 	}, [state, owner, roomId]);
 
+	// The views of a thread watch the messages of the socket. A new connect and a new room list tell
+	// them to read what they missed.
+	const watchers = useRef(new Set<(event: MessageWatch) => void>());
+	const watchMessages = useCallback((listener: (event: MessageWatch) => void) => {
+		watchers.current.add(listener);
+		return () => {
+			watchers.current.delete(listener);
+		};
+	}, []);
+
 	// Each room list is a new chance to sync: `tick` changes also when the version is the same, so a
 	// sync that failed runs again.
 	const { version: listedVersion, tick } = listed;
 	useEffect(() => {
 		if (tick > 0 && listedVersion !== null) void sync.notice(listedVersion);
+		// The view of a thread reads its changes too: without a socket, after a socket that stopped, or after a
+		// catch-up that failed, the room list is its next chance.
+		if (tick > 0) for (const watcher of watchers.current) watcher({ type: "catch-up" });
 	}, [tick, listedVersion, sync]);
 
 	/** Gets the members again after the socket told that they changed. */
@@ -508,16 +521,6 @@ export function useRoom(
 			// The members are only for the suggestions of a mention. The next load of the room gets them.
 		}
 	}, [roomId]);
-
-	// The views of a thread watch the messages of the socket, and each connect: a connect after a gap
-	// tells them to read what they missed.
-	const watchers = useRef(new Set<(event: MessageWatch) => void>());
-	const watchMessages = useCallback((listener: (event: MessageWatch) => void) => {
-		watchers.current.add(listener);
-		return () => {
-			watchers.current.delete(listener);
-		};
-	}, []);
 
 	// The socket opens after the load, for a member only: the room gives its messages to its members.
 	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
@@ -533,7 +536,7 @@ export function useRoom(
 				if (event.type === "hello") {
 					void sync.notice(event.version);
 					if (connects++ > 0) void loadMembers();
-					for (const watcher of watchers.current) watcher({ type: "connect" });
+					for (const watcher of watchers.current) watcher({ type: "catch-up" });
 				} else if (event.type === "message" || event.type === "reply") {
 					sync.push(event.message);
 					for (const watcher of watchers.current) watcher({ type: "message", message: event.message });
@@ -581,5 +584,8 @@ export function useRoom(
 	};
 }
 
-/** What a view of a thread gets from the socket of the room: a message, or a new connect. */
-export type MessageWatch = { type: "message"; message: ChatMessage } | { type: "connect" };
+/**
+ * What a view of a thread gets from the room: a message of the socket, or a time to read the changes that
+ * it missed (a new connect of the socket, or a new room list).
+ */
+export type MessageWatch = { type: "message"; message: ChatMessage } | { type: "catch-up" };

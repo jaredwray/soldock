@@ -146,6 +146,19 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(page.getByRole("complementary", { name: "Thread" }).locator(".chat-thread-replies li")).toHaveCount(4);
 	await page.getByRole("button", { name: "Close the thread" }).click();
 	await expect(page.getByRole("complementary", { name: "Thread" })).toHaveCount(0);
+
+	// On a narrow screen the view takes the width, and the room under it is hidden. After the close, the
+	// room shows again and the focus goes back to the opener.
+	await page.setViewportSize({ width: 600, height: 800 });
+	const note = sharedRow.getByRole("button", { name: "Replied in a thread" });
+	await note.focus();
+	await note.press("Enter");
+	const narrowPanel = page.getByRole("complementary", { name: "Thread" });
+	await expect(narrowPanel.locator(".chat-thread-replies li")).toHaveCount(4);
+	await expect(page.locator(".chat-messages")).toBeHidden();
+	await narrowPanel.getByRole("textbox", { name: "Reply in the thread" }).press("Escape");
+	await expect(narrowPanel).toHaveCount(0);
+	await expect(note).toBeFocused();
 });
 
 test("a send whose answers get lost shows one time, with no Not sent row", async ({ browser }) => {

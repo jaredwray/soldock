@@ -59,8 +59,11 @@ export interface ThreadView {
 	load(): Promise<void>;
 	/** Takes one message from the socket of the room. A message before the end of the load waits for it. */
 	receive(message: ChatMessage): void;
-	/** Tells the view that the socket connected again: it reads the changes that it missed. */
-	connect(): void;
+	/**
+	 * Tells the view to read the changes that it missed: after a new connect of the socket, or with a new
+	 * room list, which also tries a failed catch-up again.
+	 */
+	catchUp(): void;
 	/** The thread that shows, or null before the first load. */
 	current(): ThreadState | null;
 }
@@ -70,7 +73,7 @@ export interface ThreadView {
  * comes during the load waits, and goes into the thread after it. The load reads the changes after the
  * version of its first page, so a change during the read of a later page shows too. One catch-up runs at
  * a time. A call during a catch-up makes it run one more time. A failed catch-up keeps the version, so the
- * next connect asks for the same changes again.
+ * next catch-up asks for the same changes again.
  */
 export function createThreadView(read: ReadReplies, show: (thread: ThreadState) => void): ThreadView {
 	let thread: ThreadState | null = null;
@@ -84,7 +87,7 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 		show(next);
 	};
 
-	async function catchUp(): Promise<void> {
+	async function readChanges(): Promise<void> {
 		if (thread === null) return;
 		if (running) {
 			again = true;
@@ -107,7 +110,7 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 				}
 			} while (again);
 		} catch {
-			// The version did not move. The next connect reads again.
+			// The version did not move. The next catch-up (a connect or a room list) reads again.
 		} finally {
 			running = false;
 		}
@@ -129,14 +132,14 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 			waiting = [];
 			thread = null;
 			set(loaded);
-			await catchUp();
+			await readChanges();
 		},
 		receive(message) {
 			if (thread === null) waiting.push(message);
 			else set(mergeThread(thread, [message]));
 		},
-		connect() {
-			void catchUp();
+		catchUp() {
+			void readChanges();
 		},
 		current: () => thread,
 	};

@@ -1,5 +1,15 @@
 import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@soldock/contracts";
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	Fragment,
+	useCallback,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -63,6 +73,21 @@ type RoomDialog =
 	| { type: "delete"; message: ChatMessage }
 	| { type: "edits"; message: ChatMessage }
 	| null;
+
+/** The width under which the view of a thread takes the width of the room and hides it. */
+const THREAD_HIDES_ROOM = "(max-width: 899px)";
+
+/** True while the media query matches. */
+function useMediaQuery(query: string): boolean {
+	return useSyncExternalStore(
+		(change) => {
+			const list = window.matchMedia(query);
+			list.addEventListener("change", change);
+			return () => list.removeEventListener("change", change);
+		},
+		() => window.matchMedia(query).matches,
+	);
+}
 
 /** The distance from the end of the list, in pixels, under which a new message moves the list to its end. */
 const STICK_PX = 80;
@@ -131,6 +156,11 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [threadId, setThreadId] = useState<string | null>(null);
 	/** The element that opened the thread. It gets the focus back when the thread closes. */
 	const threadOpener = useRef<HTMLElement | null>(null);
+	/** True from the close of a thread until the focus is back, after the room shows again. */
+	const focusAfterThread = useRef(false);
+	/** True on a narrow screen, where the view of a thread hides the room (see `.chat-thread` in chat.css). */
+	const narrow = useMediaQuery(THREAD_HIDES_ROOM);
+	const threadHidesRoom = threadId !== null && narrow;
 	const openThread = useCallback((id: string) => {
 		threadOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		setThreadId(id);
@@ -182,7 +212,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// newest messages of the room. A message below the part that shows is not read.
 	const messages = view.messages;
 	// A list from the cache is not the room of now: the person reads the room after its load.
-	const looking = view.status === "ready" && view.fresh && visible && atEnd && !view.hasNewer;
+	// On a narrow screen, the view of a thread hides the room, so the person does not read it.
+	const looking = view.status === "ready" && view.fresh && visible && atEnd && !view.hasNewer && !threadHidesRoom;
 
 	// The room opens with the read marker of the person. The messages after it came while the person
 	// did not look, so the line goes before the first of them.
@@ -350,6 +381,16 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
 	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	// After a close, the focus goes back to the button that opened the thread, or to the box of the room. It
+	// waits for the commit: on a narrow screen the room is hidden while the view of the thread shows.
+	useEffect(() => {
+		if (threadId !== null || !focusAfterThread.current) return;
+		focusAfterThread.current = false;
+		const opener = threadOpener.current;
+		if (opener?.isConnected) opener.focus();
+		else composer.current?.focus();
+	}, [threadId]);
+
 	// A person who is no longer a member sees no thread, and a later join does not open it again.
 	useEffect(() => {
 		if (!isMember) setThreadId(null);
@@ -873,11 +914,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					watch={view.watchMessages}
 					onSentToRoom={view.apply}
 					onClose={() => {
+						focusAfterThread.current = true;
 						setThreadId(null);
-						// The focus goes back to the button that opened the thread, or to the box of the room.
-						const opener = threadOpener.current;
-						if (opener?.isConnected) opener.focus();
-						else composer.current?.focus();
 					}}
 				/>
 			)}
