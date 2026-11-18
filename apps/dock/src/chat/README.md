@@ -14,7 +14,7 @@
 | **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room. Later: threads, files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the table `chat_rooms` in each `PrincipalDO` (the joined rooms of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -202,6 +202,22 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     changes. A client that has version `n` asks for the changes after `n`, and gets each new,
     changed and deleted message one time.
 - Only the author changes the text of a message (`chat.edit_message`). The message gets `edited_at`.
+- **The earlier versions of a message.** An edit keeps the content before it in the table
+  `message_edits`: the text, the body, the version of the room, the time of the write and the time
+  of the edit (`keepEarlierVersion`). An edit with the same content keeps nothing.
+  - `chat.list_message_edits` returns them, oldest first, to an owner or an admin of the
+    organization only. An agent never calls it (`callers: ["human"]`). The handler checks the role
+    before it asks the room, so a different caller learns nothing about the room.
+  - The caller must be able to read the room. An owner of the organization reads the earlier
+    versions in a public room, and in a private room or a direct message only as a member. So the
+    role gives no access to a private room.
+  - Each read writes an audit line (`chat.list_message_edits`), because it shows the earlier words
+    of a different person.
+  - The room keeps the 100 newest earlier versions of a message (`CHAT_LIMITS.messageEdits`). An
+    author that edits all the time fills no storage.
+  - A delete of the message removes its earlier versions with the text. A delete is for the words of
+    the author, also the earlier ones.
+  - An edit from before the table kept nothing, so its message has no earlier version.
 - The author and the owner of the room delete a message (`chat.delete_message`). The object
   deletes the text. The message keeps its `seq`, with `deleted: true`, so clients can show a gap.
 - `chat.post_message` takes `idempotency_key` (REST: also the `Idempotency-Key` header). A second
@@ -603,6 +619,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
+| Earlier versions | `ChatRoomDO` table `message_edits` | One row for each edit of a message: the text and the body before the edit, the version of the room, the time of the write and the time of the edit. The 100 newest rows of each message stay. A delete of the message removes its rows |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |

@@ -282,6 +282,18 @@ const MIGRATIONS: string[][] = [
 		"CREATE INDEX mentions_seq ON mentions (seq)",
 		MENTIONS_BACKFILL,
 	],
+	// The earlier versions of each message: the content before each edit. A message from before has none.
+	[
+		`CREATE TABLE message_edits (
+			message_id TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			text TEXT NOT NULL,
+			body_json TEXT,
+			written_at INTEGER NOT NULL,
+			replaced_at INTEGER NOT NULL,
+			PRIMARY KEY (message_id, version)
+		) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -352,6 +364,15 @@ function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): 
 
 function iso(ms: number): string {
 	return new Date(ms).toISOString();
+}
+
+/** An earlier version of a message. Times are in milliseconds. */
+export interface MessageEditRecord {
+	version: number;
+	text: string;
+	body: ChatBody;
+	written_at: number;
+	replaced_at: number;
 }
 
 /** A message as the operations and the socket events return it. */
@@ -1147,6 +1168,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {
+				this.keepEarlierVersion(row, now);
 				this.sql.exec(
 					"UPDATE messages SET text = ?, body_json = ?, edited_at = ?, version = ? WHERE id = ?",
 					content.text,
@@ -1177,6 +1199,54 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return edited;
 	}
 
+	/**
+	 * Keeps the content of a message before an edit. The room keeps the `CHAT_LIMITS.messageEdits` newest
+	 * earlier versions of a message, so an author that edits all the time fills no storage.
+	 */
+	private keepEarlierVersion(row: MessageRow, now: number): void {
+		this.sql.exec(
+			`INSERT OR REPLACE INTO message_edits (message_id, version, text, body_json, written_at, replaced_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			row.id,
+			row.version,
+			row.text,
+			row.body_json,
+			row.edited_at ?? row.created_at,
+			now,
+		);
+		this.sql.exec(
+			`DELETE FROM message_edits WHERE message_id = ?1 AND version NOT IN (
+				SELECT version FROM message_edits WHERE message_id = ?1 ORDER BY version DESC LIMIT ?2)`,
+			row.id,
+			CHAT_LIMITS.messageEdits,
+		);
+	}
+
+	/**
+	 * The earlier versions of a message, oldest first, for a caller that can read the room. The handler
+	 * checks that the caller is an owner or an admin of the organization.
+	 */
+	listEdits(call: RoomCall, messageId: string): { edits: MessageEditRecord[] } | Refusal {
+		const opened = this.open(call, "visible");
+		if ("error" in opened) return opened;
+		if (!this.message(messageId)) return refuse("not_found", NO_MESSAGE);
+		const rows = this.sql
+			.exec<{ version: number; text: string; body_json: string | null; written_at: number; replaced_at: number }>(
+				"SELECT version, text, body_json, written_at, replaced_at FROM message_edits WHERE message_id = ? ORDER BY version",
+				messageId,
+			)
+			.toArray();
+		return {
+			edits: rows.map((row) => ({
+				version: row.version,
+				text: row.text,
+				body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
+				written_at: row.written_at,
+				replaced_at: row.replaced_at,
+			})),
+		};
+	}
+
 	/** Deletes the text of a message. Its author and the owner of the room can do this. */
 	async deleteMessage(call: RoomCall, messageId: string): Promise<{ deleted: boolean } | Refusal> {
 		const deleted = await this.ctx.blockConcurrencyWhile(async () => {
@@ -1203,9 +1273,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
-				// A deleted message keeps no reaction and no mention.
+				// A deleted message keeps no reaction, no mention and no earlier version.
 				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
 				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
+				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(

@@ -9,6 +9,7 @@ export {
 	type ChatBodyInline,
 	ChatMember,
 	ChatMessage,
+	ChatMessageEdit,
 	ChatReaction,
 	ChatRoom,
 	ChatSocketEvent,

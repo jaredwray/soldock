@@ -41,6 +41,8 @@ export const CHAT_LIMITS = {
 	 * with more members, only an owner of the room can.
 	 */
 	groupMentionMembers: 50,
+	/** The earlier versions of one message that the room keeps. An edit after that removes the oldest one. */
+	messageEdits: 100,
 	/** The blocks of the body of one message, with each list item. */
 	bodyBlocks: 1000,
 } as const;
@@ -633,6 +635,38 @@ export const deleteMessage = defineOperation({
 	errors: ["not_found"],
 });
 
+/** An earlier version of a message: its content before an edit. */
+export const ChatMessageEdit = z.object({
+	/** The version of the room when this content was written. */
+	version: z.number().int(),
+	/** The plain text of this content. */
+	text: z.string(),
+	body: ChatBody,
+	/** The body as Markdown. */
+	markdown: z.string(),
+	/** The time of the post or the edit that wrote this content. */
+	written_at: Timestamp,
+	/** The time of the edit that replaced this content. */
+	replaced_at: Timestamp,
+});
+export type ChatMessageEdit = z.infer<typeof ChatMessageEdit>;
+
+export const listMessageEdits = defineOperation({
+	name: "chat.list_message_edits",
+	summary: "Read the earlier versions of a message",
+	description: [
+		"Owners and admins of the organization only, in a room that they can read. Returns the content of a message before each of its edits, oldest first.",
+		`The room keeps the ${CHAT_LIMITS.messageEdits} newest earlier versions of a message. A delete of the message removes its earlier versions too.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edits" },
+	scopes: ["chat.read"],
+	callers: ["human"],
+	annotations: READ,
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId }),
+	output: z.object({ edits: z.array(ChatMessageEdit) }),
+	errors: ["not_found", "forbidden"],
+});
+
 export const addReaction = defineOperation({
 	name: "chat.add_reaction",
 	summary: "React to a message",
@@ -762,6 +796,7 @@ export const chatOperations = {
 	"chat.post_message": postMessage,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
+	"chat.list_message_edits": listMessageEdits,
 	"chat.add_reaction": addReaction,
 	"chat.remove_reaction": removeReaction,
 	"chat.mark_read": markRead,

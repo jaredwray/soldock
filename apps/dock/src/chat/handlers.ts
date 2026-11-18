@@ -1,7 +1,7 @@
 import type { ChatRoom, OperationName } from "@soldock/contracts";
-import { type CallContext, getPrincipals } from "../identity/index.ts";
+import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import { messageContent } from "./body.ts";
+import { bodyMarkdown, messageContent } from "./body.ts";
 import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
 import { listPublicRooms } from "./room-index.ts";
@@ -234,6 +234,28 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const result = accept(await opened.room.deleteMessage(opened.ctx, input.message_id));
 		if (result.deleted) auditOk(call, "chat.delete_message", `${input.room_id}:${input.message_id}`);
 		return result;
+	},
+
+	async "chat.list_message_edits"(call, input) {
+		// The check comes first, so a caller without the role learns nothing about the room.
+		if (!isAdmin(call.caller)) {
+			throw new OperationError(
+				"forbidden",
+				"Only owners and admins of the organization can read the earlier versions of a message.",
+			);
+		}
+		const opened = openRoom(call, input.room_id);
+		const { edits } = accept(await opened.room.listEdits(opened.ctx, input.message_id));
+		// A read of the earlier content of a different person is an access to keep in the audit log.
+		auditOk(call, "chat.list_message_edits", `${input.room_id}:${input.message_id}`);
+		return {
+			edits: edits.map((edit) => ({
+				...edit,
+				markdown: bodyMarkdown(edit.body),
+				written_at: iso(edit.written_at),
+				replaced_at: iso(edit.replaced_at),
+			})),
+		};
 	},
 
 	async "chat.add_reaction"(call, input) {
