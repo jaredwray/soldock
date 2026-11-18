@@ -1,7 +1,7 @@
 import type { ChatRoom, OperationName } from "@soldock/contracts";
-import { type CallContext, getPrincipals } from "../identity/index.ts";
+import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import { messageContent } from "./body.ts";
+import { bodyMarkdown, messageContent } from "./body.ts";
 import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
 import { listPublicRooms } from "./room-index.ts";
@@ -234,6 +234,44 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const result = accept(await opened.room.deleteMessage(opened.ctx, input.message_id));
 		if (result.deleted) auditOk(call, "chat.delete_message", `${input.room_id}:${input.message_id}`);
 		return result;
+	},
+
+	async "chat.list_message_edits"(call, input) {
+		// The check comes first, so a caller without the role learns nothing about the room. The invoker
+		// audits the refusal (`auditDenied`), as it audits a refused kind of caller or a missing scope.
+		if (!isAdmin(call.caller)) {
+			throw new OperationError(
+				"forbidden",
+				"Only owners and admins of the organization can read the earlier versions of a message.",
+			);
+		}
+		const opened = openRoom(call, input.room_id);
+		const target = `${input.room_id}:${input.message_id}`;
+		const result = await opened.room.listEdits(opened.ctx, input.message_id);
+		// A read of the earlier content of a different person is an access to keep in the audit log. A room
+		// that refuses the read (a private room of a non-member) gets a line too. The answer stays not_found.
+		if ("error" in result) {
+			audit({
+				op: "chat.list_message_edits",
+				actor: call.caller.id,
+				actorKind: call.caller.kind,
+				credential: call.caller.credential,
+				target,
+				result: "denied",
+				code: result.error.code,
+				requestId: call.requestId,
+			});
+		}
+		const { edits } = accept(result);
+		auditOk(call, "chat.list_message_edits", target);
+		return {
+			edits: edits.map((edit) => ({
+				...edit,
+				markdown: bodyMarkdown(edit.body),
+				written_at: iso(edit.written_at),
+				replaced_at: iso(edit.replaced_at),
+			})),
+		};
 	},
 
 	async "chat.add_reaction"(call, input) {

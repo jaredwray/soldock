@@ -1403,11 +1403,12 @@ describe("the mention count", () => {
 		await post(ada, room.id, "> quoted @bot and @ada");
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
-		// The room goes back to the schema before the table. The table is the last migration.
+		// The room goes back to the schema before the table. Only the table of earlier versions comes after it.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			state.storage.sql.exec("DROP TABLE mentions");
+			state.storage.sql.exec("DROP TABLE message_edits");
 			state.storage.sql.exec(
-				"UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'",
+				"UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 2 AS TEXT) WHERE key = 'schema_version'",
 			);
 		});
 		// A new start of the object runs the migration.
@@ -1517,6 +1518,108 @@ describe("mentions of a group", () => {
 		).message;
 		expect(fixed.group_mentions).toEqual(["here"]);
 		expect((await post(bot, room.id, "no group")).group_mentions).toEqual([]);
+	});
+});
+
+describe("the earlier versions of a message", () => {
+	// An owner of the organization can find out what a message said before an edit. A different person cannot.
+	it("keeps the content before each edit for owners and admins of the organization, and removes it with the message", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "We ship on Friday.");
+		const target = { room_id: room.id, message_id: message.id };
+		const second = (await ada.call("chat.edit_message", { ...target, markdown: "We ship on **Monday**." })).message;
+		await ada.call("chat.edit_message", { ...target, text: "We ship next week." });
+		// An edit with the same content keeps no version.
+		await ada.call("chat.edit_message", { ...target, text: "We ship next week." });
+
+		// The owner reads a public room without being a member. The versions come oldest first. The read of
+		// the earlier content of a different person goes to the audit log.
+		const spy = vi.spyOn(console, "log");
+		const { edits } = await owner.call("chat.list_message_edits", target);
+		const audits = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true);
+		spy.mockRestore();
+		expect(audits).toMatchObject([
+			{ op: "chat.list_message_edits", actor: owner.id, target: `${room.id}:${message.id}`, result: "ok" },
+		]);
+		expect(edits.map((edit) => [edit.text, edit.markdown])).toEqual([
+			["We ship on Friday.", "We ship on Friday."],
+			["We ship on Monday.", "We ship on **Monday**."],
+		]);
+		expect(edits.map((edit) => edit.version)).toEqual([message.version, second.version]);
+		expect([edits[0]?.written_at, edits[0]?.replaced_at]).toEqual([message.created_at, second.edited_at]);
+		// The owner gets the same through MCP.
+		const tool = await callTool(owner.key, "chat_list_message_edits", target);
+		expect(tool.structuredContent).toEqual({ edits });
+
+		// The author, the owner of the room and an agent are not owners or admins of the organization. A key
+		// of the owner without chat.read cannot read them. A key with chat.read can.
+		const key = async (scopes: ("chat.read" | "mail.read")[]) =>
+			api((await owner.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret);
+		expect((await (await key(["chat.read"]))("chat.list_message_edits", target)).edits).toEqual(edits);
+		const mailOnly = await key(["mail.read"]);
+		// Each refused read goes to the audit log, one line each: the role, the kind of caller and the scope.
+		const refusedSpy = vi.spyOn(console, "log");
+		expect(await codeOf(ada.call("chat.list_message_edits", target))).toBe("forbidden");
+		expect(await codeOf(bot.call("chat.list_message_edits", target))).toBe("forbidden");
+		expect(await codeOf(mailOnly("chat.list_message_edits", target))).toBe("forbidden");
+		const refused = refusedSpy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true);
+		refusedSpy.mockRestore();
+		expect(refused.map((line) => [line.op, line.actor, line.result])).toEqual([
+			["chat.list_message_edits", ada.id, "denied"],
+			["chat.list_message_edits", bot.id, "denied"],
+			["chat.list_message_edits", owner.id, "denied"],
+		]);
+
+		// A private room stays hidden from an owner of the organization that is not a member. A member reads it.
+		const secret = await createRoom(ada, "private", "Secret", [bot.id]);
+		const hidden = await post(ada, secret.id, "secret");
+		const secretTarget = { room_id: secret.id, message_id: hidden.id };
+		await ada.call("chat.edit_message", { ...secretTarget, text: "no secret" });
+		const hiddenSpy = vi.spyOn(console, "log");
+		expect(await codeOf(owner.call("chat.list_message_edits", secretTarget))).toBe("not_found");
+		const hiddenAudit = hiddenSpy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true);
+		hiddenSpy.mockRestore();
+		// The refusal goes to the audit log, with the code that the caller gets.
+		expect(hiddenAudit).toMatchObject([{ actor: owner.id, result: "denied", code: "not_found" }]);
+		await ada.call("chat.add_members", { room_id: secret.id, principal_ids: [owner.id] });
+		const inside = await owner.call("chat.list_message_edits", secretTarget);
+		expect(inside.edits.map((edit) => edit.text)).toEqual(["secret"]);
+
+		// A delete removes the earlier versions with the text.
+		await ada.call("chat.delete_message", target);
+		expect((await owner.call("chat.list_message_edits", target)).edits).toEqual([]);
+
+		// A public room that the directory no longer has stays closed to a non-member, as after a fresh start
+		// of the directory.
+		await env.DIRECTORY.prepare("DELETE FROM chat_rooms WHERE id = ?").bind(room.id).run();
+		expect(await codeOf(owner.call("chat.list_message_edits", target))).toBe("not_found");
+	});
+
+	it("keeps the newest earlier versions only, up to the limit", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const message = await post(ada, room.id, "v0");
+		const target = { room_id: room.id, message_id: message.id };
+		// The room has the limit of earlier versions, all older than the message.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			for (let index = 0; index < CHAT_LIMITS.messageEdits; index++) {
+				state.storage.sql.exec(
+					"INSERT INTO message_edits (message_id, version, text, written_at, replaced_at) VALUES (?, ?, 'old', 0, 0)",
+					message.id,
+					index - CHAT_LIMITS.messageEdits,
+				);
+			}
+		});
+		await ada.call("chat.edit_message", { ...target, text: "v1" });
+		const { edits } = await owner.call("chat.list_message_edits", target);
+		expect(edits).toHaveLength(CHAT_LIMITS.messageEdits);
+		// The oldest version went away. The content before the edit is the newest one.
+		expect([edits[0]?.version, edits.at(-1)?.text]).toEqual([1 - CHAT_LIMITS.messageEdits, "v0"]);
 	});
 });
 

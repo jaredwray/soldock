@@ -394,6 +394,9 @@ app uses.
   message lists them in `group_mentions`, so look there too for the messages for you. In a room with
   more than 50 members, only an owner of the room can mention a group: a different member gets the
   error `forbidden`. Mention a group only when each member must read the message.
+- **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
+  before each edit, and owners and admins of the organization can read it. So an edit does not
+  remove words. To remove a message and its earlier versions, delete it.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
   second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
   again with the same `idempotency_key`.

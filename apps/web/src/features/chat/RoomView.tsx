@@ -8,13 +8,14 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
 import { createCallLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
+import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { emojiName } from "./emoji.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
@@ -55,7 +56,12 @@ export interface RoomViewProps {
 	directory: MentionDirectory<Principal>;
 }
 
-type RoomDialog = { type: "members" } | { type: "settings" } | { type: "delete"; message: ChatMessage } | null;
+type RoomDialog =
+	| { type: "members" }
+	| { type: "settings" }
+	| { type: "delete"; message: ChatMessage }
+	| { type: "edits"; message: ChatMessage }
+	| null;
 
 /** The distance from the end of the list, in pixels, under which a new message moves the list to its end. */
 const STICK_PX = 80;
@@ -64,6 +70,8 @@ const STICK_PX = 80;
 export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
+	// An owner or an admin of the organization can read the earlier versions of a message.
+	const readsEdits = isOrgAdmin(self);
 	const toast = useToast();
 	/** Takes each message from the socket and from a sync. It is set below, after the outbox. */
 	const onChanges = useRef<(messages: readonly ChatMessage[]) => void>(() => {});
@@ -746,6 +754,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onEditSave={saveEdit}
 												onEditCancel={() => setEditing(null)}
 												onDelete={() => setDialog({ type: "delete", message })}
+												onShowEdits={readsEdits ? () => setDialog({ type: "edits", message }) : null}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
 												ownId={ownId}
@@ -861,6 +870,22 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					}}
 				/>
 			)}
+			{dialog?.type === "edits" &&
+				(() => {
+					// The newest copy of the message: the author can change it while the dialog is open. A delete
+					// removes the earlier versions, so the dialog closes and shows none of them.
+					const current = messages.find((one) => one.id === dialog.message.id) ?? dialog.message;
+					if (current.deleted) return null;
+					return (
+						<EditHistoryDialog
+							key={current.edited_at ?? ""}
+							roomId={roomId}
+							message={current}
+							mentions={mentions}
+							onClose={() => setDialog(null)}
+						/>
+					);
+				})()}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete this message?"
@@ -899,6 +924,8 @@ interface MessageItemProps {
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
+	/** Opens the earlier versions of the message, or null for a person who cannot read them. */
+	onShowEdits: (() => void) | null;
 	/** Sends a message again after its send failed. */
 	onSendAgain: () => void;
 	/** Removes a message whose send failed. */
@@ -944,6 +971,7 @@ function MessageItem({
 	onEditSave,
 	onEditCancel,
 	onDelete,
+	onShowEdits,
 	onSendAgain,
 	onSendCancel,
 	ownId,
@@ -1041,17 +1069,31 @@ function MessageItem({
 								Save
 							</button>
 						</span>
+						<p className="chat-edit-note">
+							Owners and admins of the organization can read the text before an edit. To remove it, delete the message.
+						</p>
 					</form>
 				) : message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
 					<div className="chat-text">
 						<MessageBody body={message.body} text={message.text} mentions={mentions} />
-						{message.edited_at && (
-							<span className="chat-edited" title={fullDate(message.edited_at)}>
-								(edited)
-							</span>
-						)}
+						{message.edited_at &&
+							(onShowEdits ? (
+								<button
+									type="button"
+									className="chat-edited link-button"
+									title={fullDate(message.edited_at)}
+									aria-label="Edited. Show the earlier versions"
+									onClick={onShowEdits}
+								>
+									(edited)
+								</button>
+							) : (
+								<span className="chat-edited" title={fullDate(message.edited_at)}>
+									(edited)
+								</span>
+							))}
 					</div>
 				)}
 				{pending === null && !message.deleted && (
