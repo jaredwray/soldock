@@ -29,8 +29,8 @@ describe("queue handler", () => {
 		expect(result.retryBatch.retry).toBe(false);
 	});
 
-	// Two deployments in one account (development and rivus) need different queue names. A queue name
-	// that is fixed in the code would acknowledge and lose the mail of the other deployment.
+	// Two deployments in one account (development and rivus) need different queue names. If the code fixes
+	// the queue names, the other deployment acknowledges its batches as unknown and loses the mail.
 	it("consumes the queues that the vars name, as the rivus Worker does, and no queue with a default name", async () => {
 		// Each consumer sends a job that it cannot read to its own dead-letter queue.
 		const dead = { mail: [] as unknown[], webhooks: [] as unknown[] };

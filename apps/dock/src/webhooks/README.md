@@ -100,6 +100,10 @@ One queue batch has at most 100 jobs.
 
 ## Data inventory
 
+The queue names in this README are the names of production and development. The var `WEBHOOKS_QUEUE` gives
+the name to the Worker. The `rivus` Worker uses names that start with `soldock-rivus-`
+([dock README](../../README.md#bindings)).
+
 | State | Where | Notes |
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013` |

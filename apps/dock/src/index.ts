@@ -41,8 +41,9 @@ export default {
 			await handleWebhookBatch(batch, env);
 			return;
 		}
-		// A queue without a consumer here. Acknowledge so nothing redelivers forever.
-		log("warn", "queue batch for an unknown queue acknowledged", { queue: batch.queue, size: batch.messages.length });
+		// A queue without a consumer here. The Worker gets batches only of the queues in its config, so the
+		// vars do not agree with the consumers. Acknowledge so nothing redelivers forever.
+		log("error", "queue batch for an unknown queue acknowledged", { queue: batch.queue, size: batch.messages.length });
 		batch.ackAll();
 	},
 

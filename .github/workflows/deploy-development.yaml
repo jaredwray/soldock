@@ -1,20 +1,17 @@
 name: deploy-development
 
 # Continuous deployment: each push to main builds the SPA, applies the D1 migrations, deploys the
-# dock Worker to each instance in the development Cloudflare account, then runs the smoke check
-# against its host. The hosts are the custom domains in apps/dock/wrangler.jsonc.
+# dock Worker to the development environment (`soldock-dock-dev`, wrangler `--env development`),
+# then runs the smoke check against its host, https://work.soldock.org. The host is the custom domain
+# in apps/dock/wrangler.jsonc. Production deploys come later. The dock Worker has no other
+# deployment environment.
 #
-# | GitHub environment | wrangler env | Worker | Host |
-# | development | development | soldock-dock-dev | https://work.soldock.org |
-# | rivus | rivus | soldock-dock-rivus | https://work.rivus.ai |
-#
-# Production deploys come later. The dock Worker has no other deployment environment.
-#
-# This workflow uses Cloudflare tokens, so it follows the workflow rules in docs/self-hosting.md:
+# This workflow uses the development Cloudflare token, so it follows the workflow rules in
+# docs/self-hosting.md:
 # - push to main and workflow_dispatch are the only triggers.
-# - Each job uses a GitHub environment that accepts runs of main only.
+# - The job uses the development environment, which accepts runs of main only.
 # - The checkout keeps no credentials and checks out only github.sha.
-# - The workflow has no inputs. The matrix values are fixed in this file.
+# - The workflow has no inputs.
 
 on:
   push:
@@ -30,26 +27,19 @@ concurrency:
 
 jobs:
   deploy:
-    name: deploy (${{ matrix.environment }})
+    name: deploy
     runs-on: ubuntu-latest
-    strategy:
-      # Each instance deploys alone. A failure of one instance does not stop the deploy of the other.
-      fail-fast: false
-      matrix:
-        # The GitHub environment and the wrangler env have the same name.
-        environment: [development, rivus]
     environment:
-      name: ${{ matrix.environment }}
+      name: development
       url: ${{ steps.deploy.outputs.url }}
     permissions:
       contents: read
     timeout-minutes: 15
     env:
       WRANGLER_SEND_METRICS: "false"
-      DEPLOY_ENV: ${{ matrix.environment }}
     steps:
       # This step runs first and gets no secret values, only whether each secret is set.
-      - name: Check the run and the environment configuration
+      - name: Check the run and the development configuration
         env:
           HAS_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
           HAS_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
@@ -63,7 +53,7 @@ jobs:
           [[ "$HAS_ACCOUNT_ID" == "true" ]] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
           if (( ${#missing[@]} > 0 )); then
             printf -v list '%s, ' "${missing[@]}"
-            echo "::error::The $DEPLOY_ENV environment does not have: ${list%, }. See docs/self-hosting.md."
+            echo "::error::The development environment does not have: ${list%, }. See docs/self-hosting.md."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,16 +86,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          # DIRECTORY is the binding. wrangler finds the database name of this env in wrangler.jsonc.
-          if pnpm exec wrangler d1 info DIRECTORY --env "$DEPLOY_ENV" > /dev/null 2>&1; then
-            pnpm run "migrate:$DEPLOY_ENV"
+          if pnpm exec wrangler d1 info soldock-directory --env development > /dev/null 2>&1; then
+            pnpm run migrate:development
           else
             echo "::notice::The D1 database does not exist yet. The deploy creates it, and the next step migrates it."
           fi
 
       # wrangler provisions the D1 database, the R2 bucket and the queues by name on the first deploy.
       # It also attaches the custom domain, and fails if it cannot.
-      - name: Deploy the dock Worker to ${{ matrix.environment }}
+      - name: Deploy the dock Worker to development
         id: deploy
         working-directory: apps/dock
         env:
@@ -113,13 +102,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
         run: |
-          pnpm run "deploy:$DEPLOY_ENV"
+          pnpm run deploy:development
           # The deploy output shows the custom domain as "work.soldock.org (custom domain)".
           host=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]?
             | capture("^(?<host>[a-z0-9.-]+) \\(custom domain\\)$").host] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
           version=$(jq -rn '[inputs | select(.type == "deploy") | .version_id] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
           if [[ -z "$host" ]]; then
-            echo "::error::The deploy output has no custom domain. Make sure that env.$DEPLOY_ENV in apps/dock/wrangler.jsonc has a route with custom_domain: true."
+            echo "::error::The deploy output has no custom domain. Make sure that env.development in apps/dock/wrangler.jsonc has a route with custom_domain: true."
             exit 1
           fi
           echo "url=https://$host" >> "$GITHUB_OUTPUT"
@@ -130,9 +119,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm run "migrate:$DEPLOY_ENV"
+        run: pnpm run migrate:development
 
-      - name: Smoke check the ${{ matrix.environment }} host
+      - name: Smoke check the development host
         id: smoke
         env:
           URL: ${{ steps.deploy.outputs.url }}
@@ -153,7 +142,7 @@ jobs:
             *) setup_line="unknown" ;;
           esac
           {
-            echo "## Deploy of $DEPLOY_ENV"
+            echo "## Development deploy"
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Worker version: \`${VERSION:-unknown}\`"

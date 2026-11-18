@@ -100,10 +100,10 @@ pnpm run deploy:check                       # wrangler deploy --dry-run for deve
 scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, against wrangler dev
 ```
 
-`deploy-development.yaml` runs `pnpm run deploy:development` and `pnpm run deploy:rivus`, with the
-remote D1 migrations, in GitHub Actions on each push to `main`. Then it smoke checks
-`https://work.soldock.org` and `https://work.rivus.ai`. Never run them from a developer machine or an
-agent session.
+`deploy-development.yaml` runs `pnpm run deploy:development` and the remote D1 migrations in GitHub
+Actions on each push to `main`, then smoke checks `https://work.soldock.org`. `deploy-rivus.yaml` does
+the same with `pnpm run deploy:rivus`, and smoke checks `https://work.rivus.ai`. Never run them from a
+developer machine or an agent session.
 [`docs/development.md`](../../docs/development.md) shows how to run the whole product locally,
 with injected inbound mail.
 

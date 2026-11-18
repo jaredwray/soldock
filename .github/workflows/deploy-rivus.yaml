@@ -1,0 +1,151 @@
+name: deploy-rivus
+
+# Continuous deployment: each push to main builds the SPA, applies the D1 migrations, deploys the
+# dock Worker to the rivus environment (`soldock-dock-rivus`, wrangler `--env rivus`), then runs the
+# smoke check against its host, https://work.rivus.ai. The host is the custom domain in
+# apps/dock/wrangler.jsonc. The rivus Worker is in the development account, with its own D1, R2 and
+# queues. deploy-development.yaml deploys the development Worker.
+#
+# This workflow uses a Cloudflare token, so it follows the workflow rules in docs/self-hosting.md:
+# - push to main and workflow_dispatch are the only triggers.
+# - The job uses the rivus environment, which accepts runs of main only.
+# - The checkout keeps no credentials and checks out only github.sha.
+# - The workflow has no inputs.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# Two merges never interleave. A queued run waits, and then deploys the newest commit.
+concurrency:
+  group: deploy-rivus
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: rivus
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      # This step runs first and gets no secret values, only whether each secret is set.
+      - name: Check the run and the rivus configuration
+        env:
+          HAS_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Deploy main only."
+            exit 1
+          fi
+          missing=()
+          [[ "$HAS_API_TOKEN" == "true" ]] || missing+=("secret CLOUDFLARE_API_TOKEN")
+          [[ "$HAS_ACCOUNT_ID" == "true" ]] || missing+=("secret CLOUDFLARE_ACCOUNT_ID")
+          if (( ${#missing[@]} > 0 )); then
+            printf -v list '%s, ' "${missing[@]}"
+            echo "::error::The rivus environment does not have: ${list%, }. See docs/self-hosting.md."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
+          package-manager-cache: false
+      # Only the dock Worker, the SPA and the workspace packages that they use, and no secrets in this step.
+      - run: sfw pnpm install --frozen-lockfile --filter "@soldock/dock..." --filter "@soldock/web..."
+
+      # The dock Worker serves apps/web/dist as its static assets.
+      - name: Build the SPA (apps/web)
+        run: pnpm build
+
+      # Migrations only add, so the running Worker keeps working with the new schema. On the first
+      # deploy the database does not exist yet: the deploy creates it, and the step after the deploy
+      # applies the migrations. Any other failure here stops the deploy.
+      - name: Apply the D1 migrations before the deploy
+        working-directory: apps/dock
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if pnpm exec wrangler d1 info soldock-rivus-directory --env rivus > /dev/null 2>&1; then
+            pnpm run migrate:rivus
+          else
+            echo "::notice::The D1 database does not exist yet, or the token cannot read it. The deploy creates it, and the next step migrates it."
+          fi
+
+      # wrangler provisions the D1 database, the R2 bucket and the queues by name on the first deploy.
+      # It also attaches the custom domain, and fails if it cannot.
+      - name: Deploy the dock Worker to rivus
+        id: deploy
+        working-directory: apps/dock
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: |
+          pnpm run deploy:rivus
+          # The deploy output shows the custom domain as "work.rivus.ai (custom domain)".
+          host=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]?
+            | capture("^(?<host>[a-z0-9.-]+) \\(custom domain\\)$").host] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          version=$(jq -rn '[inputs | select(.type == "deploy") | .version_id] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          if [[ -z "$host" ]]; then
+            echo "::error::The deploy output has no custom domain. Make sure that env.rivus in apps/dock/wrangler.jsonc has a route with custom_domain: true."
+            exit 1
+          fi
+          echo "url=https://$host" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Apply the D1 migrations after the deploy
+        working-directory: apps/dock
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm run migrate:rivus
+
+      - name: Smoke check the rivus host
+        id: smoke
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: scripts/smoke-check.sh "$URL"
+
+      - name: Write the job summary
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          VERSION: ${{ steps.deploy.outputs.version }}
+          SMOKE: ${{ steps.smoke.outcome }}
+        run: |
+          # GET /auth/setup is public. Before setup it returns setup_needed: true.
+          setup=$(curl --silent --max-time 10 "$URL/auth/setup" | jq -r '.setup_needed | tostring' 2> /dev/null || true)
+          case "$setup" in
+            true) setup_line="not done. Open $URL and follow the page (docs/self-hosting.md, First-run setup)." ;;
+            false) setup_line="done" ;;
+            *) setup_line="unknown" ;;
+          esac
+          {
+            echo "## Rivus deploy"
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Worker version: \`${VERSION:-unknown}\`"
+            echo "- Host: $URL"
+            echo "- Smoke check: $SMOKE"
+            echo "- First-run setup: $setup_line"
+          } >> "$GITHUB_STEP_SUMMARY"

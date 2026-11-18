@@ -1,7 +1,7 @@
 // The dock Worker: the whole backend, served from one origin.
-// The top level is production. `env.development` is the development Worker at work.soldock.org, and
-// `env.rivus` is the rivus Worker at work.rivus.ai. deploy-development.yaml deploys both on each push to
-// main. The dock Worker has no other deployment environments. test/config.test.ts checks that all of them
+// The top level is production. `env.development` is the development Worker at work.soldock.org, which
+// deploy-development.yaml deploys on each push to main. `env.rivus` is the rivus Worker at work.rivus.ai,
+// which deploy-rivus.yaml deploys on each push to main. The dock Worker has no other deployment environments. test/config.test.ts checks that all of them
 // declare the same bindings.
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
 // Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
@@ -164,7 +164,7 @@
 		},
 		// The rivus instance: a separate Soldock for the rivus.ai mail domain, in the development account.
 		// It shares that account with env.development, so each D1, R2 and queue name starts with
-		// soldock-rivus-. A shared name would share the data, and a queue has only one consumer.
+		// soldock-rivus-. Two Workers that use one name use the same data, and a queue has only one consumer.
 		// Durable Objects belong to the Worker, so the Worker name keeps them apart.
 		"rivus": {
 			"name": "soldock-dock-rivus",

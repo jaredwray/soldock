@@ -10,7 +10,7 @@ token.
 | Environment | Worker | Host | Deployed by |
 | --- | --- | --- | --- |
 | `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
-| `rivus` | `soldock-dock-rivus` (`env.rivus` in `apps/dock/wrangler.jsonc`) | `work.rivus.ai` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
+| `rivus` | `soldock-dock-rivus` (`env.rivus` in `apps/dock/wrangler.jsonc`) | `work.rivus.ai` | [`deploy-rivus.yaml`](../.github/workflows/deploy-rivus.yaml), on each push to `main` |
 | `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
 
 The domains in this document are the domains of this instance. On your own instance, use your own
@@ -25,8 +25,14 @@ The `rivus` environment is a second Soldock for the `rivus.ai` mail domain, with
 in the development account, and it gets the same deploys as development. Two Workers in one account
 that use the same D1, R2 or queue name use the same data. So each resource name of `rivus` starts with
 `soldock-rivus-`, and the vars `MAIL_INBOUND_QUEUE` and `WEBHOOKS_QUEUE` give its queue names.
-`test/config.test.ts` prevents a shared name. The API permissions apply to the whole account, so a
-development token can also get access to the `rivus` data.
+`apps/dock/test/config.test.ts` prevents a shared name. The API permissions apply to the whole account,
+so a development token can also get access to the `rivus` data.
+
+The two Workers also share Email Service. Each Worker can send from each domain that the account
+onboards to Email Service. An owner or an admin of one instance can add the mail domain of the other
+instance under **Admin › Email domains**, and send mail as that domain. The `send_email` binding
+cannot limit the sender to one domain: `allowed_sender_addresses` takes full addresses only. So give
+the owner and admin roles of `rivus` only to people that you trust with `soldock.org` mail.
 
 ## Prerequisites
 
@@ -104,13 +110,14 @@ Read each change to such a workflow against these rules before you merge it.
 
 Make one API token for each environment (**My Profile › API Tokens › Create Token**). Limit it to
 the account and the zone of that environment. The `development` token has the permissions of each
-row whose workflow exists on `main`. The `rivus` token has the permissions of the
-`deploy-development.yaml` row, with the `rivus.ai` zone in place of `soldock.org`. You can put one
-token in both environments. Then that token needs the zone permissions on both zones.
+row whose workflow exists on `main`, except `deploy-rivus.yaml`. The `rivus` token has the permissions
+of the `deploy-rivus.yaml` row. You can put one token in both environments. Then that token needs the
+zone permissions on both zones.
 
 | Workflow | Permissions |
 | --- | --- |
 | `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). Zone › Workers Routes: Edit on `soldock.org` (the deploy attaches the custom domain `work.soldock.org`). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on `soldock.org` and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `deploy-rivus.yaml` | The permissions of the `deploy-development.yaml` row, with the `rivus.ai` zone in place of `soldock.org`: Zone › Workers Routes: Edit on `rivus.ai` (the deploy attaches the custom domain `work.rivus.ai`) |
 | `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
 | The `provision` workflow (not built yet) | Also Workers KV Storage edit |
 | Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
@@ -123,15 +130,10 @@ adds a binding, it adds the permission to this table too.
 
 - Each push to `main` runs `deploy-development.yaml`. To run it again, open **Actions ›
   deploy-development › Run workflow** and select `main`.
-- The workflow has one job for each environment: `deploy (development)` and `deploy (rivus)`. Each
-  job uses the secrets of its environment, and deploys and checks its own host. A failure in one job
-  does not stop the other job.
-- Until the secrets of an environment exist, its job stops at its first step, and the error names each
-  missing secret.
-- After the deploy, each job sends a smoke check to its host, `https://work.soldock.org` or
-  `https://work.rivus.ai` ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and
-  the environment page show the host. The job reads the host from the custom domain in the deploy
-  output.
+- Until the secrets exist, the run stops at its first step, and the error names each missing secret.
+- After the deploy, the run sends a smoke check to the development host, `https://work.soldock.org`
+  ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and the `development`
+  environment page show the host. The run reads the host from the custom domain in the deploy output.
 - On the first deploy with the custom domain, the host can take some minutes to answer, because
   Cloudflare makes its DNS record and its certificate. The smoke check waits up to five minutes.
 - To run the same smoke check against the built Worker on your computer:
@@ -140,6 +142,17 @@ adds a binding, it adds the permission to this table too.
   pnpm --filter @soldock/dock dev            # wrangler dev, on http://localhost:8787
   scripts/smoke-check.sh http://localhost:8787
   ```
+
+## The rivus deploy
+
+[`deploy-rivus.yaml`](../.github/workflows/deploy-rivus.yaml) deploys the `rivus` Worker on each push
+to `main`, with the same steps as the development deploy. It is a separate workflow, with its own run,
+its own secrets and a smoke check of `https://work.rivus.ai`.
+
+- To run it again, open **Actions › deploy-rivus › Run workflow** and select `main`.
+- A failure of one deploy does not stop the other deploy.
+- Until the secrets of the `rivus` environment exist, the run stops at its first step, and the error
+  names each missing secret.
 
 ## Mail
 

@@ -125,7 +125,7 @@ describe("wrangler.jsonc", () => {
 		expect(config.preview_urls).toBe(false);
 		expect(worker.workers_dev).toBe(false);
 		expect(worker.preview_urls ?? config.preview_urls).toBe(false);
-		// deploy-development.yaml smoke checks the one custom domain in the deploy output.
+		// The deploy workflow of each env smoke checks the one custom domain in the deploy output.
 		const routes = worker.routes ?? [];
 		expect(routes).toHaveLength(1);
 		expect(routes[0]?.custom_domain).toBe(true);
@@ -139,8 +139,8 @@ describe("wrangler.jsonc", () => {
 		expect(wranglerConfig).not.toMatch(/"account_id"/);
 	});
 
-	// queue() selects the consumer by the queue name that the vars give. A var that names a different
-	// queue acknowledges each batch of the real queue, and the mail is lost.
+	// queue() selects the consumer by the queue name that the vars give. If a var names a different
+	// queue, the Worker acknowledges each batch of the real queue and loses the mail.
 	it.each([["production", config as WorkerConfig], ...envs])("names the queues of %s in its vars", (_name, worker) => {
 		const producer = (binding: string) => worker.queues?.producers.find((item) => item.binding === binding)?.queue;
 		expect(worker.queues?.consumers).toEqual([

@@ -161,8 +161,8 @@ the instance of this project, so use your own domains.
 1. Get a Cloudflare account with the Workers Paid plan. Add your mail domain to the account as an
    apex zone.
 2. Fork this repository. In `apps/dock/wrangler.jsonc`, replace the hosts of this project with your
-   own dock host. Remove `env.rivus`, and remove `rivus` from the matrix in
-   `.github/workflows/deploy-development.yaml`. They are a second instance of this project.
+   own dock host. Remove `env.rivus`. Delete `.github/workflows/deploy-rivus.yaml`. They are a second
+   instance of this project.
 3. Do the [GitHub setup](docs/self-hosting.md#github-setup): protect `main`, create the `development`
    environment, and add the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets.
    [Token permissions](docs/self-hosting.md#token-permissions) lists the permissions of the token.

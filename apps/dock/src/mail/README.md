@@ -469,6 +469,10 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 
 ## Data inventory
 
+The queue names in this README are the names of production and development. The var `MAIL_INBOUND_QUEUE` gives
+the name to the Worker. The `rivus` Worker uses names that start with `soldock-rivus-`
+([dock README](../../README.md#bindings)).
+
 | State | Where | Notes |
 | --- | --- | --- |
 | Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`) |
