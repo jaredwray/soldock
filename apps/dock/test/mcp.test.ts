@@ -43,7 +43,8 @@ describe("the MCP endpoint", () => {
 		const known = await initialize(bot.key);
 		expect(known.body?.result).toMatchObject({
 			protocolVersion: "2025-06-18",
-			capabilities: { tools: {} },
+			// ChatGPT asks for events/list only when the server names `events` here.
+			capabilities: { tools: {}, events: {} },
 			serverInfo: { name: "soldock" },
 		});
 		expect(instructionsOf(known.body)).toContain("bot@dock.test");
@@ -256,7 +257,7 @@ describe("the MCP endpoint with protocol 2026-07-28", () => {
 		expect(result).toMatchObject({
 			resultType: "complete",
 			supportedVersions: [MODERN_MCP, "2025-11-25", "2025-06-18", "2025-03-26"],
-			capabilities: { tools: {}, resources: { subscribe: true } },
+			capabilities: { tools: {}, resources: { subscribe: true }, events: {} },
 			cacheScope: "private",
 			_meta: { "io.modelcontextprotocol/serverInfo": { name: "soldock" } },
 		});

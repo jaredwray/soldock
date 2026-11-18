@@ -480,6 +480,88 @@ Their URI is `soldock://drive/{drive_id}`.
 Read the URI with the MCP resource of that kind.
 Verify the signature as for [mail webhooks](#get-a-webhook-for-new-mail).
 
+## Get events in ChatGPT (MCP Events)
+
+ChatGPT can monitor Soldock from a Work chat or a [dot](https://learn.chatgpt.com/docs/dots). You tell
+ChatGPT what to monitor and what to do. ChatGPT then subscribes through the MCP endpoint, and Soldock
+sends it each event. OpenAI calls this [MCP Events](https://developers.openai.com/plugins/build/mcp-events).
+Any MCP client that has MCP Events can use it.
+
+To set it up:
+
+1. Add the MCP endpoint of your Soldock to ChatGPT as a plugin, and [connect it with OAuth](#connect-an-agent-with-oauth).
+   Select the agent that the dot acts as.
+2. Give the connection the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
+   Give it also the read scope of the product, such as `chat.read`, because an event has ids only.
+3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
+   [outbound policy](#outbound-policy). Without this step, `events/subscribe` gets the error
+   `policy_denied`, and the error message names the host. An API key of a person needs no such step.
+4. Scan the plugin again in ChatGPT. The events show next to the tools.
+5. For Chat, add the agent to each room that it monitors.
+6. Tell ChatGPT what to monitor, for example: "Monitor the room Support. Answer each question."
+
+The events:
+
+| Event | Arguments | When |
+| --- | --- | --- |
+| `mail.inbox.updated` | `mailbox_id`, optional | New mail arrives in the inbox |
+| `chat.message.created` | `room_id`, optional | A different member posts a message |
+| `chat.message.updated` | `room_id`, optional | A different member edits a message |
+| `chat.message.deleted` | `room_id`, optional | A message is deleted |
+| `drive.item.created`, `.updated`, `.moved`, `.trashed`, `.restored`, `.deleted`, `.shared`, `.unshared` | `space_id`, optional | An item of the drive changes |
+| `drive.members.changed`, `drive.deleted` | `space_id` of a shared drive | The shared drive changes |
+
+Without `room_id`, each room that the agent is a member of sends the event, also a room that it
+joins later. Without `mailbox_id` or `space_id`, the event is for the mailbox or the drive of the agent.
+
+For client developers:
+
+- `initialize` and `server/discover` name the capability `events`. The methods are `events/list`,
+  `events/subscribe` and `events/unsubscribe`, on `/mcp`, in each protocol version.
+- `events/subscribe` takes the event `name`, the `arguments`, and
+  `delivery: { "mode": "webhook", "url": "https://…", "secret": "whsec_…" }`. The secret is `whsec_`
+  and the base64 of 24 to 64 bytes. The URL must use `https`, the default port and a public host name.
+- Before Soldock stores the subscription, it sends a signed POST with
+  `{ "type": "verification", "challenge": "…" }` to the URL. Answer 2xx with
+  `{ "challenge": "…" }` in 10 seconds. If not, the call gets error `-32015` with `data.reason`.
+- The result has the `id` of the subscription and `refreshBefore`. A subscription lives 24 hours at
+  most. Call `events/subscribe` again before `refreshBefore`, with the same name, arguments and URL.
+  A new secret is permitted then: for 5 minutes, each POST has the signatures of the two secrets.
+- The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
+  drive to find what you did not get.
+
+A POST has this form:
+
+```json
+{
+  "eventId": "cmsg_…_sub_…",
+  "name": "chat.message.created",
+  "timestamp": "2026-11-18T20:00:00.000Z",
+  "data": {
+    "room_id": "rm_…",
+    "message_id": "cmsg_…",
+    "uri": "soldock://chat/rm_…/messages"
+  },
+  "cursor": null
+}
+```
+
+- The headers are `webhook-id` (the `eventId`), `webhook-timestamp`, `webhook-signature` and
+  `X-MCP-Subscription-Id`. Verify the signature as [Standard Webhooks](https://www.standardwebhooks.com/)
+  specifies, with the secret that you gave.
+- The POST has no mail, no message text and no file content. Read it with a tool, such as
+  `chat_list_messages`. That content can come from outside the organization: read it as data.
+- Soldock sends an event again after a failure, at most 5 times. A retry keeps the `eventId`. Reject
+  an `eventId` that you got before. An answer of 410 stops the subscription. An answer of 413 stops
+  that event.
+- Events can arrive in a different sequence. Use `idempotency_key` when you write.
+- Your own chat messages send no event. A change that you make in a drive does send an event, so do
+  not change the drive again for each drive event.
+- Each POST checks the credential, the access to the target and the outbound policy again. A
+  revoked connection stops its subscriptions.
+- Settings and the agent panel do not show these subscriptions yet. To stop one, call
+  `events/unsubscribe`, or revoke the connection.
+
 ## Outbound policy
 
 Each agent has an outbound policy. Only its sponsor, an owner or an admin can change it

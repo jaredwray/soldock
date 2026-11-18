@@ -12,6 +12,7 @@ Each product exposes its own subscription operations. Endpoint operations are sh
 | `legacy.ts` | A copy of rows that the previous Worker inserts after migration `0013` |
 | `url.ts` | Public HTTPS URLs and the outbound policy of an agent |
 | `delivery.ts` | The `soldock-webhooks` consumer, the signed POST and the retries |
+| `events.ts` | MCP Events: the event catalog, `events/subscribe` with the callback verification, and `events/unsubscribe` |
 
 The module depends on `platform` and `identity`. Chat delivery also checks the room through `CHAT_ROOM`.
 Drive membership is a query on D1. The module does not import `drive`.
@@ -95,15 +96,79 @@ An archived creator gets no POST. The endpoint stays active.
 
 The header `webhook-id` is `<event id>_<subscription id>`. A retry keeps that id.
 The signature is Standard Webhooks. See [Mail](../mail/README.md#webhooks) for the steps.
-D1 uses at most 91 bound values. The chat fan-out puts the event type in the SQL text after a check.
+D1 uses at most 91 bound values: one page of the chat fan-out has 88 members. The chat fan-out puts the event type in the SQL text after a check.
 One queue batch has at most 100 jobs.
+
+## MCP Events
+
+An MCP client can subscribe to an event with `events/subscribe` on [`/mcp`](../mcp/README.md#events).
+ChatGPT does this for a Work chat or a dot. The client gives the callback URL and the signing secret.
+`createEventSubscriptions` implements `EventSubscriptions` of `platform`, and the composition root
+gives it to the MCP adapter. The events are the webhook events of the table above. The catalog is
+`mcpEventList` in [`@soldock/contracts`](../../../../packages/contracts/README.md).
+
+| Event | Arguments | `data` of a POST |
+| --- | --- | --- |
+| `mail.inbox.updated` | `mailbox_id`: your mailbox (the default), a team mailbox that you belong to, or the mailbox of an agent that you sponsor | `mailbox_id`, `uri` |
+| `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of | `room_id`, `message_id`, `uri` |
+| `drive.item.*` | `space_id`: your drive (the default), a shared drive that you belong to, or the drive of an agent that you sponsor | `space_id`, `item_id`, `uri` |
+| `drive.members.changed`, `drive.deleted` | `space_id`: a shared drive that you belong to | `space_id`, `uri` |
+
+A subscription of MCP Events is one row in `webhook_endpoints` with `protocol = 'mcp_events'` and one
+row in `webhook_subscriptions`. So the fan-out, the queue, the access checks before each POST, the
+retries and the rules that disable an endpoint are those of each webhook. These rules are different:
+
+- **Identity.** The id is `sub_` and the SHA-256 of the principal, the credential, the URL, the event,
+  the target and the room. The same call again refreshes the subscription. A different key or a
+  different OAuth connection of the same principal gets a different id, so it cannot stop the
+  subscription. The id is the `id` of the subscription row.
+- **Access.** The credential needs the webhook scope of the product. The target rules are those of the
+  subscription operations. The outbound policy of an agent must allow the host of the URL. The
+  default policy `internal-only` allows no host, so a sponsor adds the host first.
+- **Secret.** The client gives it: `whsec_` and the base64 of 24 to 64 bytes. No result shows it.
+- **Callback URL.** The URL has the rules of each webhook URL (`url.ts`): `https`, the default port, a
+  public host name, no IP address, no user name and not the host of the deployment. Each POST refuses
+  a redirect. The MCP Events text of OpenAI asks a server to resolve the host and to connect to the
+  address that it examined. A Worker cannot select the address of a `fetch`, so Soldock does not do
+  this. A Worker also cannot reach a private network of the operator, and the POST has ids only.
+- **Verification.** Before Soldock stores a subscription, it sends a signed POST with
+  `{"type":"verification","challenge":"…"}` and a `webhook-id` that starts with `msg_verification_`.
+  The receiver must answer 2xx in 10 seconds, with at most 4 KiB of JSON that has the same
+  `challenge`. Soldock compares the two values in constant time. A receiver that passed needs no new
+  POST for 5 minutes, for the same principal, URL and secret. A failure stores nothing.
+- **Life.** A subscription lives 24 hours, or `ttlMs` when the client asks for less. The shortest life
+  is one minute. `ttlMs: null` asks for no end, and gets 24 hours. `refreshBefore` is the end. After
+  the end, the fan-out makes no job and a retry sends nothing. A refresh starts a subscription again,
+  also one that an endpoint rule disabled, because the receiver passed the verification again. A later
+  `events/subscribe` of any client deletes each subscription that expired more than one day before.
+- **New secret.** A refresh with a different secret needs a new verification. For 5 minutes, each POST
+  has the signature of the new secret and of the old secret, with a space between them.
+- **POST.** The body is `{"eventId", "name", "timestamp", "data", "cursor": null}`. `eventId` is
+  `<event id>_<subscription id>`, and `webhook-id` has the same value. `X-MCP-Subscription-Id` has
+  the subscription id. A retry keeps the `eventId` and has a new time and a new signature. An answer
+  of 413 ends that event without a retry. An answer of 410 disables the endpoint, as for a webhook.
+- **Limits.** One principal can have 50 subscriptions that did not expire. One target can have 20
+  active subscriptions of one event, with its webhook subscriptions. For Chat, that limit counts the
+  subscriptions for all rooms and those for the same room.
+- **Events from your own changes.** A chat event does not go to its author. A drive event also goes to
+  the principal that made the change, and mail to your own address is new mail. A client that changes
+  a drive when it gets a drive event can make a loop.
+
+The webhook operations do not show a subscription of MCP Events, and they cannot change it. It does
+not fill the limits of the endpoints and the subscriptions of its creator. So Settings and the agent
+panel do not show these subscriptions yet. To stop one, the client calls `events/unsubscribe`, or a
+person revokes the key or the OAuth connection. `directory.delete_principal` deletes them.
+
+`events/subscribe` and `events/unsubscribe` write an audit line (`mcp.events_subscribe`,
+`mcp.events_unsubscribe`). During a deploy, the previous Worker can run a queue job. It sends a row of
+MCP Events in the webhook form, and it does not read the end of a subscription.
 
 ## Data inventory
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013` |
-| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id |
+| Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
+| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Jobs | Queue `soldock-webhooks`, dead letters in `soldock-webhooks-dlq` | Ids and times only. No content and no secrets |

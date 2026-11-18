@@ -25,6 +25,7 @@ import {
 	type EndpointDisabledReason,
 	type EndpointRow,
 	getDelivery,
+	isExpired,
 	joinsWaitingRetry,
 	recordDelivery,
 	recordFailedAttempt,
@@ -269,20 +270,25 @@ async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
 	);
 }
 
-/** One page stays within the D1 bind limit and the queue batch limit. */
+/**
+ * One page stays within the D1 bind limit and the queue batch limit. A subscription with a room gets
+ * only the events of that room. An expired subscription gets nothing.
+ */
 async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 	const eventType = job.eventType ?? "chat.message.created";
 	if (!CHAT_EVENTS.has(eventType)) return;
-	for (let start = 0; start < job.recipients.length; start += 90) {
-		const recipients = job.recipients.slice(start, start + 90);
+	const now = new Date().toISOString();
+	for (let start = 0; start < job.recipients.length; start += 88) {
+		const recipients = job.recipients.slice(start, start + 88);
 		const memberships = new Map(recipients.map((member) => [member.id, member.membershipId]));
 		const { results } = await env.DIRECTORY.prepare(
 			`SELECT s.id, s.target_id FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
 			WHERE s.status = 'active' AND e.status = 'active' AND s.domain = 'chat' AND s.event_type = '${eventType}'
-			AND s.sequence <= ? AND s.target_id IN (${recipients.map(() => "?").join(",")})`,
+			AND s.sequence <= ? AND (s.expires_at IS NULL OR s.expires_at > ?) AND (s.room_id IS NULL OR s.room_id = ?)
+			AND s.target_id IN (${recipients.map(() => "?").join(",")})`,
 		)
-			.bind(job.subscriptionSequence, ...recipients.map((member) => member.id))
+			.bind(job.subscriptionSequence, now, job.roomId, ...recipients.map((member) => member.id))
 			.all<{ id: string; target_id: string }>();
 		for (let offset = 0; offset < results.length; offset += 100) {
 			await env.WEBHOOKS.sendBatch(
@@ -398,6 +404,8 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	if (!pair) return;
 	if (pair.subscription.status !== "active" || pair.endpoint.status !== "active") return;
 	if (pair.subscription.target_id !== targetOf(job)) return;
+	// A retry can run after the end of the subscription.
+	if (isExpired(pair.subscription, Date.now())) return;
 	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(pair.subscription, job.eventId, Date.now())) return;
 	const memberIds = job.kind === "drive_delivery" ? job.memberIds : undefined;
 	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds);
@@ -426,7 +434,9 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 		return;
 	}
 	const delay = RETRY_DELAYS_S[attempt - 1];
-	if (attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
+	// MCP Events: a receiver that answers 413 refuses this event for good, so a retry has no use.
+	const refused = pair.endpoint.protocol === "mcp_events" && result === "http_413";
+	if (!refused && attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
 		await env.WEBHOOKS.send({ ...job, attempt: attempt + 1 } satisfies DeliveryJob, { delaySeconds: delay });
 		await recordFailedAttempt(
 			db,
@@ -485,7 +495,47 @@ function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob):
 	});
 }
 
-function bodyOf(subscription: SubscriptionRow, job: DeliveryJob): string {
+/**
+ * The body of a POST of MCP Events. `data` has the fields of the payload schema of the event. It has ids
+ * and a URI only: no mail, no message text and no file content.
+ */
+function eventBody(subscription: SubscriptionRow, job: DeliveryJob, id: string): string {
+	let data: Record<string, string>;
+	if (job.kind === "delivery") {
+		data = {
+			mailbox_id: job.mailboxId,
+			uri: expandTemplate(resources["mail.inbox"].uriTemplate, { mailbox_id: job.mailboxId }),
+		};
+	} else if (job.kind === "chat_delivery") {
+		data = {
+			room_id: job.roomId,
+			message_id: job.messageId ?? job.eventId,
+			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
+		};
+	} else if (job.eventType.startsWith("drive.item.")) {
+		data = {
+			space_id: job.spaceId,
+			item_id: job.itemId,
+			uri: expandTemplate(resources["drive.item"].uriTemplate, { space_id: job.spaceId, item_id: job.itemId }),
+		};
+	} else {
+		data = {
+			space_id: job.spaceId,
+			uri: expandTemplate(resources["drive.space"].uriTemplate, { drive_id: job.spaceId }),
+		};
+	}
+	return JSON.stringify({
+		eventId: id,
+		name: subscription.event_type,
+		timestamp: new Date(job.occurredAt).toISOString(),
+		data,
+		// These events have no replay.
+		cursor: null,
+	});
+}
+
+function bodyOf(endpoint: EndpointRow, subscription: SubscriptionRow, job: DeliveryJob, id: string): string {
+	if (endpoint.protocol === "mcp_events") return eventBody(subscription, job, id);
 	if (job.kind === "delivery") return webhookBody({ id: subscription.id, mailbox_id: job.mailboxId }, job.occurredAt);
 	if (job.kind === "chat_delivery") return chatBody(subscription, job);
 	return driveBody(subscription, job);
@@ -500,8 +550,18 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
 	return `v1,${bytesToBase64(await hmacSha256(key, `${id}.${timestamp}.${body}`))}`;
 }
 
-/** The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets always win. */
-async function postHeaders(endpoint: EndpointRow, id: string, timestamp: string, body: string): Promise<Headers> {
+/**
+ * The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets
+ * always win. A POST of MCP Events names its subscription. After a refresh with a new secret, it has the
+ * signature of the old secret too, for a short time.
+ */
+async function postHeaders(
+	endpoint: EndpointRow,
+	subscription: SubscriptionRow,
+	id: string,
+	timestamp: string,
+	body: string,
+): Promise<Headers> {
 	const headers = new Headers();
 	if (endpoint.header_name !== null && endpoint.header_value !== null) {
 		headers.set(endpoint.header_name, endpoint.header_value);
@@ -511,7 +571,16 @@ async function postHeaders(endpoint: EndpointRow, id: string, timestamp: string,
 	headers.set("user-agent", "Soldock-Webhooks/1");
 	headers.set("webhook-id", id);
 	headers.set("webhook-timestamp", timestamp);
-	headers.set("webhook-signature", await webhookSignature(endpoint.secret, id, timestamp, body));
+	const signatures = [await webhookSignature(endpoint.secret, id, timestamp, body)];
+	if (
+		endpoint.previous_secret !== null &&
+		endpoint.previous_secret_until !== null &&
+		Date.parse(endpoint.previous_secret_until) > Date.now()
+	) {
+		signatures.push(await webhookSignature(endpoint.previous_secret, id, timestamp, body));
+	}
+	headers.set("webhook-signature", signatures.join(" "));
+	if (endpoint.protocol === "mcp_events") headers.set("x-mcp-subscription-id", subscription.id);
 	return headers;
 }
 
@@ -524,14 +593,14 @@ async function post(
 	subscription: SubscriptionRow,
 	job: DeliveryJob,
 ): Promise<"ok" | "gone" | string> {
-	const body = bodyOf(subscription, job);
 	const id = `${job.eventId}_${subscription.id}`;
+	const body = bodyOf(endpoint, subscription, job, id);
 	const timestamp = String(Math.floor(Date.now() / 1000));
 	let response: Response;
 	try {
 		response = await fetch(endpoint.url, {
 			method: "POST",
-			headers: await postHeaders(endpoint, id, timestamp, body),
+			headers: await postHeaders(endpoint, subscription, id, timestamp, body),
 			body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(WEBHOOK_LIMITS.timeoutMs),

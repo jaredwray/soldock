@@ -10,6 +10,7 @@ import {
 	protectedResourceMetadataUrl,
 } from "../identity/index.ts";
 import {
+	type EventSubscriptions,
 	type HandlerMap,
 	log,
 	MAX_REQUEST_BYTES,
@@ -19,6 +20,7 @@ import {
 	readBodyText,
 	type WatcherMap,
 } from "../platform/index.ts";
+import { listEvents, subscribeEvent, unsubscribeEvent } from "./events.ts";
 import { listen } from "./listen.ts";
 import {
 	type CacheHint,
@@ -100,8 +102,13 @@ function instructions(caller: AuthContext, era: Era): string {
 }
 
 function capabilities(era: Era): Record<string, unknown> {
-	// Without a session, a legacy client has no stream for notifications, so it cannot subscribe.
-	return { tools: { listChanged: false }, resources: { subscribe: era === "modern", listChanged: false } };
+	// Without a session, a legacy client has no stream for notifications, so it cannot subscribe to a
+	// resource. MCP Events needs no stream: the server sends each event to the callback URL of the client.
+	return {
+		tools: { listChanged: false },
+		resources: { subscribe: era === "modern", listChanged: false },
+		events: {},
+	};
 }
 
 /**
@@ -113,6 +120,7 @@ export function mountMcp(
 	app: Hono<McpEnv>,
 	handlers: HandlerMap<CallContext>,
 	watchers: WatcherMap<CallContext>,
+	events: EventSubscriptions<CallContext>,
 ): void {
 	app.on(["GET", "DELETE"], "/mcp", (c) => {
 		const response = problemResponse({
@@ -193,7 +201,7 @@ export function mountMcp(
 			waitUntil,
 		};
 		try {
-			return await dispatch({ era, rpc, call, handlers, watchers, reauthenticate, signal: c.req.raw.signal });
+			return await dispatch({ era, rpc, call, handlers, watchers, events, reauthenticate, signal: c.req.raw.signal });
 		} catch (error) {
 			if (!(error instanceof OperationError)) throw error;
 			return rpcError(rpc.id, RPC_ERRORS.internal, error.detail, 200, { code: error.code });
@@ -207,6 +215,7 @@ interface DispatchInput {
 	call: CallContext;
 	handlers: HandlerMap<CallContext>;
 	watchers: WatcherMap<CallContext>;
+	events: EventSubscriptions<CallContext>;
 	reauthenticate(): Promise<AuthContext | null>;
 	signal: AbortSignal;
 }
@@ -265,6 +274,15 @@ async function dispatch(input: DispatchInput): Promise<Response> {
 			const code = era === "legacy" ? RPC_ERRORS.legacyResourceNotFound : RPC_ERRORS.invalidParams;
 			return rpcError(id, code, read.message, 200, { uri: params.uri, ...(read.code ? { code: read.code } : {}) });
 		}
+		case "legacy events/list":
+		case "modern events/list":
+			return listEvents(id, params, call, input.events, (result) => reply(result, CACHE.static));
+		case "legacy events/subscribe":
+		case "modern events/subscribe":
+			return subscribeEvent(id, params, call, input.events, reply);
+		case "legacy events/unsubscribe":
+		case "modern events/unsubscribe":
+			return unsubscribeEvent(id, params, call, input.events, reply);
 		case "modern subscriptions/listen":
 			return listen({
 				id,
