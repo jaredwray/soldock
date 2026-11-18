@@ -955,7 +955,9 @@ MCP clients. The app has no UI-only path.
       reader, and with no link.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
-    - The page reads the directory one time (`directory.list_principals`). The members of the
+    - The page reads the directory one time, each page of `directory.list_principals`
+      (`listAllPrincipals`). The views that ask at the same time share one read. Admin starts a
+      fresh read for each load, so the list after a save has the change. The members of the
       room come from `chat.get_room`, again after the socket tells that the room changed, after
       each reconnect of the socket, and when the room list has a different number of members.
     - Known limit: a message from before the mention nodes has its mentions as text, and each
@@ -977,6 +979,13 @@ MCP clients. The app has no UI-only path.
     of a room can delete each message. A deleted message shows "This message was deleted."
   - A change and a delete show at once, before the answer of the server. The new text shows with
     the edited mark. A deleted message shows as deleted, and the confirmation closes.
+  - For an owner or an admin of the organization, the edited mark is a button. It opens "Earlier
+    versions" (`EditHistoryDialog`, `chat.list_message_edits`): each earlier text with its time,
+    oldest first, and the current text last. For each other person, the mark is text. The name of
+    the button is "Edited. Show the earlier versions". A delete of the message while the dialog is
+    open closes the dialog, because the room removes the earlier versions.
+  - Under the edit box, a note tells the author that owners and admins of the organization can read
+    the text before an edit, and that a delete removes it.
   - After a refusal, the message shows as before, with a notice of the reason. For a change, the
     edit box opens again with the new body, so the person does not write it again.
   - A change or a delete has one attempt. It does not wait in an outbox, and it does not stay

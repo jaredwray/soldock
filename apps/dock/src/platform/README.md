@@ -15,6 +15,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 ## What exists
 
 - `http/request-id.ts`: Hono middleware giving each request a server-generated id (`c.var.requestId`, `x-request-id` header). The answer to a WebSocket upgrade keeps its socket, so it gets no header.
+- `http/cursor.ts`: the cursor of a list with pages: base64url of the JSON of the sort key of the last item. Chat and the directory use it.
 - `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path.
 - `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
 - `crypto/crypto.ts`: SHA-256, HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.
@@ -22,4 +23,4 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`.
 - `events/subscriptions.ts`: `EventSubscriptions`, the subscriptions of MCP Events, and `EventCallbackError`. The `webhooks` module implements it, and the MCP adapter uses it for `events/list`, `events/subscribe` and `events/unsubscribe`.
-- `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, refuses input with more than 64 levels of objects and lists (a schema reads its input with recursion), validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes.
+- `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, refuses input with more than 64 levels of objects and lists (a schema reads its input with recursion), validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes, and the refused calls of an operation with `auditDenied` (a read of sensitive data).

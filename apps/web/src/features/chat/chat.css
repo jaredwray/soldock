@@ -557,6 +557,43 @@ a.chat-author:hover {
 	font-size: 12px;
 }
 
+/* For an owner or an admin of the organization, "(edited)" is a button that opens the earlier versions. */
+.chat-edited.link-button {
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+/* The earlier versions of a message: the oldest first, and the current text last. */
+.chat-edit-history {
+	display: grid;
+	gap: 12px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chat-edit-version {
+	padding-left: 12px;
+	border-left: 3px solid var(--border);
+}
+
+.chat-edit-current {
+	border-left-color: var(--primary);
+}
+
+/* Under the edit box: who can read the text before an edit. */
+.chat-edit-note {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.chat-edit-time {
+	margin: 0 0 4px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
 /* The actions of a message: a small bar at the top right of the row. It shows while the pointer is
    on the row, and while the focus is in the row. */
 

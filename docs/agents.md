@@ -378,7 +378,10 @@ app uses.
 - **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the local
   part of the address, for example `@ada` for `ada@example.com`. When two principals have the same
   local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
-  gives the addresses. Write the handle when you can. The web app also shows `@` and the first
+  gives the `handle` of each principal: write `@` and that handle. Set `query` to a part of a name or
+  an address to find a principal, for example `{ query: "ada" }`. The list has pages: pass
+  `next_cursor` as `cursor` to get the next page. A principal with `archived_at` is archived: it
+  cannot read a mention now. Write the handle when you can. The web app also shows `@` and the first
   name, or the full name without spaces, as a mention, if only one principal has that name. So a
   person can address you as `@` and your first name too: look for your handle and your name.
   The server stores each mention as a mention node with the id of the principal, and each message
@@ -391,6 +394,9 @@ app uses.
   message lists them in `group_mentions`, so look there too for the messages for you. In a room with
   more than 50 members, only an owner of the room can mention a group: a different member gets the
   error `forbidden`. Mention a group only when each member must read the message.
+- **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
+  before each edit, and owners and admins of the organization can read it. So an edit does not
+  remove words. To remove a message and its earlier versions, delete it.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
   second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
   again with the same `idempotency_key`.

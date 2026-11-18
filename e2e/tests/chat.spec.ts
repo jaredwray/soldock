@@ -139,10 +139,14 @@ test("a message that waits stays after a reload, and goes out one time", async (
 	await expect(page.locator(".chat-message-pending, .chat-send-failed")).toHaveCount(0);
 });
 
-test("a change and a delete show at once, and come back after a refusal", async ({ browser }) => {
+test("a change and a delete show at once, and come back after a refusal, and an owner reads the earlier versions", async ({
+	browser,
+}) => {
 	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const chidi = await signIn(browser, "chidi");
 	const name = unique("Edits");
-	const roomId = await createRoom(tomasz, name);
+	const roomId = await createRoom(tomasz, name, [nadia, chidi]);
 	const first = unique("edit me");
 	const message = await post(tomasz, roomId, first);
 	const page = await tomasz.newPage();
@@ -172,6 +176,24 @@ test("a change and a delete show at once, and come back after a refusal", async 
 	await expect
 		.poll(async () => (await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text)
 		.toBe("changed text");
+	// Chidi is a member of the organization, so the edited mark is text. Nadia owns the organization, so
+	// her mark opens the earlier versions.
+	const memberPage = await chidi.newPage();
+	await openRoom(memberPage, roomId);
+	const memberRow = memberPage.locator(".chat-message").filter({ hasText: "changed text" });
+	await expect(memberRow.locator(".chat-edited")).toBeVisible();
+	await expect(memberRow.getByRole("button", { name: /Edited/ })).toHaveCount(0);
+	const ownerPage = await nadia.newPage();
+	await openRoom(ownerPage, roomId);
+	await ownerPage
+		.locator(".chat-message")
+		.filter({ hasText: "changed text" })
+		.getByRole("button", { name: "Edited. Show the earlier versions" })
+		.click();
+	const history = ownerPage.getByRole("dialog", { name: "Earlier versions" });
+	await expect(history.locator(".chat-edit-version .chat-text")).toHaveText([first, "changed text"]);
+	await history.getByRole("button", { name: "Close" }).click();
+	await expect(history).toHaveCount(0);
 
 	// A refused delete: the message shows again.
 	await page.route("**/api/v1/chat/rooms/*/messages/*", (route) =>

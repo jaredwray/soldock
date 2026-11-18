@@ -43,6 +43,11 @@ export interface Operation<I extends z.ZodType = z.ZodType, O extends z.ZodType 
 	/** The principal kinds that can call the operation at all. */
 	callers: readonly PrincipalKind[];
 	annotations: OperationAnnotations;
+	/**
+	 * True when the invoker audits each refused call (`forbidden`, `policy_denied`), also of a read. A
+	 * refused change always gets an audit line. Set it for a read of sensitive data.
+	 */
+	auditDenied?: boolean;
 	input: I;
 	output: O;
 	/** The error codes that the operation can return, in addition to the codes that every call can return. */

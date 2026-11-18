@@ -1,7 +1,7 @@
 import type { ChatRoomEntry, ChatRoomState } from "../identity/index.ts";
-import { log } from "../platform/index.ts";
+import { decodeCursor, encodeCursor, log } from "../platform/index.ts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
-import { decodeCursor, encodeCursor, type ListInput, type RoomPage } from "./room-index.ts";
+import type { ListInput, RoomPage } from "./room-index.ts";
 
 // The joined rooms of a principal, from its `PrincipalDO`. Each room sends its state to the objects of
 // its members after each change (room.ts, `sendStates`). The room object decides each access.
