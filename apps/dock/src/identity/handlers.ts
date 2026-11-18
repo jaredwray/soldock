@@ -1,5 +1,12 @@
-import { AGENT_SCOPES, ALL_SCOPES, SIGN_IN_LOCK_MINUTES, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
-import { audit, type HandlerMap, OperationError } from "../platform/index.ts";
+import {
+	AGENT_SCOPES,
+	ALL_SCOPES,
+	DIRECTORY_LIMITS,
+	mentionHandle,
+	SIGN_IN_LOCK_MINUTES,
+	TEAM_MAILBOX_LIMITS,
+} from "@soldock/contracts";
+import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
@@ -14,6 +21,7 @@ import {
 	countSponsoredAgents,
 	createApiKey,
 	createPrincipal,
+	type DirectoryPosition,
 	deletePrincipal,
 	disableTotp,
 	domainOf,
@@ -21,7 +29,7 @@ import {
 	getApiKey,
 	getPrincipal,
 	listApiKeys,
-	listPrincipals,
+	listPrincipalPage,
 	liveSponsorCondition,
 	mailDomains,
 	type PrincipalRecord,
@@ -183,8 +191,28 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		};
 	},
 
-	async "directory.list_principals"(call) {
-		return { principals: (await listPrincipals(call.env.DIRECTORY)).map(toPrincipalOutput) };
+	async "directory.list_principals"(call, input) {
+		const after =
+			input.cursor === undefined ? null : decodeCursor<DirectoryPosition>(input.cursor, ["string", "string", "string"]);
+		if (input.cursor !== undefined && after === null) {
+			throw new OperationError(
+				"invalid",
+				"The cursor is not valid. Use next_cursor from the last page of the same list.",
+			);
+		}
+		const page = await listPrincipalPage(call.env.DIRECTORY, {
+			// The same fold as `lower` of SQLite: A to Z only. So an exact copy of "Élodie" finds Élodie.
+			query: input.query?.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) ?? null,
+			after,
+			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
+		});
+		return {
+			principals: page.principals.map((record) => ({
+				...toPrincipalOutput(record),
+				handle: mentionHandle(record.address, record.sharedLocal),
+			})),
+			next_cursor: page.next === null ? null : encodeCursor(page.next),
+		};
 	},
 
 	async "directory.create_principal"(call, input) {

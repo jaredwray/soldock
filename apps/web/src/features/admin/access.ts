@@ -1,6 +1,6 @@
 import type { Principal } from "@soldock/contracts";
 import { useEffect, useState } from "react";
-import { api } from "../../lib/api.ts";
+import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { isOrgAdmin } from "../auth/session.tsx";
 
 /**
@@ -14,9 +14,9 @@ export function useAdminAccess(principal: Principal): boolean {
 	useEffect(() => {
 		if (elevated) return;
 		let active = true;
-		api.call("directory.list_principals").then(
-			(result) => {
-				if (active) setSponsor(result.principals.some((p) => p.kind === "agent" && p.sponsor_id === principal.id));
+		listAllPrincipals().then(
+			(principals) => {
+				if (active) setSponsor(principals.some((p) => p.kind === "agent" && p.sponsor_id === principal.id));
 			},
 			() => {
 				// Without the directory, the link stays hidden. The admin page itself shows the error.

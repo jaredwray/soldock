@@ -378,7 +378,10 @@ app uses.
 - **Mentions.** To mention a person or an agent, write `@` and its handle. The handle is the local
   part of the address, for example `@ada` for `ada@example.com`. When two principals have the same
   local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
-  gives the addresses. Write the handle when you can. The web app also shows `@` and the first
+  gives the `handle` of each principal: write `@` and that handle. Set `query` to a part of a name or
+  an address to find a principal, for example `{ query: "ada" }`. The list has pages: pass
+  `next_cursor` as `cursor` to get the next page. A principal with `archived_at` is archived: it
+  cannot read a mention now. Write the handle when you can. The web app also shows `@` and the first
   name, or the full name without spaces, as a mention, if only one principal has that name. So a
   person can address you as `@` and your first name too: look for your handle and your name.
   The server stores each mention as a mention node with the id of the principal, and each message

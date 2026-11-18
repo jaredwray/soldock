@@ -1,8 +1,9 @@
 import type { CreatedApiKey, Principal } from "@soldock/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorMessage } from "../../lib/api.ts";
+import { errorMessage } from "../../lib/api.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
+import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { type AdminSection, adminPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
@@ -47,9 +48,10 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	const load = useCallback(async () => {
 		const generation = ++loadGeneration.current;
 		try {
-			const result = await api.call("directory.list_principals");
+			// Admin changes the directory, so each load reads it again, also while a different view reads it.
+			const principals = await listAllPrincipals({ fresh: true });
 			if (generation !== loadGeneration.current) return;
-			setState({ status: "ready", principals: result.principals });
+			setState({ status: "ready", principals });
 		} catch (error) {
 			if (generation !== loadGeneration.current) return;
 			// A later refresh keeps the list. The first load still shows the error.

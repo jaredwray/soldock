@@ -9,6 +9,7 @@ export {
 	sha256Hex,
 } from "./crypto/crypto.ts";
 export { MAX_REQUEST_BYTES, readBodyText } from "./http/body.ts";
+export { decodeCursor, encodeCursor } from "./http/cursor.ts";
 export { PROBLEM_CONTENT_TYPE, type ProblemDetails, problemResponse } from "./http/problem.ts";
 export { REQUEST_ID_HEADER, type RequestIdVariables, requestId } from "./http/request-id.ts";
 export { newId } from "./ids/ids.ts";
