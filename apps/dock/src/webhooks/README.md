@@ -149,7 +149,9 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   of 413 ends that event without a retry. An answer of 410 disables the endpoint, as for a webhook.
 - **Limits.** One principal can have 50 subscriptions that did not expire. One target can have 20
   active subscriptions of one event, with its webhook subscriptions. For Chat, that limit counts the
-  subscriptions for all rooms and those for the same room.
+  subscriptions for all rooms and those for the same room. A subscription that expired fills no
+  limit, also not the limit of a target for a webhook subscription. A refresh examines the two limits
+  again, so a subscription that expired cannot start again above a limit.
 - **Events from your own changes.** A chat event does not go to its author. A drive event also goes to
   the principal that made the change, and mail to your own address is new mail. A client that changes
   a drive when it gets a drive event can make a loop.

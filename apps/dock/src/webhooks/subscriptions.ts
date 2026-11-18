@@ -236,7 +236,8 @@ export function createSubscriptionHandlers(
 				AND (SELECT COUNT(*) FROM webhook_subscriptions s2
 					JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
 					WHERE s2.domain = ?3 AND s2.event_type = ?4 AND s2.target_id = ?5
-					AND s2.status = 'active' AND e2.status = 'active') < ?11
+					AND s2.status = 'active' AND e2.status = 'active'
+					AND (s2.expires_at IS NULL OR s2.expires_at > ?8)) < ?11
 				ON CONFLICT (endpoint_id, event_type, target_id) DO NOTHING
 				RETURNING id`,
 			)

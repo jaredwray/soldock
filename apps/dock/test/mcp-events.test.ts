@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { MCP_EVENT_LIMITS, mcpEvents } from "@soldock/contracts";
+import { MCP_EVENT_LIMITS, mcpEvents, WEBHOOK_LIMITS } from "@soldock/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
@@ -372,11 +372,10 @@ describe("events/subscribe", () => {
 		near(await lifeOf(1), MCP_EVENT_LIMITS.minTtlMs);
 	});
 
-	it("limits the event subscriptions of one principal", async () => {
-		receiver();
+	/** Stored subscriptions of MCP Events for Ada, without a call for each one. A limit counts the stored rows. */
+	async function fill(count: number, domain: "chat" | "drive", event: string) {
 		const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
-		// The limit counts stored rows, so the rows of the principal go in directly.
-		for (let i = 0; i < MCP_EVENT_LIMITS.subscriptionsPerCreator; i++) {
+		for (let i = 0; i < count; i++) {
 			await env.DIRECTORY.batch([
 				env.DIRECTORY.prepare(
 					`INSERT INTO webhook_endpoints (id, created_by, credential_kind, url, label, secret, created_at, protocol)
@@ -384,17 +383,48 @@ describe("events/subscribe", () => {
 				).bind(`whe_fill_${i}`, ada.id, `${CALLBACK}/${i}`, SECRET, expiresAt),
 				env.DIRECTORY.prepare(
 					`INSERT INTO webhook_subscriptions (id, endpoint_id, domain, event_type, target_id, credential_kind,
-						created_at, expires_at) VALUES (?, ?, 'drive', 'drive.item.created', ?, 'api_key', ?, ?)`,
-				).bind(`sub_fill_${i}`, `whe_fill_${i}`, ada.id, expiresAt, expiresAt),
+						created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'api_key', ?, ?)`,
+				).bind(`sub_fill_${i}`, `whe_fill_${i}`, domain, event, ada.id, expiresAt, expiresAt),
 			]);
 		}
-		const full = await subscribe(ada.key, "chat.message.created");
-		expect(errorOf(full)).toMatchObject({ code: -32603, data: { code: "conflict" } });
-		// A subscription that expired does not fill the limit.
-		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET expires_at = ? WHERE id = 'sub_fill_0'")
+	}
+
+	const expire = (where: string) =>
+		env.DIRECTORY.prepare(`UPDATE webhook_subscriptions SET expires_at = ? WHERE ${where}`)
 			.bind(new Date(Date.now() - 1000).toISOString())
 			.run();
-		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toMatch(/^sub_/);
+
+	const refused = async (answer: Promise<{ body: Record<string, unknown> | null }>) =>
+		expect(errorOf(await answer)).toMatchObject({ code: -32603, data: { code: "conflict" } });
+
+	it("limits the event subscriptions of one principal, also for a subscription that expired", async () => {
+		receiver();
+		const old = resultOf(await subscribe(ada.key, "chat.message.created"));
+		await expire(`id = '${old.id}'`);
+		await fill(MCP_EVENT_LIMITS.subscriptionsPerCreator, "drive", "drive.item.created");
+		await refused(subscribe(ada.key, "chat.message.created", { url: `${CALLBACK}/new` }));
+		// A refresh must not start an expired subscription again above the limit.
+		await refused(subscribe(ada.key, "chat.message.created"));
+		// A subscription that expired does not fill the limit.
+		await expire("id = 'sub_fill_0'");
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(old.id);
+	});
+
+	// The limit of a target is the most POST requests of one event. Webhooks and MCP Events share it.
+	it("limits the active subscriptions of one target, and does not count a subscription that expired", async () => {
+		receiver();
+		const old = resultOf(await subscribe(ada.key, "chat.message.created"));
+		await expire(`id = '${old.id}'`);
+		await fill(WEBHOOK_LIMITS.perTarget, "chat", "chat.message.created");
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: "https://hooks.example.com/chat" });
+		const add = () =>
+			ada.call("chat.create_webhook_subscription", { endpoint_id: endpoint.id, event: "chat.message.created" });
+		expect(await codeOf(add())).toBe("conflict");
+		await refused(subscribe(ada.key, "chat.message.created"));
+
+		await expire("id LIKE 'sub_fill_%'");
+		expect((await add()).subscription.status).toBe("active");
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(old.id);
 	});
 });
 

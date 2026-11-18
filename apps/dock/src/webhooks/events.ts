@@ -254,9 +254,39 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				: MCP_EVENT_LIMITS.ttlMs;
 		const expiresAt = new Date(now + life).toISOString();
 
-		/** Gives the subscription its new end and its new secret. A subscription that stopped starts again. */
+		/**
+		 * Gives the subscription its new end and its new secret. A subscription that stopped starts again.
+		 * The limits count the other subscriptions, so a subscription that expired cannot start again above
+		 * a limit. The endpoint changes only when the subscription changed.
+		 */
 		const refresh = async (endpointId: string): Promise<boolean> => {
 			const results = await db.batch<{ id: string }>([
+				db
+					.prepare(
+						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL
+						WHERE id = ?2 AND endpoint_id = ?3
+						AND (SELECT COUNT(*) FROM webhook_subscriptions s
+							JOIN webhook_endpoints e ON e.id = s.endpoint_id
+							WHERE e.created_by = ?4 AND e.protocol = 'mcp_events' AND s.expires_at > ?5 AND s.id != ?2) < ?6
+						AND (SELECT COUNT(*) FROM webhook_subscriptions s2
+							JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
+							WHERE s2.event_type = ?7 AND s2.target_id = ?8 AND s2.status = 'active' AND e2.status = 'active'
+							AND (s2.expires_at IS NULL OR s2.expires_at > ?5) AND s2.id != ?2
+							AND (?9 IS NULL OR s2.room_id IS NULL OR s2.room_id = ?9)) < ?10
+						RETURNING id`,
+					)
+					.bind(
+						expiresAt,
+						id,
+						endpointId,
+						principal.id,
+						nowText,
+						MCP_EVENT_LIMITS.subscriptionsPerCreator,
+						event.name,
+						targetId,
+						args.roomId,
+						WEBHOOK_LIMITS.perTarget,
+					),
 				db
 					.prepare(
 						`UPDATE webhook_endpoints SET
@@ -264,7 +294,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 							previous_secret_until = CASE WHEN secret IS NOT ?1 THEN ?2 ELSE previous_secret_until END,
 							consecutive_failures = CASE WHEN status = 'disabled' THEN 0 ELSE consecutive_failures END,
 							secret = ?1, status = 'active', disabled_reason = NULL, verified_at = ?3
-						WHERE id = ?4 AND created_by = ?5 AND protocol = 'mcp_events'`,
+						WHERE id = ?4 AND created_by = ?5 AND protocol = 'mcp_events'
+						AND EXISTS (SELECT 1 FROM webhook_subscriptions WHERE id = ?6 AND endpoint_id = ?4 AND expires_at = ?7)`,
 					)
 					.bind(
 						input.secret,
@@ -272,15 +303,11 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						verifiedAt,
 						endpointId,
 						principal.id,
+						id,
+						expiresAt,
 					),
-				db
-					.prepare(
-						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL
-						WHERE id = ?2 AND endpoint_id = ?3 RETURNING id`,
-					)
-					.bind(expiresAt, id, endpointId),
 			]);
-			return (results[1]?.results.length ?? 0) > 0;
+			return (results[0]?.results.length ?? 0) > 0;
 		};
 
 		const existing = await getDelivery(db, id);
