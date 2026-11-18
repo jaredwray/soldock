@@ -4,6 +4,7 @@ import { mountChatSocket } from "./chat/index.ts";
 import { type CallContext, mountAuthRoutes, mountEventsSocket, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
 import {
+	type EventSubscriptions,
 	type HandlerMap,
 	log,
 	OperationError,
@@ -19,9 +20,14 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
  * `/.well-known/*`), REST, MCP, the room sockets of Chat (`/ws/chat/*`) and the events socket (`/ws/events`). The REST routes and the MCP tools
  * come from the operation registry, with the handlers that the composition root passes in. MCP
- * resource subscriptions use the change feeds that it passes in.
+ * resource subscriptions use the change feeds that it passes in. MCP Events uses the subscriptions that
+ * it passes in.
  */
-export function createApp(handlers: HandlerMap<CallContext>, watchers: WatcherMap<CallContext>): Hono<AppEnv> {
+export function createApp(
+	handlers: HandlerMap<CallContext>,
+	watchers: WatcherMap<CallContext>,
+	events: EventSubscriptions<CallContext>,
+): Hono<AppEnv> {
 	const app = new Hono<AppEnv>();
 
 	app.use(requestId());
@@ -31,7 +37,7 @@ export function createApp(handlers: HandlerMap<CallContext>, watchers: WatcherMa
 	mountAuthRoutes(app);
 	mountOAuthRoutes(app);
 	mountRestApi(app, handlers);
-	mountMcp(app, handlers, watchers);
+	mountMcp(app, handlers, watchers, events);
 	mountChatSocket(app);
 	mountEventsSocket(app);
 

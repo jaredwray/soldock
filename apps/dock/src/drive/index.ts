@@ -13,3 +13,4 @@ export {
 export { driveHandlers } from "./handlers.ts";
 export { DriveSpaceDO, type ItemRecord } from "./space.ts";
 export { driveWatchers } from "./watch.ts";
+export { enableDriveEvents } from "./webhooks.ts";

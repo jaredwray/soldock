@@ -28,7 +28,10 @@ function heldDomains(call: CallContext): WebhookDomain[] {
  */
 async function openEndpoint(call: CallContext, id: string, mode: "read" | "change"): Promise<EndpointRow> {
 	const row = await getEndpoint(call.env.DIRECTORY, id);
-	if (row?.created_by !== call.caller.id) throw new OperationError("not_found", "No endpoint has that id.");
+	// An MCP client owns a subscription of MCP Events. The webhook operations do not show its endpoint.
+	if (row?.created_by !== call.caller.id || row.protocol !== "webhook") {
+		throw new OperationError("not_found", "No endpoint has that id.");
+	}
 	const domains = await endpointDomains(call.env.DIRECTORY, row.id);
 	const held = new Set(heldDomains(call));
 	const hidden = domains.length > 0 && domains.every((domain) => !held.has(domain));
@@ -93,12 +96,16 @@ export const endpointHandlers: Pick<
 			header_name: input.header?.name ?? null,
 			header_value: input.header?.value ?? null,
 			created_at: new Date().toISOString(),
+			protocol: "webhook",
+			previous_secret: null,
+			previous_secret_until: null,
+			verified_at: null,
 		};
 		const inserted = await call.env.DIRECTORY.prepare(
 			`INSERT INTO webhook_endpoints (id, created_by, credential_kind, credential_id, url, label, secret, created_at,
 				auth_key, header_name, header_value)
 			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?10, ?11, ?12
-			WHERE (SELECT COUNT(*) FROM webhook_endpoints WHERE created_by = ?2) < ?9
+			WHERE (SELECT COUNT(*) FROM webhook_endpoints WHERE created_by = ?2 AND protocol = 'webhook') < ?9
 			RETURNING id`,
 		)
 			.bind(
@@ -133,11 +140,14 @@ export const endpointHandlers: Pick<
 		const statement =
 			held.length === 3
 				? db
-						.prepare(`SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE created_by = ? ORDER BY created_at DESC`)
+						.prepare(
+							`SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE created_by = ? AND protocol = 'webhook'
+							ORDER BY created_at DESC`,
+						)
 						.bind(call.caller.id)
 				: db
 						.prepare(
-							`SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints e WHERE e.created_by = ?
+							`SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints e WHERE e.created_by = ? AND e.protocol = 'webhook'
 							AND (
 								NOT EXISTS (SELECT 1 FROM webhook_subscriptions s WHERE s.endpoint_id = e.id)
 								OR EXISTS (

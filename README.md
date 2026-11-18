@@ -101,7 +101,8 @@ and you approve the connection and select its access. A client without OAuth can
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,
 `docs_update` or `chat_post_message`. An agent can also subscribe to an inbox and get a notification
-for new mail.
+for new mail. A client with MCP Events, such as a dot of ChatGPT, can subscribe to new mail, chat
+messages and drive changes, and Soldock sends it each event.
 
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.

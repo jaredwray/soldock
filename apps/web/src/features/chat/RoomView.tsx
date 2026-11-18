@@ -39,6 +39,7 @@ import {
 import type { PendingMessage } from "./outbox.ts";
 import { ReactionPicker, Reactions } from "./Reactions.tsx";
 import { createSendSettler } from "./settle.ts";
+import { ThreadPanel } from "./ThreadPanel.tsx";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -126,6 +127,14 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const refocus = useRef(false);
 	/** The message in edit: the body that the edit box opened with, and the body in it now (null without text). */
 	const [editing, setEditing] = useState<{ id: string; initial: ChatBody; body: ChatBody | null } | null>(null);
+	/** The id of the message whose thread shows beside the room, or null. */
+	const [threadId, setThreadId] = useState<string | null>(null);
+	/** The element that opened the thread. It gets the focus back when the thread closes. */
+	const threadOpener = useRef<HTMLElement | null>(null);
+	const openThread = useCallback((id: string) => {
+		threadOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		setThreadId(id);
+	}, []);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// A path with a message opens the list at that message, not at its end.
 	const stick = useRef(focusSeq === null);
@@ -341,6 +350,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
 	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	// A person who is no longer a member sees no thread, and a later join does not open it again.
+	useEffect(() => {
+		if (!isMember) setThreadId(null);
+	}, [isMember]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: holdPlace reads and moves the DOM only.
 	useEffect(() => {
 		const list = scrollRef.current;
@@ -755,6 +768,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onEditCancel={() => setEditing(null)}
 												onDelete={() => setDialog({ type: "delete", message })}
 												onShowEdits={readsEdits ? () => setDialog({ type: "edits", message }) : null}
+												// A reply that also went to the room opens the thread of its parent.
+												onOpenThread={pending === null ? () => openThread(message.parent_id ?? message.id) : null}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
 												ownId={ownId}
@@ -848,6 +863,24 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				</div>
 			)}
 
+			{threadId !== null && room.role !== null && (
+				<ThreadPanel
+					key={threadId}
+					roomId={roomId}
+					roomTitle={title}
+					parentId={threadId}
+					mentions={mentions}
+					watch={view.watchMessages}
+					onSentToRoom={view.apply}
+					onClose={() => {
+						setThreadId(null);
+						// The focus goes back to the button that opened the thread, or to the box of the room.
+						const opener = threadOpener.current;
+						if (opener?.isConnected) opener.focus();
+						else composer.current?.focus();
+					}}
+				/>
+			)}
 			{dialog?.type === "members" && (
 				<MembersDialog
 					room={room}
@@ -924,6 +957,8 @@ interface MessageItemProps {
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
+	/** Opens the thread of the message (of its parent, for a reply), or null for a message that waits. */
+	onOpenThread: (() => void) | null;
 	/** Opens the earlier versions of the message, or null for a person who cannot read them. */
 	onShowEdits: (() => void) | null;
 	/** Sends a message again after its send failed. */
@@ -971,6 +1006,7 @@ function MessageItem({
 	onEditSave,
 	onEditCancel,
 	onDelete,
+	onOpenThread,
 	onShowEdits,
 	onSendAgain,
 	onSendCancel,
@@ -1099,6 +1135,24 @@ function MessageItem({
 				{pending === null && !message.deleted && (
 					<Reactions reactions={message.reactions} ownId={ownId} nameOf={nameOf} onToggle={onReact} />
 				)}
+				{message.thread && onOpenThread && (
+					<button type="button" className="chat-thread-summary" onClick={onOpenThread}>
+						<span className="chat-thread-authors" aria-hidden="true">
+							{message.thread.authors.map((who) => (
+								<span key={who.principal_id} className="chat-thread-author">
+									{initials(who.display_name)}
+								</span>
+							))}
+						</span>
+						<span className="chat-thread-replies-count">{plural(message.thread.reply_count, "reply", "replies")}</span>
+						<span className="chat-thread-last">Last reply {shortDate(message.thread.last_reply_at)}</span>
+					</button>
+				)}
+				{message.parent_id !== null && onOpenThread && (
+					<button type="button" className="chat-thread-note link-button" onClick={onOpenThread}>
+						Replied in a thread
+					</button>
+				)}
 				{failed && (
 					<p className="chat-send-failed" role="alert">
 						<span>Not sent. {pending.error}</span>
@@ -1169,6 +1223,17 @@ function MessageItem({
 					>
 						<Icon name="link" size={16} />
 					</button>
+					{onOpenThread && message.parent_id === null && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label={`Reply in a thread to the message of ${author} from ${shortDate(message.created_at)}`}
+							title="Reply in a thread"
+							onClick={onOpenThread}
+						>
+							<Icon name="reply" size={16} />
+						</button>
+					)}
 					{own && (
 						<button
 							type="button"

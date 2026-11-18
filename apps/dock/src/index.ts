@@ -1,7 +1,7 @@
 // Composition root of the dock Worker. Every handler, Durable Object and Workflow class is
 // exported from here. The operation handlers of each domain are joined in handlers.ts.
 import { createApp } from "./app.ts";
-import { handlers, watchers } from "./handlers.ts";
+import { events, handlers, watchers } from "./handlers.ts";
 import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
@@ -13,7 +13,7 @@ export { DriveSpaceDO } from "./drive/index.ts";
 export { PrincipalDO } from "./identity/index.ts";
 export { MailboxDO } from "./mail/index.ts";
 
-const app = createApp(handlers, watchers);
+const app = createApp(handlers, watchers, events);
 
 export default {
 	async fetch(request, env, ctx) {
