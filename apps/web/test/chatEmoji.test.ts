@@ -50,14 +50,18 @@ describe("the emoji codes of the message box", () => {
 	});
 
 	// A ":" in a time, a word or a link must not open the list.
-	it("start at a ':' after a space or at the start, with two characters or more", () => {
+	it("start at a ':' after a space or at the start, with two characters or more, and list the emoji of each code", () => {
 		expect(emojiQueryAt("ship it :ta")).toEqual({ start: 8, query: "ta" });
 		expect(emojiQueryAt(":+1")).toEqual({ start: 0, query: "+1" });
 		for (const text of ["at 10:30", "note:ab", "see https://ex", "a :t", "a ::ta", "a :ta b"]) {
 			expect(emojiQueryAt(text), text).toBeNull();
 		}
-		// A "_" is a space of the name. The list has eight emoji at most.
+		// The list finds a code, also of a name with "-" or a capital letter. The list has eight emoji at most.
 		expect(emojiSuggestions("thumbs_u").map((choice) => choice.emoji)).toEqual(["👍"]);
+		expect(emojiSuggestions("see_no").map((choice) => choice.emoji)).toEqual(["🙈"]);
+		expect(emojiSuggestions("ok_ha").map((choice) => choice.emoji)).toEqual(["👌"]);
+		expect(emojiSuggestions("tad").map((choice) => choice.emoji)).toContain("🎉");
+		for (const choice of EMOJI) expect(emojiSuggestions(emojiCode(choice)), choice.name).toContain(choice);
 		expect(emojiSuggestions("e").length).toBe(8);
 	});
 });
