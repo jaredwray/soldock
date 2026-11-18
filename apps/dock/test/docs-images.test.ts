@@ -406,6 +406,11 @@ describe("an image in the content of a doc", () => {
 		expect(
 			await codeOf(bot.call("docs.update", { item_id: item.id, markdown: `![](image:${image.id}?crop=0.1,0.2)` })),
 		).toBe("invalid");
+		// An option that is not an option of an image gets a message with its name, and changes nothing.
+		await expect(
+			bot.call("docs.update", { item_id: item.id, markdown: `![](image:${image.id}?widht=200)` }),
+		).rejects.toMatchObject({ code: "invalid", message: expect.stringContaining('"widht"') });
+		expect((await bot.call("docs.get", { item_id: item.id })).revision).toBe(doc.revision);
 	});
 
 	it("puts its alt text and its caption in the search index of the drive", async () => {
@@ -571,12 +576,16 @@ describe("the images of a deleted doc and of a copy", () => {
 		await upload(ada, item.id, png(20, 20));
 		// An upload that stopped after its bytes went to R2: an object that no row of the doc names.
 		await env.BLOBS.put(`document/${item.id}/img_stopped`, png(5, 5));
+		// The same for a doc that holds no image at all: no row gives the object its prefix.
+		const empty = (await ada.call("docs.create", { name: "Empty" })).item;
+		await env.BLOBS.put(`document/${empty.id}/img_stopped`, png(5, 5));
 		await ada.call("docs.update", { item_id: item.id, content: imageIn({ id: image.id }) });
 		expect(await imageKeys(item.id)).toHaveLength(3);
-		await ada.call("drive.trash_items", { item_ids: [item.id] });
-		await ada.call("drive.delete_items", { item_ids: [item.id] });
+		await ada.call("drive.trash_items", { item_ids: [item.id, empty.id] });
+		await ada.call("drive.delete_items", { item_ids: [item.id, empty.id] });
 		await drainDrive(ada.id);
 		expect(await imageKeys(item.id)).toEqual([]);
+		expect(await imageKeys(empty.id)).toEqual([]);
 	});
 
 	it("go into a copy of the doc, which keeps them after the first doc is deleted", async () => {

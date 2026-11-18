@@ -272,6 +272,14 @@ export class DocumentDO extends DurableObject<Env> {
 		return { revision: revision + 1, changed: true, modifiedAt, size };
 	}
 
+	/**
+	 * The content and the attachments at one moment. Two calls can have a write between them: the
+	 * content of the first call can then name an attachment that the second call shows as not in use.
+	 */
+	snapshot(): { state: DocumentState | null; attachments: AttachmentRecord[] } {
+		return { state: this.read(), attachments: this.attachments() };
+	}
+
 	/** The attachments of the document, oldest first. */
 	attachments(): AttachmentRecord[] {
 		if (!this.hasTable("attachments")) return [];
@@ -338,16 +346,20 @@ export class DocumentDO extends DurableObject<Env> {
 			for (let start = 0; start < keys.length; start += DELETE_BATCH) {
 				await this.env.BLOBS.delete(keys.slice(start, start + DELETE_BATCH));
 			}
-			// A caller writes the bytes before it records the attachment. When it stopped between the two,
-			// R2 has an object without a row. Each key of a document has one prefix, so a list finds it.
-			const first = keys[0];
-			const prefix = first?.slice(0, first.lastIndexOf("/") + 1);
-			for (let cursor: string | undefined; prefix; ) {
-				const listed = await this.env.BLOBS.list({ prefix, limit: DELETE_BATCH, ...(cursor ? { cursor } : {}) });
-				if (listed.objects.length > 0) await this.env.BLOBS.delete(listed.objects.map((object) => object.key));
-				if (!listed.truncated) break;
-				cursor = listed.cursor;
-			}
+		}
+		// A caller writes the bytes before it records the attachment. When it stopped between the two,
+		// R2 has an object without a row, also for a document without tables. Each key of a document has
+		// one prefix, so a list finds it. The name of the object is the id of the item.
+		const name = this.ctx.id.name;
+		for (let cursor: string | undefined; name; ) {
+			const listed = await this.env.BLOBS.list({
+				prefix: attachmentKey(name, ""),
+				limit: DELETE_BATCH,
+				...(cursor ? { cursor } : {}),
+			});
+			if (listed.objects.length > 0) await this.env.BLOBS.delete(listed.objects.map((object) => object.key));
+			if (!listed.truncated) break;
+			cursor = listed.cursor;
 		}
 		await this.ctx.storage.deleteAlarm();
 		await this.ctx.storage.deleteAll();

@@ -146,7 +146,8 @@ Markdown is the form for agents and for the download in the web app.
 - An image of the doc is `![alt](image:img_… "caption")`. The options are a query after the id:
   `?width=320&layout=wrap_left&crop=0.1,0.1,0.8,0.8`. Markdown keeps each option, so an agent that
   changes the text with Markdown does not change the images. An option with a bad value is refused
-  with `invalid`.
+  with `invalid`. An option that is not `width`, `layout` or `crop`, an option that is there two
+  times, and a crop without 4 numbers are refused too, with the name of the option in the message.
 - Only the handlers of this module read an image (the option `images`). The `chat` module reads
   Markdown without it, and a chat message has no image.
 - Text that is not Markdown of this subset stays text: HTML, tables, and an image with a web

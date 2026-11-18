@@ -145,6 +145,8 @@ describe("the content of a doc with images", () => {
 			"file:///C:/a.png",
 			"/relative.png",
 			`https://example.com/${"a".repeat(3000)}`,
+			// More base64 than the largest image has.
+			`data:image/png;base64,${"A".repeat(Math.ceil(DOC_LIMITS.imageBytes / 3) * 4 + 100)}`,
 		]) {
 			expect(importableSrc(src), src).toBeNull();
 		}

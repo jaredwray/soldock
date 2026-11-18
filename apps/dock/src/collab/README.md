@@ -47,7 +47,11 @@ One object for each doc and each sheet. Its name is the id of the Drive item (`i
   - A failed send is tried again with backoff (1 minute, doubled, at most 1 hour), 8 times. Then
     the message is dropped and logged. The next change sends the newer state.
 - **Delete.** `destroy()` deletes the bytes of each attachment from R2, also an object under the
-  prefix of the document that no row names, then all storage of the object. The drive calls it from its outbox after the item is deleted permanently. A failed R2
+  prefix of the document that no row names, then all storage of the object. The prefix comes from
+  the name of the object, so a document without rows also loses such an object.
+- **Snapshot.** `snapshot()` returns the content and the attachments of one moment. A copy of a
+  document and `docs.get` use it, so the content never names an attachment that the same answer
+  does not have. The drive calls it from its outbox after the item is deleted permanently. A failed R2
   delete throws, and the outbox calls again.
 - **Empty objects.** An object that nobody wrote has no tables. A read of it creates nothing.
 

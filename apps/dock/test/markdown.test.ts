@@ -318,10 +318,41 @@ describe("an image in Markdown", () => {
 	});
 
 	it("gives a bad option to the check of the content, which refuses it", () => {
-		for (const options of ["width=wide", "width=5", "layout=behind", "crop=0.1,0.2", "crop=0.9,0,0.5,1"]) {
+		for (const options of [
+			"width=wide",
+			"width=5",
+			"width=",
+			"width=0x140",
+			"layout=behind",
+			"crop=0.1,0.2",
+			"crop=0.9,0,0.5,1",
+			"crop=0,0,1e0,1",
+		]) {
 			const read = markdownToDoc(`![](image:${ID}?${options})`, { images: true });
 			expect(DocContent.safeParse(read).success, options).toBe(false);
 		}
+	});
+
+	// The content has no place for these, and the Markdown of the doc would come back without them.
+	// The writer must get a message, not a doc that is different from the request.
+	it("reports an option that the content cannot hold", () => {
+		const problemsOf = (options: string) => {
+			const problems: string[] = [];
+			markdownToDoc(`![](image:${ID}?${options})`, { images: true, problems });
+			return problems;
+		};
+		expect(problemsOf("width=320&layout=wrap_left&crop=0,0,0.5,0.5")).toEqual([]);
+		expect(problemsOf("widht=320")).toEqual([
+			`The image ${ID} has the option "widht". The options of an image are width, layout and crop.`,
+		]);
+		expect(problemsOf("width=320&width=100")).toEqual([`The image ${ID} has the option width two times.`]);
+		expect(problemsOf("crop=0,0,0.5,0.5,0.9")).toEqual([
+			`The image ${ID} has a crop without 4 numbers. A crop is x,y,width,height.`,
+		]);
+		// Many bad images give a short list.
+		const problems: string[] = [];
+		markdownToDoc(`![](image:${ID}?a=1) `.repeat(500), { images: true, problems });
+		expect(problems).toHaveLength(5);
 	});
 });
 

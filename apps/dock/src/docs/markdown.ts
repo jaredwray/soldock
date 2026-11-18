@@ -190,17 +190,43 @@ function plain(text: string): string {
 		.trim();
 }
 
+const IMAGE_OPTIONS: ReadonlySet<string> = new Set(["width", "layout", "crop"]);
+
+/** The most problems that one call reports. Hostile Markdown can have thousands of bad images. */
+const MAX_PROBLEMS = 5;
+
+/** A number in plain decimal form, or NaN. `Number` also reads "", "0x10" and "1e3". */
+function decimal(value: string): number {
+	return /^(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) ? Number(value) : Number.NaN;
+}
+
 /**
  * The image of `![alt](image:img_… "caption")`, or null when the target is not an image of a doc. An
  * option with a bad value stays in the node, so the check of the content refuses it with a message.
+ * The content cannot hold an option that is not an option of an image, an option that is there two
+ * times, or a crop without 4 numbers. Each of these goes into `problems`: the writer of the Markdown
+ * must get a message, because Markdown without that option would come back from the doc.
  */
-function imageOf(link: LinkSyntax): DocImageNode | null {
+function imageOf(link: LinkSyntax, problems: string[] | null): DocImageNode | null {
 	const target = IMAGE_TARGET.exec(link.href);
 	if (!target) return null;
+	const id = target[1] as string;
+	const report = (problem: string) => {
+		if (problems && problems.length < MAX_PROBLEMS) problems.push(`The image ${id} ${problem}`);
+	};
 	const options = new URLSearchParams(target[2] ?? "");
-	const attrs: DocImageNode["attrs"] = { id: target[1] as string, layout: "inline" };
+	const seen = new Set<string>();
+	for (const key of options.keys()) {
+		if (!IMAGE_OPTIONS.has(key)) {
+			report(`has the option "${key.slice(0, 40)}". The options of an image are width, layout and crop.`);
+		} else if (seen.has(key)) {
+			report(`has the option ${key} two times.`);
+		}
+		seen.add(key);
+	}
+	const attrs: DocImageNode["attrs"] = { id, layout: "inline" };
 	const width = options.get("width");
-	if (width !== null) attrs.width = Number(width);
+	if (width !== null) attrs.width = decimal(width);
 	const layout = options.get("layout");
 	if (layout !== null) attrs.layout = layout as DocImageNode["attrs"]["layout"];
 	const alt = plain(link.label);
@@ -209,7 +235,9 @@ function imageOf(link: LinkSyntax): DocImageNode | null {
 	if (caption !== "") attrs.caption = caption;
 	const crop = options.get("crop");
 	if (crop !== null) {
-		const [x, y, w, h] = crop.split(",").map((value) => (value.trim() === "" ? Number.NaN : Number(value)));
+		const parts = crop.split(",").map(decimal);
+		if (parts.length !== 4) report("has a crop without 4 numbers. A crop is x,y,width,height.");
+		const [x, y, w, h] = parts;
 		attrs.crop = { x: x ?? Number.NaN, y: y ?? Number.NaN, width: w ?? Number.NaN, height: h ?? Number.NaN };
 	}
 	return { type: "image", attrs };
@@ -217,9 +245,9 @@ function imageOf(link: LinkSyntax): DocImageNode | null {
 
 /**
  * Cuts inline Markdown into tokens. Emphasis marks stay as `delim` tokens for `matchDelims`. With
- * `images`, the image of a doc is a token. Without it, such an image stays text.
+ * `options.images`, the image of a doc is a token. Without it, such an image stays text.
  */
-function tokenize(src: string, linkDepth: number, images: boolean): Token[] {
+function tokenize(src: string, linkDepth: number, options: ReadOptions): Token[] {
 	const tokens: Token[] = [];
 	let text = "";
 	const links = linkDepth < 4;
@@ -262,11 +290,11 @@ function tokenize(src: string, linkDepth: number, images: boolean): Token[] {
 				if (code !== "") tokens.push({ kind: "code", text: code });
 				i = close + length;
 			}
-		} else if (ch === "!" && next === "[" && images) {
+		} else if (ch === "!" && next === "[" && options.images) {
 			brackets ??= matchBrackets(src);
 			const close = brackets.get(i + 1);
 			const link = close === undefined ? null : readLink(src, i + 1, close);
-			const node = link === null ? null : imageOf(link);
+			const node = link === null ? null : imageOf(link, options.problems);
 			if (link === null || node === null) {
 				// Not an image of a doc: the mark is text, and the bracket after it can be a link.
 				text += ch;
@@ -286,7 +314,7 @@ function tokenize(src: string, linkDepth: number, images: boolean): Token[] {
 			} else {
 				flush();
 				const href = safeHref(link.href);
-				const children = matchDelims(tokenize(link.label, linkDepth + 1, images));
+				const children = matchDelims(tokenize(link.label, linkDepth + 1, options));
 				// A link that is not safe keeps its text and loses its target.
 				if (href === null) tokens.push(...children);
 				else tokens.push({ kind: "link", href, children });
@@ -430,10 +458,12 @@ interface ReadOptions {
 	breaks: boolean;
 	/** The image of a doc is read. */
 	images: boolean;
+	/** Gets a message for each part of an image that the content cannot hold. */
+	problems: string[] | null;
 }
 
 function parseInline(src: string, options: ReadOptions): DocInline[] {
-	const inline = flatten(matchDelims(tokenize(src, 0, options.images)), [], []);
+	const inline = flatten(matchDelims(tokenize(src, 0, options)), [], []);
 	// A hard break at the end of a block shows nothing.
 	while (inline[inline.length - 1]?.type === "hard_break") inline.pop();
 	return inline;
@@ -614,12 +644,21 @@ function parseBlocks(lines: string[], depth: number, options: ReadOptions): DocB
 /**
  * Reads Markdown into the content of a doc. Text that is not Markdown of this subset stays text. With
  * `lineBreaks`, each new line in a paragraph is a hard break, as in a chat. Without it, Markdown joins the lines.
+ * With `problems`, the list gets a message for each option of an image that the content cannot hold. A
+ * caller that reads images gives the list and refuses the Markdown when the list has a message.
  * With `images`, `![alt](image:img_…)` is an image of the doc. Without it, that text stays text: a chat
  * message has no image.
  */
-export function markdownToDoc(markdown: string, options: { lineBreaks?: boolean; images?: boolean } = {}): DocContent {
+export function markdownToDoc(
+	markdown: string,
+	options: { lineBreaks?: boolean; images?: boolean; problems?: string[] } = {},
+): DocContent {
 	const lines = markdown.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
-	const blocks = parseBlocks(lines, 1, { breaks: options.lineBreaks === true, images: options.images === true });
+	const blocks = parseBlocks(lines, 1, {
+		breaks: options.lineBreaks === true,
+		images: options.images === true,
+		problems: options.problems ?? null,
+	});
 	return { type: "doc", content: blocks.length > 0 ? blocks : [{ type: "paragraph" }] };
 }
 

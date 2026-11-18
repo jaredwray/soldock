@@ -161,6 +161,9 @@ export function imageDomAttrs(node: Node): Record<string, string> {
 	return dom;
 }
 
+/** The most characters of a `data:` address: the base64 of the largest image, and the start of the address. */
+const DATA_IMAGE_CHARS = Math.ceil(DOC_LIMITS.imageBytes / 3) * 4 + 64;
+
 /** The image types of a `data:` address that a paste can hold. */
 const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,/i;
 
@@ -169,7 +172,8 @@ const DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,/i;
  * address, or an https address that the server downloads one time. Null for each other address.
  */
 export function importableSrc(src: string): string | null {
-	if (DATA_IMAGE.test(src)) return src;
+	// A `data:` address over the size of the largest image is refused before the editor decodes it.
+	if (DATA_IMAGE.test(src)) return src.length <= DATA_IMAGE_CHARS ? src : null;
 	if (src.length > DOC_LIMITS.imageUrlChars || /\s/.test(src)) return null;
 	try {
 		return new URL(src).protocol === "https:" ? src : null;

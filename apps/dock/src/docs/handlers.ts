@@ -27,7 +27,10 @@ function contentOf(input: { content?: DocContent | undefined; markdown?: string 
 	if (content === undefined) {
 		// Markdown can make content over a limit of the schema, for example one text of more than
 		// 100,000 characters. Such content must not go into storage: no read can return it.
-		const parsed = DocContent.safeParse(markdownToDoc(input.markdown as string, { images: true }));
+		const problems: string[] = [];
+		const read = markdownToDoc(input.markdown as string, { images: true, problems });
+		if (problems.length > 0) throw new OperationError("invalid", problems.join(" "));
+		const parsed = DocContent.safeParse(read);
 		if (!parsed.success) {
 			throw new OperationError("invalid", `The Markdown makes a doc over a limit. ${z.prettifyError(parsed.error)}`);
 		}
@@ -280,7 +283,9 @@ export const docsHandlers: Pick<HandlerMap<CallContext>, DocsOperation> = {
 	async "docs.get"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		const item = accept(await opened.space.checkItem(opened.ctx, input.item_id, "viewer", ["doc"]));
-		const [state, images] = await Promise.all([readDocument(call, input.item_id), imagesOf(call, input.item_id)]);
+		// One call, so the content and the list of the images are of the same moment.
+		const { state, attachments } = await documentStub(call.env, input.item_id).snapshot();
+		const images = attachments.map(toImage);
 		// The content was checked when it was stored. The output check of the operation reads it again.
 		const content = state ? (JSON.parse(state.content) as DocContent) : EMPTY_DOC;
 		return {
