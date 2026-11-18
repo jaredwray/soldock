@@ -9,6 +9,7 @@ import {
 	post,
 	postMarkdown,
 	react,
+	reply,
 	rowsWithText,
 	signIn,
 	unique,
@@ -63,6 +64,27 @@ test("a send shows at once, and the room stores it one time", async ({ browser }
 		.toBe(1);
 	await expect(page.locator(".chat-message-pending")).toHaveCount(0);
 	await expect(rowsWithText(page, text)).toHaveCount(1);
+});
+
+// A thread keeps its replies out of the room. The socket brings each reply to the page, and the list
+// must leave it out without a gap in the versions of the room.
+test("a reply in a thread stays out of the room list of an open page", async ({ browser }) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const roomId = await createRoom(tomasz, unique("Threads"), [nadia]);
+	const parent = await post(nadia, roomId, unique("thread start"));
+	const page = await tomasz.newPage();
+	await openRoom(page, roomId);
+	await expect(rowsWithText(page, parent.text)).toHaveCount(1);
+
+	const hidden = unique("reply text");
+	await reply(nadia, roomId, parent.id, hidden);
+	// A later message of the room comes after the reply on the socket, so the page has the reply event too.
+	const later = unique("room text");
+	await post(nadia, roomId, later);
+	await expect(rowsWithText(page, later)).toHaveCount(1);
+	await expect(page.locator(".chat-message").filter({ hasText: hidden })).toHaveCount(0);
+	await expect(rowsWithText(page, parent.text)).toHaveCount(1);
 });
 
 test("a send whose answers get lost shows one time, with no Not sent row", async ({ browser }) => {

@@ -25,6 +25,9 @@ function fakeRoom(count: number) {
 			reactions: [],
 			mentions: [],
 			group_mentions: [],
+			parent_id: null,
+			also_in_room: false,
+			thread: null,
 		};
 		messages.push(message);
 		return message;

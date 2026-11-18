@@ -70,6 +70,16 @@ export async function post(context: BrowserContext, roomId: string, text: string
 		.message;
 }
 
+/** Posts a reply in the thread of a message, as the person of the context. */
+export async function reply(context: BrowserContext, roomId: string, parentId: string, text: string): Promise<Message> {
+	return (
+		await call<{ message: Message }>(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages`, {
+			text,
+			parent_id: parentId,
+		})
+	).message;
+}
+
 /** Adds a reaction of the person of the context to a message. */
 export async function react(context: BrowserContext, roomId: string, messageId: string, emoji: string): Promise<void> {
 	await call(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages/${messageId}/reactions`, { emoji });

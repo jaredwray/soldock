@@ -216,10 +216,29 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				content: messageContent(input),
 				idempotency: await idempotencyOf(call, "chat.post_message", input),
 				clientKey: input.idempotency_key ?? null,
+				parentId: input.parent_id ?? null,
+				alsoInRoom: input.also_in_room ?? false,
 			}),
 		);
 		if (!posted.duplicate) auditOk(call, "chat.post_message", `${input.room_id}:${posted.message.id}`);
 		return { message: messageOutput(posted.message) };
+	},
+
+	async "chat.list_replies"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const page = accept(
+			await opened.room.listReplies(opened.ctx, input.message_id, {
+				after: input.after ?? null,
+				changedAfter: input.changed_after ?? null,
+				limit: input.limit ?? DEFAULT_PAGE,
+			}),
+		);
+		return {
+			parent: messageOutput(page.parent),
+			replies: page.replies.map(messageOutput),
+			version: page.version,
+			has_more: page.hasMore,
+		};
 	},
 
 	async "chat.edit_message"(call, input) {

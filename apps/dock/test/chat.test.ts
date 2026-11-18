@@ -20,6 +20,8 @@ import {
 	seedOrg,
 } from "./helpers.ts";
 
+type ChatMessageEvent = { id: string; version: number };
+
 let owner: Actor;
 let ada: Actor;
 let bot: Actor;
@@ -1403,13 +1405,17 @@ describe("the mention count", () => {
 		await post(ada, room.id, "> quoted @bot and @ada");
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
-		// The room goes back to the schema before the table. Only the table of earlier versions comes after it.
+		// The room goes back to the schema before the table: the migrations after it are undone too, the
+		// table of earlier versions and the columns of threads.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			state.storage.sql.exec("DROP TABLE mentions");
-			state.storage.sql.exec("DROP TABLE message_edits");
-			state.storage.sql.exec(
-				"UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 2 AS TEXT) WHERE key = 'schema_version'",
-			);
+			const sql = state.storage.sql;
+			sql.exec("DROP TABLE mentions");
+			sql.exec("DROP TABLE message_edits");
+			sql.exec("DROP INDEX messages_parent");
+			for (const column of ["parent_id", "also_in_room", "reply_count", "last_reply_at", "reply_authors_json"]) {
+				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
+			}
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 3 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -1620,6 +1626,117 @@ describe("the earlier versions of a message", () => {
 		expect(edits).toHaveLength(CHAT_LIMITS.messageEdits);
 		// The oldest version went away. The content before the edit is the newest one.
 		expect([edits[0]?.version, edits.at(-1)?.text]).toEqual([1 - CHAT_LIMITS.messageEdits, "v0"]);
+	});
+});
+
+describe("threads", () => {
+	const reply = async (actor: Actor, room_id: string, parent_id: string, text: string, also_in_room?: boolean) =>
+		(
+			await actor.call("chat.post_message", {
+				room_id,
+				parent_id,
+				text,
+				...(also_in_room === undefined ? {} : { also_in_room }),
+			})
+		).message;
+	const roomList = async (actor: Actor, room_id: string) =>
+		(await actor.call("chat.list_messages", { room_id })).messages;
+
+	// A thread keeps a side talk out of the room, as in other chat apps.
+	it("keeps a reply out of the room list and its unread count, and keeps a summary of the replies on the parent", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const parent = await post(ada, room.id, "Plan for Friday");
+		const before = (await ada.call("chat.list_messages", { room_id: room.id })).version;
+
+		const first = await reply(bot, room.id, parent.id, "Looks good");
+		expect([first.parent_id, first.also_in_room, first.thread]).toEqual([parent.id, false, null]);
+		// The room list has the parent only, with the summary. The reply makes the room unread for nobody.
+		const listed = await roomList(ada, room.id);
+		expect(listed.map((message) => message.text)).toEqual(["Plan for Friday"]);
+		expect(listed[0]?.thread).toEqual({
+			reply_count: 1,
+			last_reply_at: first.created_at,
+			authors: [{ principal_id: bot.id, kind: "agent", display_name: "Billing Bot" }],
+		});
+		expect((await ada.call("chat.get_room", { room_id: room.id })).room.unread_count).toBe(0);
+		// The changes of the room list have the new summary of the parent, and not the reply.
+		const changes = await ada.call("chat.list_messages", { room_id: room.id, changed_after: before });
+		expect(changes.messages.map((message) => message.id)).toEqual([parent.id]);
+
+		// A reply that also goes to the room is in the room list, and makes the room unread.
+		await bot.call("chat.mark_read", { room_id: room.id });
+		const second = await reply(ada, room.id, parent.id, "Ship it", true);
+		expect((await roomList(bot, room.id)).map((message) => message.text)).toEqual(["Plan for Friday", "Ship it"]);
+		expect((await bot.call("chat.get_room", { room_id: room.id })).room.unread_count).toBe(1);
+
+		// The replies come oldest first, with the parent, also for an agent through MCP.
+		const thread = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id });
+		expect(thread.replies.map((message) => message.text)).toEqual(["Looks good", "Ship it"]);
+		expect(thread.parent.thread?.reply_count).toBe(2);
+		expect(thread.parent.thread?.authors.map((author) => author.principal_id)).toEqual([ada.id, bot.id]);
+		const tool = await callTool(bot.key, "chat_list_replies", { room_id: room.id, message_id: parent.id });
+		expect(tool.structuredContent).toEqual(thread);
+		// A page of one reply, then the rest.
+		const page = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id, limit: 1 });
+		expect([page.replies.map((message) => message.id), page.has_more]).toEqual([[first.id], true]);
+		const rest = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			after: first.seq,
+		});
+		expect(rest.replies.map((message) => message.id)).toEqual([second.id]);
+
+		// An edit of a reply comes with changed_after of the thread.
+		await bot.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "Looks great" });
+		const edited = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			changed_after: thread.version,
+		});
+		expect(edited.replies.map((message) => message.text)).toEqual(["Looks great"]);
+
+		// A delete of a reply takes it out of the summary. Without replies, the parent has no thread.
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: second.id });
+		expect((await roomList(ada, room.id))[0]?.thread?.reply_count).toBe(1);
+		await bot.call("chat.delete_message", { room_id: room.id, message_id: first.id });
+		expect((await roomList(ada, room.id))[0]?.thread).toBeNull();
+	});
+
+	it("refuses a reply to a reply, to a deleted message and to an unknown message, and keeps one reply for a retry", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const parent = await post(ada, room.id, "Plan");
+		const first = await reply(bot, room.id, parent.id, "One");
+		expect(await codeOf(reply(ada, room.id, first.id, "Two"))).toBe("invalid");
+		expect(await codeOf(ada.call("chat.list_replies", { room_id: room.id, message_id: first.id }))).toBe("invalid");
+		expect(await codeOf(reply(ada, room.id, "cmsg_01JD0000000000000000000000", "Two"))).toBe("not_found");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text: "x", also_in_room: true }))).toBe(
+			"invalid",
+		);
+		// A retry of a reply with the same key adds no reply.
+		const input = { room_id: room.id, parent_id: parent.id, text: "Again", idempotency_key: "reply-1" };
+		const again = (await ada.call("chat.post_message", input)).message;
+		expect((await ada.call("chat.post_message", input)).message.id).toBe(again.id);
+		expect((await roomList(ada, room.id))[0]?.thread?.reply_count).toBe(2);
+		// A mention in a reply that is not in the room list does not count for the room.
+		await reply(bot, room.id, parent.id, "@ada see this");
+		expect((await ada.call("chat.get_room", { room_id: room.id })).room.mention_count).toBe(0);
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: parent.id });
+		expect(await codeOf(reply(bot, room.id, parent.id, "Late"))).toBe("invalid");
+	});
+
+	// The client counts each version of the room. A reply changes two messages, so the two events come in order.
+	it("sends the new summary of the parent, then the reply, with one version each, to the sockets of the room", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const parent = await post(ada, room.id, "Plan");
+		const socket = await connectRoomSocket(room.id, bearer(ada.key));
+		const posted = await reply(bot, room.id, parent.id, "Done");
+		const events: { message: ChatMessageEvent }[] = [];
+		for (let index = 0; index < 2; index++) events.push((await socket.next()) as { message: ChatMessageEvent });
+		expect(events.map((event) => [event.message.id, event.message.version])).toEqual([
+			[parent.id, socket.version + 1],
+			[posted.id, socket.version + 2],
+		]);
+		socket.socket.close();
 	});
 });
 
@@ -1868,7 +1985,13 @@ describe("a room object", () => {
 		// The old room writes its rows again, as after a write that failed before the fresh start.
 		const posted = await roomStub(room.id).postMessage(
 			{ roomId: room.id, actor: { principal_id: ada.id, kind: "human", display_name: "Ada Lovelace" } },
-			{ id: UNKNOWN_MESSAGE, content: messageContent({ text: "A late write." }), clientKey: null },
+			{
+				id: UNKNOWN_MESSAGE,
+				content: messageContent({ text: "A late write." }),
+				clientKey: null,
+				parentId: null,
+				alsoInRoom: false,
+			},
 		);
 		expect(posted).toMatchObject({ duplicate: false });
 		expect((await fresh("chat.list_rooms", { view: "public" })).rooms.map((listed) => listed.id)).toEqual([created.id]);

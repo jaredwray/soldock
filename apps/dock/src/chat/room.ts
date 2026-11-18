@@ -92,6 +92,10 @@ export interface MessageRecord {
 	reactions: ChatReaction[];
 	/** The body. A message from before the bodies, and a deleted message, have the body of their text. */
 	body: ChatBody;
+	parent_id: string | null;
+	also_in_room: boolean;
+	/** The summary of the replies, or null without replies. Times are in milliseconds. */
+	thread: { reply_count: number; last_reply_at: number; authors: ActorRecord[] } | null;
 }
 
 /**
@@ -171,6 +175,12 @@ interface MessageRow extends Row {
 	version: number;
 	idempotency_key: string | null;
 	body_json: string | null;
+	/** The id of the message that this message replies to, or null. */
+	parent_id: string | null;
+	also_in_room: number;
+	reply_count: number;
+	last_reply_at: number | null;
+	reply_authors_json: string | null;
 }
 
 interface OutboxRow extends Row {
@@ -294,7 +304,21 @@ const MIGRATIONS: string[][] = [
 			PRIMARY KEY (message_id, version)
 		) WITHOUT ROWID`,
 	],
+	// Threads: a reply has the id of its parent. The parent keeps the summary of its replies.
+	[
+		"ALTER TABLE messages ADD COLUMN parent_id TEXT",
+		"ALTER TABLE messages ADD COLUMN also_in_room INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE messages ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE messages ADD COLUMN last_reply_at INTEGER",
+		"ALTER TABLE messages ADD COLUMN reply_authors_json TEXT",
+		"CREATE INDEX messages_parent ON messages (parent_id, seq) WHERE parent_id IS NOT NULL",
+	],
 ];
+
+/** The messages of the room list: the messages of the room, and the replies that also went to the room. */
+const IN_ROOM_LIST = "(parent_id IS NULL OR also_in_room = 1)";
+/** The most authors that the summary of a thread keeps. */
+const THREAD_AUTHORS = 3;
 
 const OUTBOX_BATCH = 100;
 /** The most passes of one drain. A room that changes all the time lets the next drain continue. */
@@ -359,6 +383,16 @@ function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): 
 		idempotency_key: row.idempotency_key,
 		reactions,
 		body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
+		parent_id: row.parent_id,
+		also_in_room: row.also_in_room === 1,
+		thread:
+			row.reply_count > 0 && row.last_reply_at !== null
+				? {
+						reply_count: row.reply_count,
+						last_reply_at: row.last_reply_at,
+						authors: JSON.parse(row.reply_authors_json ?? "[]") as ActorRecord[],
+					}
+				: null,
 	};
 }
 
@@ -382,6 +416,7 @@ export function messageOutput(record: MessageRecord): ChatMessage {
 		markdown: record.deleted ? "" : bodyMarkdown(record.body),
 		mentions: record.deleted ? [] : mentionIds(record.body),
 		group_mentions: record.deleted ? [] : groupMentions(record.body),
+		thread: record.thread && { ...record.thread, last_reply_at: iso(record.thread.last_reply_at) },
 		created_at: iso(record.created_at),
 		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
@@ -504,15 +539,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * The messages of other members after the read marker of a member, without deleted messages. The
-	 * count stops at `UNREAD_COUNT_MAX`, so its cost has a limit.
+	 * The messages of other members after the read marker of a member, without deleted messages and
+	 * without the replies that are not in the room list. The count stops at `UNREAD_COUNT_MAX`, so its
+	 * cost has a limit.
 	 */
 	private unreadCount(member: MemberRow | null): number {
 		if (!member) return 0;
 		return (
 			this.one<{ n: number }>(
 				`SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages
-				WHERE seq > ? AND author_id <> ? AND deleted_at IS NULL LIMIT ?)`,
+				WHERE seq > ? AND author_id <> ? AND deleted_at IS NULL AND ${IN_ROOM_LIST} LIMIT ?)`,
 				member.last_read_seq,
 				member.principal_id,
 				UNREAD_COUNT_MAX,
@@ -545,10 +581,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Keeps the mentions of a message: each principal of its body, except its author, and a row for each
-	 * group (`groupRow`).
+	 * group (`groupRow`). A reply that is not in the room list keeps no row: the room counts the messages
+	 * of the room list only. The follows of a thread come later.
 	 */
-	private setMentions(seq: number, authorId: string, body: ChatBody): void {
+	private setMentions(seq: number, authorId: string, body: ChatBody, inRoomList = true): void {
 		this.sql.exec("DELETE FROM mentions WHERE seq = ?", seq);
+		if (!inRoomList) return;
 		const rows = [...mentionIds(body).filter((id) => id !== authorId), ...groupMentions(body).map(groupRow)];
 		for (const row of rows) this.sql.exec("INSERT INTO mentions (principal_id, seq) VALUES (?, ?)", row, seq);
 	}
@@ -850,24 +888,27 @@ export class ChatRoomDO extends DurableObject<Env> {
 		let rows: MessageRow[];
 		if (input.changedAfter !== null) {
 			rows = this.all<MessageRow>(
-				"SELECT * FROM messages WHERE version > ? ORDER BY version LIMIT ?",
+				`SELECT * FROM messages WHERE version > ? AND ${IN_ROOM_LIST} ORDER BY version LIMIT ?`,
 				input.changedAfter,
 				input.limit + 1,
 			);
 		} else if (input.after !== null) {
 			rows = this.all<MessageRow>(
-				"SELECT * FROM messages WHERE seq > ? ORDER BY seq LIMIT ?",
+				`SELECT * FROM messages WHERE seq > ? AND ${IN_ROOM_LIST} ORDER BY seq LIMIT ?`,
 				input.after,
 				input.limit + 1,
 			);
 		} else if (input.before !== null) {
 			rows = this.all<MessageRow>(
-				"SELECT * FROM messages WHERE seq < ? ORDER BY seq DESC LIMIT ?",
+				`SELECT * FROM messages WHERE seq < ? AND ${IN_ROOM_LIST} ORDER BY seq DESC LIMIT ?`,
 				input.before,
 				input.limit + 1,
 			);
 		} else {
-			rows = this.all<MessageRow>("SELECT * FROM messages ORDER BY seq DESC LIMIT ?", input.limit + 1);
+			rows = this.all<MessageRow>(
+				`SELECT * FROM messages WHERE ${IN_ROOM_LIST} ORDER BY seq DESC LIMIT ?`,
+				input.limit + 1,
+			);
 		}
 		const hasMore = rows.length > input.limit;
 		const page = rows.slice(0, input.limit);
@@ -952,6 +993,70 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/** One message with its reactions. */
 	private messageRecord(roomId: string, row: MessageRow): MessageRecord {
 		return toMessage(roomId, row, this.reactionsOf([row.id]).get(row.id) ?? []);
+	}
+
+	/**
+	 * Writes the summary of the replies of a message again: the count and the time of the newest reply
+	 * that stays, and the authors of the newest replies. The parent gets `version`, so a client of the
+	 * room list gets the new summary.
+	 */
+	private refreshThread(parentId: string, version: number): void {
+		const summary = this.one<{ n: number; last: number | null }>(
+			"SELECT COUNT(*) AS n, MAX(created_at) AS last FROM messages WHERE parent_id = ? AND deleted_at IS NULL",
+			parentId,
+		);
+		const authors = this.all<{ author_json: string }>(
+			`SELECT author_json FROM messages WHERE parent_id = ? AND deleted_at IS NULL
+			GROUP BY author_id ORDER BY MAX(seq) DESC LIMIT ?`,
+			parentId,
+			THREAD_AUTHORS,
+		).map((row) => JSON.parse(row.author_json) as ActorRecord);
+		this.sql.exec(
+			"UPDATE messages SET reply_count = ?, last_reply_at = ?, reply_authors_json = ?, version = ? WHERE id = ?",
+			summary?.n ?? 0,
+			summary?.last ?? null,
+			JSON.stringify(authors),
+			version,
+			parentId,
+		);
+	}
+
+	/**
+	 * A message and a page of its replies, oldest first: the first replies, the replies after a seq, or
+	 * the replies that changed after a version of the room.
+	 */
+	listReplies(
+		call: RoomCall,
+		messageId: string,
+		input: { after: number | null; changedAfter: number | null; limit: number },
+	): { parent: MessageRecord; replies: MessageRecord[]; version: number; hasMore: boolean } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const parent = this.message(messageId);
+		if (!parent) return refuse("not_found", NO_MESSAGE);
+		if (parent.parent_id !== null) {
+			return refuse("invalid", "The message is a reply, so it has no replies. Read the replies of its parent.");
+		}
+		const rows =
+			input.changedAfter !== null
+				? this.all<MessageRow>(
+						"SELECT * FROM messages WHERE parent_id = ? AND version > ? ORDER BY version LIMIT ?",
+						messageId,
+						input.changedAfter,
+						input.limit + 1,
+					)
+				: this.all<MessageRow>(
+						"SELECT * FROM messages WHERE parent_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+						messageId,
+						input.after ?? 0,
+						input.limit + 1,
+					);
+		return {
+			parent: this.messageRecord(opened.room.room_id, parent),
+			replies: this.messageRecords(opened.room.room_id, rows.slice(0, input.limit)),
+			version: opened.room.version,
+			hasMore: rows.length > input.limit,
+		};
 	}
 
 	/** The messages of a page with their reactions, with one read of the reactions. */
@@ -1061,8 +1166,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 			idempotency?: { key: string; requestHash: string } | undefined;
 			/** The key of the client, as the caller gave it. The message keeps it. */
 			clientKey: string | null;
+			/** The message that this message replies to, or null for a message of the room. */
+			parentId: string | null;
+			/** True for a reply that also goes to the room list. */
+			alsoInRoom: boolean;
 		},
-	): Promise<{ message: MessageRecord; duplicate: boolean } | Refusal> {
+	): Promise<{ message: MessageRecord; parent: MessageRecord | null; duplicate: boolean } | Refusal> {
 		// Hold room calls until the subscription boundary and message commit agree on their order.
 		const posted = await this.ctx.blockConcurrencyWhile(async () => {
 			const opened = this.openAsMember(call);
@@ -1079,9 +1188,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 						return refuse("conflict", "The idempotency key was used with a different request.");
 					}
 					const row = this.message(earlier.message_id) as MessageRow;
-					return { message: this.messageRecord(opened.room.room_id, row), duplicate: true };
+					return { message: this.messageRecord(opened.room.room_id, row), parent: null, duplicate: true };
 				}
 			}
+			// A thread has one level, and a deleted message takes no new reply.
+			const parent = input.parentId === null ? null : this.message(input.parentId);
+			if (input.parentId !== null && !parent)
+				return refuse("not_found", "The message to reply to is not in this room.");
+			if (parent && parent.parent_id !== null) {
+				return refuse("invalid", "A reply cannot have replies. Reply to the first message of the thread.");
+			}
+			if (parent && parent.deleted_at !== null)
+				return refuse("invalid", "The message is deleted, so it takes no reply.");
+			const inRoomList = parent === null || input.alsoInRoom;
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 			// A retry with the same key returned above: it adds no message, so it uses no allowance.
 			const limited = this.spendAllowance(call, now);
@@ -1090,11 +1209,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if ("error" in content) return content;
 			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, []);
 			if (groupRefusal) return groupRefusal;
-			const version = opened.room.version + 1;
+			// A reply changes its parent too. The parent gets the first version and the reply the next, so a
+			// client that gets the two events in that order has each version of the room.
+			const version = opened.room.version + (parent ? 2 : 1);
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
-					`INSERT INTO messages (id, author_id, author_json, text, body_json, created_at, version, idempotency_key)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+					`INSERT INTO messages (id, author_id, author_json, text, body_json, created_at, version, idempotency_key,
+						parent_id, also_in_room)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
@@ -1103,10 +1225,18 @@ export class ChatRoomDO extends DurableObject<Env> {
 					now,
 					version,
 					input.clientKey,
+					parent?.id ?? null,
+					parent && input.alsoInRoom ? 1 : 0,
 				)?.seq as number;
-				this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
-				this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
-				this.setMentions(seq, call.actor.principal_id, content.body);
+				// A reply that is not in the room list leaves the room list as it was: its last message, its
+				// activity and the read markers.
+				if (inRoomList) {
+					this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ? WHERE id = 1", seq, now);
+					this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
+				}
+				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+				if (parent) this.refreshThread(parent.id, version - 1);
+				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
 					this.sql.exec(
@@ -1125,13 +1255,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 					call.actor.principal_id,
 					now,
 					subscriptionSequence,
+					parent?.id ?? null,
 				);
 				this.roomChanged(call.actor.principal_id);
 			});
 			const message = this.messageRecord(opened.room.room_id, this.message(input.id) as MessageRow);
-			return { message, duplicate: false };
+			const changedParent = parent
+				? this.messageRecord(opened.room.room_id, this.message(parent.id) as MessageRow)
+				: null;
+			return { message, parent: changedParent, duplicate: false };
 		});
 		if (!("error" in posted) && !posted.duplicate) {
+			// The parent first: its version comes before the version of the reply.
+			if (posted.parent) await this.publish({ type: "message", message: messageOutput(posted.parent) });
 			await this.publish({ type: "message", message: messageOutput(posted.message) });
 		}
 		return posted;
@@ -1177,7 +1313,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
-				this.setMentions(row.seq, row.author_id, content.body);
+				this.setMentions(row.seq, row.author_id, content.body, row.parent_id === null || row.also_in_room === 1);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
@@ -1188,6 +1324,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					call.actor.principal_id,
 					now,
 					subscriptionSequence,
+					row.parent_id,
 				);
 			});
 			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
@@ -1268,6 +1405,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				);
 			}
 			if (row.deleted_at !== null) return { deleted: false as const };
+			// The delete of a reply changes the summary of its parent too, with the next version.
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {
@@ -1278,11 +1416,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
+				if (row.parent_id !== null) this.refreshThread(row.parent_id, version + 1);
 				// A deleted message keeps no reaction, no mention and no earlier version.
 				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
 				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
 				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
-				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", row.parent_id === null ? version : version + 1);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
 					room.room_id,
@@ -1292,13 +1431,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 					call.actor.principal_id,
 					now,
 					subscriptionSequence,
+					row.parent_id,
 				);
 			});
 			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
-			return { deleted: true as const, message };
+			const parentRow = row.parent_id === null ? null : this.message(row.parent_id);
+			const parent = parentRow ? this.messageRecord(room.room_id, parentRow) : null;
+			return { deleted: true as const, message, parent };
 		});
 		if (!("error" in deleted) && deleted.deleted) {
 			await this.publish({ type: "message", message: messageOutput(deleted.message) });
+			if (deleted.parent) await this.publish({ type: "message", message: messageOutput(deleted.parent) });
 		}
 		if ("error" in deleted) return deleted;
 		return { deleted: deleted.deleted };
@@ -1616,6 +1759,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		actorId: string,
 		now: number,
 		subscriptionSequence: number,
+		parentId: string | null = null,
 	): void {
 		const recipients = this.all<{ principal_id: string; membership_id: string }>(
 			"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
@@ -1632,6 +1776,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			recipients,
 			eventType,
 			messageId,
+			...(parentId === null ? {} : { parentId }),
 		};
 		this.sql.exec(
 			"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",

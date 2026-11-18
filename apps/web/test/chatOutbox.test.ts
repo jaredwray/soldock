@@ -45,6 +45,9 @@ function fakeRoom() {
 							reactions: [],
 							mentions: [],
 							group_mentions: [],
+							parent_id: null,
+							also_in_room: false,
+							thread: null,
 						});
 						return settle();
 					},

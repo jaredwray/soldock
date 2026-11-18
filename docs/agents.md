@@ -394,6 +394,12 @@ app uses.
   message lists them in `group_mentions`, so look there too for the messages for you. In a room with
   more than 50 members, only an owner of the room can mention a group: a different member gets the
   error `forbidden`. Mention a group only when each member must read the message.
+- **Threads.** To reply to a message, call `chat_post_message` with `parent_id`: the id of the message.
+  A reply is not in `chat_list_messages`, and it does not make the room unread. Set
+  `also_in_room: true` when each member must see the reply in the room too. A message with replies
+  has `thread`, with the number of replies. Read the replies with `chat_list_replies`. A thread has
+  one level: reply to the first message of a thread, not to a reply. A chat webhook for a reply has
+  `parent_id`.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not
   remove words. To remove a message and its earlier versions, delete it.
