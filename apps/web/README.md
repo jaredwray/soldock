@@ -744,7 +744,7 @@ MCP clients. The app has no UI-only path.
       and the wait before a retry is over. The wait is 1 s, and it doubles after each failure, up to
       60 s, so the room lists of other rooms do not repeat a read that fails.
       A room list during a read for the same version adds no read. A room that is not in the room list
-      has no version, so its thread reads with each room list. Thus a change in a different room makes
+      has no version, so its thread reads at most one time in 15 s (`THREAD_POLL_MS`). Thus a change in a different room makes
       no read, and the view stays current without a socket too. A failed read keeps the version, so
       the next read asks for the same changes.
     - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).

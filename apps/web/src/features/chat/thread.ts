@@ -47,6 +47,8 @@ export function inThread(message: Pick<ChatMessage, "id" | "parent_id">, parentI
 export const THREAD_RETRY_MS = 1_000;
 /** The longest wait before a retry. Each failure doubles the wait up to this value. */
 export const THREAD_RETRY_MAX_MS = 60_000;
+/** The shortest time between two reads for the room lists of a room that is not in the room list, in ms. */
+export const THREAD_POLL_MS = 15_000;
 
 /** One page of `chat.list_replies`. */
 export interface RepliesPage {
@@ -68,9 +70,10 @@ export interface ThreadView {
 	 * Tells the view to read the changes that it missed. A new connect of the socket gives no version, and
 	 * the view always reads. A new room list gives the version of the room: the view reads only when the
 	 * room is after the version of the thread and after each version that a catch-up asked for before, or
-	 * when its last catch-up failed and the wait before a retry is over.
+	 * when its last catch-up failed and the wait before a retry is over. A room list that does not have
+	 * the room gives null: the view reads at most one time in `THREAD_POLL_MS`.
 	 */
-	catchUp(roomVersion?: number): void;
+	catchUp(roomVersion?: number | null): void;
 	/** The thread that shows, or null before the first load. */
 	current(): ThreadState | null;
 }
@@ -95,6 +98,8 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 	let retryAt = 0;
 	/** The highest version of the room that a catch-up asked for. A read that runs or ran covers it. */
 	let asked = 0;
+	/** The time (ms) after which a room list with no version of the room reads again. */
+	let pollAt = 0;
 	let again = false;
 
 	const set = (next: ThreadState) => {
@@ -162,7 +167,12 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 		catchUp(roomVersion) {
 			// Before the end of the load there is nothing to do: the load reads the changes at its end.
 			if (thread === null) return;
-			if (roomVersion !== undefined) {
+			if (roomVersion === null) {
+				// The room list does not show if this room changed, so it reads at most one time in THREAD_POLL_MS.
+				const now = Date.now();
+				if (running || now < pollAt || (failed && now < retryAt)) return;
+				pollAt = now + THREAD_POLL_MS;
+			} else if (roomVersion !== undefined) {
 				// A read that runs covers each version up to `asked`. After a failure, a room list for a covered
 				// version waits for `retryAt`, so the room lists of other rooms do not repeat a read that fails.
 				const covered = roomVersion <= Math.max(thread.version, asked);

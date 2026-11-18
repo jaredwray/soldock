@@ -5,6 +5,7 @@ import {
 	mergeThread,
 	type RepliesPage,
 	replyAttempt,
+	THREAD_POLL_MS,
 	THREAD_RETRY_MS,
 	type ThreadState,
 } from "../src/features/chat/thread.ts";
@@ -105,6 +106,8 @@ describe("the data of the view of a thread", () => {
 			page([message(3, 7, "cmsg_1", "two")], 7, true),
 			page([], 8),
 			page([], 8),
+			page([], 8),
+			page([], 8),
 		];
 		const calls: unknown[] = [];
 		const read = async (range: { after?: number; changed_after?: number }) => {
@@ -131,14 +134,25 @@ describe("the data of the view of a thread", () => {
 		vi.setSystemTime(Date.now() + THREAD_RETRY_MS);
 		view.catchUp(6);
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
-		// A catch-up with no version (a new connect of the socket, or a room that is not in the list) always reads.
+		// A catch-up with no version (a new connect of the socket) always reads.
 		view.catchUp();
 		await vi.waitFor(() => expect(calls).toHaveLength(7));
+		// A room list that does not have the room (null) reads at most one time in THREAD_POLL_MS.
+		view.catchUp(null);
+		await vi.waitFor(() => expect(calls).toHaveLength(8));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		view.catchUp(null);
+		expect(calls).toHaveLength(8);
+		vi.setSystemTime(Date.now() + THREAD_POLL_MS);
+		view.catchUp(null);
+		expect(calls).toHaveLength(9);
 		expect(calls.slice(2)).toEqual([
 			{ changed_after: 5 },
 			{ changed_after: 6 },
 			{ changed_after: 6 },
 			{ changed_after: 7 },
+			{ changed_after: 8 },
+			{ changed_after: 8 },
 			{ changed_after: 8 },
 		]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);

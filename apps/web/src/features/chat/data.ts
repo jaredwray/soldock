@@ -508,10 +508,9 @@ export function useRoom(
 		// The view of a thread reads its changes too: without a socket, after a socket that stopped, or after a
 		// catch-up that failed, the room list is its next chance.
 		// The version of this room goes with it, so a list after a change of a different room reads nothing.
-		// A room that is not in the list has no version, so its thread reads on each list.
+		// A room that is not in the list gives null, so its thread reads at most one time in a period.
 		if (tick > 0) {
-			const roomVersion = listedVersion ?? undefined;
-			for (const watcher of watchers.current) watcher({ type: "catch-up", roomVersion });
+			for (const watcher of watchers.current) watcher({ type: "catch-up", roomVersion: listedVersion });
 		}
 	}, [tick, listedVersion, sync]);
 
@@ -595,4 +594,5 @@ export function useRoom(
  */
 export type MessageWatch =
 	| { type: "message"; message: ChatMessage }
-	| { type: "catch-up"; roomVersion?: number | undefined };
+	/** `roomVersion`: the listed version of the room, null when the list does not have it, absent after a connect. */
+	| { type: "catch-up"; roomVersion?: number | null | undefined };
