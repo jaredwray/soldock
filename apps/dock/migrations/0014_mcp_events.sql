@@ -20,3 +20,12 @@ ALTER TABLE webhook_subscriptions ADD COLUMN expires_at TEXT;
 --> statement-breakpoint
 -- Chat only. Null: each room of the target sends the event. Else only this room sends it.
 ALTER TABLE webhook_subscriptions ADD COLUMN room_id TEXT;
+--> statement-breakpoint
+-- The verification POSTs that one principal caused in the current hour. events/subscribe sends a POST
+-- to a URL of the caller, so this count limits the POSTs that one principal can cause.
+-- The table has no reference to principals, so a fresh start can drop and replay it.
+CREATE TABLE IF NOT EXISTS mcp_event_verifications (
+	principal_id TEXT PRIMARY KEY,
+	window_start INTEGER NOT NULL,
+	count INTEGER NOT NULL
+);

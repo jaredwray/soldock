@@ -185,6 +185,32 @@ async function verifyCallback(id: string, url: string, secret: string): Promise<
 	if (typeof echoed !== "string" || !sameSecret(echoed, challenge)) throw new EventCallbackError("challenge_failed");
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Counts one verification POST for the principal. A caller can change the secret or the path for each
+ * call, so each call can cause a POST to a public host. This count limits those POSTs in one hour.
+ */
+async function countVerification(db: D1Database, principalId: string, now: number): Promise<void> {
+	const counted = await db
+		.prepare(
+			`INSERT INTO mcp_event_verifications (principal_id, window_start, count) VALUES (?1, ?2, 1)
+			ON CONFLICT (principal_id) DO UPDATE SET
+				count = CASE WHEN window_start <= ?3 THEN 1 ELSE count + 1 END,
+				window_start = CASE WHEN window_start <= ?3 THEN ?2 ELSE window_start END
+			WHERE window_start <= ?3 OR count < ?4
+			RETURNING count`,
+		)
+		.bind(principalId, now, now - HOUR_MS, MCP_EVENT_LIMITS.verificationsPerHour)
+		.first();
+	if (!counted) {
+		throw new OperationError(
+			"rate_limited",
+			`You can verify at most ${MCP_EVENT_LIMITS.verificationsPerHour} callbacks in one hour. Try again later.`,
+		);
+	}
+}
+
 function auditEvents(call: CallContext, op: string, id: string, targetId: string): void {
 	audit({
 		op,
@@ -244,7 +270,10 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 			)
 			.bind(principal.id, url, input.secret, new Date(now - MCP_EVENT_LIMITS.verifiedMs).toISOString())
 			.first<{ verified_at: string }>();
-		if (!passed) await verifyCallback(id, url, input.secret);
+		if (!passed) {
+			await countVerification(db, principal.id, now);
+			await verifyCallback(id, url, input.secret);
+		}
 		const verifiedAt = passed?.verified_at ?? nowText;
 
 		await prepare[event.domain]?.(call, targetId);

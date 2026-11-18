@@ -281,5 +281,5 @@ Migration `0013_webhook_endpoints.sql` adds endpoints and subscriptions for Mail
 The old tables stay, so the previous Worker can still write them. The same `WEBHOOKS` binding serves every event.
 Chat rooms apply their object migration on their next start. No new Cloudflare resource or secret is required.
 
-Migration `0014_mcp_events.sql` adds columns to the two tables for [MCP Events](agents.md#get-events-in-chatgpt-mcp-events).
+Migration `0014_mcp_events.sql` adds columns to the two tables and one small table for [MCP Events](agents.md#get-events-in-chatgpt-mcp-events).
 It needs no new Cloudflare resource and no secret. A subscription of MCP Events uses the same queue.

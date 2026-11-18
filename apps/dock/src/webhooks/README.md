@@ -135,7 +135,9 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   `{"type":"verification","challenge":"…"}` and a `webhook-id` that starts with `msg_verification_`.
   The receiver must answer 2xx in 10 seconds, with at most 4 KiB of JSON that has the same
   `challenge`. Soldock compares the two values in constant time. A receiver that passed needs no new
-  POST for 5 minutes, for the same principal, URL and secret. A failure stores nothing.
+  POST for 5 minutes, for the same principal, URL and secret. A failure stores nothing. One principal
+  can cause 100 verification POSTs in one hour. A caller can change the secret or the path for each
+  call, so this count, not the 5 minutes, limits the POSTs to a host. More get the error `rate_limited`.
 - **Life.** A subscription lives 24 hours, or `ttlMs` when the client asks for less. The shortest life
   is one minute. `ttlMs: null` asks for no end, and gets 24 hours. `refreshBefore` is the end. After
   the end, the fan-out makes no job and a retry sends nothing. A refresh starts a subscription again,
@@ -150,6 +152,8 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   `<event id>_<subscription id>`, and `webhook-id` has the same value. `X-MCP-Subscription-Id` has
   the subscription id. A retry keeps the `eventId` and has a new time and a new signature. An answer
   of 413 ends that event without a retry. An answer of 410 disables the endpoint, as for a webhook.
+  An event from before the subscription was created sends nothing. So a retry that waits on the queue
+  does not go to a subscription that the client stopped and then created again with the same id.
 - **Limits.** One principal can have 50 subscriptions that did not expire. One event of one target
   can make 20 POST requests, with its webhook subscriptions. For Chat, one message goes to the
   subscriptions for all rooms and to those for its room. So the limit counts the subscriptions for all
@@ -177,6 +181,7 @@ MCP Events in the webhook form, and it does not read the end of a subscription.
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
 | Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription |
+| Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Jobs | Queue `soldock-webhooks`, dead letters in `soldock-webhooks-dlq` | Ids and times only. No content and no secrets |

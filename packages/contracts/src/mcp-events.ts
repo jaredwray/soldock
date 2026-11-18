@@ -18,6 +18,8 @@ export const MCP_EVENT_LIMITS = {
 	subscriptionsPerCreator: 50,
 	/** The time that the receiver has to answer the verification POST. */
 	verifyTimeoutMs: 10_000,
+	/** The verification POSTs that one principal can cause in one hour. More get the error `rate_limited`. */
+	verificationsPerHour: 100,
 	/** The most bytes that Soldock reads from the answer to the verification POST. */
 	verifyResponseBytes: 4096,
 	/** After a verification, the same principal, URL and secret need no new verification for this time. */

@@ -524,6 +524,7 @@ For client developers:
 - Before Soldock stores the subscription, it sends a signed POST with
   `{ "type": "verification", "challenge": "…" }` to the URL. Answer 2xx with
   `{ "challenge": "…" }` in 10 seconds. If not, the call gets error `-32015` with `data.reason`.
+  One principal can cause 100 such POSTs in one hour. More get the error `rate_limited`.
 - The result has the `id` of the subscription and `refreshBefore`. A subscription lives 24 hours at
   most. Call `events/subscribe` again before `refreshBefore`, with the same name, arguments and URL.
   A new secret is permitted then: for 5 minutes, each POST has the signatures of the two secrets.

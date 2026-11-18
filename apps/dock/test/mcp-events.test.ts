@@ -443,6 +443,27 @@ describe("events/subscribe", () => {
 		expect((await add()).subscription.status).toBe("active");
 		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(old.id);
 	});
+	// events/subscribe sends a POST to a URL of the caller. A caller can change the secret for each call,
+	// so a count for each principal must limit the POSTs, not the verification cache.
+	it("limits the verification POSTs that one principal can cause in one hour", async () => {
+		const { verifications } = receiver();
+		await env.DIRECTORY.prepare(
+			"INSERT INTO mcp_event_verifications (principal_id, window_start, count) VALUES (?, ?, ?)",
+		)
+			.bind(ada.id, Date.now(), MCP_EVENT_LIMITS.verificationsPerHour - 1)
+			.run();
+		const { id } = resultOf(await subscribe(ada.key, "chat.message.created"));
+		const over = await subscribe(ada.key, "chat.message.created", { secret: OTHER_SECRET });
+		expect(errorOf(over)).toMatchObject({ code: -32603, data: { code: "rate_limited" } });
+		expect(verifications()).toHaveLength(1);
+		// A refresh with the secret that passed sends no POST, so the limit does not stop it.
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(id);
+
+		vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 + 1000 });
+		expect(resultOf(await subscribe(ada.key, "chat.message.created", { secret: OTHER_SECRET })).id).toBe(id);
+		expect(verifications()).toHaveLength(2);
+	});
+
 	// One message goes to the subscriptions for all rooms and to those for its room. Subscriptions for
 	// other rooms add no POST, so they must not stop the refresh of a subscription for all rooms.
 	it("counts a subscription for one room only against that room", async () => {
@@ -653,6 +674,29 @@ describe("events/unsubscribe", () => {
 		await queue.drain();
 		await deliver(queue.events);
 		expect(events()).toEqual([]);
+	});
+
+	// The id of a subscription is the same after an unsubscribe and a new subscribe. A retry that waited
+	// on the queue must not go to the new subscription: the events have no replay.
+	it("sends no event from before a new subscription with the same id", async () => {
+		const room = await privateRoom("Launch", bot, [ada.id]);
+		const { events } = receiver();
+		const first = resultOf(await subscribe(ada.key, "chat.message.created"));
+		const queue = await roomQueue(room.id);
+		const post = async () => {
+			await bot.call("chat.post_message", { room_id: room.id, text: "Hello" });
+			await queue.drain();
+			return deliver(queue.events);
+		};
+		const { jobs } = await post();
+		expect(events()).toHaveLength(1);
+
+		await unsubscribe(ada.key, "chat.message.created");
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(first.id);
+		await consumeWebhooks(jobs);
+		expect(events()).toHaveLength(1);
+		await post();
+		expect(events()).toHaveLength(2);
 	});
 });
 

@@ -86,6 +86,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TRIGGER IF EXISTS chat_webhooks_mirror_update",
 		"DROP TRIGGER IF EXISTS webhooks_mirror_delete",
 		"DROP TRIGGER IF EXISTS chat_webhooks_mirror_delete",
+		"DROP TABLE IF EXISTS mcp_event_verifications",
 		"DROP TABLE IF EXISTS webhook_subscriptions",
 		"DROP TABLE IF EXISTS webhook_endpoints",
 		"DROP TABLE IF EXISTS webhooks",

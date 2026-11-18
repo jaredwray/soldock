@@ -406,6 +406,9 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	if (pair.subscription.target_id !== targetOf(job)) return;
 	// A retry can run after the end of the subscription.
 	if (isExpired(pair.subscription, Date.now())) return;
+	// The id of a subscription of MCP Events is the same after an unsubscribe and a new subscribe. A job
+	// from before the new subscription must not go to it: these events have no replay.
+	if (pair.endpoint.protocol === "mcp_events" && job.occurredAt < Date.parse(pair.subscription.created_at)) return;
 	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(pair.subscription, job.eventId, Date.now())) return;
 	const memberIds = job.kind === "drive_delivery" ? job.memberIds : undefined;
 	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds);

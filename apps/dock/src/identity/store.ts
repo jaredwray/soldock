@@ -506,6 +506,7 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 		// Subscriptions that watch this principal go first. The endpoint of a sponsor then stays.
 		db.prepare(`DELETE FROM webhook_subscriptions WHERE target_id = ?2 AND ${deleted}`).bind(now, id),
 		db.prepare(`DELETE FROM webhook_endpoints WHERE created_by = ?2 AND ${deleted}`).bind(now, id),
+		db.prepare(`DELETE FROM mcp_event_verifications WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
 		// The old rows, for a Worker that still reads them. The mirror trigger removes a copied row.
 		db.prepare(`DELETE FROM webhooks WHERE (created_by = ?2 OR mailbox_id = ?2) AND ${deleted}`).bind(now, id),
 		db.prepare(`DELETE FROM chat_webhooks WHERE (created_by = ?2 OR mailbox_id = ?2) AND ${deleted}`).bind(now, id),
