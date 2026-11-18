@@ -202,7 +202,8 @@ export function messageContent(input: {
 		}
 		content = { body, text: bodyText(body) };
 	}
-	return checkedContent(content.body, content.text);
+	// The room counts the mentions after it links them: a mention that stays text counts as no mention.
+	return checkedContent(content.body, content.text, { countMentions: false });
 }
 
 /** The mention nodes of the blocks, in the order of the body. */
@@ -226,10 +227,14 @@ export function mentionsOf(body: ChatBody): Extract<ChatBodyInline, { type: "men
  * The content of a body after each check of the limits: text, characters, mentions, bytes and Markdown.
  * Each change of a body (the forms of a call, the mentions) ends here.
  */
-export function checkedContent(body: ChatBody, text = bodyText(body)): MessageContent {
+export function checkedContent(
+	body: ChatBody,
+	text = bodyText(body),
+	options: { countMentions: boolean } = { countMentions: true },
+): MessageContent {
 	const content: MessageContent = { body, text };
 	if (content.text.trim() === "") throw new OperationError("invalid", "The message has no text.");
-	if (mentionsOf(body).length > CHAT_LIMITS.mentions) {
+	if (options.countMentions && mentionsOf(body).length > CHAT_LIMITS.mentions) {
 		throw new OperationError("invalid", `A message has at most ${CHAT_LIMITS.mentions} mentions.`);
 	}
 	if (content.text.length > CHAT_LIMITS.messageChars) {
@@ -282,15 +287,6 @@ export function mapMentions(body: ChatBody, change: (node: Mention) => ChatBodyI
 			}
 		});
 	return { ...body, content: blocks(body.content) };
-}
-
-/**
- * The body with each mention of a principal that cannot see the room as text: "@" and its label. Such
- * a mention gives no access to the room and counts as no mention.
- */
-export function visibleMentions(body: ChatBody, canSee: (principalId: string) => boolean): ChatBody {
-	if (mentionsOf(body).every((node) => canSee(node.attrs.id))) return body;
-	return mapMentions(body, (node) => (canSee(node.attrs.id) ? node : { type: "text", text: `@${node.attrs.label}` }));
 }
 
 /** The ids of the principals that a body mentions, each one time, in the order of the body. */

@@ -1171,6 +1171,18 @@ describe("mentions", () => {
 			})
 		).message;
 		expect([edited.text, edited.mentions]).toEqual(["@owner", []]);
+		// A node of an outsider keeps the label that the caller sent: the room tells no handle of a
+		// principal outside it.
+		const forged = (
+			await ada.call("chat.post_message", {
+				room_id: secret.id,
+				body: { type: "doc", content: [{ type: "paragraph", content: [mention(owner.id, "nobody")] }] } as never,
+			})
+		).message;
+		expect([forged.text, forged.mentions]).toEqual(["@nobody", []]);
+		// A mention that stays text does not count for the limit of mentions.
+		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => "@owner").join(" ");
+		expect((await ada.call("chat.post_message", { room_id: secret.id, text: many })).message.mentions).toEqual([]);
 		// Each principal can see a public room, so the mention there is a node.
 		const open = await createRoom(ada, "public", "Open");
 		expect((await post(ada, open.id, "@owner")).mentions).toEqual([owner.id]);
@@ -1209,7 +1221,11 @@ describe("mentions", () => {
 				}),
 			),
 		).toBe("not_found");
-		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => mention(bot.id, "bot"));
+		// The nodes have a space between them: a node that touches a node is text.
+		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => [
+			mention(bot.id, "bot"),
+			{ type: "text", text: " " },
+		]).flat();
 		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, body: body(...many) }))).toBe("invalid");
 		// The text form has the same limit.
 		const text = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => "@bot").join(" ");

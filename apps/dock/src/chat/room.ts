@@ -20,7 +20,7 @@ import {
 } from "../identity/index.ts";
 import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
-import { bodyMarkdown, type MessageContent, mentionIds, textBody, visibleMentions } from "./body.ts";
+import { bodyMarkdown, type MessageContent, mentionIds, textBody } from "./body.ts";
 import { withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -934,18 +934,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * label.
 	 */
 	private async mentionedContent(room: RoomRow, input: MessageContent): Promise<MessageContent | Refusal> {
-		let content: MessageContent;
+		const canSee = (principalId: string) => room.kind === "public" || this.member(principalId) !== null;
 		try {
-			content = await withMentions(this.env.DIRECTORY, input);
+			return await withMentions(this.env.DIRECTORY, input, canSee);
 		} catch (error) {
 			if (error instanceof OperationError && (error.code === "invalid" || error.code === "payload_too_large")) {
 				return refuse(error.code, error.detail);
 			}
 			throw error;
 		}
-		if (room.kind === "public") return content;
-		const body = visibleMentions(content.body, (principalId) => this.member(principalId) !== null);
-		return body === content.body ? content : { body, text: content.text };
 	}
 
 	/** Adds a message. The room is then read for its author. */

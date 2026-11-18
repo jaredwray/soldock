@@ -143,9 +143,14 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   - The directory (`listPrincipals`) loads only for a body with the syntax of a mention (`@` and a
     handle, not an address) in a text that can hold one, or with a mention node. It is the whole
     directory: a later change reads only the handles and ids of the body.
-  - The room keeps a mention of a principal that cannot see the room as text: `@` and the label.
-    Each principal can see a public room. A private room and a direct message are for their members.
-    So a mention gives no access and no notification outside the room.
+  - The room keeps a mention of a principal that cannot see the room as text: `@` and the label that
+    the caller sent, with no change, so the room tells no handle of a principal outside it. Each
+    principal can see a public room. A private room and a direct message are for their members. So a
+    mention gives no access and no notification outside the room.
+  - The room spends the allowance of the rate limit before it reads the directory, so a caller above
+    the limit forces no read. A call that the mentions then refuse (more than 50) has used its
+    allowance. The limit of mentions counts the nodes after the room makes them: a mention that stays
+    text counts as no mention.
   - A caller with `chat.write` learns the id of a principal that a mention finds. An id is not a
     secret: `directory.list_principals` gives the ids with the names and the addresses.
   - Known limits: a mention node has no marks, so `**@bot**` is a mention without bold. A label is

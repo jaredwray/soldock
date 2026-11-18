@@ -48,26 +48,35 @@ function needsDirectory(body: ChatBody): boolean {
 	return found;
 }
 
-/** The inline nodes of a text, with a mention node for each mention of a principal of the directory. */
-function linkText(node: Text, directory: MentionDirectory<PrincipalRecord>): ChatBodyInline[] {
+/** True when a principal can see the room of the message. A mention of any other principal is text. */
+type CanSee = (principalId: string) => boolean;
+
+/**
+ * The inline nodes of a text, with a mention node for each mention of a principal of the directory that
+ * can see the room. Each other mention stays the text that the caller wrote.
+ */
+function linkText(node: Text, directory: MentionDirectory<PrincipalRecord>, canSee: CanSee): ChatBodyInline[] {
 	if (!canHoldMention(node)) return [node];
 	return textParts(node.text, directory).map((part): ChatBodyInline => {
-		if (part.person) return { type: "mention", attrs: { id: part.person.id, label: part.text.slice(1) } };
+		if (part.person && canSee(part.person.id)) {
+			return { type: "mention", attrs: { id: part.person.id, label: part.text.slice(1) } };
+		}
 		return node.marks ? { type: "text", text: part.text, marks: node.marks } : { type: "text", text: part.text };
 	});
 }
 
 /**
  * A mention node with a label that finds its principal. The label of the time of the write stays when
- * it still finds the principal (a handle or a name alias). Each other label becomes the handle. A
- * mention of a principal that the directory does not have (a deleted one), or that has no handle, is
- * text: "@" and its label. So a stored message with such a mention can still change, and a call tells
- * nothing about the ids that exist.
+ * it still finds the principal (a handle or a name alias). Each other label becomes the handle.
+ *
+ * A mention of a principal that cannot see the room, that the directory does not have (a deleted one),
+ * or that has no handle, is text: "@" and the label that the caller sent. So a stored message with such
+ * a mention can still change, and a call tells nothing about the ids or the handles outside the room.
  */
-function checkedMention(node: Mention, directory: MentionDirectory<PrincipalRecord>): ChatBodyInline {
+function checkedMention(node: Mention, directory: MentionDirectory<PrincipalRecord>, canSee: CanSee): ChatBodyInline {
 	const person = directory.byId.get(node.attrs.id);
 	const handle = directory.handleOf.get(node.attrs.id);
-	if (!person || handle === undefined) return { type: "text", text: `@${node.attrs.label}` };
+	if (!person || handle === undefined || !canSee(person.id)) return { type: "text", text: `@${node.attrs.label}` };
 	const label = directory.byHandle.get(node.attrs.label.toLowerCase())?.id === person.id ? node.attrs.label : handle;
 	return { type: "mention", attrs: { id: person.id, label } };
 }
@@ -101,12 +110,12 @@ function fitMentions(content: ChatBodyInline[]): ChatBodyInline[] {
 }
 
 /** The body with mention nodes for the mentions in its text, and each mention node checked. */
-export function linkMentions(body: ChatBody, directory: MentionDirectory<PrincipalRecord>): ChatBody {
+export function linkMentions(body: ChatBody, directory: MentionDirectory<PrincipalRecord>, canSee: CanSee): ChatBody {
 	const inline = (content: readonly ChatBodyInline[]): ChatBodyInline[] =>
 		fitMentions(
 			content.flatMap((node) => {
-				if (node.type === "text") return linkText(node, directory);
-				if (node.type === "mention") return [checkedMention(node, directory)];
+				if (node.type === "text") return linkText(node, directory, canSee);
+				if (node.type === "mention") return [checkedMention(node, directory, canSee)];
 				return [node];
 			}),
 		);
@@ -131,13 +140,14 @@ export function linkMentions(body: ChatBody, directory: MentionDirectory<Princip
 }
 
 /**
- * The content with its mentions as nodes. The directory loads only for a body with an "@" in a text
- * that can hold a mention, or with a mention node. A plain text keeps its text as it came.
+ * The content with its mentions as nodes, for the principals that can see the room. The directory loads
+ * only for a body with the syntax of a mention, or with a mention node. A plain text keeps its text as it
+ * came. The limits, also the limit of mentions, apply to the result.
  */
-export async function withMentions(db: D1Database, content: MessageContent): Promise<MessageContent> {
+export async function withMentions(db: D1Database, content: MessageContent, canSee: CanSee): Promise<MessageContent> {
 	if (!needsDirectory(content.body)) return content;
 	const directory = mentionDirectory(await listPrincipals(db));
-	const body = linkMentions(content.body, directory);
+	const body = linkMentions(content.body, directory, canSee);
 	// A plain text keeps its spaces at the start. A mention is "@" and its label, so the text of a text
 	// with mentions is the same text. A body form gets the text of its new labels.
 	const sameText = content.text === bodyText(content.body);
