@@ -118,7 +118,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const page =
 			input.view === "public"
 				? await listPublicRooms(call.env.DIRECTORY, call.caller.id, list)
-				: await listJoinedRooms(call.env, call.caller.id, list);
+				: await listJoinedRooms(call.env, call.caller.id, list, input.view === "starred");
 		if (page === null) {
 			throw new OperationError(
 				"invalid",
@@ -254,5 +254,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.markRead(opened.ctx, input.seq ?? null));
 		return { last_read_seq: result.lastReadSeq, unread: result.unread };
+	},
+
+	// A star changes the view of the caller, not the data of the room. So it writes no audit line, as
+	// for the read marker.
+	async "chat.star_room"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const room = accept(await opened.room.star(opened.ctx, input.starred));
+		return { room: toRoom(room) };
 	},
 };

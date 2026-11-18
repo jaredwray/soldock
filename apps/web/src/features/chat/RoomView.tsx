@@ -101,6 +101,17 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	/** The characters of the draft above the limit of the plain text, or 0. */
 	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
 	const [joining, setJoining] = useState(false);
+	/** The star that the person set, until the room list has it. Null when no call runs. */
+	const [starring, setStarring] = useState<boolean | null>(null);
+	/**
+	 * The star of the last answer of `chat.star_room`, until the room loads again. A room that is not in
+	 * the list shows it: it is newer than the room of the load.
+	 */
+	const [answeredStar, setAnsweredStar] = useState<boolean | null>(null);
+	/** The end of the line of star calls. Each call starts after the call before it ends. */
+	const starCalls = useRef<Promise<void>>(Promise.resolve());
+	/** The number of star clicks. Only the last click clears the star of the button. */
+	const starClicks = useRef(0);
 	/** True while a read of the newest messages runs for this view. */
 	const [goingToLatest, setGoingToLatest] = useState(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
@@ -129,6 +140,11 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	// The room list follows each change, so its room is newer than the room of the first load.
 	const room = listed ?? view.room;
+	// A new load of the room is newer than the answer of a star call from before it.
+	const loadedForStar = view.room;
+	useEffect(() => {
+		if (loadedForStar) setAnsweredStar(null);
+	}, [loadedForStar]);
 	const title = room ? roomTitle(room) : "Chat";
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });
 
@@ -559,6 +575,28 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		});
 	}
 
+	/**
+	 * Sets or removes the star of the person. The button changes at once, and goes back after a refusal.
+	 * A click while a call runs waits in a line: two calls at the same time can reach the room in the
+	 * other order, and a click must not get lost.
+	 */
+	function setStar(starred: boolean) {
+		const click = ++starClicks.current;
+		setStarring(starred);
+		starCalls.current = starCalls.current.then(async () => {
+			try {
+				const answer = await api.call("chat.star_room", { room_id: roomId, starred });
+				setAnsweredStar(answer.room.starred);
+				// The list puts the room in its part of the sidebar. The events socket brings it too.
+				await onRoomsChanged();
+			} catch (caught) {
+				fail(caught);
+			}
+			// A later click keeps its own star on the button until its call ends.
+			if (click === starClicks.current) setStarring(null);
+		});
+	}
+
 	async function join() {
 		setJoining(true);
 		try {
@@ -605,6 +643,9 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					{title}
 				</h1>
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
+				{room.role !== null && (
+					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
+				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
 					<button
@@ -862,6 +903,23 @@ interface MessageItemProps {
 	quickEmoji: readonly string[];
 	/** Adds or removes the reaction of the person with one emoji. */
 	onReact: (emoji: string, add: boolean) => void;
+}
+
+/** The star of the person on the room, as in the header of a Drive item. A set star is solid. */
+function StarButton({ starred, onChange }: { starred: boolean; onChange: (starred: boolean) => void }) {
+	const label = starred ? "Remove star" : "Star";
+	return (
+		<button
+			type="button"
+			className={starred ? "icon-button icon-button-star" : "icon-button"}
+			aria-label={label}
+			aria-pressed={starred}
+			title={label}
+			onClick={() => onChange(!starred)}
+		>
+			<Icon name="star" filled={starred} />
+		</button>
+	);
 }
 
 function MessageItem({

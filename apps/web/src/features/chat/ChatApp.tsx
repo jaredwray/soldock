@@ -1,6 +1,6 @@
 import "./chat.css";
 import type { ChatRoom } from "@soldock/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
@@ -133,7 +133,12 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
-	const { named, direct } = sidebarRooms(rooms.rooms);
+	const { starred, named, direct } = sidebarRooms(rooms.rooms);
+	// The text of an empty part is for a person without such a room. A room with a star is in its own part.
+	const hasNamed = rooms.rooms.some((room) => room.kind !== "dm");
+	const hasDirect = rooms.rooms.some((room) => room.kind === "dm");
+	// Each list has the name of its heading, so a screen reader names the part of a room.
+	const headingId = useId();
 
 	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
 	// focus goes back to the menu button, if the focus was in the drawer.
@@ -159,8 +164,24 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 					<Icon name="plus" size={16} />
 					New room
 				</button>
-				<div className="nav-section nav-section-first">
-					<h2 className="nav-heading">Rooms</h2>
+				{starred.length > 0 && (
+					<>
+						<div className="nav-section nav-section-first">
+							<h2 className="nav-heading" id={`${headingId}-starred`}>
+								Starred
+							</h2>
+						</div>
+						<ul className="nav-list" aria-labelledby={`${headingId}-starred`}>
+							{starred.map((room) => (
+								<RoomLink key={room.id} room={room} active={room.id === activeId} />
+							))}
+						</ul>
+					</>
+				)}
+				<div className={starred.length > 0 ? "nav-section" : "nav-section nav-section-first"}>
+					<h2 className="nav-heading" id={`${headingId}-rooms`}>
+						Rooms
+					</h2>
 					<button
 						type="button"
 						className="icon-button icon-button-small"
@@ -177,14 +198,16 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 						{rooms.error}
 					</p>
 				)}
-				{rooms.status === "ready" && named.length === 0 && <p className="nav-empty">You are in no room yet.</p>}
-				<ul className="nav-list">
+				{rooms.status === "ready" && !hasNamed && <p className="nav-empty">You are in no room yet.</p>}
+				<ul className="nav-list" aria-labelledby={`${headingId}-rooms`}>
 					{named.map((room) => (
 						<RoomLink key={room.id} room={room} active={room.id === activeId} />
 					))}
 				</ul>
 				<div className="nav-section">
-					<h2 className="nav-heading">Direct messages</h2>
+					<h2 className="nav-heading" id={`${headingId}-direct`}>
+						Direct messages
+					</h2>
 					<button
 						type="button"
 						className="icon-button icon-button-small"
@@ -195,8 +218,8 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 						<Icon name="plus" size={15} />
 					</button>
 				</div>
-				{rooms.status === "ready" && direct.length === 0 && <p className="nav-empty">No direct messages yet.</p>}
-				<ul className="nav-list">
+				{rooms.status === "ready" && !hasDirect && <p className="nav-empty">No direct messages yet.</p>}
+				<ul className="nav-list" aria-labelledby={`${headingId}-direct`}>
 					{direct.map((room) => (
 						<RoomLink key={room.id} room={room} active={room.id === activeId} />
 					))}

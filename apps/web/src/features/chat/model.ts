@@ -282,10 +282,19 @@ export function draftPlaceholder(room: Pick<ChatRoom, "kind" | "name" | "peer">)
 	return `Message ${room.kind === "dm" ? "" : "#"}${roomTitle(room)}`;
 }
 
-/** The rooms of the sidebar: the rooms with a name, then the direct messages. Each keeps the order of the list. */
-export function sidebarRooms(rooms: readonly ChatRoom[]): { named: ChatRoom[]; direct: ChatRoom[] } {
+/**
+ * The rooms of the sidebar: the rooms and the direct messages with a star, then the other rooms with a
+ * name, then the other direct messages. A room is in one part only. Each part keeps the order of the list.
+ */
+export function sidebarRooms(rooms: readonly ChatRoom[]): {
+	starred: ChatRoom[];
+	named: ChatRoom[];
+	direct: ChatRoom[];
+} {
+	const others = rooms.filter((room) => !room.starred);
 	return {
-		named: rooms.filter((room) => room.kind !== "dm"),
-		direct: rooms.filter((room) => room.kind === "dm"),
+		starred: rooms.filter((room) => room.starred),
+		named: others.filter((room) => room.kind !== "dm"),
+		direct: others.filter((room) => room.kind === "dm"),
 	};
 }

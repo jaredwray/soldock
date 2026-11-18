@@ -1,9 +1,15 @@
 import type { ChatRoom } from "@soldock/contracts";
 import { CHAT_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
-import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom } from "../src/features/chat/roomList.ts";
+import {
+	forgetChangesUpTo,
+	type RoomChange,
+	withChangesSince,
+	withRoom,
+	withStarred,
+} from "../src/features/chat/roomList.ts";
 
-function room(id: string, lastMessageAt: string | null, unread = 0): ChatRoom {
+function room(id: string, lastMessageAt: string | null, unread = 0, starred = false): ChatRoom {
 	return {
 		id,
 		kind: "public",
@@ -20,10 +26,17 @@ function room(id: string, lastMessageAt: string | null, unread = 0): ChatRoom {
 		unread: unread > 0,
 		unread_count: unread,
 		version: unread,
+		starred,
 	};
 }
 
 const ids = (rooms: readonly ChatRoom[]) => rooms.map((listed) => listed.id);
+
+/** A full first page of chat.list_rooms: 100 rooms with a message on 2026-02-01, without a star. */
+const firstPage = () =>
+	Array.from({ length: CHAT_LIMITS.pageSize }, (_, index) =>
+		room(`rm_${String(index).padStart(3, "0")}`, `2026-02-01T09:${String(index % 60).padStart(2, "0")}:00.000Z`),
+	);
 
 describe("the room list with the events socket", () => {
 	it("puts a changed room at its place, adds a new room, and removes a room that the person left", () => {
@@ -54,17 +67,34 @@ describe("the room list with the events socket", () => {
 		expect(ids(withChangesSince([...answer, room("rm_c", null)], changes, 4))).toEqual(["rm_a", "rm_b"]);
 	});
 
-	// The sidebar shows the first page of chat.list_rooms. An event for an older room must not make it longer.
-	it("keeps the first page only when an event adds a room", () => {
-		const page = Array.from({ length: CHAT_LIMITS.pageSize }, (_, index) =>
-			room(`rm_${String(index).padStart(3, "0")}`, `2026-02-01T09:${String(index % 60).padStart(2, "0")}:00.000Z`),
-		);
+	// The sidebar shows the first page of chat.list_rooms. An event for an older room must not make it
+	// longer, but a room with a star stays after the first page.
+	it("keeps the first page, and each room with a star after it, when an event adds a room", () => {
+		const page = firstPage();
 		const older = withRoom(page, "rm_old", room("rm_old", "2026-01-01T09:00:00.000Z", 1));
 		expect(older).toHaveLength(CHAT_LIMITS.pageSize);
 		expect(ids(older)).not.toContain("rm_old");
 		const newer = withRoom(page, "rm_new", room("rm_new", "2026-03-01T09:00:00.000Z", 1));
 		expect(newer).toHaveLength(CHAT_LIMITS.pageSize);
 		expect(newer[0]?.id).toBe("rm_new");
+		const starred = withRoom(page, "rm_old", room("rm_old", "2026-01-01T09:00:00.000Z", 1, true));
+		expect(starred).toHaveLength(CHAT_LIMITS.pageSize + 1);
+		expect(starred.at(-1)?.id).toBe("rm_old");
+		// The star goes away: the room is after the first page again, so the sidebar drops it.
+		expect(ids(withRoom(starred, "rm_old", room("rm_old", "2026-01-01T09:00:00.000Z", 1)))).not.toContain("rm_old");
+	});
+
+	// A person with more rooms than the first page gets the rooms with a star from the starred view.
+	it("adds the rooms of the starred view that the first page does not have, one time each", () => {
+		const page = [...firstPage().slice(1), room("rm_000", "2026-02-01T09:00:00.000Z", 0, true)];
+		const starredView = [
+			room("rm_000", "2026-02-01T09:00:00.000Z", 0, true),
+			room("rm_old", "2026-01-01T09:00:00.000Z", 3, true),
+		];
+		const rooms = withStarred(page, starredView);
+		expect(rooms).toHaveLength(CHAT_LIMITS.pageSize + 1);
+		expect(ids(rooms).filter((id) => id === "rm_000")).toHaveLength(1);
+		expect(rooms.at(-1)).toMatchObject({ id: "rm_old", unread_count: 3, starred: true });
 	});
 
 	// A long-lived page gets changes of many rooms. It keeps only the changes that a read can still need.

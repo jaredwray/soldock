@@ -4,16 +4,17 @@
 > messages, messages with plain text, the read marker, and access for people and agents. The
 > second layer has the live socket of a room. Outbound webhooks notify members of new messages. The
 > third layer starts with the state of each principal in its `PrincipalDO`: the joined rooms, the
-> read markers and the unread counts. Keep this README current as the module grows. It is
+> read markers and the unread counts. Layer 8 starts with stars: a member can put its star on a
+> room. Keep this README current as the module grows. It is
 > the module's contract. The plan for the next layers is in
 > [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, browser notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room. Later: threads, reactions, mention counts, files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the table `chat_rooms` in each `PrincipalDO` (the joined rooms of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.edit_message`, `chat.delete_message`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -27,7 +28,7 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 
 | File | What |
 | --- | --- |
-| `room.ts` | `ChatRoomDO`: schema, access checks, members, messages, the read marker, the writes to the index, and the live sockets with their events |
+| `room.ts` | `ChatRoomDO`: schema, access checks, members, messages, the read marker, the stars, the writes to the index, and the live sockets with their events |
 | `room-index.ts` | The reads of the index in D1: the public rooms |
 | `principal-rooms.ts` | The joined rooms of a principal, from its `PrincipalDO`, and the first fill of that object |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
@@ -218,27 +219,50 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   gets it before the call returns. So the next list on each device of the member has it. When that
   send fails, the list is behind until the alarm sends it again. See [The lists](#the-lists).
 
+## Stars
+
+- A member puts its star on a room or a direct message with `chat.star_room` and `starred: true`.
+  `starred: false` removes the star. A second call with the same value changes nothing.
+- Only the member sees its star. Each room in the output has `starred`: the star of the caller. It
+  is `false` for a principal that is not a member.
+- The star is a column of the member row in the `ChatRoomDO`, as the read marker is. So the room
+  makes the access check, and a member that leaves loses its star. A member that joins again starts
+  without a star.
+- As for the read marker, the `PrincipalDO` of the member gets the new state before the call
+  returns. The events socket of the member then gets the room (`chat.room`). The room socket gets
+  no event, and the other members get no state.
+- `chat.list_rooms` with `view: "starred"` returns the joined rooms with the star of the caller,
+  with the newest message first. Its cursor and `query` are as for the joined view.
+- A star does not change the `version` of the room, and does not use the allowance of the rate
+  limit. It writes no audit line and sends no webhook event.
+- The web app shows the rooms with a star in a **Starred** part at the top of the sidebar
+  ([`apps/web`](../../../web/README.md)).
+- Known limit: the index in D1 has no stars. The public view gets the star of a joined room from
+  the `PrincipalDO` of the caller, as it gets the read marker.
+
 ## The lists
 
-`chat.list_rooms` must not call each room object. The two views read from two places:
+`chat.list_rooms` must not call each room object. The three views read from two places:
 
 | View | Reads from | Order |
 | --- | --- | --- |
 | `joined` | The `PrincipalDO` of the caller: one object for each person and each agent ([`identity`](../identity/README.md#the-object-of-a-principal)) | The newest message first |
+| `starred` | The `PrincipalDO` of the caller: the joined rooms with its star. A partial index (`chat_rooms_starred`) has these rooms only | The newest message first |
 | `public` | The index in D1 `DIRECTORY`, with the state of the caller from its `PrincipalDO` for each room that it joined | The names, in the order of their NFC lowercase form |
 
-The two views use keyset pages (`next_cursor`). `query` keeps the rooms whose name has that text. A
+The three views use keyset pages (`next_cursor`). `query` keeps the rooms whose name has that text. A
 direct message has no name, so it never matches.
 
 ### The state of a principal
 
 The `PrincipalDO` of a principal has one row for each room of the principal: the room fields, the
-role, `last_read_seq`, `unread_count` and the other member of a `dm` room.
+role, `last_read_seq`, `unread_count`, the star and the other member of a `dm` room.
 
 - The room object is the only writer of these rows. After each change, it records in its `outbox`
   which targets are behind: `principal:<principal id>`.
 - A change to the room or to its messages makes each member a target: a post, an edit, a delete, a
-  new name or topic, and a change to the members. A read marker makes only its member a target.
+  new name or topic, and a change to the members. A read marker and a star make only their member a
+  target.
 - The room sends the current state of the room to the object of the member that made the change
   (`sendStates`), before it answers. So a list of that member that comes after the change has it.
 - The objects of the other members wait `MEMBER_DELAY_MS` (500 ms), and the alarm sends them. So a
@@ -486,8 +510,8 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 ## Safety
 
 - Each change writes an audit line (`audit: true`): the room, and the message or the principal. The
-  line has no text of a message. `chat.mark_read` writes no line, and a call that changed nothing
-  writes no line. The operation invoker audits a change that got `forbidden`. A change on a room
+  line has no text of a message. `chat.mark_read` and `chat.star_room` write no line: they change
+  the view of the member, not the data of the room. A call that changed nothing writes no line. The operation invoker audits a change that got `forbidden`. A change on a room
   that the caller cannot see gets `not_found`, which has no line.
 - Chat holds text that principals of this organization wrote. No operation brings in content from
   outside, so no output has `untrusted: true`. When a bot or a webhook can post text from outside,
@@ -505,7 +529,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles and read markers | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join |
+| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
@@ -513,7 +537,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
-| The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
+| The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql`. `chat_members.last_read_seq` has the marker at the time of the join only |
 
@@ -521,6 +545,6 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 
 Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
 (through Drive), search, the MCP resource for the events of a principal, presence, typing,
-browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots, and
-admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
+browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots,
+sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.

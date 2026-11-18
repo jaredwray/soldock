@@ -61,6 +61,8 @@ export interface RoomRecord {
 	/** The messages of other members after `last_read_seq`, without deleted messages. At most `UNREAD_COUNT_MAX`. */
 	unread_count: number;
 	version: number;
+	/** True when the principal put its star on the room. False for a principal that is not a member. */
+	starred: boolean;
 }
 
 export interface MemberRecord extends ActorRecord {
@@ -146,6 +148,8 @@ interface MemberRow extends Row {
 	role: RoomRole;
 	joined_at: number;
 	last_read_seq: number;
+	/** 1 when the member put its star on the room, else 0. */
+	starred: number;
 }
 
 interface MessageRow extends Row {
@@ -245,6 +249,8 @@ const MIGRATIONS: string[][] = [
 	],
 	// The body of a message, as the JSON of `ChatBody`. A message from before has null: its body is its text.
 	["ALTER TABLE messages ADD COLUMN body_json TEXT"],
+	// The star of each member. It is part of the member row, so it goes away when the member leaves.
+	["ALTER TABLE members ADD COLUMN starred INTEGER NOT NULL DEFAULT 0"],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -474,6 +480,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			unread: unreadCount > 0,
 			unread_count: unreadCount,
 			version: room.version,
+			starred: member?.starred === 1,
 		};
 	}
 
@@ -508,6 +515,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				unread_count: this.unreadCount(member),
 				peer_json: this.peerJson(room, principalId),
 				version: room.version,
+				starred: member.starred === 1,
 			},
 		};
 	}
@@ -1120,6 +1128,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 			await this.flush();
 		}
 		return { lastReadSeq, unread: this.unreadCount(this.member(call.actor.principal_id)) > 0 };
+	}
+
+	/**
+	 * Puts the star of the caller on the room, or removes it. Only the caller sees its star. The star is
+	 * part of the member row, so a member that leaves loses it. As for the read marker, the
+	 * `PrincipalDO` of the caller has the new state before the call returns, and the room sends no
+	 * socket event: the events socket of the caller has the change.
+	 */
+	async star(call: RoomCall, starred: boolean): Promise<RoomRecord | Refusal> {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if ((opened.member.starred === 1) !== starred) {
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					"UPDATE members SET starred = ? WHERE principal_id = ?",
+					starred ? 1 : 0,
+					call.actor.principal_id,
+				);
+				this.touch(`${PRINCIPAL_TARGET}${call.actor.principal_id}`);
+			});
+			await this.flush();
+		}
+		return this.record(call.actor.principal_id);
 	}
 
 	// --- Live sockets ---------------------------------------------------------------------------

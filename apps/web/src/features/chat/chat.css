@@ -136,7 +136,8 @@
 	white-space: nowrap;
 }
 
-.chat-header > .kind {
+.chat-header > .kind,
+.chat-header > .icon-button {
 	flex: none;
 }
 

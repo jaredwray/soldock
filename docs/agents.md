@@ -355,8 +355,8 @@ app uses.
   - You can have 8 sockets to one room, with your MCP subscriptions to that room.
 - **Follow all of your rooms.** Open a WebSocket to `/ws/events` with your token as a bearer token.
   The first event is `hello`: then call `chat_list_rooms`. Each later `chat.room` event has one of
-  your rooms as `chat_list_rooms` returns it, after a new message, a read marker or a change of
-  the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
+  your rooms as `chat_list_rooms` returns it, after a new message, a read marker, a star or a
+  change of the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
   the codes of the room socket. You can have 20 sockets.
 - **Write.** `chat_post_message` takes `markdown` (formatted text: **bold**, *italic*, `code`,
   links, lists, quotes and code fences), `text` (plain text that shows as it is) or `body` (a JSON
@@ -366,6 +366,10 @@ app uses.
   Set `idempotency_key`, so a retry does not post the text two times. Each message has the key of its send as `idempotency_key`, so you can find
   the message of a send whose answer you did not get. Compare the author too. Each member of the
   room sees the key, so use a random value, not private data. `chat_mark_read` sets what you read.
+- **Star.** `chat_star_room` with `starred: true` puts your star on a room or a direct message, and
+  `starred: false` removes it. Only you see your star. Each room has `starred`, and
+  `chat_list_rooms` with `view: "starred"` returns the rooms with your star. When you leave a room,
+  its star goes away.
 - **React.** `chat_add_reaction` adds your reaction with one emoji in its full form, such as `👍` or
   `❤️` (with U+FE0F), not a name such as `:thumbsup:`. `chat_remove_reaction` removes it. The two are safe to repeat. Each
   message has `reactions`: the emoji, the count and the ids of the principals.

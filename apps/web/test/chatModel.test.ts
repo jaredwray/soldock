@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage, ChatRoom } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
@@ -6,6 +6,7 @@ import {
 	type LocalChange,
 	newMessages,
 	nextReading,
+	sidebarRooms,
 	startReading,
 	startsDay,
 	startsGroup,
@@ -370,5 +371,39 @@ describe("the line before the new messages", () => {
 		expect(startsNew(undefined, list[0] as ChatMessage, 3, true)).toBe(false);
 		expect(startsNew(undefined, list[0] as ChatMessage, 3, false)).toBe(true);
 		expect(startsNew(list[0], list[1] as ChatMessage, 5, true)).toBe(true);
+	});
+});
+
+describe("the parts of the sidebar", () => {
+	function listed(id: string, kind: ChatRoom["kind"], starred: boolean): ChatRoom {
+		return {
+			id,
+			kind,
+			name: kind === "dm" ? null : id,
+			topic: "",
+			peer: kind === "dm" ? BOT : null,
+			created_at: "2026-01-01T09:00:00.000Z",
+			created_by: ADA,
+			member_count: 2,
+			role: "member",
+			last_seq: 0,
+			last_message_at: null,
+			last_read_seq: 0,
+			unread: false,
+			unread_count: 0,
+			version: 0,
+			starred,
+		};
+	}
+
+	it("puts each room and direct message with a star in the starred part only, in the order of the list", () => {
+		const parts = sidebarRooms([
+			listed("rm_a", "public", false),
+			listed("dm_b", "dm", true),
+			listed("rm_c", "private", true),
+			listed("dm_d", "dm", false),
+		]);
+		const ids = (rooms: readonly ChatRoom[]) => rooms.map((room) => room.id);
+		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([["dm_b", "rm_c"], ["rm_a"], ["dm_d"]]);
 	});
 });

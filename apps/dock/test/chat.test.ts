@@ -68,6 +68,7 @@ describe("a public room", () => {
 			expect(await codeOf(other.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.post_message", { room_id: room.id, text: "Hello" }))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.mark_read", { room_id: room.id }))).toBe("forbidden");
+			expect(await codeOf(other.call("chat.star_room", { room_id: room.id, starred: true }))).toBe("forbidden");
 
 			expect((await other.call("chat.join_room", { room_id: room.id })).room.role).toBe("member");
 			// A member reads the messages from before it joined, and they do not count as unread.
@@ -118,6 +119,7 @@ describe("a private room", () => {
 			expect(refusals[1]).toBe(refusals[0]);
 			expect(await codeOf(other.call("chat.remove_member", { ...target, principal_id: ada.id }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.mark_read", target))).toBe("not_found");
+			expect(await codeOf(other.call("chat.star_room", { ...target, starred: true }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.edit_message", { ...target, message_id: message.id, text: "x" }))).toBe(
 				"not_found",
 			);
@@ -354,6 +356,48 @@ describe("the read marker", () => {
 			last_read_seq: 2,
 			unread: false,
 		});
+	});
+});
+
+describe("stars", () => {
+	it("are for the member that sets them, in each list and view, and go away when the member leaves", async () => {
+		const launch = await createRoom(ada, "public", "Launch", [bot.id]);
+		const quiet = await createRoom(ada, "private", "Quiet");
+		const dm = (await ada.call("chat.open_dm", { principal_id: owner.id })).room;
+		for (const room of [launch, quiet, dm]) await post(ada, room.id, "Hello");
+		const starredIds = async () =>
+			(await ada.call("chat.list_rooms", { view: "starred" })).rooms.map((room) => room.id);
+
+		const before = (await ada.call("chat.get_room", { room_id: launch.id })).room;
+		const set = await ada.call("chat.star_room", { room_id: launch.id, starred: true });
+		// A star is not a change of the messages: the version stays, so no client gets the changes again.
+		expect(set.room).toMatchObject({ id: launch.id, starred: true, version: before.version });
+		await ada.call("chat.star_room", { room_id: dm.id, starred: true });
+		// The list has the star when the call returns. The starred view keeps the order of the list.
+		expect((await joined(ada)).map((room) => [room.id, room.starred])).toEqual([
+			[dm.id, true],
+			[quiet.id, false],
+			[launch.id, true],
+		]);
+		expect(await starredIds()).toEqual([dm.id, launch.id]);
+		expect((await ada.call("chat.get_room", { room_id: launch.id })).room.starred).toBe(true);
+		expect((await ada.call("chat.list_rooms", { view: "public" })).rooms[0]).toMatchObject({ starred: true });
+		// Only Ada sees her star: a member and a principal that is not a member see none.
+		expect((await bot.call("chat.get_room", { room_id: launch.id })).room.starred).toBe(false);
+		expect((await joined(bot))[0]).toMatchObject({ id: launch.id, starred: false });
+		expect((await owner.call("chat.list_rooms", { view: "public" })).rooms[0]).toMatchObject({ starred: false });
+		expect(await owner.call("chat.list_rooms", { view: "starred" })).toEqual({ rooms: [], next_cursor: null });
+
+		// A second call changes nothing. starred: false removes the star.
+		expect((await ada.call("chat.star_room", { room_id: dm.id, starred: true })).room.starred).toBe(true);
+		expect((await ada.call("chat.star_room", { room_id: dm.id, starred: false })).room.starred).toBe(false);
+		expect(await starredIds()).toEqual([launch.id]);
+
+		// A member that leaves loses its star. It does not come back when the member joins again.
+		await ada.call("chat.remove_member", { room_id: launch.id, principal_id: ada.id });
+		expect(await starredIds()).toEqual([]);
+		expect((await ada.call("chat.join_room", { room_id: launch.id })).room.starred).toBe(false);
+		expect(await starredIds()).toEqual([]);
 	});
 });
 
@@ -699,6 +743,7 @@ describe("the scopes of a key", () => {
 		expect((await read("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
 		expect(await codeOf(read("chat.post_message", { room_id: room.id, text: "Hello" }))).toBe("forbidden");
 		expect(await codeOf(read("chat.mark_read", { room_id: room.id }))).toBe("forbidden");
+		expect(await codeOf(read("chat.star_room", { room_id: room.id, starred: true }))).toBe("forbidden");
 		const [first] = (await read("chat.list_messages", { room_id: room.id })).messages;
 		expect(
 			await codeOf(read("chat.add_reaction", { room_id: room.id, message_id: first?.id ?? "", emoji: "👍" })),
@@ -816,6 +861,12 @@ describe("chat through MCP", () => {
 		expect(removed.structuredContent).toMatchObject({
 			message: { reactions: [{ emoji: "🎉", count: 1, principal_ids: [bot.id] }] },
 		});
+
+		// An agent stars the room through MCP. Its REST list has the star, and the person has none.
+		const starred = await callTool(bot.key, "chat_star_room", { room_id: roomId, starred: true });
+		expect(starred.structuredContent).toMatchObject({ room: { id: roomId, starred: true } });
+		expect((await bot.call("chat.list_rooms", { view: "starred" })).rooms.map((room) => room.id)).toEqual([roomId]);
+		expect((await joined(ada))[0]).toMatchObject({ id: roomId, starred: false });
 	});
 });
 

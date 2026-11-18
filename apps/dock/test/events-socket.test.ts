@@ -90,6 +90,24 @@ describe("the events socket", () => {
 		expect(await laptop.next()).toMatchObject({ type: "chat.room", room: { unread_count: 0 } });
 	});
 
+	// A star is the view of one member. The other members must not get a state for it.
+	it("sends a star to the sockets of its member only", async () => {
+		const room = await privateRoom(ada, "Launch", [bot.id]);
+		const person = await connect(bearer(ada.key));
+		const agent = await connect(bearer(bot.key));
+		// The agent gets the new room after the delay of the other members. Only then does the clock stop.
+		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { id: room.id, last_seq: 0 } });
+		vi.useFakeTimers({ toFake: ["Date"] });
+
+		await ada.call("chat.star_room", { room_id: room.id, starred: true });
+		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id, starred: true } });
+		// The delay of the other members ends. The next event of the agent is the message, not the star.
+		await sendToMembers(room.id);
+		await ada.call("chat.post_message", { room_id: room.id, text: "Hello" });
+		await sendToMembers(room.id);
+		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: 1, starred: false } });
+	});
+
 	// A room can send the same state two times, after a failure. The sockets must not get it two times.
 	it("sends nothing for a state that the object does not keep", async () => {
 		const room = await privateRoom(ada, "Launch", [bot.id]);

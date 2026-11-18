@@ -32,6 +32,7 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
 		unread: entry.unread_count > 0,
 		unread_count: entry.unread_count,
 		version: entry.version,
+		starred: entry.starred,
 	};
 }
 
@@ -98,10 +99,15 @@ function isAfter(a: Position, b: Position): boolean {
 }
 
 /**
- * The rooms that a principal is a member of, with the newest message first. Returns null for a cursor
- * that is not from this list.
+ * The rooms that a principal is a member of, with the newest message first. With `starred`, only the
+ * rooms with the star of the principal. Returns null for a cursor that is not from this list.
  */
-export async function listJoinedRooms(env: Env, principalId: string, input: ListInput): Promise<RoomPage | null> {
+export async function listJoinedRooms(
+	env: Env,
+	principalId: string,
+	input: ListInput,
+	starred = false,
+): Promise<RoomPage | null> {
 	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
 	if (input.cursor !== null && cursor === null) return null;
 	const principal = principalStub(env, principalId);
@@ -110,6 +116,7 @@ export async function listJoinedRooms(env: Env, principalId: string, input: List
 		nameKey: input.query === null ? null : nameKey(input.query),
 		after,
 		until: null,
+		starred,
 		limit: input.limit,
 	};
 	let listed = await principal.listChatRooms(query);
@@ -131,7 +138,7 @@ export async function listJoinedRooms(env: Env, principalId: string, input: List
 
 /**
  * The rooms of a page with the state of the principal in each room that it joined: the role, the read
- * marker and the unread count. The index in D1 has no read marker. A room that the `PrincipalDO` does
+ * marker, the unread count and the star. The index in D1 has no read marker and no star. A room that the `PrincipalDO` does
  * not have yet keeps the values of the index. The first fill of the object runs here too, as for the
  * joined list.
  */
