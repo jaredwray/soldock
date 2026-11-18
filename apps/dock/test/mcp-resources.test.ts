@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
 	CHAT_LIMITS,
@@ -414,6 +414,14 @@ describe("MCP subscriptions/listen", () => {
 	it("keeps the feed of a stream when the caller opens more events sockets than the limit, and refuses a new feed", async () => {
 		const { ada, bot } = await seedOrg();
 		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		// The room sends the state of the agent to its object 500 ms after the create, and each events socket
+		// of the agent then gets chat.room. The room sends it now, so that event cannot come before the close
+		// of the oldest socket below.
+		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		await runInDurableObject(stub, (_instance, state) =>
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0"),
+		);
+		await runDurableObjectAlarm(stub);
 		const stream = await listen(bot.key, [ROOMS]);
 		expect(await stream.next()).toMatchObject({ params: { notifications: { resourceSubscriptions: [ROOMS] } } });
 		const open = async () => {
