@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2 and the webhook check boxes have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the webhook check boxes and the reload after a deploy have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -38,6 +38,7 @@ pnpm e2e
 | --- | --- |
 | [`tests/chat.spec.ts`](tests/chat.spec.ts) | A send shows at once and goes out one time. A send with lost answers shows one time. A failed send shows "Not sent", and **Try again** sends it. A message that waits stays after a reload. A change and a delete show at once, and come back after a refusal. A page of older messages keeps the place of the list. The **New messages** line and the button to the newest messages. The draft of a room after a change of room, a reload and a sign-out. A room from the cache before the answer of the server. A link to one message. The unread count of the sidebar from the events socket, without a read of the list, and its end after a read on a different device. A star moves a room to the **Starred** part, also on a second page of the person without a read of the list, and **Remove star** moves it back |
 | [`tests/webhooks.spec.ts`](tests/webhooks.spec.ts) | A new webhook with its events from check boxes. **Edit** shows the saved events, and a save adds and removes only the difference. The menu of a second target, a shared drive. A delete. A save that fails in part: the problem shows in the secret dialog after **Add webhook** and in the dialog after **Edit**, and a second save sends only the event that failed. A sponsor sends the events of an agent to a webhook. An admin can clear an event of that agent, but cannot set one |
+| [`tests/newVersion.spec.ts`](tests/newVersion.spec.ts) | A page chunk that a deploy removed: the page reloads one time and shows Drive of the new version. A person who goes back to Mail before the version check ends stays on Mail, and the reload waits until Drive shows again. A page chunk that does not load in the current version: the page asks for a reload, and does not reload by itself |
 
 The first flows to cover, because they are tested by hand only:
 
