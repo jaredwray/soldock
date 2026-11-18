@@ -346,7 +346,7 @@ test("a link to one message opens the room at that message and marks it", async 
 });
 
 // Layer 3 (jaredwray/soldock#72): the sidebar follows the events socket of the person, without a poll.
-test("the sidebar count of a room that is not open goes up and clears without a poll of the list", async ({
+test("the sidebar count of a room that is not open goes up, shows a mention, and clears without a poll of the list", async ({
 	browser,
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
@@ -375,6 +375,11 @@ test("the sidebar count of a room that is not open goes up and clears without a 
 	const link = page.getByRole("link", { name: busy });
 	await expect(link.locator(".chat-nav-count")).toContainText("2");
 	await expect(link).toContainText("2 unread messages");
+
+	// A mention of the person gives the badge of a mention: "@" and the count of mentions.
+	await post(tomasz, busyId, "@nadia can you look?");
+	await expect(link.locator(".chat-nav-mention")).toContainText("@1");
+	await expect(link).toContainText("1 mention of you, 3 unread messages");
 
 	// A different device of the same person reads the room. The count goes away on this page.
 	await markRead(nadia, busyId);

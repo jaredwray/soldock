@@ -259,6 +259,11 @@ export const ChatRoom = z.object({
 	 * 100, so 100 means 100 or more. 0 when you are not a member.
 	 */
 	unread_count: z.number().int().nonnegative(),
+	/**
+	 * The messages after `last_read_seq` that mention you, without deleted messages and your own
+	 * messages. The count stops at 100. 0 when you are not a member.
+	 */
+	mention_count: z.number().int().nonnegative(),
 	/** A number that grows with each new, changed or deleted message. Compare it to find out if you must get the changes. */
 	version: z.number().int(),
 	/**
@@ -385,7 +390,7 @@ export const listRooms = defineOperation({
 		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you can join with chat.join_room.",
 		"The starred view has the rooms and the direct messages of the joined view that have your star (chat.star_room), with the newest message first.",
 		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
-		"Each room has unread, unread_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
+		"Each room has unread, unread_count, mention_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
 		"Each room sends its changes to the lists after the change. A list can be a moment behind a change.",
 		"Pass next_cursor as cursor to get the next page.",
 	].join(" "),

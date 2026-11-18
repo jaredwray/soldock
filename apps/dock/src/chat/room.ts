@@ -64,6 +64,8 @@ export interface RoomRecord {
 	unread: boolean;
 	/** The messages of other members after `last_read_seq`, without deleted messages. At most `UNREAD_COUNT_MAX`. */
 	unread_count: number;
+	/** The messages after `last_read_seq` that mention the principal. At most `UNREAD_COUNT_MAX`. */
+	mention_count: number;
 	version: number;
 	/** True when the principal put its star on the room. False for a principal that is not a member. */
 	starred: boolean;
@@ -177,6 +179,19 @@ interface OutboxRow extends Row {
 }
 
 /** Ordered migrations. Each inner list runs in one transaction. Append only. */
+/**
+ * The rows of `mentions` for the messages from before the table, from their body: each mention node,
+ * except a mention of the author. A deleted message has no body. The row of the "type" key of a node
+ * finds the node, and its id is beside it, at the path of that row.
+ */
+const MENTIONS_BACKFILL = `INSERT OR IGNORE INTO mentions (principal_id, seq)
+	SELECT json_extract(messages.body_json, node.path || '.attrs.id'), messages.seq
+	FROM messages, json_tree(messages.body_json) AS node
+	WHERE messages.body_json IS NOT NULL AND messages.deleted_at IS NULL
+		AND node.key = 'type' AND node.atom = 'mention'
+		AND json_extract(messages.body_json, node.path || '.attrs.id') IS NOT NULL
+		AND json_extract(messages.body_json, node.path || '.attrs.id') <> messages.author_id`;
+
 const MIGRATIONS: string[][] = [
 	[
 		`CREATE TABLE room (
@@ -255,6 +270,17 @@ const MIGRATIONS: string[][] = [
 	["ALTER TABLE messages ADD COLUMN body_json TEXT"],
 	// The star of each member. It is part of the member row, so it goes away when the member leaves.
 	["ALTER TABLE members ADD COLUMN starred INTEGER NOT NULL DEFAULT 0"],
+	// The mentions of each message that stays, for the mention count of each member. The author of a
+	// message does not count its own mention. A message from before has no rows.
+	[
+		`CREATE TABLE mentions (
+			principal_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			PRIMARY KEY (principal_id, seq)
+		) WITHOUT ROWID`,
+		"CREATE INDEX mentions_seq ON mentions (seq)",
+		MENTIONS_BACKFILL,
+	],
 ];
 
 const OUTBOX_BATCH = 100;
@@ -463,6 +489,31 @@ export class ChatRoomDO extends DurableObject<Env> {
 		);
 	}
 
+	/**
+	 * The messages after the read marker of a member that mention it. A delete of a message removes its
+	 * mentions. The count stops at `UNREAD_COUNT_MAX`.
+	 */
+	private mentionCount(member: MemberRow | null): number {
+		if (!member) return 0;
+		return (
+			this.one<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM (SELECT 1 FROM mentions WHERE principal_id = ? AND seq > ? LIMIT ?)",
+				member.principal_id,
+				member.last_read_seq,
+				UNREAD_COUNT_MAX,
+			)?.n ?? 0
+		);
+	}
+
+	/** Keeps the mentions of a message: each principal of its body, except its author. */
+	private setMentions(seq: number, authorId: string, body: ChatBody): void {
+		this.sql.exec("DELETE FROM mentions WHERE seq = ?", seq);
+		for (const principalId of mentionIds(body)) {
+			if (principalId !== authorId)
+				this.sql.exec("INSERT INTO mentions (principal_id, seq) VALUES (?, ?)", principalId, seq);
+		}
+	}
+
 	/** The room as one principal sees it. */
 	private record(principalId: string): RoomRecord {
 		const room = this.room() as RoomRow;
@@ -484,6 +535,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			last_read_seq: member?.last_read_seq ?? 0,
 			unread: unreadCount > 0,
 			unread_count: unreadCount,
+			mention_count: this.mentionCount(member),
 			version: room.version,
 			starred: member?.starred === 1,
 		};
@@ -518,6 +570,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				last_message_at: room.last_message_at,
 				last_read_seq: member.last_read_seq,
 				unread_count: this.unreadCount(member),
+				mention_count: this.mentionCount(member),
 				peer_json: this.peerJson(room, principalId),
 				version: room.version,
 				starred: member.starred === 1,
@@ -998,6 +1051,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				)?.seq as number;
 				this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
 				this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
+				this.setMentions(seq, call.actor.principal_id, content.body);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
 					this.sql.exec(
@@ -1064,6 +1118,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
+				this.setMentions(row.seq, row.author_id, content.body);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
@@ -1111,8 +1166,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 					version,
 					messageId,
 				);
-				// A deleted message keeps no reaction.
+				// A deleted message keeps no reaction and no mention.
 				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
+				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(

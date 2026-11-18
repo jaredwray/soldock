@@ -31,6 +31,7 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
 		last_read_seq: entry.last_read_seq,
 		unread: entry.unread_count > 0,
 		unread_count: entry.unread_count,
+		mention_count: entry.mention_count,
 		version: entry.version,
 		starred: entry.starred,
 	};

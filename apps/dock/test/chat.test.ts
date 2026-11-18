@@ -1314,6 +1314,98 @@ describe("mentions after a change", () => {
 	});
 });
 
+describe("the mention count", () => {
+	/** Sends the waiting states of a room to the objects of its members, as its alarm does. */
+	const deliver = async (roomId: string) => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+			await runDurableObjectAlarm(roomStub(roomId));
+		} finally {
+			vi.useRealTimers();
+		}
+	};
+
+	// A person sees in the room list which rooms mention them, as in other chat apps.
+	it("counts the messages after the read marker that mention a member, in chat.get_room and in the room list after each change", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const count = async (actor: Actor) => (await actor.call("chat.get_room", { room_id: room.id })).room.mention_count;
+		const listed = async (actor: Actor) => (await joined(actor)).find((one) => one.id === room.id);
+		// The object of the agent has its rooms before the posts, so the list below shows the states that
+		// the room sends, not the first fill.
+		await deliver(room.id);
+		await soon(async () => expect((await listed(bot))?.mention_count).toBe(0));
+
+		const first = await post(ada, room.id, "@bot one");
+		await post(ada, room.id, "no mention");
+		const third = await post(ada, room.id, "@bot two, and @ada and @owner");
+		// The author does not count its own mention. A mention before a join does not count after it.
+		expect([await count(bot), await count(ada)]).toEqual([2, 0]);
+		await owner.call("chat.join_room", { room_id: room.id });
+		expect(await count(owner)).toBe(0);
+		await deliver(room.id);
+		await soon(async () => expect(await listed(bot)).toMatchObject({ mention_count: 2, unread_count: 3 }));
+
+		// An edit without the mention and a delete remove the mention. An edit that adds one counts it.
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "one" });
+		await deliver(room.id);
+		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([1, 1]));
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: third.id });
+		await deliver(room.id);
+		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([0, 0]));
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "@bot one again" });
+		expect(await count(bot)).toBe(1);
+
+		// A read clears it, in the room and in the list.
+		await bot.call("chat.mark_read", { room_id: room.id });
+		await deliver(room.id);
+		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([0, 0]));
+
+		// A delete by the owner of the room, of the message of a different member, removes its mention too.
+		const fromBot = await post(bot, room.id, "@ada please look");
+		expect(await count(ada)).toBe(1);
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: fromBot.id });
+		expect(await count(ada)).toBe(0);
+	});
+
+	it("starts again from the newest message at a join after a leave, and stops at 100", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		await post(ada, room.id, "@bot one");
+		await bot.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		await post(ada, room.id, "@bot two");
+		await bot.call("chat.join_room", { room_id: room.id });
+		const count = async () => (await bot.call("chat.get_room", { room_id: room.id })).room.mention_count;
+		expect(await count()).toBe(0);
+		// The count has a limit, so its cost has one too.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			for (let seq = 1000; seq < 1101; seq++) {
+				state.storage.sql.exec("INSERT INTO mentions (principal_id, seq) VALUES (?, ?)", bot.id, seq);
+			}
+		});
+		expect(await count()).toBe(100);
+	});
+
+	// A message with a mention node from before the table must count after the change of the schema.
+	it("fills the table of mentions from the bodies of the messages from before it, at the start of the object", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		await post(ada, room.id, "> quoted @bot and @ada");
+		const gone = await post(ada, room.id, "@bot deleted");
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
+		// The room goes back to the schema before the table. The table is the last migration.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			state.storage.sql.exec("DROP TABLE mentions");
+			state.storage.sql.exec(
+				"UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'",
+			);
+		});
+		// A new start of the object runs the migration.
+		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
+		// The node in a quote counts. The mention of the author and a deleted message do not count.
+		const count = async (actor: Actor) => (await actor.call("chat.get_room", { room_id: room.id })).room.mention_count;
+		expect([await count(bot), await count(ada)]).toEqual([1, 0]);
+	});
+});
+
 describe("reactions", () => {
 	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
