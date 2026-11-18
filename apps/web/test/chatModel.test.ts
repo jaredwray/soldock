@@ -392,6 +392,7 @@ describe("the parts of the sidebar", () => {
 			last_read_seq: 0,
 			unread: false,
 			unread_count: 0,
+			mention_count: 0,
 			version: 0,
 			starred,
 		};

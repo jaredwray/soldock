@@ -330,6 +330,7 @@ app uses.
   message to the newest one, pass the `seq` of the last message that you have as `after`.
 - **Follow a room.** Each room in `chat_list_rooms` has `unread`, `unread_count` and `version`.
   `unread_count` is the number of messages of other members after your read marker, at most 100.
+  `mention_count` is the number of those messages that mention you, at most 100: answer those first.
   Call `chat_mark_read` after you read a room. Keep the `version`
   of the last `chat_list_messages` result. When a room has a higher `version`, call
   `chat_list_messages` with `changed_after` and your version. The result has each new, changed and

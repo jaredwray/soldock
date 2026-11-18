@@ -159,9 +159,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   - A message has at most 50 mentions (`CHAT_LIMITS.mentions`). Each message returns `mentions`: the
     ids of its mentions, each one time. The plain text and the Markdown have `@` and the label, so
     the Markdown of a message makes the same mentions again.
-  - The room counts no mention and sends no notification of its own yet. The mention count and
-    `@here` / `@channel` are the next parts of layer 4 of
-    [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69). A webhook for new
+  - The room keeps the mentions of each message in its table `mentions`: one row for each mentioned
+    principal, without the author. A post and an edit write the rows of the message again, and a
+    delete removes them. `mention_count` of a member counts its rows after its read marker (see
+    [The read marker](#the-read-marker)).
+  - The room sends no notification of its own yet. `@here` / `@channel` are the next part of layer 4
+    of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69). A webhook for new
     messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about each new message.
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
@@ -240,6 +243,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - Each member has `last_read_seq`. `unread_count` is the number of messages of other members after
   the marker, without deleted messages. The count stops at 100 (`UNREAD_COUNT_MAX`), so its cost
   has a limit. A room is `unread` for a member while the count is more than 0.
+- `mention_count` is the number of messages after the marker that mention the member, without
+  deleted messages. The author of a message does not count its own mention. It stops at 100 too. A
+  mention before a join does not count: the join sets the marker to the newest message. A message
+  from before the table `mentions` has no rows, so it does not count.
 - A post sets the marker of its author to the new message. A new member starts with each message
   read.
 - `chat.mark_read` sets the marker of the caller: to the newest message, or to `seq`. A lower
@@ -285,7 +292,7 @@ direct message has no name, so it never matches.
 ### The state of a principal
 
 The `PrincipalDO` of a principal has one row for each room of the principal: the room fields, the
-role, `last_read_seq`, `unread_count`, the star and the other member of a `dm` room.
+role, `last_read_seq`, `unread_count`, `mention_count`, the star and the other member of a `dm` room.
 
 - The room object is the only writer of these rows. After each change, it records in its `outbox`
   which targets are behind: `principal:<principal id>`.
@@ -560,6 +567,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
 | Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key |
+| Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |

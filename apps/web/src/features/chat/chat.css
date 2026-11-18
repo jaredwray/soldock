@@ -94,6 +94,12 @@
 	font-variant-numeric: tabular-nums;
 }
 
+/* The badge of a room with a mention of the person: the color of an alert, as in other chat apps. */
+.chat-nav-mention {
+	background: var(--destructive);
+	color: #fff;
+}
+
 .chat-nav-avatar {
 	width: 24px;
 	height: 24px;

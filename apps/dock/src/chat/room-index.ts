@@ -48,6 +48,7 @@ function toRecord(row: IndexRow): RoomRecord {
 		last_read_seq: row.last_read_seq ?? 0,
 		unread: false,
 		unread_count: 0,
+		mention_count: 0,
 		version: row.version,
 		// The star of a member is in its `PrincipalDO`. The index has no stars.
 		starred: false,

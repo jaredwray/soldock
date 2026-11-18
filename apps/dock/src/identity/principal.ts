@@ -32,6 +32,8 @@ export interface ChatRoomView {
 	last_read_seq: number;
 	/** The messages of other members after `last_read_seq`, without deleted messages. At most `UNREAD_COUNT_MAX`. */
 	unread_count: number;
+	/** The messages after `last_read_seq` that mention the principal. At most `UNREAD_COUNT_MAX`. */
+	mention_count: number;
 	/** The other member of a direct message, as JSON. */
 	peer_json: string | null;
 	version: number;
@@ -140,6 +142,7 @@ export function chatRoomOutput(entry: ChatRoomEntry): ChatRoom {
 		last_read_seq: entry.last_read_seq,
 		unread: entry.unread_count > 0,
 		unread_count: entry.unread_count,
+		mention_count: entry.mention_count,
 		version: entry.version,
 		starred: entry.starred,
 	};
@@ -177,10 +180,12 @@ const MIGRATIONS: string[][] = [
 		`CREATE INDEX chat_rooms_starred ON chat_rooms (activity_at DESC, room_id DESC)
 			WHERE joined = 1 AND starred = 1`,
 	],
+	// The mention count of the principal, from the room. A room from before has 0 until its next state.
+	["ALTER TABLE chat_rooms ADD COLUMN mention_count INTEGER NOT NULL DEFAULT 0"],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
-	last_message_at, activity_at, last_read_seq, unread_count, peer_json, version, starred`;
+	last_message_at, activity_at, last_read_seq, unread_count, mention_count, peer_json, version, starred`;
 
 /** A row of `chat_rooms` as SQLite returns it: the star is 0 or 1. */
 type EntryRow = Omit<ChatRoomEntry, "starred"> & { starred: number } & Row;
@@ -246,15 +251,16 @@ export class PrincipalDO extends DurableObject<Env> {
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
 					`INSERT INTO chat_rooms (room_id, stamp, joined, kind, name, name_key, topic, created_at, created_by_json,
 						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version,
-						starred)
-					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+						starred, mention_count)
+					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
 					ON CONFLICT (room_id) DO UPDATE SET stamp = excluded.stamp, joined = excluded.joined, kind = excluded.kind,
 						name = excluded.name, name_key = excluded.name_key, topic = excluded.topic,
 						created_at = excluded.created_at, created_by_json = excluded.created_by_json,
 						member_count = excluded.member_count, role = excluded.role, last_seq = excluded.last_seq,
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
 						last_read_seq = excluded.last_read_seq, unread_count = excluded.unread_count,
-						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred
+						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred,
+						mention_count = excluded.mention_count
 					WHERE excluded.stamp > chat_rooms.stamp
 					RETURNING room_id, joined`,
 					state.room_id,
@@ -276,6 +282,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.peer_json ?? null,
 					view?.version ?? null,
 					view?.starred ? 1 : 0,
+					view?.mention_count ?? 0,
 				);
 				kept.push(...row.toArray());
 			}

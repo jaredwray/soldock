@@ -25,6 +25,7 @@ function room(id: string, lastMessageAt: string | null, unread = 0, starred = fa
 		last_read_seq: 0,
 		unread: unread > 0,
 		unread_count: unread,
+		mention_count: 0,
 		version: unread,
 		starred,
 	};

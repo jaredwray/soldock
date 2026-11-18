@@ -707,7 +707,9 @@ MCP clients. The app has no UI-only path.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
     bold with the number of unread messages at the right ("99+" above 99). A screen reader reads
-    "2 unread messages". A direct message row shows a round avatar with the initials of
+    "2 unread messages". A room with a message that mentions the person has a red badge with `@` and
+    the number of mentions in place of that number (`mention_count`). A screen reader reads
+    "1 mention of you, 3 unread messages". A direct message row shows a round avatar with the initials of
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.

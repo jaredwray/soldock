@@ -24,8 +24,8 @@ names it, with the binding `PRINCIPAL`. It holds the state of the principal that
 to it, so a list of that state reads one object and not the directory.
 
 - Now it holds the Chat part only: the table `chat_rooms`, with one row for each room of the
-  principal. A row has the state of the room for the principal: the read marker, the unread count
-  and the star. Each `ChatRoomDO` sends the state of its room to the objects of its members. The
+  principal. A row has the state of the room for the principal: the read marker, the unread count,
+  the mention count and the star. Each `ChatRoomDO` sends the state of its room to the objects of its members. The
   [`chat`](../chat/README.md#the-state-of-a-principal) module has the rules of the delivery.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.

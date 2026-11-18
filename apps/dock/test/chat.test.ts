@@ -1314,6 +1314,45 @@ describe("mentions after a change", () => {
 	});
 });
 
+describe("the mention count", () => {
+	// A person sees in the room list which rooms mention them, as in other chat apps.
+	it("counts the messages after the read marker that mention a member, for chat.get_room and the room list", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const count = async (actor: Actor) => (await actor.call("chat.get_room", { room_id: room.id })).room.mention_count;
+		const first = await post(ada, room.id, "@bot one");
+		await post(ada, room.id, "no mention");
+		const third = await post(ada, room.id, "@bot two, and @ada and @owner");
+		// The author does not count its own mention. A mention before a join does not count after it.
+		expect([await count(bot), await count(ada)]).toEqual([2, 0]);
+		await owner.call("chat.join_room", { room_id: room.id });
+		expect(await count(owner)).toBe(0);
+
+		// The room list has the count from the state of the room.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+			await runDurableObjectAlarm(roomStub(room.id));
+		} finally {
+			vi.useRealTimers();
+		}
+		expect((await joined(bot)).find((listed) => listed.id === room.id)).toMatchObject({
+			mention_count: 2,
+			unread_count: 3,
+		});
+
+		// An edit without the mention and a delete remove the mention.
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "one" });
+		expect(await count(bot)).toBe(1);
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: third.id });
+		expect(await count(bot)).toBe(0);
+		await post(ada, room.id, "@bot three");
+		expect(await count(bot)).toBe(1);
+		// A read clears it.
+		await bot.call("chat.mark_read", { room_id: room.id });
+		expect(await count(bot)).toBe(0);
+	});
+});
+
 describe("reactions", () => {
 	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);

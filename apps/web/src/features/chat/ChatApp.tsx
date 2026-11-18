@@ -239,6 +239,11 @@ function unreadText(count: number): string {
 	return count === 1 ? "1 unread message" : `${count} unread messages`;
 }
 
+function mentionText(count: number): string {
+	if (count > 99) return "More than 99 mentions of you";
+	return count === 1 ? "1 mention of you" : `${count} mentions of you`;
+}
+
 function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 	const title = roomTitle(room);
 	// The open room is read while it shows. Its marker reaches the list a moment later, so it gets no count.
@@ -258,11 +263,21 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 				)}
 				<span className="nav-name">{title}</span>
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
-				{unread && (
-					<span className="chat-nav-count">
-						<span aria-hidden="true">{unreadLabel(room.unread_count)}</span>
-						<span className="visually-hidden">{unreadText(room.unread_count)}</span>
+				{/* A mention of the person has a badge of its own color, with "@" and the count of mentions. */}
+				{unread && room.mention_count > 0 ? (
+					<span className="chat-nav-count chat-nav-mention">
+						<span aria-hidden="true">@{unreadLabel(room.mention_count)}</span>
+						<span className="visually-hidden">
+							{mentionText(room.mention_count)}, {unreadText(room.unread_count)}
+						</span>
 					</span>
+				) : (
+					unread && (
+						<span className="chat-nav-count">
+							<span aria-hidden="true">{unreadLabel(room.unread_count)}</span>
+							<span className="visually-hidden">{unreadText(room.unread_count)}</span>
+						</span>
+					)
 				)}
 			</Link>
 		</li>
