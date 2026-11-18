@@ -96,17 +96,25 @@ function shown(node: ChatBodyInline | undefined): string {
  */
 function fitMentions(content: ChatBodyInline[]): ChatBodyInline[] {
 	const out: ChatBodyInline[] = [];
-	// The text of the line before the node: a link can start in an earlier node.
+	// The text before the node, back to the start of the line: a link can start in an earlier node. A text
+	// with marks has its Markdown marks around it (`code`, **bold**, a link), which end a word. So it is a
+	// boundary, before and after a mention.
 	let before = "";
 	content.forEach((node, index) => {
+		const next = content[index + 1];
 		const kept: ChatBodyInline =
-			node.type === "mention" && !mentionFits(before, shown(content[index + 1]))
+			node.type === "mention" && !mentionFits(before, marked(next) ? "" : shown(next))
 				? { type: "text", text: shown(node) }
 				: node;
 		out.push(kept);
-		before = node.type === "hard_break" ? "" : before + shown(kept);
+		before = node.type === "hard_break" || marked(node) ? "" : before + shown(kept);
 	});
 	return out;
+}
+
+/** True for a text with marks. */
+function marked(node: ChatBodyInline | undefined): boolean {
+	return node?.type === "text" && (node.marks?.length ?? 0) > 0;
 }
 
 /** The body with mention nodes for the mentions in its text, and each mention node checked. */

@@ -1278,6 +1278,13 @@ describe("mentions after a change", () => {
 			// In a link, also after a mark that can start a mention: the text form reads no mention there.
 			[[{ type: "text", text: "see https://e.com/?u=" }, mention(bot.id, "bot")], "see https://e.com/?u=@bot", []],
 			[[mention(bot.id, "bot"), { type: "text", text: ", ok" }], "@bot, ok", [bot.id]],
+			// A text with marks has Markdown marks around it, which end a word: the mention stays.
+			[
+				[{ type: "text", text: "https://e.com/", marks: [{ type: "code" }] }, mention(bot.id, "bot")],
+				"https://e.com/@bot",
+				[bot.id],
+			],
+			[[mention(bot.id, "bot"), { type: "text", text: "now", marks: [{ type: "strong" }] }], "@botnow", [bot.id]],
 		];
 		for (const [content, text, mentions] of cases) {
 			const { message } = await ada.call("chat.post_message", { room_id: room.id, body: body(...content) });
