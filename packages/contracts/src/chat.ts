@@ -606,7 +606,7 @@ export const postMessage = defineOperation({
 export const editMessage = defineOperation({
 	name: "chat.edit_message",
 	summary: "Change the text of your message",
-	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. ${RATE_LIMIT}`,
+	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. An edit keeps the mentions of a group (@here, @channel) that the message has. A new mention of a group follows the rule of chat.post_message. ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edit" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],

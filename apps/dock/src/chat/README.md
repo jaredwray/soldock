@@ -168,8 +168,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - **Mentions of a group.** `@here` and `@channel` mention each member of the room, except the
   author. A mention of a group is a node: `{ type: "group_mention", attrs: { group } }`.
   - The room makes the node from `@here` and `@channel` in the text of each form, in each letter
-    case, with the rules of a mention: not in code, not in a link, not touching a letter. `@room`,
-    `@all` and `@everyone` stay text.
+    case. The rules of a mention apply: the node is not in code or in a link, and does not touch a
+    letter. `@room`, `@all` and `@everyone` stay text.
   - A group word is never a handle. A principal with the address `here@example.com` has its full
     address as its handle.
   - Each message returns `group_mentions`: its groups, each one time. The plain text and the
@@ -179,8 +179,13 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   - The limit by role: in a room with more than 50 members (`CHAT_LIMITS.groupMentionMembers`), only
     an owner of the room can add a mention of a group. A different member gets `forbidden`. An edit
     can keep the groups that the message has already, so its author can still change the text of a
-    message from a smaller room. The room checks the limit after the allowance of the rate limit, as
-    it does for the limit of mentions.
+    message from a smaller room. A message from before the group nodes has `@here` as text, and an
+    edit keeps that group too (`storedGroups`). The room checks the limit after the allowance of the
+    rate limit, for a post and for an edit, as it does for the limit of mentions.
+  - Known limit: before this change, a principal with the address `here@example.com` had the handle
+    `here`. Its old mention nodes keep the label `here`, so their Markdown is `@here`. An edit from
+    that Markdown makes a mention of the group. An edit of the body keeps the mention of the
+    principal: the room changes its label to the full address.
   - The table `mentions` has one row for each group of a message: `group:here` or `group:channel`
     in place of the id of a principal. An id of a principal starts with `prn_`, so the two never
     meet. `mention_count` counts these rows for each member, except on the messages of that member.

@@ -1233,6 +1233,8 @@ describe("mentions", () => {
 	});
 });
 
+const group = (name: string) => ({ type: "group_mention", attrs: { group: name } });
+
 describe("mentions after a change", () => {
 	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
 	const body = (...content: unknown[]) => ({ type: "doc", content: [{ type: "paragraph", content }] }) as never;
@@ -1269,7 +1271,6 @@ describe("mentions after a change", () => {
 
 	// The Markdown of a node that touches a letter would be a different mention: "@bot" and "x" is "@botx".
 	it("keeps a mention node that touches a letter, a digit or a mark of an address as text, so its Markdown reads back the same", async () => {
-		const room = await createRoom(ada, "public", "Launch", [bot.id]);
 		const cases: [unknown[], string, string[]][] = [
 			[[mention(bot.id, "bot"), { type: "text", text: "x" }], "@botx", []],
 			[[{ type: "text", text: "x" }, mention(bot.id, "bot")], "x@bot", []],
@@ -1285,13 +1286,24 @@ describe("mentions after a change", () => {
 				[bot.id],
 			],
 			[[mention(bot.id, "bot"), { type: "text", text: "now", marks: [{ type: "strong" }] }], "@botnow", [bot.id]],
+			// A mention of a group has the same rule. The last column has the ids, then the groups.
+			[[group("here"), { type: "text", text: "x" }], "@herex", []],
+			[[{ type: "text", text: "a" }, group("channel")], "a@channel", []],
+			[[group("here"), { type: "text", text: "@example.com" }], "@here@example.com", []],
+			[[group("here"), { type: "text", text: ", ok" }], "@here, ok", ["here"]],
+		];
+		const found = (message: { mentions: string[]; group_mentions: string[] }) => [
+			...message.mentions,
+			...message.group_mentions,
 		];
 		for (const [content, text, mentions] of cases) {
+			// A room for each case, so the posts stay in the rate limit of a room.
+			const room = await createRoom(ada, "public", "Launch", [bot.id]);
 			const { message } = await ada.call("chat.post_message", { room_id: room.id, body: body(...content) });
-			expect([message.text, message.mentions], text).toEqual([text, mentions]);
+			expect([message.text, found(message)], text).toEqual([text, mentions]);
 			const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" }))
 				.message;
-			expect(again.mentions, text).toEqual(mentions);
+			expect(found(again), text).toEqual(mentions);
 		}
 	});
 
@@ -1407,7 +1419,6 @@ describe("the mention count", () => {
 });
 
 describe("mentions of a group", () => {
-	const group = (name: string) => ({ type: "group_mention", attrs: { group: name } });
 	const count = async (actor: Actor, room_id: string) =>
 		(await actor.call("chat.get_room", { room_id })).room.mention_count;
 
@@ -1462,26 +1473,49 @@ describe("mentions of a group", () => {
 	// A mention of a group in a large room disturbs many people, so a room owner decides on it.
 	it("lets only an owner add a mention of a group in a room with more than the limit of members", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		await owner.call("chat.join_room", { room_id: room.id });
 		const small = await post(bot, room.id, "@channel standup");
-		// The room grows to one member above the limit.
-		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			for (let index = 0; index < CHAT_LIMITS.groupMentionMembers - 1; index++) {
+		const old = await post(bot, room.id, "old standup");
+		const grow = (count: number, from: number) =>
+			runInDurableObject(roomStub(room.id), (_instance, state) => {
+				for (let index = from; index < from + count; index++) {
+					state.storage.sql.exec(
+						"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq) VALUES (?, '{}', 'member', 0, 0)",
+						`prn_member${index}`,
+					);
+				}
+				// A message from before the group nodes has its group as text.
+				const text = "@here old standup";
 				state.storage.sql.exec(
-					"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq) VALUES (?, '{}', 'member', 0, 0)",
-					`prn_member${index}`,
+					"UPDATE messages SET text = ?, body_json = ? WHERE id = ?",
+					text,
+					JSON.stringify(messageContent({ text }).body),
+					old.id,
 				);
-			}
-		});
-		const refused = bot.call("chat.post_message", { room_id: room.id, text: "@here look" });
-		expect(await codeOf(refused)).toBe("forbidden");
+			});
+		// At the limit, each member can mention a group.
+		await grow(CHAT_LIMITS.groupMentionMembers - 3, 0);
+		expect((await post(bot, room.id, "@here at the limit")).group_mentions).toEqual(["here"]);
+		await grow(1, CHAT_LIMITS.groupMentionMembers);
+
+		// Above the limit, a member gets forbidden in each form: a person, an agent through MCP, a body.
+		expect(await codeOf(owner.call("chat.post_message", { room_id: room.id, text: "@here look" }))).toBe("forbidden");
 		const tool = await callTool(bot.key, "chat_post_message", { room_id: room.id, markdown: "@channel look" });
 		expect(JSON.parse(tool.content[0]?.text ?? "{}")).toMatchObject({ code: "forbidden" });
+		const node = { type: "doc", content: [{ type: "paragraph", content: [group("here")] }] } as never;
+		expect(await codeOf(bot.call("chat.post_message", { room_id: room.id, body: node }))).toBe("forbidden");
 		expect((await post(ada, room.id, "@here look")).group_mentions).toEqual(["here"]);
-		// The author of a message from before can still change its text. A new group is refused.
+
+		// The author of a message from before can still change its text, also when its group is text. A
+		// new group is refused.
 		const target = { room_id: room.id, message_id: small.id };
 		const kept = (await bot.call("chat.edit_message", { ...target, text: "@channel standup at 10" })).message;
 		expect(kept.group_mentions).toEqual(["channel"]);
 		expect(await codeOf(bot.call("chat.edit_message", { ...target, text: "@channel and @here" }))).toBe("forbidden");
+		const fixed = (
+			await bot.call("chat.edit_message", { room_id: room.id, message_id: old.id, text: "@here old standup at 9" })
+		).message;
+		expect(fixed.group_mentions).toEqual(["here"]);
 		expect((await post(bot, room.id, "no group")).group_mentions).toEqual([]);
 	});
 });

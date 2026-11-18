@@ -22,7 +22,7 @@ import {
 import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
-import { withMentions } from "./mentions.ts";
+import { storedGroups, withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -1136,14 +1136,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
 			const content = await this.mentionedContent(room, input);
 			if ("error" in content) return content;
-			const stored = row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody);
-			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, groupMentions(stored));
-			if (groupRefusal) return groupRefusal;
 			const bodyJson = JSON.stringify(content.body);
 			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };
 			const limited = this.spendAllowance(call, Date.now());
 			if (limited) return limited;
+			const stored = row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody);
+			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, storedGroups(stored));
+			if (groupRefusal) return groupRefusal;
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {

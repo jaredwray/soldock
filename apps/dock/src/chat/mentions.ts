@@ -2,6 +2,7 @@ import {
 	type ChatBody,
 	type ChatBodyBlock,
 	type ChatBodyInline,
+	type GroupMention,
 	hasMentionSyntax,
 	type MentionDirectory,
 	mentionDirectory,
@@ -149,6 +150,14 @@ export function linkMentions(body: ChatBody, directory: MentionDirectory<Princip
 			}
 		});
 	return { ...body, content: blocks(body.content) };
+}
+
+/**
+ * The groups of a stored message: its group nodes, and "@here" or "@channel" in its text, as the room
+ * links them now. A message from before the group nodes has its groups as text. An edit keeps them.
+ */
+export function storedGroups(body: ChatBody): GroupMention[] {
+	return groupMentions(linkMentions(body, mentionDirectory<PrincipalRecord>([]), () => false));
 }
 
 /**
