@@ -834,9 +834,12 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect(box).toHaveText("");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
-	// The box sent a mention node: the room stores the id of the principal.
-	const stored = (await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
-	expect(stored?.mentions).toHaveLength(1);
+	// The box sent a mention node: the room stores the id of the principal. The row shows before the room
+	// stores the message, so wait for the stored message.
+	const storedThanks = async () =>
+		(await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
+	await expect.poll(async () => (await storedThanks())?.mentions.length).toBe(1);
+	const stored = await storedThanks();
 
 	// "@he" offers the group @here after the people. The box sends a group node, which mentions each member.
 	await box.pressSequentially("standup @he");
