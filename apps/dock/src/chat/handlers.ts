@@ -246,9 +246,24 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			);
 		}
 		const opened = openRoom(call, input.room_id);
-		const { edits } = accept(await opened.room.listEdits(opened.ctx, input.message_id));
-		// A read of the earlier content of a different person is an access to keep in the audit log.
-		auditOk(call, "chat.list_message_edits", `${input.room_id}:${input.message_id}`);
+		const target = `${input.room_id}:${input.message_id}`;
+		const result = await opened.room.listEdits(opened.ctx, input.message_id);
+		// A read of the earlier content of a different person is an access to keep in the audit log. A room
+		// that refuses the read (a private room of a non-member) gets a line too. The answer stays not_found.
+		if ("error" in result) {
+			audit({
+				op: "chat.list_message_edits",
+				actor: call.caller.id,
+				actorKind: call.caller.kind,
+				credential: call.caller.credential,
+				target,
+				result: "denied",
+				code: result.error.code,
+				requestId: call.requestId,
+			});
+		}
+		const { edits } = accept(result);
+		auditOk(call, "chat.list_message_edits", target);
 		return {
 			edits: edits.map((edit) => ({
 				...edit,

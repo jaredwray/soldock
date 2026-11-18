@@ -1228,9 +1228,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * The earlier versions of a message, oldest first, for a caller that can read the room. The handler
 	 * checks that the caller is an owner or an admin of the organization.
 	 */
-	listEdits(call: RoomCall, messageId: string): { edits: MessageEditRecord[] } | Refusal {
+	async listEdits(call: RoomCall, messageId: string): Promise<{ edits: MessageEditRecord[] } | Refusal> {
 		const opened = this.open(call, "visible");
 		if ("error" in opened) return opened;
+		// A non-member reads a public room only while the directory has it, as for `get`. A fresh start of
+		// the directory leaves old room objects, and they stay closed.
+		if (!opened.member && !(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
 		if (!this.message(messageId)) return refuse("not_found", NO_MESSAGE);
 		const rows = this.sql
 			.exec<{ version: number; text: string; body_json: string | null; written_at: number; replaced_at: number }>(

@@ -1579,7 +1579,14 @@ describe("the earlier versions of a message", () => {
 		const hidden = await post(ada, secret.id, "secret");
 		const secretTarget = { room_id: secret.id, message_id: hidden.id };
 		await ada.call("chat.edit_message", { ...secretTarget, text: "no secret" });
+		const hiddenSpy = vi.spyOn(console, "log");
 		expect(await codeOf(owner.call("chat.list_message_edits", secretTarget))).toBe("not_found");
+		const hiddenAudit = hiddenSpy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true);
+		hiddenSpy.mockRestore();
+		// The refusal goes to the audit log, with the code that the caller gets.
+		expect(hiddenAudit).toMatchObject([{ actor: owner.id, result: "denied", code: "not_found" }]);
 		await ada.call("chat.add_members", { room_id: secret.id, principal_ids: [owner.id] });
 		const inside = await owner.call("chat.list_message_edits", secretTarget);
 		expect(inside.edits.map((edit) => edit.text)).toEqual(["secret"]);
@@ -1587,6 +1594,11 @@ describe("the earlier versions of a message", () => {
 		// A delete removes the earlier versions with the text.
 		await ada.call("chat.delete_message", target);
 		expect((await owner.call("chat.list_message_edits", target)).edits).toEqual([]);
+
+		// A public room that the directory no longer has stays closed to a non-member, as after a fresh start
+		// of the directory.
+		await env.DIRECTORY.prepare("DELETE FROM chat_rooms WHERE id = ?").bind(room.id).run();
+		expect(await codeOf(owner.call("chat.list_message_edits", target))).toBe("not_found");
 	});
 
 	it("keeps the newest earlier versions only, up to the limit", async () => {

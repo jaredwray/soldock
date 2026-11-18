@@ -216,7 +216,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     changes it too, so it gives only the order.
   - The caller must be able to read the room. An owner of the organization reads the earlier
     versions in a public room, and in a private room or a direct message only as a member. So the
-    role gives no access to a private room.
+    role gives no access to a private room. As for `chat.get_room`, a non-member reads a public room
+    only while the directory has it, so the old rooms after a fresh start of the directory stay closed.
+  - A refusal of the room (`not_found`) gets a `denied` audit line too, with the code. The caller
+    still gets `not_found`.
   - Each read writes an audit line (`chat.list_message_edits`), because it shows the earlier words
     of a different person. A refused read writes a line with `denied` too: the operation has
     `auditDenied`, so the invoker audits a refused kind of caller, a missing scope and a missing role,
