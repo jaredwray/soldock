@@ -872,8 +872,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			)}
 			{dialog?.type === "edits" &&
 				(() => {
-					// The newest copy of the message: the author can change it while the dialog is open.
+					// The newest copy of the message: the author can change it while the dialog is open. A delete
+					// removes the earlier versions, so the dialog closes and shows none of them.
 					const current = messages.find((one) => one.id === dialog.message.id) ?? dialog.message;
+					if (current.deleted) return null;
 					return (
 						<EditHistoryDialog
 							key={current.edited_at ?? ""}

@@ -665,6 +665,8 @@ export const listMessageEdits = defineOperation({
 	scopes: ["chat.read"],
 	callers: ["human"],
 	annotations: READ,
+	// The earlier words of a different person: each refused read gets an audit line too.
+	auditDenied: true,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId }),
 	output: z.object({ edits: z.array(ChatMessageEdit) }),
 	errors: ["not_found", "forbidden"],

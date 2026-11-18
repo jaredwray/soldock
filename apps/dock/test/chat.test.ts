@@ -1553,21 +1553,26 @@ describe("the earlier versions of a message", () => {
 		const tool = await callTool(owner.key, "chat_list_message_edits", target);
 		expect(tool.structuredContent).toEqual({ edits });
 
-		// The author, the owner of the room and an agent are not owners or admins of the organization. A
-		// refused read goes to the audit log too.
+		// The author, the owner of the room and an agent are not owners or admins of the organization. A key
+		// of the owner without chat.read cannot read them. A key with chat.read can.
+		const key = async (scopes: ("chat.read" | "mail.read")[]) =>
+			api((await owner.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret);
+		expect((await (await key(["chat.read"]))("chat.list_message_edits", target)).edits).toEqual(edits);
+		const mailOnly = await key(["mail.read"]);
+		// Each refused read goes to the audit log, one line each: the role, the kind of caller and the scope.
 		const refusedSpy = vi.spyOn(console, "log");
 		expect(await codeOf(ada.call("chat.list_message_edits", target))).toBe("forbidden");
+		expect(await codeOf(bot.call("chat.list_message_edits", target))).toBe("forbidden");
+		expect(await codeOf(mailOnly("chat.list_message_edits", target))).toBe("forbidden");
 		const refused = refusedSpy.mock.calls
 			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
 			.filter((line) => line?.audit === true);
 		refusedSpy.mockRestore();
-		expect(refused).toMatchObject([{ op: "chat.list_message_edits", actor: ada.id, result: "denied" }]);
-		expect(await codeOf(bot.call("chat.list_message_edits", target))).toBe("forbidden");
-		// A key of the owner with chat.read reads them. A key without chat.read does not.
-		const key = async (scopes: ("chat.read" | "mail.read")[]) =>
-			api((await owner.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret);
-		expect((await (await key(["chat.read"]))("chat.list_message_edits", target)).edits).toEqual(edits);
-		expect(await codeOf((await key(["mail.read"]))("chat.list_message_edits", target))).toBe("forbidden");
+		expect(refused.map((line) => [line.op, line.actor, line.result])).toEqual([
+			["chat.list_message_edits", ada.id, "denied"],
+			["chat.list_message_edits", bot.id, "denied"],
+			["chat.list_message_edits", owner.id, "denied"],
+		]);
 
 		// A private room stays hidden from an owner of the organization that is not a member. A member reads it.
 		const secret = await createRoom(ada, "private", "Secret", [bot.id]);

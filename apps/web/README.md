@@ -982,7 +982,8 @@ MCP clients. The app has no UI-only path.
   - For an owner or an admin of the organization, the edited mark is a button. It opens "Earlier
     versions" (`EditHistoryDialog`, `chat.list_message_edits`): each earlier text with its time,
     oldest first, and the current text last. For each other person, the mark is text. The name of
-    the button is "Edited. Show the earlier versions".
+    the button is "Edited. Show the earlier versions". A delete of the message while the dialog is
+    open closes the dialog, because the room removes the earlier versions.
   - Under the edit box, a note tells the author that owners and admins of the organization can read
     the text before an edit, and that a delete removes it.
   - After a refusal, the message shows as before, with a notice of the reason. For a change, the

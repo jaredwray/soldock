@@ -28,8 +28,8 @@ export type AnyHandler<C> = (call: C, input: never) => Promise<unknown>;
 /**
  * Runs one operation for REST and MCP alike: the caller kind and scope checks, input validation,
  * the handler, and output validation. Output validation also drops fields that the contract does
- * not declare, so a handler cannot leak them. A refused change is audited here. Handlers audit
- * the changes that they make.
+ * not declare, so a handler cannot leak them. A refused change, and a refused call of an operation
+ * with `auditDenied`, is audited here. Handlers audit the changes that they make.
  */
 export async function invokeOperation<C extends { caller: Caller; requestId: string }>(
 	operation: Operation,
@@ -41,7 +41,7 @@ export async function invokeOperation<C extends { caller: Caller; requestId: str
 		return await run(operation, handler, call, rawInput);
 	} catch (error) {
 		const denied = error instanceof OperationError && (error.code === "forbidden" || error.code === "policy_denied");
-		if (denied && !operation.annotations.readOnly) {
+		if (denied && (!operation.annotations.readOnly || operation.auditDenied)) {
 			audit({
 				op: operation.name,
 				actor: call.caller.id,

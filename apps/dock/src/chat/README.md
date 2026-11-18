@@ -218,8 +218,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     versions in a public room, and in a private room or a direct message only as a member. So the
     role gives no access to a private room.
   - Each read writes an audit line (`chat.list_message_edits`), because it shows the earlier words
-    of a different person. A refused read writes a line with `denied` too: a read operation gets no
-    audit line from the invoker.
+    of a different person. A refused read writes a line with `denied` too: the operation has
+    `auditDenied`, so the invoker audits a refused kind of caller, a missing scope and a missing role,
+    one line each.
   - The room keeps the 100 newest earlier versions of a message (`CHAT_LIMITS.messageEdits`). An
     author that edits all the time fills no storage.
   - A delete of the message removes its earlier versions with the text, also a delete by the owner of
