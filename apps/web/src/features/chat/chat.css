@@ -581,6 +581,13 @@ a.chat-author:hover {
 	border-left-color: var(--primary);
 }
 
+/* Under the edit box: who can read the text before an edit. */
+.chat-edit-note {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
 .chat-edit-time {
 	margin: 0 0 4px;
 	color: var(--muted-foreground);

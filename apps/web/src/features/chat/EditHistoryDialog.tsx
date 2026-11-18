@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatMessageEdit } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatMessage, type ChatMessageEdit } from "@soldock/contracts";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -10,7 +10,8 @@ type State = { status: "loading" } | { status: "ready"; edits: ChatMessageEdit[]
 
 /**
  * The earlier versions of a message, for an owner or an admin of the organization
- * (`chat.list_message_edits`). The oldest version comes first, and the current text comes last.
+ * (`chat.list_message_edits`). The oldest version comes first, and the current text comes last. The
+ * room view gives it a key with the time of the last edit, so a new edit reads the versions again.
  */
 export function EditHistoryDialog({
 	roomId,
@@ -56,6 +57,11 @@ export function EditHistoryDialog({
 				<ol className="chat-edit-history">
 					{state.edits.length === 0 && (
 						<li className="list-state">The room kept no earlier version of this message.</li>
+					)}
+					{state.edits.length >= CHAT_LIMITS.messageEdits && (
+						<li className="list-state">
+							The room keeps the {CHAT_LIMITS.messageEdits} newest earlier versions. Older versions are not kept.
+						</li>
 					)}
 					{state.edits.map((edit) => (
 						<li key={edit.version} className="chat-edit-version">

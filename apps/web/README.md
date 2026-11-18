@@ -981,7 +981,10 @@ MCP clients. The app has no UI-only path.
     the edited mark. A deleted message shows as deleted, and the confirmation closes.
   - For an owner or an admin of the organization, the edited mark is a button. It opens "Earlier
     versions" (`EditHistoryDialog`, `chat.list_message_edits`): each earlier text with its time,
-    oldest first, and the current text last. For each other person, the mark is text.
+    oldest first, and the current text last. For each other person, the mark is text. The name of
+    the button is "Edited. Show the earlier versions".
+  - Under the edit box, a note tells the author that owners and admins of the organization can read
+    the text before an edit, and that a delete removes it.
   - After a refusal, the message shows as before, with a notice of the reason. For a change, the
     edit box opens again with the new body, so the person does not write it again.
   - A change or a delete has one attempt. It does not wait in an outbox, and it does not stay

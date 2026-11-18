@@ -182,13 +182,13 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await openRoom(memberPage, roomId);
 	const memberRow = memberPage.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(memberRow.locator(".chat-edited")).toBeVisible();
-	await expect(memberRow.getByRole("button", { name: "(edited)" })).toHaveCount(0);
+	await expect(memberRow.getByRole("button", { name: /Edited/ })).toHaveCount(0);
 	const ownerPage = await nadia.newPage();
 	await openRoom(ownerPage, roomId);
 	await ownerPage
 		.locator(".chat-message")
 		.filter({ hasText: "changed text" })
-		.getByRole("button", { name: "(edited)" })
+		.getByRole("button", { name: "Edited. Show the earlier versions" })
 		.click();
 	const history = ownerPage.getByRole("dialog", { name: "Earlier versions" });
 	await expect(history.locator(".chat-edit-version .chat-text")).toHaveText([first, "changed text"]);

@@ -49,14 +49,19 @@ function toRoom(record: RoomRecord): ChatRoom {
 }
 
 function auditOk(call: CallContext, op: string, target: string): void {
+	auditResult(call, op, target, "ok");
+}
+
+function auditResult(call: CallContext, op: string, target: string, result: "ok" | "denied"): void {
 	audit({
 		op,
 		actor: call.caller.id,
 		actorKind: call.caller.kind,
 		credential: call.caller.credential,
 		target,
-		result: "ok",
+		result,
 		requestId: call.requestId,
+		...(result === "denied" ? { code: "forbidden" } : {}),
 	});
 }
 
@@ -237,8 +242,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.list_message_edits"(call, input) {
-		// The check comes first, so a caller without the role learns nothing about the room.
+		// The check comes first, so a caller without the role learns nothing about the room. A refused read
+		// of these words goes to the audit log too: a read operation gets no audit line of its own.
 		if (!isAdmin(call.caller)) {
+			auditResult(call, "chat.list_message_edits", `${input.room_id}:${input.message_id}`, "denied");
 			throw new OperationError(
 				"forbidden",
 				"Only owners and admins of the organization can read the earlier versions of a message.",

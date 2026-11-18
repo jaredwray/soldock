@@ -870,14 +870,20 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					}}
 				/>
 			)}
-			{dialog?.type === "edits" && (
-				<EditHistoryDialog
-					roomId={roomId}
-					message={dialog.message}
-					mentions={mentions}
-					onClose={() => setDialog(null)}
-				/>
-			)}
+			{dialog?.type === "edits" &&
+				(() => {
+					// The newest copy of the message: the author can change it while the dialog is open.
+					const current = messages.find((one) => one.id === dialog.message.id) ?? dialog.message;
+					return (
+						<EditHistoryDialog
+							key={current.edited_at ?? ""}
+							roomId={roomId}
+							message={current}
+							mentions={mentions}
+							onClose={() => setDialog(null)}
+						/>
+					);
+				})()}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete this message?"
@@ -1061,6 +1067,9 @@ function MessageItem({
 								Save
 							</button>
 						</span>
+						<p className="chat-edit-note">
+							Owners and admins of the organization can read the text before an edit. To remove it, delete the message.
+						</p>
 					</form>
 				) : message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
@@ -1072,7 +1081,8 @@ function MessageItem({
 								<button
 									type="button"
 									className="chat-edited link-button"
-									title={`${fullDate(message.edited_at)}. Show the earlier versions.`}
+									title={fullDate(message.edited_at)}
+									aria-label="Edited. Show the earlier versions"
 									onClick={onShowEdits}
 								>
 									(edited)

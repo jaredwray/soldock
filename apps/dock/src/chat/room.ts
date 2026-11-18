@@ -1205,7 +1205,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 */
 	private keepEarlierVersion(row: MessageRow, now: number): void {
 		this.sql.exec(
-			`INSERT OR REPLACE INTO message_edits (message_id, version, text, body_json, written_at, replaced_at)
+			// Each change of a message gives it a new version, so the key is always new. A plain insert fails
+			// loudly if that ever stops being true, and never writes over an earlier version.
+			`INSERT INTO message_edits (message_id, version, text, body_json, written_at, replaced_at)
 			VALUES (?, ?, ?, ?, ?, ?)`,
 			row.id,
 			row.version,

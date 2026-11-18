@@ -208,15 +208,25 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   - `chat.list_message_edits` returns them, oldest first, to an owner or an admin of the
     organization only. An agent never calls it (`callers: ["human"]`). The handler checks the role
     before it asks the room, so a different caller learns nothing about the room.
+  - A key or an OAuth token of an owner or an admin with `chat.read` can call it, as the reads of the
+    mailbox of an agent (`canReadAgentMailboxes`). A key without `chat.read` cannot.
+  - The author does not read the earlier versions of its own message with this operation. The
+    history is for the owners and the admins of the organization.
+  - `version` of an earlier version is the version of the message before the edit. A reaction
+    changes it too, so it gives only the order.
   - The caller must be able to read the room. An owner of the organization reads the earlier
     versions in a public room, and in a private room or a direct message only as a member. So the
     role gives no access to a private room.
   - Each read writes an audit line (`chat.list_message_edits`), because it shows the earlier words
-    of a different person.
+    of a different person. A refused read writes a line with `denied` too: a read operation gets no
+    audit line from the invoker.
   - The room keeps the 100 newest earlier versions of a message (`CHAT_LIMITS.messageEdits`). An
     author that edits all the time fills no storage.
-  - A delete of the message removes its earlier versions with the text. A delete is for the words of
-    the author, also the earlier ones.
+  - A delete of the message removes its earlier versions with the text, also a delete by the owner of
+    the room. The audit line of the delete stays.
+  - The web app tells the author under the edit box that owners and admins can read the text before
+    an edit, and that a delete removes it.
+  - Known limit: the list has no pages. 100 versions of a large body can make a large answer.
   - An edit from before the table kept nothing, so its message has no earlier version.
 - The author and the owner of the room delete a message (`chat.delete_message`). The object
   deletes the text. The message keeps its `seq`, with `deleted: true`, so clients can show a gap.

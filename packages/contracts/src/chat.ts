@@ -637,7 +637,10 @@ export const deleteMessage = defineOperation({
 
 /** An earlier version of a message: its content before an edit. */
 export const ChatMessageEdit = z.object({
-	/** The version of the room when this content was written. */
+	/**
+	 * The version of the message before the edit that replaced this content. A reaction changes it too,
+	 * so use it only for the order of the versions.
+	 */
 	version: z.number().int(),
 	/** The plain text of this content. */
 	text: z.string(),
@@ -655,7 +658,7 @@ export const listMessageEdits = defineOperation({
 	name: "chat.list_message_edits",
 	summary: "Read the earlier versions of a message",
 	description: [
-		"Owners and admins of the organization only, in a room that they can read. Returns the content of a message before each of its edits, oldest first.",
+		"Owners and admins of the organization only, in a room that they can read. Returns the content of a message before each of its edits, oldest first. A key or a token of an owner or an admin with chat.read can call it.",
 		`The room keeps the ${CHAT_LIMITS.messageEdits} newest earlier versions of a message. A delete of the message removes its earlier versions too.`,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edits" },

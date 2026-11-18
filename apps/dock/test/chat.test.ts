@@ -1553,15 +1553,31 @@ describe("the earlier versions of a message", () => {
 		const tool = await callTool(owner.key, "chat_list_message_edits", target);
 		expect(tool.structuredContent).toEqual({ edits });
 
-		// The author, the owner of the room and an agent are not owners or admins of the organization.
+		// The author, the owner of the room and an agent are not owners or admins of the organization. A
+		// refused read goes to the audit log too.
+		const refusedSpy = vi.spyOn(console, "log");
 		expect(await codeOf(ada.call("chat.list_message_edits", target))).toBe("forbidden");
+		const refused = refusedSpy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true);
+		refusedSpy.mockRestore();
+		expect(refused).toMatchObject([{ op: "chat.list_message_edits", actor: ada.id, result: "denied" }]);
 		expect(await codeOf(bot.call("chat.list_message_edits", target))).toBe("forbidden");
-		// A private room stays hidden from an owner of the organization that is not a member.
+		// A key of the owner with chat.read reads them. A key without chat.read does not.
+		const key = async (scopes: ("chat.read" | "mail.read")[]) =>
+			api((await owner.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret);
+		expect((await (await key(["chat.read"]))("chat.list_message_edits", target)).edits).toEqual(edits);
+		expect(await codeOf((await key(["mail.read"]))("chat.list_message_edits", target))).toBe("forbidden");
+
+		// A private room stays hidden from an owner of the organization that is not a member. A member reads it.
 		const secret = await createRoom(ada, "private", "Secret", [bot.id]);
 		const hidden = await post(ada, secret.id, "secret");
-		expect(await codeOf(owner.call("chat.list_message_edits", { room_id: secret.id, message_id: hidden.id }))).toBe(
-			"not_found",
-		);
+		const secretTarget = { room_id: secret.id, message_id: hidden.id };
+		await ada.call("chat.edit_message", { ...secretTarget, text: "no secret" });
+		expect(await codeOf(owner.call("chat.list_message_edits", secretTarget))).toBe("not_found");
+		await ada.call("chat.add_members", { room_id: secret.id, principal_ids: [owner.id] });
+		const inside = await owner.call("chat.list_message_edits", secretTarget);
+		expect(inside.edits.map((edit) => edit.text)).toEqual(["secret"]);
 
 		// A delete removes the earlier versions with the text.
 		await ada.call("chat.delete_message", target);
