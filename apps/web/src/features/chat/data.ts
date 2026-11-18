@@ -509,6 +509,16 @@ export function useRoom(
 		}
 	}, [roomId]);
 
+	// The views of a thread watch the messages of the socket, and each connect: a connect after a gap
+	// tells them to read what they missed.
+	const watchers = useRef(new Set<(event: MessageWatch) => void>());
+	const watchMessages = useCallback((listener: (event: MessageWatch) => void) => {
+		watchers.current.add(listener);
+		return () => {
+			watchers.current.delete(listener);
+		};
+	}, []);
+
 	// The socket opens after the load, for a member only: the room gives its messages to its members.
 	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
 	useEffect(() => {
@@ -523,8 +533,11 @@ export function useRoom(
 				if (event.type === "hello") {
 					void sync.notice(event.version);
 					if (connects++ > 0) void loadMembers();
-				} else if (event.type === "message" || event.type === "reply") sync.push(event.message);
-				else {
+					for (const watcher of watchers.current) watcher({ type: "connect" });
+				} else if (event.type === "message" || event.type === "reply") {
+					sync.push(event.message);
+					for (const watcher of watchers.current) watcher({ type: "message", message: event.message });
+				} else {
 					roomChanged.current();
 					void loadMembers();
 				}
@@ -564,5 +577,9 @@ export function useRoom(
 		follow: pager.follow,
 		apply,
 		loadMembers,
+		watchMessages,
 	};
 }
+
+/** What a view of a thread gets from the socket of the room: a message, or a new connect. */
+export type MessageWatch = { type: "message"; message: ChatMessage } | { type: "connect" };

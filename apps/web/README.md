@@ -724,8 +724,22 @@ MCP clients. The app has no UI-only path.
     room, so the page gets what changed while it had no socket.
   - The socket also brings each reply of a thread. The sync keeps its version, and the room list
     leaves it out (`inRoomList`), unless its author also sent it to the room. A reply changes its
-    parent first, so the list gets the new summary of the thread in the same order. The view of a
-    thread comes in the next part of threads.
+    parent first, so the list gets the new summary of the thread in the same order.
+  - **Threads.** A message with replies shows the summary of its thread under it: the initials of
+    the newest authors, the number of replies and the time of the last reply. The button opens the
+    view of the thread. The bar of actions of a message has "Reply in a thread" too. A reply that also
+    went to the room shows "Replied in a thread", which opens the thread of its parent.
+    - The view of a thread (`ThreadPanel`) is a column at the right of the room, with the full width
+      on a narrow screen. It has the message that starts the thread, its replies oldest first, and a
+      box for a reply. "Also send to <room>" sends the reply to the room list too.
+    - The view reads each page of `chat.list_replies`. The socket of the room brings each change of
+      the thread (`watchMessages`), and `mergeThread` keeps the newest copy of each message. After a
+      new connect of the socket, the view reads the changes after its version, so it misses no change
+      of a gap.
+    - A reply that fails stays in the box, with the reason. Escape and the close button close the
+      view.
+    - Known limits, for the next part: the view has no edit, delete or reaction of a reply, and no
+      draft that stays. A thread has no unread state yet.
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
     that stopped without a close. When the tab shows again, or the network comes back, the page
