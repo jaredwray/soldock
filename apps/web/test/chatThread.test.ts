@@ -99,6 +99,7 @@ describe("the data of the view of a thread", () => {
 			new Error("offline"),
 			page([message(3, 7, "cmsg_1", "two")], 7, true),
 			page([], 8),
+			page([], 8),
 		];
 		const calls: unknown[] = [];
 		const read = async (range: { after?: number; changed_after?: number }) => {
@@ -121,11 +122,15 @@ describe("the data of the view of a thread", () => {
 		// The failed read kept the version, so the next catch-up asks for the same changes, also for a room version that it has.
 		view.catchUp(6);
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
+		// A catch-up with no version (a new connect of the socket, or a room that is not in the list) always reads.
+		view.catchUp();
+		await vi.waitFor(() => expect(calls).toHaveLength(7));
 		expect(calls.slice(2)).toEqual([
 			{ changed_after: 5 },
 			{ changed_after: 6 },
 			{ changed_after: 6 },
 			{ changed_after: 7 },
+			{ changed_after: 8 },
 		]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
 	});
