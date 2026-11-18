@@ -258,6 +258,8 @@ export class DocImages {
 		};
 		this.jobs.set(job.key, job);
 		this.running += 1;
+		// The page shows that the doc is not saved while a job runs, so it must know the start too.
+		this.emit(null);
 		this.run(job, source).then(
 			(image) => {
 				this.running -= 1;

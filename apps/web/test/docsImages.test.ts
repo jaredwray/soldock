@@ -462,11 +462,16 @@ describe("the image store of a doc", () => {
 				}),
 		});
 		const ends: string[] = [];
+		// What the page sees at each message of the store: it shows "Not saved yet" while this is true.
+		const seen: boolean[] = [];
 		store.subscribe((job) => {
+			seen.push(store.busy);
 			if (job) ends.push(job.status);
 		});
 		expect(store.busy).toBe(false);
 		store.start({ kind: "file", file: new File([PNG], "a.png", { type: "image/png" }), name: null });
+		// The start of a job is a message too, or the page learns of the upload only at its end.
+		expect(seen[0]).toBe(true);
 		// This import has no answer in the fake server, so it fails.
 		store.start({ kind: "address", src: "https://example.com/a.png" });
 		expect(store.busy).toBe(true);
@@ -476,6 +481,7 @@ describe("the image store of a doc", () => {
 		(answer as unknown as (value: unknown) => void)({ image: meta(ID) });
 		await vi.waitFor(() => expect(ends).toEqual(["failed", "done"]));
 		expect(store.busy).toBe(false);
+		expect(seen.at(-1)).toBe(false);
 		store.dispose();
 	});
 

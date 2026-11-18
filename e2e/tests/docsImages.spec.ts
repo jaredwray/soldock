@@ -284,6 +284,36 @@ test("a picture with a web address in pasted HTML goes through the server, and a
 	await context.close();
 });
 
+test("the doc is not saved while an image uploads, also after the save of the text ends", async ({ browser }) => {
+	const context = await signIn(browser, "nadia");
+	const page = await context.newPage();
+	const doc = await createDoc(context, unique("Images"), "Start.");
+	const body = await openDoc(page, doc);
+	// The upload waits until the test lets it continue.
+	let release: () => void = () => undefined;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await page.route("**/api/v1/docs/*/images", async (route) => {
+		await held;
+		await route.continue();
+	});
+	const header = page.locator(".doc-page");
+	await dropFiles(page, ".doc-body", [{ name: "slow.png", type: "image/png", bytes: pngFile(120, 80) }]);
+	await expect(body.locator(".doc-image-pending")).toHaveCount(1);
+	// The editor saves the text without the image. That save must not make the page say "Saved".
+	await page.waitForResponse(
+		(response) => response.url().endsWith(`/api/v1/docs/${doc.id}`) && response.request().method() === "POST",
+	);
+	await expect(header.getByText("Not saved yet")).toBeVisible();
+	expect(await savedImages(context, doc.id, () => true)).toEqual([]);
+	release();
+	await expect(body.locator(".doc-image-loaded:not(.doc-image-pending)")).toHaveCount(1);
+	await savedImages(context, doc.id, (images) => images.length === 1);
+	await expect(header.getByText("Saved", { exact: true })).toBeVisible();
+	await context.close();
+});
+
 test("the Insert image menu adds an image from this computer and from Drive", async ({ browser }) => {
 	const context = await signIn(browser, "nadia");
 	const page = await context.newPage();

@@ -59,6 +59,8 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 	/** The images of the doc that is open. The page makes one store for each doc, and releases it at the end. */
 	const [images, setImages] = useState<DocImages | null>(null);
 	const imagesRef = useRef<DocImages | null>(null);
+	/** True while an image uploads. The doc on the server does not have that image yet. */
+	const [uploading, setUploading] = useState(false);
 	/** The newest document of the editor. A save sends it. */
 	const docRef = useRef<Node | null>(null);
 	const saverRef = useRef<Autosaver | null>(null);
@@ -94,6 +96,8 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		const store = new DocImages({ spaceId, itemId });
 		imagesRef.current = store;
 		setImages(store);
+		setUploading(false);
+		const stopListening = store.subscribe(() => setUploading(store.busy));
 		const saver = new Autosaver({
 			save: async (baseRevision) => {
 				const doc = docRef.current;
@@ -122,6 +126,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 			void saver.flush();
 			saver.dispose();
 			saverRef.current = null;
+			stopListening();
 			store.dispose();
 			imagesRef.current = null;
 		};
@@ -181,7 +186,9 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 	}, [load.status, spaceId, itemId]);
 
 	// The browser asks before it closes a tab with changes that the server does not have.
-	const unsaved = saveState !== "saved";
+	// An image that still uploads is not in a save. The save can end before the upload, so the state
+	// of the save alone would let the tab close without a warning, and the image would be lost.
+	const unsaved = saveState !== "saved" || uploading;
 	useEffect(() => {
 		if (!unsaved) return;
 		const warn = (event: BeforeUnloadEvent) => {
@@ -271,7 +278,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		<main id="main" className="doc-page" tabIndex={-1}>
 			<DocumentHeader
 				item={item}
-				saveState={editable ? saveState : null}
+				saveState={editable ? (uploading && saveState === "saved" ? "unsaved" : saveState) : null}
 				onItemChange={onItemChange}
 				actions={
 					<button

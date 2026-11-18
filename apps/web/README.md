@@ -612,7 +612,8 @@ MCP clients. The app has no UI-only path.
       of the same doc, asks the server for the image in the same way. An image that still uploads
       does not go to the clipboard.
     - While an image uploads, the page does not load new content from the server, because that
-      content has no place for the image.
+      content has no place for the image. The header shows "Not saved yet", also after the save of
+      the text ends, and the browser asks before it closes the tab.
     - **A selected image.** A click selects an image. The image toolbar then takes the place of the
       formatting toolbar, so the page does not move. It has **In line**, **Wrap text** and **Break
       text**, the side (left, center, right), the size (25% to 100% of the text width, or the
