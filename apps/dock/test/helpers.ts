@@ -232,7 +232,7 @@ export async function inject(raw: string, to: string, options: { from?: string; 
 /** Runs the inbound queue consumer on the given job bodies, as delivery number `attempts`. */
 export async function consume(jobs: unknown[], attempts = 1) {
 	const batch = createMessageBatch(
-		"soldock-mail-inbound",
+		env.MAIL_INBOUND_QUEUE,
 		jobs.map((body, i) => ({ id: `job-${counter}-${i}`, timestamp: new Date(), attempts, body })),
 	);
 	const ctx = createExecutionContext();
@@ -566,7 +566,7 @@ export async function consumeWebhooks(jobs: unknown[], attempts = 1, options: { 
 		},
 	} as unknown as Queue;
 	const batch = createMessageBatch(
-		"soldock-webhooks",
+		env.WEBHOOKS_QUEUE,
 		jobs.map((body, i) => ({ id: `webhook-job-${++counter}-${i}`, timestamp: new Date(), attempts, body })),
 	);
 	const ctx = createExecutionContext();

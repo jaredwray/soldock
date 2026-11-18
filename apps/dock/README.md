@@ -10,7 +10,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org`. `env.rivus` is the `soldock-dock-rivus` Worker at `work.rivus.ai`, in the development account, with its own D1, R2 and queue names ([docs/self-hosting.md](../../docs/self-hosting.md)). No Worker serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers, and the Durable Object classes `MailboxDO`, `DriveSpaceDO`, `DocumentDO` and `ChatRoomDO` |
 | [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters, and the change feed of each resource kind for MCP subscriptions |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
@@ -56,8 +56,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   ([`src/identity/`](src/identity/)).
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
-- `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound` and `soldock-webhooks`, and acknowledges batches of other queues.
+- `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes the
+  queues that the vars `MAIL_INBOUND_QUEUE` and `WEBHOOKS_QUEUE` name, and acknowledges batches of
+  other queues.
   `scheduled` logs.
 
 ## Bindings
@@ -75,10 +76,13 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `DOCUMENT` | Durable Object `DocumentDO` (SQLite) | The content of each doc and each sheet |
 | `CHAT_ROOM` | Durable Object `ChatRoomDO` (SQLite) | One room or one direct message of Chat |
 | `MAIL_AUTHSERV_ID` | Var | The receiving server whose Authentication-Results header counts |
+| `MAIL_INBOUND_QUEUE`, `WEBHOOKS_QUEUE` | Vars | The names of the queues that `queue` consumes: `soldock-mail-inbound` and `soldock-webhooks`, or `soldock-rivus-mail-inbound` and `soldock-rivus-webhooks` on `rivus`. Each must equal the queue of the `MAIL_INBOUND` or `WEBHOOKS` binding. `test/config.test.ts` enforces it |
 | `SETUP_TOKEN` | Secret (optional) | Turns on `POST /auth/setup` while it has at least 32 characters. `GET /auth/setup` reports its state, never its value. Delete it after setup |
 
 `wrangler.jsonc` has no resource ids. `wrangler deploy` provisions the D1 database, the R2 bucket
-and the queues by name on the first deploy, and finds them by name after that.
+and the queues by name on the first deploy, and finds them by name after that. The resource names
+in this README are the names of production and development. The `rivus` Worker shares the development
+account, so its D1, R2 and queue names start with `soldock-rivus-` in place of `soldock-`.
 
 ## Commands
 
@@ -92,13 +96,14 @@ pnpm --filter @soldock/dock dev             # wrangler dev
 pnpm --filter @soldock/dock types           # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm types:check                            # fails if worker-configuration.d.ts is stale (CI)
 pnpm budgets:check                          # builds with --dry-run, profiles startup, compares to budgets.json (CI)
-pnpm run deploy:check                       # wrangler deploy --dry-run --env development (CI)
+pnpm run deploy:check                       # wrangler deploy --dry-run for development and rivus (CI)
 scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, against wrangler dev
 ```
 
-`deploy-development.yaml` runs `pnpm run deploy:development` and the remote D1 migrations in GitHub
-Actions on each push to `main`, then smoke checks `https://work.soldock.org`. Never run them from a
-developer machine or an agent session.
+`deploy-development.yaml` runs `pnpm run deploy:development` and `pnpm run deploy:rivus`, with the
+remote D1 migrations, in GitHub Actions on each push to `main`. Then it smoke checks
+`https://work.soldock.org` and `https://work.rivus.ai`. Never run them from a developer machine or an
+agent session.
 [`docs/development.md`](../../docs/development.md) shows how to run the whole product locally,
 with injected inbound mail.
 

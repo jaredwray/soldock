@@ -3,9 +3,6 @@ import { addressTag, resolveMailboxAddress } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { deliverStoredRaw, storeRaw } from "./delivery.ts";
 
-/** The queue that carries inbound mail from `email()` to the parser. */
-export const MAIL_INBOUND_QUEUE = "soldock-mail-inbound";
-
 /** One message for one mailbox. The raw bytes are in R2. Version 1. */
 export interface InboundJob {
 	v: 1;

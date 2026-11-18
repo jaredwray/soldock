@@ -2,10 +2,10 @@
 // exported from here. The operation handlers of each domain are joined in handlers.ts.
 import { createApp } from "./app.ts";
 import { handlers, watchers } from "./handlers.ts";
-import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
+import { handleEmail, handleInboundBatch } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
-import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
+import { handleWebhookBatch } from "./webhooks/index.ts";
 
 export { ChatRoomDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";
@@ -30,12 +30,14 @@ export default {
 		await handleEmail(message, env);
 	},
 
+	// The vars name the queues of this deployment. Queue names are unique in an account, so two
+	// deployments in one account use different names (wrangler.jsonc).
 	async queue(batch, env) {
-		if (batch.queue === MAIL_INBOUND_QUEUE) {
+		if (batch.queue === env.MAIL_INBOUND_QUEUE) {
 			await handleInboundBatch(batch, env);
 			return;
 		}
-		if (batch.queue === WEBHOOK_QUEUE) {
+		if (batch.queue === env.WEBHOOKS_QUEUE) {
 			await handleWebhookBatch(batch, env);
 			return;
 		}

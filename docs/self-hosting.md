@@ -3,12 +3,14 @@
 > Status: **first draft**. It grows as features are added. Later, it becomes part of the docs site.
 
 Soldock runs only on Cloudflare.
-The dock Worker has two deployment environments, `development` and `production`, and no others.
-GitHub Actions deploys both. No developer machine or agent session holds a Cloudflare token.
+The dock Worker has three deployment environments, `development`, `rivus` and `production`, and no
+others. GitHub Actions deploys each of them. No developer machine or agent session holds a Cloudflare
+token.
 
 | Environment | Worker | Host | Deployed by |
 | --- | --- | --- | --- |
 | `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
+| `rivus` | `soldock-dock-rivus` (`env.rivus` in `apps/dock/wrangler.jsonc`) | `work.rivus.ai` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
 | `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
 
 The domains in this document are the domains of this instance. On your own instance, use your own
@@ -19,11 +21,18 @@ The development environment is also the project's own Soldock: the team uses it 
 deploy never deletes a mailbox. Each Worker serves only its custom domain. `workers.dev` and Preview
 URLs are off, because each one is a second origin with the same data.
 
+The `rivus` environment is a second Soldock for the `rivus.ai` mail domain, with its own data. It is
+in the development account, and it gets the same deploys as development. Two Workers in one account
+that use the same D1, R2 or queue name use the same data. So each resource name of `rivus` starts with
+`soldock-rivus-`, and the vars `MAIL_INBOUND_QUEUE` and `WEBHOOKS_QUEUE` give its queue names.
+`test/config.test.ts` prevents a shared name. The API permissions apply to the whole account, so a
+development token can also get access to the `rivus` data.
+
 ## Prerequisites
 
-- One Cloudflare account for each environment. Use two accounts, because the API permissions for
-  Workers, D1, R2, KV and Queues apply to the whole account. A leaked development token must not
-  reach production.
+- One Cloudflare account for `production`, and one account for `development` and `rivus`. Use two
+  accounts, because the API permissions for Workers, D1, R2, KV and Queues apply to the whole account.
+  A leaked development token must not reach production.
 - The Workers Paid plan on each account.
 - The mail domain of each environment as an apex zone in that account:
   - development: `soldock.org`. It is also the public domain of the project, so the development
@@ -34,16 +43,19 @@ URLs are off, because each one is a second origin with the same data.
     - Turn on DNSSEC in the development account.
     - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
     - Send test mail only to seed accounts, inside the Email Service quota.
+  - rivus: `rivus.ai`, in the development account.
   - production: `soldock.org`
 - No DNS record for `work.soldock.org`. The development deploy attaches this custom domain to the
   Worker and makes its DNS record and certificate. In GitHub Actions, the deploy replaces a DNS record
   that conflicts. So do not use this name for a different service.
+- No DNS record for `work.rivus.ai`, for the same reason. The `rivus` deploy attaches this custom domain
+  in the `rivus.ai` zone.
 - A `workers.dev` subdomain on the development account, for the Email Service spike only. Set it on
   the **Workers & Pages** page of the dashboard. The dock Worker does not use `workers.dev`.
 
 ## GitHub setup
 
-Do these steps in this order. Do steps 1 and 2 before you merge a workflow that names the
+Do these steps in this order. Do steps 1 to 3 before you merge a workflow that names the
 environment. A run that names a missing environment makes GitHub create it with no rules.
 
 1. Protect `main` with a branch ruleset named `Pull requests required`:
@@ -54,12 +66,14 @@ environment. A run that names a missing environment makes GitHub create it with 
    to `main` only. If it exists already, set the branch rule before you add a secret. If a
    `staging` environment exists, move its secrets and variables to `development`, then delete
    `staging`. No environment may hold a token that no workflow uses.
-3. Read each workflow on `main` against the [workflow rules](#workflow-rules).
-4. Add these **environment** secrets to `development`. Do not add them as repository secrets.
+3. Create the `rivus` environment in the same way. Set its deployment branches to `main` only.
+4. Read each workflow on `main` against the [workflow rules](#workflow-rules).
+5. Add these **environment** secrets to `development`, and again to `rivus`. Do not add them as
+   repository secrets.
    - `CLOUDFLARE_API_TOKEN`: see [Token permissions](#token-permissions).
-   - `CLOUDFLARE_ACCOUNT_ID`: the development account ID. Find it on the account home page of the
-     dashboard, or in the dashboard URL after `dash.cloudflare.com/`.
-5. For the Email Service spike only, add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of
+   - `CLOUDFLARE_ACCOUNT_ID`: the development account ID, for both environments. Find it on the
+     account home page of the dashboard, or in the dashboard URL after `dash.cloudflare.com/`.
+6. For the Email Service spike only, add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of
    `soldock.org`. Find it on the zone's **Overview** page, in the **API** section. A zone ID has 32
    hex characters. It is an identifier, not a secret.
 
@@ -90,7 +104,9 @@ Read each change to such a workflow against these rules before you merge it.
 
 Make one API token for each environment (**My Profile › API Tokens › Create Token**). Limit it to
 the account and the zone of that environment. The `development` token has the permissions of each
-row whose workflow exists on `main`.
+row whose workflow exists on `main`. The `rivus` token has the permissions of the
+`deploy-development.yaml` row, with the `rivus.ai` zone in place of `soldock.org`. You can put one
+token in both environments. Then that token needs the zone permissions on both zones.
 
 | Workflow | Permissions |
 | --- | --- |
@@ -107,10 +123,15 @@ adds a binding, it adds the permission to this table too.
 
 - Each push to `main` runs `deploy-development.yaml`. To run it again, open **Actions ›
   deploy-development › Run workflow** and select `main`.
-- Until the secrets exist, the run stops at its first step, and the error names each missing secret.
-- After the deploy, the run sends a smoke check to the development host, `https://work.soldock.org`
-  ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and the `development`
-  environment page show the host. The run reads the host from the custom domain in the deploy output.
+- The workflow has one job for each environment: `deploy (development)` and `deploy (rivus)`. Each
+  job uses the secrets of its environment, and deploys and checks its own host. A failure in one job
+  does not stop the other job.
+- Until the secrets of an environment exist, its job stops at its first step, and the error names each
+  missing secret.
+- After the deploy, each job sends a smoke check to its host, `https://work.soldock.org` or
+  `https://work.rivus.ai` ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and
+  the environment page show the host. The job reads the host from the custom domain in the deploy
+  output.
 - On the first deploy with the custom domain, the host can take some minutes to answer, because
   Cloudflare makes its DNS record and its certificate. The smoke check waits up to five minutes.
 - To run the same smoke check against the built Worker on your computer:
@@ -129,7 +150,11 @@ Email Routing can route only to a Worker that exists.
 | Environment | Mail domain | Dock host | Worker |
 | --- | --- | --- | --- |
 | `development` | `soldock.org` | `work.soldock.org` | `soldock-dock-dev` |
+| `rivus` | `rivus.ai` | `work.rivus.ai` | `soldock-dock-rivus` |
 | `production` | `soldock.org` | `dock.jaredwray.com` | `soldock-dock` |
+
+Email Routing replaces the MX records of the zone. If `rivus.ai` gets mail through a different
+provider, that mail stops. Do step 2 for `rivus.ai` only when Soldock must get its mail.
 
 The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
 top-level only and applies to each environment. So it cannot hold a rule for one environment.
@@ -141,15 +166,16 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
      providers.
    - Under **Routing rules**, set the **Catch-all address** action to **Send to a Worker** and select
-     the dock Worker (`soldock-dock-dev` or `soldock-dock`). Catch-all works only on an apex domain.
+     the dock Worker (`soldock-dock-dev`, `soldock-dock-rivus` or `soldock-dock`). Catch-all works only
+     on an apex domain.
    - The Worker rejects mail for unknown addresses during the SMTP session, so a catch-all does not
      accept mail for addresses that do not exist.
 3. Send: onboard the mail domain to Email Service (**Email › Email Service**). Publish the DKIM,
    SPF and DMARC records that it shows, and wait until each one is verified. Publish DMARC
    `p=quarantine` or stricter before the first send.
 4. Confirm `MAIL_AUTHSERV_ID`: send a message from an external account, and read the topmost
-   `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
-   `mail/raw/<mailbox id>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
+   `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, or `soldock-rivus-blobs`
+   for `rivus`, key `mail/raw/<mailbox id>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
    change the var: the mailbox ignores results from any other server.
 5. First-run setup (once). Until setup runs, the dock host shows a setup page, and the deploy job
    summary shows "First-run setup: not done".
@@ -157,7 +183,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
       shorter token keeps setup off.
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
       Secrets**, and add the secret `SETUP_TOKEN` with that token.
-   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, then select **Continue**.
+   3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`, rivus: `https://work.rivus.ai/`). Enter the token, then select **Continue**.
       Select **Set up without a reset**. Enter your name, email domain, mailbox name, and a password
       of at least 12 characters. Select **Create the owner**.
    4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
@@ -268,11 +294,11 @@ Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 ### Dead letters
 
 An inbound job that fails 5 times, or that cannot be read, goes to the queue
-`soldock-mail-inbound-dlq`. The raw message stays in R2. Look at the queue in the dashboard
+`soldock-mail-inbound-dlq` (`soldock-rivus-mail-inbound-dlq` on `rivus`). The raw message stays in R2. Look at the queue in the dashboard
 (**Storage & Databases › Queues**). The Worker logs each dead letter with the principal id.
 
 A webhook job that cannot be read, or that fails 10 times in Soldock itself (for example while D1 is
-down), goes to the queue `soldock-webhooks-dlq`. A job holds ids only, never mail, chat or file content or
+down), goes to the queue `soldock-webhooks-dlq` (`soldock-rivus-webhooks-dlq` on `rivus`). A job holds ids only, never mail, chat or file content or
 secrets. A failed POST to the receiver does not go there: the endpoint records the failure, and it
 stops after 5 failed events in a row. The log line `webhook endpoint disabled` gives the endpoint,
 the host of the URL and the reason. The first deploy creates both webhook queues by name.

@@ -4,7 +4,6 @@ export {
 	type ChatWebhookEventJob,
 	type DriveWebhookEventJob,
 	handleWebhookBatch,
-	WEBHOOK_QUEUE,
 	type WebhookEventJob,
 } from "./delivery.ts";
 export { endpointHandlers } from "./endpoints.ts";

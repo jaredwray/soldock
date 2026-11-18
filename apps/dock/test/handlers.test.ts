@@ -28,6 +28,41 @@ describe("queue handler", () => {
 		expect(result.ackAll).toBe(true);
 		expect(result.retryBatch.retry).toBe(false);
 	});
+
+	// Two deployments in one account (development and rivus) need different queue names. A queue name
+	// that is fixed in the code would acknowledge and lose the mail of the other deployment.
+	it("consumes the queues that the vars name, as the rivus Worker does, and no queue with a default name", async () => {
+		// Each consumer sends a job that it cannot read to its own dead-letter queue.
+		const dead = { mail: [] as unknown[], webhooks: [] as unknown[] };
+		const deadLetters = (sent: unknown[]) =>
+			({ send: async (body: unknown) => void sent.push(body) }) as unknown as Queue;
+		const renamed = {
+			...env,
+			MAIL_INBOUND_QUEUE: "soldock-rivus-mail-inbound",
+			WEBHOOKS_QUEUE: "soldock-rivus-webhooks",
+			MAIL_INBOUND_DLQ: deadLetters(dead.mail),
+			WEBHOOKS_DLQ: deadLetters(dead.webhooks),
+		} as Env;
+		const run = async (queue: string) => {
+			const batch = createMessageBatch<unknown>(queue, [
+				{ id: queue, timestamp: new Date(), attempts: 1, body: { queue } },
+			]);
+			const ctx = createExecutionContext();
+			await worker.queue(batch, renamed, ctx);
+			return getQueueResult(batch, ctx);
+		};
+		await run("soldock-rivus-mail-inbound");
+		await run("soldock-rivus-webhooks");
+		const expected = {
+			mail: [{ queue: "soldock-rivus-mail-inbound" }],
+			webhooks: [{ queue: "soldock-rivus-webhooks" }],
+		};
+		expect(dead).toEqual(expected);
+		// The default names have no consumer in this deployment: the batch is acknowledged and goes nowhere.
+		expect((await run("soldock-mail-inbound")).ackAll).toBe(true);
+		expect((await run("soldock-webhooks")).ackAll).toBe(true);
+		expect(dead).toEqual(expected);
+	});
 });
 
 describe("scheduled handler", () => {

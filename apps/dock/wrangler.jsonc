@@ -1,7 +1,8 @@
 // The dock Worker: the whole backend, served from one origin.
-// The top level is production. `env.development` is the development Worker at work.soldock.org, which
-// deploy-development.yaml deploys on each push to main. The dock Worker has no other
-// deployment environments. test/config.test.ts checks that both declare the same bindings.
+// The top level is production. `env.development` is the development Worker at work.soldock.org, and
+// `env.rivus` is the rivus Worker at work.rivus.ai. deploy-development.yaml deploys both on each push to
+// main. The dock Worker has no other deployment environments. test/config.test.ts checks that all of them
+// declare the same bindings.
 // After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
 // Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
 {
@@ -99,14 +100,17 @@
 		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] }
 	],
 	"vars": {
-		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
 		// The receiving server whose Authentication-Results header the mailbox trusts.
-		"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
+		"MAIL_AUTHSERV_ID": "mx.cloudflare.net",
+		// The names of the two queues that this Worker consumes. queue() selects the consumer by the queue
+		// name of the batch. Queue names are unique in an account, so each env sets its own names.
+		"MAIL_INBOUND_QUEUE": "soldock-mail-inbound",
+		"WEBHOOKS_QUEUE": "soldock-webhooks"
 	},
 	"env": {
 		// A named env inherits `main`, the compatibility settings, observability, `assets`, routes and
 		// Durable Object migrations. It does not inherit bindings or vars: when production gets a binding,
-		// add the development one here.
+		// add it to each env here.
 		"development": {
 			"name": "soldock-dock-dev",
 			// The development host is the custom domain work.soldock.org, in the soldock.org zone of the
@@ -153,7 +157,64 @@
 				]
 			},
 			"vars": {
-				"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
+				"MAIL_AUTHSERV_ID": "mx.cloudflare.net",
+				"MAIL_INBOUND_QUEUE": "soldock-mail-inbound",
+				"WEBHOOKS_QUEUE": "soldock-webhooks"
+			}
+		},
+		// The rivus instance: a separate Soldock for the rivus.ai mail domain, in the development account.
+		// It shares that account with env.development, so each D1, R2 and queue name starts with
+		// soldock-rivus-. A shared name would share the data, and a queue has only one consumer.
+		// Durable Objects belong to the Worker, so the Worker name keeps them apart.
+		"rivus": {
+			"name": "soldock-dock-rivus",
+			// The rivus host is the custom domain work.rivus.ai, in the rivus.ai zone of the development
+			// account. It is the only origin: workers.dev is off. The deploy attaches the domain and makes
+			// its DNS record. Do not give work.rivus.ai another DNS record.
+			"workers_dev": false,
+			"routes": [{ "pattern": "work.rivus.ai", "custom_domain": true }],
+			"d1_databases": [
+				{ "binding": "DIRECTORY", "database_name": "soldock-rivus-directory", "migrations_dir": "migrations" }
+			],
+			"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-rivus-blobs" }],
+			"queues": {
+				"producers": [
+					{ "binding": "MAIL_INBOUND", "queue": "soldock-rivus-mail-inbound" },
+					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-rivus-mail-inbound-dlq" },
+					{ "binding": "WEBHOOKS", "queue": "soldock-rivus-webhooks" },
+					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-rivus-webhooks-dlq" }
+				],
+				"consumers": [
+					{
+						"queue": "soldock-rivus-mail-inbound",
+						"max_batch_size": 10,
+						"max_batch_timeout": 2,
+						"max_retries": 5,
+						"dead_letter_queue": "soldock-rivus-mail-inbound-dlq"
+					},
+					{
+						"queue": "soldock-rivus-webhooks",
+						"max_batch_size": 10,
+						"max_batch_timeout": 2,
+						"max_retries": 10,
+						"dead_letter_queue": "soldock-rivus-webhooks-dlq"
+					}
+				]
+			},
+			"send_email": [{ "name": "EMAIL" }],
+			"durable_objects": {
+				"bindings": [
+					{ "name": "MAILBOX", "class_name": "MailboxDO" },
+					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
+					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
+					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
+					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
+				]
+			},
+			"vars": {
+				"MAIL_AUTHSERV_ID": "mx.cloudflare.net",
+				"MAIL_INBOUND_QUEUE": "soldock-rivus-mail-inbound",
+				"WEBHOOKS_QUEUE": "soldock-rivus-webhooks"
 			}
 		}
 	}

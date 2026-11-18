@@ -34,9 +34,6 @@ import {
 } from "./store.ts";
 import { webhookHostAllowed } from "./url.ts";
 
-/** The queue that carries webhook events, and one POST for each subscription. */
-export const WEBHOOK_QUEUE = "soldock-webhooks";
-
 /** New mail in the inbox of a mailbox. The `MailboxDO` sends it from its event outbox. Version 1. */
 export interface WebhookEventJob {
 	v: 1;
