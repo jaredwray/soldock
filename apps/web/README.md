@@ -740,7 +740,9 @@ MCP clients. The app has no UI-only path.
       after the version of its first page, so a change during the read of a later page shows too.
       After a new connect of the socket, the view reads the changes after its version, in pages. A new
       room list gives the version of the open room. The view reads only when that version is after
-      its own version, or when its last read failed. So a change in a different room makes no read,
+      its own version and after each version that it asked for before, or when its last read failed.
+      A room list during a read for the same version adds no read. So a change in a different room
+      makes no read,
       the view stays current without a socket too, and a failed read tries again with the next room
       list. A failed read keeps the version, so it reads the same changes.
     - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).

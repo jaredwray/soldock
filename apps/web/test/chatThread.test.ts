@@ -95,9 +95,10 @@ describe("the data of the view of a thread", () => {
 		const pages: (RepliesPage | Error)[] = [
 			page([], 5),
 			page([], 5),
+			page([message(2, 6, "cmsg_1", "one")], 6),
 			new Error("offline"),
-			page([message(2, 6, "cmsg_1", "one")], 6, true),
-			page([message(3, 7, "cmsg_1", "two")], 8),
+			page([message(3, 7, "cmsg_1", "two")], 7, true),
+			page([], 8),
 		];
 		const calls: unknown[] = [];
 		const read = async (range: { after?: number; changed_after?: number }) => {
@@ -111,12 +112,21 @@ describe("the data of the view of a thread", () => {
 		// The room is not after the thread, so the catch-up of a room list reads nothing.
 		view.catchUp(5);
 		expect(calls).toHaveLength(2);
+		// A second room list during the read, after a change of a different room, adds no read.
 		view.catchUp(6);
-		await vi.waitFor(() => expect(calls).toHaveLength(3));
-		// The failed read kept the version, so the next catch-up asks for the same changes, also for the same room version.
-		view.catchUp(5);
+		view.catchUp(6);
+		await vi.waitFor(() => expect(view.current()?.version).toBe(6));
+		view.catchUp(7);
+		await vi.waitFor(() => expect(calls).toHaveLength(4));
+		// The failed read kept the version, so the next catch-up asks for the same changes, also for a room version that it has.
+		view.catchUp(6);
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
-		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
+		expect(calls.slice(2)).toEqual([
+			{ changed_after: 5 },
+			{ changed_after: 6 },
+			{ changed_after: 6 },
+			{ changed_after: 7 },
+		]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
 	});
 });

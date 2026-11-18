@@ -62,7 +62,8 @@ export interface ThreadView {
 	/**
 	 * Tells the view to read the changes that it missed. A new connect of the socket gives no version, and
 	 * the view always reads. A new room list gives the version of the room: the view reads only when the
-	 * room is after the version of the thread, or when its last catch-up failed.
+	 * room is after the version of the thread and after each version that a catch-up asked for before, or
+	 * when its last catch-up failed.
 	 */
 	catchUp(roomVersion?: number): void;
 	/** The thread that shows, or null before the first load. */
@@ -82,6 +83,8 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 	let running = false;
 	/** True after a catch-up that failed: the next catch-up reads, also for the same version of the room. */
 	let failed = false;
+	/** The highest version of the room that a catch-up asked for. A read that runs or ran covers it. */
+	let asked = 0;
 	let again = false;
 
 	const set = (next: ThreadState) => {
@@ -144,7 +147,14 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 			else set(mergeThread(thread, [message]));
 		},
 		catchUp(roomVersion) {
-			if (roomVersion !== undefined && !failed && thread !== null && roomVersion <= thread.version) return;
+			// Before the end of the load there is nothing to do: the load reads the changes at its end.
+			if (thread === null) return;
+			if (roomVersion !== undefined) {
+				// A read that runs covers each version up to `asked`. If it fails, the next room list reads again.
+				const covered = roomVersion <= Math.max(thread.version, asked);
+				if (covered && (running || !failed)) return;
+				asked = Math.max(asked, roomVersion);
+			}
 			void readChanges();
 		},
 		current: () => thread,
