@@ -12,6 +12,9 @@ import { safeHref } from "../mail/richText.ts";
 // `docToBody` joins the paragraphs that follow one another into one paragraph, and `bodyToDoc` splits
 // a paragraph at its hard breaks.
 
+/** The label of a mention: a handle or a name alias, as the contract takes it. */
+const MENTION_LABEL = /^[a-z0-9._+-]+(?:@[a-z0-9.-]+)?$/i;
+
 /** The first number of a numbered list, as the contract takes it. Each other value is 1. */
 function listOrder(value: unknown): number {
 	const order = typeof value === "string" ? Number.parseInt(value, 10) : value;
@@ -73,6 +76,26 @@ export const chatSchema = new Schema({
 			leafText: () => "\n",
 			parseDOM: [{ tag: "br" }],
 			toDOM: () => ["br"],
+		},
+		// A mention of a principal: one unit, with the id of the principal. The server checks the id.
+		mention: {
+			inline: true,
+			group: "inline",
+			atom: true,
+			selectable: false,
+			attrs: { id: { validate: "string" }, label: { validate: "string" } },
+			leafText: (node) => `@${node.attrs.label}`,
+			parseDOM: [
+				{
+					tag: "span[data-mention-id]",
+					getAttrs: (dom) => {
+						const id = dom.getAttribute("data-mention-id") ?? "";
+						const label = (dom.textContent ?? "").replace(/^@/, "");
+						return /^prn_[0-9A-HJKMNP-TV-Z]{26}$/.test(id) && MENTION_LABEL.test(label) ? { id, label } : false;
+					},
+				},
+			],
+			toDOM: (node) => ["span", { class: "chat-mention", "data-mention-id": node.attrs.id }, `@${node.attrs.label}`],
 		},
 	},
 	// The order is the nesting order in the HTML: a link holds the other marks.
@@ -152,6 +175,10 @@ function inlineToBody(paragraph: Node): ChatBodyInline[] {
 	paragraph.forEach((child) => {
 		if (child.type === nodes.hard_break) {
 			out.push({ type: "hard_break" });
+			return;
+		}
+		if (child.type === nodes.mention) {
+			out.push({ type: "mention", attrs: { id: String(child.attrs.id), label: String(child.attrs.label) } });
 			return;
 		}
 		if (!child.isText || !child.text) return;
@@ -275,6 +302,7 @@ function linesFromBody(content: readonly ChatBodyInline[] | undefined): Node[] {
 	const lines: Node[][] = [[]];
 	for (const inline of content ?? []) {
 		if (inline.type === "hard_break") lines.push([]);
+		else if (inline.type === "mention") (lines.at(-1) as Node[]).push(nodes.mention.create(inline.attrs));
 		else (lines.at(-1) as Node[]).push(chatSchema.text(inline.text, marksFromBody(inline.marks)));
 	}
 	return lines.map((line) => nodes.paragraph.create(null, line));
@@ -357,7 +385,13 @@ export function bodyText(body: ChatBody): string {
 		for (const block of blocks) {
 			switch (block.type) {
 				case "paragraph":
-					lines.push((block.content ?? []).map((node) => (node.type === "text" ? node.text : "\n")).join(""));
+					lines.push(
+						(block.content ?? [])
+							.map((node) =>
+								node.type === "text" ? node.text : node.type === "mention" ? `@${node.attrs.label}` : "\n",
+							)
+							.join(""),
+					);
 					break;
 				case "code_block":
 					lines.push((block.content ?? []).map((node) => node.text).join(""));

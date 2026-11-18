@@ -711,6 +711,9 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect(box).toHaveText("");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
+	// The box sent a mention node: the room stores the id of the principal.
+	const stored = (await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
+	expect(stored?.mentions).toHaveLength(1);
 
 	// In the edit box, Escape closes the list of a mention first, and then the edit box.
 	await thanks.hover();

@@ -96,6 +96,13 @@ function fromDoc(doc: DocContent): ChatBody {
 	return { type: "doc", content: content.length > 0 ? content : [{ type: "paragraph" }] };
 }
 
+/** The text of an inline node: its text, "@" and the label of a mention, or a new line for a line break. */
+function inlineText(node: ChatBodyInline): string {
+	if (node.type === "text") return node.text;
+	if (node.type === "mention") return `@${node.attrs.label}`;
+	return "\n";
+}
+
 /** The plain text of a body: one line for each block, and a new line for each line break. */
 export function bodyText(body: ChatBody): string {
 	const lines: string[] = [];
@@ -103,7 +110,7 @@ export function bodyText(body: ChatBody): string {
 		for (const block of list) {
 			switch (block.type) {
 				case "paragraph":
-					lines.push((block.content ?? []).map((node) => (node.type === "text" ? node.text : "\n")).join(""));
+					lines.push((block.content ?? []).map(inlineText).join(""));
 					break;
 				case "code_block":
 					lines.push((block.content ?? []).map((node) => node.text).join(""));
@@ -195,7 +202,36 @@ export function messageContent(input: {
 		}
 		content = { body, text: bodyText(body) };
 	}
+	return checkedContent(content.body, content.text);
+}
+
+/** The mention nodes of the blocks, in the order of the body. */
+export function mentionsOf(body: ChatBody): Extract<ChatBodyInline, { type: "mention" }>[] {
+	const found: Extract<ChatBodyInline, { type: "mention" }>[] = [];
+	const walk = (list: readonly ChatBodyBlock[]) => {
+		for (const block of list) {
+			if (block.type === "paragraph") {
+				for (const node of block.content ?? []) if (node.type === "mention") found.push(node);
+			} else if (block.type === "blockquote") walk(block.content);
+			else if (block.type === "bullet_list" || block.type === "ordered_list") {
+				for (const item of block.content) walk(item.content);
+			}
+		}
+	};
+	walk(body.content);
+	return found;
+}
+
+/**
+ * The content of a body after each check of the limits: text, characters, mentions, bytes and Markdown.
+ * Each change of a body (the forms of a call, the mentions) ends here.
+ */
+export function checkedContent(body: ChatBody, text = bodyText(body)): MessageContent {
+	const content: MessageContent = { body, text };
 	if (content.text.trim() === "") throw new OperationError("invalid", "The message has no text.");
+	if (mentionsOf(body).length > CHAT_LIMITS.mentions) {
+		throw new OperationError("invalid", `A message has at most ${CHAT_LIMITS.mentions} mentions.`);
+	}
 	if (content.text.length > CHAT_LIMITS.messageChars) {
 		throw new OperationError("invalid", `The text of a message has at most ${CHAT_LIMITS.messageChars} characters.`);
 	}
@@ -212,7 +248,52 @@ export function messageContent(input: {
 	return content;
 }
 
-/** The body as Markdown, without the new line at the end that a file of Markdown has. */
+/**
+ * The body as Markdown, without the new line at the end that a file of Markdown has. A mention is "@"
+ * and its label, so the server reads it as the same mention again.
+ */
 export function bodyMarkdown(body: ChatBody): string {
-	return docToMarkdown(body as unknown as DocContent).replace(/\n+$/, "");
+	return docToMarkdown(
+		mapMentions(body, (node) => ({ type: "text", text: `@${node.attrs.label}` })) as unknown as DocContent,
+	).replace(/\n+$/, "");
+}
+
+type Mention = Extract<ChatBodyInline, { type: "mention" }>;
+
+/** The body with each mention node in place of the nodes that `change` gives for it. */
+export function mapMentions(body: ChatBody, change: (node: Mention) => ChatBodyInline | ChatBodyInline[]): ChatBody {
+	const blocks = (list: readonly ChatBodyBlock[]): ChatBodyBlock[] =>
+		list.map((block): ChatBodyBlock => {
+			switch (block.type) {
+				case "paragraph":
+					return block.content
+						? { ...block, content: block.content.flatMap((node) => (node.type === "mention" ? change(node) : [node])) }
+						: block;
+				case "blockquote":
+					return { ...block, content: blocks(block.content) };
+				case "bullet_list":
+				case "ordered_list":
+					return {
+						...block,
+						content: block.content.map((item) => ({ ...item, content: blocks(item.content) })),
+					} as ChatBodyBlock;
+				default:
+					return block;
+			}
+		});
+	return { ...body, content: blocks(body.content) };
+}
+
+/**
+ * The body with each mention of a principal that cannot see the room as text: "@" and its label. Such
+ * a mention gives no access to the room and counts as no mention.
+ */
+export function visibleMentions(body: ChatBody, canSee: (principalId: string) => boolean): ChatBody {
+	if (mentionsOf(body).every((node) => canSee(node.attrs.id))) return body;
+	return mapMentions(body, (node) => (canSee(node.attrs.id) ? node : { type: "text", text: `@${node.attrs.label}` }));
+}
+
+/** The ids of the principals that a body mentions, each one time, in the order of the body. */
+export function mentionIds(body: ChatBody): string[] {
+	return [...new Set(mentionsOf(body).map((node) => node.attrs.id))];
 }

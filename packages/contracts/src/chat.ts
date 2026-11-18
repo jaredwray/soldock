@@ -33,6 +33,8 @@ export const CHAT_LIMITS = {
 	bodyBytes: 64 * 1024,
 	/** Blocks in blocks in the body of one message: a list in a quote, and so on. A list and its items are one level. */
 	bodyDepth: 6,
+	/** The mention nodes of the body of one message. */
+	mentions: 50,
 	/** The blocks of the body of one message, with each list item. */
 	bodyBlocks: 1000,
 } as const;
@@ -65,7 +67,28 @@ const BodyText = z.strictObject({
 		.optional(),
 });
 
-const BodyInline = z.discriminatedUnion("type", [BodyText, z.strictObject({ type: z.literal("hard_break") })]);
+/**
+ * A mention of a principal. `label` is the text after the "@" that shows: the handle, or the name
+ * alias, of the time of the write. The server checks `id`, and sets `label` when it no longer finds
+ * that principal.
+ */
+const BodyMention = z.strictObject({
+	type: z.literal("mention"),
+	attrs: z.strictObject({
+		id: prefixedId("prn"),
+		label: z
+			.string()
+			.min(1)
+			.max(254)
+			.regex(/^[a-z0-9._+-]+(?:@[a-z0-9.-]+)?$/i, "must be a handle: the label has no @ at its start"),
+	}),
+});
+
+const BodyInline = z.discriminatedUnion("type", [
+	BodyText,
+	z.strictObject({ type: z.literal("hard_break") }),
+	BodyMention,
+]);
 
 const BodyParagraph = z.strictObject({ type: z.literal("paragraph"), content: z.array(BodyInline).optional() });
 
@@ -102,8 +125,8 @@ const BodyBlock = z.union([BodyParagraph, BodyCodeBlock, BodyBlockquote, BodyBul
 
 /**
  * The body of a message: a tree of blocks in the JSON form of ProseMirror. Blocks: paragraph,
- * code_block, blockquote, bullet_list, ordered_list and list_item. Inline: text and hard_break. Marks
- * on text: strong, em, strike, code and link (http, https or mailto). An emoji is text.
+ * code_block, blockquote, bullet_list, ordered_list and list_item. Inline: text, hard_break and mention.
+ * Marks on text: strong, em, strike, code and link (http, https or mailto). An emoji is text.
  */
 export const ChatBody = z.strictObject({
 	type: z.literal("doc"),
@@ -290,6 +313,11 @@ export const ChatMessage = z.object({
 	 * none. A reader that gets no value takes an empty list.
 	 */
 	reactions: z.array(ChatReaction).default([]),
+	/**
+	 * The ids of the principals that the body mentions, each one time, in the order of the body. A
+	 * deleted message has none. A reader that gets no value takes an empty list.
+	 */
+	mentions: z.array(z.string()).default([]),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -346,7 +374,7 @@ const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld
 
 const MEMBERS_ONLY = "You must be a member of the room.";
 const MENTIONS =
-	"To mention a person or an agent, write @ and the local part of its address, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The web app shows a mention as a link to the profile.";
+	"To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }.";
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
 export const listRooms = defineOperation({

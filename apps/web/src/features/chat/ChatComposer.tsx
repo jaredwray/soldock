@@ -218,7 +218,7 @@ export function ChatComposer({
 		const person = suggestions[index];
 		const emoji = emojiChoices[index];
 		const tr = person
-			? insertTypedMention(view.state, person.handle)
+			? insertTypedMention(view.state, { id: person.person.id, handle: person.handle })
 			: emoji
 				? insertTypedEmoji(view.state, emoji.emoji)
 				: null;

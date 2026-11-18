@@ -20,7 +20,7 @@ import {
 } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
-import { bodyMarkdown, type MessageContent, textBody } from "./body.ts";
+import { bodyMarkdown, type MessageContent, mentionIds, textBody, visibleMentions } from "./body.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -320,6 +320,7 @@ export function messageOutput(record: MessageRecord): ChatMessage {
 	return {
 		...record,
 		markdown: record.deleted ? "" : bodyMarkdown(record.body),
+		mentions: record.deleted ? [] : mentionIds(record.body),
 		created_at: iso(record.created_at),
 		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
@@ -921,6 +922,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { message, changed: true };
 	}
 
+	/**
+	 * The content with each mention of a principal that cannot see the room as text. Each principal can
+	 * see a public room. A private room and a direct message are for their members only. The text stays
+	 * the same: a mention and its text are "@" and the label.
+	 */
+	private visibleContent(room: RoomRow, content: MessageContent): MessageContent {
+		if (room.kind === "public") return content;
+		const body = visibleMentions(content.body, (principalId) => this.member(principalId) !== null);
+		return body === content.body ? content : { body, text: content.text };
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,
@@ -952,6 +964,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					return { message: this.messageRecord(opened.room.room_id, row), duplicate: true };
 				}
 			}
+			const content = this.visibleContent(opened.room, input.content);
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 			// A retry with the same key returned above: it adds no message, so it uses no allowance.
 			const limited = this.spendAllowance(call, now);
@@ -964,8 +977,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
-					input.content.text,
-					JSON.stringify(input.content.body),
+					content.text,
+					JSON.stringify(content.body),
 					now,
 					version,
 					input.clientKey,
@@ -1006,7 +1019,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async editMessage(
 		call: RoomCall,
 		messageId: string,
-		content: MessageContent,
+		input: MessageContent,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		// Hold other room calls until the new version and the webhook event are stored.
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
@@ -1020,6 +1033,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
+			const content = this.visibleContent(room, input);
 			const bodyJson = JSON.stringify(content.body);
 			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };

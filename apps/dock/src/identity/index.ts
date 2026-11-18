@@ -32,6 +32,7 @@ export {
 	domainOf,
 	getPrincipal,
 	getPrincipals,
+	listPrincipals,
 	mailDomains,
 	normalizeAddress,
 	type OutboundMode,

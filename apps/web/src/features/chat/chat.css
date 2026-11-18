@@ -428,6 +428,15 @@ a.chat-author:hover {
 	text-decoration: underline;
 }
 
+/* A mention in the box is one unit: the caret goes past it, and Backspace removes all of it. */
+.chat-composer-text .chat-mention {
+	white-space: nowrap;
+}
+
+.chat-composer-text .chat-mention:hover {
+	text-decoration: none;
+}
+
 .chat-mention-own {
 	background: var(--warning-soft);
 	box-shadow: inset 0 0 0 1px var(--warning-border);

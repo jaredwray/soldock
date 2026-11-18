@@ -1,0 +1,109 @@
+import {
+	type ChatBody,
+	type ChatBodyBlock,
+	type ChatBodyInline,
+	type MentionDirectory,
+	mentionDirectory,
+	textParts,
+} from "@soldock/contracts";
+import { listPrincipals, type PrincipalRecord } from "../identity/index.ts";
+import { OperationError } from "../platform/index.ts";
+import { bodyText, checkedContent, type MessageContent, mentionsOf } from "./body.ts";
+
+// The mentions of a message. A mention is a node with the id of a principal. The server makes the nodes
+// from the text: "@" and a handle or a name alias, with the rules of `mentionDirectory` in the contracts,
+// which the web app uses too. So a mention that an agent writes in Markdown and a mention from the
+// box of the web app are the same node.
+
+type Mention = Extract<ChatBodyInline, { type: "mention" }>;
+type Text = Extract<ChatBodyInline, { type: "text" }>;
+
+/** True when a text can be a mention: it has an "@", and no code mark and no link mark. */
+function canHoldMention(node: Text): boolean {
+	return node.text.includes("@") && !(node.marks ?? []).some((mark) => mark.type === "code" || mark.type === "link");
+}
+
+/** True when the body has a mention node, or a text that can hold one. Then the directory must load. */
+function needsDirectory(body: ChatBody): boolean {
+	if (mentionsOf(body).length > 0) return true;
+	let found = false;
+	const walk = (list: readonly ChatBodyBlock[]) => {
+		for (const block of list) {
+			if (found) return;
+			if (block.type === "paragraph") {
+				found = (block.content ?? []).some((node) => node.type === "text" && canHoldMention(node));
+			} else if (block.type === "blockquote") walk(block.content);
+			else if (block.type === "bullet_list" || block.type === "ordered_list") {
+				for (const item of block.content) walk(item.content);
+			}
+		}
+	};
+	walk(body.content);
+	return found;
+}
+
+/** The inline nodes of a text, with a mention node for each mention of a principal of the directory. */
+function linkText(node: Text, directory: MentionDirectory<PrincipalRecord>): ChatBodyInline[] {
+	if (!canHoldMention(node)) return [node];
+	return textParts(node.text, directory).map((part): ChatBodyInline => {
+		if (part.person) return { type: "mention", attrs: { id: part.person.id, label: part.text.slice(1) } };
+		return node.marks ? { type: "text", text: part.text, marks: node.marks } : { type: "text", text: part.text };
+	});
+}
+
+/**
+ * A mention node with a label that finds its principal. The label of the time of the write stays when
+ * it still finds the principal (a handle or a name alias). Each other label becomes the handle. A
+ * mention of a principal that the directory does not have, or that has no handle, is `invalid`.
+ */
+function checkedMention(node: Mention, directory: MentionDirectory<PrincipalRecord>): Mention {
+	const person = directory.byId.get(node.attrs.id);
+	const handle = directory.handleOf.get(node.attrs.id);
+	if (!person || handle === undefined) {
+		throw new OperationError("invalid", "A mention names a principal that does not exist.");
+	}
+	const label = directory.byHandle.get(node.attrs.label.toLowerCase())?.id === person.id ? node.attrs.label : handle;
+	return { type: "mention", attrs: { id: person.id, label } };
+}
+
+/** The body with mention nodes for the mentions in its text, and each mention node checked. */
+export function linkMentions(body: ChatBody, directory: MentionDirectory<PrincipalRecord>): ChatBody {
+	const inline = (content: readonly ChatBodyInline[]): ChatBodyInline[] =>
+		content.flatMap((node) => {
+			if (node.type === "text") return linkText(node, directory);
+			if (node.type === "mention") return [checkedMention(node, directory)];
+			return [node];
+		});
+	const blocks = (list: readonly ChatBodyBlock[]): ChatBodyBlock[] =>
+		list.map((block): ChatBodyBlock => {
+			switch (block.type) {
+				case "paragraph":
+					return block.content ? { ...block, content: inline(block.content) } : block;
+				case "blockquote":
+					return { ...block, content: blocks(block.content) };
+				case "bullet_list":
+				case "ordered_list":
+					return {
+						...block,
+						content: block.content.map((item) => ({ ...item, content: blocks(item.content) })),
+					} as ChatBodyBlock;
+				default:
+					return block;
+			}
+		});
+	return { ...body, content: blocks(body.content) };
+}
+
+/**
+ * The content with its mentions as nodes. The directory loads only for a body with an "@" in a text
+ * that can hold a mention, or with a mention node. A plain text keeps its text as it came.
+ */
+export async function withMentions(db: D1Database, content: MessageContent): Promise<MessageContent> {
+	if (!needsDirectory(content.body)) return content;
+	const directory = mentionDirectory(await listPrincipals(db));
+	const body = linkMentions(content.body, directory);
+	// A plain text keeps its spaces at the start. A mention is "@" and its label, so the text of a text
+	// with mentions is the same text. A body form gets the text of its new labels.
+	const sameText = content.text === bodyText(content.body);
+	return checkedContent(body, sameText ? bodyText(body) : content.text);
+}

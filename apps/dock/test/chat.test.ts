@@ -1114,6 +1114,95 @@ describe("rich text", () => {
 	});
 });
 
+describe("mentions", () => {
+	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
+
+	// An agent writes "@bot" in Markdown or text. The web app sends a node. Both must be the same mention.
+	it("makes a node of each handle or name alias in text and Markdown, and keeps code, links, addresses and unknown handles as text", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const markdown = "Hi @bot and @olive, see `@bot`, [@bot](https://example.com/), bot@dock.test and @nobody.";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, markdown });
+		expect(message.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "Hi " },
+				mention(bot.id, "bot"),
+				{ type: "text", text: " and " },
+				mention(owner.id, "olive"),
+				{ type: "text", text: ", see " },
+				{ type: "text", text: "@bot", marks: [{ type: "code" }] },
+				{ type: "text", text: ", " },
+				{ type: "text", text: "@bot", marks: [{ type: "link", attrs: { href: "https://example.com/" } }] },
+				{ type: "text", text: ", bot@dock.test and @nobody." },
+			],
+		});
+		expect(message.mentions).toEqual([bot.id, owner.id]);
+		expect(message.text).toBe("Hi @bot and @olive, see @bot, @bot, bot@dock.test and @nobody.");
+		// The Markdown has "@" and the label, so the same Markdown makes the same mentions again.
+		expect(message.markdown).toBe(markdown);
+		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
+		expect(again.body).toEqual(message.body);
+
+		// A plain text keeps its text, also its spaces at the start, and gets its mentions.
+		const text = (await ada.call("chat.post_message", { room_id: room.id, text: "  @bot ping" })).message;
+		expect([text.text, text.mentions]).toEqual(["  @bot ping", [bot.id]]);
+
+		// An agent through MCP gets the same result.
+		const posted = await callTool(bot.key, "chat_post_message", { room_id: room.id, markdown: "Done, @ada." });
+		expect((posted.structuredContent as { message: { mentions: string[] } }).message.mentions).toEqual([ada.id]);
+	});
+
+	// A mention must not show a private room to a principal outside it, and must not count for it.
+	it("keeps a mention of a principal that cannot see the room as text, in a private room and in an edit", async () => {
+		const secret = await createRoom(ada, "private", "Secret", [bot.id]);
+		const { message } = await ada.call("chat.post_message", { room_id: secret.id, text: "@owner and @bot" });
+		expect(message.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [{ type: "text", text: "@owner" }, { type: "text", text: " and " }, mention(bot.id, "bot")],
+		});
+		expect(message.mentions).toEqual([bot.id]);
+		// A node from the box gets the same rule.
+		const edited = (
+			await ada.call("chat.edit_message", {
+				room_id: secret.id,
+				message_id: message.id,
+				body: { type: "doc", content: [{ type: "paragraph", content: [mention(owner.id, "owner")] }] } as never,
+			})
+		).message;
+		expect([edited.text, edited.mentions]).toEqual(["@owner", []]);
+		// Each principal can see a public room, so the mention there is a node.
+		const open = await createRoom(ada, "public", "Open");
+		expect((await post(ada, open.id, "@owner")).mentions).toEqual([owner.id]);
+	});
+
+	// The box sends nodes. Their ids and labels come from a client.
+	it("checks each mention node: an unknown principal is invalid, a label that finds no principal becomes the handle, and a message has 50 at most", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const body = (...content: unknown[]) => ({ type: "doc", content: [{ type: "paragraph", content }] }) as never;
+		const relabeled = (
+			await ada.call("chat.post_message", {
+				room_id: room.id,
+				body: body(mention(bot.id, "somebody"), { type: "text", text: " " }, mention(bot.id, "billing")),
+			})
+		).message;
+		// A label that finds the principal stays: "billing" is the name alias of Billing Bot.
+		expect(relabeled.body?.content[0]).toMatchObject({
+			content: [mention(bot.id, "bot"), { type: "text", text: " " }, mention(bot.id, "billing")],
+		});
+		expect([relabeled.text, relabeled.mentions]).toEqual(["@bot @billing", [bot.id]]);
+		expect(
+			await codeOf(
+				ada.call("chat.post_message", { room_id: room.id, body: body(mention("prn_01JD0000000000000000000000", "x")) }),
+			),
+		).toBe("invalid");
+		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => mention(bot.id, "bot"));
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, body: body(...many) }))).toBe("invalid");
+		// The text form has the same limit.
+		const text = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => "@bot").join(" ");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text }))).toBe("invalid");
+	});
+});
+
 describe("reactions", () => {
 	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);

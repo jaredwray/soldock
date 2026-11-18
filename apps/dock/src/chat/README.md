@@ -125,15 +125,26 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - Known limit: Markdown has no spaces at the start of a line of a paragraph. So the Markdown of a
   plain text with an indent, and an edit of that Markdown, lose the indent. A code fence keeps it.
   The web app edits the body itself, so its edits keep the indent.
-- A mention is text: `@` and the handle of a principal. The handle is the part of the address
-  before the `@`, or the full address when two principals have the same part. The room does not
-  read mentions. It stores no mention, counts none and sends no notification of its own. A
-  webhook for new messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about
-  each new message, with or without a mention. A client finds the
-  principal of a handle in the directory: the web app shows a link to the profile
-  ([`apps/web`](../../../web/README.md)). The description of `chat.post_message` tells agents the
-  form. A later layer stores the principals of the mentions with the message and returns them in
-  the output: layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
+- **Mentions** (`mentions.ts`, the rules in `packages/contracts/src/mentions.ts`). A mention is a node
+  of the body with the id of a principal and a label: `{ type: "mention", attrs: { id, label } }`.
+  - The handler makes the nodes from the text of each form: `@` and a handle (the part of the
+    address before the `@`, or the full address when two principals have the same part) or a name
+    alias (a first name, or a full name without spaces, of one principal only). The web app uses the
+    same rules. A text in code or in a link, an address and an unknown handle stay text.
+  - The handler checks each mention node of a body: an unknown principal is `invalid`. A label that
+    no longer finds the principal becomes the handle.
+  - The directory (`listPrincipals`) loads only for a body with an `@` in a text that can hold a
+    mention, or with a mention node.
+  - The room keeps a mention of a principal that cannot see the room as text: `@` and the label.
+    Each principal can see a public room. A private room and a direct message are for their members.
+    So a mention gives no access and no notification outside the room.
+  - A message has at most 50 mentions (`CHAT_LIMITS.mentions`). Each message returns `mentions`: the
+    ids of its mentions, each one time. The plain text and the Markdown have `@` and the label, so
+    the Markdown of a message makes the same mentions again.
+  - The room counts no mention and sends no notification of its own yet. The mention count and
+    `@here` / `@channel` are the next parts of layer 4 of
+    [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69). A webhook for new
+    messages ([Webhooks for new messages](#webhooks-for-new-messages)) tells about each new message.
 - Each message has a `seq`: its position in the room, from 1. A `seq` never changes and is never
   used two times.
 - The room has a `version`. Each new, changed or deleted message adds 1 to it, and the message

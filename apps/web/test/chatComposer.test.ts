@@ -381,21 +381,53 @@ describe("an emoji code in the box", () => {
 describe("a mention in the box", () => {
 	const at = (box: Node, pos?: number) => stateAt(box, pos);
 
-	// The list replaces only the typed mention, also in the middle of a line and on a later line.
-	it("replaces the typed text with the handle, with a space and the caret after it", () => {
-		const end = insertTypedMention(at(doc(p(t("hi @ad")))), "ada") as Transaction;
+	// The list replaces only the typed mention, also in the middle of a line and on a later line. The
+	// mention is a node with the id of the principal, so the server needs no handle to find it.
+	it("replaces the typed text with a mention node, with a space and the caret after it", () => {
+		const ADA = { id: "prn_01JD0000000000000000000ADA", handle: "ada" };
+		const end = insertTypedMention(at(doc(p(t("hi @ad")))), ADA) as Transaction;
 		expect(end.doc.textContent).toBe("hi @ada ");
+		expect(end.doc.firstChild?.child(1).type).toBe(nodes.mention);
+		expect(end.doc.firstChild?.child(1).attrs).toEqual({ id: ADA.id, label: "ada" });
 		expect(end.selection.from).toBe(end.doc.content.size - 1);
+		expect(docToBody(end.doc)?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "hi " },
+				{ type: "mention", attrs: { id: ADA.id, label: "ada" } },
+				{ type: "text", text: " " },
+			],
+		});
 
-		// "hi @ad|, see": a comma ends the word, so no space goes in.
-		const middle = insertTypedMention(at(doc(p(t("hi @ad, see"))), 7), "ada") as Transaction;
+		// "hi @ad|, see": a comma ends the word, so no space goes in. The node is one position.
+		const middle = insertTypedMention(at(doc(p(t("hi @ad, see"))), 7), ADA) as Transaction;
 		expect(middle.doc.textContent).toBe("hi @ada, see");
-		expect(middle.selection.from).toBe(1 + "hi @ada".length);
+		expect(middle.selection.from).toBe(1 + "hi ".length + 1);
 
-		const second = insertTypedMention(at(doc(p(t("bold", "strong")), p(t("x @ca")))), "captain") as Transaction;
+		const second = insertTypedMention(at(doc(p(t("bold", "strong")), p(t("x @ca")))), {
+			id: "prn_01JD000000000000000000CAPT",
+			handle: "captain",
+		}) as Transaction;
 		expect(second.doc.child(0).textContent).toBe("bold");
 		expect(second.doc.child(1).textContent).toBe("x @captain ");
 		expect(second.selection.$from.parent).toBe(second.doc.child(1));
+	});
+
+	// An edit opens a message with its mention nodes. A save must keep them.
+	it("opens a body with a mention node and gives the same body back", () => {
+		const body: ChatBody = {
+			type: "doc",
+			content: [
+				{
+					type: "paragraph",
+					content: [
+						{ type: "mention", attrs: { id: "prn_01JD0000000000000000000ADA", label: "ada" } },
+						{ type: "text", text: " thanks" },
+					],
+				},
+			],
+		};
+		expect(docToBody(bodyToDoc(body))).toEqual(body);
 	});
 
 	it("has no mention in a code block, in code, or away from an @", () => {

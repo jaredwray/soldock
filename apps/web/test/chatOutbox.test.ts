@@ -43,6 +43,7 @@ function fakeRoom() {
 							version: seq,
 							idempotency_key: key,
 							reactions: [],
+							mentions: [],
 						});
 						return settle();
 					},

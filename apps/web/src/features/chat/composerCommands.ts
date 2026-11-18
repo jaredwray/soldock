@@ -218,19 +218,23 @@ export function typedMention(state: EditorState): TypedMention | null {
 }
 
 /**
- * The change that puts the mention of `handle` in place of the mention that the person types, with the
- * caret after it, as `insertMention` does in a text. Null when the caret is not at a typed mention.
+ * The change that puts a mention node of the principal in place of the mention that the person types,
+ * with the caret after it. A space follows, as `insertMention` does in a text: not before a space or a
+ * mark that ends a word. The label is the handle.
  */
-export function insertTypedMention(state: EditorState, handle: string): Transaction | null {
+export function insertTypedMention(state: EditorState, person: { id: string; handle: string }): Transaction | null {
 	const mention = typedMention(state);
 	if (!mention) return null;
 	const text = mention.before + mention.after;
 	const start = mention.before.length - mention.query.length - 1;
-	const next = insertMention(text, { start, end: mention.before.length, query: mention.query }, handle);
-	const inserted = next.value.slice(start, next.value.length - mention.after.length);
-	const lineStart = mention.from - start;
-	const tr = state.tr.insertText(inserted, mention.from, mention.to);
-	return tr.setSelection(TextSelection.create(tr.doc, lineStart + next.caret)).scrollIntoView();
+	const next = insertMention(text, { start, end: mention.before.length, query: mention.query }, person.handle);
+	const typed = next.value.slice(start, next.value.length - mention.after.length);
+	const space = typed.endsWith(" ");
+	// insertMention puts the caret after the mention, and after one space that follows it.
+	const afterMention = next.caret - start - `@${person.handle}`.length;
+	const node = nodes.mention.create({ id: person.id, label: person.handle });
+	const tr = state.tr.replaceWith(mention.from, mention.to, space ? [node, chatSchema.text(" ")] : [node]);
+	return tr.setSelection(TextSelection.create(tr.doc, mention.from + 1 + afterMention)).scrollIntoView();
 }
 
 /** The code of an emoji that the person types: from its ":" (`from`) to the caret (`to`). */
