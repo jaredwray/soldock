@@ -111,7 +111,7 @@ gives it to the MCP adapter. The events are the webhook events of the table abov
 | Event | Arguments | `data` of a POST |
 | --- | --- | --- |
 | `mail.inbox.updated` | `mailbox_id`: your mailbox (the default), a team mailbox that you belong to, or the mailbox of an agent that you sponsor | `mailbox_id`, `uri` |
-| `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of | `room_id`, `message_id`, `uri` |
+| `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of | `room_id`, `message_id`, `uri`, and `parent_id` for a reply in a thread |
 | `drive.item.*` | `space_id`: your drive (the default), a shared drive that you belong to, or the drive of an agent that you sponsor | `space_id`, `item_id`, `uri` |
 | `drive.members.changed`, `drive.deleted` | `space_id`: a shared drive that you belong to | `space_id`, `uri` |
 

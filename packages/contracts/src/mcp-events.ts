@@ -69,7 +69,17 @@ const MailPayload = z.strictObject({
 
 const ChatPayload = z.strictObject({
 	room_id: z.string(),
-	message_id: z.string().describe("Read the message with chat_list_messages. The event has no message text."),
+	message_id: z
+		.string()
+		.describe(
+			"Read the message with chat_list_messages, or with chat_list_replies when parent_id is set. The event has no message text.",
+		),
+	parent_id: z
+		.string()
+		.optional()
+		.describe(
+			"Only for a reply in a thread: the message that the reply answers. The reply is not in chat_list_messages. Read it with chat_list_replies of this message.",
+		),
 	uri: Uri,
 });
 
@@ -88,7 +98,7 @@ const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"mail.inbox.updated":
 		"New mail arrived in the inbox of the mailbox. Spam, a label and an archive send nothing. Mail in a short time gives one event. Read the inbox with mail_list_threads.",
 	"chat.message.created":
-		"A different member posted a message in a room that you are a member of. Your own messages send nothing.",
+		"A different member posted a message in a room that you are a member of, also a reply in a thread. Your own messages send nothing.",
 	"chat.message.updated": "A different member edited a message in a room that you are a member of.",
 	"chat.message.deleted": "A message was deleted in a room that you are a member of.",
 	"drive.item.created": "An item was created in the drive, also a copy and an item that arrived from another drive.",
