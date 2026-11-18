@@ -97,7 +97,7 @@
 /* The badge of a room with a mention of the person: the color of an alert, as in other chat apps. */
 .chat-nav-mention {
 	background: var(--destructive);
-	color: #fff;
+	color: var(--destructive-foreground);
 }
 
 .chat-nav-avatar {

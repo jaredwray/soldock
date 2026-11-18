@@ -91,7 +91,7 @@ export const chatRooms = defineResource({
 	name: "chat.rooms",
 	title: "Your rooms",
 	description:
-		"Your rooms and direct messages, newest message first, with the unread count of each, as chat.list_rooms returns them. Subscribe to it with subscriptions/listen to follow all of your rooms with one subscription, also the rooms that you join later. Then call chat.list_rooms, and chat.list_messages for each room with a new version.",
+		"Your rooms and direct messages, newest message first, with the unread count and the mention count of each, as chat.list_rooms returns them. Subscribe to it with subscriptions/listen to follow all of your rooms with one subscription, also the rooms that you join later. Then call chat.list_rooms, and chat.list_messages for each room with a new version.",
 	uriTemplate: "soldock://chat/rooms",
 	mimeType: "application/json",
 	read: { operation: "chat.list_rooms", input: () => ({ view: "joined", limit: CHAT_LIMITS.pageSize }) },

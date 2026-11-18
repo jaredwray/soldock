@@ -261,9 +261,9 @@ export const ChatRoom = z.object({
 	unread_count: z.number().int().nonnegative(),
 	/**
 	 * The messages after `last_read_seq` that mention you, without deleted messages and your own
-	 * messages. The count stops at 100. 0 when you are not a member. A reader that gets no value takes 0.
+	 * messages. The count stops at 100. 0 when you are not a member.
 	 */
-	mention_count: z.number().int().nonnegative().default(0),
+	mention_count: z.number().int().nonnegative(),
 	/** A number that grows with each new, changed or deleted message. Compare it to find out if you must get the changes. */
 	version: z.number().int(),
 	/**
