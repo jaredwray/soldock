@@ -6,6 +6,7 @@ import {
 	type DocBlock,
 	type DocContent,
 	type DocInline,
+	type GroupMention,
 } from "@soldock/contracts";
 import { docToMarkdown, markdownToDoc } from "../docs/index.ts";
 import { OperationError } from "../platform/index.ts";
@@ -96,10 +97,14 @@ function fromDoc(doc: DocContent): ChatBody {
 	return { type: "doc", content: content.length > 0 ? content : [{ type: "paragraph" }] };
 }
 
-/** The text of an inline node: its text, "@" and the label of a mention, or a new line for a line break. */
+/**
+ * The text of an inline node: its text, "@" and the label of a mention, "@" and the group of a mention of
+ * a group, or a new line for a line break.
+ */
 function inlineText(node: ChatBodyInline): string {
 	if (node.type === "text") return node.text;
 	if (node.type === "mention") return `@${node.attrs.label}`;
+	if (node.type === "group_mention") return `@${node.attrs.group}`;
 	return "\n";
 }
 
@@ -206,14 +211,13 @@ export function messageContent(input: {
 	return checkedContent(content.body, content.text, { countMentions: false });
 }
 
-/** The mention nodes of the blocks, in the order of the body. */
-export function mentionsOf(body: ChatBody): Extract<ChatBodyInline, { type: "mention" }>[] {
-	const found: Extract<ChatBodyInline, { type: "mention" }>[] = [];
+/** The inline nodes of the paragraphs of a body, in the order of the body. A code block has text only. */
+function inlineNodes(body: ChatBody): ChatBodyInline[] {
+	const found: ChatBodyInline[] = [];
 	const walk = (list: readonly ChatBodyBlock[]) => {
 		for (const block of list) {
-			if (block.type === "paragraph") {
-				for (const node of block.content ?? []) if (node.type === "mention") found.push(node);
-			} else if (block.type === "blockquote") walk(block.content);
+			if (block.type === "paragraph") found.push(...(block.content ?? []));
+			else if (block.type === "blockquote") walk(block.content);
 			else if (block.type === "bullet_list" || block.type === "ordered_list") {
 				for (const item of block.content) walk(item.content);
 			}
@@ -221,6 +225,17 @@ export function mentionsOf(body: ChatBody): Extract<ChatBodyInline, { type: "men
 	};
 	walk(body.content);
 	return found;
+}
+
+/** The mention nodes of the blocks, in the order of the body. */
+export function mentionsOf(body: ChatBody): Extract<ChatBodyInline, { type: "mention" }>[] {
+	return inlineNodes(body).filter((node) => node.type === "mention");
+}
+
+/** The groups that a body mentions ("here", "channel"), each one time, in the order of the body. */
+export function groupMentions(body: ChatBody): GroupMention[] {
+	const groups = inlineNodes(body).flatMap((node) => (node.type === "group_mention" ? [node.attrs.group] : []));
+	return [...new Set(groups)];
 }
 
 /**
@@ -255,24 +270,30 @@ export function checkedContent(
 
 /**
  * The body as Markdown, without the new line at the end that a file of Markdown has. A mention is "@"
- * and its label, so the server reads it as the same mention again.
+ * and its label, and a mention of a group is "@" and the group, so the server reads it as the same
+ * mention again.
  */
 export function bodyMarkdown(body: ChatBody): string {
 	return docToMarkdown(
-		mapMentions(body, (node) => ({ type: "text", text: `@${node.attrs.label}` })) as unknown as DocContent,
+		mapMentions(body, (node) => ({ type: "text", text: inlineText(node) })) as unknown as DocContent,
 	).replace(/\n+$/, "");
 }
 
-type Mention = Extract<ChatBodyInline, { type: "mention" }>;
+type AnyMention = Extract<ChatBodyInline, { type: "mention" | "group_mention" }>;
 
-/** The body with each mention node in place of the nodes that `change` gives for it. */
-export function mapMentions(body: ChatBody, change: (node: Mention) => ChatBodyInline | ChatBodyInline[]): ChatBody {
+/** The body with each mention node, and each mention of a group, in place of the nodes that `change` gives for it. */
+export function mapMentions(body: ChatBody, change: (node: AnyMention) => ChatBodyInline | ChatBodyInline[]): ChatBody {
 	const blocks = (list: readonly ChatBodyBlock[]): ChatBodyBlock[] =>
 		list.map((block): ChatBodyBlock => {
 			switch (block.type) {
 				case "paragraph":
 					return block.content
-						? { ...block, content: block.content.flatMap((node) => (node.type === "mention" ? change(node) : [node])) }
+						? {
+								...block,
+								content: block.content.flatMap((node) =>
+									node.type === "mention" || node.type === "group_mention" ? change(node) : [node],
+								),
+							}
 						: block;
 				case "blockquote":
 					return { ...block, content: blocks(block.content) };

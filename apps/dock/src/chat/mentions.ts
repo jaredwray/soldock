@@ -9,7 +9,7 @@ import {
 	textParts,
 } from "@soldock/contracts";
 import { listPrincipals, type PrincipalRecord } from "../identity/index.ts";
-import { bodyText, checkedContent, type MessageContent, mentionsOf } from "./body.ts";
+import { bodyText, checkedContent, groupMentions, type MessageContent, mentionsOf } from "./body.ts";
 
 // The mentions of a message. A mention is a node with the id of a principal. The server makes the nodes
 // from the text: "@" and a handle or a name alias, with the rules of `mentionDirectory` in the contracts,
@@ -25,11 +25,11 @@ function canHoldMention(node: Text): boolean {
 }
 
 /**
- * True when the body has a mention node, or a text with the syntax of a mention ("@" and a handle, not an
- * address). Only then the directory loads.
+ * True when the body has a mention node (also of a group), or a text with the syntax of a mention ("@"
+ * and a handle, not an address). Only then the directory loads, and the nodes get their checks.
  */
 function needsDirectory(body: ChatBody): boolean {
-	if (mentionsOf(body).length > 0) return true;
+	if (mentionsOf(body).length > 0 || groupMentions(body).length > 0) return true;
 	let found = false;
 	const walk = (list: readonly ChatBodyBlock[]) => {
 		for (const block of list) {
@@ -58,6 +58,8 @@ type CanSee = (principalId: string) => boolean;
 function linkText(node: Text, directory: MentionDirectory<PrincipalRecord>, canSee: CanSee): ChatBodyInline[] {
 	if (!canHoldMention(node)) return [node];
 	return textParts(node.text, directory).map((part): ChatBodyInline => {
+		// A mention of a group mentions the members of the room only, so it needs no check of access.
+		if (part.group) return { type: "group_mention", attrs: { group: part.group } };
 		if (part.person && canSee(part.person.id)) {
 			return { type: "mention", attrs: { id: part.person.id, label: part.text.slice(1) } };
 		}
@@ -81,17 +83,18 @@ function checkedMention(node: Mention, directory: MentionDirectory<PrincipalReco
 	return { type: "mention", attrs: { id: person.id, label } };
 }
 
-/** The text that an inline node shows: its text, "@" and a label, or a new line. */
+/** The text that an inline node shows: its text, "@" and a label or a group, or a new line. */
 function shown(node: ChatBodyInline | undefined): string {
 	if (!node) return "";
 	if (node.type === "text") return node.text;
 	if (node.type === "mention") return `@${node.attrs.label}`;
+	if (node.type === "group_mention") return `@${node.attrs.group}`;
 	return "\n";
 }
 
 /**
- * The inline nodes with each mention node that touches a letter, a digit or a mark of an address as
- * text. Its Markdown would read back as a different mention, or as text: "@bot" and "x" is "@botx".
+ * The inline nodes with each mention node (also of a group) that touches a letter, a digit or a mark
+ * of an address as text. Its Markdown would read back as a different mention, or as text: "@bot" and "x" is "@botx".
  * This is the rule of a mention in text too.
  */
 function fitMentions(content: ChatBodyInline[]): ChatBodyInline[] {
@@ -103,7 +106,8 @@ function fitMentions(content: ChatBodyInline[]): ChatBodyInline[] {
 	content.forEach((node, index) => {
 		const next = content[index + 1];
 		const kept: ChatBodyInline =
-			node.type === "mention" && !mentionFits(before, marked(next) ? "" : shown(next))
+			(node.type === "mention" || node.type === "group_mention") &&
+			!mentionFits(before, marked(next) ? "" : shown(next))
 				? { type: "text", text: shown(node) }
 				: node;
 		out.push(kept);

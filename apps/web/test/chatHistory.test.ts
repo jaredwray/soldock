@@ -16,6 +16,7 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		idempotency_key: null,
 		reactions: [],
 		mentions: [],
+		group_mentions: [],
 		...change,
 	};
 }

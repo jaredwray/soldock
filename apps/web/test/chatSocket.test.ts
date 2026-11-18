@@ -78,6 +78,7 @@ describe("the socket of an open room", () => {
 			idempotency_key: "k1",
 			reactions: [],
 			mentions: [],
+			group_mentions: [],
 		};
 		const { handlers } = server.last();
 		handlers.message(HELLO);

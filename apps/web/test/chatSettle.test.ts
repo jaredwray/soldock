@@ -20,6 +20,7 @@ function stored(seq: number, key: string | null, author: ChatMessage["author"] =
 		idempotency_key: key,
 		reactions: [],
 		mentions: [],
+		group_mentions: [],
 	};
 }
 

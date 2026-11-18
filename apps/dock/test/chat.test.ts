@@ -1406,6 +1406,86 @@ describe("the mention count", () => {
 	});
 });
 
+describe("mentions of a group", () => {
+	const group = (name: string) => ({ type: "group_mention", attrs: { group: name } });
+	const count = async (actor: Actor, room_id: string) =>
+		(await actor.call("chat.get_room", { room_id })).room.mention_count;
+
+	// "@here" and "@channel" tell each member of the room, as in other chat apps.
+	it("reads @here and @channel in text, Markdown and a body, and counts them for each member except the author", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const here = (await ada.call("chat.post_message", { room_id: room.id, markdown: "@here ship it, not `@channel`" }))
+			.message;
+		expect(here.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				group("here"),
+				{ type: "text", text: " ship it, not " },
+				{ type: "text", text: "@channel", marks: [{ type: "code" }] },
+			],
+		});
+		expect([here.group_mentions, here.mentions, here.text]).toEqual([["here"], [], "@here ship it, not @channel"]);
+		// The Markdown has "@" and the group, so it makes the same mention again.
+		expect(here.markdown).toBe("@here ship it, not `@channel`");
+		expect([await count(bot, room.id), await count(ada, room.id)]).toEqual([1, 0]);
+
+		// An agent writes a body node through MCP. A mention of a principal and of a group count one time. The
+		// post of the agent reads the room for it.
+		const posted = await callTool(bot.key, "chat_post_message", {
+			room_id: room.id,
+			body: {
+				type: "doc",
+				content: [{ type: "paragraph", content: [group("channel"), { type: "text", text: " and @ada" }] }],
+			},
+		});
+		const both = (posted.structuredContent as { message: { id: string; group_mentions: string[]; mentions: string[] } })
+			.message;
+		expect([both.group_mentions, both.mentions]).toEqual([["channel"], [ada.id]]);
+		expect([await count(ada, room.id), await count(bot, room.id)]).toEqual([1, 0]);
+		const plain = await post(ada, room.id, "Now @CHANNEL.");
+		expect([plain.group_mentions, plain.text]).toEqual([["channel"], "Now @channel."]);
+		expect(await count(bot, room.id)).toBe(1);
+
+		// An edit without the group and a delete remove the mention. An edit that adds one counts it.
+		const target = { room_id: room.id, message_id: plain.id };
+		await ada.call("chat.edit_message", { ...target, text: "Now." });
+		expect(await count(bot, room.id)).toBe(0);
+		await ada.call("chat.edit_message", { ...target, text: "Now @here." });
+		expect(await count(bot, room.id)).toBe(1);
+		await ada.call("chat.delete_message", target);
+		expect(await count(bot, room.id)).toBe(0);
+		// A read clears the count.
+		await ada.call("chat.mark_read", { room_id: room.id });
+		expect(await count(ada, room.id)).toBe(0);
+	});
+
+	// A mention of a group in a large room disturbs many people, so a room owner decides on it.
+	it("lets only an owner add a mention of a group in a room with more than the limit of members", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const small = await post(bot, room.id, "@channel standup");
+		// The room grows to one member above the limit.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			for (let index = 0; index < CHAT_LIMITS.groupMentionMembers - 1; index++) {
+				state.storage.sql.exec(
+					"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq) VALUES (?, '{}', 'member', 0, 0)",
+					`prn_member${index}`,
+				);
+			}
+		});
+		const refused = bot.call("chat.post_message", { room_id: room.id, text: "@here look" });
+		expect(await codeOf(refused)).toBe("forbidden");
+		const tool = await callTool(bot.key, "chat_post_message", { room_id: room.id, markdown: "@channel look" });
+		expect(JSON.parse(tool.content[0]?.text ?? "{}")).toMatchObject({ code: "forbidden" });
+		expect((await post(ada, room.id, "@here look")).group_mentions).toEqual(["here"]);
+		// The author of a message from before can still change its text. A new group is refused.
+		const target = { room_id: room.id, message_id: small.id };
+		const kept = (await bot.call("chat.edit_message", { ...target, text: "@channel standup at 10" })).message;
+		expect(kept.group_mentions).toEqual(["channel"]);
+		expect(await codeOf(bot.call("chat.edit_message", { ...target, text: "@channel and @here" }))).toBe("forbidden");
+		expect((await post(bot, room.id, "no group")).group_mentions).toEqual([]);
+	});
+});
+
 describe("reactions", () => {
 	it("keeps one reaction of each principal for each emoji, in the order of the first reaction", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);

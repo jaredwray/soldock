@@ -106,6 +106,12 @@ function Inline({ content, mentions }: { content: readonly ChatBodyInline[] | un
 				) : node.type === "mention" ? (
 					// biome-ignore lint/suspicious/noArrayIndexKey: the nodes of a body do not move while it shows.
 					<MentionNode key={index} node={node} mentions={mentions} />
+				) : node.type === "group_mention" ? (
+					// A mention of a group mentions each member, so it shows as a mention of the reader.
+					// biome-ignore lint/suspicious/noArrayIndexKey: the nodes of a body do not move while it shows.
+					<span key={index} className="chat-mention chat-mention-own" title="Each member of this room">
+						@{node.attrs.group}
+					</span>
 				) : null,
 			)}
 		</>

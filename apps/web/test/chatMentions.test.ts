@@ -1,5 +1,8 @@
+import { CHAT_LIMITS } from "@soldock/contracts";
 import { describe, expect, it } from "vitest";
 import {
+	canMentionGroups,
+	groupSuggestions,
 	insertMention,
 	liveMention,
 	type MentionPerson,
@@ -40,20 +43,20 @@ describe("the handle of a principal", () => {
 });
 
 describe("the mentions in the text of a message", () => {
-	const plain = (text: string) => ({ text, person: null });
+	const plain = (text: string) => ({ text, person: null, group: null });
 
 	it("finds a mention of a known handle, in each letter case, and keeps the full text", () => {
 		expect(textParts("Hi @captain, see @Captain@Example.com and @ada@example.org.", DIRECTORY)).toEqual([
 			plain("Hi "),
-			{ text: "@captain", person: CAPTAIN },
+			{ text: "@captain", person: CAPTAIN, group: null },
 			plain(", see "),
-			{ text: "@Captain@Example.com", person: CAPTAIN },
+			{ text: "@Captain@Example.com", person: CAPTAIN, group: null },
 			plain(" and "),
-			{ text: "@ada@example.org", person: ADA_ORG },
+			{ text: "@ada@example.org", person: ADA_ORG, group: null },
 			plain("."),
 		]);
 		expect(textParts("@elodie.martin's notes", DIRECTORY)).toEqual([
-			{ text: "@elodie.martin", person: ELLE },
+			{ text: "@elodie.martin", person: ELLE, group: null },
 			plain("'s notes"),
 		]);
 	});
@@ -64,14 +67,14 @@ describe("the mentions in the text of a message", () => {
 		const JARED = person("jared", "Jared Wray", "me@example.com");
 		const directory = mentionDirectory([...PEOPLE, JARED]);
 		expect(textParts("@jared Seattle today", directory)).toEqual([
-			{ text: "@jared", person: JARED },
+			{ text: "@jared", person: JARED, group: null },
 			plain(" Seattle today"),
 		]);
 		// The full name without spaces, in each letter case, and a name without its accents.
 		expect(textParts("@JaredWray and @elodie", directory)).toEqual([
-			{ text: "@JaredWray", person: JARED },
+			{ text: "@JaredWray", person: JARED, group: null },
 			plain(" and "),
-			{ text: "@elodie", person: ELLE },
+			{ text: "@elodie", person: ELLE, group: null },
 		]);
 		// A new mention from the list uses the handle.
 		expect(directory.handleOf.get(JARED.id)).toBe("me");
@@ -80,17 +83,26 @@ describe("the mentions in the text of a message", () => {
 		const SMITH = person("smith", "Jared Smith", "jsmith@example.com");
 		const shared = mentionDirectory([...PEOPLE, JARED, SMITH]);
 		expect(textParts("@jared", shared)).toEqual([plain("@jared")]);
-		expect(textParts("@jaredsmith", shared)).toEqual([{ text: "@jaredsmith", person: SMITH }]);
+		expect(textParts("@jaredsmith", shared)).toEqual([{ text: "@jaredsmith", person: SMITH, group: null }]);
 		// A handle and a local part win over a name: "Captain Cook" does not take "@captain", and
 		// "Ada Lovelace" does not take "@ada", the local part of two addresses.
 		const COOK = person("cook", "Captain Cook", "cook@example.com");
 		const withCook = mentionDirectory([...PEOPLE, COOK]);
-		expect(textParts("@captain", withCook)).toEqual([{ text: "@captain", person: CAPTAIN }]);
+		expect(textParts("@captain", withCook)).toEqual([{ text: "@captain", person: CAPTAIN, group: null }]);
 		expect(textParts("@ada", withCook)).toEqual([plain("@ada")]);
-		// A word for a group is never the name of one principal.
-		const groups = mentionDirectory([...PEOPLE, person("here", "Here Maps", "maps@example.com")]);
-		expect(textParts("@here", groups)).toEqual([plain("@here")]);
+		// A word for a group is never the name or the handle of one principal. "@here" and "@channel"
+		// mention the group, and the principal with the address here@example.com has its full address.
+		const HERE = person("here-box", "Here Box", "here@example.com");
+		const groups = mentionDirectory([...PEOPLE, person("here", "Here Maps", "maps@example.com"), HERE]);
+		expect(textParts("@here and @Channel, not @room", groups)).toEqual([
+			{ text: "@here", person: null, group: "here" },
+			plain(" and "),
+			{ text: "@Channel", person: null, group: "channel" },
+			plain(", not @room"),
+		]);
 		expect(textParts("@heremaps", groups)[0]?.person?.display_name).toBe("Here Maps");
+		expect(groups.handleOf.get(HERE.id)).toBe("here@example.com");
+		expect(textParts("@here@example.com", groups)).toEqual([{ text: "@here@example.com", person: HERE, group: null }]);
 	});
 
 	// A wrong link would send a reader to a different person than the author meant.
@@ -159,6 +171,19 @@ describe("the suggestions for a mention", () => {
 			Array.from({ length: 10 }, (_, index) => person(`p${index}`, `Person ${index}`, `p${index}@example.com`)),
 		);
 		expect(mentionSuggestions(many, "", { memberIds: new Set(), ownId: ADA.id })).toHaveLength(8);
+	});
+});
+
+describe("the groups in the suggestions", () => {
+	// The list must not offer a mention that the room refuses.
+	it("offers @here and @channel for their start, only to an owner or the member of a room within the limit", () => {
+		expect(groupSuggestions("", true)).toEqual(["here", "channel"]);
+		expect(groupSuggestions("CH", true)).toEqual(["channel"]);
+		expect(groupSuggestions("hex", true)).toEqual([]);
+		expect(groupSuggestions("here", false)).toEqual([]);
+		const limit = CHAT_LIMITS.groupMentionMembers;
+		expect([canMentionGroups("member", limit), canMentionGroups("member", limit + 1)]).toEqual([true, false]);
+		expect([canMentionGroups("owner", limit + 1), canMentionGroups(null, 2)]).toEqual([true, false]);
 	});
 });
 

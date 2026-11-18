@@ -18,7 +18,7 @@ import { createDraftStore, draftStorage } from "./drafts.ts";
 import { emojiName } from "./emoji.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
-import type { MentionContext, MentionDirectory } from "./mentions.ts";
+import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import {
 	chatRows,
 	dayLabel,
@@ -211,9 +211,15 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	useEffect(() => {
 		if (fresh && listedCount !== undefined && listedCount !== members.length) void loadMembers();
 	}, [fresh, listedCount, members.length, loadMembers]);
+	const ownRole = (listed ?? view.room)?.role ?? null;
 	const mentions = useMemo<MentionContext>(
-		() => ({ directory, memberIds: new Set(members.map((member) => member.principal_id)), ownId }),
-		[directory, members, ownId],
+		() => ({
+			directory,
+			memberIds: new Set(members.map((member) => member.principal_id)),
+			ownId,
+			groups: canMentionGroups(ownRole, members.length),
+		}),
+		[directory, members, ownId, ownRole],
 	);
 	// An edit and a delete show at once, before the answer of the server. `latest` has the newest
 	// change of each message at each moment. `changes` is its copy for the list.

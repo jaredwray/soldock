@@ -23,6 +23,7 @@ import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
 import {
 	composerKeys,
 	insertTypedEmoji,
+	insertTypedGroupMention,
 	insertTypedMention,
 	isCodeBlockActive,
 	markdownRules,
@@ -33,7 +34,7 @@ import {
 } from "./composerCommands.ts";
 import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
 import { emojiCode, emojiSuggestions } from "./emoji.ts";
-import { type MentionContext, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
+import { groupSuggestions, type MentionContext, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -203,8 +204,10 @@ export function ChatComposer({
 	const typedCode = listOpen && !typed ? typedEmoji(editorState) : null;
 	const { directory, memberIds, ownId } = mentions;
 	const suggestions = typed ? mentionSuggestions(directory, typed.query, { memberIds, ownId }) : [];
+	// The groups come after the people, so the list keeps their place for one typed name.
+	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
-	const count = suggestions.length + emojiChoices.length;
+	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
 	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
 	const query = typed ? `@${typed.query}` : typedCode ? `:${typedCode.query}` : "";
@@ -216,12 +219,15 @@ export function ChatComposer({
 		setListOpen(false);
 		if (!view) return;
 		const person = suggestions[index];
+		const group = groups[index - suggestions.length];
 		const emoji = emojiChoices[index];
 		const tr = person
 			? insertTypedMention(view.state, { id: person.person.id, handle: person.handle })
-			: emoji
-				? insertTypedEmoji(view.state, emoji.emoji)
-				: null;
+			: group
+				? insertTypedGroupMention(view.state, group)
+				: emoji
+					? insertTypedEmoji(view.state, emoji.emoji)
+					: null;
 		if (tr) view.dispatch(tr);
 	}
 
@@ -410,6 +416,31 @@ export function ChatComposer({
 							{!suggestion.member && <span className="mention-note">Not in this room</span>}
 						</div>
 					))}
+					{groups.map((group, offset) => {
+						const index = suggestions.length + offset;
+						return (
+							// biome-ignore lint/a11y/useKeyWithClickEvents: the keys go to the box, as the ARIA combobox pattern asks.
+							<div
+								key={group}
+								id={optionId(index)}
+								role="option"
+								tabIndex={-1}
+								aria-selected={index === active}
+								className="mention-option"
+								onMouseDown={(event) => event.preventDefault()}
+								onMouseMove={() => {
+									if (index !== active) setSelected({ query, index });
+								}}
+								onClick={() => choose(index)}
+							>
+								<span className="mention-avatar" aria-hidden="true">
+									@
+								</span>
+								<span className="mention-name">@{group}</span>
+								<span className="mention-note">Mention each member of this room</span>
+							</div>
+						);
+					})}
 					{emojiChoices.map((choice, index) => (
 						// biome-ignore lint/a11y/useKeyWithClickEvents: the keys go to the box, as the ARIA combobox pattern asks.
 						<div

@@ -44,6 +44,21 @@ export const MENTION_NOT_AFTER = "(?<![\\p{L}\\p{N}_.+\\-/@])";
  */
 const NOT_BEFORE = "(?![\\p{L}\\p{N}_@]|[._+\\-][\\p{L}\\p{N}_@])";
 const MENTION = new RegExp(`${MENTION_NOT_AFTER}@(${LOCAL})(?:@(${DOMAIN}))?${NOT_BEFORE}`, "giu");
+/**
+ * The words of a mention of a group. "@here" and "@channel" mention each member of the room. A group
+ * word is never the handle of one principal: a principal with the address here@example.com has its
+ * full address as its handle.
+ */
+export const GROUP_MENTIONS = ["here", "channel"] as const;
+export type GroupMention = (typeof GROUP_MENTIONS)[number];
+const GROUP_MENTION_WORDS: ReadonlySet<string> = new Set(GROUP_MENTIONS);
+
+/** The group of a word, in each letter case, or null. */
+export function groupMentionOf(word: string): GroupMention | null {
+	const lower = word.toLowerCase();
+	return GROUP_MENTION_WORDS.has(lower) ? (lower as GroupMention) : null;
+}
+
 function localPart(address: string): string {
 	return address.slice(0, address.lastIndexOf("@"));
 }
@@ -66,7 +81,7 @@ export function mentionDirectory<P extends MentionPerson>(people: readonly P[]):
 		const local = localPart(address);
 		if (!HANDLE.test(address)) continue;
 		byHandle.set(address, person);
-		if (locals.get(local) === 1) {
+		if (locals.get(local) === 1 && !GROUP_MENTION_WORDS.has(local)) {
 			byHandle.set(local, person);
 			handleOf.set(person.id, local);
 		} else {
@@ -113,11 +128,13 @@ function nameAliases(displayName: string): string[] {
 	return [...aliases].filter((alias) => LOCAL_ONLY.test(alias) && !GROUP_WORDS.has(alias));
 }
 
-/** One part of the text of a message: plain text, or a mention with its principal. */
+/** One part of the text of a message: plain text, a mention with its principal, or a mention of a group. */
 export interface TextPart<P extends MentionPerson = MentionPerson> {
 	text: string;
-	/** The principal of a mention, or null for plain text. */
+	/** The principal of a mention, or null for plain text and for a group. */
 	person: P | null;
+	/** The group of a mention of a group ("@here", "@channel"), or null. */
+	group: GroupMention | null;
 }
 
 /** True when the character at `at` is in a word with "://": a link, such as https://example.com/?u=@ada. */
@@ -128,9 +145,9 @@ function inLink(text: string, at: number): boolean {
 }
 
 /**
- * The text of a message in parts: plain text, and the mentions of principals in the directory. A
- * handle that the directory does not have stays plain text, as does a mention in a link. The parts
- * together are the full text.
+ * The text of a message in parts: plain text, the mentions of principals in the directory, and the
+ * mentions of a group. A handle that the directory does not have stays plain text, as does a mention in
+ * a link. The parts together are the full text.
  */
 export function textParts<P extends MentionPerson>(text: string, directory: MentionDirectory<P>): TextPart<P>[] {
 	const parts: TextPart<P>[] = [];
@@ -138,13 +155,14 @@ export function textParts<P extends MentionPerson>(text: string, directory: Ment
 	for (const match of text.matchAll(MENTION)) {
 		const whole = match[0];
 		const [, local = "", domain] = match;
-		const person = directory.byHandle.get((domain ? `${local}@${domain}` : local).toLowerCase());
-		if (!person || inLink(text, match.index)) continue;
-		if (match.index > last) parts.push({ text: text.slice(last, match.index), person: null });
-		parts.push({ text: whole, person });
+		const group = domain ? null : groupMentionOf(local);
+		const person = group ? null : directory.byHandle.get((domain ? `${local}@${domain}` : local).toLowerCase());
+		if ((!person && !group) || inLink(text, match.index)) continue;
+		if (match.index > last) parts.push({ text: text.slice(last, match.index), person: null, group: null });
+		parts.push({ text: whole, person: person ?? null, group });
 		last = match.index + whole.length;
 	}
-	if (last < text.length) parts.push({ text: text.slice(last), person: null });
+	if (last < text.length) parts.push({ text: text.slice(last), person: null, group: null });
 	return parts;
 }
 

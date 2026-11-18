@@ -1,4 +1,10 @@
-import { CHAT_LIMITS, type ChatBody, type ChatBodyBlock, type ChatBodyInline } from "@soldock/contracts";
+import {
+	CHAT_LIMITS,
+	type ChatBody,
+	type ChatBodyBlock,
+	type ChatBodyInline,
+	groupMentionOf,
+} from "@soldock/contracts";
 import { Fragment, type Mark, type Node, Schema, Slice } from "prosemirror-model";
 import { safeHref } from "../mail/richText.ts";
 
@@ -97,6 +103,29 @@ export const chatSchema = new Schema({
 			],
 			toDOM: (node) => ["span", { class: "chat-mention", "data-mention-id": node.attrs.id }, `@${node.attrs.label}`],
 		},
+		// A mention of a group: "@here" or "@channel". It mentions each member of the room.
+		group_mention: {
+			inline: true,
+			group: "inline",
+			atom: true,
+			selectable: false,
+			attrs: { group: { validate: "string" } },
+			leafText: (node) => `@${node.attrs.group}`,
+			parseDOM: [
+				{
+					tag: "span[data-group-mention]",
+					getAttrs: (dom) => {
+						const group = groupMentionOf(dom.getAttribute("data-group-mention") ?? "");
+						return group ? { group } : false;
+					},
+				},
+			],
+			toDOM: (node) => [
+				"span",
+				{ class: "chat-mention", "data-group-mention": node.attrs.group },
+				`@${node.attrs.group}`,
+			],
+		},
 	},
 	// The order is the nesting order in the HTML: a link holds the other marks.
 	marks: {
@@ -179,6 +208,11 @@ function inlineToBody(paragraph: Node): ChatBodyInline[] {
 		}
 		if (child.type === nodes.mention) {
 			out.push({ type: "mention", attrs: { id: String(child.attrs.id), label: String(child.attrs.label) } });
+			return;
+		}
+		if (child.type === nodes.group_mention) {
+			const group = groupMentionOf(String(child.attrs.group));
+			if (group) out.push({ type: "group_mention", attrs: { group } });
 			return;
 		}
 		if (!child.isText || !child.text) return;
@@ -303,6 +337,7 @@ function linesFromBody(content: readonly ChatBodyInline[] | undefined): Node[] {
 	for (const inline of content ?? []) {
 		if (inline.type === "hard_break") lines.push([]);
 		else if (inline.type === "mention") (lines.at(-1) as Node[]).push(nodes.mention.create(inline.attrs));
+		else if (inline.type === "group_mention") (lines.at(-1) as Node[]).push(nodes.group_mention.create(inline.attrs));
 		else (lines.at(-1) as Node[]).push(chatSchema.text(inline.text, marksFromBody(inline.marks)));
 	}
 	return lines.map((line) => nodes.paragraph.create(null, line));
@@ -388,7 +423,13 @@ export function bodyText(body: ChatBody): string {
 					lines.push(
 						(block.content ?? [])
 							.map((node) =>
-								node.type === "text" ? node.text : node.type === "mention" ? `@${node.attrs.label}` : "\n",
+								node.type === "text"
+									? node.text
+									: node.type === "mention"
+										? `@${node.attrs.label}`
+										: node.type === "group_mention"
+											? `@${node.attrs.group}`
+											: "\n",
 							)
 							.join(""),
 					);

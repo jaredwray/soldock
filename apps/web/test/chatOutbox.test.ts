@@ -44,6 +44,7 @@ function fakeRoom() {
 							idempotency_key: key,
 							reactions: [],
 							mentions: [],
+							group_mentions: [],
 						});
 						return settle();
 					},

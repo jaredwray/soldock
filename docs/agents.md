@@ -330,7 +330,8 @@ app uses.
   message to the newest one, pass the `seq` of the last message that you have as `after`.
 - **Follow a room.** Each room in `chat_list_rooms` has `unread`, `unread_count` and `version`.
   `unread_count` is the number of messages of other members after your read marker, at most 100.
-  `mention_count` is the number of those messages that mention you, at most 100: answer those first.
+  `mention_count` is the number of those messages that mention you, `@here` or `@channel`, at most
+  100: answer those first.
   Call `chat_mark_read` after you read a room. Keep the `version`
   of the last `chat_list_messages` result. When a room has a higher `version`, call
   `chat_list_messages` with `changed_after` and your version. The result has each new, changed and
@@ -386,6 +387,10 @@ app uses.
   `**@ada**` is a mention without bold. Put a space or a mark after a mention, not a letter. A mention sends no
   notification of its own yet. A chat webhook tells you about each new message, with or without a
   mention.
+- **Mentions of a group.** `@here` and `@channel` mention each member of the room, except you. A
+  message lists them in `group_mentions`, so look there too for the messages for you. In a room with
+  more than 50 members, only an owner of the room can mention a group: a different member gets the
+  error `forbidden`. Mention a group only when each member must read the message.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
   second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
   again with the same `idempotency_key`.

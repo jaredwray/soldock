@@ -947,6 +947,12 @@ MCP clients. The app has no UI-only path.
     - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
       space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
       follows it.
+    - After the people, the list has `@here` and `@channel` for their start
+      (`groupSuggestions`), with "Mention each member of this room". The box puts a group node in
+      the body (`insertTypedGroupMention`). The list shows the groups only when the room takes them
+      (`canMentionGroups`): for an owner, and for a member of a room with at most 50 members. A
+      message shows a group node as `@here` or `@channel` with the yellow fill of a mention of the
+      reader, and with no link.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
     - The page reads the directory one time (`directory.list_principals`). The members of the
