@@ -42,6 +42,8 @@ export interface Message {
 	text: string;
 	deleted: boolean;
 	idempotency_key: string | null;
+	/** The ids of the principals that the body mentions. */
+	mentions: string[];
 }
 
 /** A public room of `owner`, which each person of `members` joined. Returns the id of the room. */

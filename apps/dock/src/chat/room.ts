@@ -18,13 +18,17 @@ import {
 	checkCredentials,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
-import { log } from "../platform/index.ts";
+import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
-import { bodyMarkdown, type MessageContent, textBody } from "./body.ts";
+import { bodyMarkdown, type MessageContent, mentionIds, textBody } from "./body.ts";
+import { withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
-	error: { code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited"; message: string };
+	error: {
+		code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited" | "payload_too_large";
+		message: string;
+	};
 };
 
 /** The person or agent of a change, with the name at that time. */
@@ -320,6 +324,7 @@ export function messageOutput(record: MessageRecord): ChatMessage {
 	return {
 		...record,
 		markdown: record.deleted ? "" : bodyMarkdown(record.body),
+		mentions: record.deleted ? [] : mentionIds(record.body),
 		created_at: iso(record.created_at),
 		edited_at: record.edited_at === null ? null : iso(record.edited_at),
 	};
@@ -921,6 +926,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { message, changed: true };
 	}
 
+	/**
+	 * The content with its mentions as nodes (`withMentions`), after the checks of access, so a caller
+	 * outside the room reads no directory and learns nothing about it. Then each mention of a principal
+	 * that cannot see the room is text. Each principal can see a public room. A private room and a direct
+	 * message are for their members only. The text stays the same: a mention and its text are "@" and the
+	 * label.
+	 */
+	private async mentionedContent(room: RoomRow, input: MessageContent): Promise<MessageContent | Refusal> {
+		const canSee = (principalId: string) => room.kind === "public" || this.member(principalId) !== null;
+		try {
+			return await withMentions(this.env.DIRECTORY, input, canSee);
+		} catch (error) {
+			if (error instanceof OperationError && (error.code === "invalid" || error.code === "payload_too_large")) {
+				return refuse(error.code, error.detail);
+			}
+			throw error;
+		}
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,
@@ -956,6 +980,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A retry with the same key returned above: it adds no message, so it uses no allowance.
 			const limited = this.spendAllowance(call, now);
 			if (limited) return limited;
+			const content = await this.mentionedContent(opened.room, input.content);
+			if ("error" in content) return content;
 			const version = opened.room.version + 1;
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
@@ -964,8 +990,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
-					input.content.text,
-					JSON.stringify(input.content.body),
+					content.text,
+					JSON.stringify(content.body),
 					now,
 					version,
 					input.clientKey,
@@ -1006,7 +1032,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async editMessage(
 		call: RoomCall,
 		messageId: string,
-		content: MessageContent,
+		input: MessageContent,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		// Hold other room calls until the new version and the webhook event are stored.
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
@@ -1020,6 +1046,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
+			const content = await this.mentionedContent(room, input);
+			if ("error" in content) return content;
 			const bodyJson = JSON.stringify(content.body);
 			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };

@@ -12,6 +12,7 @@ import {
 	callTool,
 	codeOf,
 	connectRoomSocket,
+	createActor,
 	ORIGIN,
 	PASSWORD,
 	request,
@@ -1111,6 +1112,205 @@ describe("rich text", () => {
 		const [read] = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
 		expect(posted.structuredContent).toEqual({ message: read });
 		expect(read?.text).toBe("Deploy 42 is done.");
+	});
+});
+
+describe("mentions", () => {
+	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
+
+	// An agent writes "@bot" in Markdown or text. The web app sends a node. Both must be the same mention.
+	it("makes a node of each handle or name alias in text and Markdown, and keeps code, links, addresses and unknown handles as text", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const markdown = "Hi @bot and @olive, see `@bot`, [@bot](https://example.com/), bot@dock.test and @nobody.";
+		const { message } = await ada.call("chat.post_message", { room_id: room.id, markdown });
+		expect(message.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [
+				{ type: "text", text: "Hi " },
+				mention(bot.id, "bot"),
+				{ type: "text", text: " and " },
+				mention(owner.id, "olive"),
+				{ type: "text", text: ", see " },
+				{ type: "text", text: "@bot", marks: [{ type: "code" }] },
+				{ type: "text", text: ", " },
+				{ type: "text", text: "@bot", marks: [{ type: "link", attrs: { href: "https://example.com/" } }] },
+				{ type: "text", text: ", bot@dock.test and @nobody." },
+			],
+		});
+		expect(message.mentions).toEqual([bot.id, owner.id]);
+		expect(message.text).toBe("Hi @bot and @olive, see @bot, @bot, bot@dock.test and @nobody.");
+		// The Markdown has "@" and the label, so the same Markdown makes the same mentions again.
+		expect(message.markdown).toBe(markdown);
+		const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" })).message;
+		expect(again.body).toEqual(message.body);
+
+		// A plain text keeps its text, also its spaces at the start, and gets its mentions.
+		const text = (await ada.call("chat.post_message", { room_id: room.id, text: "  @bot ping" })).message;
+		expect([text.text, text.mentions]).toEqual(["  @bot ping", [bot.id]]);
+
+		// An agent through MCP gets the same result.
+		const posted = await callTool(bot.key, "chat_post_message", { room_id: room.id, markdown: "Done, @ada." });
+		expect((posted.structuredContent as { message: { mentions: string[] } }).message.mentions).toEqual([ada.id]);
+	});
+
+	// A mention must not show a private room to a principal outside it, and must not count for it.
+	it("keeps a mention of a principal that cannot see the room as text, in a private room and in an edit", async () => {
+		const secret = await createRoom(ada, "private", "Secret", [bot.id]);
+		const { message } = await ada.call("chat.post_message", { room_id: secret.id, text: "@owner and @bot" });
+		expect(message.body?.content[0]).toEqual({
+			type: "paragraph",
+			content: [{ type: "text", text: "@owner" }, { type: "text", text: " and " }, mention(bot.id, "bot")],
+		});
+		expect(message.mentions).toEqual([bot.id]);
+		// A node from the box gets the same rule.
+		const edited = (
+			await ada.call("chat.edit_message", {
+				room_id: secret.id,
+				message_id: message.id,
+				body: { type: "doc", content: [{ type: "paragraph", content: [mention(owner.id, "owner")] }] } as never,
+			})
+		).message;
+		expect([edited.text, edited.mentions]).toEqual(["@owner", []]);
+		// A node of an outsider keeps the label that the caller sent: the room tells no handle of a
+		// principal outside it.
+		const forged = (
+			await ada.call("chat.post_message", {
+				room_id: secret.id,
+				body: { type: "doc", content: [{ type: "paragraph", content: [mention(owner.id, "nobody")] }] } as never,
+			})
+		).message;
+		expect([forged.text, forged.mentions]).toEqual(["@nobody", []]);
+		// A mention that stays text does not count for the limit of mentions.
+		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => "@owner").join(" ");
+		expect((await ada.call("chat.post_message", { room_id: secret.id, text: many })).message.mentions).toEqual([]);
+		// Each principal can see a public room, so the mention there is a node.
+		const open = await createRoom(ada, "public", "Open");
+		expect((await post(ada, open.id, "@owner")).mentions).toEqual([owner.id]);
+	});
+
+	// The box sends nodes. Their ids and labels come from a client.
+	it("checks each mention node: an unknown principal is text, a label that finds no principal becomes the handle, and a message has 50 at most", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const body = (...content: unknown[]) => ({ type: "doc", content: [{ type: "paragraph", content }] }) as never;
+		const relabeled = (
+			await ada.call("chat.post_message", {
+				room_id: room.id,
+				body: body(mention(bot.id, "somebody"), { type: "text", text: " " }, mention(bot.id, "billing")),
+			})
+		).message;
+		// A label that finds the principal stays: "billing" is the name alias of Billing Bot.
+		expect(relabeled.body?.content[0]).toMatchObject({
+			content: [mention(bot.id, "bot"), { type: "text", text: " " }, mention(bot.id, "billing")],
+		});
+		expect([relabeled.text, relabeled.mentions]).toEqual(["@bot @billing", [bot.id]]);
+		// A principal that the directory does not have: the mention is text. The call tells nothing about the id.
+		const unknown = (
+			await ada.call("chat.post_message", {
+				room_id: room.id,
+				body: body(mention("prn_01JD0000000000000000000000", "x")),
+			})
+		).message;
+		expect([unknown.text, unknown.mentions]).toEqual(["@x", []]);
+		// A caller outside a private room gets the answer of each call outside it, before a read of the directory.
+		const secret = await createRoom(ada, "private", "Secret");
+		expect(
+			await codeOf(
+				owner.call("chat.post_message", {
+					room_id: secret.id,
+					body: body(mention("prn_01JD0000000000000000000000", "x")),
+				}),
+			),
+		).toBe("not_found");
+		// The nodes have a space between them: a node that touches a node is text.
+		const many = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => [
+			mention(bot.id, "bot"),
+			{ type: "text", text: " " },
+		]).flat();
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, body: body(...many) }))).toBe("invalid");
+		// The text form has the same limit.
+		const text = Array.from({ length: CHAT_LIMITS.mentions + 1 }, () => "@bot").join(" ");
+		expect(await codeOf(ada.call("chat.post_message", { room_id: room.id, text }))).toBe("invalid");
+	});
+});
+
+describe("mentions after a change", () => {
+	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
+	const body = (...content: unknown[]) => ({ type: "doc", content: [{ type: "paragraph", content }] }) as never;
+
+	// A deleted principal leaves the directory. Its mention must not stop an edit or a retry of the message.
+	it("keeps a message with a mention of a deleted principal editable, and its retry returns the stored message", async () => {
+		const carl = await createActor(owner, {
+			kind: "human",
+			display_name: "Carl Sagan",
+			address: "carl@dock.test",
+			password: PASSWORD,
+		});
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const input = {
+			room_id: room.id,
+			body: body(mention(carl.id, "carl"), { type: "text", text: " hey" }),
+			idempotency_key: "k-1",
+		};
+		const { message } = await ada.call("chat.post_message", input);
+		expect(message.mentions).toEqual([carl.id]);
+		await owner.call("directory.delete_principal", { principal_id: carl.id });
+		// The same send again returns the stored message.
+		expect((await ada.call("chat.post_message", input)).message.id).toBe(message.id);
+		// The web app sends the stored body back in an edit. The mention of the deleted principal is text then.
+		const edited = (
+			await ada.call("chat.edit_message", {
+				room_id: room.id,
+				message_id: message.id,
+				body: body(mention(carl.id, "carl"), { type: "text", text: " hey all" }),
+			})
+		).message;
+		expect([edited.text, edited.mentions]).toEqual(["@carl hey all", []]);
+	});
+
+	// The Markdown of a node that touches a letter would be a different mention: "@bot" and "x" is "@botx".
+	it("keeps a mention node that touches a letter, a digit or a mark of an address as text, so its Markdown reads back the same", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const cases: [unknown[], string, string[]][] = [
+			[[mention(bot.id, "bot"), { type: "text", text: "x" }], "@botx", []],
+			[[{ type: "text", text: "x" }, mention(bot.id, "bot")], "x@bot", []],
+			[[mention(bot.id, "bot"), mention(ada.id, "ada")], "@bot@ada", []],
+			[[{ type: "text", text: "https://e.com/" }, mention(bot.id, "bot")], "https://e.com/@bot", []],
+			// In a link, also after a mark that can start a mention: the text form reads no mention there.
+			[[{ type: "text", text: "see https://e.com/?u=" }, mention(bot.id, "bot")], "see https://e.com/?u=@bot", []],
+			[[mention(bot.id, "bot"), { type: "text", text: ", ok" }], "@bot, ok", [bot.id]],
+			// A text with marks has Markdown marks around it, which end a word: the mention stays.
+			[
+				[{ type: "text", text: "https://e.com/", marks: [{ type: "code" }] }, mention(bot.id, "bot")],
+				"https://e.com/@bot",
+				[bot.id],
+			],
+			[[mention(bot.id, "bot"), { type: "text", text: "now", marks: [{ type: "strong" }] }], "@botnow", [bot.id]],
+		];
+		for (const [content, text, mentions] of cases) {
+			const { message } = await ada.call("chat.post_message", { room_id: room.id, body: body(...content) });
+			expect([message.text, message.mentions], text).toEqual([text, mentions]);
+			const again = (await ada.call("chat.post_message", { room_id: room.id, markdown: message.markdown ?? "" }))
+				.message;
+			expect(again.mentions, text).toEqual(mentions);
+		}
+	});
+
+	it("applies the rule of a private room to a direct message, and gives a message from before the nodes its mentions at an edit", async () => {
+		const dm = (await ada.call("chat.open_dm", { principal_id: bot.id })).room;
+		expect((await post(ada, dm.id, "@owner and @bot")).mentions).toEqual([bot.id]);
+
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const old = await post(ada, room.id, "@bot hi");
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			state.storage.sql.exec("UPDATE messages SET body_json = NULL");
+		});
+		// An old message has the body of its text, with no node.
+		const [read] = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(read?.mentions).toEqual([]);
+		// An edit stores the nodes.
+		const edited = (await ada.call("chat.edit_message", { room_id: room.id, message_id: old.id, text: "@bot hi" }))
+			.message;
+		expect(edited.mentions).toEqual([bot.id]);
 	});
 });
 

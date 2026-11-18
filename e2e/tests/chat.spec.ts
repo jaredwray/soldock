@@ -711,6 +711,27 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect(box).toHaveText("");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
+	// The box sent a mention node: the room stores the id of the principal.
+	const stored = (await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
+	expect(stored?.mentions).toHaveLength(1);
+
+	// A paste keeps a mention of the app as a node. A mention chip with a wrong id is no node.
+	const tomaszId = stored?.mentions[0] as string;
+	await box.evaluate((element, id) => {
+		const data = new DataTransfer();
+		data.setData(
+			"text/html",
+			`<p>cc <span data-mention-id="${id}">@tomasz</span> and <span data-mention-id="prn_bad">@x</span></p>`,
+		);
+		data.setData("text/plain", "cc @tomasz and @x");
+		element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+	}, tomaszId);
+	await expect(box.locator(".chat-mention")).toHaveCount(1);
+	// The caret is after "@x", so the list of people is open. Ctrl+Enter sends all the same.
+	await box.press("Control+Enter");
+	await expect
+		.poll(async () => (await newest(nadia, roomId)).find((one) => one.text === "cc @tomasz and @x")?.mentions)
+		.toEqual([tomaszId]);
 
 	// In the edit box, Escape closes the list of a mention first, and then the edit box.
 	await thanks.hover();

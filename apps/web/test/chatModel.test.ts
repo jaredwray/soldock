@@ -32,6 +32,7 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		version: seq,
 		idempotency_key: null,
 		reactions: [],
+		mentions: [],
 		...change,
 	};
 }

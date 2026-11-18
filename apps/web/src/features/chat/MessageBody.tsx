@@ -72,6 +72,27 @@ function TextNode({ node, mentions }: { node: Text; mentions: MentionContext }) 
 	return <>{content}</>;
 }
 
+type Mention = Extract<ChatBodyInline, { type: "mention" }>;
+
+/**
+ * A mention node: a link to the profile of its principal, found by its id. So the link stays right when
+ * the handle changes. A principal that the directory does not have (a deleted one) shows as text.
+ */
+function MentionNode({ node, mentions }: { node: Mention; mentions: MentionContext }) {
+	const person = mentions.directory.byId.get(node.attrs.id);
+	const text = `@${node.attrs.label}`;
+	if (!person) return <span>{text}</span>;
+	return (
+		<Link
+			to={profilePath(person.id)}
+			className={person.id === mentions.ownId ? "chat-mention chat-mention-own" : "chat-mention"}
+			title={person.display_name}
+		>
+			{text}
+		</Link>
+	);
+}
+
 function Inline({ content, mentions }: { content: readonly ChatBodyInline[] | undefined; mentions: MentionContext }) {
 	return (
 		<>
@@ -82,6 +103,9 @@ function Inline({ content, mentions }: { content: readonly ChatBodyInline[] | un
 				) : node.type === "hard_break" ? (
 					// biome-ignore lint/suspicious/noArrayIndexKey: the nodes of a body do not move while it shows.
 					<br key={index} />
+				) : node.type === "mention" ? (
+					// biome-ignore lint/suspicious/noArrayIndexKey: the nodes of a body do not move while it shows.
+					<MentionNode key={index} node={node} mentions={mentions} />
 				) : null,
 			)}
 		</>

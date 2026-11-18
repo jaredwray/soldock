@@ -92,6 +92,7 @@ export function chatRows(
 				version: 0,
 				idempotency_key: pending.key,
 				reactions: [],
+				mentions: [],
 			},
 			pending,
 		});

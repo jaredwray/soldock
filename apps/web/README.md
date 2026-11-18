@@ -915,7 +915,12 @@ MCP clients. The app has no UI-only path.
   - **Mentions.** A mention is the text `@` and the handle of a person or an agent, for example
     `@captain`. The handle is the part of the address before the `@`. When two principals have the
     same part, on two mail domains, each of them has the full address as its handle, for example
-    `@ada@example.org`. The room stores only the text. `mentions.ts` has the rules.
+    `@ada@example.org`. The rules of handles and aliases are in `packages/contracts/src/mentions.ts`,
+    so the server uses the same rules. The box puts a mention node with the id of the principal in
+    the body (`insertTypedMention`), and the server makes nodes from the mentions in the text of an
+    agent. A message shows a mention node as a link to the profile of its id, so the link stays right
+    after a change of a handle. A principal that the directory does not have shows as text. A text
+    `@handle` without a node (an older message) still shows as a mention of the directory.
     - In a message, a mention of a principal in the directory is a link to the profile of that
       principal. A mention of the person who reads has a yellow fill. A handle that the directory
       does not have stays text. An address (`ada@example.com`) has no mention. A word with `://`
@@ -945,11 +950,10 @@ MCP clients. The app has no UI-only path.
     - The page reads the directory one time (`directory.list_principals`). The members of the
       room come from `chat.get_room`, again after the socket tells that the room changed, after
       each reconnect of the socket, and when the room list has a different number of members.
-    - Known limit: a mention is text, and each client finds its principal in the directory of
-      that time. So a mention does not follow a change of an address. When a second principal
-      gets the same local part, each old mention of the short handle stays text. A handle of a
-      deleted principal can later be the handle of a new principal. Server-side mentions are
-      part of layer 4 of [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
+    - Known limit: a message from before the mention nodes has its mentions as text, and each
+      client finds their principals in the directory of that time. The web app shows such a text as a
+      mention also in a newer message, for example a mention that the server kept as text because its
+      principal cannot see a private room.
   - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
     place of a room: the avatar, the name, the handle, the address, the role in the organization
     or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
