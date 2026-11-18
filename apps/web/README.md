@@ -724,8 +724,36 @@ MCP clients. The app has no UI-only path.
     room, so the page gets what changed while it had no socket.
   - The socket also brings each reply of a thread. The sync keeps its version, and the room list
     leaves it out (`inRoomList`), unless its author also sent it to the room. A reply changes its
-    parent first, so the list gets the new summary of the thread in the same order. The view of a
-    thread comes in the next part of threads.
+    parent first, so the list gets the new summary of the thread in the same order.
+  - **Threads.** A message with replies shows the summary of its thread under it: the initials of
+    the newest authors, the number of replies and the time of the last reply. The button opens the
+    view of the thread. The bar of actions of a message has "Reply in a thread" too. A reply that also
+    went to the room shows "Replied in a thread", which opens the thread of its parent.
+    - The view of a thread (`ThreadPanel`) is a column at the right of the room. On a wide screen
+      (900px and more) the room gives it 400px, so no control of the room is under it. On a narrow
+      screen it takes the width, and the room under it is hidden, so the Tab key goes to no control
+      that nobody sees. It has the message that starts the thread, its replies oldest first, and a box
+      for a reply. "Also send to <room>" sends the reply to the room list too.
+    - `createThreadView` (`thread.ts`) keeps the data of the view, with no DOM. The watch of the socket
+      (`watchMessages`) starts before the load. A change that comes during the load waits, and goes
+      into the thread after it. The load reads each page of `chat.list_replies`, then the changes
+      after the version of its first page, so a change during the read of a later page shows too.
+      After a new connect of the socket, the view reads the changes after its version, in pages. A
+      failed read keeps the version, so the next connect reads the same changes again.
+    - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).
+      A reply that fails stays in the box, with the reason. A second Enter with the same reply keeps
+      the key, so it posts one time. A changed reply, or a changed "Also send to <room>", gets a new
+      key, so a second send never gets `conflict`. Text that the person types during a send stays in
+      the box.
+    - A new reply moves the list to its end when the list showed its end, and after an own send.
+    - Escape closes the view when the box is empty. With a typed reply, Escape does nothing, so one
+      key never deletes a reply. The close gives the focus back to the button that opened the view,
+      or to the box of the room. A load that fails shows "Try again", which gets the focus. A thread
+      whose first message was deleted shows a note in place of the box.
+    - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
+      draft that stays. A thread has no unread state yet. The view reads all pages of a thread before
+      it shows, and shows each reply, so a very long thread is slow
+      ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
     that stopped without a close. When the tab shows again, or the network comes back, the page
