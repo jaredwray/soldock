@@ -32,6 +32,8 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `room-index.ts` | The reads of the index in D1: the public rooms |
 | `principal-rooms.ts` | The joined rooms of a principal, from its `PrincipalDO`, and the first fill of that object |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
+| `body.ts` | The body of a message from each form of a call (text, Markdown, JSON tree), its plain text, its Markdown and its limits |
+| `mentions.ts` | The mention nodes of a body: from the handles and name aliases in its text, with the directory |
 | `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
 | `webhooks.ts` | The Chat adapter for shared webhook operations |
 | `watch.ts` | The change feeds of the `chat.room` and `chat.rooms` resources, for MCP `subscriptions/listen` |
@@ -127,17 +129,28 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   The web app edits the body itself, so its edits keep the indent.
 - **Mentions** (`mentions.ts`, the rules in `packages/contracts/src/mentions.ts`). A mention is a node
   of the body with the id of a principal and a label: `{ type: "mention", attrs: { id, label } }`.
-  - The handler makes the nodes from the text of each form: `@` and a handle (the part of the
-    address before the `@`, or the full address when two principals have the same part) or a name
-    alias (a first name, or a full name without spaces, of one principal only). The web app uses the
-    same rules. A text in code or in a link, an address and an unknown handle stay text.
-  - The handler checks each mention node of a body: an unknown principal is `invalid`. A label that
-    no longer finds the principal becomes the handle.
-  - The directory (`listPrincipals`) loads only for a body with an `@` in a text that can hold a
-    mention, or with a mention node.
+  - The room makes the nodes (`withMentions`), after the checks of access and the rate limit, so a
+    caller outside the room reads no directory and learns nothing. It makes them from the text of each
+    form: `@` and a handle (the part of the address before the `@`, or the full address when two
+    principals have the same part) or a name alias (a first name, or a full name without spaces, of
+    one principal only). The web app uses the same rules. A text in code or in a link, an address and
+    an unknown handle stay text. An archived principal can be mentioned: it still has a profile.
+  - The room checks each mention node of a body. A label that no longer finds the principal becomes
+    the handle. A node of a principal that the directory does not have (a deleted one) is text: `@`
+    and its label. So a message with such a mention can still change, and its retry returns it.
+  - A node that touches a letter, a digit or a mark of an address is text, as a mention in text is:
+    its Markdown would read back as a different mention (`@bot` and `x` is `@botx`).
+  - The directory (`listPrincipals`) loads only for a body with the syntax of a mention (`@` and a
+    handle, not an address) in a text that can hold one, or with a mention node. It is the whole
+    directory: a later change reads only the handles and ids of the body.
   - The room keeps a mention of a principal that cannot see the room as text: `@` and the label.
     Each principal can see a public room. A private room and a direct message are for their members.
     So a mention gives no access and no notification outside the room.
+  - A caller with `chat.write` learns the id of a principal that a mention finds. An id is not a
+    secret: `directory.list_principals` gives the ids with the names and the addresses.
+  - Known limits: a mention node has no marks, so `**@bot**` is a mention without bold. A label is
+    the handle of the time of the write: after a delete, a new principal can get the same handle, and
+    the Markdown of an old message then finds the new principal.
   - A message has at most 50 mentions (`CHAT_LIMITS.mentions`). Each message returns `mentions`: the
     ids of its mentions, each one time. The plain text and the Markdown have `@` and the label, so
     the Markdown of a message makes the same mentions again.
@@ -554,7 +567,7 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 
 ## Later layers
 
-Not built yet: threads, reactions, mention counts and notifications, rich text, files in messages
+Not built yet: threads, mention counts and notifications, files in messages
 (through Drive), search, the MCP resource for the events of a principal, presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots,
 sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has

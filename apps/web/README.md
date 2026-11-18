@@ -951,7 +951,9 @@ MCP clients. The app has no UI-only path.
       room come from `chat.get_room`, again after the socket tells that the room changed, after
       each reconnect of the socket, and when the room list has a different number of members.
     - Known limit: a message from before the mention nodes has its mentions as text, and each
-      client finds their principals in the directory of that time.
+      client finds their principals in the directory of that time. The web app shows such a text as a
+      mention also in a newer message, for example a mention that the server kept as text because its
+      principal cannot see a private room.
   - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
     place of a room: the avatar, the name, the handle, the address, the role in the organization
     or the sponsor of an agent, and the date of the account. **Send a direct message** opens the

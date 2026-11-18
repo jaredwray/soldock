@@ -18,13 +18,17 @@ import {
 	checkCredentials,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
-import { log } from "../platform/index.ts";
+import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 import { bodyMarkdown, type MessageContent, mentionIds, textBody, visibleMentions } from "./body.ts";
+import { withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
-	error: { code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited"; message: string };
+	error: {
+		code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited" | "payload_too_large";
+		message: string;
+	};
 };
 
 /** The person or agent of a change, with the name at that time. */
@@ -923,11 +927,22 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * The content with each mention of a principal that cannot see the room as text. Each principal can
-	 * see a public room. A private room and a direct message are for their members only. The text stays
-	 * the same: a mention and its text are "@" and the label.
+	 * The content with its mentions as nodes (`withMentions`), after the checks of access, so a caller
+	 * outside the room reads no directory and learns nothing about it. Then each mention of a principal
+	 * that cannot see the room is text. Each principal can see a public room. A private room and a direct
+	 * message are for their members only. The text stays the same: a mention and its text are "@" and the
+	 * label.
 	 */
-	private visibleContent(room: RoomRow, content: MessageContent): MessageContent {
+	private async mentionedContent(room: RoomRow, input: MessageContent): Promise<MessageContent | Refusal> {
+		let content: MessageContent;
+		try {
+			content = await withMentions(this.env.DIRECTORY, input);
+		} catch (error) {
+			if (error instanceof OperationError && (error.code === "invalid" || error.code === "payload_too_large")) {
+				return refuse(error.code, error.detail);
+			}
+			throw error;
+		}
 		if (room.kind === "public") return content;
 		const body = visibleMentions(content.body, (principalId) => this.member(principalId) !== null);
 		return body === content.body ? content : { body, text: content.text };
@@ -964,11 +979,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 					return { message: this.messageRecord(opened.room.room_id, row), duplicate: true };
 				}
 			}
-			const content = this.visibleContent(opened.room, input.content);
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 			// A retry with the same key returned above: it adds no message, so it uses no allowance.
 			const limited = this.spendAllowance(call, now);
 			if (limited) return limited;
+			const content = await this.mentionedContent(opened.room, input.content);
+			if ("error" in content) return content;
 			const version = opened.room.version + 1;
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
@@ -1033,7 +1049,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
-			const content = this.visibleContent(room, input);
+			const content = await this.mentionedContent(room, input);
+			if ("error" in content) return content;
 			const bodyJson = JSON.stringify(content.body);
 			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };

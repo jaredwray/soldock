@@ -147,3 +147,23 @@ export function textParts<P extends MentionPerson>(text: string, directory: Ment
 	if (last < text.length) parts.push({ text: text.slice(last), person: null });
 	return parts;
 }
+
+/** True when a text has a mention in the form of the syntax: "@" and a handle, not in an address. */
+export function hasMentionSyntax(text: string): boolean {
+	MENTION.lastIndex = 0;
+	const found = MENTION.test(text);
+	MENTION.lastIndex = 0;
+	return found;
+}
+
+const BEFORE_MENTION = /[\p{L}\p{N}_.+\-/@]$/u;
+const AFTER_MENTION = /^(?:[\p{L}\p{N}_@]|[._+-][\p{L}\p{N}_@])/u;
+
+/**
+ * True when "@" and a label between the text `before` and the text `after` read back as a mention: no
+ * letter, digit or mark of an address touches it. A mention node that does not fit would become a
+ * different mention, or text, in its Markdown.
+ */
+export function mentionFits(before: string, after: string): boolean {
+	return !BEFORE_MENTION.test(before) && !AFTER_MENTION.test(after);
+}

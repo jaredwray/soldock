@@ -75,10 +75,12 @@ export {
 	WEBHOOK_EVENT_TYPE,
 } from "./mail.ts";
 export {
+	hasMentionSyntax,
 	MENTION_NOT_AFTER,
 	type MentionDirectory,
 	type MentionPerson,
 	mentionDirectory,
+	mentionFits,
 	type TextPart,
 	textParts,
 } from "./mentions.ts";

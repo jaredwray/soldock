@@ -2,7 +2,6 @@ import type { ChatRoom, OperationName } from "@soldock/contracts";
 import { type CallContext, getPrincipals } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { messageContent } from "./body.ts";
-import { withMentions } from "./mentions.ts";
 import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
 import { listPublicRooms } from "./room-index.ts";
@@ -214,7 +213,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const posted = accept(
 			await opened.room.postMessage(opened.ctx, {
 				id: newId("cmsg"),
-				content: await withMentions(call.env.DIRECTORY, messageContent(input)),
+				content: messageContent(input),
 				idempotency: await idempotencyOf(call, "chat.post_message", input),
 				clientKey: input.idempotency_key ?? null,
 			}),
@@ -225,8 +224,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.edit_message"(call, input) {
 		const opened = openRoom(call, input.room_id);
-		const content = await withMentions(call.env.DIRECTORY, messageContent(input));
-		const edited = accept(await opened.room.editMessage(opened.ctx, input.message_id, content));
+		const edited = accept(await opened.room.editMessage(opened.ctx, input.message_id, messageContent(input)));
 		if (edited.changed) auditOk(call, "chat.edit_message", `${input.room_id}:${input.message_id}`);
 		return { message: messageOutput(edited.message) };
 	},

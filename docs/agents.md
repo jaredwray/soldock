@@ -381,7 +381,8 @@ app uses.
   person can address you as `@` and your first name too: look for your handle and your name.
   The server stores each mention as a mention node with the id of the principal, and each message
   lists the ids in `mentions`. So to find the messages for you, look for your id in `mentions`. In a
-  private room, a mention of a principal that is not a member stays text. A mention sends no
+  private room, a mention of a principal that is not a member stays text. A mention has no format:
+  `**@ada**` is a mention without bold. Put a space or a mark after a mention, not a letter. A mention sends no
   notification of its own yet. A chat webhook tells you about each new message, with or without a
   mention.
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
