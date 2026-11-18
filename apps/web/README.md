@@ -722,6 +722,10 @@ MCP clients. The app has no UI-only path.
   - Each message event has the version of the room. When a version is missing, the page calls
     `chat.list_messages` with `changed_after`. The first event of a socket has the version of the
     room, so the page gets what changed while it had no socket.
+  - The socket also brings each reply of a thread. The sync keeps its version, and the room list
+    leaves it out (`inRoomList`), unless its author also sent it to the room. A reply changes its
+    parent first, so the list gets the new summary of the thread in the same order. The view of a
+    thread comes in the next part of threads.
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
     that stopped without a close. When the tab shows again, or the network comes back, the page

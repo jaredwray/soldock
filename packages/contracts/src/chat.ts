@@ -183,6 +183,17 @@ export const ChatReaction = z.object({
 });
 export type ChatReaction = z.infer<typeof ChatReaction>;
 
+/** The replies of a message: a thread. The parent keeps this summary, so a list shows it without a read. */
+export const ChatThread = z.object({
+	/** The replies that stay, without deleted replies. */
+	reply_count: z.number().int().nonnegative(),
+	/** The time of the newest reply that stays. */
+	last_reply_at: Timestamp,
+	/** The authors of the newest replies, newest first, each one time, at most 3. */
+	authors: z.array(Actor),
+});
+export type ChatThread = z.infer<typeof ChatThread>;
+
 /**
  * The kinds of a room. Each person and each agent can find and join a `public` room. Only its
  * members can find a `private` room. A `dm` room has two members, and it has no name.
@@ -348,6 +359,18 @@ export const ChatMessage = z.object({
 	 * that gets no value takes an empty list.
 	 */
 	group_mentions: z.array(z.enum(GROUP_MENTIONS)).default([]),
+	/**
+	 * The id of the message that this message replies to, or null for a message of the room. A thread has
+	 * one level: a reply has no replies. A reader that gets no value takes null.
+	 */
+	parent_id: z.string().nullable().default(null),
+	/**
+	 * True for a reply that the author also sent to the room: the room list shows it too. A reader that
+	 * gets no value takes false.
+	 */
+	also_in_room: z.boolean().default(false),
+	/** The summary of the replies of this message, or null when it has none. A reader that gets no value takes null. */
+	thread: ChatThread.nullable().default(null),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -383,6 +406,9 @@ export const CHAT_SOCKET_CLOSE = {
  *   older version calls chat.list_messages with changed_after.
  * - `message` has a new, changed or deleted message, as chat.list_messages returns it. Its `version` is
  *   the version of the room after the change, so a client that misses a version gets the changes.
+ * - `reply` has a new, changed or deleted reply that is not in the room list, as chat.list_replies
+ *   returns it. Its `version` is a version of the room too. A client without threads ignores it, and
+ *   its sync gets the changes of the room list.
  * - `room` tells that the name, the topic or the members changed. Call chat.get_room.
  */
 export const ChatSocketEvent = z.discriminatedUnion("type", [
@@ -393,6 +419,7 @@ export const ChatSocketEvent = z.discriminatedUnion("type", [
 		version: z.number().int(),
 	}),
 	z.object({ type: z.literal("message"), message: ChatMessage }),
+	z.object({ type: z.literal("reply"), message: ChatMessage }),
 	z.object({ type: z.literal("room") }),
 ]);
 export type ChatSocketEvent = z.infer<typeof ChatSocketEvent>;
@@ -563,6 +590,7 @@ export const listMessages = defineOperation({
 		"With changed_after, returns each message that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
 		"When has_more is true, call again with the version of the last message as changed_after.",
 		"A deleted message has deleted: true and no text.",
+		"A reply is not in this list, unless its author also sent it to the room (also_in_room). A message with replies has thread: read the replies with chat.list_replies.",
 		MEMBERS_ONLY,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages" },
@@ -590,19 +618,66 @@ export const listMessages = defineOperation({
 	errors: ["not_found"],
 });
 
+const THREADS = `To reply in a thread, set parent_id to the id of a message of the room. A thread has one level: a reply cannot have replies, and a deleted message takes no reply. A reply is not in the room list and does not make the room unread. Set also_in_room: true to show the reply in the room list too.`;
+
 export const postMessage = defineOperation({
 	name: "chat.post_message",
-	summary: "Post a message in a room",
-	description: `Adds a message to the room. ${FORMS_NOTE} The room is then read for you, and unread for each other member. ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	summary: "Post a message in a room, or a reply in a thread",
+	description: `Adds a message to the room. ${FORMS_NOTE} The room is then read for you, and unread for each other member. ${THREADS} ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CREATE,
 	input: z
-		.strictObject({ room_id: RoomId, ...MESSAGE_FORMS, idempotency_key: IdempotencyKey })
-		.refine(oneForm, ONE_FORM),
+		.strictObject({
+			room_id: RoomId,
+			...MESSAGE_FORMS,
+			idempotency_key: IdempotencyKey,
+			parent_id: MessageId.optional(),
+			also_in_room: z.boolean().optional(),
+		})
+		.refine(oneForm, ONE_FORM)
+		.refine((input) => input.also_in_room !== true || input.parent_id !== undefined, {
+			message: "also_in_room needs parent_id: only a reply can also go to the room",
+		}),
 	output: z.object({ message: ChatMessage }),
-	errors: ["not_found", "conflict", "rate_limited"],
+	errors: ["not_found", "invalid", "conflict", "rate_limited"],
+});
+
+export const listReplies = defineOperation({
+	name: "chat.list_replies",
+	summary: "Read the replies of a message, or get what changed",
+	description: [
+		"Returns the message (parent) and its replies, oldest first.",
+		"Without after and changed_after, returns the first replies. has_more is true when more replies exist: pass the seq of the last reply as after to get them.",
+		"With changed_after, returns each reply that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
+		"When has_more is true with changed_after, call again with the version of the last reply as changed_after.",
+		"The replies of a deleted message stay, and this operation returns them.",
+		MEMBERS_ONLY,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/replies" },
+	scopes: ["chat.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z
+		.strictObject({
+			room_id: RoomId,
+			message_id: MessageId,
+			after: z.coerce.number().int().min(0).optional(),
+			changed_after: z.coerce.number().int().min(0).optional(),
+			limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
+		})
+		.refine((input) => input.after === undefined || input.changed_after === undefined, {
+			message: "set only one of after and changed_after",
+		}),
+	output: z.object({
+		parent: ChatMessage,
+		replies: z.array(ChatMessage),
+		/** The version of the room at the time of the read. */
+		version: z.number().int(),
+		has_more: z.boolean(),
+	}),
+	errors: ["not_found", "invalid"],
 });
 
 export const editMessage = defineOperation({
@@ -799,6 +874,7 @@ export const chatOperations = {
 	"chat.remove_member": removeMember,
 	"chat.list_messages": listMessages,
 	"chat.post_message": postMessage,
+	"chat.list_replies": listReplies,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
 	"chat.list_message_edits": listMessageEdits,

@@ -21,6 +21,9 @@ function stored(seq: number, key: string | null, author: ChatMessage["author"] =
 		reactions: [],
 		mentions: [],
 		group_mentions: [],
+		parent_id: null,
+		also_in_room: false,
+		thread: null,
 	};
 }
 

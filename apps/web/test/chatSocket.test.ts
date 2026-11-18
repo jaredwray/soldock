@@ -79,6 +79,9 @@ describe("the socket of an open room", () => {
 			reactions: [],
 			mentions: [],
 			group_mentions: [],
+			parent_id: null,
+			also_in_room: false,
+			thread: null,
 		};
 		const { handlers } = server.last();
 		handlers.message(HELLO);

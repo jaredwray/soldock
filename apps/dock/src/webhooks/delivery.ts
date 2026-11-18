@@ -77,6 +77,8 @@ export interface ChatWebhookEventJob {
 	 */
 	eventType?: ChatWebhookEvent;
 	messageId?: string;
+	/** The message that the message replies to, for a reply in a thread. */
+	parentId?: string;
 }
 
 interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind"> {
@@ -85,6 +87,7 @@ interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind"> {
 	membershipId: string;
 	eventType?: ChatWebhookEvent;
 	messageId?: string;
+	parentId?: string;
 }
 
 /** A change in one drive. The `DriveSpaceDO` sends it from its webhook outbox. */
@@ -298,6 +301,7 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 						membershipId: memberships.get(row.target_id) as string,
 						eventType,
 						messageId: job.messageId ?? job.eventId,
+						...(job.parentId === undefined ? {} : { parentId: job.parentId }),
 					} satisfies ChatWebhookDeliveryJob,
 				})),
 			);
@@ -463,6 +467,8 @@ function chatBody(subscription: SubscriptionRow, job: ChatWebhookDeliveryJob): s
 			principal_id: subscription.target_id,
 			room_id: job.roomId,
 			message_id: job.messageId ?? job.eventId,
+			// A reply in a thread: read it with chat.list_replies of the parent.
+			...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
 			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
 		},
 	});

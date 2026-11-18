@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
+import { inRoomList } from "./model.ts";
 import { createOutbox, type Outbox, postContent } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
@@ -414,10 +415,14 @@ export function useRoom(
 		const sync = createRoomSync(
 			(changedAfter) => api.call("chat.list_messages", { room_id: roomId, changed_after: changedAfter }),
 			(changes) => {
+				// A reply that is not in the room list comes from the socket too. The sync keeps its version,
+				// and the room list leaves it out.
+				const listed = changes.filter(inRoomList);
+				if (listed.length === 0) return;
 				// Each change goes to the view first: the list can drop a change outside its part of the
 				// history, and the view still needs to know of a message that the room stored.
-				incoming.current(changes);
-				pages.pager?.apply(changes);
+				incoming.current(listed);
+				pages.pager?.apply(listed);
 			},
 		);
 		const pager = createRoomPager({
@@ -518,7 +523,7 @@ export function useRoom(
 				if (event.type === "hello") {
 					void sync.notice(event.version);
 					if (connects++ > 0) void loadMembers();
-				} else if (event.type === "message") sync.push(event.message);
+				} else if (event.type === "message" || event.type === "reply") sync.push(event.message);
 				else {
 					roomChanged.current();
 					void loadMembers();

@@ -3,6 +3,14 @@ import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
 
+/**
+ * True for a message of the room list: a message of the room, or a reply that its author also sent to the
+ * room. The socket and `changed_after` of a thread view bring replies too. The room list leaves them out.
+ */
+export function inRoomList(message: Pick<ChatMessage, "parent_id" | "also_in_room">): boolean {
+	return message.parent_id === null || message.also_in_room;
+}
+
 /** The name that a room shows: its name, or the name of the other member for a direct message. */
 export function roomTitle(room: Pick<ChatRoom, "kind" | "name" | "peer">): string {
 	if (room.kind === "dm") return room.peer?.display_name ?? "Direct message";
@@ -94,6 +102,9 @@ export function chatRows(
 				reactions: [],
 				mentions: [],
 				group_mentions: [],
+				parent_id: null,
+				also_in_room: false,
+				thread: null,
 			},
 			pending,
 		});
