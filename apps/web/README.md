@@ -740,9 +740,11 @@ MCP clients. The app has no UI-only path.
       after the version of its first page, so a change during the read of a later page shows too.
       After a new connect of the socket, the view reads the changes after its version, in pages. A
       failed read keeps the version, so the next connect reads the same changes again.
-    - A send has an idempotency key for each reply in the box. A reply that fails stays in the box,
-      with its key and the reason, so a second Enter posts it one time. Text that the person types
-      during a send stays in the box.
+    - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).
+      A reply that fails stays in the box, with the reason. A second Enter with the same reply keeps
+      the key, so it posts one time. A changed reply, or a changed "Also send to <room>", gets a new
+      key, so a second send never gets `conflict`. Text that the person types during a send stays in
+      the box.
     - A new reply moves the list to its end when the list showed its end, and after an own send.
     - Escape closes the view when the box is empty. With a typed reply, Escape does nothing, so one
       key never deletes a reply. The close gives the focus back to the button that opened the view,

@@ -8,7 +8,14 @@ import { bodyText } from "./composerSchema.ts";
 import type { MessageWatch } from "./data.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import type { MentionContext } from "./mentions.ts";
-import { createThreadView, inThread, type ThreadState, type ThreadView } from "./thread.ts";
+import {
+	createThreadView,
+	inThread,
+	type ReplyAttempt,
+	replyAttempt,
+	type ThreadState,
+	type ThreadView,
+} from "./thread.ts";
 
 type LoadState = { status: "loading" } | { status: "ready"; thread: ThreadState } | { status: "error"; error: string };
 
@@ -49,8 +56,8 @@ export function ThreadPanel({
 	const [alsoInRoom, setAlsoInRoom] = useState(false);
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
-	/** The key of the send of the reply in the box. A second send after a lost answer posts it one time. */
-	const sendKey = useRef(crypto.randomUUID());
+	/** The last send that got no answer: a second send of the same reply posts it one time. */
+	const lastAttempt = useRef<ReplyAttempt | null>(null);
 	const composer = useRef<ChatComposerHandle>(null);
 	const body = useRef<HTMLDivElement>(null);
 	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
@@ -111,6 +118,10 @@ export function ThreadPanel({
 		if (!draft || sending || !thread || thread.parent.deleted) return;
 		if (bodyText(draft).length > CHAT_LIMITS.messageChars) return;
 		const sent = draft;
+		const attempt = replyAttempt(lastAttempt.current, JSON.stringify({ body: sent, alsoInRoom }), () =>
+			crypto.randomUUID(),
+		);
+		lastAttempt.current = attempt;
 		setSending(true);
 		setSendError(null);
 		try {
@@ -118,12 +129,12 @@ export function ThreadPanel({
 				room_id: roomId,
 				parent_id: parentId,
 				body: sent,
-				idempotency_key: sendKey.current,
+				idempotency_key: attempt.key,
 				...(alsoInRoom ? { also_in_room: true } : {}),
 			});
 			view.current?.receive(message);
 			if (message.also_in_room) onSentToRoom(message);
-			sendKey.current = crypto.randomUUID();
+			lastAttempt.current = null;
 			stick.current = true;
 			setAlsoInRoom(false);
 			// Text that the person typed during the send stays in the box.
@@ -132,7 +143,7 @@ export function ThreadPanel({
 				changeDraft(null);
 			}
 		} catch (error) {
-			// The box keeps the reply and its key, so a second send posts it one time.
+			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
 			setSendError(errorMessage(error));
 		} finally {
 			setSending(false);

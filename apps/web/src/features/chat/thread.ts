@@ -141,3 +141,18 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 		current: () => thread,
 	};
 }
+
+/** The last send of a reply: its idempotency key, and the request that the key belongs to. */
+export interface ReplyAttempt {
+	key: string;
+	request: string;
+}
+
+/**
+ * The attempt for a send of `request` (the body and the options, as JSON). A second send of the same
+ * request after a lost answer keeps the key, so the room stores the reply one time. A changed request
+ * gets a new key: the old key with a different request would get `conflict` forever.
+ */
+export function replyAttempt(previous: ReplyAttempt | null, request: string, newKey: () => string): ReplyAttempt {
+	return previous !== null && previous.request === request ? previous : { key: newKey(), request };
+}

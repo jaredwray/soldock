@@ -1,6 +1,12 @@
 import type { ChatMessage } from "@soldock/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createThreadView, mergeThread, type RepliesPage, type ThreadState } from "../src/features/chat/thread.ts";
+import {
+	createThreadView,
+	mergeThread,
+	type RepliesPage,
+	replyAttempt,
+	type ThreadState,
+} from "../src/features/chat/thread.ts";
 
 function message(seq: number, version: number, parentId: string | null, text = `message ${seq}`): ChatMessage {
 	return {
@@ -108,5 +114,19 @@ describe("the data of the view of a thread", () => {
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
 		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
+	});
+});
+
+describe("the idempotency key of a reply", () => {
+	// A lost answer and a second send must post one reply. A changed reply must not get conflict forever.
+	it("keeps the key for a second send of the same reply, and takes a new key for a changed reply", () => {
+		let count = 0;
+		const newKey = () => `key-${++count}`;
+		const first = replyAttempt(null, '{"text":"hi"}', newKey);
+		expect(replyAttempt(first, '{"text":"hi"}', newKey)).toEqual({ key: "key-1", request: '{"text":"hi"}' });
+		expect(replyAttempt(first, '{"text":"hi there"}', newKey)).toEqual({
+			key: "key-2",
+			request: '{"text":"hi there"}',
+		});
 	});
 });
