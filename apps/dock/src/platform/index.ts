@@ -8,6 +8,14 @@ export {
 	sameSecret,
 	sha256Hex,
 } from "./crypto/crypto.ts";
+export {
+	EventCallbackError,
+	type EventCallbackReason,
+	type EventDefinition,
+	type EventSubscribeInput,
+	type EventSubscriptionRef,
+	type EventSubscriptions,
+} from "./events/subscriptions.ts";
 export { MAX_REQUEST_BYTES, readBodyText } from "./http/body.ts";
 export { decodeCursor, encodeCursor } from "./http/cursor.ts";
 export { PROBLEM_CONTENT_TYPE, type ProblemDetails, problemResponse } from "./http/problem.ts";

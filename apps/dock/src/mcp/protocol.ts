@@ -34,6 +34,8 @@ export const RPC_ERRORS = {
 	internal: -32603,
 	/** Protocol 2025-11-25 and earlier: no resource has the URI. Modern versions use `invalidParams`. */
 	legacyResourceNotFound: -32002,
+	/** MCP Events: the callback URL of a subscription is not valid, or its receiver did not pass the verification. */
+	callbackEndpoint: -32015,
 	headerMismatch: -32020,
 	unsupportedProtocolVersion: -32022,
 } as const;

@@ -23,6 +23,7 @@ import {
 	getSubscription,
 	type SubscriptionRow,
 	subscriptionColumns,
+	targetLoadSql,
 	toEndpoint,
 } from "./store.ts";
 import { webhookHostAllowed } from "./url.ts";
@@ -99,7 +100,7 @@ function listedEndpoint(row: ListedEndpoint, callerId: string): WebhookEndpoint 
  * Chat: self or a sponsored agent. Drive: own drive, a shared drive the caller belongs to, or the
  * drive of a sponsored agent.
  */
-async function creatableTarget(
+export async function creatableTarget(
 	call: CallContext,
 	targetId: string | undefined,
 	domain: WebhookDomain,
@@ -209,7 +210,9 @@ export function createSubscriptionHandlers(
 				throw new OperationError("invalid", "That event does not belong to this product.");
 			}
 			const endpoint = await getEndpoint(call.env.DIRECTORY, input.endpoint_id);
-			if (endpoint?.created_by !== call.caller.id) throw new OperationError("not_found", "No endpoint has that id.");
+			if (endpoint?.created_by !== call.caller.id || endpoint.protocol !== "webhook") {
+				throw new OperationError("not_found", "No endpoint has that id.");
+			}
 			if (endpoint.status !== "active") {
 				throw new OperationError("conflict", "The endpoint is disabled. Create a new endpoint.");
 			}
@@ -230,11 +233,8 @@ export function createSubscriptionHandlers(
 				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
 				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 					JOIN webhook_endpoints e ON e.id = s.endpoint_id
-					WHERE e.created_by = ?9 AND s.domain = ?3 AND s.event_type = ?4) < ?10
-				AND (SELECT COUNT(*) FROM webhook_subscriptions s2
-					JOIN webhook_endpoints e2 ON e2.id = s2.endpoint_id
-					WHERE s2.domain = ?3 AND s2.event_type = ?4 AND s2.target_id = ?5
-					AND s2.status = 'active' AND e2.status = 'active') < ?11
+					WHERE e.created_by = ?9 AND e.protocol = 'webhook' AND s.domain = ?3 AND s.event_type = ?4) < ?10
+				AND ${targetLoadSql({ event: "?4", target: "?5", now: "?8" })} < ?11
 				ON CONFLICT (endpoint_id, event_type, target_id) DO NOTHING
 				RETURNING id`,
 			)
@@ -280,7 +280,7 @@ export function createSubscriptionHandlers(
 					.prepare(
 						`SELECT ${columns} FROM webhook_subscriptions s
 						JOIN webhook_endpoints e ON e.id = s.endpoint_id
-						WHERE s.domain = ? AND e.created_by = ? ORDER BY s.created_at DESC`,
+						WHERE s.domain = ? AND e.created_by = ? AND e.protocol = 'webhook' ORDER BY s.created_at DESC`,
 					)
 					.bind(domain, call.caller.id);
 			} else if ((await visibleSubscriptions(call, input.mailbox_id, domain)) === "all") {
@@ -288,7 +288,7 @@ export function createSubscriptionHandlers(
 					.prepare(
 						`SELECT ${columns} FROM webhook_subscriptions s
 						JOIN webhook_endpoints e ON e.id = s.endpoint_id
-						WHERE s.domain = ? AND s.target_id = ? ORDER BY s.created_at DESC`,
+						WHERE s.domain = ? AND s.target_id = ? AND e.protocol = 'webhook' ORDER BY s.created_at DESC`,
 					)
 					.bind(domain, input.mailbox_id);
 			} else {
@@ -296,7 +296,8 @@ export function createSubscriptionHandlers(
 					.prepare(
 						`SELECT ${columns} FROM webhook_subscriptions s
 						JOIN webhook_endpoints e ON e.id = s.endpoint_id
-						WHERE s.domain = ? AND s.target_id = ? AND e.created_by = ? ORDER BY s.created_at DESC`,
+						WHERE s.domain = ? AND s.target_id = ? AND e.created_by = ? AND e.protocol = 'webhook'
+						ORDER BY s.created_at DESC`,
 					)
 					.bind(domain, input.mailbox_id, call.caller.id);
 			}

@@ -1012,4 +1012,89 @@ describe("OAuth and webhooks", () => {
 				: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions;
 		expect(listed).toMatchObject([{ endpoint: { status: "disabled", disabled_reason: "credential_revoked" } }]);
 	});
+
+	// A dot of ChatGPT connects with OAuth. Its access token changes each hour, and its subscription of
+	// MCP Events lives a day, so the connection, not the token, must name the subscription.
+	it("binds a subscription of MCP Events to its OAuth connection", async () => {
+		const owner = await setupOwner();
+		const scopes = ["chat.read", "chat.webhooks"] as const;
+		const clientId = await registerClient();
+		const first = await startAuthorization(clientId, scopes.join(" "));
+		const approved = await owner.call("oauth.approve_authorization", {
+			request_id: first.requestId,
+			new_agent: { display_name: "Dot", address: "dot@dock.test" },
+			scopes: [...scopes],
+		});
+		const tokens = (await (await exchange(clientId, approved.redirect_to, first.verifier)).json()) as Tokens;
+		const agent = approved.principal;
+		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
+		const posts = receiveWebhooks((post) => {
+			const body = JSON.parse(post.body) as { type?: string; challenge?: string };
+			return body.type === "verification" ? Response.json({ challenge: body.challenge }) : new Response(null);
+		});
+		const params = {
+			name: "chat.message.created",
+			arguments: {},
+			delivery: {
+				mode: "webhook",
+				url: "https://receiver.example.com/callback",
+				secret: `whsec_${btoa("k".repeat(32))}`,
+			},
+		};
+		const idOf = async (accessToken: string) =>
+			((await mcp(accessToken, "events/subscribe", params)).body?.result as { id: string } | undefined)?.id;
+		const id = await idOf(tokens.access_token);
+		expect(id).toMatch(/^sub_/);
+
+		// A new access token of the same connection refreshes the same subscription.
+		const renewed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
+		expect(await idOf(renewed.access_token)).toBe(id);
+
+		// A second connection of the same agent has its own subscription, and cannot stop the first one.
+		const second = await startAuthorization(clientId, scopes.join(" "));
+		const again = await owner.call("oauth.approve_authorization", {
+			request_id: second.requestId,
+			agent_id: agent.id,
+			scopes: [...scopes],
+		});
+		const others = (await (await exchange(clientId, again.redirect_to, second.verifier)).json()) as Tokens;
+		expect((await mcp(others.access_token, "events/unsubscribe", params)).body?.result).toEqual({});
+		expect(await idOf(others.access_token)).not.toBe(id);
+
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "OAuth", member_ids: [agent.id] });
+		const { message } = await owner.call("chat.post_message", { room_id: room.id, text: "Wake up" });
+		const membershipId = await runInDurableObject(
+			env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)),
+			(_instance, state) =>
+				state.storage.sql
+					.exec<{ membership_id: string }>("SELECT membership_id FROM members WHERE principal_id = ?", agent.id)
+					.one().membership_id,
+		);
+		const job = {
+			v: 1,
+			kind: "chat_delivery",
+			webhookId: id,
+			mailboxId: agent.id,
+			roomId: room.id,
+			eventId: message.id,
+			messageId: message.id,
+			eventType: "chat.message.created",
+			occurredAt: Date.now(),
+			membershipId,
+		};
+		const eventsFor = () =>
+			posts.filter((post) => post.headers.get("x-mcp-subscription-id") === id && "eventId" in JSON.parse(post.body));
+		await consumeWebhooks([job]);
+		expect(eventsFor()).toHaveLength(1);
+
+		// The revoke of the first connection stops its subscription.
+		const grants = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
+		const stored = await env.DIRECTORY.prepare("SELECT credential_id FROM webhook_subscriptions WHERE id = ?")
+			.bind(id)
+			.first<string>("credential_id");
+		expect(grants.map((grant) => grant.id)).toContain(stored);
+		await owner.call("oauth.revoke_grant", { grant_id: stored ?? "" });
+		await consumeWebhooks([job]);
+		expect(eventsFor()).toHaveLength(1);
+	});
 });

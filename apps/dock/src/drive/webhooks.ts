@@ -3,6 +3,11 @@ import type { CallContext } from "../identity/index.ts";
 import type { HandlerMap } from "../platform/index.ts";
 import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";
 
+/** Tells the drive object that a subscription exists. Then the object records an event for each change. */
+export async function enableDriveEvents(call: CallContext, spaceId: string): Promise<void> {
+	await call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(spaceId)).enableWebhookEvents();
+}
+
 const shared = createSubscriptionHandlers("drive");
 
 function forDrive(view: SubscriptionView): DriveWebhookSubscription {
@@ -24,8 +29,7 @@ export const driveWebhookHandlers: Pick<
 			event: input.event,
 			...(input.space_id ? { mailbox_id: input.space_id } : {}),
 		});
-		const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(result.subscription.target_id));
-		await space.enableWebhookEvents();
+		await enableDriveEvents(call, result.subscription.target_id);
 		return { subscription: forDrive(result.subscription) };
 	},
 	async "drive.list_webhook_subscriptions"(call, input) {
