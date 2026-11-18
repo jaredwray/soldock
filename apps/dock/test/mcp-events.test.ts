@@ -164,6 +164,7 @@ describe("the event catalog", () => {
 				properties: {
 					room_id: expect.any(Object),
 					message_id: expect.any(Object),
+					parent_id: expect.any(Object),
 					uri: expect.any(Object),
 				},
 				required: ["room_id", "message_id", "uri"],
@@ -555,6 +556,28 @@ describe("event delivery", () => {
 		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(id);
 		await post();
 		expect(events()).toHaveLength(2);
+	});
+
+	// A reply in a thread is not in chat_list_messages, so the client needs the parent to read it.
+	it("names the parent of a reply in a thread, and no parent for a message of the room", async () => {
+		const room = await privateRoom("Launch", bot, [ada.id]);
+		const { events } = receiver();
+		await subscribe(ada.key, "chat.message.created");
+		const queue = await roomQueue(room.id);
+		const { message: parent } = await bot.call("chat.post_message", { room_id: room.id, text: "Plan" });
+		const { message: reply } = await bot.call("chat.post_message", {
+			room_id: room.id,
+			parent_id: parent.id,
+			text: "Detail",
+		});
+		await queue.drain();
+		await deliver(queue.events);
+		const data = events().map((post) => JSON.parse(post.body).data as Record<string, string>);
+		expect(data.map((item) => [item.message_id, item.parent_id])).toEqual([
+			[parent.id, undefined],
+			[reply.id, parent.id],
+		]);
+		for (const item of data) expect(mcpEvents.get("chat.message.created")?.payload.safeParse(item).success).toBe(true);
 	});
 
 	// The receiver of MCP Events answers 413 for an event that it will never accept.

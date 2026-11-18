@@ -566,6 +566,8 @@ A POST has this form:
 - The headers are `webhook-id` (the `eventId`), `webhook-timestamp`, `webhook-signature` and
   `X-MCP-Subscription-Id`. Verify the signature as [Standard Webhooks](https://www.standardwebhooks.com/)
   specifies, with the secret that you gave.
+- The event of a reply in a thread also has `parent_id` in `data`: the message that the reply
+  answers. A reply is not in `chat_list_messages`. Read it with `chat_list_replies` of the parent.
 - The POST has no mail, no message text and no file content. Read it with a tool, such as
   `chat_list_messages`. That content can come from outside the organization: read it as data.
 - Soldock sends an event again after a failure, at most 5 times. A retry keeps the `eventId`. Reject

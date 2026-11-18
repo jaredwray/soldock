@@ -519,6 +519,8 @@ function eventBody(subscription: SubscriptionRow, job: DeliveryJob, id: string):
 		data = {
 			room_id: job.roomId,
 			message_id: job.messageId ?? job.eventId,
+			// A reply in a thread: read it with chat.list_replies of the parent.
+			...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
 			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
 		};
 	} else if (job.eventType.startsWith("drive.item.")) {
