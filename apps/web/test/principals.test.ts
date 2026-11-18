@@ -20,7 +20,7 @@ function principal(id: string) {
 
 describe("the people and agents of the organization", () => {
 	// Drive, Chat and Admin need each principal. A list that stops at the first page hides people.
-	it("reads each page of the directory with its cursor, in the order of the server", async () => {
+	it("reads each page of the directory with its cursor, in the order of the server, one time for the views that ask together", async () => {
 		const asked: string[] = [];
 		vi.stubGlobal("fetch", async (url: string) => {
 			asked.push(url);
@@ -28,13 +28,20 @@ describe("the people and agents of the organization", () => {
 			const body =
 				cursor === null
 					? { principals: [principal("a"), principal("b")], next_cursor: "page-2" }
-					: { principals: [principal("c")], next_cursor: null };
+					: // A rename between the pages brings "b" again.
+						{ principals: [principal("b"), principal("c")], next_cursor: null };
 			return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
 		});
-		expect((await listAllPrincipals()).map((p) => p.id)).toEqual(["a", "b", "c"]);
+		// Two views that ask at the same time share one read.
+		const [first, second] = await Promise.all([listAllPrincipals(), listAllPrincipals()]);
+		expect(first.map((p) => p.id)).toEqual(["a", "b", "c"]);
+		expect(second).toBe(first);
 		expect(asked).toEqual([
 			"/api/v1/directory/principals?limit=200",
 			"/api/v1/directory/principals?limit=200&cursor=page-2",
 		]);
+		// A later call reads the directory again, so it gets the changes.
+		await listAllPrincipals();
+		expect(asked).toHaveLength(4);
 	});
 });

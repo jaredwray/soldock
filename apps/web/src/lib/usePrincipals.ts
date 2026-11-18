@@ -12,22 +12,34 @@ export function principalOption(principal: Principal): SelectOption<string> {
 	};
 }
 
+/** The read of the directory that runs now. The views that need the directory at the same time share it. */
+let reading: Promise<DirectoryEntry[]> | null = null;
+
 /**
  * Each person and agent of the organization: each page of `directory.list_principals`, in the order of
- * the server. The pages have the largest size, so a small organization needs one call.
+ * the server. The pages have the largest size, so a small organization needs one call. A call while a
+ * read runs gets that read. The pages are not one snapshot: a principal that changes its name between
+ * two pages can come two times, so the list keeps the first one.
  */
-export async function listAllPrincipals(): Promise<DirectoryEntry[]> {
-	const all: DirectoryEntry[] = [];
+export function listAllPrincipals(): Promise<DirectoryEntry[]> {
+	reading ??= readAllPages().finally(() => {
+		reading = null;
+	});
+	return reading;
+}
+
+async function readAllPages(): Promise<DirectoryEntry[]> {
+	const all = new Map<string, DirectoryEntry>();
 	let cursor: string | null = null;
 	do {
 		const page: { principals: DirectoryEntry[]; next_cursor: string | null } = await api.call(
 			"directory.list_principals",
 			cursor === null ? { limit: DIRECTORY_LIMITS.pageSize } : { limit: DIRECTORY_LIMITS.pageSize, cursor },
 		);
-		all.push(...page.principals);
+		for (const principal of page.principals) if (!all.has(principal.id)) all.set(principal.id, principal);
 		cursor = page.next_cursor;
 	} while (cursor !== null);
-	return all;
+	return [...all.values()];
 }
 
 /**

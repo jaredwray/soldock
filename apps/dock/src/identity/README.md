@@ -108,14 +108,17 @@ contract of the socket.
   the page (`listPrincipalPage`).
   - `query` keeps the principals whose display name or address has the text. The match is in each
     letter case of A to Z only: `lower` of SQLite changes no other letter, so `elodie` does not find
-    "Élodie".
+    "Élodie". The handler changes only A to Z of the query too, so an exact copy (`Élodie`) finds it.
   - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
     `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full
     address when a different principal has the same part or the part is a group word (`here`,
     `channel`). The count of the same part reads the index of the addresses: an address with the
     part `ada` sorts from `ada@` to `adaA`.
-  - The web app reads each page (`listAllPrincipals`). The room of a Chat message reads the whole
-    directory for its mentions (`listPrincipals`).
+  - The web app reads each page (`listAllPrincipals`). The views that ask at the same time share one
+    read. The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
+    `@` list filters this whole directory, because a message also needs it for its mention links and
+    name aliases. The room of a Chat message reads the whole directory for its mentions
+    (`listPrincipals`).
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`. The
   [`mail`](../mail/README.md#tags) module uses the tag to apply a label.

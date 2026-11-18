@@ -201,7 +201,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			);
 		}
 		const page = await listPrincipalPage(call.env.DIRECTORY, {
-			query: input.query?.toLowerCase() ?? null,
+			// The same fold as `lower` of SQLite: A to Z only. So an exact copy of "Élodie" finds Élodie.
+			query: input.query?.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) ?? null,
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});

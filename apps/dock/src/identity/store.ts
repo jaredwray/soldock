@@ -179,7 +179,7 @@ export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]>
 /** The place in the directory list: the kind, the display name and the id of the last principal of a page. */
 export type DirectoryPosition = [kind: string, displayName: string, id: string];
 
-/** A page of the directory list, with the number of principals that share the local part of each address. */
+/** A page of the directory list. `sharedLocal` is true when a different principal has the same local part. */
 export interface DirectoryPage {
 	principals: (PrincipalRecord & { sharedLocal: boolean })[];
 	/** The place after the last principal, or null for the last page. */

@@ -1076,6 +1076,9 @@ describe("the directory list", () => {
 		const adaOther = await person("Ada Byron", "ada@second.test");
 		const here = await person("Hera Box", "here@dock.test");
 		const zed = await person("Zed Adams", "zed@dock.test");
+		// "adam" is a different part than "ada": its handle stays short. Two principals have one name.
+		const adam = await person("Adam Smith", "adam@dock.test");
+		const twin = await person("Adam Smith", "adam.smith@dock.test");
 
 		// The pages give the order of the full list: the agents, then the humans by name.
 		const ids: string[] = [];
@@ -1089,7 +1092,17 @@ describe("the directory list", () => {
 			ids.push(...page.principals.map((p) => p.id));
 			cursor = page.next_cursor;
 		} while (cursor !== null);
-		expect(ids).toEqual([bot.id, adaOther.id, ada.id, here.id, owner.id, zed.id]);
+		const twins = [adam.id, twin.id].sort();
+		expect(ids).toEqual([bot.id, adaOther.id, ada.id, ...twins, here.id, owner.id, zed.id]);
+		// The id orders two principals with one name, so a page between them skips and repeats none.
+		const first = await owner.call("directory.list_principals", { query: "adam smith", limit: 1 });
+		const second = await owner.call("directory.list_principals", {
+			query: "adam smith",
+			limit: 1,
+			cursor: first.next_cursor ?? "",
+		});
+		expect([...first.principals, ...second.principals].map((p) => p.id)).toEqual(twins);
+		expect(second.next_cursor).toBeNull();
 
 		// A query finds a part of the name or of the address, in each letter case.
 		const found = await bot.call("directory.list_principals", { query: "ADA" });
@@ -1097,8 +1110,16 @@ describe("the directory list", () => {
 			// Two principals have "ada" before the "@", so each has its full address as its handle.
 			[adaOther.id, "ada@second.test"],
 			[ada.id, "ada@dock.test"],
+			...[
+				[adam.id, "adam"],
+				[twin.id, "adam.smith"],
+			].sort((a, b) => (a[0] as string).localeCompare(b[0] as string)),
 			[zed.id, "zed"],
 		]);
+		// A query is an exact copy of a name with a letter outside A to Z.
+		const elodie = await person("Élodie Durand", "elodie@dock.test");
+		const exact = await owner.call("directory.list_principals", { query: "Élodie" });
+		expect(exact.principals.map((p) => p.id)).toEqual([elodie.id]);
 		expect(found.next_cursor).toBeNull();
 		// A group word of Chat is never a handle. An agent finds the same through MCP.
 		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });
@@ -1106,7 +1127,7 @@ describe("the directory list", () => {
 		expect(listed.map((p) => [p.id, p.handle])).toEqual([[here.id, "here@dock.test"]]);
 		expect((await owner.call("directory.list_principals", { query: "bill" })).principals[0]?.handle).toBe("bot");
 
-		// A cursor that is not from the list is refused.
+		// The server refuses a cursor that is not from the list.
 		const refused = await owner.call("directory.list_principals", { cursor: "not-a-cursor" }).catch((error) => error);
 		expect(refused).toMatchObject({ status: 400 });
 	});

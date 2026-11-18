@@ -956,7 +956,7 @@ MCP clients. The app has no UI-only path.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
     - The page reads the directory one time, each page of `directory.list_principals`
-      (`listAllPrincipals`). The members of the
+      (`listAllPrincipals`). The views that ask at the same time share one read. The members of the
       room come from `chat.get_room`, again after the socket tells that the room changed, after
       each reconnect of the socket, and when the room list has a different number of members.
     - Known limit: a message from before the mention nodes has its mentions as text, and each
