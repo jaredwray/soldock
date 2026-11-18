@@ -33,7 +33,22 @@ export {
 	OutboundPolicy,
 	Principal,
 } from "./directory.ts";
-export { DOC_LIMITS, type DocBlock, DocContent, type DocInline, type DocMark, Href } from "./docs.ts";
+export {
+	DOC_IMAGE_LAYOUTS,
+	DOC_IMAGE_TYPES,
+	DOC_LIMITS,
+	type DocBlock,
+	DocContent,
+	DocImage,
+	DocImageCrop,
+	DocImageId,
+	type DocImageLayout,
+	type DocImageNode,
+	type DocImageType,
+	type DocInline,
+	type DocMark,
+	Href,
+} from "./docs.ts";
 export { MailDomain } from "./domains.ts";
 export {
 	Actor,

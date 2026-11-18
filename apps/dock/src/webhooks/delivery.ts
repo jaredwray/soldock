@@ -32,7 +32,7 @@ import {
 	type SubscriptionDisabledReason,
 	type SubscriptionRow,
 } from "./store.ts";
-import { webhookHostAllowed } from "./url.ts";
+import { outboundHostAllowed } from "./url.ts";
 
 /** The queue that carries webhook events, and one POST for each subscription. */
 export const WEBHOOK_QUEUE = "soldock-webhooks";
@@ -382,7 +382,7 @@ async function checkDelivery(
 			if (agent.archived_at !== null) return { action: "skip" };
 		}
 	}
-	if (!webhookHostAllowed(creator, endpoint.url)) return { action: "disable_endpoint", reason: "policy_denied" };
+	if (!outboundHostAllowed(creator, endpoint.url)) return { action: "disable_endpoint", reason: "policy_denied" };
 	return { action: "deliver", creator };
 }
 

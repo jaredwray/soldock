@@ -1,4 +1,5 @@
 import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@soldock/contracts";
+import { attachmentKey, documentStub } from "../collab/index.ts";
 import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { loseDriveAccess } from "../webhooks/store.ts";
@@ -76,13 +77,43 @@ async function copyBlob(call: CallContext, from: string, to: string): Promise<vo
 }
 
 /**
+ * Copies the attachments that the content of a document uses (the images of a doc) to its copy, with
+ * the same ids. An attachment that the copy holds is not copied again, so a second call continues the
+ * work of the first one.
+ */
+async function copyAttachments(call: CallContext, sourceId: string, copyId: string): Promise<void> {
+	const used = (await documentStub(call.env, sourceId).attachments()).filter(
+		(attachment) => attachment.unusedSince === null,
+	);
+	if (used.length === 0) return;
+	const copy = documentStub(call.env, copyId);
+	const held = new Set((await copy.attachments()).map((attachment) => attachment.id));
+	for (const attachment of used) {
+		if (held.has(attachment.id)) continue;
+		const blobKey = attachmentKey(copyId, attachment.id);
+		await copyBlob(call, attachment.blobKey, blobKey);
+		const answer = await copy.addAttachment({
+			id: attachment.id,
+			blobKey,
+			size: attachment.size,
+			meta: attachment.meta,
+			used: true,
+			limit: used.length,
+		});
+		if ("error" in answer) throw new Error(`the copy refused an attachment: ${answer.error.message}`);
+	}
+}
+
+/**
  * Writes the content of a doc or a sheet into its copy, when the copy has no content yet. A copy with
- * content stays as it is, so a second call never replaces what a person wrote in the copy.
+ * content stays as it is, so a second call never replaces what a person wrote in the copy. The
+ * attachments go first, because the content names them.
  */
 async function fillCopy(call: CallContext, own: OpenSpace, sourceId: string, copyId: string): Promise<void> {
 	if ((await readDocument(call, copyId)) !== null) return;
 	const state = await readDocument(call, sourceId);
 	if (!state) return;
+	await copyAttachments(call, sourceId, copyId);
 	try {
 		await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
 	} catch (error) {

@@ -172,7 +172,7 @@ export async function writeDocument(
 	call: CallContext,
 	opened: OpenSpace,
 	itemId: string,
-	input: { content: string; text: string; baseRevision: number | null },
+	input: { content: string; text: string; baseRevision: number | null; attachmentIds?: string[] },
 ): Promise<{ revision: number; changed: boolean }> {
 	const author = actorOf(call);
 	const result = accept(

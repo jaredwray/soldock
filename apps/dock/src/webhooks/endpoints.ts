@@ -12,7 +12,7 @@ import {
 	subscriptionIdsForEndpoint,
 	toEndpoint,
 } from "./store.ts";
-import { webhookHostAllowed, webhookUrlProblem } from "./url.ts";
+import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 
 function heldDomains(call: CallContext): WebhookDomain[] {
 	const domains: WebhookDomain[] = [];
@@ -67,7 +67,7 @@ export const endpointHandlers: Pick<
 		const problem = webhookUrlProblem(input.url, call.origin);
 		if (problem) throw new OperationError("invalid", problem);
 		const { principal } = call.caller;
-		if (!webhookHostAllowed(principal, input.url)) {
+		if (!outboundHostAllowed(principal, input.url)) {
 			throw new OperationError(
 				"policy_denied",
 				`The outbound policy of this agent (${principal.outbound_mode ?? "internal-only"}) does not allow a webhook to ${new URL(input.url).hostname}. Ask its sponsor to add the host to the allowlist, or to create the endpoint for you.`,

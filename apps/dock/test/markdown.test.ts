@@ -239,6 +239,71 @@ describe("docToMarkdown and markdownToDoc", () => {
 	});
 });
 
+describe("an image in Markdown", () => {
+	const ID = "img_01JD3V0Y9XG8Q2W4E6R8T0Y2V4";
+	const image = (attrs: Record<string, unknown> = {}) =>
+		({ type: "image", attrs: { id: ID, layout: "inline", ...attrs } }) as Inline[number];
+
+	// The options of an image are in its target, so an agent that writes the Markdown back keeps them.
+	it("comes back the same in each block that holds text, with each option", () => {
+		const source = doc(
+			{ type: "heading", attrs: { level: 2 }, content: [text("Chart "), image({ width: 48 })] },
+			p(image()),
+			p(
+				text("Before "),
+				image({
+					width: 320,
+					layout: "break_center",
+					alt: "A [bracket] and a \\ backslash",
+					caption: 'It\'s "quoted" (twice)',
+					crop: { x: 0.25, y: 0, width: 0.5, height: 0.3333 },
+				}),
+				text(" after"),
+			),
+			{
+				type: "bullet_list",
+				content: [{ type: "list_item", content: [p(text("item "), image({ layout: "wrap_right" }))] }],
+			},
+			{ type: "blockquote", content: [p(text("in "), text("a link", "https://example.com/"), image({ alt: "x" }))] },
+		);
+		const markdown = docToMarkdown(source);
+		expect(markdown).toContain(`![](image:${ID})`);
+		expect(markdown).toContain(`(image:${ID}?width=320&layout=break_center&crop=0.25,0,0.5,0.3333 "It's`);
+		expect(markdownToDoc(markdown, { images: true })).toEqual(source);
+		expect(DocContent.safeParse(markdownToDoc(markdown, { images: true })).success).toBe(true);
+	});
+
+	// A doc never loads an image from an address. Only the id of an image that the doc holds makes an image.
+	it("is not read from a web address, a data address or a different id", () => {
+		for (const target of [
+			"https://example.com/a.png",
+			"data:image/png;base64,AAAA",
+			"image:https://example.com/a.png",
+			"image:img_short",
+			`image:${ID}#fragment`,
+		]) {
+			const read = markdownToDoc(`![alt](${target})`, { images: true });
+			expect(JSON.stringify(read), target).not.toContain('"image"');
+			expect(docText(read), target).toContain("!");
+		}
+		expect(markdownToDoc("![alt](https://example.com/a.png)", { images: true })).toEqual(
+			doc(p(text("!"), text("alt", "https://example.com/a.png"))),
+		);
+	});
+
+	// The chat module reads Markdown without images. A chat message must not get a node that it cannot show.
+	it("stays text for a reader without images", () => {
+		expect(markdownToDoc(`a ![alt](image:${ID}) b`)).toEqual(doc(p(text("a !alt b"))));
+	});
+
+	it("gives a bad option to the check of the content, which refuses it", () => {
+		for (const options of ["width=wide", "width=5", "layout=behind", "crop=0.1,0.2", "crop=0.9,0,0.5,1"]) {
+			const read = markdownToDoc(`![](image:${ID}?${options})`, { images: true });
+			expect(DocContent.safeParse(read).success, options).toBe(false);
+		}
+	});
+});
+
 describe("checkDoc", () => {
 	it("refuses blocks in blocks over the limit", () => {
 		let block: DocContent["content"][number] = p(text("deep"));
