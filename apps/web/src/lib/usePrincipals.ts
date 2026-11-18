@@ -20,11 +20,17 @@ let reading: Promise<DirectoryEntry[]> | null = null;
  * the server. The pages have the largest size, so a small organization needs one call. A call while a
  * read runs gets that read. The pages are not one snapshot: a principal that changes its name between
  * two pages can come two times, so the list keeps the first one.
+ *
+ * `fresh` starts a new read, also while a read runs: a caller that just changed the directory needs
+ * the change. The calls after it share the new read.
  */
-export function listAllPrincipals(): Promise<DirectoryEntry[]> {
-	reading ??= readAllPages().finally(() => {
-		reading = null;
-	});
+export function listAllPrincipals(options: { fresh?: boolean } = {}): Promise<DirectoryEntry[]> {
+	if (options.fresh || reading === null) {
+		const read = readAllPages().finally(() => {
+			if (reading === read) reading = null;
+		});
+		reading = read;
+	}
 	return reading;
 }
 

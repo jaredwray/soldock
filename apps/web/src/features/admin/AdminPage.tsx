@@ -48,7 +48,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	const load = useCallback(async () => {
 		const generation = ++loadGeneration.current;
 		try {
-			const principals = await listAllPrincipals();
+			// Admin changes the directory, so each load reads it again, also while a different view reads it.
+			const principals = await listAllPrincipals({ fresh: true });
 			if (generation !== loadGeneration.current) return;
 			setState({ status: "ready", principals });
 		} catch (error) {

@@ -115,7 +115,7 @@ contract of the socket.
     `channel`). The count of the same part reads the index of the addresses: an address with the
     part `ada` sorts from `ada@` to `adaA`.
   - The web app reads each page (`listAllPrincipals`). The views that ask at the same time share one
-    read. The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
+    read. Admin changes the directory, so it starts a fresh read for each load (`fresh`). The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
     `@` list filters this whole directory, because a message also needs it for its mention links and
     name aliases. The room of a Chat message reads the whole directory for its mentions
     (`listPrincipals`).

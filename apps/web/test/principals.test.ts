@@ -20,7 +20,7 @@ function principal(id: string) {
 
 describe("the people and agents of the organization", () => {
 	// Drive, Chat and Admin need each principal. A list that stops at the first page hides people.
-	it("reads each page of the directory with its cursor, in the order of the server, one time for the views that ask together", async () => {
+	it("reads each page of the directory with its cursor, in the order of the server, one time for the views that ask together, and again after a change", async () => {
 		const asked: string[] = [];
 		vi.stubGlobal("fetch", async (url: string) => {
 			asked.push(url);
@@ -43,5 +43,13 @@ describe("the people and agents of the organization", () => {
 		// A later call reads the directory again, so it gets the changes.
 		await listAllPrincipals();
 		expect(asked).toHaveLength(4);
+		// After a change, a fresh read does not take the read that runs, and the next call shares it.
+		const running = listAllPrincipals();
+		const fresh = listAllPrincipals({ fresh: true });
+		const next = listAllPrincipals();
+		expect(next).toBe(fresh);
+		expect(fresh).not.toBe(running);
+		await Promise.all([running, fresh]);
+		expect(asked).toHaveLength(8);
 	});
 });
