@@ -1,4 +1,4 @@
-import { prefixedId, Timestamp } from "./common.ts";
+import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { DRIVE_WEBHOOK_EVENTS, DriveWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
@@ -110,6 +110,26 @@ export const ContentBase64 = z
 	// The base64 of the largest file, so a request cannot make the Worker decode more than that.
 	.max(Math.ceil(DRIVE_LIMITS.fileBytes / 3) * 4, "must be at most 10 MiB")
 	.regex(/^[A-Za-z0-9+/]*={0,2}$/, "must be base64");
+
+/** The input field that puts a new file in the folder of a room of Chat. */
+const ChatRoomParam = RoomId.optional().describe(
+	"Puts the file in the folder Chat/<room name> of your own drive, for a message of that room. For a direct message, the folder has the name of the other person. The server makes the folders when they are not there. You must be a member of the room. Not with parent_id or space_id.",
+);
+
+/** One sentence for the description of each upload that takes `room_id`. */
+const IN_ROOM =
+	"For a file of a message of Chat, set room_id: the file goes into the folder Chat/<room name> of your own drive.";
+
+/** A file goes into a folder of the call, or into the folder of a room: not both. */
+function oneFolder(input: {
+	room_id?: string | undefined;
+	parent_id?: string | undefined;
+	space_id?: string | undefined;
+}) {
+	return input.room_id === undefined || (input.parent_id === undefined && input.space_id === undefined);
+}
+
+const ONE_FOLDER = "set room_id without parent_id and space_id: the folder of a room is in your own drive";
 
 /** The base64 of one part of an upload. */
 const PartBase64 = z
@@ -437,20 +457,24 @@ export const uploadFile = defineOperation({
 		"Stores a new file in the folder parent_id, or at the root of the drive without parent_id. The content is base64, at most 10 MiB.",
 		"For a larger file, use drive.create_upload. To replace the content of a file that exists, use drive.upload_version.",
 		"In a folder of somebody else, you need the editor role, and the owner of that drive owns the new file.",
+		IN_ROOM,
 		IN_SPACE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/files" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent"],
 	annotations: CREATE,
-	input: z.strictObject({
-		space_id: SpaceParam,
-		parent_id: ItemId.optional(),
-		name: ItemName,
-		mime_type: MimeType.default("application/octet-stream"),
-		content_base64: ContentBase64,
-		idempotency_key: IdempotencyKey,
-	}),
+	input: z
+		.strictObject({
+			space_id: SpaceParam,
+			parent_id: ItemId.optional(),
+			room_id: ChatRoomParam,
+			name: ItemName,
+			mime_type: MimeType.default("application/octet-stream"),
+			content_base64: ContentBase64,
+			idempotency_key: IdempotencyKey,
+		})
+		.refine(oneFolder, ONE_FOLDER),
 	output: z.object({ item: DriveItem }),
 	errors: ["not_found", "payload_too_large", "conflict"],
 });
@@ -563,27 +587,31 @@ export const createUpload = defineOperation({
 		"Set sha256 to the SHA-256 of the whole file, so that drive.complete_upload checks it.",
 		`An upload that does not complete in 24 hours goes away with its parts. You can have ${DRIVE_LIMITS.openUploads} open uploads in one drive.`,
 		"In a folder of somebody else, you need the editor role, and the owner of that drive owns the new file.",
+		IN_ROOM,
 		IN_SPACE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/uploads" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent"],
 	annotations: CREATE,
-	input: z.strictObject({
-		space_id: SpaceParam,
-		parent_id: ItemId.optional(),
-		name: ItemName,
-		mime_type: MimeType.default("application/octet-stream"),
-		size: z.number().int().min(1).max(DRIVE_LIMITS.uploadBytes).describe("The bytes of the whole file."),
-		sha256: z
-			.string()
-			.regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex characters")
-			.optional()
-			.describe("The SHA-256 of the whole file, as lowercase hex."),
-		idempotency_key: IdempotencyKey.describe(
-			"Makes a retry safe: a second call with the same key and the same input returns the first upload.",
-		),
-	}),
+	input: z
+		.strictObject({
+			space_id: SpaceParam,
+			parent_id: ItemId.optional(),
+			room_id: ChatRoomParam,
+			name: ItemName,
+			mime_type: MimeType.default("application/octet-stream"),
+			size: z.number().int().min(1).max(DRIVE_LIMITS.uploadBytes).describe("The bytes of the whole file."),
+			sha256: z
+				.string()
+				.regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex characters")
+				.optional()
+				.describe("The SHA-256 of the whole file, as lowercase hex."),
+			idempotency_key: IdempotencyKey.describe(
+				"Makes a retry safe: a second call with the same key and the same input returns the first upload.",
+			),
+		})
+		.refine(oneFolder, ONE_FOLDER),
 	output: z.object({ upload: DriveUpload }),
 	errors: ["not_found", "conflict"],
 });

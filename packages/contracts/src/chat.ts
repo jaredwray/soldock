@@ -1,4 +1,4 @@
-import { prefixedId, Timestamp } from "./common.ts";
+import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
 import { GROUP_MENTIONS } from "./mentions.ts";
@@ -221,9 +221,8 @@ export const ROOM_ROLES = ["owner", "member"] as const;
 export type RoomRole = (typeof ROOM_ROLES)[number];
 
 /** The id of a room. A `dm` room has an id that starts with `dm_`. Each other room has an id that starts with `rm_`. */
-export const RoomId = z
-	.string()
-	.regex(/^(?:rm|dm)_[0-9A-HJKMNP-TV-Z]{26}$/, "must be the id of a room: it starts with rm_ or dm_");
+export { RoomId };
+
 const MessageId = prefixedId("cmsg");
 const PrincipalId = prefixedId("prn");
 

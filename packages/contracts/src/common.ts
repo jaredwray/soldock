@@ -1,5 +1,10 @@
 import { z } from "./zod.ts";
 
+/** The id of a room of Chat: a room (`rm_…`) or a direct message (`dm_…`). */
+export const RoomId = z
+	.string()
+	.regex(/^(?:rm|dm)_[0-9A-HJKMNP-TV-Z]{26}$/, "must be the id of a room: it starts with rm_ or dm_");
+
 /**
  * One mailbox address, without a display name. The pattern refuses spaces, line breaks, angle
  * brackets, quotes, commas and semicolons, so an address can never inject a header or a second

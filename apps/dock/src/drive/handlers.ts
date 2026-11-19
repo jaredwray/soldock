@@ -34,6 +34,7 @@ import {
 	writeDocument,
 } from "./access.ts";
 import { setPreview, toVersion } from "./preview.ts";
+import { chatFolderFor } from "./rooms.ts";
 import { listSharedDriveRows, sharedDriveState } from "./shared-index.ts";
 import {
 	type ItemRecord,
@@ -318,8 +319,10 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			const earlier = await opened.space.idempotentResult(opened.ctx, idempotency.key, idempotency.requestHash);
 			if (earlier !== null) return { item: await toOneItem(call, accept(earlier)) };
 		}
+		// A file of a message of Chat goes into Chat/<room name> of the own drive of the caller.
+		const parentId = input.room_id === undefined ? (input.parent_id ?? null) : await chatFolderFor(call, input.room_id);
 		// Refuse before the bytes go to R2, so a caller without access stores nothing.
-		accept(await opened.space.checkCreate(opened.ctx, input.parent_id ?? null));
+		accept(await opened.space.checkCreate(opened.ctx, parentId));
 		const bytes = decode(input.content_base64);
 		const itemId = newId("itm");
 		const versionId = newId("ver");
@@ -330,7 +333,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		// committed, so the object stays: a version without its bytes would lose the file.
 		const answer = await opened.space.createItem(opened.ctx, {
 			id: itemId,
-			parentId: input.parent_id ?? null,
+			parentId,
 			kind: "file",
 			name: input.name,
 			version: {

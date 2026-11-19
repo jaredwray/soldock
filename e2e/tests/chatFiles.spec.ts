@@ -1,9 +1,10 @@
 import { expect, type Page, test } from "@playwright/test";
 import { composer, createRoom, openRoom, signIn, unique } from "../support/chat.ts";
-import { dropFiles, pngFile } from "../support/docs.ts";
+import { call, dropFiles, pngFile } from "../support/docs.ts";
 
-// The files of a message (jaredwray/soldock#74). A file uploads to the drive of the author from the box,
-// and each member of the room downloads it from the message. Each test makes its own room.
+// The files of a message (jaredwray/soldock#74). A file uploads to the folder Chat/<room name> of the drive
+// of the author from the box, and each member of the room downloads it from the message. Each test makes its
+// own room.
 
 /** The file input of the box for a new message. The paperclip opens it. */
 const fileInput = (page: Page) => page.locator('.chat-composer input[type="file"]');
@@ -37,6 +38,11 @@ test("a file from the box goes with the message, and a member downloads it", asy
 	const download = await nadia.request.get(href ?? "");
 	expect(download.status()).toBe(200);
 	expect(await download.text()).toBe(content);
+
+	// The file is in the folder Chat/<room name> of the drive of the author.
+	const itemId = decodeURIComponent((href ?? "").split("/").pop() ?? "");
+	const { path } = await call<{ path: { name: string }[] }>(tomasz, "GET", `/api/v1/drive/items/${itemId}`);
+	expect(path.map((entry) => entry.name)).toEqual(["Chat", name]);
 });
 
 test("a picture goes without text, and shows its small picture from the browser", async ({ browser }) => {

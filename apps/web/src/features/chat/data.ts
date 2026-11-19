@@ -311,12 +311,13 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 // The page sends each call with the session of its person. After a sign-out, or a sign-in as a
 // different person, a message that waits must not go out: it would be a message of the new person.
 /**
- * The files of a new message, for the box of a room or of a thread. Each file uploads to the root of the
- * own drive (`uploadFile`). A file that the person removes before the send goes to the trash of Drive.
+ * The files of a new message, for the box of a room or of a thread. Each file uploads to the folder
+ * Chat/<room name> of the own drive (`uploadFile` with `roomId`). A file that the person removes before the
+ * send goes to the trash of Drive.
  */
-export function newAttachments(): Attachments {
+export function newAttachments(roomId: string): Attachments {
 	return createAttachments({
-		upload: (file, onProgress, signal) => uploadFile(file, { onProgress: (sent) => onProgress(sent), signal }),
+		upload: (file, onProgress, signal) => uploadFile(file, { roomId, onProgress: (sent) => onProgress(sent), signal }),
 		discard: (item) => {
 			// The file stays in the drive when the call fails. The person can delete it there.
 			api.call("drive.trash_items", { item_ids: [item.id] }).catch(() => {});
@@ -336,7 +337,7 @@ export function attachmentsOf(ownId: string, roomId: string): Attachments {
 	const name = `${ownId}/${roomId}`;
 	let attachments = roomAttachments.get(name);
 	if (!attachments) {
-		attachments = newAttachments();
+		attachments = newAttachments(roomId);
 		roomAttachments.set(name, attachments);
 	}
 	return attachments;
