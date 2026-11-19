@@ -124,7 +124,7 @@ with injected inbound mail.
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
-| File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb` |
+| File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |
 | Uploads in parts that are not complete | [`drive`](src/drive/README.md#uploads-in-parts) | `DriveSpaceDO` tables `uploads`, `upload_parts`; R2 multipart uploads |
 | The content of each doc and each sheet, with its revision | [`collab`](src/collab/README.md) | `DocumentDO` SQLite |
 | Rooms and direct messages (members, read markers, messages with their files and link previews, outbox, idempotency keys) | [`chat`](src/chat/README.md) | `ChatRoomDO` SQLite |

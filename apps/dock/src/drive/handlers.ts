@@ -41,7 +41,6 @@ import {
 	isSharedDriveId,
 	type MemberInput,
 	memberRefusal,
-	previewKeyFor,
 	type SharedDriveRecord,
 	type VersionRecord,
 } from "./space.ts";
@@ -73,7 +72,7 @@ export function contentOf(
 	}
 	const { preview } = found.version;
 	if (!preview) throw new OperationError("not_found", "The file has no preview. Set one with drive.set_preview.");
-	return { key: previewKeyFor(found.blobKey), size: preview.size, mimeType: preview.type };
+	return { key: preview.key, size: preview.size, mimeType: preview.type };
 }
 
 /**

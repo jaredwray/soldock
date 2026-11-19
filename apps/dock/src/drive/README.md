@@ -168,8 +168,10 @@ size, of 5 MiB or more, and the base64 of 8 MiB fits in one JSON call.
   small picture must have the same shape (1 pixel or 2 %). The server keeps the size of the picture.
 - The server cannot check that the small picture shows the file. It proves only that the small picture
   is a small picture with no script.
-- The bytes are in R2 at the key of the version with `.thumb`. The version owns them: a delete of the
-  version deletes them through the outbox. A second call replaces them. The editor role is needed.
+- The bytes are in R2 at the key of the version with `.thumb-` and a random id. Each call writes a new
+  key, so two calls at the same time cannot mix the bytes of one with the facts of the other. The version
+  owns the bytes: a delete of the version deletes them through the outbox. A second call replaces them,
+  and the outbox deletes the bytes before them. The editor role is needed.
 - Known limit: a move between drives and a copy do not keep the small picture.
 
 ## Files in rooms of Chat
@@ -578,7 +580,7 @@ See the [webhook module](../webhooks/README.md).
 | Grants of rooms of Chat | `DriveSpaceDO` table `room_grants` | The item, the room, the author of the message and the time. The room writes the rows through its outbox. A delete of the item and a move remove them |
 | Uploads in parts | `DriveSpaceDO` tables `uploads` and `upload_parts` | The principal, the R2 multipart upload, the ids of the item and the version, the folder, the name, the type, the size, the size of a part, the SHA-256 of the start, the state, the idempotency key, and the etag of each part. Removed 24 hours after the start |
 | Parts of an upload that is not complete | R2 `blobs`, a multipart upload to the key of the version | Stopped by `drive.abort_upload`, by the alarm after 24 hours, or by R2 after 7 days |
-| Small pictures of versions | R2 `blobs`, key `drive/<space id>/<item id>/<version id>.thumb` | One owner: the version |
+| Small pictures of versions | R2 `blobs`, key `drive/<space id>/<item id>/<version id>.thumb-<id>` | One owner: the version, whose `preview_json` names the key |
 | Grants | `DriveSpaceDO` table `permissions` | The principal, the role and who gave it |
 | Search index | `DriveSpaceDO` FTS5 table `items_fts` | Rebuildable from the items and the content of each doc and sheet |
 | Stars of the owner | `DriveSpaceDO` table `stars` | Pointers to items of this drive and of other drives |
@@ -602,8 +604,9 @@ outbox. A move between drives makes a new object for each version, and deletes t
 through the outbox after the target has the version rows. An error after an R2 write and before the drive answers can leave an orphan, which blob GC
 will collect.
 
-A small picture has one owner too: the version whose key it extends. A delete of the version, a version
-over the limit, and a move delete it through the outbox. An upload in parts writes the key of its
+A small picture has one owner too: the version whose key it extends, and whose `preview_json` names it. A
+delete of the version, a version over the limit, a move, and a new small picture delete it through the
+outbox. An upload in parts writes the key of its
 version only at the completion. The key of an open upload that goes away is deleted through the outbox,
 in case R2 joined the parts before the drive refused the file.
 

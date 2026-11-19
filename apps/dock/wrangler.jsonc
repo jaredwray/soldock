@@ -47,7 +47,7 @@
 	// Migrations are in ./migrations.
 	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
 	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), the bytes of each version of
-	// each Drive file (key drive/<space id>/<item id>/<version id>, its small picture with .thumb), the
+	// each Drive file (key drive/<space id>/<item id>/<version id>, its small picture with .thumb-<id>), the
 	// bytes of each image of each doc (key document/<item id>/<image id>), and the picture of each link
 	// preview of Chat (key chat/<room id>/<message id>/link-<id>).
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],

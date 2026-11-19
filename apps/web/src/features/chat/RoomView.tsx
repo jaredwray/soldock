@@ -651,18 +651,21 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			body: newBody,
 			text: bodyText(newBody),
 			at: new Date().toISOString(),
-			...(filesChanged ? { files: keptFiles } : {}),
+			files: keptFiles,
 		};
 		showChange(id, change);
 		afterEarlierCalls(id, async () => {
 			// A newer change replaced this one before its call started. Only the newest change goes.
 			if (latest.current.get(id) !== change) return;
 			try {
+				// The call sends the whole state that the person wants, the body and the files. A newer change
+				// replaces an earlier one that did not go, so a call with only its own change would lose the
+				// change of the earlier one. The room changes nothing for a part that is the same.
 				const { message } = await api.call("chat.edit_message", {
 					room_id: roomId,
 					message_id: id,
-					...(textChanged ? { body: newBody } : {}),
-					...(filesChanged ? { file_ids: keptFiles.map((file) => file.item_id) } : {}),
+					body: newBody,
+					file_ids: keptFiles.map((file) => file.item_id),
 				});
 				view.apply(message);
 				endChange(id, change);

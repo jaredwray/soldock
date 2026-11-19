@@ -41,9 +41,13 @@ export function blobKeyFor(spaceId: string, itemId: string, versionId: string): 
 	return `drive/${spaceId}/${itemId}/${versionId}`;
 }
 
-/** The R2 key of the small picture of a version. The version owns it, as it owns its bytes. */
-export function previewKeyFor(blobKey: string): string {
-	return `${blobKey}.thumb`;
+/**
+ * A new R2 key for the small picture of a version: the key of the version, `.thumb-` and a random id. The
+ * version owns it, as it owns its bytes. Each call of `drive.set_preview` writes a new key, so two calls at
+ * the same time cannot mix the bytes of one with the facts of the other.
+ */
+export function newPreviewKey(blobKey: string): string {
+	return `${blobKey}.thumb-${crypto.randomUUID()}`;
 }
 
 /** True for the id of a shared drive. A personal drive has the id of its owner. */
@@ -120,6 +124,8 @@ export interface ItemRecord {
 
 /** The small picture of a version of a picture or a video, which the browser made and the server checked. */
 export interface PreviewRecord {
+	/** The R2 key of the bytes of the small picture. */
+	key: string;
 	/** The type of the small picture: PNG, JPEG or WebP. */
 	type: string;
 	width: number;
@@ -1595,7 +1601,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Deletes the bytes of a version and of its small picture, through the outbox. */
 	private dropVersionBlobs(version: { blob_key: string; preview_json: string | null }): void {
 		this.enqueue("blob", version.blob_key, {});
-		if (version.preview_json !== null) this.enqueue("blob", previewKeyFor(version.blob_key), {});
+		if (version.preview_json !== null) {
+			this.enqueue("blob", (JSON.parse(version.preview_json) as PreviewRecord).key, {});
+		}
 	}
 
 	/** Stores new content for a file. The version over the limit, the oldest, goes away with its bytes. */
@@ -2033,14 +2041,31 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { versionId: version.id, blobKey: version.blob_key, size: version.size, detectedType: detected };
 	}
 
-	/** Records the small picture of a version, after the Worker stored its bytes. A second call replaces it. */
-	setPreview(call: SpaceCall, itemId: string, versionId: string, preview: PreviewRecord): VersionRecord | Refusal {
+	/**
+	 * Records the small picture of a version, after the Worker stored its bytes at a new key. A second call
+	 * replaces it, and the outbox deletes the bytes of the small picture before it.
+	 */
+	async setPreview(
+		call: SpaceCall,
+		itemId: string,
+		versionId: string,
+		preview: PreviewRecord,
+	): Promise<VersionRecord | Refusal> {
 		const target = this.previewTarget(call, itemId, versionId);
 		if ("error" in target) return target;
+		const before = this.one<{ preview_json: string | null }>(
+			"SELECT preview_json FROM versions WHERE id = ?",
+			versionId,
+		)?.preview_json;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("UPDATE versions SET preview_json = ? WHERE id = ?", JSON.stringify(preview), versionId);
+			if (before) {
+				const old = (JSON.parse(before) as PreviewRecord).key;
+				if (old !== preview.key) this.enqueue("blob", old, {});
+			}
 			this.bump();
 		});
+		await this.schedule();
 		const row = this.row(itemId) as ItemRow;
 		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", versionId) as VersionRow;
 		return this.versionRecord(version, row.head_version_id);

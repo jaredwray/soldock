@@ -2,7 +2,7 @@ import { DRIVE_LIMITS, type FileVersion } from "@asterra/contracts";
 import type { CallContext } from "../identity/index.ts";
 import { base64ToBytes, type ImageInfo, OperationError, readImageInfo } from "../platform/index.ts";
 import { accept, auditOk, openSpace, STORED_TYPE } from "./access.ts";
-import { previewKeyFor, type VersionRecord } from "./space.ts";
+import { newPreviewKey, type VersionRecord } from "./space.ts";
 
 // The small picture of a picture or a video. The browser of the uploader makes it, because a Worker
 // cannot decode a picture or a video. The server checks what it can: the small picture is a small,
@@ -69,17 +69,20 @@ export async function setPreview(
 		}
 	}
 	// After an error here, the bytes can stay without a record. Blob GC will collect them.
-	await call.env.BLOBS.put(previewKeyFor(target.blobKey), bytes, STORED_TYPE);
-	const version = accept(
-		await opened.space.setPreview(opened.ctx, input.item_id, target.versionId, {
-			type: info.type,
-			width: info.width,
-			height: info.height,
-			size: bytes.byteLength,
-			media_width: media?.width ?? null,
-			media_height: media?.height ?? null,
-		}),
-	);
+	const key = newPreviewKey(target.blobKey);
+	await call.env.BLOBS.put(key, bytes, STORED_TYPE);
+	const answer = await opened.space.setPreview(opened.ctx, input.item_id, target.versionId, {
+		key,
+		type: info.type,
+		width: info.width,
+		height: info.height,
+		size: bytes.byteLength,
+		media_width: media?.width ?? null,
+		media_height: media?.height ?? null,
+	});
+	// No version names the bytes of a refused call.
+	if ("error" in answer) await call.env.BLOBS.delete(key);
+	const version = accept(answer);
 	auditOk(call, opened, "drive.set_preview", input.item_id);
 	return { version: toVersion(version) };
 }

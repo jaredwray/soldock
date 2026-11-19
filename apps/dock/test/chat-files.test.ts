@@ -2,7 +2,19 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS, chatFilePath } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Actor, api, base64, bearer, callTool, codeOf, request, seedOrg, signIn } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	base64,
+	bearer,
+	callTool,
+	codeOf,
+	drainDrive,
+	driveBlobKeys,
+	request,
+	seedOrg,
+	signIn,
+} from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -214,6 +226,17 @@ describe("a file in a message", () => {
 		expect(
 			(await request(chatFilePath(room.id, message.id, picture.id, "preview"), { headers: bearer(owner.key) })).status,
 		).toBe(404);
+		// A second preview replaces the first: the download has its bytes, and the bytes of the first go from R2.
+		const PNG_2X2 =
+			"iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+		const second = await ada.call("drive.set_preview", { item_id: picture.id, content_base64: PNG_2X2 });
+		expect(second.version.preview).toMatchObject({ width: 2, height: 2, size: 73 });
+		const replaced = await request(chatFilePath(room.id, message.id, picture.id, "preview"), {
+			headers: bearer(bot.key),
+		});
+		expect([replaced.headers.get("content-length"), (await replaced.arrayBuffer()).byteLength]).toEqual(["73", 73]);
+		await drainDrive(ada.id);
+		expect((await driveBlobKeys(ada.id)).filter((key) => key.includes(".thumb"))).toHaveLength(1);
 		// A text file has no preview.
 		const text = await uploadText(ada, "t.txt", "t");
 		expect(await codeOf(ada.call("drive.set_preview", { item_id: text.id, content_base64: PNG_1X1 }))).toBe("invalid");
