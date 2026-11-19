@@ -28,6 +28,8 @@ function fakeRoom(count: number) {
 			parent_id: null,
 			also_in_room: false,
 			thread: null,
+			files: [],
+			link_previews: [],
 		};
 		messages.push(message);
 		return message;

@@ -1,4 +1,11 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
+import {
+	CHAT_LIMITS,
+	type ChatBody,
+	type ChatFile,
+	type ChatMessage,
+	type ChatRoom,
+	type Principal,
+} from "@asterra/contracts";
 import {
 	Fragment,
 	useCallback,
@@ -19,16 +26,20 @@ import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
+import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
+import { AttachButton, AttachmentChips } from "./ComposerFiles.tsx";
 import { createCallLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
-import { useOutbox, usePageVisible, useRoom } from "./data.ts";
+import { attachmentsOf, useAttachments, useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
 import { createDraftStore, draftStorage } from "./drafts.ts";
 import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { emojiName } from "./emoji.ts";
+import { useFileDrop } from "./fileDrop.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
+import { EditFiles, LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
 import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import {
 	chatRows,
@@ -39,6 +50,7 @@ import {
 	nextReading,
 	type Reading,
 	roomTitle,
+	sameFileIds,
 	startReading,
 	startsDay,
 	startsGroup,
@@ -92,6 +104,30 @@ function useMediaQuery(query: string): boolean {
 /** The distance from the end of the list, in pixels, under which a new message moves the list to its end. */
 const STICK_PX = 80;
 
+/** The message in edit: the body and the files that the edit box opened with, and the body and the files in it now. */
+interface Editing {
+	id: string;
+	initial: ChatBody;
+	/** The body in the box now, or null without text. */
+	body: ChatBody | null;
+	initialFiles: readonly ChatFile[];
+	files: readonly ChatFile[];
+}
+
+/**
+ * True when the edit box can save. The text keeps its limit. A message with text needs text: an edit
+ * without text keeps the old text on the server. A message with only files can remove some of them, and
+ * keeps at least one.
+ */
+function editSavable(editing: Editing): boolean {
+	if (editing.body !== null) return bodyText(editing.body).length <= CHAT_LIMITS.messageChars;
+	return (
+		bodyText(editing.initial).trim() === "" &&
+		editing.files.length > 0 &&
+		!sameFileIds(editing.files, editing.initialFiles)
+	);
+}
+
 /** One room: its header, its messages and the box for a new message. */
 export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
 	const self = useSession().whoami.principal;
@@ -134,6 +170,23 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const composer = useRef<ChatComposerHandle>(null);
 	/** The characters of the draft above the limit of the plain text, or 0. */
 	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
+	// The files of the new message upload at once, to the drive of the person. They stay for the room when
+	// the person opens a different room, until a reload.
+	const attachments = useMemo(() => attachmentsOf(ownId, roomId), [ownId, roomId]);
+	const files = useAttachments(attachments);
+	/** True when the message has text or files, and each file is in the drive. */
+	const canSend = canSendWith(draft !== null, files.list) && draftOver === 0;
+	const addFiles = useCallback(
+		(added: File[], folders: readonly string[] = []) => {
+			if (folders.length > 0) {
+				toast({ message: "A folder cannot go into a message. Drop the files that are in it.", tone: "error" });
+			}
+			attachments.add(added);
+		},
+		[attachments, toast],
+	);
+	/** True while the person drags files over the list or the box. */
+	const dropping = useFileDrop("room", addFiles);
 	const [joining, setJoining] = useState(false);
 	/** The star that the person set, until the room list has it. Null when no call runs. */
 	const [starring, setStarring] = useState<boolean | null>(null);
@@ -150,8 +203,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [goingToLatest, setGoingToLatest] = useState(false);
 	/** True after the person used a button of the list. The focus then stays in the list when the button goes. */
 	const refocus = useRef(false);
-	/** The message in edit: the body that the edit box opened with, and the body in it now (null without text). */
-	const [editing, setEditing] = useState<{ id: string; initial: ChatBody; body: ChatBody | null } | null>(null);
+	const [editing, setEditing] = useState<Editing | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
 	const [threadId, setThreadId] = useState<string | null>(null);
 	/** The element that opened the thread. It gets the focus back when the thread closes. */
@@ -476,7 +528,9 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	}, [hasNewer]);
 
 	function send() {
-		if (!draft || draftOver > 0) return;
+		if (!canSend) return;
+		// Each file is in the drive, so the outbox carries only the files. They leave the box at once.
+		const sentFiles = attachments.files() ?? [];
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
 		// after a reload and after a different room opens.
@@ -499,7 +553,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			}
 		}
 		// The message shows in the list at once. The outbox sends it, and tries again after a failure.
-		outbox.send(bodyText(draft), draft);
+		outbox.send(draft ? bodyText(draft) : "", draft ?? undefined, sentFiles);
+		attachments.release(sentFiles);
 		setDraft(null);
 		composer.current?.clear();
 		setStick(true);
@@ -571,32 +626,57 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	}
 
 	function saveEdit() {
-		if (!editing?.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars) return;
-		const { id, body } = editing;
+		if (!editing || !editSavable(editing)) return;
+		const { id, body, files: keptFiles } = editing;
 		setEditing(null);
 		// The body that shows: the body of an edit that waits, or the body that the room has.
 		const waiting = latest.current.get(id);
 		const stored = messages.find((message) => message.id === id);
 		const shown = waiting?.kind === "edit" ? waiting.body : stored && (stored.body ?? textToBody(stored.text));
-		if (shown && sameInBox(shown, body)) return;
-		// The new body shows at once.
-		const change: LocalChange = { kind: "edit", body, text: bodyText(body), at: new Date().toISOString() };
+		const shownFiles = (waiting?.kind === "edit" ? waiting.files : undefined) ?? stored?.files ?? editing.initialFiles;
+		const textChanged = body !== null && !(shown && sameInBox(shown, body));
+		const filesChanged = !sameFileIds(keptFiles, shownFiles);
+		if (!textChanged && !filesChanged) return;
+		// The new body and files show at once. An edit without a new text keeps the text.
+		const newBody = textChanged && body ? body : (shown ?? editing.initial);
+		const change: LocalChange = {
+			kind: "edit",
+			body: newBody,
+			text: bodyText(newBody),
+			at: new Date().toISOString(),
+			...(filesChanged ? { files: keptFiles } : {}),
+		};
 		showChange(id, change);
 		afterEarlierCalls(id, async () => {
 			// A newer change replaced this one before its call started. Only the newest change goes.
 			if (latest.current.get(id) !== change) return;
 			try {
-				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, body });
+				const { message } = await api.call("chat.edit_message", {
+					room_id: roomId,
+					message_id: id,
+					...(textChanged ? { body: newBody } : {}),
+					...(filesChanged ? { file_ids: keptFiles.map((file) => file.item_id) } : {}),
+				});
 				view.apply(message);
 				endChange(id, change);
 			} catch (caught) {
-				// After a refusal, the old message shows again, and the edit box opens with the new body, so the
-				// person does not write it again. A newer change of the message stays as it is.
+				// After a refusal, the old message shows again, and the edit box opens with the new body and files,
+				// so the person does not do the edit again. A newer change of the message stays as it is.
 				if (!endChange(id, change)) return;
-				setEditing((current) => current ?? { id, initial: body, body });
+				setEditing(
+					(current) =>
+						current ?? { id, initial: newBody, body: newBody, initialFiles: shownFiles, files: keptFiles },
+				);
 				fail(caught);
 			}
 		});
+	}
+
+	/** Removes the preview of a link of an own message. The link stays in the text. */
+	function removePreview(id: string, url: string) {
+		api.call("chat.remove_link_preview", { room_id: roomId, message_id: id, url }).then(({ message }) => {
+			view.apply(message);
+		}, fail);
 	}
 
 	/**
@@ -742,7 +822,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 			{isMember ? (
 				<>
-					<div className="chat-list">
+					{/* The list and the box take the files of a drop (`useFileDrop`). */}
+					<div className="chat-list" data-file-drop="room">
 						<div className="chat-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1}>
 							{view.hasOlder && (
 								<p className="chat-more">
@@ -802,15 +883,28 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												editing={editing?.id === message.id ? editing : null}
 												onEditStart={() => {
 													const initial = message.body ?? textToBody(message.text);
-													setEditing({ id: message.id, initial, body: initial });
+													setEditing({
+														id: message.id,
+														initial,
+														body: initial,
+														initialFiles: message.files,
+														files: message.files,
+													});
 												}}
 												onEditChange={(body) => setEditing((current) => current && { ...current, body })}
+												onEditRemoveFile={(itemId) =>
+													setEditing(
+														(current) => current && { ...current, files: current.files.filter((file) => file.item_id !== itemId) },
+													)
+												}
 												onEditSave={saveEdit}
 												onEditCancel={() => setEditing(null)}
 												onDelete={() => setDialog({ type: "delete", message })}
 												onShowEdits={readsEdits ? () => setDialog({ type: "edits", message }) : null}
 												// A reply that also went to the room opens the thread of its parent.
 												onOpenThread={pending === null ? () => openThread(message.parent_id ?? message.id) : null}
+												onRemovePreview={(url) => removePreview(message.id, url)}
+												onMediaLoad={holdPlace}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
 												ownId={ownId}
@@ -852,15 +946,22 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 								{jumpLabel && <span>{jumpLabel}</span>}
 							</button>
 						)}
+						{dropping && (
+							<div className="chat-drop" aria-hidden="true">
+								<Icon name="paperclip" size={18} />
+								<span>Drop the files to add them to your message</span>
+							</div>
+						)}
 					</div>
 					<form
 						className="chat-composer"
+						data-file-drop="room"
 						onSubmit={(event) => {
 							event.preventDefault();
 							send();
 						}}
 					>
-						<div className="chat-composer-box">
+						<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
 							<ChatComposer
 								ref={composer}
 								id={draftId}
@@ -869,20 +970,37 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 								initial={draft}
 								onChange={setDraft}
 								onSubmit={send}
+								onFiles={addFiles}
 								mentions={mentions}
 								placement="above"
+								files={
+									<AttachmentChips
+										files={files.list}
+										notice={files.notice}
+										onRetry={attachments.retry}
+										onRemove={attachments.remove}
+									/>
+								}
 							>
-								<button
-									type="submit"
-									className="chat-send"
-									aria-label="Send the message"
-									title="Send (Enter)"
-									disabled={!draft || draftOver > 0}
-								>
-									<Icon name="arrowUp" size={18} />
-								</button>
+								<span className="chat-composer-actions">
+									<AttachButton count={files.list.length} onFiles={addFiles} />
+									<button
+										type="submit"
+										className="chat-send"
+										aria-label="Send the message"
+										title="Send (Enter)"
+										disabled={!canSend}
+									>
+										<Icon name="arrowUp" size={18} />
+									</button>
+								</span>
 							</ChatComposer>
 						</div>
+						{filesNote(files.list) !== null && (
+							<p className="chat-composer-files-note" role="status">
+								{filesNote(files.list)}
+							</p>
+						)}
 						{draftOver > 0 && (
 							<p className="chat-composer-limit" role="status">
 								The message has {plural(draftOver, "character")} more than the limit of{" "}
@@ -988,10 +1106,16 @@ interface MessageItemProps {
 	head: boolean;
 	own: boolean;
 	canDelete: boolean;
-	/** The bodies of the edit box, or null when the message is not in edit. */
-	editing: { initial: ChatBody; body: ChatBody | null } | null;
+	/** The bodies and the files of the edit box, or null when the message is not in edit. */
+	editing: Editing | null;
 	onEditStart: () => void;
 	onEditChange: (body: ChatBody | null) => void;
+	/** Removes a file from the message in the edit box. */
+	onEditRemoveFile: (itemId: string) => void;
+	/** Removes the preview of a link of an own message. */
+	onRemovePreview: (url: string) => void;
+	/** Runs when a picture or a video of the message gets its size, so the list keeps its place. */
+	onMediaLoad: () => void;
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
@@ -1041,6 +1165,9 @@ function MessageItem({
 	editing,
 	onEditStart,
 	onEditChange,
+	onEditRemoveFile,
+	onRemovePreview,
+	onMediaLoad,
 	onEditSave,
 	onEditCancel,
 	onDelete,
@@ -1131,6 +1258,7 @@ function MessageItem({
 							// The person asked for the edit box, so the focus goes to it.
 							autofocus
 						/>
+						<EditFiles files={editing.files} onRemove={onEditRemoveFile} />
 						<span className="chat-edit-actions">
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
@@ -1138,7 +1266,7 @@ function MessageItem({
 							<button
 								type="submit"
 								className="button button-small button-primary"
-								disabled={!editing.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars}
+								disabled={!editSavable(editing)}
 							>
 								Save
 							</button>
@@ -1150,25 +1278,44 @@ function MessageItem({
 				) : message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
-					<div className="chat-text">
-						<MessageBody body={message.body} text={message.text} mentions={mentions} />
-						{message.edited_at &&
-							(onShowEdits ? (
-								<button
-									type="button"
-									className="chat-edited link-button"
-									title={fullDate(message.edited_at)}
-									aria-label="Edited. Show the earlier versions"
-									onClick={onShowEdits}
-								>
-									(edited)
-								</button>
-							) : (
-								<span className="chat-edited" title={fullDate(message.edited_at)}>
-									(edited)
-								</span>
-							))}
-					</div>
+					<>
+						{/* A message with only files has no text to show. */}
+						{(message.text !== "" || message.files.length === 0 || message.edited_at) && (
+							<div className="chat-text">
+								<MessageBody body={message.body} text={message.text} mentions={mentions} />
+								{message.edited_at &&
+									(onShowEdits ? (
+										<button
+											type="button"
+											className="chat-edited link-button"
+											title={fullDate(message.edited_at)}
+											aria-label="Edited. Show the earlier versions"
+											onClick={onShowEdits}
+										>
+											(edited)
+										</button>
+									) : (
+										<span className="chat-edited" title={fullDate(message.edited_at)}>
+											(edited)
+										</span>
+									))}
+							</div>
+						)}
+						<MessageFiles
+							files={message.files}
+							roomId={message.room_id}
+							messageId={message.id}
+							pending={pending !== null}
+							onMediaLoad={onMediaLoad}
+						/>
+						<LinkPreviews
+							previews={message.link_previews}
+							roomId={message.room_id}
+							messageId={message.id}
+							onRemove={own && pending === null ? onRemovePreview : null}
+							onMediaLoad={onMediaLoad}
+						/>
+					</>
 				)}
 				{pending === null && !message.deleted && (
 					<Reactions reactions={message.reactions} ownId={ownId} nameOf={nameOf} onToggle={onReact} />

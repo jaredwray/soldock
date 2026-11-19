@@ -1,13 +1,14 @@
-import type { DriveItem, FileVersion } from "@asterra/contracts";
+import { DRIVE_LIMITS, type DriveItem, type FileVersion } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes, fullDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { uploadMimeType } from "../../lib/upload.ts";
 import { useSession } from "../auth/session.tsx";
 import { downloadFile } from "./data.ts";
-import { canEdit as roleCanEdit, spaceInput, uploadMimeType, uploadRefusal } from "./model.ts";
+import { canEdit as roleCanEdit, spaceInput, uploadRefusal } from "./model.ts";
 
 /**
  * The versions of a file. Each person with access can get a version. An owner or an editor can
@@ -62,7 +63,8 @@ export function VersionsDialog({
 	}
 
 	function upload(file: File) {
-		const refusal = uploadRefusal(file);
+		// A new version goes in one call, with the content as base64.
+		const refusal = uploadRefusal(file, DRIVE_LIMITS.fileBytes);
 		if (refusal) {
 			setError(refusal);
 			return;
@@ -124,7 +126,7 @@ export function VersionsDialog({
 									aria-label={`Download the version of ${fullDate(version.created_at)}`}
 									title="Download"
 									disabled={busy !== null}
-									onClick={() => void run("Getting the version…", () => downloadFile(item, ownId, version.id))}
+									onClick={() => downloadFile(item, version.id)}
 								>
 									<Icon name="download" size={18} />
 								</button>

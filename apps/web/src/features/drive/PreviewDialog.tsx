@@ -1,12 +1,13 @@
-import type { DriveItem } from "@asterra/contracts";
+import { type DriveItem, driveDownloadPath } from "@asterra/contracts";
 import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
+import { base64ToBytes } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes, fullDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { useSession } from "../auth/session.tsx";
+import { downloadFile } from "./data.ts";
 import { itemIcon, type PreviewKind, type PreviewNeighbors, previewKind, spaceInput } from "./model.ts";
 
 /** The characters of a text file that the preview shows. */
@@ -16,10 +17,15 @@ type Content =
 	| { status: "none" }
 	| { status: "loading" }
 	| { status: "error"; message: string }
-	| { status: "image"; url: string; bytes: Uint8Array<ArrayBuffer> }
-	| { status: "text"; text: string; cut: boolean; bytes: Uint8Array<ArrayBuffer> };
+	| { status: "image"; url: string }
+	| { status: "text"; text: string; cut: boolean };
 
-function initialContent(kind: PreviewKind): Content {
+/**
+ * The first content of a file. A picture shows from `/dl/` at once: the server sends it inline only when
+ * it found a raster picture in the bytes. Text loads with `drive.download_file`.
+ */
+function initialContent(item: DriveItem, kind: PreviewKind): Content {
+	if (kind === "image") return { status: "image", url: driveDownloadPath(item.space_id, item.id) };
 	return kind === "none" ? { status: "none" } : { status: "loading" };
 }
 
@@ -33,18 +39,14 @@ interface PreviewDialogProps {
 }
 
 /**
- * Shows a file over the page, as a lightbox. A raster image shows from a `blob:` URL, and text shows as plain text. The content
+ * Shows a file over the page, as a lightbox. A raster image shows from `/dl/`, and text shows as plain text. The content
  * of a file never goes into the page as HTML. Each other type shows its details and a download.
  * Previous and Next, and the Left and Right arrow keys, show the other files of the list in the same dialog.
  */
 export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialogProps) {
 	const ownId = useSession().whoami.principal.id;
 	const kind = previewKind(item.mime_type, item.size);
-	const [content, setContent] = useState<Content>(() => initialContent(kind));
-	// The person can go to a different file before a download ends. The state of a download keeps the id
-	// of its file, so the busy state and the error show only with that file.
-	const [downloadingId, setDownloadingId] = useState<string | null>(null);
-	const [downloadError, setDownloadError] = useState<{ itemId: string; message: string } | null>(null);
+	const [content, setContent] = useState<Content>(() => initialContent(item, kind));
 	const [shownId, setShownId] = useState(item.id);
 	const previousRef = useRef<HTMLButtonElement>(null);
 	const nextRef = useRef<HTMLButtonElement>(null);
@@ -55,8 +57,7 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 	// A different file: the content of the last file must not show for one frame, so the state resets during the render.
 	if (shownId !== item.id) {
 		setShownId(item.id);
-		setContent(initialContent(kind));
-		setDownloadError(null);
+		setContent(initialContent(item, kind));
 	}
 
 	useEffect(() => {
@@ -86,27 +87,15 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 		(previousRef.current ?? nextRef.current ?? downloadRef.current)?.focus();
 	});
 
+	// Text loads as base64: previewKind gives text only for a small file.
 	useEffect(() => {
-		if (kind === "none") return;
+		if (kind !== "text") return;
 		let active = true;
-		let url: string | null = null;
 		api.call("drive.download_file", { ...spaceInput(item.space_id, ownId), item_id: item.id }).then(
 			(result) => {
 				if (!active) return;
-				const bytes = base64ToBytes(result.content_base64);
-				if (kind === "image") {
-					// The type is one of the raster types of previewKind, so the browser reads the bytes as an image only.
-					url = URL.createObjectURL(new Blob([bytes], { type: item.mime_type ?? "application/octet-stream" }));
-					setContent({ status: "image", url, bytes });
-				} else {
-					const text = new TextDecoder().decode(bytes);
-					setContent({
-						status: "text",
-						text: text.slice(0, TEXT_PREVIEW_CHARS),
-						cut: text.length > TEXT_PREVIEW_CHARS,
-						bytes,
-					});
-				}
+				const text = new TextDecoder().decode(base64ToBytes(result.content_base64));
+				setContent({ status: "text", text: text.slice(0, TEXT_PREVIEW_CHARS), cut: text.length > TEXT_PREVIEW_CHARS });
 			},
 			(caught) => {
 				if (active) setContent({ status: "error", message: errorMessage(caught) });
@@ -114,35 +103,8 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 		);
 		return () => {
 			active = false;
-			if (url) URL.revokeObjectURL(url);
 		};
-	}, [kind, item.id, item.space_id, item.mime_type, ownId]);
-
-	async function download() {
-		setDownloadError(null);
-		// The preview has the bytes already.
-		if (content.status === "image" || content.status === "text") {
-			saveBytes(content.bytes, item.name);
-			return;
-		}
-		// The person asked for this file, so the file saves also after a move to a different file.
-		const itemId = item.id;
-		setDownloadingId(itemId);
-		try {
-			const result = await api.call("drive.download_file", {
-				...spaceInput(item.space_id, ownId),
-				item_id: itemId,
-			});
-			saveBytes(base64ToBytes(result.content_base64), result.name);
-		} catch (caught) {
-			setDownloadError({ itemId, message: errorMessage(caught) });
-		} finally {
-			setDownloadingId((current) => (current === itemId ? null : current));
-		}
-	}
-
-	const downloading = downloadingId === item.id;
-	const shownError = downloadError?.itemId === item.id ? downloadError.message : null;
+	}, [kind, item.id, item.space_id, ownId]);
 
 	return (
 		<Dialog title={item.name} onClose={onClose} className="drive-preview">
@@ -162,7 +124,14 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						The file did not load. {content.message}
 					</p>
 				)}
-				{content.status === "image" && <img className="drive-preview-image" src={content.url} alt={item.name} />}
+				{content.status === "image" && (
+					<img
+						className="drive-preview-image"
+						src={content.url}
+						alt={item.name}
+						onError={() => setContent({ status: "error", message: "Download it to open it." })}
+					/>
+				)}
 				{content.status === "text" && (
 					<div className="drive-preview-sheet">
 						{/* biome-ignore lint/a11y/noNoninteractiveTabindex: a keyboard must be able to scroll the text. */}
@@ -201,11 +170,6 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						</dd>
 					</div>
 				</dl>
-				{shownError && (
-					<p className="form-error" role="alert">
-						{shownError}
-					</p>
-				)}
 				{/* Previous, Download and Next. Above 600px, Previous and Next are at the left and right edges of the
 				    file. On a phone, the three buttons are in one row at the bottom, with Download in the center. */}
 				<div className="drive-preview-actions">
@@ -225,12 +189,11 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						ref={downloadRef}
 						type="button"
 						className="button button-primary"
-						onClick={() => void download()}
-						disabled={downloading}
+						onClick={() => downloadFile(item)}
 						data-autofocus
 					>
 						<Icon name="download" size={16} />
-						{downloading ? "Getting the file…" : "Download"}
+						Download
 					</button>
 					{next && (
 						<button

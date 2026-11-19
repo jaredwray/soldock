@@ -1,4 +1,4 @@
-import { ApiError, type ChatBody, type ChatMessage } from "@asterra/contracts";
+import { ApiError, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
 
 // The messages of one room that the person sent and that the server does not have yet. It has no DOM
 // and no network of its own, so apps/web/test checks it.
@@ -20,6 +20,11 @@ export interface PendingMessage {
 	text: string;
 	/** The body of the message. A message from before the box had formats has none. */
 	body?: ChatBody;
+	/**
+	 * The files of the message, in order. They are in the drive of the person before the message goes to
+	 * the outbox, so the post has only their ids. A message without files has none.
+	 */
+	files?: readonly ChatFile[];
 	/** The time of the send on the device. */
 	created_at: string;
 	/** `waiting`: a message before it is in the line. `sending`: the call runs, or waits for a new attempt. */
@@ -36,10 +41,21 @@ export interface PendingMessage {
 
 /**
  * The content of the post of a message: its body, or for a message from before the box had formats
- * (no body), its text as the Markdown that the person typed. Never both: the server takes one form.
+ * (no body), its text as the Markdown that the person typed. Never both: the server takes one form. A
+ * message with files has their ids, in order, and can have no text.
  */
-export function postContent(message: Pick<PendingMessage, "text" | "body">): { body: ChatBody } | { markdown: string } {
-	return message.body ? { body: message.body } : { markdown: message.text };
+export function postContent(message: Pick<PendingMessage, "text" | "body" | "files">): {
+	body?: ChatBody;
+	markdown?: string;
+	file_ids?: string[];
+} {
+	const ids = (message.files ?? []).map((file) => file.item_id);
+	const content = message.body
+		? { body: message.body }
+		: message.text !== "" || ids.length === 0
+			? { markdown: message.text }
+			: {};
+	return ids.length > 0 ? { ...content, file_ids: ids } : content;
 }
 
 /** The list that shows the room of an outbox. */
@@ -63,7 +79,7 @@ export interface OutboxState {
 
 export interface OutboxOptions {
 	/** Posts the message with the idempotency key, and returns the stored message. */
-	post(message: Pick<PendingMessage, "text" | "body" | "key">): Promise<ChatMessage>;
+	post(message: Pick<PendingMessage, "text" | "body" | "files" | "key">): Promise<ChatMessage>;
 	/** The text of a failure for the person. */
 	describe(error: unknown): string;
 	/**
@@ -79,8 +95,8 @@ export interface Outbox {
 	subscribe(listener: () => void): () => void;
 	/** The list that shows the room now. Null while no list shows it. */
 	attach(view: OutboxView | null): void;
-	/** Adds a message to the end of the line. */
-	send(text: string, body?: ChatBody): void;
+	/** Adds a message to the end of the line. `files` are in the drive of the person already. */
+	send(text: string, body?: ChatBody, files?: readonly ChatFile[]): void;
 	/**
 	 * Puts the messages from before a reload of the page at the start of the line, in their order.
 	 * They are older than each message that the person sent after the reload. A message that the
@@ -220,12 +236,13 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		attach(next) {
 			view = next;
 		},
-		send(text, body) {
+		send(text, body, files) {
 			if (stopped) return;
 			const message: PendingMessage = {
 				key: crypto.randomUUID(),
 				text,
 				...(body ? { body } : {}),
+				...(files && files.length > 0 ? { files } : {}),
 				created_at: new Date().toISOString(),
 				state: "waiting",
 				error: null,

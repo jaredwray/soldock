@@ -4,6 +4,7 @@ import { baseKeymap, toggleMark } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { inputRules } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
+import type { Slice } from "prosemirror-model";
 import { type Command, EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import {
@@ -133,6 +134,23 @@ interface ChatComposerProps {
 	className?: string;
 	/** More controls at the end of the bar under the text, such as the send button. */
 	children?: ReactNode;
+	/** The chips of the files of the message, between the text and the bar. */
+	files?: ReactNode;
+	/**
+	 * Gets the files of a paste. Without it, the box takes no file. A paste with text and files keeps the
+	 * text: an office app puts a picture of the copied text on the clipboard too.
+	 */
+	onFiles?: (files: File[]) => void;
+}
+
+/** True when a slice has text. */
+function hasText(slice: Slice): boolean {
+	let found = false;
+	slice.content.descendants((node) => {
+		if (node.isText) found = true;
+		return !found;
+	});
+	return found;
 }
 
 /**
@@ -155,6 +173,8 @@ export function ChatComposer({
 	autofocus = false,
 	className,
 	children,
+	files,
+	onFiles,
 }: ChatComposerProps) {
 	const mountRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
@@ -162,9 +182,9 @@ export function ChatComposer({
 	const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
 	const [refocus, setRefocus] = useState(0);
 	// The callbacks of the newest render, for the keys and the changes of the view.
-	const callbacks = useRef({ onChange, onSubmit, onCancel });
+	const callbacks = useRef({ onChange, onSubmit, onCancel, onFiles });
 	useEffect(() => {
-		callbacks.current = { onChange, onSubmit, onCancel };
+		callbacks.current = { onChange, onSubmit, onCancel, onFiles };
 	});
 
 	// The first props make the view once. Later changes to them do not make a new view.
@@ -252,9 +272,22 @@ export function ChatComposer({
 				spellcheck: "true",
 			},
 			clipboardTextParser: (text, $context) => plainTextSlice(text, $context.marks()),
-			// A paste with nothing to parse (only an image, for example) would go to the fallback of
-			// ProseMirror, which lets the browser paste into a live element. Nothing can be inserted, so stop it.
-			handlePaste: (_view, _event, slice) => slice.content.size === 0,
+			handlePaste(_view, event, slice) {
+				// A copy of one picture has its bytes and, often, HTML with its address. The schema has no
+				// picture, so the slice has no text, and the bytes go to the files of the message.
+				const take = callbacks.current.onFiles;
+				const pasted = [...(event.clipboardData?.files ?? [])];
+				if (take && pasted.length > 0 && !hasText(slice)) {
+					take(pasted);
+					return true;
+				}
+				// A paste with nothing to parse (only an image, for example) would go to the fallback of
+				// ProseMirror, which lets the browser paste into a live element. Nothing can be inserted, so stop it.
+				return slice.content.size === 0;
+			},
+			// A drop of files goes to the drop zone of the box (`useFileDrop`), not into the text. The event
+			// still goes up to the window, where the zone takes the files.
+			handleDrop: (_view, event) => (event.dataTransfer?.files.length ?? 0) > 0,
 			handleKeyDown(_view, event) {
 				// Safari gives the key that ends a text composition the code 229, without `isComposing`.
 				const composing = event.isComposing || event.keyCode === 229;
@@ -363,6 +396,7 @@ export function ChatComposer({
 	return (
 		<div className={className ? `chat-composer-editor ${className}` : "chat-composer-editor"}>
 			<div ref={mountRef} className="chat-composer-mount" />
+			{files}
 			<div className="chat-composer-bar">
 				<FormatToolbar
 					tools={TOOLS}

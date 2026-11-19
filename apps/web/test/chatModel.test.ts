@@ -37,6 +37,8 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		parent_id: null,
 		also_in_room: false,
 		thread: null,
+		files: [],
+		link_previews: [],
 		...change,
 	};
 }

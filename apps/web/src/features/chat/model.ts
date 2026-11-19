@@ -1,4 +1,4 @@
-import type { ChatBody, ChatMessage, ChatRoom } from "@asterra/contracts";
+import type { ChatBody, ChatFile, ChatMessage, ChatRoom } from "@asterra/contracts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
@@ -105,6 +105,8 @@ export function chatRows(
 				parent_id: null,
 				also_in_room: false,
 				thread: null,
+				files: [...(pending.files ?? [])],
+				link_previews: [],
 			},
 			pending,
 		});
@@ -155,9 +157,12 @@ export function unseenSendsNote(outbox: OutboxState, sent: number): string | nul
 
 /**
  * A change of a stored message that the page shows before the answer of the server: a new text, or
- * a delete. `at` is the time of the edit on the device.
+ * a delete. `at` is the time of the edit on the device. `files` is the new list of the files, when the
+ * edit removed a file.
  */
-export type LocalChange = { kind: "edit"; body: ChatBody; text: string; at: string } | { kind: "delete" };
+export type LocalChange =
+	| { kind: "edit"; body: ChatBody; text: string; at: string; files?: readonly ChatFile[] }
+	| { kind: "delete" };
 
 const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
 
@@ -165,8 +170,8 @@ const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
  * The messages as the person sees them: each message with its change that waits for the server. So
  * an edit and a delete show at once.
  *
- * - An edit shows the new text, with the edited mark.
- * - A delete shows the message as deleted, without its text.
+ * - An edit shows the new text, with the edited mark, and the files that the edit kept.
+ * - A delete shows the message as deleted, without its text, its files and its link previews.
  * - A message that the room deleted stays deleted: an edit of it shows nothing.
  *
  * Without a change, the result is the same list, so a list that did not change makes no new rows.
@@ -179,10 +184,11 @@ export function withLocalChanges(
 	return messages.map((message) => {
 		const change = changes.get(message.id);
 		if (!change || message.deleted) return message;
-		if (change.kind === "delete") return { ...message, text: "", deleted: true };
+		if (change.kind === "delete") return { ...message, text: "", deleted: true, files: [], link_previews: [] };
 		// The server makes the Markdown of the new body. Until its answer, the message has none.
 		const { markdown: _old, ...rest } = message;
-		return { ...rest, body: change.body, text: change.text, edited_at: change.at };
+		const files = change.files ? { files: [...change.files] } : {};
+		return { ...rest, body: change.body, text: change.text, edited_at: change.at, ...files };
 	});
 }
 
@@ -310,4 +316,36 @@ export function sidebarRooms(rooms: readonly ChatRoom[]): {
 		named: others.filter((room) => room.kind !== "dm"),
 		direct: others.filter((room) => room.kind === "dm"),
 	};
+}
+
+/**
+ * The box of a picture of `size` pixels in a message: as large as the picture, and at most `max`. The
+ * picture keeps its shape. The list gives the box before the picture loads, so a row keeps its height.
+ */
+export function fitBox(
+	size: { width: number; height: number },
+	max: { width: number; height: number },
+): { width: number; height: number } | null {
+	if (!(size.width > 0 && size.height > 0)) return null;
+	const scale = Math.min(1, max.width / size.width, max.height / size.height);
+	return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) };
+}
+
+/**
+ * The link of a link preview, when it is an http or https address. Null for each other address, so a
+ * preview never gets a link that runs a script. The server fetches only https links, so null is a
+ * second layer.
+ */
+export function safeLinkPreviewHref(url: string): string | null {
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when two lists name the same files in the same order. */
+export function sameFileIds(a: readonly Pick<ChatFile, "item_id">[], b: readonly Pick<ChatFile, "item_id">[]): boolean {
+	return a.length === b.length && a.every((file, index) => file.item_id === b[index]?.item_id);
 }

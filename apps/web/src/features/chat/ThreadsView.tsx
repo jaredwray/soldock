@@ -256,7 +256,8 @@ function ThreadCard({
 					<em>This message was deleted.</em>
 				) : (
 					<>
-						<strong>{parent.author.display_name}</strong> {parent.text}
+						<strong>{parent.author.display_name}</strong>{" "}
+						{parent.text !== "" ? parent.text : plural(parent.files.length, "file")}
 					</>
 				)}
 			</span>

@@ -48,6 +48,8 @@ function fakeRoom() {
 							parent_id: null,
 							also_in_room: false,
 							thread: null,
+							files: [],
+							link_previews: [],
 						});
 						return settle();
 					},

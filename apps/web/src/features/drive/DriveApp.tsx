@@ -2,12 +2,12 @@ import "./drive.css";
 import type { DriveItem } from "@asterra/contracts";
 import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { fileToBase64 } from "../../lib/base64.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { uploadFile } from "../../lib/upload.ts";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { type DriveView, drivePath, isSharedDriveId, itemPath, SHARED_DRIVES_PATH } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
@@ -60,7 +60,6 @@ import {
 	spaceBatches,
 	spaceInput,
 	spacePath,
-	uploadMimeType,
 	uploadRefusal,
 	viewTitle,
 } from "./model.ts";
@@ -176,7 +175,14 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const [order, setOrder] = useState<ItemOrder>("name");
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [dialog, setDialog] = useState<DriveDialog>(null);
-	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
+	/** The file that uploads now, with the bytes that went out, and the count of the files of the queue. */
+	const [upload, setUpload] = useState<{
+		done: number;
+		total: number;
+		name: string;
+		size: number;
+		sent: number;
+	} | null>(null);
 	const [drop, setDrop] = useState<DropZone | null>(null);
 	// The items of a drag from the list, and the drives that can get them.
 	const [drag, setDrag] = useState<{ items: DriveItem[]; targets: MoveTarget[] } | null>(null);
@@ -453,7 +459,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			case "open":
 				return open(item);
 			case "download":
-				return void downloadFile(item, ownId).catch(fail);
+				return downloadFile(item);
 			case "rename":
 				return setDialog({ type: "rename", item });
 			case "move":
@@ -532,7 +538,10 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		else void runUploads();
 	}
 
-	/** Uploads the queue, each file with an idempotency key. A file over the limit is refused before it is read. */
+	/**
+	 * Uploads the queue, one file at a time (`uploadFile`): a file with content goes in parts, with the
+	 * progress in bytes. A file over the limit is refused before it is read.
+	 */
 	async function runUploads() {
 		uploadingRef.current = true;
 		const queue = queueRef.current;
@@ -542,19 +551,23 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		let uploaded = 0;
 		for (let job = queue.shift(); job; job = queue.shift()) {
 			const { file } = job;
-			setUpload({ done, total: done + 1 + queue.length, name: file.name, size: file.size });
+			setUpload({ done, total: done + 1 + queue.length, name: file.name, size: file.size, sent: 0 });
 			const refusal = uploadRefusal(file);
 			if (refusal) {
 				toast({ message: refusal, tone: "error" });
 			} else {
 				try {
-					const mimeType = uploadMimeType(file.type);
-					await api.call("drive.upload_file", {
-						...job.target,
-						name: file.name,
-						...(mimeType ? { mime_type: mimeType } : {}),
-						content_base64: await fileToBase64(file),
-						idempotency_key: crypto.randomUUID(),
+					// The bar changes at each whole percent, so a large file does not render the page for each event.
+					let shown = 0;
+					await uploadFile(file, {
+						...(job.target.space_id ? { spaceId: job.target.space_id } : {}),
+						...(job.target.parent_id ? { parentId: job.target.parent_id } : {}),
+						onProgress: (sent, total) => {
+							const percent = total > 0 ? Math.floor((sent * 100) / total) : 100;
+							if (percent === shown) return;
+							shown = percent;
+							setUpload((current) => current && { ...current, sent });
+						},
 					});
 					uploaded += 1;
 					destinations.set(JSON.stringify(job.target), job.destination);
@@ -883,19 +896,29 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						</span>
 					</div>
 				)}
-				<div className={upload ? "drive-upload" : "visually-hidden"} role="status">
+				<div className={upload ? "drive-upload" : "visually-hidden"}>
 					{upload && (
 						<>
 							<span className="drive-upload-head">
 								<strong className="drive-upload-name">{upload.name}</strong>
-								<span className="drive-upload-size">{formatBytes(upload.size)}</span>
+								<span className="drive-upload-size">
+									{upload.sent > 0 ? `${formatBytes(upload.sent)} of ` : ""}
+									{formatBytes(upload.size)}
+								</span>
 							</span>
-							<progress className="drive-upload-bar" max={upload.total} value={upload.done} aria-hidden="true" />
-							<span className="drive-upload-text">
-								{`Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…`}
-							</span>
+							{/* The bar shows the bytes of the file that uploads now. The status line below tells the count only,
+							    so a screen reader does not read each change of the bytes. */}
+							<progress
+								className="drive-upload-bar"
+								max={Math.max(1, upload.size)}
+								value={upload.sent}
+								aria-label={`Upload of ${upload.name}`}
+							/>
 						</>
 					)}
+					<span className="drive-upload-text" role="status">
+						{upload ? `Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…` : ""}
+					</span>
 				</div>
 				<input
 					ref={fileInputRef}

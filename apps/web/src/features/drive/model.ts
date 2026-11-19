@@ -289,23 +289,22 @@ export function kindName(item: Pick<DriveItem, "kind">): string {
 	return KIND_NAMES[item.kind];
 }
 
-const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
-
-/**
- * The MIME type to send with an upload: the type that the browser gave, when the server accepts its
- * form. Without it, the server uses its default.
- */
-export function uploadMimeType(browserType: string): string | undefined {
-	// The server takes the type without parameters such as charset.
-	const type = browserType.split(";")[0]?.trim() ?? "";
-	return type.length <= 127 && MIME_TYPE.test(type) ? type : undefined;
+/** A limit of bytes as text: "1 GB" or "10 MB". */
+function limitText(bytes: number): string {
+	const gib = 1024 * 1024 * 1024;
+	return bytes >= gib ? `${bytes / gib} GB` : `${bytes / (1024 * 1024)} MB`;
 }
 
-/** The reason why a file cannot be uploaded, or null. The check runs before the file is read. */
-export function uploadRefusal(file: { name: string; size: number }): string | null {
-	if (file.size > DRIVE_LIMITS.fileBytes) {
-		return `“${file.name}” is larger than ${DRIVE_LIMITS.fileBytes / (1024 * 1024)} MB, the limit for one file.`;
-	}
+/**
+ * The reason why a file cannot be uploaded, or null. The check runs before the file is read. A new file
+ * goes in parts, up to `DRIVE_LIMITS.uploadBytes`. A new version of a file goes in one call
+ * (`drive.upload_version`), so its limit is `DRIVE_LIMITS.fileBytes`.
+ */
+export function uploadRefusal(
+	file: { name: string; size: number },
+	limit: number = DRIVE_LIMITS.uploadBytes,
+): string | null {
+	if (file.size > limit) return `“${file.name}” is larger than ${limitText(limit)}, the limit for one file.`;
 	return null;
 }
 

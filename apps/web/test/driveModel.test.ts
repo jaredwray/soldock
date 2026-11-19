@@ -21,9 +21,9 @@ import {
 	previewKind,
 	previewNeighbors,
 	spaceBatches,
-	uploadMimeType,
 	uploadRefusal,
 } from "../src/features/drive/model.ts";
+import { uploadMimeType } from "../src/lib/upload.ts";
 import type { DriveView } from "../src/routes.ts";
 
 const ME = "prn_01JD00000000000000000000ME";
@@ -498,9 +498,14 @@ describe("linkPath and backPath", () => {
 });
 
 describe("uploads", () => {
+	// A new file goes in parts, up to 1 GiB. A new version goes in one call of base64, up to 10 MiB.
 	it("refuses a file over the limit, and accepts a file at the limit", () => {
-		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes })).toBeNull();
-		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes + 1 })).toMatch(/a\.bin.*10 MB/);
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.uploadBytes })).toBeNull();
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.uploadBytes + 1 })).toMatch(/a\.bin.*1 GB/);
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes }, DRIVE_LIMITS.fileBytes)).toBeNull();
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes + 1 }, DRIVE_LIMITS.fileBytes)).toMatch(
+			/a\.bin.*10 MB/,
+		);
 	});
 
 	// A browser gives an empty type for an unknown extension. The server refuses such a mime_type.
