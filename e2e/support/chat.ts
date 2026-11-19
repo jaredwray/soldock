@@ -1,4 +1,4 @@
-import type { APIRequestContext, Browser, BrowserContext, Page } from "@playwright/test";
+import type { APIRequestContext, Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { BASE_URL } from "./server.ts";
 
@@ -162,4 +162,15 @@ export function waitingRecords(page: Page): Promise<string[]> {
 				};
 			}),
 	);
+}
+
+/**
+ * Puts `text` in place of the text of a message box. `fill` selects the text in the DOM only, and the box
+ * can put back its own selection before the input, so the old text stays. The select-all key goes through
+ * the box itself, so its selection has all the text.
+ */
+export async function replaceText(box: Locator, text: string): Promise<void> {
+	await box.focus();
+	await box.press("ControlOrMeta+a");
+	await box.page().keyboard.insertText(text);
 }
