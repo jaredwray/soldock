@@ -38,6 +38,11 @@ type LoadState = { status: "loading" } | { status: "ready"; thread: ThreadState 
 const STICK_PX = 80;
 /** The distance from the top of the list, in pixels, under which a scroll reads the older replies. */
 const OLDER_PX = 200;
+/**
+ * The most older pages that the view reads by itself when it opens, to get to the read marker. The unread
+ * count of a thread stops at 100, so 4 pages of 50 replies cover the new replies with some own replies.
+ */
+const UNREAD_PAGES = 4;
 
 /**
  * The view of one thread, beside the messages of the room: the message that starts it, its replies, and
@@ -143,8 +148,15 @@ export function ThreadPanel({
 	const keeper = useRef<FollowKeeper | null>(null);
 	const [followBusy, setFollowBusy] = useState(false);
 	const [followError, setFollowError] = useState<string | null>(null);
-	/** The seq of the first new reply when the view opened, for the "New" line. Undefined before the first read. */
+	/**
+	 * The seq of the first new reply when the view opened, for the "New" line. Undefined until the view has
+	 * the replies after the marker of that time.
+	 */
 	const [newFrom, setNewFrom] = useState<number | null | undefined>(undefined);
+	/** The read marker of the first state of the thread. The "New" line starts after it. */
+	const openMarker = useRef<number | undefined>(undefined);
+	/** The older pages that the view read by itself to get to the read marker (see `UNREAD_PAGES`). */
+	const unreadPages = useRef(0);
 	/** True while a call of `chat.mark_thread_read` runs. */
 	const marking = useRef(false);
 	/** The state of the read of the older replies: "loading" while it runs, or the reason of a failure. */
@@ -212,16 +224,50 @@ export function ThreadPanel({
 			.catch(() => {});
 	}, [roomId, parentId]);
 
-	// The read marker: the first state of the thread fixes the "New" line. Then, while the view shows on a
+	/**
+	 * Reads the replies before the first reply that shows. A scroll to the top of the list and the button
+	 * both start it. One read runs at a time.
+	 */
+	const loadOlder = useCallback(() => {
+		const current = view.current;
+		const element = body.current;
+		if (!current?.current()?.hasOlder || olderAnchor.current !== null) return;
+		olderAnchor.current = element ? element.scrollHeight - element.scrollTop : 0;
+		setOlder({ status: "loading" });
+		current
+			.loadOlder()
+			.then(() => {
+				if (view.current === current) setOlder({ status: "idle" });
+			})
+			.catch((error: unknown) => {
+				olderAnchor.current = null;
+				if (view.current === current) setOlder({ status: "error", error: errorMessage(error) });
+			});
+	}, []);
+
+	// The read marker: the marker of the first state fixes the "New" line. Then, while the view shows on a
 	// visible page, each new reply of a different principal moves the marker to the newest reply.
+	// The marker never moves past a new reply that did not load. While new replies can be before the replies
+	// that show, the view reads the older pages, at most `UNREAD_PAGES`. After that, a scroll reads them.
 	const shownThread = state.status === "ready" ? state.thread : null;
 	useEffect(() => {
 		if (!shownThread || !follow) return;
-		const unread = firstUnread(shownThread.replies, follow.last_read_seq, ownId);
-		if (newFrom === undefined) {
-			setNewFrom(unread);
+		if (openMarker.current === undefined) openMarker.current = follow.last_read_seq;
+		const first = shownThread.replies[0];
+		const newBefore =
+			shownThread.hasOlder && first !== undefined && follow.last_read_seq < first.seq && follow.unread_count > 0;
+		if (newBefore) {
+			if (unreadPages.current < UNREAD_PAGES && olderAnchor.current === null) {
+				unreadPages.current += 1;
+				loadOlder();
+			}
 			return;
 		}
+		if (newFrom === undefined) {
+			setNewFrom(firstUnread(shownThread.replies, openMarker.current, ownId));
+			return;
+		}
+		const unread = firstUnread(shownThread.replies, follow.last_read_seq, ownId);
 		const follows = keeper.current;
 		const newest = shownThread.replies[shownThread.replies.length - 1];
 		if (unread === null || !newest || !follows || !visible || marking.current) return;
@@ -239,7 +285,7 @@ export function ThreadPanel({
 			.finally(() => {
 				marking.current = false;
 			});
-	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId, readFollowAgain]);
+	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId, readFollowAgain, loadOlder]);
 
 	async function toggleFollow() {
 		const follows = keeper.current;
@@ -273,27 +319,6 @@ export function ThreadPanel({
 		const element = body.current;
 		if (element && replyCount > 0 && stick.current) element.scrollTop = element.scrollHeight;
 	}, [replyCount]);
-
-	/**
-	 * Reads the replies before the first reply that shows. A scroll to the top of the list and the button
-	 * both start it. One read runs at a time.
-	 */
-	const loadOlder = useCallback(() => {
-		const current = view.current;
-		const element = body.current;
-		if (!current?.current()?.hasOlder || olderAnchor.current !== null) return;
-		olderAnchor.current = element ? element.scrollHeight - element.scrollTop : 0;
-		setOlder({ status: "loading" });
-		current
-			.loadOlder()
-			.then(() => {
-				if (view.current === current) setOlder({ status: "idle" });
-			})
-			.catch((error: unknown) => {
-				olderAnchor.current = null;
-				if (view.current === current) setOlder({ status: "error", error: errorMessage(error) });
-			});
-	}, []);
 
 	// After older replies came in above the list, the list keeps the reply that showed at its place.
 	const firstReply = state.status === "ready" ? state.thread.replies[0]?.id : undefined;

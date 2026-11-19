@@ -809,6 +809,10 @@ MCP clients. The app has no UI-only path.
         that it takes, and puts them in again after the page. So an old copy of the page never
         replaces a newer copy.
       - With older replies that do not show, the count of the view is the count of the thread.
+      - The read marker never moves past a new reply that did not load. When the newest page does not
+        reach the marker and the thread has new replies, the view reads older pages until it does, at
+        most 4 pages (`UNREAD_PAGES`). After that, a scroll reads them. The "New" line is after the
+        marker of the first state, and it shows when the view has the replies after that marker.
       After a new connect of the socket, the view reads the changes after its version, in pages. A new
       room list gives the version of the open room. The view reads only when that version is after
       its own version and after each version that it asked for before, or when its last read failed

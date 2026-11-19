@@ -9,6 +9,7 @@ import {
 	post,
 	postMarkdown,
 	react,
+	replaceText,
 	reply,
 	rowsWithText,
 	signIn,
@@ -147,6 +148,36 @@ test("a long thread shows its newest replies after one read, and the older repli
 	expect(new URL(`http://x${pageReads[1]}`).searchParams.get("before")).toBe(String(replies[10]?.seq));
 });
 
+test("a long thread with many new replies reads back to the read marker, and the New line marks the first new reply", async ({
+	browser,
+}) => {
+	const people = await Promise.all(
+		(["tomasz", "nadia", "chidi", "meiling"] as const).map((person) => signIn(browser, person)),
+	);
+	const [tomasz, ...others] = people;
+	if (!tomasz) throw new Error("no context");
+	const roomId = await createRoom(tomasz, unique("Unread thread"), others);
+	// Tomasz starts the thread, so he follows it with nothing read. The 60 replies of the others are new for him.
+	const parent = await post(tomasz, roomId, unique("unread thread start"));
+	const replies = [];
+	for (let index = 0; index < 60; index++) {
+		replies.push(await reply(others[index % others.length] as BrowserContext, roomId, parent.id, `u${index + 1}`));
+	}
+	const page = await tomasz.newPage();
+	await openRoom(page, roomId);
+	await page
+		.locator(".chat-messages .chat-message")
+		.filter({ hasText: parent.text })
+		.getByRole("button", { name: /60 replies/ })
+		.click();
+	const panel = page.getByRole("complementary", { name: "Thread" });
+	// The first new reply is older than the newest page. The view reads back to it before the marker moves.
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(60);
+	await expect(panel.locator(".chat-new")).toHaveCount(1);
+	await expect(panel.locator(".chat-new + li .chat-text")).toHaveText("u1");
+	await expect.poll(async () => (await threadFollow(tomasz, roomId, parent.id)).last_read_seq).toBe(replies[59]?.seq);
+});
+
 test("a thread opens beside the room, shows each new reply, and sends a reply, also to the room", async ({
 	browser,
 }) => {
@@ -271,7 +302,7 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 	await ownRow.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = mine.page.getByRole("textbox", { name: "New text of the message" });
 	const changed = unique("changed reply");
-	await editBox.fill(changed);
+	await replaceText(editBox, changed);
 	await mine.panel.getByRole("button", { name: "Save" }).click();
 	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
 	await expect(other.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
@@ -461,7 +492,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await row.hover();
 	await row.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
-	await editBox.fill("refused text");
+	await replaceText(editBox, "refused text");
 	await page.getByRole("button", { name: "Save" }).click();
 	await expect(editBox).toHaveText("refused text");
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
@@ -469,7 +500,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	// The change goes through: the new text shows at once, with the edited mark.
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 	const editAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/edit", "POST");
-	await editBox.fill("changed text");
+	await replaceText(editBox, "changed text");
 	await page.getByRole("button", { name: "Save" }).click();
 	const changed = page.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(changed.locator(".chat-edited")).toBeVisible();
