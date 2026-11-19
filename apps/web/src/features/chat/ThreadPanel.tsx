@@ -7,7 +7,7 @@ import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
-import { createCallLine } from "./callLine.ts";
+import { createCallLine, createToggleLine } from "./callLine.ts";
 import { bodyText, textToBody } from "./composerSchema.ts";
 import { type MessageWatch, usePageVisible } from "./data.ts";
 import { draftStorage } from "./drafts.ts";
@@ -98,8 +98,8 @@ export function ThreadPanel({
 	const [dialog, setDialog] = useState<{ type: "delete" | "edits"; message: ChatMessage } | null>(null);
 	// The emoji that the person uses most, as in the room. The list of the time that the view opened.
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId]);
-	/** The reaction calls that run, as "message id" and "emoji". */
-	const reacting = useRef(new Set<string>());
+	/** The reaction calls of each "message id" and "emoji": see `createToggleLine`. */
+	const reactions = useMemo(() => createToggleLine(), []);
 	// The edits of one message go one at a time, in order, so the room gets the newest edit last.
 	const editLine = useMemo(() => createCallLine(() => view.current !== null), []);
 	/** The state of the thread for the person, as the keeper has it. Null before the first read. */
@@ -297,22 +297,29 @@ export function ThreadPanel({
 		});
 	}
 
-	/** Adds or removes a reaction of the person. A second click while the call runs does nothing. */
+	/**
+	 * Adds or removes a reaction of the person, as in the room (`createToggleLine`): a second click of the
+	 * same kind while its call runs does nothing, and a click of the other kind waits for that call.
+	 */
 	function react(id: string, emoji: string, add: boolean) {
-		const call = `${id} ${emoji}`;
-		if (reacting.current.has(call)) return;
-		reacting.current.add(call);
 		setActionError(null);
 		const signedIn = accountChangeCount();
-		void api
-			.call(add ? "chat.add_reaction" : "chat.remove_reaction", { room_id: roomId, message_id: id, emoji })
-			.then(({ message }) => {
+		reactions(`${id} ${emoji}`, add, async () => {
+			// A click that waited does not go out after a sign-out: the next sign-in is a different session.
+			if (accountChangeCount() !== signedIn) return;
+			try {
+				const { message } = await api.call(add ? "chat.add_reaction" : "chat.remove_reaction", {
+					room_id: roomId,
+					message_id: id,
+					emoji,
+				});
 				view.current?.receive(message);
 				// As in the room: a reaction counts for the quick reactions, unless the person signed out.
 				if (add && accountChangeCount() === signedIn) countEmoji(draftStorage(), ownId, emoji);
-			})
-			.catch((error: unknown) => setActionError(errorMessage(error)))
-			.finally(() => reacting.current.delete(call));
+			} catch (error) {
+				setActionError(errorMessage(error));
+			}
+		});
 	}
 
 	/** Deletes a message. The answer has no message, so the view reads the changes of the thread. */
