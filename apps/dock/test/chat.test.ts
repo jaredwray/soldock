@@ -773,6 +773,7 @@ describe("the scopes of a key", () => {
 			"forbidden",
 		);
 		expect(await codeOf(read("chat.follow_thread", { ...thread, following: true }))).toBe("forbidden");
+		expect((await read("chat.list_threads")).threads).toEqual([]);
 		expect(await codeOf(read("chat.mark_thread_read", thread))).toBe("forbidden");
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
@@ -1869,6 +1870,56 @@ describe("threads", () => {
 		expect(await codeOf(ada.call("chat.mark_thread_read", { ...target, message_id: UNKNOWN_MESSAGE }))).toBe(
 			"not_found",
 		);
+	});
+
+	// The Threads view shows the threads of each room in one list, as in other chat apps.
+	it("lists the threads that a principal follows in all its rooms, newest reply first, with the unread replies", async () => {
+		const launch = await createRoom(ada, "public", "Launch", [bot.id]);
+		const ops = await createRoom(bot, "private", "Ops", [ada.id]);
+		const plan = await post(ada, launch.id, "Plan");
+		await reply(bot, launch.id, plan.id, "Looks good");
+		const alert = await post(bot, ops.id, "Disk is full");
+		await reply(ada, ops.id, alert.id, "On it");
+		const threads = async (actor: Actor, input: { filter?: "all" | "unread"; cursor?: string; limit?: number } = {}) =>
+			await actor.call("chat.list_threads", input);
+		const shown = (page: Awaited<ReturnType<typeof threads>>) =>
+			page.threads.map((thread) => [thread.room.name, thread.message_id, thread.unread_count]);
+
+		// The reply of the agent is new for Ada. The state of a different member comes after a moment.
+		await soon(async () =>
+			expect(shown(await threads(ada))).toEqual([
+				["Ops", alert.id, 0],
+				["Launch", plan.id, 1],
+			]),
+		);
+		const all = await threads(ada);
+		expect(all.unread_threads).toBe(1);
+		expect(all.threads[1]?.room).toMatchObject({ id: launch.id, kind: "public", role: "owner" });
+		expect(shown(await threads(ada, { filter: "unread" }))).toEqual([["Launch", plan.id, 1]]);
+		// Pages, with the cursor of the last thread.
+		const first = await threads(ada, { limit: 1 });
+		expect([shown(first), first.next_cursor === null]).toEqual([[["Ops", alert.id, 0]], false]);
+		const rest = await threads(ada, { limit: 1, cursor: first.next_cursor ?? "" });
+		expect([shown(rest), rest.next_cursor]).toEqual([[["Launch", plan.id, 1]], null]);
+		expect(await codeOf(threads(ada, { cursor: "not-a-cursor" }))).toBe("invalid");
+
+		// A read marker and a stop show in the list when the call returns.
+		await ada.call("chat.mark_thread_read", { room_id: launch.id, message_id: plan.id });
+		expect((await threads(ada)).unread_threads).toBe(0);
+		await ada.call("chat.follow_thread", { room_id: ops.id, message_id: alert.id, following: false });
+		expect(shown(await threads(ada))).toEqual([["Launch", plan.id, 0]]);
+
+		// An agent reads its list through MCP. A room that it leaves takes its threads away.
+		await soon(async () => {
+			const tool = await callTool(bot.key, "chat_list_threads", {});
+			const page = tool.structuredContent as Awaited<ReturnType<typeof threads>>;
+			expect(shown(page)).toEqual([
+				["Ops", alert.id, 1],
+				["Launch", plan.id, 0],
+			]);
+		});
+		await bot.call("chat.remove_member", { room_id: launch.id, principal_id: bot.id });
+		expect(shown(await threads(bot))).toEqual([["Ops", alert.id, 1]]);
 	});
 
 	// The threads from before the table of follows must keep their people after the change of the schema.

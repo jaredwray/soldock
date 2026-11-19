@@ -11,10 +11,10 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads. Later: the list of unread threads, files, search, browser notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads. Later: files, search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the table `chat_rooms` in each `PrincipalDO` (the joined rooms of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.edit_message`, `chat.delete_message`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.edit_message`, `chat.delete_message`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -251,8 +251,20 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       with its marker at the newest reply, also when it wrote a reply. A mention from before the table starts no follow.
     - A member that leaves loses its rows. A follow and a marker change the view of the caller only:
       they send no socket event, and they write no audit line.
-  - Known limits, for the next parts of threads: the list of rooms and the `PrincipalDO` know nothing of
-    the follows yet, so no list shows the unread threads. A mention in a reply that is not in the room list
+  - **The list of followed threads** (`chat.list_threads`). The state of a room for each member
+    (`principalState`) has the threads that the member follows and that have replies: at most 50
+    (`THREADS_PER_ROOM`), newest reply first, each with the time of its newest reply and its unread count
+    (`followedThreads`). The `PrincipalDO` keeps them in `chat_threads`, and sends `chat.threads` when they
+    change. See [`identity`](../identity/README.md#the-object-of-a-principal).
+    - A new, changed or deleted reply changes the room, so each member gets a new state, as for a message.
+    - `chat.follow_thread` and `chat.mark_thread_read` record that the `PrincipalDO` of the caller is
+      behind, in the same transaction as the change, and wait for the send. So the list has the change
+      when the call returns, as for `chat.mark_read`.
+    - `chat.list_threads` reads the `PrincipalDO` of the caller only, with the newest reply first, in
+      pages. `filter: unread` keeps the threads with new replies. `unread_threads` counts them, at most 100.
+    - A room that did not change since this version sends no threads: its followed threads show after
+      its next change.
+  - Known limits, for the next parts of threads: a mention in a reply that is not in the room list
     gives no mention count. An edit or a reaction of such a reply changes the version of the room, and
     `chat.list_messages` with `changed_after` returns nothing for it: a reader of the room finds it with
     `chat.list_replies` only.

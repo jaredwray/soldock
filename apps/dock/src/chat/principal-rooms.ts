@@ -137,6 +137,48 @@ export async function listJoinedRooms(
 	return { rooms: shown.map(toRecord), nextCursor };
 }
 
+/** A followed thread of a page, with the room as a record. */
+export interface FollowedThread {
+	room: RoomRecord;
+	parentId: string;
+	lastReplyAt: number;
+	unreadCount: number;
+}
+
+/**
+ * A page of the threads that a principal follows, from its `PrincipalDO`, with the newest reply first.
+ * Returns null for a cursor that is not from this list.
+ */
+export async function listFollowedThreads(
+	env: Env,
+	principalId: string,
+	input: { unread: boolean; cursor: string | null; limit: number },
+): Promise<{ threads: FollowedThread[]; nextCursor: string | null; unreadThreads: number } | null> {
+	const cursor =
+		input.cursor === null ? null : decodeCursor<[number, string, string]>(input.cursor, ["number", "string", "string"]);
+	if (input.cursor !== null && cursor === null) return null;
+	const listed = await principalStub(env, principalId).listChatThreads({
+		unread: input.unread,
+		after: cursor === null ? null : { lastReplyAt: cursor[0], roomId: cursor[1], parentId: cursor[2] },
+		limit: input.limit,
+	});
+	const shown = listed.threads.slice(0, input.limit);
+	const last = shown[shown.length - 1];
+	return {
+		threads: shown.map((thread) => ({
+			room: toRecord(thread.room),
+			parentId: thread.parent_id,
+			lastReplyAt: thread.last_reply_at,
+			unreadCount: thread.unread_count,
+		})),
+		nextCursor:
+			listed.threads.length > input.limit && last
+				? encodeCursor([last.last_reply_at, last.room.room_id, last.parent_id])
+				: null,
+		unreadThreads: listed.unreadThreads,
+	};
+}
+
 /**
  * The rooms of a page with the state of the principal in each room that it joined: the role, the read
  * marker, the unread count and the star. The index in D1 has no read marker and no star. A room that the `PrincipalDO` does

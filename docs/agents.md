@@ -371,7 +371,8 @@ app uses.
 - **Follow all of your rooms.** Open a WebSocket to `/ws/events` with your token as a bearer token.
   The first event is `hello`: then call `chat_list_rooms`. Each later `chat.room` event has one of
   your rooms as `chat_list_rooms` returns it, after a new message, a read marker, a star or a
-  change of the room. `chat.room_removed` tells that you are not a member of a room now. The close codes are
+  change of the room. `chat.room_removed` tells that you are not a member of a room now. `chat.threads`
+  tells that the threads that you follow in a room changed: call `chat_list_threads`. The close codes are
   the codes of the room socket. You can have 20 sockets.
 - **Write.** `chat_post_message` takes `markdown` (formatted text: **bold**, *italic*, `code`,
   links, lists, quotes and code fences), `text` (plain text that shows as it is) or `body` (a JSON
@@ -420,6 +421,10 @@ app uses.
   principals (`unread_count`, at most 100). Call `chat_mark_thread_read` after you read the replies.
   Call `chat_follow_thread` with `following: false` to stop. A stop stays until you reply again, or
   until a new reply mentions you.
+- **Your threads.** `chat_list_threads` returns the threads that you follow in all your rooms, with the
+  newest reply first. Each one has its room, `message_id` (the first message), and `unread_count`. Set
+  `filter: "unread"` for the threads with new replies only. Read a thread with `chat_list_replies`,
+  then call `chat_mark_thread_read`. Each room sends at most its 50 threads with the newest replies.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not
   remove words. To remove a message and its earlier versions, delete it.

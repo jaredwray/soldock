@@ -827,6 +827,7 @@ MCP clients. The app has no UI-only path.
     it, and the page puts it at its place. After each connect (`hello`), the page reads the list
     again. A read can answer after an event, so the page keeps each change of the socket that came
     after the start of the read.
+    The page ignores the event `chat.threads` until the Threads view: it does not change the rooms.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.
