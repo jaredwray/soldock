@@ -1,15 +1,17 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage } from "@soldock/contracts";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@soldock/contracts";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
 import { bodyText } from "./composerSchema.ts";
-import type { MessageWatch } from "./data.ts";
+import { type MessageWatch, usePageVisible } from "./data.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import type { MentionContext } from "./mentions.ts";
 import {
 	createThreadView,
+	firstUnread,
 	inThread,
 	type ReplyAttempt,
 	replyAttempt,
@@ -26,6 +28,10 @@ const STICK_PX = 80;
  * The view of one thread, beside the messages of the room: the message that starts it, its replies, and
  * a box for a reply. The socket of the room brings each change (`watch`), and `createThreadView` keeps
  * the thread: a change during the load, and the changes of a gap after a new connect, show too.
+ *
+ * The header has the follow of the person (`chat.follow_thread`). While the view shows and the page is
+ * visible, the view moves the read marker of the thread to the newest reply (`chat.mark_thread_read`). A
+ * "New" line marks the first reply that was new when the view opened.
  */
 export function ThreadPanel({
 	roomId,
@@ -66,6 +72,21 @@ export function ThreadPanel({
 	const retry = useRef<HTMLButtonElement>(null);
 	const boxId = useId();
 	const headingId = useId();
+	const ownId = useSession().whoami.principal.id;
+	const visible = usePageVisible();
+	/** The state of the thread for the person, from the newest read or own change. Null before the first read. */
+	const [follow, setFollow] = useState<ChatThreadFollow | null>(null);
+	/**
+	 * Each own change of the follow or of the marker adds 1. A read that started before the change does not
+	 * show its older state of the follow.
+	 */
+	const followEpoch = useRef(0);
+	const [followBusy, setFollowBusy] = useState(false);
+	const [followError, setFollowError] = useState<string | null>(null);
+	/** The seq of the first new reply when the view opened, for the "New" line. Undefined before the first read. */
+	const [newFrom, setNewFrom] = useState<number | null | undefined>(undefined);
+	/** True while a call of `chat.mark_thread_read` runs. */
+	const marking = useRef(false);
 
 	const load = useCallback(() => {
 		const current = view.current;
@@ -78,7 +99,13 @@ export function ThreadPanel({
 
 	useEffect(() => {
 		const thread = createThreadView(
-			(range) => api.call("chat.list_replies", { room_id: roomId, message_id: parentId, ...range }),
+			(range) => {
+				const epoch = followEpoch.current;
+				return api.call("chat.list_replies", { room_id: roomId, message_id: parentId, ...range }).then((page) => {
+					if (view.current === thread && epoch === followEpoch.current) setFollow(page.follow);
+					return page;
+				});
+			},
 			(next) => {
 				if (view.current === thread) setState({ status: "ready", thread: next });
 			},
@@ -95,6 +122,50 @@ export function ThreadPanel({
 			stop();
 		};
 	}, [roomId, parentId, watch, load]);
+
+	// The read marker: the first state of the thread fixes the "New" line. Then, while the view shows on a
+	// visible page, each new reply of a different principal moves the marker to the newest reply.
+	const shownThread = state.status === "ready" ? state.thread : null;
+	useEffect(() => {
+		if (!shownThread || !follow) return;
+		const unread = firstUnread(shownThread.replies, follow.last_read_seq, ownId);
+		if (newFrom === undefined) {
+			setNewFrom(unread);
+			return;
+		}
+		if (unread === null || !visible || marking.current) return;
+		marking.current = true;
+		const epoch = ++followEpoch.current;
+		api
+			.call("chat.mark_thread_read", { room_id: roomId, message_id: parentId })
+			.then((result) => {
+				if (epoch === followEpoch.current) setFollow(result.follow);
+			})
+			// The marker stays where it was. The next reply, or the next visible moment, tries again.
+			.catch(() => {})
+			.finally(() => {
+				marking.current = false;
+			});
+	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId]);
+
+	async function toggleFollow() {
+		if (!follow || followBusy) return;
+		setFollowBusy(true);
+		setFollowError(null);
+		const epoch = ++followEpoch.current;
+		try {
+			const result = await api.call("chat.follow_thread", {
+				room_id: roomId,
+				message_id: parentId,
+				following: !follow.following,
+			});
+			if (epoch === followEpoch.current) setFollow(result.follow);
+		} catch (error) {
+			setFollowError(errorMessage(error));
+		} finally {
+			setFollowBusy(false);
+		}
+	}
 
 	// The focus goes to the one action of an error, so a keyboard can try again at once.
 	useEffect(() => {
@@ -136,6 +207,16 @@ export function ThreadPanel({
 			});
 			view.current?.receive(message);
 			if (message.also_in_room) onSentToRoom(message);
+			// The room makes the author of a reply follow the thread, with its marker at its reply.
+			followEpoch.current += 1;
+			setFollow(
+				(current) =>
+					current && {
+						following: true,
+						last_read_seq: Math.max(current.last_read_seq, message.seq),
+						unread_count: 0,
+					},
+			);
 			lastAttempt.current = null;
 			stick.current = true;
 			setAlsoInRoom(false);
@@ -167,10 +248,31 @@ export function ThreadPanel({
 			<header className="chat-thread-header">
 				<h2 id={headingId}>Thread</h2>
 				<span className="chat-thread-room">{roomTitle}</span>
+				{follow && (
+					<button
+						type="button"
+						className={follow.following ? "button button-small chat-thread-following" : "button button-small"}
+						aria-pressed={follow.following}
+						title={
+							follow.following
+								? "You get the new replies of this thread. Click to stop."
+								: "Get the new replies of this thread"
+						}
+						disabled={followBusy}
+						onClick={() => void toggleFollow()}
+					>
+						{follow.following ? "Following" : "Follow"}
+					</button>
+				)}
 				<button type="button" className="icon-button" aria-label="Close the thread" title="Close" onClick={onClose}>
 					<Icon name="close" size={18} />
 				</button>
 			</header>
+			{followError && (
+				<p className="chat-thread-follow-error" role="alert">
+					The follow did not change. {followError}
+				</p>
+			)}
 			{state.status === "loading" && (
 				<p className="list-state" role="status">
 					Loading the thread…
@@ -201,9 +303,16 @@ export function ThreadPanel({
 						<div role="log" aria-label="Replies">
 							<ol className="chat-thread-replies">
 								{thread.replies.map((reply) => (
-									<li key={reply.id}>
-										<ThreadMessage message={reply} mentions={mentions} />
-									</li>
+									<Fragment key={reply.id}>
+										{reply.seq === newFrom && (
+											<li className="chat-new">
+												<span>New</span>
+											</li>
+										)}
+										<li className="chat-thread-reply">
+											<ThreadMessage message={reply} mentions={mentions} />
+										</li>
+									</Fragment>
 								))}
 							</ol>
 						</div>

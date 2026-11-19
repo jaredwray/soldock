@@ -1512,6 +1512,25 @@ a.chat-author:hover {
 	list-style: none;
 }
 
+/* The "New" line of the thread: the body has its own side space. */
+.chat-thread-replies .chat-new {
+	padding: 0;
+}
+
+/* The follow of the thread: the pressed state has the color of the primary action. */
+.chat-thread-following {
+	border-color: var(--primary);
+	color: var(--primary);
+}
+
+.chat-thread-follow-error {
+	margin: 0;
+	padding: 8px 16px;
+	border-bottom: 1px solid var(--border);
+	color: var(--negative);
+	font-size: 13px;
+}
+
 .chat-thread-composer {
 	display: flex;
 	flex-direction: column;

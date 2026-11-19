@@ -801,8 +801,18 @@ MCP clients. The app has no UI-only path.
       reply above the limit of characters disables the send, with a note of the excess.
     - On a narrow screen, the room under the view is hidden, so the room is not read: no read marker
       moves while the view shows.
+    - **Follow and read marker.** Each read of `chat.list_replies` brings the state of the person
+      (`follow`). The header has "Follow" or "Following" (`aria-pressed`), which calls
+      `chat.follow_thread`. An own reply makes the person follow, as the room does.
+      - While the view shows and the page is visible, each reply of a different principal after the
+        marker moves the marker to the newest reply (`chat.mark_thread_read`). A failure keeps the
+        marker, and the next reply tries again.
+      - The first read fixes the line "New" before the first new reply (`firstUnread`, the rule of the
+        unread count of the server). The line stays while the view shows, also after the marker moves.
+      - A read that started before an own change of the follow or of the marker does not show its older
+        state (`followEpoch`).
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
-      draft that stays. A thread has no unread state yet. The view reads all pages of a thread before
+      draft that stays. No list shows the unread threads yet. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after

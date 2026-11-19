@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage, ChatThreadFollow } from "@soldock/contracts";
 
 // The pure rules of the view of one thread. They have no DOM and no network, so apps/web/test checks them.
 
@@ -50,12 +50,27 @@ export const THREAD_RETRY_MAX_MS = 60_000;
 /** The shortest time between two reads for the room lists of a room that is not in the room list, in ms. */
 export const THREAD_POLL_MS = 15_000;
 
+/**
+ * The seq of the first new reply for a person: the first reply after the read marker of the thread that
+ * stays and that a different principal wrote, or null. The server counts `unread_count` with the same rule.
+ */
+export function firstUnread(
+	replies: readonly Pick<ChatMessage, "seq" | "deleted" | "author">[],
+	lastReadSeq: number,
+	ownId: string,
+): number | null {
+	const reply = replies.find((one) => one.seq > lastReadSeq && !one.deleted && one.author.principal_id !== ownId);
+	return reply?.seq ?? null;
+}
+
 /** One page of `chat.list_replies`. */
 export interface RepliesPage {
 	parent: ChatMessage;
 	replies: ChatMessage[];
 	version: number;
 	has_more: boolean;
+	/** The state of the thread for the caller: the follow, the read marker and the unread count. */
+	follow?: ChatThreadFollow | undefined;
 }
 
 /** Reads one page of the replies: the first page, the page after a seq, or the changes after a version. */

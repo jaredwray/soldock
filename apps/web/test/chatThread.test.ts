@@ -2,6 +2,7 @@ import type { ChatMessage } from "@soldock/contracts";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	createThreadView,
+	firstUnread,
 	mergeThread,
 	type RepliesPage,
 	replyAttempt,
@@ -156,6 +157,23 @@ describe("the data of the view of a thread", () => {
 			{ changed_after: 8 },
 		]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
+	});
+});
+
+describe("the first new reply", () => {
+	// The "New" line and the read marker of the view must follow the unread count of the server.
+	it("is the first reply after the marker that stays and that a different principal wrote", () => {
+		const own = { principal_id: "prn_01JD0000000000000000000OWN", kind: "human" as const, display_name: "Me" };
+		const replies = [
+			message(2, 2, "cmsg_1", "read"),
+			{ ...message(3, 3, "cmsg_1", "mine"), author: own },
+			{ ...message(4, 4, "cmsg_1", "gone"), deleted: true },
+			message(5, 5, "cmsg_1", "new"),
+		];
+		expect(firstUnread(replies, 2, own.principal_id)).toBe(5);
+		expect(firstUnread(replies, 5, own.principal_id)).toBeNull();
+		// With no marker, each reply of a different principal is new.
+		expect(firstUnread(replies, 0, own.principal_id)).toBe(2);
 	});
 });
 

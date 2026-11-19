@@ -80,6 +80,21 @@ export async function reply(context: BrowserContext, roomId: string, parentId: s
 	).message;
 }
 
+/** The state of a thread for the person of the context: the follow and the read marker, as the server has them. */
+export async function threadFollow(
+	context: BrowserContext,
+	roomId: string,
+	parentId: string,
+): Promise<{ following: boolean; last_read_seq: number; unread_count: number }> {
+	return (
+		await call<{ follow: { following: boolean; last_read_seq: number; unread_count: number } }>(
+			context.request,
+			"GET",
+			`/api/v1/chat/rooms/${roomId}/messages/${parentId}/replies?limit=1`,
+		)
+	).follow;
+}
+
 /** Adds a reaction of the person of the context to a message. */
 export async function react(context: BrowserContext, roomId: string, messageId: string, emoji: string): Promise<void> {
 	await call(context.request, "POST", `/api/v1/chat/rooms/${roomId}/messages/${messageId}/reactions`, { emoji });
