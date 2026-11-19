@@ -688,8 +688,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, ...fields });
 				view.apply(message);
 				// The next queued call of the message can start before the next render. It must compare with this
-				// answer, not with the message before it.
-				messagesNow.current = messagesNow.current.map((current) => (current.id === message.id ? message : current));
+				// answer, not with the message before it. A socket event with a newer version of the message stays.
+				messagesNow.current = messagesNow.current.map((current) =>
+					current.id === message.id && message.version >= current.version ? message : current,
+				);
 				endChange(id, change);
 			} catch (caught) {
 				// After a refusal, the old message shows again, and the edit box opens with the new body and files,
