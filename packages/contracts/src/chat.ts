@@ -739,7 +739,7 @@ export const listThreads = defineOperation({
 		"Read the replies of a thread with chat.list_replies, then call chat.mark_thread_read.",
 		"A thread with no reply that stays is not in the list. Each room sends at most the 50 threads with the newest replies.",
 		"Each room sends its changes to the list after the change. A list can be a moment behind a change.",
-		"Pass next_cursor as cursor to get the next page.",
+		"Pass next_cursor as cursor to get the next page. The first list of a principal in many rooms can return no threads with a next_cursor: call again with it until the threads come.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/threads" },
 	scopes: ["chat.read"],

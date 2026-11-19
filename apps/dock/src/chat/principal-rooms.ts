@@ -150,11 +150,14 @@ export interface FollowedThread {
  * room with no change since then sent none, so the first lists ask each such room for its state, in the
  * same parts as `seed`. A room that does not answer stays for the next list. The fill is complete when each
  * joined room answered one time.
+ *
+ * Returns true while rooms remain that the fill did not ask yet: more than `SEED_MAX`, or rooms of a fill of
+ * the room list that is not complete. Their threads can sort before each place in the list, so the list waits.
  */
-async function fillThreads(env: Env, principalId: string): Promise<void> {
+async function fillThreads(env: Env, principalId: string): Promise<boolean> {
 	const principal = principalStub(env, principalId);
 	let fill = await principal.threadFill(SEED_MAX + 1);
-	if (fill.filled) return;
+	if (fill.filled) return false;
 	// The rooms from before the object come with the fill of the room list first.
 	if (!fill.seeded) {
 		await seed(env, principalId);
@@ -180,22 +183,41 @@ async function fillThreads(env: Env, principalId: string): Promise<void> {
 		await principal.fillChatThreads(states, answered, false);
 	}
 	if (failed > 0) log("warn", "chat thread fill: rooms did not answer", { rooms: failed });
-	if (failed === 0 && fill.rooms.length <= SEED_MAX && fill.seeded) await principal.fillChatThreads([], [], true);
+	const more = fill.rooms.length > SEED_MAX || !fill.seeded;
+	if (failed === 0 && !more) await principal.fillChatThreads([], [], true);
+	return more;
 }
+
+/** The cursor of a list while the first fill of the threads continues: the next call asks the next rooms. */
+const FILL_CURSOR = encodeCursor(["fill"]);
 
 /**
  * A page of the threads that a principal follows, from its `PrincipalDO`, with the newest reply first.
  * Returns null for a cursor that is not from this list.
+ *
+ * While the first fill asks more rooms (`fillThreads`), the page is empty, and its cursor asks for the next
+ * part of the fill. The first page after the fill starts at the top. So a cursor of a place in the list comes
+ * only from a complete fill, and a later part of the fill cannot put a thread before it.
  */
 export async function listFollowedThreads(
 	env: Env,
 	principalId: string,
 	input: { unread: boolean; cursor: string | null; limit: number },
 ): Promise<{ threads: FollowedThread[]; nextCursor: string | null; unreadThreads: number } | null> {
+	const filling = input.cursor !== null && decodeCursor<[string]>(input.cursor, ["string"])?.[0] === "fill";
 	const cursor =
-		input.cursor === null ? null : decodeCursor<[number, string, string]>(input.cursor, ["number", "string", "string"]);
-	if (input.cursor !== null && cursor === null) return null;
-	await fillThreads(env, principalId);
+		input.cursor === null || filling
+			? null
+			: decodeCursor<[number, string, string]>(input.cursor, ["number", "string", "string"]);
+	if (input.cursor !== null && !filling && cursor === null) return null;
+	if (await fillThreads(env, principalId)) {
+		const { unreadThreads } = await principalStub(env, principalId).listChatThreads({
+			unread: true,
+			after: null,
+			limit: 1,
+		});
+		return { threads: [], nextCursor: FILL_CURSOR, unreadThreads };
+	}
 	const listed = await principalStub(env, principalId).listChatThreads({
 		unread: input.unread,
 		after: cursor === null ? null : { lastReplyAt: cursor[0], roomId: cursor[1], parentId: cursor[2] },

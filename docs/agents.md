@@ -424,7 +424,8 @@ app uses.
 - **Your threads.** `chat_list_threads` returns the threads that you follow in all your rooms, with the
   newest reply first. Each one has its room, `message_id` (the first message), and `unread_count`. Set
   `filter: "unread"` for the threads with new replies only. Read a thread with `chat_list_replies`,
-  then call `chat_mark_thread_read`. Each room sends at most its 50 threads with the newest replies.
+  then call `chat_mark_thread_read`. Each room sends at most its 50 threads with the newest replies. In
+  many rooms, your first call can return no threads with a `next_cursor`: call again with it.
   No MCP resource has the threads yet: the events socket (`chat.threads`) tells you when they change.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not

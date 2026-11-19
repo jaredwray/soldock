@@ -1970,6 +1970,31 @@ describe("threads", () => {
 		expect(pages).toEqual([fakeMessageId(3), fakeMessageId(2), fakeMessageId(1), plan.id]);
 	});
 
+	// A principal in many rooms: a later part of the fill must not put a thread before a cursor of a page.
+	it("keeps the list empty while the first fill has more rooms to ask, then starts at the top", async () => {
+		const room = await createRoom(bot, "public", "Launch", [ada.id]);
+		const alert = await post(bot, room.id, "Disk is full");
+		await reply(ada, room.id, alert.id, "On it");
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+		// The object goes back to before this version, with 201 more joined rooms that sent no threads.
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_threads");
+			state.storage.sql.exec("UPDATE chat_rooms SET threads_known = 0");
+			for (let n = 1; n <= 201; n++) {
+				state.storage.sql.exec(
+					"INSERT INTO chat_rooms (room_id, stamp, joined, activity_at) VALUES (?, 0, 1, ?)",
+					`rm_01JD${String(n).padStart(22, "0")}`,
+					n,
+				);
+			}
+		});
+		// The first call asks 200 rooms. One room is left, so the page is empty, with a cursor to go on.
+		const first = await ada.call("chat.list_threads", {});
+		expect([first.threads, first.next_cursor === null]).toEqual([[], false]);
+		const next = await ada.call("chat.list_threads", { cursor: first.next_cursor ?? "" });
+		expect([next.threads.map((thread) => thread.message_id), next.next_cursor]).toEqual([[alert.id], null]);
+	});
+
 	// The state of a room has a limit of threads, so its cost has one too.
 	it("sends at most 50 followed threads of one room, the threads with the newest replies", async () => {
 		const room = await createRoom(ada, "public", "Launch");

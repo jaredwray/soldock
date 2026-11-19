@@ -272,6 +272,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       as the fill of the room list. A room that does not answer stays for the next list. When each room
       answered, the object records that the fill is complete, and later lists ask nothing. The fill of the
       room list (`seed`) runs first when the object needs it.
+    - While rooms remain that the fill did not ask (more than 200), the page is empty, and its
+      `next_cursor` asks for the next part of the fill. The first page after the fill starts at the top. A
+      later part of the fill could put a thread before the place of a cursor, so a cursor of a place comes
+      only after the fill. A room that did not answer does not hold the list: it is asked again later.
     - A state from a room on an older version has no `threads`. The `PrincipalDO` then keeps the rows of
       that room as they were.
   - Known limits, for the next parts of threads: a mention in a reply that is not in the room list
