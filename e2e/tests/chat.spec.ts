@@ -175,6 +175,70 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(note).toBeFocused();
 });
 
+test("a reply in the view of a thread can change, get a reaction and be deleted, and each open view shows it", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const roomId = await createRoom(tomasz, unique("Reply actions room"), [nadia]);
+	const parent = await post(tomasz, roomId, unique("thread with actions"));
+	const own = unique("own reply");
+	const theirs = unique("their reply");
+	await reply(tomasz, roomId, parent.id, own);
+	await reply(nadia, roomId, parent.id, theirs);
+	const openThread = async (context: typeof tomasz) => {
+		const page = await context.newPage();
+		await openRoom(page, roomId);
+		await page
+			.locator(".chat-messages .chat-message")
+			.filter({ hasText: parent.text })
+			.getByRole("button", { name: /2 replies/ })
+			.click();
+		const panel = page.getByRole("complementary", { name: "Thread" });
+		await expect(panel.locator(".chat-thread-reply")).toHaveCount(2);
+		return { page, panel };
+	};
+	const mine = await openThread(tomasz);
+	const other = await openThread(nadia);
+
+	// The author changes its reply in the view. The other view shows the new text.
+	const ownRow = mine.panel.locator(".chat-thread-reply").filter({ hasText: own });
+	await ownRow.hover();
+	await ownRow.getByRole("button", { name: /Change your message/ }).click();
+	const editBox = mine.page.getByRole("textbox", { name: "New text of the message" });
+	const changed = unique("changed reply");
+	await editBox.fill(changed);
+	await mine.panel.getByRole("button", { name: "Save" }).click();
+	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
+	await expect(other.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
+	// A reply of a different person has no change button.
+	const theirRow = mine.panel.locator(".chat-thread-reply").filter({ hasText: theirs });
+	await theirRow.hover();
+	await expect(theirRow.getByRole("button", { name: /Change your message/ })).toHaveCount(0);
+
+	// A quick reaction to the reply of a different person shows in each view.
+	await theirRow.getByRole("button", { name: "React with thumbs up" }).click();
+	await expect(theirRow.getByRole("button", { name: "thumbs up: 1 reaction, with yours" })).toBeVisible();
+	await expect(
+		other.panel
+			.locator(".chat-thread-reply")
+			.filter({ hasText: theirs })
+			.getByRole("button", { name: /^thumbs up: 1 reaction/ }),
+	).toBeVisible();
+
+	// The author deletes its reply, after a confirmation. Each view shows the reply as deleted.
+	const changedRow = mine.panel.locator(".chat-thread-reply").filter({ hasText: changed });
+	await changedRow.hover();
+	await changedRow.getByRole("button", { name: /Delete the message/ }).click();
+	await mine.page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: "This message was deleted." })).toHaveCount(
+		1,
+	);
+	await expect(other.panel.locator(".chat-thread-reply").filter({ hasText: "This message was deleted." })).toHaveCount(
+		1,
+	);
+});
+
 test("the Threads view lists the followed threads with their new replies, and a thread read there loses its count", async ({
 	browser,
 }) => {

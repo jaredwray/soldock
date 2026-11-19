@@ -190,6 +190,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 					roomTitle={roomTitle(open.room)}
 					parentId={open.message_id}
 					mentions={mentions}
+					canDeleteAll={open.room.role === "owner"}
 					watch={watch}
 					// The view has no list of the room: the room shows the reply when it opens.
 					onSentToRoom={() => {}}

@@ -816,9 +816,19 @@ MCP clients. The app has no UI-only path.
         that part. The answer of the own call sets its part, unless an own reply changed it during the
         call. Then the order of the two on the server is not known, so the view reads the state again
         after both. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
-    - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
-      draft that stays. The view reads all pages of a thread before
-      it shows, and shows each reply, so a very long thread is slow
+    - **Actions.** Each message of the view, the first message and each reply, is a row of the room
+      (`MessageItem.tsx`, which the room list uses too). It has the same actions: the quick reactions and
+      the list of emoji, change (the author only), delete (the author, or an owner of the room, after a
+      confirmation), the earlier versions (owners and admins of the organization), and a link from the
+      author to the profile.
+      - The view shows the answer of the room (`receive`). A delete has no message in its answer, so the
+        view reads the changes of the thread. The socket of the room brings each change to each other open
+        view.
+      - A refused change opens the edit box again with the new text. A refusal shows its reason under the
+        first message.
+      - A reply has no "Copy a link": no path opens a thread yet.
+    - Known limits, for the next parts: the view keeps no draft after a reload. The view reads all pages
+      of a thread before it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection

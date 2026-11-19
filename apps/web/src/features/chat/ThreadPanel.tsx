@@ -1,13 +1,18 @@
 import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@asterra/contracts";
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
-import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
+import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
-import { bodyText } from "./composerSchema.ts";
+import { bodyText, textToBody } from "./composerSchema.ts";
 import { type MessageWatch, usePageVisible } from "./data.ts";
-import { MessageBody } from "./MessageBody.tsx";
+import { draftStorage } from "./drafts.ts";
+import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
+import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
+import { MessageItem } from "./MessageItem.tsx";
 import type { MentionContext } from "./mentions.ts";
 import {
 	createFollowKeeper,
@@ -34,12 +39,17 @@ const STICK_PX = 80;
  * The header has the follow of the person (`chat.follow_thread`). While the view shows and the page is
  * visible, the view moves the read marker of the thread to the newest reply (`chat.mark_thread_read`). A
  * "New" line marks the first reply that was new when the view opened.
+ *
+ * Each message has the actions of a message of the room (`MessageItem`): react, change, delete, and the
+ * earlier versions. The view shows the answer of the room, and the socket brings the change to each other
+ * view. A reply has no link to copy: no path opens a thread yet.
  */
 export function ThreadPanel({
 	roomId,
 	roomTitle,
 	parentId,
 	mentions,
+	canDeleteAll,
 	watch,
 	onSentToRoom,
 	onClose,
@@ -48,6 +58,8 @@ export function ThreadPanel({
 	roomTitle: string;
 	parentId: string;
 	mentions: MentionContext;
+	/** True for an owner of the room, who can delete each message. */
+	canDeleteAll: boolean;
 	watch: (listener: (event: MessageWatch) => void) => () => void;
 	/** Gets a reply that also went to the room, so the room list shows it at once. */
 	onSentToRoom: (message: ChatMessage) => void;
@@ -74,8 +86,19 @@ export function ThreadPanel({
 	const retry = useRef<HTMLButtonElement>(null);
 	const boxId = useId();
 	const headingId = useId();
-	const ownId = useSession().whoami.principal.id;
+	const self = useSession().whoami.principal;
+	const ownId = self.id;
+	const readsEdits = isOrgAdmin(self);
 	const visible = usePageVisible();
+	/** The message in edit: its id, the body that the box started with, and the body in the box now. */
+	const [editing, setEditing] = useState<{ id: string; initial: ChatBody; body: ChatBody | null } | null>(null);
+	/** The reason of an edit, a reaction or a delete that the room refused. */
+	const [actionError, setActionError] = useState<string | null>(null);
+	const [dialog, setDialog] = useState<{ type: "delete" | "edits"; message: ChatMessage } | null>(null);
+	// The emoji that the person uses most, as in the room. The list of the time that the view opened.
+	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId]);
+	/** The reaction calls that run, as "message id" and "emoji". */
+	const reacting = useRef(new Set<string>());
 	/** The state of the thread for the person, as the keeper has it. Null before the first read. */
 	const [follow, setFollow] = useState<ChatThreadFollow | null>(null);
 	/** Keeps the follow and the marker apart, so an older answer never hides an own change (`createFollowKeeper`). */
@@ -254,6 +277,79 @@ export function ThreadPanel({
 		}
 	}
 
+	async function saveEdit() {
+		if (!editing?.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars) return;
+		const { id, body } = editing;
+		setEditing(null);
+		setActionError(null);
+		try {
+			const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, body });
+			view.current?.receive(message);
+		} catch (error) {
+			// The edit box opens again with the new body, so the person does not write it again.
+			setEditing((current) => current ?? { id, initial: body, body });
+			setActionError(errorMessage(error));
+		}
+	}
+
+	/** Adds or removes a reaction of the person. A second click while the call runs does nothing. */
+	function react(id: string, emoji: string, add: boolean) {
+		const call = `${id} ${emoji}`;
+		if (reacting.current.has(call)) return;
+		reacting.current.add(call);
+		setActionError(null);
+		const signedIn = accountChangeCount();
+		void api
+			.call(add ? "chat.add_reaction" : "chat.remove_reaction", { room_id: roomId, message_id: id, emoji })
+			.then(({ message }) => {
+				view.current?.receive(message);
+				// As in the room: a reaction counts for the quick reactions, unless the person signed out.
+				if (add && accountChangeCount() === signedIn) countEmoji(draftStorage(), ownId, emoji);
+			})
+			.catch((error: unknown) => setActionError(errorMessage(error)))
+			.finally(() => reacting.current.delete(call));
+	}
+
+	/** Deletes a message. The answer has no message, so the view reads the changes of the thread. */
+	async function remove(id: string) {
+		await api.call("chat.delete_message", { room_id: roomId, message_id: id });
+		view.current?.catchUp();
+	}
+
+	/** The props of `MessageItem` for one message of the view. */
+	function itemProps(message: ChatMessage) {
+		const own = message.author.principal_id === ownId;
+		return {
+			message,
+			rowKey: message.id,
+			marked: false,
+			onCopyLink: null,
+			pending: null,
+			mentions,
+			head: true,
+			own,
+			canDelete: own || canDeleteAll,
+			editing: editing?.id === message.id ? editing : null,
+			onEditStart: () => {
+				setActionError(null);
+				const initial = message.body ?? textToBody(message.text);
+				setEditing({ id: message.id, initial, body: initial });
+			},
+			onEditChange: (next: ChatBody | null) =>
+				setEditing((current) => (current?.id === message.id ? { ...current, body: next } : current)),
+			onEditSave: () => void saveEdit(),
+			onEditCancel: () => setEditing(null),
+			onDelete: () => setDialog({ type: "delete", message }),
+			onOpenThread: null,
+			onShowEdits: readsEdits ? () => setDialog({ type: "edits", message }) : null,
+			onSendAgain: () => {},
+			onSendCancel: () => {},
+			ownId,
+			quickEmoji,
+			onReact: (emoji: string, add: boolean) => react(message.id, emoji, add),
+		};
+	}
+
 	const thread = state.status === "ready" ? state.thread : null;
 	return (
 		<aside
@@ -317,7 +413,14 @@ export function ThreadPanel({
 							stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX;
 						}}
 					>
-						<ThreadMessage message={thread.parent} mentions={mentions} />
+						<ul className="chat-thread-parent">
+							<MessageItem {...itemProps(thread.parent)} />
+						</ul>
+						{actionError && (
+							<p className="chat-thread-action-error" role="alert">
+								The change did not go through. {actionError}
+							</p>
+						)}
 						<p className="chat-thread-count">
 							{thread.replies.length === 0 ? "No replies yet" : plural(thread.replies.length, "reply", "replies")}
 						</p>
@@ -330,9 +433,7 @@ export function ThreadPanel({
 												<span>New</span>
 											</li>
 										)}
-										<li className="chat-thread-reply">
-											<ThreadMessage message={reply} mentions={mentions} />
-										</li>
+										<MessageItem {...itemProps(reply)} className="chat-thread-reply" />
 									</Fragment>
 								))}
 							</ol>
@@ -392,42 +493,37 @@ export function ThreadPanel({
 					)}
 				</>
 			)}
+			{dialog?.type === "delete" && (
+				<ConfirmDialog
+					title="Delete this message?"
+					confirmLabel="Delete"
+					danger
+					onClose={() => setDialog(null)}
+					onConfirm={() => remove(dialog.message.id)}
+				>
+					<p>The text of the message is deleted for each member. This cannot be undone.</p>
+				</ConfirmDialog>
+			)}
+			{dialog?.type === "edits" &&
+				(() => {
+					// The newest copy of the message. A delete removes the earlier versions, so the dialog closes.
+					const current =
+						thread &&
+						(thread.parent.id === dialog.message.id
+							? thread.parent
+							: thread.replies.find((reply) => reply.id === dialog.message.id));
+					const shown = current ?? dialog.message;
+					if (shown.deleted) return null;
+					return (
+						<EditHistoryDialog
+							key={shown.edited_at ?? ""}
+							roomId={roomId}
+							message={shown}
+							mentions={mentions}
+							onClose={() => setDialog(null)}
+						/>
+					);
+				})()}
 		</aside>
-	);
-}
-
-/** One message of the thread: its author, its time and its body. */
-function ThreadMessage({ message, mentions }: { message: ChatMessage; mentions: MentionContext }) {
-	const author = message.author.display_name;
-	return (
-		<article className="chat-thread-message">
-			<span
-				className={message.author.kind === "agent" ? "chat-avatar chat-avatar-agent" : "chat-avatar"}
-				aria-hidden="true"
-			>
-				{initials(author)}
-			</span>
-			<div>
-				<p className="chat-message-meta">
-					<strong className="chat-author">{author}</strong>
-					{message.author.kind === "agent" && <span className="kind kind-agent">agent</span>}
-					<time className="chat-time" dateTime={message.created_at} title={fullDate(message.created_at)}>
-						{shortDate(message.created_at)}
-					</time>
-				</p>
-				{message.deleted ? (
-					<p className="chat-text chat-text-deleted">This message was deleted.</p>
-				) : (
-					<div className="chat-text">
-						<MessageBody body={message.body} text={message.text} mentions={mentions} />
-						{message.edited_at && (
-							<span className="chat-edited" title={fullDate(message.edited_at)}>
-								(edited)
-							</span>
-						)}
-					</div>
-				)}
-			</div>
-		</article>
 	);
 }
