@@ -1476,13 +1476,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * A message and a page of its replies, oldest first: the first replies, the replies after a seq, or
-	 * the replies that changed after a version of the room.
+	 * A message and a page of its replies, oldest first: the first replies, the last replies before a seq,
+	 * the replies after a seq, or the replies that changed after a version of the room.
 	 */
 	listReplies(
 		call: RoomCall,
 		messageId: string,
-		input: { after: number | null; changedAfter: number | null; limit: number },
+		input: { before: number | null; after: number | null; changedAfter: number | null; limit: number },
 	):
 		| { parent: MessageRecord; replies: MessageRecord[]; version: number; hasMore: boolean; follow: ThreadFollowRecord }
 		| Refusal {
@@ -1491,6 +1491,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const thread = this.threadParent(messageId);
 		if ("error" in thread) return thread;
 		const { parent } = thread;
+		// One row more than the page tells if more replies exist in the direction of the read.
 		const rows =
 			input.changedAfter !== null
 				? this.all<MessageRow>(
@@ -1499,15 +1500,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 						input.changedAfter,
 						input.limit + 1,
 					)
-				: this.all<MessageRow>(
-						"SELECT * FROM messages WHERE parent_id = ? AND seq > ? ORDER BY seq LIMIT ?",
-						messageId,
-						input.after ?? 0,
-						input.limit + 1,
-					);
+				: input.before !== null
+					? this.all<MessageRow>(
+							"SELECT * FROM messages WHERE parent_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?",
+							messageId,
+							input.before,
+							input.limit + 1,
+						)
+					: this.all<MessageRow>(
+							"SELECT * FROM messages WHERE parent_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+							messageId,
+							input.after ?? 0,
+							input.limit + 1,
+						);
+		const page = rows.slice(0, input.limit);
+		// The last replies before a seq come newest first from the table. The page has them oldest first.
+		if (input.changedAfter === null && input.before !== null) page.reverse();
 		return {
 			parent: this.messageRecord(opened.room.room_id, parent),
-			replies: this.messageRecords(opened.room.room_id, rows.slice(0, input.limit)),
+			replies: this.messageRecords(opened.room.room_id, page),
 			version: opened.room.version,
 			hasMore: rows.length > input.limit,
 			follow: this.threadFollow(messageId, call.actor.principal_id),

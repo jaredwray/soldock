@@ -286,6 +286,8 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const opened = openRoom(call, input.room_id);
 		const page = accept(
 			await opened.room.listReplies(opened.ctx, input.message_id, {
+				// The newest replies are the replies before a seq that no reply has.
+				before: input.newest === "true" ? Number.MAX_SAFE_INTEGER : (input.before ?? null),
 				after: input.after ?? null,
 				changedAfter: input.changed_after ?? null,
 				limit: input.limit ?? DEFAULT_PAGE,

@@ -36,6 +36,8 @@ type LoadState = { status: "loading" } | { status: "ready"; thread: ThreadState 
 
 /** The distance from the end of the replies, in pixels, under which a new reply moves the list to its end. */
 const STICK_PX = 80;
+/** The distance from the top of the list, in pixels, under which a scroll reads the older replies. */
+const OLDER_PX = 200;
 
 /**
  * The view of one thread, beside the messages of the room: the message that starts it, its replies, and
@@ -145,6 +147,15 @@ export function ThreadPanel({
 	const [newFrom, setNewFrom] = useState<number | null | undefined>(undefined);
 	/** True while a call of `chat.mark_thread_read` runs. */
 	const marking = useRef(false);
+	/** The state of the read of the older replies: "loading" while it runs, or the reason of a failure. */
+	const [older, setOlder] = useState<{ status: "idle" | "loading" } | { status: "error"; error: string }>({
+		status: "idle",
+	});
+	/**
+	 * The distance from the top of the list to its end before older replies came in. The list keeps it, so
+	 * the reply that showed stays at its place.
+	 */
+	const olderAnchor = useRef<number | null>(null);
 
 	const load = useCallback(() => {
 		const current = view.current;
@@ -262,6 +273,38 @@ export function ThreadPanel({
 		const element = body.current;
 		if (element && replyCount > 0 && stick.current) element.scrollTop = element.scrollHeight;
 	}, [replyCount]);
+
+	/**
+	 * Reads the replies before the first reply that shows. A scroll to the top of the list and the button
+	 * both start it. One read runs at a time.
+	 */
+	const loadOlder = useCallback(() => {
+		const current = view.current;
+		const element = body.current;
+		if (!current?.current()?.hasOlder || olderAnchor.current !== null) return;
+		olderAnchor.current = element ? element.scrollHeight - element.scrollTop : 0;
+		setOlder({ status: "loading" });
+		current
+			.loadOlder()
+			.then(() => {
+				if (view.current === current) setOlder({ status: "idle" });
+			})
+			.catch((error: unknown) => {
+				olderAnchor.current = null;
+				if (view.current === current) setOlder({ status: "error", error: errorMessage(error) });
+			});
+	}, []);
+
+	// After older replies came in above the list, the list keeps the reply that showed at its place.
+	const firstReply = state.status === "ready" ? state.thread.replies[0]?.id : undefined;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the effect reads and moves the DOM only.
+	useLayoutEffect(() => {
+		const element = body.current;
+		const anchor = olderAnchor.current;
+		if (anchor === null) return;
+		olderAnchor.current = null;
+		if (element) element.scrollTop = element.scrollHeight - anchor;
+	}, [firstReply]);
 
 	/** Gives the focus to the box of the reply. */
 	const focusBox = useCallback(() => composer.current?.focus(), []);
@@ -512,6 +555,8 @@ export function ThreadPanel({
 						onScroll={(event) => {
 							const element = event.currentTarget;
 							stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX;
+							// Near the top, the older replies come in. A failed read waits for the button.
+							if (element.scrollTop < OLDER_PX && older.status === "idle") loadOlder();
 						}}
 					>
 						<ul className="chat-thread-parent">
@@ -523,8 +568,30 @@ export function ThreadPanel({
 							</p>
 						)}
 						<p className="chat-thread-count">
-							{thread.replies.length === 0 ? "No replies yet" : plural(thread.replies.length, "reply", "replies")}
+							{thread.hasOlder
+								? // Only the newest part of the replies shows: the count is the count of the thread.
+									plural(thread.parent.thread?.reply_count ?? thread.replies.length, "reply", "replies")
+								: thread.replies.length === 0
+									? "No replies yet"
+									: plural(thread.replies.length, "reply", "replies")}
 						</p>
+						{thread.hasOlder && (
+							<p className="chat-more">
+								<button
+									type="button"
+									className="button button-small"
+									disabled={older.status === "loading"}
+									onClick={loadOlder}
+								>
+									{older.status === "loading" ? "Loading…" : "Show older replies"}
+								</button>
+							</p>
+						)}
+						{older.status === "error" && (
+							<p className="chat-thread-action-error" role="alert">
+								The older replies did not load. {older.error}
+							</p>
+						)}
 						<div role="log" aria-label="Replies">
 							<ol className="chat-thread-replies">
 								{thread.replies.map((reply) => (

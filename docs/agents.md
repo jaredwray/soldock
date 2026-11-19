@@ -446,7 +446,8 @@ app uses.
 - **Threads.** To reply to a message, call `chat_post_message` with `parent_id`: the id of the message.
   A reply is not in `chat_list_messages`, and it does not make the room unread. Set
   `also_in_room: true` when each member must see the reply in the room too. A message with replies
-  has `thread`, with the number of replies. Read the replies with `chat_list_replies`. A thread has
+  has `thread`, with the number of replies. Read the replies with `chat_list_replies`. For a long
+  thread, set `newest: "true"` to get the newest replies, and `before` to get older replies. A thread has
   one level: reply to the first message of a thread, not to a reply. A chat webhook for a reply has
   `parent_id`. A mention in a reply that is not in the room gives no `mention_count` yet, and
   `chat_list_messages` with `changed_after` does not show an edit or a reaction of such a reply.

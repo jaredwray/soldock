@@ -816,7 +816,9 @@ export const listReplies = defineOperation({
 	summary: "Read the replies of a message, or get what changed",
 	description: [
 		"Returns the message (parent) and its replies, oldest first.",
-		"Without after and changed_after, returns the first replies. has_more is true when more replies exist: pass the seq of the last reply as after to get them.",
+		"Without newest, before, after and changed_after, returns the first replies. has_more is true when more replies exist: pass the seq of the last reply as after to get them.",
+		'With newest: "true", returns the newest replies. has_more is true when older replies exist: pass the seq of the first reply as before to get them.',
+		"With before, returns the last replies before that seq. has_more is true when older replies exist: pass the seq of the first reply as before again.",
 		"With changed_after, returns each reply that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
 		"When has_more is true with changed_after, call again with the version of the last reply as changed_after.",
 		"The replies of a deleted message stay, and this operation returns them.",
@@ -831,13 +833,19 @@ export const listReplies = defineOperation({
 		.strictObject({
 			room_id: RoomId,
 			message_id: MessageId,
+			newest: z.enum(["true", "false"]).optional(),
+			before: z.coerce.number().int().min(1).optional(),
 			after: z.coerce.number().int().min(0).optional(),
 			changed_after: z.coerce.number().int().min(0).optional(),
 			limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
 		})
-		.refine((input) => input.after === undefined || input.changed_after === undefined, {
-			message: "set only one of after and changed_after",
-		}),
+		.refine(
+			(input) =>
+				[input.newest === "true" ? true : undefined, input.before, input.after, input.changed_after].filter(
+					(value) => value !== undefined,
+				).length <= 1,
+			{ message: "set only one of newest, before, after and changed_after" },
+		),
 	output: z.object({
 		parent: ChatMessage,
 		replies: z.array(ChatMessage),

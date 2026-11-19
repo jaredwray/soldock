@@ -799,8 +799,16 @@ MCP clients. The app has no UI-only path.
       for a reply. "Also send to <room>" sends the reply to the room list too.
     - `createThreadView` (`thread.ts`) keeps the data of the view, with no DOM. The watch of the socket
       (`watchMessages`) starts before the load. A change that comes during the load waits, and goes
-      into the thread after it. The load reads each page of `chat.list_replies`, then the changes
-      after the version of its first page, so a change during the read of a later page shows too.
+      into the thread after it. The load reads the newest page of `chat.list_replies` (`newest`) in one
+      request, then the changes after the version of that page.
+      - "Show older replies", and a scroll to the top of the view, read the page before the first reply
+        that shows (`before`). One read runs at a time. The reply that showed stays at its place. A
+        failure shows its reason, and the button tries again.
+      - While older replies do not show, a change of a reply before the first reply that shows does not
+        go in, so the list has no gap. While a read of an older page runs, the view keeps each message
+        that it takes, and puts them in again after the page. So an old copy of the page never
+        replaces a newer copy.
+      - With older replies that do not show, the count of the view is the count of the thread.
       After a new connect of the socket, the view reads the changes after its version, in pages. A new
       room list gives the version of the open room. The view reads only when that version is after
       its own version and after each version that it asked for before, or when its last read failed
@@ -859,8 +867,8 @@ MCP clients. The app has no UI-only path.
       view closes, an upload that runs stops, and a file that is in the drive goes to the trash, except
       a file of a send (see the X of a chip below). Escape does not close a view that has files in its
       box.
-    - Known limits, for the next parts: the view keeps no draft after a reload. The view reads all pages
-      of a thread before it shows, and shows each reply, so a very long thread is slow
+    - Known limits, for the next parts: the view keeps no draft after a reload. The view keeps each
+      reply that it read, so a thread that the person reads far back keeps many rows
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
