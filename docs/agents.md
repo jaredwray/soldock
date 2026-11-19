@@ -414,7 +414,7 @@ app uses.
 - **Files.** Upload each file to your own drive first (`drive_upload_file`, or `drive_create_upload` for
   a large file). Set `room_id` on the upload: the file then goes into the folder `Chat/<room name>` of
   your drive, which the server makes (for a direct message, the folder has the name of the other
-  person). Then pass `file_ids` to `chat_post_message`, at most 10. A message with files can have
+  person). `room_id` needs the `chat.read` scope too. Then pass `file_ids` to `chat_post_message`, at most 10. A message with files can have
   no text. This needs the `drive.share` scope too. Each member of the room can then download a file with
   `chat_download_file`, and nobody else can: a principal that is not a member gets `not_found`, also in a
   public room. A member that leaves the room cannot download the files after that. `chat_edit_message`

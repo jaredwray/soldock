@@ -199,16 +199,27 @@ they are not there. The web app sets it for each file of a message, and an agent
 
 - The room gives the name of the folder (`folderName` of the `ChatRoomDO`): the name of the room, or the
   name of the other member of a direct message. A slash, a backslash and a control character become a
-  hyphen. A principal that is not a member of the room gets `not_found`, also for a public room, and no
-  folder comes.
+  hyphen, and an empty name, `.` or `..` becomes "Room". A principal that is not a member of the room gets
+  `not_found`, also for a public room, and no folder comes.
+- The name of the folder is the name of a room, and the answer tells which rooms the principal is in. So
+  `room_id` needs the `chat.read` scope too, apart from `drive.write`.
 - `room_id` goes with neither `parent_id` nor `space_id`: the folders of Chat are in the own drive only.
 - The drive keeps the folder of each room id (`chat_folders`), and the folder of "Chat" itself (`meta`,
   key `chat_root_id`). So two rooms with one name have two folders.
 - A room with a new name renames its folder at the next upload, unless the person renamed the folder.
-  The drive keeps the name that it gave the folder (`named`) to see that.
+  The drive keeps the name that it gave the folder (`named`) to see that. Known limit: an upload that read
+  the room before a rename can give the folder the old name again. The next upload gives the new name.
 - A folder that the person moved stays in use where it is now.
-- A folder in the trash, a deleted folder, and a folder in a move to a different drive get a new folder.
-  So does the folder of "Chat" itself.
+- A folder in the trash, and a deleted folder, get a new folder. So does the folder of "Chat" itself.
+- The folder of a room is one level under "Chat". When "Chat" is at the last level of folders (30), a new
+  "Chat" comes at the root.
+- The drive finds "Chat" by its id (`chat_root_id`), not by its name. A folder "Chat" that the person
+  made is not that folder. After a restore of a "Chat" from the trash, the two folders stay in use: each
+  for the rooms whose folders it holds.
+- The folders come before the checks of the upload. When the upload then fails (the limit of open
+  uploads, a bad body), the empty folder stays, and the next upload uses it.
+- The audit line of the upload covers the folders that it made or renamed. The folders send the drive
+  events (`drive.item.created`, `drive.item.updated`) and change the version of the drive.
 - A file of a message from before these folders stays where it is.
 
 ## The trash

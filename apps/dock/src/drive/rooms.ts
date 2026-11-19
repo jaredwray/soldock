@@ -44,10 +44,10 @@ export async function roomFile(
  * cannot have, and at most the length of an item name.
  */
 function folderNameOf(name: string): string {
-	const clean = name
-		.replace(/[\p{Cc}\\/]/gu, "-")
-		.trim()
+	// Cut by code point, so a long name never keeps half of a surrogate pair.
+	const clean = Array.from(name.replace(/[\p{Cc}\\/]/gu, "-").trim())
 		.slice(0, DRIVE_LIMITS.nameChars)
+		.join("")
 		.trim();
 	return clean === "" || clean === "." || clean === ".." ? "Room" : clean;
 }
@@ -58,6 +58,11 @@ function folderNameOf(name: string): string {
  * and no folder comes.
  */
 export async function chatFolderFor(call: CallContext, roomId: string): Promise<string> {
+	// The name of the folder is the name of a room, and the answer tells which rooms the principal is in. That
+	// is Chat data, so the credential needs chat.read, as for a read of the room.
+	if (!call.caller.scopes.has("chat.read")) {
+		throw new OperationError("forbidden", "To use room_id, the credential needs the chat.read scope.");
+	}
 	const room = call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId));
 	const answer = (await room.folderName({ roomId, actor: actorOf(call) })) as
 		| { name: string }

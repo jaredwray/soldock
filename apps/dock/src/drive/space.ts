@@ -2121,7 +2121,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			const folder = live(known?.folder_id ?? null);
 			if (known && folder) {
 				folderId = folder.id;
-				// The person did not rename the folder, so it takes the new name of the room.
+				// The person did not rename the folder, so it takes the new name of the room. A call that read the room
+				// before a rename can give the old name back. The next upload gives the new name again.
 				if (folder.name === known.named && known.named !== input.name) {
 					this.sql.exec(
 						"UPDATE items SET name = ?, name_key = ?, modified_at = ?, modified_by_json = ? WHERE id = ?",
@@ -2140,6 +2141,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				return;
 			}
 			let rootId = live(this.meta("chat_root_id"))?.id ?? null;
+			// The folder of the room is one level under "Chat". A "Chat" that the person moved to the last level
+			// cannot hold a folder, so a new "Chat" comes at the root.
+			if (rootId !== null) {
+				const level = this.one<{ n: number }>(`${UP} SELECT COUNT(*) AS n FROM up`, rootId)?.n ?? 0;
+				if (this.tooDeep(level + 1)) rootId = null;
+			}
 			if (rootId === null) {
 				rootId = create(null, CHAT_FOLDER);
 				this.setMeta("chat_root_id", rootId);

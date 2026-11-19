@@ -113,7 +113,7 @@ export const ContentBase64 = z
 
 /** The input field that puts a new file in the folder of a room of Chat. */
 const ChatRoomParam = RoomId.optional().describe(
-	"Puts the file in the folder Chat/<room name> of your own drive, for a message of that room. For a direct message, the folder has the name of the other person. The server makes the folders when they are not there. You must be a member of the room. Not with parent_id or space_id.",
+	"Puts the file in the folder Chat/<room name> of your own drive, for a message of that room. For a direct message, the folder has the name of the other person. The server makes the folders when they are not there. You must be a member of the room, and the credential needs chat.read too. Not with parent_id or space_id.",
 );
 
 /** One sentence for the description of each upload that takes `room_id`. */

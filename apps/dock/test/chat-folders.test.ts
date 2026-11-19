@@ -1,5 +1,6 @@
+import { DRIVE_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Actor, base64, callTool, codeOf, seedOrg } from "./helpers.ts";
+import { type Actor, api, base64, callTool, codeOf, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -46,9 +47,17 @@ describe("the folder of a room in Drive", () => {
 		const one = await uploadFor(ada, (await createRoom(ada, "Plans")).id);
 		const two = await uploadFor(ada, (await createRoom(ada, "Plans")).id);
 		expect(one.parent_id).not.toBe(two.parent_id);
-		// A slash cannot be in a name of Drive.
-		const slashed = await uploadFor(ada, (await createRoom(ada, "Q3/Q4 plans")).id);
-		expect(await pathOf(ada, slashed.id)).toEqual(["Chat", "Q3-Q4 plans"]);
+		// A slash and a backslash cannot be in a name of Drive, and "." and ".." are no names.
+		const names: [string, string][] = [
+			["Q3/Q4 plans", "Q3-Q4 plans"],
+			["back\\slash", "back-slash"],
+			[".", "Room"],
+			["..", "Room"],
+		];
+		for (const [room, folder] of names) {
+			const file = await uploadFor(ada, (await createRoom(ada, room)).id);
+			expect([room, await pathOf(ada, file.id)]).toEqual([room, ["Chat", folder]]);
+		}
 	});
 
 	it("gives not_found to a principal that is not a member, and makes no folder for it", async () => {
@@ -61,12 +70,36 @@ describe("the folder of a room in Drive", () => {
 			"not_found",
 		);
 		expect(await rootNames(owner)).toEqual([]);
-		// The folder of a room is in the own drive only.
-		expect(
-			await codeOf(
-				ada.call("drive.upload_file", { room_id: room.id, space_id: bot.id, name: "a", content_base64: "" } as never),
-			),
-		).toBe("invalid");
+		// The folder of a room is in the own drive only, and it is the folder of the file.
+		const { item: folder } = await ada.call("drive.create_folder", { name: "F" });
+		for (const place of [{ space_id: bot.id }, { parent_id: folder.id }]) {
+			expect(
+				await codeOf(
+					ada.call("drive.upload_file", { room_id: room.id, ...place, name: "a", content_base64: "" } as never),
+				),
+			).toBe("invalid");
+		}
+	});
+
+	// Review: the name of the folder is the name of a room, so room_id is a read of Chat.
+	it("needs the chat.read scope for room_id", async () => {
+		const room = await createRoom(ada, "Private");
+		const { api_key: driveOnly } = await ada.call("account.create_api_key", {
+			label: "drive",
+			scopes: ["drive.read", "drive.write"],
+		});
+		const upload = { room_id: room.id, name: "a.txt", content_base64: base64("x") };
+		expect(await codeOf(api(driveOnly.secret)("drive.upload_file", upload))).toBe("forbidden");
+		expect(await codeOf(api(driveOnly.secret)("drive.create_upload", { room_id: room.id, name: "a", size: 1 }))).toBe(
+			"forbidden",
+		);
+		expect(await rootNames(ada)).toEqual([]);
+		const { api_key: withChat } = await ada.call("account.create_api_key", {
+			label: "drive and chat",
+			scopes: ["drive.read", "drive.write", "chat.read"],
+		});
+		const { item } = await api(withChat.secret)("drive.upload_file", upload);
+		expect(await pathOf(ada, item.id)).toEqual(["Chat", "Private"]);
 	});
 
 	it("renames the folder with the room, and keeps a name that the person gave it", async () => {
@@ -92,10 +125,14 @@ describe("the folder of a room in Drive", () => {
 		const fresh = await uploadFor(ada, room.id, "c.txt");
 		expect(await pathOf(ada, fresh.id)).toEqual(["Chat", "Design"]);
 		expect(fresh.parent_id).not.toBe(first.parent_id);
+		// A folder that the person deleted gets a new folder.
+		await ada.call("drive.trash_items", { item_ids: [fresh.parent_id as string] });
+		await ada.call("drive.delete_items", { item_ids: [fresh.parent_id as string] });
+		const afterDelete = await uploadFor(ada, room.id, "e.txt");
+		expect(await pathOf(ada, afterDelete.id)).toEqual(["Chat", "Design"]);
 		// The folder of "Chat" in the trash gets a new folder too.
-		await ada.call("drive.trash_items", {
-			item_ids: [(await ada.call("drive.get_item", { item_id: fresh.parent_id as string })).item.parent_id as string],
-		});
+		const chat = (await ada.call("drive.get_item", { item_id: afterDelete.parent_id as string })).item.parent_id;
+		await ada.call("drive.trash_items", { item_ids: [chat as string] });
 		const again = await uploadFor(ada, room.id, "d.txt");
 		expect(await pathOf(ada, again.id)).toEqual(["Chat", "Design"]);
 	});
@@ -110,5 +147,41 @@ describe("the folder of a room in Drive", () => {
 		expect(result.isError).not.toBe(true);
 		const item = (result.structuredContent as { item: { id: string } }).item;
 		expect(await pathOf(bot, item.id)).toEqual(["Chat", "Design"]);
+	});
+
+	// Review: a "Chat" at the last level of folders cannot hold the folder of a room.
+	it("makes a new Chat at the root when the person moved Chat to the last level of folders", async () => {
+		const room = await createRoom(ada, "Design");
+		const first = await uploadFor(ada, room.id);
+		const chat = (await ada.call("drive.get_item", { item_id: first.parent_id as string })).item.parent_id as string;
+		// The person deletes the folder of the room, and moves the empty Chat to the last level.
+		await ada.call("drive.trash_items", { item_ids: [first.parent_id as string] });
+		await ada.call("drive.delete_items", { item_ids: [first.parent_id as string] });
+		let parent: string | undefined;
+		for (let level = 1; level < DRIVE_LIMITS.depth; level++) {
+			const created = await ada.call("drive.create_folder", {
+				name: `L${level}`,
+				...(parent ? { parent_id: parent } : {}),
+			});
+			parent = created.item.id;
+		}
+		await ada.call("drive.move_items", { item_ids: [chat], parent_id: parent as string });
+		// A folder in that Chat is one level too deep, so a new Chat comes at the root.
+		const file = await uploadFor(ada, room.id, "b.txt");
+		expect(await pathOf(ada, file.id)).toEqual(["Chat", "Design"]);
+		expect((await rootNames(ada)).filter((name) => name === "folder:Chat")).toHaveLength(1);
+	});
+
+	it("makes one folder for two uploads at the same time, and none for a retry with the same key", async () => {
+		const room = await createRoom(ada, "Design");
+		const [one, two] = await Promise.all([uploadFor(ada, room.id, "a.txt"), uploadFor(ada, room.id, "b.txt")]);
+		expect(one.parent_id).toBe(two.parent_id);
+		const input = { room_id: room.id, name: "c.txt", content_base64: base64("c"), idempotency_key: "k1" };
+		const first = await ada.call("drive.upload_file", input);
+		const again = await ada.call("drive.upload_file", input);
+		expect(again.item.id).toBe(first.item.id);
+		const chat = (await ada.call("drive.get_item", { item_id: one.parent_id as string })).item.parent_id as string;
+		const rooms = (await ada.call("drive.list_items", { parent_id: chat })).items.map((item) => item.name);
+		expect(rooms).toEqual(["Design"]);
 	});
 });
