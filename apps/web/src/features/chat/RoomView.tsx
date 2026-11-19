@@ -664,8 +664,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				// so the person does not do the edit again. A newer change of the message stays as it is.
 				if (!endChange(id, change)) return;
 				setEditing(
-					(current) =>
-						current ?? { id, initial: newBody, body: newBody, initialFiles: shownFiles, files: keptFiles },
+					(current) => current ?? { id, initial: newBody, body: newBody, initialFiles: shownFiles, files: keptFiles },
 				);
 				fail(caught);
 			}
@@ -894,7 +893,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												onEditChange={(body) => setEditing((current) => current && { ...current, body })}
 												onEditRemoveFile={(itemId) =>
 													setEditing(
-														(current) => current && { ...current, files: current.files.filter((file) => file.item_id !== itemId) },
+														(current) =>
+															current && { ...current, files: current.files.filter((file) => file.item_id !== itemId) },
 													)
 												}
 												onEditSave={saveEdit}
@@ -1263,11 +1263,7 @@ function MessageItem({
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
 							</button>
-							<button
-								type="submit"
-								className="button button-small button-primary"
-								disabled={!editSavable(editing)}
-							>
+							<button type="submit" className="button button-small button-primary" disabled={!editSavable(editing)}>
 								Save
 							</button>
 						</span>

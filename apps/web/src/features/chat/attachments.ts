@@ -117,8 +117,10 @@ export function admit(
 	const admitted: number[] = [];
 	const large = files.filter((file) => file.size > DRIVE_LIMITS.uploadBytes);
 	const limit = `${DRIVE_LIMITS.uploadBytes / 2 ** 30} GB`;
-	if (large.length === 1 && large[0]) problems.push(`“${large[0].name}” is larger than ${limit}, the limit for one file.`);
-	else if (large.length > 1) problems.push(`${plural(large.length, "file")} are larger than ${limit}, the limit for one file.`);
+	if (large.length === 1 && large[0])
+		problems.push(`“${large[0].name}” is larger than ${limit}, the limit for one file.`);
+	else if (large.length > 1)
+		problems.push(`${plural(large.length, "file")} are larger than ${limit}, the limit for one file.`);
 	let over = 0;
 	files.forEach((file, index) => {
 		if (file.size > DRIVE_LIMITS.uploadBytes) return;

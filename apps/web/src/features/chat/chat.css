@@ -1242,6 +1242,16 @@ a.chat-author:hover {
 	.chat-composer-box .chat-format-toolbar {
 		display: none;
 	}
+
+	/* The files of the message take their own line above the text. */
+	.chat-composer-box .chat-composer-editor:has(.chat-attachments) {
+		flex-wrap: wrap;
+	}
+
+	.chat-composer-box .chat-attachments {
+		flex-basis: 100%;
+		order: -1;
+	}
 }
 
 /* Reactions: one button for each emoji, under the text of a message. */

@@ -70,7 +70,10 @@ export function AttachmentChips({
 						return (
 							<li key={file.key} className={`chat-attachment chat-attachment-${file.state}`}>
 								<span className="chat-attachment-icon" aria-hidden="true">
-									<Icon name={file.state === "failed" ? "warning" : /^image\//.test(file.type) ? "image" : "file"} size={16} />
+									<Icon
+										name={file.state === "failed" ? "warning" : /^image\//.test(file.type) ? "image" : "file"}
+										size={16}
+									/>
 								</span>
 								<span className="chat-attachment-text">
 									<span className="chat-attachment-name" title={file.name}>

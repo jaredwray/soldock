@@ -1,11 +1,13 @@
-import type { ChatMessage, ChatRoom } from "@asterra/contracts";
+import type { ChatFile, ChatLinkPreview, ChatMessage, ChatRoom } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
 	chatRows,
+	fitBox,
 	type LocalChange,
 	newMessages,
 	nextReading,
+	safeLinkPreviewHref,
 	sidebarRooms,
 	startReading,
 	startsDay,
@@ -18,6 +20,25 @@ import {
 
 const ADA = { principal_id: "prn_01JD0000000000000000000ADA", kind: "human", display_name: "Ada Lovelace" } as const;
 const BOT = { principal_id: "prn_01JD0000000000000000000B0T", kind: "agent", display_name: "Deploy Bot" } as const;
+
+const FILE: ChatFile = {
+	item_id: "itm_01JD0000000000000000000001",
+	space_id: ADA.principal_id,
+	name: "plan.pdf",
+	mime_type: "application/pdf",
+	size: 2048,
+	kind: "file",
+	preview: null,
+};
+
+const PREVIEW: ChatLinkPreview = {
+	url: "https://example.com/",
+	title: "Example",
+	description: null,
+	site_name: null,
+	image: null,
+	untrusted: true,
+};
 
 function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 	return {
@@ -75,7 +96,7 @@ describe("the rows of the message list", () => {
 		error: state === "failed" ? "No connection." : null,
 		uncertain: state === "failed",
 	});
-	const outbox = (pending: ReturnType<typeof waiting>[], keys: [string, string][] = []) => ({
+	const outbox = (pending: (ReturnType<typeof waiting> & { files?: ChatFile[] })[], keys: [string, string][] = []) => ({
 		pending,
 		keys: new Map(keys),
 		sendingKey: pending.find((entry) => entry.state === "sending")?.key ?? null,
@@ -86,7 +107,7 @@ describe("the rows of the message list", () => {
 	it("keeps the key of a send for the stored message, and puts the messages that wait at the end", () => {
 		const rows = chatRows(
 			[message(1, { author: BOT, idempotency_key: "bot-key" }), message(2, { idempotency_key: "k2" })],
-			outbox([waiting("k3", "third", "sending"), waiting("k4", "fourth")], [["cmsg_2", "k2"]]),
+			outbox([waiting("k3", "third", "sending"), { ...waiting("k4", "fourth"), files: [FILE] }], [["cmsg_2", "k2"]]),
 			ADA,
 			ROOM,
 		);
@@ -99,6 +120,8 @@ describe("the rows of the message list", () => {
 		// A message that waits shows as a message of the person, after the last stored message.
 		expect(rows[2]?.message).toMatchObject({ id: "k3", room_id: ROOM, seq: 3, author: ADA, deleted: false });
 		expect(rows[3]?.message.seq).toBe(4);
+		// A message with files shows them while it waits.
+		expect([rows[2]?.message.files, rows[3]?.message.files]).toEqual([[], [FILE]]);
 	});
 
 	// The socket can bring the stored message before the answer of the call. The list must not show the message two times.
@@ -246,21 +269,32 @@ describe("the messages with the changes that wait for the server", () => {
 	// The person sees the result of an edit or a delete before the answer of the server.
 	it("show the new text of an edit with the edited mark, and a delete without its text", () => {
 		const messages = [
-			message(1, { markdown: "message 1", body: textToBody("message 1") }),
-			message(2),
+			message(1, { markdown: "message 1", body: textToBody("message 1"), files: [FILE] }),
+			message(2, { files: [FILE], link_previews: [PREVIEW] }),
 			message(3, { edited_at: "2026-01-01T09:30:00.000Z" }),
+			message(4, { files: [FILE] }),
 		];
 		const shown = withLocalChanges(
 			messages,
 			new Map<string, LocalChange>([
 				["cmsg_1", { kind: "edit", body: textToBody("new text"), text: "new text", at: AT }],
 				["cmsg_2", { kind: "delete" }],
+				["cmsg_4", { kind: "edit", body: textToBody("message 4"), text: "message 4", at: AT, files: [] }],
 			]),
 		);
 		expect(shown.map((entry) => [entry.id, entry.text, entry.edited_at, entry.deleted])).toEqual([
 			["cmsg_1", "new text", AT, false],
 			["cmsg_2", "", null, true],
 			["cmsg_3", "message 3", "2026-01-01T09:30:00.000Z", false],
+			["cmsg_4", "message 4", AT, false],
+		]);
+		// An edit of the text keeps the files. An edit that removed a file shows the files that stay. A deleted
+		// message has no files and no link previews.
+		expect(shown.map((entry) => [entry.files.length, entry.link_previews.length])).toEqual([
+			[1, 0],
+			[0, 0],
+			[0, 0],
+			[0, 0],
 		]);
 		// The new body shows. The server makes its Markdown, so the message has none until the answer.
 		expect(shown[0]?.body).toEqual(textToBody("new text"));
@@ -413,5 +447,26 @@ describe("the parts of the sidebar", () => {
 		]);
 		const ids = (rooms: readonly ChatRoom[]) => rooms.map((room) => room.id);
 		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([["dm_b", "rm_c"], ["rm_a"], ["dm_d"]]);
+	});
+});
+
+describe("the files and the links of a message", () => {
+	// The box of a picture comes before the picture loads, so the list does not move. It must keep the shape.
+	it("gives a picture a box with its shape, never larger than the picture or the limit", () => {
+		const max = { width: 360, height: 280 };
+		expect(fitBox({ width: 640, height: 480 }, max)).toEqual({ width: 360, height: 270 });
+		expect(fitBox({ width: 480, height: 640 }, max)).toEqual({ width: 210, height: 280 });
+		expect(fitBox({ width: 100, height: 50 }, max)).toEqual({ width: 100, height: 50 });
+		expect(fitBox({ width: 640, height: 1 }, max)).toEqual({ width: 360, height: 1 });
+		expect(fitBox({ width: 0, height: 50 }, max)).toBeNull();
+	});
+
+	// A link preview is content from outside. Its link must never run a script on the page.
+	it("links a preview only to an http or https address", () => {
+		expect(safeLinkPreviewHref("https://example.com/a?b=1")).toBe("https://example.com/a?b=1");
+		expect(safeLinkPreviewHref("http://example.com")).toBe("http://example.com/");
+		expect(safeLinkPreviewHref("javascript:alert(1)")).toBeNull();
+		expect(safeLinkPreviewHref("data:text/html,hi")).toBeNull();
+		expect(safeLinkPreviewHref("/relative")).toBeNull();
 	});
 });
