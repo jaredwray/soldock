@@ -1,6 +1,7 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage, ChatThreadFollow } from "@soldock/contracts";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
+	createFollowKeeper,
 	createThreadView,
 	firstUnread,
 	mergeThread,
@@ -174,6 +175,31 @@ describe("the first new reply", () => {
 		expect(firstUnread(replies, 5, own.principal_id)).toBeNull();
 		// With no marker, each reply of a different principal is new.
 		expect(firstUnread(replies, 0, own.principal_id)).toBe(2);
+	});
+});
+
+describe("the state of a thread for a person", () => {
+	// A read of the marker and a click of Follow can overlap, and the server can answer them in a different
+	// order. The button must show the follow of the click, and the marker the newest marker.
+	it("keeps an own change of each part when an older answer comes after it", () => {
+		const shown: ChatThreadFollow[] = [];
+		const keeper = createFollowKeeper((follow) => shown.push(follow));
+		keeper.apply(keeper.ticket(), { following: false, last_read_seq: 0, unread_count: 2 });
+		const read = keeper.ticket();
+		// The person clicks Follow. A new reply starts a call of the marker during that call.
+		const follow = keeper.begin("following");
+		const mark = keeper.begin("marker");
+		keeper.finish(follow, "following", { following: true, last_read_seq: 0, unread_count: 2 });
+		// The server did the marker before the follow, so its answer has the follow from before the click.
+		keeper.finish(mark, "marker", { following: false, last_read_seq: 5, unread_count: 0 });
+		expect(keeper.current()).toEqual({ following: true, last_read_seq: 5, unread_count: 0 });
+		// A read that started before the two calls shows neither part.
+		keeper.apply(read, { following: false, last_read_seq: 0, unread_count: 2 });
+		expect(keeper.current()).toEqual({ following: true, last_read_seq: 5, unread_count: 0 });
+		// A read that starts now shows both parts. An own reply changes both.
+		keeper.apply(keeper.ticket(), { following: true, last_read_seq: 6, unread_count: 0 });
+		keeper.local((current) => ({ ...current, last_read_seq: 9 }));
+		expect(shown.at(-1)).toEqual({ following: true, last_read_seq: 9, unread_count: 0 });
 	});
 });
 

@@ -63,6 +63,81 @@ export function firstUnread(
 	return reply?.seq ?? null;
 }
 
+/** A part of the state of a thread for a person: the follow, or the read marker with its unread count. */
+export type FollowPart = "following" | "marker";
+
+/** The counts of the own changes of each part when a read or a call started. */
+export interface FollowTicket {
+	following: number;
+	marker: number;
+}
+
+/**
+ * The state of a thread for a person, from reads and own calls that can overlap. The follow and the marker
+ * are two parts, each with a count of own changes.
+ * - An own call (`begin`, then `finish`) adds 1 to the count of its part at its start and at its end. So a
+ *   response that started during the call does not show that part: the server can answer it before the call.
+ * - The response of the own call always sets its own part. It sets the other part only when that part had
+ *   no own change since the call started.
+ * - A read (`ticket`, then `apply`) sets each part that had no own change since the read started.
+ */
+export interface FollowKeeper {
+	current(): ChatThreadFollow | null;
+	ticket(): FollowTicket;
+	apply(ticket: FollowTicket, follow: ChatThreadFollow | undefined): void;
+	begin(part: FollowPart): FollowTicket;
+	finish(ticket: FollowTicket, part: FollowPart, follow: ChatThreadFollow | null): void;
+	/** Sets the state after an own change that has no call of its own (an own reply), for both parts. */
+	local(change: (follow: ChatThreadFollow) => ChatThreadFollow): void;
+}
+
+export function createFollowKeeper(show: (follow: ChatThreadFollow) => void): FollowKeeper {
+	let state: ChatThreadFollow | null = null;
+	const counts: FollowTicket = { following: 0, marker: 0 };
+	const set = (next: ChatThreadFollow) => {
+		state = next;
+		show(next);
+	};
+	/** The state with the parts of `follow` that `keep` allows, on the current state. */
+	const merge = (follow: ChatThreadFollow, keep: Record<FollowPart, boolean>): ChatThreadFollow | null => {
+		if (state === null) return keep.following && keep.marker ? follow : null;
+		return {
+			following: keep.following ? follow.following : state.following,
+			last_read_seq: keep.marker ? follow.last_read_seq : state.last_read_seq,
+			unread_count: keep.marker ? follow.unread_count : state.unread_count,
+		};
+	};
+	return {
+		current: () => state,
+		ticket: () => ({ ...counts }),
+		apply(ticket, follow) {
+			if (!follow) return;
+			const next = merge(follow, {
+				following: ticket.following === counts.following,
+				marker: ticket.marker === counts.marker,
+			});
+			if (next) set(next);
+		},
+		begin(part) {
+			counts[part] += 1;
+			return { ...counts };
+		},
+		finish(ticket, part, follow) {
+			const other: FollowPart = part === "following" ? "marker" : "following";
+			const otherKept = ticket[other] === counts[other];
+			counts[part] += 1;
+			if (!follow) return;
+			const next = merge(follow, { [part]: true, [other]: otherKept } as Record<FollowPart, boolean>);
+			if (next) set(next);
+		},
+		local(change) {
+			counts.following += 1;
+			counts.marker += 1;
+			if (state) set(change(state));
+		},
+	};
+}
+
 /** One page of `chat.list_replies`. */
 export interface RepliesPage {
 	parent: ChatMessage;

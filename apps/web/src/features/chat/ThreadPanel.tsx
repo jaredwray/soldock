@@ -10,7 +10,9 @@ import { type MessageWatch, usePageVisible } from "./data.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import type { MentionContext } from "./mentions.ts";
 import {
+	createFollowKeeper,
 	createThreadView,
+	type FollowKeeper,
 	firstUnread,
 	inThread,
 	type ReplyAttempt,
@@ -74,13 +76,10 @@ export function ThreadPanel({
 	const headingId = useId();
 	const ownId = useSession().whoami.principal.id;
 	const visible = usePageVisible();
-	/** The state of the thread for the person, from the newest read or own change. Null before the first read. */
+	/** The state of the thread for the person, as the keeper has it. Null before the first read. */
 	const [follow, setFollow] = useState<ChatThreadFollow | null>(null);
-	/**
-	 * Each own change of the follow or of the marker adds 1. A read that started before the change does not
-	 * show its older state of the follow.
-	 */
-	const followEpoch = useRef(0);
+	/** Keeps the follow and the marker apart, so an older answer never hides an own change (`createFollowKeeper`). */
+	const keeper = useRef<FollowKeeper | null>(null);
 	const [followBusy, setFollowBusy] = useState(false);
 	const [followError, setFollowError] = useState<string | null>(null);
 	/** The seq of the first new reply when the view opened, for the "New" line. Undefined before the first read. */
@@ -98,11 +97,15 @@ export function ThreadPanel({
 	}, []);
 
 	useEffect(() => {
+		const follows = createFollowKeeper((next) => {
+			if (keeper.current === follows) setFollow(next);
+		});
+		keeper.current = follows;
 		const thread = createThreadView(
 			(range) => {
-				const epoch = followEpoch.current;
+				const ticket = follows.ticket();
 				return api.call("chat.list_replies", { room_id: roomId, message_id: parentId, ...range }).then((page) => {
-					if (view.current === thread && epoch === followEpoch.current) setFollow(page.follow);
+					follows.apply(ticket, page.follow);
 					return page;
 				});
 			},
@@ -119,6 +122,7 @@ export function ThreadPanel({
 		load();
 		return () => {
 			view.current = null;
+			keeper.current = null;
 			stop();
 		};
 	}, [roomId, parentId, watch, load]);
@@ -133,34 +137,38 @@ export function ThreadPanel({
 			setNewFrom(unread);
 			return;
 		}
-		if (unread === null || !visible || marking.current) return;
+		const follows = keeper.current;
+		const newest = shownThread.replies[shownThread.replies.length - 1];
+		if (unread === null || !newest || !follows || !visible || marking.current) return;
 		marking.current = true;
-		const epoch = ++followEpoch.current;
+		const ticket = follows.begin("marker");
+		// The marker goes to the newest reply that shows, not to the newest reply of the server: a reply whose
+		// socket event is late stays new.
 		api
-			.call("chat.mark_thread_read", { room_id: roomId, message_id: parentId })
-			.then((result) => {
-				if (epoch === followEpoch.current) setFollow(result.follow);
-			})
+			.call("chat.mark_thread_read", { room_id: roomId, message_id: parentId, seq: newest.seq })
+			.then((result) => follows.finish(ticket, "marker", result.follow))
 			// The marker stays where it was. The next reply, or the next visible moment, tries again.
-			.catch(() => {})
+			.catch(() => follows.finish(ticket, "marker", null))
 			.finally(() => {
 				marking.current = false;
 			});
 	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId]);
 
 	async function toggleFollow() {
-		if (!follow || followBusy) return;
+		const follows = keeper.current;
+		if (!follow || !follows || followBusy) return;
 		setFollowBusy(true);
 		setFollowError(null);
-		const epoch = ++followEpoch.current;
+		const ticket = follows.begin("following");
 		try {
 			const result = await api.call("chat.follow_thread", {
 				room_id: roomId,
 				message_id: parentId,
 				following: !follow.following,
 			});
-			if (epoch === followEpoch.current) setFollow(result.follow);
+			follows.finish(ticket, "following", result.follow);
 		} catch (error) {
+			follows.finish(ticket, "following", null);
 			setFollowError(errorMessage(error));
 		} finally {
 			setFollowBusy(false);
@@ -208,15 +216,11 @@ export function ThreadPanel({
 			view.current?.receive(message);
 			if (message.also_in_room) onSentToRoom(message);
 			// The room makes the author of a reply follow the thread, with its marker at its reply.
-			followEpoch.current += 1;
-			setFollow(
-				(current) =>
-					current && {
-						following: true,
-						last_read_seq: Math.max(current.last_read_seq, message.seq),
-						unread_count: 0,
-					},
-			);
+			keeper.current?.local((current) => ({
+				following: true,
+				last_read_seq: Math.max(current.last_read_seq, message.seq),
+				unread_count: 0,
+			}));
 			lastAttempt.current = null;
 			stick.current = true;
 			setAlsoInRoom(false);
