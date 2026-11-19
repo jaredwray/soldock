@@ -46,8 +46,9 @@
 	// The directory: principals, addresses, API keys and sessions, and the room index of Chat.
 	// Migrations are in ./migrations.
 	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
-	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), and the bytes of each version of
-	// each Drive file (key drive/<space id>/<item id>/<version id>).
+	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), the bytes of each version of
+	// each Drive file (key drive/<space id>/<item id>/<version id>), and the bytes of each image of
+	// each doc (key document/<item id>/<image id>).
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
 	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
 	// A MailboxDO puts each webhook event on soldock-webhooks. The consumer makes one job for each webhook
@@ -81,7 +82,7 @@
 	"send_email": [{ "name": "EMAIL" }],
 	// One MailboxDO for each principal and each team mailbox (messages, threads, labels, search index, outbox).
 	// One DriveSpaceDO for each principal (items, versions, grants, trash, search index, stars, outbox).
-	// One DocumentDO for each doc and each sheet (the content and its revision).
+	// One DocumentDO for each doc and each sheet (the content, its revision, and the images of a doc).
 	// One ChatRoomDO for each room and each direct message of Chat (the members and the messages).
 	"durable_objects": {
 		"bindings": [

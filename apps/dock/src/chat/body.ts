@@ -37,15 +37,17 @@ export function textBody(text: string): ChatBody {
 const CHAT_MARKS: ReadonlySet<string> = new Set(["strong", "em", "strike", "code", "link"]);
 
 function inlineFromDoc(content: readonly DocInline[] | undefined, strong: boolean): ChatBodyInline[] {
-	return (content ?? []).map((node): ChatBodyInline => {
-		if (node.type === "hard_break") return node;
+	return (content ?? []).flatMap((node): ChatBodyInline[] => {
+		// A chat message has no image. The Markdown of a message is read without images, so none comes here.
+		if (node.type === "image") return [];
+		if (node.type === "hard_break") return [node];
 		const marks = (node.marks ?? []).filter((mark) => CHAT_MARKS.has(mark.type)) as NonNullable<
 			Extract<ChatBodyInline, { type: "text" }>["marks"]
 		>;
 		if (strong && !marks.some((mark) => mark.type === "strong") && !marks.some((mark) => mark.type === "code")) {
 			marks.push({ type: "strong" });
 		}
-		return marks.length > 0 ? { type: "text", text: node.text, marks } : { type: "text", text: node.text };
+		return [marks.length > 0 ? { type: "text", text: node.text, marks } : { type: "text", text: node.text }];
 	});
 }
 

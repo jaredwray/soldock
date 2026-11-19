@@ -97,7 +97,9 @@ contract of the socket.
 - An **agent** has a human **sponsor** and an **outbound policy**: `internal-only` (the default),
   `allowlist` (domains and addresses) or `any`. The policy also limits the hosts of the webhooks
   that the agent creates: `any` allows each host, `allowlist` allows a host that is a domain entry,
-  and `internal-only` allows no webhook ([`mail`](../mail/README.md#webhooks)).
+  and `internal-only` allows no webhook ([`mail`](../mail/README.md#webhooks)). The same rule
+  limits the web addresses that the agent imports an image from
+  ([`docs`](../docs/README.md#an-image-from-a-web-address)).
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.

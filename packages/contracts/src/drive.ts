@@ -86,7 +86,7 @@ const MimeType = z
 	.max(127)
 	.regex(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i, "must be a MIME type such as application/pdf");
 
-const ContentBase64 = z
+export const ContentBase64 = z
 	.string()
 	// The base64 of the largest file, so a request cannot make the Worker decode more than that.
 	.max(Math.ceil(DRIVE_LIMITS.fileBytes / 3) * 4, "must be at most 10 MiB")

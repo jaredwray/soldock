@@ -1,8 +1,19 @@
-import { DOC_LIMITS, type DocBlock, type DocContent, type DocInline, type DocMark } from "@soldock/contracts";
+import {
+	DOC_LIMITS,
+	type DocBlock,
+	type DocContent,
+	type DocImageNode,
+	type DocInline,
+	type DocMark,
+} from "@soldock/contracts";
 
 // Markdown for agents and for downloads. The two functions are a pair: `markdownToDoc` reads all that
 // `docToMarkdown` writes. Markdown has no underline and no empty paragraph, so a doc loses those in
 // Markdown. Each other format comes back the same.
+//
+// An image of a doc is `![alt](image:img_… "caption")`. Its options are a query after the id:
+// `?width=320&layout=wrap_left&crop=0.1,0.1,0.8,0.8`. The target is the id of an image that the doc
+// holds, never an address.
 
 type ListBlock = Extract<DocBlock, { type: "bullet_list" | "ordered_list" }>;
 type ListItem = ListBlock["content"][number];
@@ -37,6 +48,7 @@ type Token =
 	| { kind: "code"; text: string }
 	| { kind: "break" }
 	| { kind: "link"; href: string; children: Token[] }
+	| { kind: "image"; node: DocImageNode }
 	| { kind: "group"; mark: "strong" | "em" | "strike"; children: Token[] }
 	| { kind: "delim"; ch: "*" | "_" | "~"; count: number; canOpen: boolean; canClose: boolean };
 
@@ -86,20 +98,156 @@ function backtickRuns(src: string): Map<number, number[]> {
 	return runs;
 }
 
-/** The link that starts with `[` at `start` and has its `]` at `close`: its label, its target and its end. */
-function readLink(src: string, start: number, close: number): { label: string; href: string; end: number } | null {
-	if (src[close + 1] !== "(") return null;
-	const target = /^\(\s*(?:<([^<>\n]*)>|((?:[^\s()\\]|\\.|\([^\s()]*\))*))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/.exec(
-		// A target is at most a link and a title. The slice has a limit, so many links cost no more than their text.
-		src.slice(close + 1, close + 1 + DOC_LIMITS.hrefChars + 600),
-	);
-	if (!target) return null;
-	const href = (target[1] ?? target[2] ?? "").replace(/\\(.)/g, "$1");
-	return { label: src.slice(start + 1, close), href, end: close + 1 + target[0].length };
+interface LinkSyntax {
+	label: string;
+	href: string;
+	/** The text in quotes after the target, or null. */
+	title: string | null;
+	end: number;
 }
 
-/** Cuts inline Markdown into tokens. Emphasis marks stay as `delim` tokens for `matchDelims`. */
-function tokenize(src: string, linkDepth: number): Token[] {
+/** A target is at most a link and a title. The title of an image is its caption, with an escape for each character at most. */
+const TARGET_CHARS = DOC_LIMITS.hrefChars + 2 * DOC_LIMITS.imageCaptionChars + 100;
+
+function isBlankChar(ch: string | undefined): boolean {
+	return ch !== undefined && /\s/.test(ch);
+}
+
+/**
+ * The link that starts with `[` at `start` and has its `]` at `close`: its label, its target, its title
+ * and its end. The scan reads each character one time, so a long run of spaces costs no more than its
+ * length. A regular expression with two parts that read spaces would read such a run many times.
+ */
+function readLink(src: string, start: number, close: number): LinkSyntax | null {
+	if (src[close + 1] !== "(") return null;
+	// The slice has a limit, so many links cost no more than their text.
+	const limit = Math.min(src.length, close + 1 + TARGET_CHARS);
+	let i = close + 2;
+	const skipBlank = () => {
+		while (i < limit && isBlankChar(src[i])) i++;
+	};
+	skipBlank();
+	// The target: `<…>` on one line, or text without spaces. A parenthesis in it needs its pair.
+	let href: string | null = null;
+	if (src[i] === "<") {
+		let end = i + 1;
+		while (end < limit && src[end] !== ">" && src[end] !== "<" && src[end] !== "\n") end++;
+		if (end < limit && src[end] === ">") {
+			href = src.slice(i + 1, end);
+			i = end + 1;
+		}
+	}
+	if (href === null) {
+		const from = i;
+		while (i < limit) {
+			const ch = src[i] as string;
+			if (ch === "\\") {
+				if (i + 1 >= limit || src[i + 1] === "\n") break;
+				i += 2;
+			} else if (ch === "(") {
+				let end = i + 1;
+				while (end < limit && !isBlankChar(src[end]) && src[end] !== "(" && src[end] !== ")") end++;
+				if (end >= limit || src[end] !== ")") break;
+				i = end + 1;
+			} else if (ch === ")" || isBlankChar(ch)) {
+				break;
+			} else {
+				i++;
+			}
+		}
+		href = src.slice(from, i);
+	}
+	// The title: text in quotes, after one space or more.
+	const afterTarget = i;
+	skipBlank();
+	let title: string | null = null;
+	const quote = src[i];
+	if (i > afterTarget && (quote === '"' || quote === "'")) {
+		let end = i + 1;
+		while (end < limit && src[end] !== quote) {
+			if (src[end] === "\\") {
+				if (end + 1 >= limit || src[end + 1] === "\n") return null;
+				end++;
+			}
+			end++;
+		}
+		if (end >= limit) return null;
+		title = src.slice(i + 1, end);
+		i = end + 1;
+		skipBlank();
+	}
+	if (i >= limit || src[i] !== ")") return null;
+	return { label: src.slice(start + 1, close), href: href.replace(/\\(.)/g, "$1"), title, end: i + 1 };
+}
+
+const IMAGE_TARGET = /^image:(img_[0-9A-HJKMNP-TV-Z]{26})(?:\?([^#]*))?$/;
+
+/** The text of an alt text or a caption: no escapes, and one line. */
+function plain(text: string): string {
+	return text
+		.replace(/\\(.)/gs, "$1")
+		.replace(/\s*\n\s*/g, " ")
+		.trim();
+}
+
+const IMAGE_OPTIONS: ReadonlySet<string> = new Set(["width", "layout", "crop"]);
+
+/** The most problems that one call reports. Hostile Markdown can have thousands of bad images. */
+const MAX_PROBLEMS = 5;
+
+/** A number in plain decimal form, or NaN. `Number` also reads "", "0x10" and "1e3". */
+function decimal(value: string): number {
+	return /^(?:\d+\.?\d*|\.\d+)$/.test(value.trim()) ? Number(value) : Number.NaN;
+}
+
+/**
+ * The image of `![alt](image:img_… "caption")`, or null when the target is not an image of a doc. An
+ * option with a bad value stays in the node, so the check of the content refuses it with a message.
+ * The content cannot hold an option that is not an option of an image, an option that is there two
+ * times, or a crop without 4 numbers. Each of these goes into `problems`: the writer of the Markdown
+ * must get a message, because Markdown without that option would come back from the doc.
+ */
+function imageOf(link: LinkSyntax, problems: string[] | null): DocImageNode | null {
+	const target = IMAGE_TARGET.exec(link.href);
+	if (!target) return null;
+	const id = target[1] as string;
+	const report = (problem: string) => {
+		if (problems && problems.length < MAX_PROBLEMS) problems.push(`The image ${id} ${problem}`);
+	};
+	const options = new URLSearchParams(target[2] ?? "");
+	const seen = new Set<string>();
+	for (const key of options.keys()) {
+		if (!IMAGE_OPTIONS.has(key)) {
+			report(`has the option "${key.slice(0, 40)}". The options of an image are width, layout and crop.`);
+		} else if (seen.has(key)) {
+			report(`has the option ${key} two times.`);
+		}
+		seen.add(key);
+	}
+	const attrs: DocImageNode["attrs"] = { id, layout: "inline" };
+	const width = options.get("width");
+	if (width !== null) attrs.width = decimal(width);
+	const layout = options.get("layout");
+	if (layout !== null) attrs.layout = layout as DocImageNode["attrs"]["layout"];
+	const alt = plain(link.label);
+	if (alt !== "") attrs.alt = alt;
+	const caption = plain(link.title ?? "");
+	if (caption !== "") attrs.caption = caption;
+	const crop = options.get("crop");
+	if (crop !== null) {
+		const parts = crop.split(",").map(decimal);
+		if (parts.length !== 4) report("has a crop without 4 numbers. A crop is x,y,width,height.");
+		const [x, y, w, h] = parts;
+		attrs.crop = { x: x ?? Number.NaN, y: y ?? Number.NaN, width: w ?? Number.NaN, height: h ?? Number.NaN };
+	}
+	return { type: "image", attrs };
+}
+
+/**
+ * Cuts inline Markdown into tokens. Emphasis marks stay as `delim` tokens for `matchDelims`. With
+ * `options.images`, the image of a doc is a token. Without it, such an image stays text.
+ */
+function tokenize(src: string, linkDepth: number, options: ReadOptions): Token[] {
 	const tokens: Token[] = [];
 	let text = "";
 	const links = linkDepth < 4;
@@ -142,6 +290,20 @@ function tokenize(src: string, linkDepth: number): Token[] {
 				if (code !== "") tokens.push({ kind: "code", text: code });
 				i = close + length;
 			}
+		} else if (ch === "!" && next === "[" && options.images) {
+			brackets ??= matchBrackets(src);
+			const close = brackets.get(i + 1);
+			const link = close === undefined ? null : readLink(src, i + 1, close);
+			const node = link === null ? null : imageOf(link, options.problems);
+			if (link === null || node === null) {
+				// Not an image of a doc: the mark is text, and the bracket after it can be a link.
+				text += ch;
+				i++;
+			} else {
+				flush();
+				tokens.push({ kind: "image", node });
+				i = link.end;
+			}
 		} else if (ch === "[" && links) {
 			brackets ??= matchBrackets(src);
 			const close = brackets.get(i);
@@ -152,7 +314,7 @@ function tokenize(src: string, linkDepth: number): Token[] {
 			} else {
 				flush();
 				const href = safeHref(link.href);
-				const children = matchDelims(tokenize(link.label, linkDepth + 1));
+				const children = matchDelims(tokenize(link.label, linkDepth + 1, options));
 				// A link that is not safe keeps its text and loses its target.
 				if (href === null) tokens.push(...children);
 				else tokens.push({ kind: "link", href, children });
@@ -276,6 +438,9 @@ function flatten(tokens: Token[], marks: DocMark[], out: DocInline[]): DocInline
 			case "delim":
 				pushText(token.ch.repeat(token.count), marks);
 				break;
+			case "image":
+				out.push(token.node);
+				break;
 			case "link":
 				flatten(token.children, withMark(marks, { type: "link", attrs: { href: token.href } }), out);
 				break;
@@ -287,8 +452,18 @@ function flatten(tokens: Token[], marks: DocMark[], out: DocInline[]): DocInline
 	return out;
 }
 
-function parseInline(src: string): DocInline[] {
-	const inline = flatten(matchDelims(tokenize(src, 0)), [], []);
+/** How the blocks and the text of one call are read. */
+interface ReadOptions {
+	/** Each new line in a paragraph is a hard break, as in a chat. */
+	breaks: boolean;
+	/** The image of a doc is read. */
+	images: boolean;
+	/** Gets a message for each part of an image that the content cannot hold. */
+	problems: string[] | null;
+}
+
+function parseInline(src: string, options: ReadOptions): DocInline[] {
+	const inline = flatten(matchDelims(tokenize(src, 0, options)), [], []);
 	// A hard break at the end of a block shows nothing.
 	while (inline[inline.length - 1]?.type === "hard_break") inline.pop();
 	return inline;
@@ -359,15 +534,12 @@ function paragraphText(lines: string[], breaks: boolean): string {
 	return text;
 }
 
-function paragraph(lines: string[], breaks: boolean): DocBlock {
-	return withContent({ type: "paragraph" as const }, parseInline(paragraphText(lines, breaks)));
+function paragraph(lines: string[], options: ReadOptions): DocBlock {
+	return withContent({ type: "paragraph" as const }, parseInline(paragraphText(lines, options.breaks), options));
 }
 
-/**
- * `depth` is the level of the blocks that these lines make. Blocks over the limit become paragraphs. With
- * `breaks`, each new line in a paragraph is a hard break.
- */
-function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[] {
+/** `depth` is the level of the blocks that these lines make. Blocks over the limit become paragraphs. */
+function parseBlocks(lines: string[], depth: number, options: ReadOptions): DocBlock[] {
 	const blocks: DocBlock[] = [];
 	let i = 0;
 	while (i < lines.length) {
@@ -392,7 +564,10 @@ function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[
 		if (heading) {
 			const level = Math.min((heading[1] as string).length, 3);
 			blocks.push(
-				withContent({ type: "heading" as const, attrs: { level } }, parseInline(headingText(heading[2] ?? ""))),
+				withContent(
+					{ type: "heading" as const, attrs: { level } },
+					parseInline(headingText(heading[2] ?? ""), options),
+				),
 			);
 			i++;
 			continue;
@@ -407,7 +582,7 @@ function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[
 			while (i < lines.length && QUOTE.test(lines[i] as string)) {
 				inner.push((lines[i++] as string).replace(/^ {0,3}> ?/, ""));
 			}
-			const content = parseBlocks(inner, depth + 1, breaks);
+			const content = parseBlocks(inner, depth + 1, options);
 			blocks.push({ type: "blockquote", content: content.length > 0 ? content : [{ type: "paragraph" }] });
 			continue;
 		}
@@ -441,7 +616,7 @@ function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[
 						break;
 					}
 				}
-				const content = parseBlocks(itemLines, depth + 2, breaks);
+				const content = parseBlocks(itemLines, depth + 2, options);
 				items.push({ type: "list_item", content: content.length > 0 ? content : [{ type: "paragraph" }] });
 				// Empty lines between two items of the same list do not end the list.
 				let j = i;
@@ -461,7 +636,7 @@ function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[
 		while (i < lines.length && !isBlank(lines[i] as string) && !startsBlock(lines[i] as string)) {
 			text.push(lines[i++] as string);
 		}
-		blocks.push(paragraph(text, breaks));
+		blocks.push(paragraph(text, options));
 	}
 	return blocks;
 }
@@ -469,10 +644,21 @@ function parseBlocks(lines: string[], depth: number, breaks: boolean): DocBlock[
 /**
  * Reads Markdown into the content of a doc. Text that is not Markdown of this subset stays text. With
  * `lineBreaks`, each new line in a paragraph is a hard break, as in a chat. Without it, Markdown joins the lines.
+ * With `problems`, the list gets a message for each option of an image that the content cannot hold. A
+ * caller that reads images gives the list and refuses the Markdown when the list has a message.
+ * With `images`, `![alt](image:img_…)` is an image of the doc. Without it, that text stays text: a chat
+ * message has no image.
  */
-export function markdownToDoc(markdown: string, options: { lineBreaks?: boolean } = {}): DocContent {
+export function markdownToDoc(
+	markdown: string,
+	options: { lineBreaks?: boolean; images?: boolean; problems?: string[] } = {},
+): DocContent {
 	const lines = markdown.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
-	const blocks = parseBlocks(lines, 1, options.lineBreaks === true);
+	const blocks = parseBlocks(lines, 1, {
+		breaks: options.lineBreaks === true,
+		images: options.images === true,
+		problems: options.problems ?? null,
+	});
 	return { type: "doc", content: blocks.length > 0 ? blocks : [{ type: "paragraph" }] };
 }
 
@@ -516,6 +702,18 @@ function textToMarkdown(node: Extract<DocInline, { type: "text" }>): string {
 	return `${escapeText(lead)}${text}${escapeText(trail)}`;
 }
 
+/** An image of the doc: the alt text, the id with the options, and the caption as the title. */
+function imageToMarkdown(node: DocImageNode): string {
+	const { id, width, layout, alt, caption, crop } = node.attrs;
+	const options: string[] = [];
+	if (width !== undefined) options.push(`width=${width}`);
+	if (layout !== "inline") options.push(`layout=${layout}`);
+	if (crop) options.push(`crop=${[crop.x, crop.y, crop.width, crop.height].join(",")}`);
+	const target = `image:${id}${options.length > 0 ? `?${options.join("&")}` : ""}`;
+	const title = caption === undefined ? "" : ` "${caption.replace(/[\\"]/g, "\\$&")}"`;
+	return `![${(alt ?? "").replace(/[\\[\]]/g, "\\$&")}](${target}${title})`;
+}
+
 function inlineToMarkdown(content: readonly DocInline[] | undefined, oneLine = false): string {
 	let out = "";
 	const nodes = content ?? [];
@@ -523,6 +721,11 @@ function inlineToMarkdown(content: readonly DocInline[] | undefined, oneLine = f
 		const node = nodes[i] as DocInline;
 		if (node.type === "hard_break") {
 			out += oneLine ? " " : "\\\n";
+			i++;
+			continue;
+		}
+		if (node.type === "image") {
+			out += imageToMarkdown(node);
 			i++;
 			continue;
 		}

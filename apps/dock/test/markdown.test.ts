@@ -205,6 +205,11 @@ describe("docToMarkdown and markdownToDoc", () => {
 		const hostile = [
 			`${"[".repeat(n / 2)}${"]".repeat(n / 2)}`,
 			`${"[a".repeat(n / 4)}${"](b".repeat(n / 4)}`,
+			// A target that never ends, after a long run of spaces, for a link and for an image: 1 MB, the
+			// most Markdown of one request. A scan that reads a run of spaces again for each start is slow here.
+			`[a](${" ".repeat(3140)}x `.repeat(317),
+			`![a](${" ".repeat(3140)}x `.repeat(317),
+			`[a](b${" ".repeat(3100)}"t `.repeat(317),
 			`# x${" ".repeat(n)}x`,
 			`a${" ".repeat(n)}x\nb`,
 			`a${"\\".repeat(n)}x\nb`,
@@ -217,7 +222,7 @@ describe("docToMarkdown and markdownToDoc", () => {
 		];
 		const start = Date.now();
 		for (const markdown of hostile) {
-			const read = markdownToDoc(markdown);
+			const read = markdownToDoc(markdown, { images: true });
 			docToMarkdown(read);
 			docText(read);
 		}
@@ -236,6 +241,118 @@ describe("docToMarkdown and markdownToDoc", () => {
 		expect(docText(markdownToDoc(`${"*".repeat(5000)}a${"*".repeat(5000)}`))).toBe(
 			`${"*".repeat(5000)}a${"*".repeat(5000)}`,
 		);
+	});
+});
+
+describe("an image in Markdown", () => {
+	const ID = "img_01JD3V0Y9XG8Q2W4E6R8T0Y2V4";
+	const image = (attrs: Record<string, unknown> = {}) =>
+		({ type: "image", attrs: { id: ID, layout: "inline", ...attrs } }) as Inline[number];
+
+	// The options of an image are in its target, so an agent that writes the Markdown back keeps them.
+	it("comes back the same in each block that holds text, with each option", () => {
+		const source = doc(
+			{ type: "heading", attrs: { level: 2 }, content: [text("Chart "), image({ width: 48 })] },
+			p(image()),
+			p(
+				text("Before "),
+				image({
+					width: 320,
+					layout: "break_center",
+					alt: "A [bracket] and a \\ backslash",
+					caption: 'It\'s "quoted" (twice)',
+					crop: { x: 0.25, y: 0, width: 0.5, height: 0.3333 },
+				}),
+				text(" after"),
+			),
+			{
+				type: "bullet_list",
+				content: [{ type: "list_item", content: [p(text("item "), image({ layout: "wrap_right" }))] }],
+			},
+			{ type: "blockquote", content: [p(text("in "), text("a link", "https://example.com/"), image({ alt: "x" }))] },
+		);
+		const markdown = docToMarkdown(source);
+		expect(markdown).toContain(`![](image:${ID})`);
+		expect(markdown).toContain(`(image:${ID}?width=320&layout=break_center&crop=0.25,0,0.5,0.3333 "It's`);
+		expect(markdownToDoc(markdown, { images: true })).toEqual(source);
+		expect(DocContent.safeParse(markdownToDoc(markdown, { images: true })).success).toBe(true);
+	});
+
+	// A doc never loads an image from an address. Only the id of an image that the doc holds makes an image.
+	it("is not read from a web address, a data address or a different id", () => {
+		for (const target of [
+			"https://example.com/a.png",
+			"data:image/png;base64,AAAA",
+			"image:https://example.com/a.png",
+			"image:img_short",
+			`image:${ID}#fragment`,
+		]) {
+			const read = markdownToDoc(`![alt](${target})`, { images: true });
+			expect(JSON.stringify(read), target).not.toContain('"image"');
+			expect(docText(read), target).toContain("!");
+		}
+		expect(markdownToDoc("![alt](https://example.com/a.png)", { images: true })).toEqual(
+			doc(p(text("!"), text("alt", "https://example.com/a.png"))),
+		);
+	});
+
+	// The chat module reads Markdown without images. A chat message must not get a node that it cannot show.
+	it("stays text for a reader without images", () => {
+		expect(markdownToDoc(`a ![alt](image:${ID}) b`)).toEqual(doc(p(text("a !alt b"))));
+	});
+
+	// CommonMark lets a target and a title have spaces around them, a target in angle brackets, a
+	// parenthesis with its pair, and an escaped quote in a title.
+	it("reads each form of a target and a title", () => {
+		const link = (markdown: string) => markdownToDoc(markdown, { images: true }).content[0];
+		expect(link('[a](  https://example.com/x_(1)   "The \\"title\\""  )')).toEqual(
+			p(text("a", "https://example.com/x_(1)")),
+		);
+		expect(link("[a](<https://example.com/a b>)")).toEqual(p(text("a", "https://example.com/a%20b")));
+		expect(link("[a](https://example.com/ 'it''s')")).toEqual(p(text("[a](https://example.com/ 'it''s')")));
+		expect(link('[a](https://example.com/"t")')).toEqual(p(text("a", "https://example.com/%22t%22")));
+		expect(link("[a](https://example.com/(b c))")).toEqual(p(text("[a](https://example.com/(b c))")));
+		expect(link(`![x](  image:${ID}?width=40   'It\\'s'  )`)).toEqual(
+			p(image({ width: 40, alt: "x", caption: "It's" })),
+		);
+	});
+
+	it("gives a bad option to the check of the content, which refuses it", () => {
+		for (const options of [
+			"width=wide",
+			"width=5",
+			"width=",
+			"width=0x140",
+			"layout=behind",
+			"crop=0.1,0.2",
+			"crop=0.9,0,0.5,1",
+			"crop=0,0,1e0,1",
+		]) {
+			const read = markdownToDoc(`![](image:${ID}?${options})`, { images: true });
+			expect(DocContent.safeParse(read).success, options).toBe(false);
+		}
+	});
+
+	// The content has no place for these, and the Markdown of the doc would come back without them.
+	// The writer must get a message, not a doc that is different from the request.
+	it("reports an option that the content cannot hold", () => {
+		const problemsOf = (options: string) => {
+			const problems: string[] = [];
+			markdownToDoc(`![](image:${ID}?${options})`, { images: true, problems });
+			return problems;
+		};
+		expect(problemsOf("width=320&layout=wrap_left&crop=0,0,0.5,0.5")).toEqual([]);
+		expect(problemsOf("widht=320")).toEqual([
+			`The image ${ID} has the option "widht". The options of an image are width, layout and crop.`,
+		]);
+		expect(problemsOf("width=320&width=100")).toEqual([`The image ${ID} has the option width two times.`]);
+		expect(problemsOf("crop=0,0,0.5,0.5,0.9")).toEqual([
+			`The image ${ID} has a crop without 4 numbers. A crop is x,y,width,height.`,
+		]);
+		// Many bad images give a short list.
+		const problems: string[] = [];
+		markdownToDoc(`![](image:${ID}?a=1) `.repeat(500), { images: true, problems });
+		expect(problems).toHaveLength(5);
 	});
 });
 

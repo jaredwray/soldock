@@ -5,13 +5,21 @@ import type { PrincipalRecord } from "../identity/index.ts";
 const PRIVATE_HOST_SUFFIXES = [".localhost", ".local", ".internal", ".home.arpa", ".invalid"];
 
 /**
- * The problem with a webhook URL, or null when the URL is valid. A webhook URL is an absolute https URL
- * on the default port, with a public host name: no IP address, no user name, no fragment, and not the
- * host of the deployment (`dockOrigin`). A Worker cannot reach a private network, and these rules also
- * keep a webhook off the deployment itself.
+ * The problem with a webhook URL, or null when the URL is valid. A webhook URL has at most
+ * `WEBHOOK_LIMITS.urlChars` characters, and it follows the rules of `publicUrlProblem`.
  */
 export function webhookUrlProblem(value: string, dockOrigin: string): string | null {
 	if (value.length > WEBHOOK_LIMITS.urlChars) return `The URL must have at most ${WEBHOOK_LIMITS.urlChars} characters.`;
+	return publicUrlProblem(value, dockOrigin);
+}
+
+/**
+ * The problem with a URL that the Worker sends a request to, or null when the URL is valid. Such a URL
+ * is an absolute https URL on the default port, with a public host name: no IP address, no user name,
+ * no fragment, and not the host of the deployment (`dockOrigin`). A Worker cannot reach a private
+ * network, and these rules also keep the request off the deployment itself.
+ */
+export function publicUrlProblem(value: string, dockOrigin: string): string | null {
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -36,11 +44,11 @@ export function webhookUrlProblem(value: string, dockOrigin: string): string | n
 }
 
 /**
- * True when the outbound policy of an agent allows a webhook to this host: mode `any`, or mode
+ * True when the outbound policy of an agent allows a request to this host: mode `any`, or mode
  * `allowlist` with the host as a domain entry. An address entry never matches a host. A person has no
  * outbound policy, so each host is allowed.
  */
-export function webhookHostAllowed(principal: PrincipalRecord, url: string): boolean {
+export function outboundHostAllowed(principal: PrincipalRecord, url: string): boolean {
 	if (principal.kind !== "agent") return true;
 	const mode = principal.outbound_mode ?? "internal-only";
 	if (mode === "any") return true;
