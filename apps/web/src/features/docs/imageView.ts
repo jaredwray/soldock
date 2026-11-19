@@ -1,4 +1,4 @@
-import { DOC_LIMITS } from "@soldock/contracts";
+import { DOC_LIMITS } from "@asterra/contracts";
 import { closeHistory } from "prosemirror-history";
 import type { Node } from "prosemirror-model";
 import { NodeSelection } from "prosemirror-state";

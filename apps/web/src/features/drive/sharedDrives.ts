@@ -4,7 +4,7 @@ import {
 	SHARED_DRIVE_ROLES,
 	type SharedDriveMember,
 	type SharedDriveRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 // The rules of the members of a shared drive that need no DOM. The Admin section, the Drive pages
 // and the Node tests use them. The server applies the same rules, and it has the last word.

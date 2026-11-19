@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { createRoomPager, type PagerState } from "../src/features/chat/pager.ts";
 import { type ChangePage, createRoomSync } from "../src/features/chat/sync.ts";

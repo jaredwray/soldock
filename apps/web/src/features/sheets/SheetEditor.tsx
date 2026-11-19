@@ -1,4 +1,4 @@
-import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@soldock/contracts";
+import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@asterra/contracts";
 import {
 	type ClipboardEvent,
 	type CSSProperties,

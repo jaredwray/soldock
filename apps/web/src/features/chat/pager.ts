@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { type History, withChanges, withNewer, withOlder } from "./history.ts";
 import type { ChangePage, RoomSync } from "./sync.ts";
 

@@ -1,4 +1,4 @@
-# `@soldock/sdk`
+# `@asterra/sdk`
 
 > Status: **planned** — not created yet.
 

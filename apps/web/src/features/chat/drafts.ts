@@ -1,4 +1,4 @@
-import { ChatBody } from "@soldock/contracts";
+import { ChatBody } from "@asterra/contracts";
 import { textToBody } from "./composerSchema.ts";
 
 // The message that a person wrote in the box of a room and did not send. It stays when the person

@@ -1,4 +1,4 @@
-import { MailDomain } from "@soldock/contracts";
+import { MailDomain } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -155,7 +155,7 @@ export function MailDomainsCard() {
 					onClose={() => setRemove(null)}
 					onConfirm={() => removeDomain(remove)}
 				>
-					<p>Remove {remove} from Soldock? Cloudflare and DNS records stay in place.</p>
+					<p>Remove {remove} from Asterra? Cloudflare and DNS records stay in place.</p>
 				</ConfirmDialog>
 			)}
 		</section>

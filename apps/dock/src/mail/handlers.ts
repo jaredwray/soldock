@@ -1,4 +1,4 @@
-import { MAIL_LIMITS, type Message } from "@soldock/contracts";
+import { MAIL_LIMITS, type Message } from "@asterra/contracts";
 import {
 	agentMailboxes,
 	agentMailboxFor,
@@ -441,7 +441,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 					: undefined,
 				date: now,
 				attachments,
-				headers: principal.kind === "agent" ? [["X-Soldock-Agent", "true"]] : undefined,
+				headers:
+					principal.kind === "agent"
+						? [
+								["X-Asterra-Agent", "true"],
+								["X-Soldock-Agent", "true"],
+							]
+						: undefined,
 			});
 		} catch (error) {
 			throw new OperationError("invalid", error instanceof Error ? error.message : "The message is not valid.");

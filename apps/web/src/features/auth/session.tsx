@@ -1,4 +1,4 @@
-import type { OutputOf } from "@soldock/contracts";
+import type { OutputOf } from "@asterra/contracts";
 import { createContext, useContext } from "react";
 
 export type Whoami = OutputOf<"account.whoami">;

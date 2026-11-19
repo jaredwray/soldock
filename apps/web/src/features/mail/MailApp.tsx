@@ -1,4 +1,4 @@
-import type { Label, Mailbox } from "@soldock/contracts";
+import type { Label, Mailbox } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -76,7 +76,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 
 	useEffect(() => {
 		const mailbox = mailboxName ? ` – ${mailboxName}` : "";
-		document.title = `${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Soldock`;
+		document.title = `${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`;
 	}, [title, inboxUnread, mailboxName]);
 
 	const compose = useCallback(

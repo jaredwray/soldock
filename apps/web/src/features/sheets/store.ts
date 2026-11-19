@@ -1,4 +1,4 @@
-import { ApiError, type Cell, type CellFormat, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
+import { ApiError, type Cell, type CellFormat, type DriveItem, SHEET_LIMITS, type Tab } from "@asterra/contracts";
 import type { SaveState } from "../drive/DocumentHeader.tsx";
 import { applyCells, type CellChange, toCellMap, type ViewCell, viewCells } from "./cells.ts";
 import { applyFormatChanges, cellCount, type FormatChange, formatsOf } from "./formats.ts";

@@ -1,4 +1,4 @@
-import type { WebhookDomain } from "@soldock/contracts";
+import type { WebhookDomain } from "@asterra/contracts";
 import { useId, useState } from "react";
 import { Select } from "../../lib/Select.tsx";
 import { choiceKey, DOMAIN_LABELS, EVENT_LABELS, eventsFor, eventsOf } from "./webhookModel.ts";

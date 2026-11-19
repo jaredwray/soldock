@@ -1,4 +1,4 @@
-import { ApiError, type ChatBody, type ChatMessage } from "@soldock/contracts";
+import { ApiError, type ChatBody, type ChatMessage } from "@asterra/contracts";
 
 // The messages of one room that the person sent and that the server does not have yet. It has no DOM
 // and no network of its own, so apps/web/test checks it.

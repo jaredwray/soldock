@@ -1,4 +1,4 @@
-import { TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
+import { TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { newId, OperationError } from "../platform/index.ts";
 import { conflictOf, normalizeAddress } from "./store.ts";
 

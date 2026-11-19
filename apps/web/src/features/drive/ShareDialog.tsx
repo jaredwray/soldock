@@ -1,4 +1,4 @@
-import type { DriveItem, Permission, Principal } from "@soldock/contracts";
+import type { DriveItem, Permission, Principal } from "@asterra/contracts";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";

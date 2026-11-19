@@ -1,5 +1,5 @@
-// The connection from the seed to Soldock. The seed uses only the public surface: the setup ceremony,
-// the REST operations of `@soldock/contracts`, and the local inbound mail endpoint of `wrangler dev`.
+// The connection from the seed to Asterra. The seed uses only the public surface: the setup ceremony,
+// the REST operations of `@asterra/contracts`, and the local inbound mail endpoint of `wrangler dev`.
 import {
 	ApiError,
 	createClient,
@@ -9,7 +9,7 @@ import {
 	operations,
 	SetupInput,
 	type SetupResult,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 /** The seed stopped before it changed anything, for a reason that the operator can correct. */
 export class SeedStop extends Error {}

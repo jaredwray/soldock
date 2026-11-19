@@ -5,7 +5,7 @@ import {
 	type DocImage,
 	type DocImageNode,
 	type DocInline,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 /** A doc with no text: one empty paragraph. */
 export const EMPTY_DOC: DocContent = { type: "doc", content: [{ type: "paragraph" }] };

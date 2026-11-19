@@ -1,4 +1,4 @@
-import type { ChatRoom } from "@soldock/contracts";
+import type { ChatRoom } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { type CachedRoom, createRoomCache } from "../src/features/chat/roomCache.ts";
 

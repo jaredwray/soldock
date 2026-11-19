@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { storedSends } from "./model.ts";
 import type { OutboxState } from "./outbox.ts";
 

@@ -1,5 +1,5 @@
 import "./drive.css";
-import { DRIVE_LIMITS, type DriveItem } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem } from "@asterra/contracts";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";

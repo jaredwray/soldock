@@ -5,7 +5,7 @@ import {
 	type WebhookDomain,
 	type WebhookEndpoint,
 	webhookDomain,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { applyPlan, type EventChoice, type ListedSubscription, planChanges } from "./webhookModel.ts";
 

@@ -1,4 +1,4 @@
-import { WEBHOOK_LIMITS, type WebhookDomain, webhookHeaderNameProblem, webhookScope } from "@soldock/contracts";
+import { WEBHOOK_LIMITS, type WebhookDomain, webhookHeaderNameProblem, webhookScope } from "@asterra/contracts";
 import { type CallContext, credentialBinding } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError } from "../platform/index.ts";
 import { adoptLegacyWebhooks } from "./legacy.ts";

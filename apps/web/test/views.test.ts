@@ -1,4 +1,4 @@
-import type { Label } from "@soldock/contracts";
+import type { Label } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 // The real search parser of dock. It is pure TypeScript, so it runs here.
 import { parseQuery } from "../../dock/src/mail/search.ts";

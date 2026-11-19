@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatThreadFollow } from "@soldock/contracts";
+import type { ChatMessage, ChatThreadFollow } from "@asterra/contracts";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	createFollowKeeper,

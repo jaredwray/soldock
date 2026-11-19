@@ -1,4 +1,4 @@
-import type { Address } from "@soldock/contracts";
+import type { Address } from "@asterra/contracts";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const dayFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });

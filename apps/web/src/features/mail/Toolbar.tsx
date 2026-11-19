@@ -1,4 +1,4 @@
-import type { Label } from "@soldock/contracts";
+import type { Label } from "@asterra/contracts";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";

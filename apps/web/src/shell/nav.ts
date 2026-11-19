@@ -28,7 +28,7 @@ export function sidebarId(route: Route): string | null {
 	return NAV_IDS[route.page] ?? null;
 }
 
-/** The products of Soldock. A doc and a sheet are part of Drive. */
+/** The products of Asterra. A doc and a sheet are part of Drive. */
 export type Product = "mail" | "drive" | "chat";
 
 /** The product of a page, or null for a page that is not part of a product, for example Settings. */

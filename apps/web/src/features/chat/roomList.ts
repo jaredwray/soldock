@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatRoom } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatRoom } from "@asterra/contracts";
 
 // The room list of the sidebar, with the changes of the events socket. It has no DOM and no network,
 // so apps/web/test checks it.

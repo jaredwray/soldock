@@ -4,7 +4,7 @@ import {
 	type WebhookEndpoint,
 	type WebhookEvent,
 	webhookDomain,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import {
 	type CallContext,
 	canManageCredentialsOf,

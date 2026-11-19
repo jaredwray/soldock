@@ -8,7 +8,7 @@ import {
 	resources,
 	WEBHOOK_EVENT_TYPE,
 	WEBHOOK_LIMITS,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import {
 	credentialState,
 	getPrincipal,
@@ -57,7 +57,7 @@ export interface WebhookDeliveryJob {
 	eventId: string;
 	occurredAt: number;
 	/**
-	 * The POST attempt, from 1. A retry is a new job with the next attempt, so a failure of Soldock
+	 * The POST attempt, from 1. A retry is a new job with the next attempt, so a failure of Asterra
 	 * itself, which retries the same job, never uses up an attempt of the receiver.
 	 */
 	attempt?: number;
@@ -132,7 +132,7 @@ type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob | DriveWebhookDel
 
 /** The delay in seconds before attempt 2, 3, 4 and 5 of a POST. */
 const RETRY_DELAYS_S = [10, 60, 300, 1800] as const;
-/** The delay before a job runs again after a failure of Soldock itself, such as D1. */
+/** The delay before a job runs again after a failure of Asterra itself, such as D1. */
 const INTERNAL_RETRY_S = 30;
 /** The time after the planned retry while a new mail event still joins it, in case the retry job runs late. */
 const RETRY_GRACE_MS = 2 * WEBHOOK_LIMITS.timeoutMs + 60_000;
@@ -562,7 +562,7 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
 }
 
 /**
- * The headers of a POST. The custom header and the auth key come first, so the headers that Soldock sets
+ * The headers of a POST. The custom header and the auth key come first, so the headers that Asterra sets
  * always win. A POST of MCP Events names its subscription. After a refresh with a new secret, it has the
  * signature of the old secret too, for a short time.
  */
@@ -579,7 +579,7 @@ async function postHeaders(
 	}
 	if (endpoint.auth_key !== null) headers.set("authorization", `Bearer ${endpoint.auth_key}`);
 	headers.set("content-type", "application/json");
-	headers.set("user-agent", "Soldock-Webhooks/1");
+	headers.set("user-agent", "Asterra-Webhooks/1");
 	headers.set("webhook-id", id);
 	headers.set("webhook-timestamp", timestamp);
 	const signatures = [await webhookSignature(endpoint.secret, id, timestamp, body)];

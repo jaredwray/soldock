@@ -45,7 +45,7 @@ describe("the MCP endpoint", () => {
 			protocolVersion: "2025-06-18",
 			// ChatGPT asks for events/list only when the server names `events` here.
 			capabilities: { tools: {}, events: {} },
-			serverInfo: { name: "soldock" },
+			serverInfo: { name: "asterra" },
 		});
 		expect(instructionsOf(known.body)).toContain("bot@dock.test");
 		// The key holds each agent scope, so no tool is hidden from it.
@@ -267,7 +267,7 @@ describe("the MCP endpoint with protocol 2026-07-28", () => {
 			supportedVersions: [MODERN_MCP, "2025-11-25", "2025-06-18", "2025-03-26"],
 			capabilities: { tools: {}, resources: { subscribe: true }, events: {} },
 			cacheScope: "private",
-			_meta: { "io.modelcontextprotocol/serverInfo": { name: "soldock" } },
+			_meta: { "io.modelcontextprotocol/serverInfo": { name: "asterra" } },
 		});
 		expect(result.ttlMs).toBeGreaterThanOrEqual(0);
 		expect(result.instructions).toEqual(expect.stringContaining("bot@dock.test"));
@@ -323,7 +323,7 @@ describe("the MCP endpoint with protocol 2026-07-28", () => {
 			[
 				"a filter with too many URIs",
 				modern(bot.key, "subscriptions/listen", {
-					notifications: { resourceSubscriptions: Array.from({ length: 101 }, (_, i) => `soldock://x/${i}`) },
+					notifications: { resourceSubscriptions: Array.from({ length: 101 }, (_, i) => `asterra://x/${i}`) },
 				}),
 				200,
 				-32602,

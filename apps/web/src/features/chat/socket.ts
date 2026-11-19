@@ -1,4 +1,4 @@
-import { CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, ChatSocketEvent } from "@soldock/contracts";
+import { CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, ChatSocketEvent } from "@asterra/contracts";
 
 // The live connections of the page: the socket of one open room, and the events socket of the person.
 // They have no DOM and no network of their own, so apps/web/test checks them. The two sockets use the

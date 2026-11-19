@@ -107,7 +107,7 @@ jobs:
           # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
           package-manager-cache: false
       # Only the spike's dependencies, and no secrets in this step.
-      - run: sfw pnpm install --frozen-lockfile --filter @soldock/spike-email-service
+      - run: sfw pnpm install --frozen-lockfile --filter @asterra/spike-email-service
 
       # The queue and the event subscription outlive each run, because bounces and deferrals
       # arrive later. The cleanup mode deletes them.

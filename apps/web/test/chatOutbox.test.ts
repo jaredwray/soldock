@@ -1,4 +1,4 @@
-import { ApiError, type ChatBody, type ChatMessage } from "@soldock/contracts";
+import { ApiError, type ChatBody, type ChatMessage } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOutbox, postContent, RETRY_WAITS_MS } from "../src/features/chat/outbox.ts";
 

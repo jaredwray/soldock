@@ -17,7 +17,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, `/oauth/*` and `/.well-known/*`, the REST routes and `/mcp` |
 | [`src/platform/`](src/platform/) | Cross-cutting runtime services: HTTP plumbing, ids, crypto, logs, the operation invoker |
 | [`src/identity/`](src/identity/) | Directory, API keys, sessions, first-run setup, the OAuth server for agents, account, directory and OAuth operations |
-| [`src/api/`](src/api/), [`src/mcp/`](src/mcp/) | The REST and MCP adapters, generated from `@soldock/contracts` |
+| [`src/api/`](src/api/), [`src/mcp/`](src/mcp/) | The REST and MCP adapters, generated from `@asterra/contracts` |
 | [`src/mail/`](src/mail/) | Mail: inbound pipeline, `MailboxDO`, search, sanitizer, MIME, outbound |
 | [`src/drive/`](src/drive/) | Drive: `DriveSpaceDO` (items, versions, grants, trash, search, stars), uploads and downloads through R2 |
 | [`src/collab/`](src/collab/) | `DocumentDO`: the content of one doc or one sheet, with a revision counter, and the attachments of the document |
@@ -36,7 +36,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   The answer to a WebSocket upgrade (`101`) is the exception: it has no such header.
 - `GET /healthz` returns `{ "ok": true }` without authentication, D1, or static assets. It checks Worker liveness only.
 - `GET /api/v1/system/ping` returns `{ "ok": true }`.
-- `/api/v1/*`: one route for each operation in `@soldock/contracts` ([`src/api/`](src/api/)).
+- `/api/v1/*`: one route for each operation in `@asterra/contracts` ([`src/api/`](src/api/)).
 - `/mcp`: the MCP endpoint, with one tool for each operation, and the inbox of each mailbox and
   the messages of each chat room as resources ([`src/mcp/`](src/mcp/)). It speaks protocol
   2026-07-28 and the older protocols. A `subscriptions/listen` request gets a long-lived SSE response
@@ -87,9 +87,9 @@ Run these from the repository root.
 ```sh
 pnpm build                                  # builds apps/web into apps/web/dist (assets for dev, tests and deploy)
 pnpm test                                   # includes the workerd project ("dock")
-pnpm --filter @soldock/dock migrate:local   # applies the D1 migrations to the local database of wrangler dev
-pnpm --filter @soldock/dock dev             # wrangler dev
-pnpm --filter @soldock/dock types           # regenerate worker-configuration.d.ts after editing wrangler.jsonc
+pnpm --filter @asterra/dock migrate:local   # applies the D1 migrations to the local database of wrangler dev
+pnpm --filter @asterra/dock dev             # wrangler dev
+pnpm --filter @asterra/dock types           # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm types:check                            # fails if worker-configuration.d.ts is stale (CI)
 pnpm budgets:check                          # builds with --dry-run, profiles startup, compares to budgets.json (CI)
 pnpm run deploy:check                       # wrangler deploy --dry-run --env development (CI)
@@ -119,6 +119,6 @@ with injected inbound mail.
 | Rooms and direct messages (members, read markers, messages, outbox, idempotency keys) | [`chat`](src/chat/README.md) | `ChatRoomDO` SQLite |
 | The room index of Chat (a copy for the lists) | [`chat`](src/chat/README.md) | D1 `DIRECTORY`, tables `chat_rooms` and `chat_members` |
 
-`MailboxDO`, `DriveSpaceDO` and `ChatRoomDO` do not extend a `SoldockObject` base class yet. Each has its own
-migrations, outbox and idempotency table. When `SoldockObject` exists, they move onto it. Backups:
+`MailboxDO`, `DriveSpaceDO` and `ChatRoomDO` do not extend a `AsterraObject` base class yet. Each has its own
+migrations, outbox and idempotency table. When `AsterraObject` exists, they move onto it. Backups:
 not built yet.

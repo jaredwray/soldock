@@ -1,4 +1,4 @@
-import { type Cell, formatCellNumber } from "@soldock/contracts";
+import { type Cell, formatCellNumber } from "@asterra/contracts";
 import { cellName, parseCell } from "./a1.ts";
 import { type GridSize, inRange, isOneCell, type Range } from "./selection.ts";
 

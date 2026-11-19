@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@soldock/contracts";
+import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";

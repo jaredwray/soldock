@@ -42,7 +42,7 @@ export const mailInbox = defineResource({
 	title: "Inbox",
 	description:
 		"The newest threads in the inbox of a mailbox, as mail.list_threads returns them for the query in:inbox. Subscribe to it with subscriptions/listen to get a notification when new mail arrives. A client that cannot keep a stream open can use a webhook subscription for mail.inbox.updated instead.",
-	uriTemplate: "soldock://mail/{mailbox_id}/inbox",
+	uriTemplate: "asterra://mail/{mailbox_id}/inbox",
 	mimeType: "application/json",
 	read: { operation: "mail.list_threads", input: (vars) => ({ mailbox_id: vars.mailbox_id, query: "in:inbox" }) },
 	list: {
@@ -64,7 +64,7 @@ export const chatRoom = defineResource({
 	title: "Room messages",
 	description:
 		"The newest messages of a room or a direct message that you are a member of, as chat.list_messages returns them. Subscribe to it with subscriptions/listen to get a notification when a message is new, changed or deleted. Then call chat.list_messages with changed_after and the version that you have. A reply in a thread is not in this list: read it with chat.list_replies.",
-	uriTemplate: "soldock://chat/{room_id}/messages",
+	uriTemplate: "asterra://chat/{room_id}/messages",
 	mimeType: "application/json",
 	read: { operation: "chat.list_messages", input: (vars) => ({ room_id: vars.room_id as string }) },
 	list: {
@@ -92,7 +92,7 @@ export const chatRooms = defineResource({
 	title: "Your rooms",
 	description:
 		"Your rooms and direct messages, newest message first, with the unread count and the mention count of each, as chat.list_rooms returns them. Subscribe to it with subscriptions/listen to follow all of your rooms with one subscription, also the rooms that you join later. Then call chat.list_rooms, and chat.list_messages for each room with a new version.",
-	uriTemplate: "soldock://chat/rooms",
+	uriTemplate: "asterra://chat/rooms",
 	mimeType: "application/json",
 	read: { operation: "chat.list_rooms", input: () => ({ view: "joined", limit: CHAT_LIMITS.pageSize }) },
 	list: {
@@ -110,7 +110,7 @@ export const driveItem = defineResource({
 	title: "Drive item",
 	description:
 		"One item in a drive, as drive.get_item returns it. A webhook for an item event sends this URI. The POST has no file content.",
-	uriTemplate: "soldock://drive/{space_id}/items/{item_id}",
+	uriTemplate: "asterra://drive/{space_id}/items/{item_id}",
 	mimeType: "application/json",
 	read: {
 		operation: "drive.get_item",
@@ -134,7 +134,7 @@ export const driveSpace = defineResource({
 	title: "Shared drive",
 	description:
 		"One shared drive, as drive.get_shared_drive returns it. A webhook for members or for a deleted drive sends this URI.",
-	uriTemplate: "soldock://drive/{drive_id}",
+	uriTemplate: "asterra://drive/{drive_id}",
 	mimeType: "application/json",
 	read: {
 		operation: "drive.get_shared_drive",

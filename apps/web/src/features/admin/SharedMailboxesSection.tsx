@@ -1,4 +1,4 @@
-import { EmailAddress, type Principal, type TeamMailbox } from "@soldock/contracts";
+import { EmailAddress, type Principal, type TeamMailbox } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";

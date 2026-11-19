@@ -24,7 +24,7 @@ interface RailProps {
 }
 
 /**
- * The rail at the left of each page: the mark of Soldock, the products, Admin, Settings and the
+ * The rail at the left of each page: the mark of Asterra, the products, Admin, Settings and the
  * account button. At 900px and below it is part of the drawer that the menu button opens.
  */
 export function Rail({ route, open, hasSidebar }: RailProps) {
@@ -49,7 +49,7 @@ export function Rail({ route, open, hasSidebar }: RailProps) {
 
 	return (
 		<nav id={RAIL_ID} ref={navRef} className={open ? "rail rail-open" : "rail"} aria-label="Products">
-			<Link to={INBOX_PATH} className="rail-brand" aria-label="Soldock, go to the inbox">
+			<Link to={INBOX_PATH} className="rail-brand" aria-label="Asterra, go to the inbox">
 				<BrandMark />
 			</Link>
 			{PRODUCTS.map((entry) => (

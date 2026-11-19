@@ -1,4 +1,4 @@
-import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@soldock/contracts";
+import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@asterra/contracts";
 import { Fragment, type ReactNode } from "react";
 import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";

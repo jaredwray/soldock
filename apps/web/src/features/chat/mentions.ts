@@ -6,7 +6,7 @@ import {
 	type MentionDirectory,
 	type MentionPerson,
 	type RoomRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { recipientKeyAction } from "../mail/compose.ts";
 
 export {
@@ -15,7 +15,7 @@ export {
 	mentionDirectory,
 	type TextPart,
 	textParts,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 // The pure rules of mentions in Chat. They have no DOM and no network, so apps/web/test checks them.
 //

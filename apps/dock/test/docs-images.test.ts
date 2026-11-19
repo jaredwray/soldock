@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { DOC_LIMITS, type InputOf, UNTRUSTED_NOTICE } from "@soldock/contracts";
+import { DOC_LIMITS, type InputOf, UNTRUSTED_NOTICE } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTACHMENT_KEEP_MS } from "../src/collab/index.ts";
 import { readImageInfo } from "../src/docs/image.ts";

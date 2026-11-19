@@ -40,7 +40,7 @@ test("a person selects the events of a webhook with check boxes, then changes th
 	// A new webhook gets its URL and its events in one dialog.
 	await page.getByRole("button", { name: "Add webhook" }).click();
 	const add = page.getByRole("dialog", { name: "Add a webhook" });
-	await add.getByLabel("Receiver URL").fill("https://hooks.example.com/soldock");
+	await add.getByLabel("Receiver URL").fill("https://hooks.example.com/asterra");
 	await add.getByLabel("Label (optional)").fill(label);
 	await add.getByLabel("New mail in the inbox").check();
 	await add.getByLabel("A new message").check();
@@ -208,7 +208,7 @@ test("a save that fails in part shows the problem, a second save sends only the 
 	await edit.getByLabel("A new message").check();
 	await edit.getByLabel("An edited message").check();
 	await edit.getByRole("button", { name: "Save" }).click();
-	await expect(edit.getByRole("alert")).toContainText("Soldock did not save each event. A test refused this event.");
+	await expect(edit.getByRole("alert")).toContainText("Asterra did not save each event. A test refused this event.");
 	failList = true;
 	await edit.getByRole("button", { name: "Save" }).click();
 	await expect(edit).toHaveCount(0);

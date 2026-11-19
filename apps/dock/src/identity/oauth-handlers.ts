@@ -1,4 +1,4 @@
-import type { OAuthAuthorization, OAuthGrant } from "@soldock/contracts";
+import type { OAuthAuthorization, OAuthGrant } from "@asterra/contracts";
 import { type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, canManageCredentialsOf, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
 import type { CallContext } from "./auth.ts";

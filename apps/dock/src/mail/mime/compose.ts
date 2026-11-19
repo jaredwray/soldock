@@ -18,7 +18,7 @@ export interface OutgoingMessage {
 	references?: string[] | undefined;
 	date: Date;
 	attachments: OutgoingAttachment[];
-	/** Extra headers, for example `X-Soldock-Agent`. Names must be header tokens. */
+	/** Extra headers, for example `X-Asterra-Agent`. Names must be header tokens. */
 	headers?: [string, string][] | undefined;
 }
 
@@ -132,7 +132,7 @@ function textPart(subtype: "plain" | "html", content: string): string {
 }
 
 function multipart(subtype: "alternative" | "mixed", parts: string[]): string {
-	const boundary = `=_soldock_${randomToken(12)}`;
+	const boundary = `=_asterra_${randomToken(12)}`;
 	return [
 		`Content-Type: multipart/${subtype}; boundary="${boundary}"`,
 		"",

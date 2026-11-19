@@ -1,4 +1,4 @@
-import type { RoomKind, RoomRole } from "@soldock/contracts";
+import type { RoomKind, RoomRole } from "@asterra/contracts";
 import { decodeCursor, encodeCursor } from "../platform/index.ts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
 

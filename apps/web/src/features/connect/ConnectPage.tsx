@@ -6,7 +6,7 @@ import {
 	type Principal,
 	SCOPES,
 	type Scope,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -64,7 +64,7 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 	}, [requestId, canCreate, elevated, me.id]);
 
 	useEffect(() => {
-		document.title = "Connect an agent – Soldock";
+		document.title = "Connect an agent – Asterra";
 		void load();
 	}, [load]);
 
@@ -234,7 +234,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 				<p id={ids.warning} className="warning-box">
 					<Icon name="warning" size={18} />
 					<span>
-						Approve only if you started this connection. The app gives its own name, and Soldock does not check it. The
+						Approve only if you started this connection. The app gives its own name, and Asterra does not check it. The
 						app gets access at <strong className="connect-host">{authorization.redirect_host}</strong>.
 					</span>
 				</p>

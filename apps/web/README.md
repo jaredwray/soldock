@@ -9,7 +9,7 @@ MCP clients. The app has no UI-only path.
 
 ## What exists
 
-- **Sign-in.** The person enters their Soldock address and their password
+- **Sign-in.** The person enters their Asterra address and their password
   (`autocomplete="username"` and `"current-password"`, so a password manager can fill them).
   `POST /auth/session` sets an HttpOnly session cookie.
   - When the person has two-step verification, the server answers `totp_required`. A second step
@@ -19,7 +19,7 @@ MCP clients. The app has no UI-only path.
   - Each refusal shows the same message from the server, also during a lock after 10 failed attempts.
   - Agents have no password, so they cannot sign in to the UI. Each 401 from an operation
     shows the sign-in page again.
-  - The page is one card on the surface: the mark of Soldock, the title and one line of text, then
+  - The page is one card on the surface: the mark of Asterra, the title and one line of text, then
     the fields and an ink button with the full width. An error shows in a box with a red tint,
     above the button. Setup uses the same card.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
@@ -67,7 +67,7 @@ MCP clients. The app has no UI-only path.
     **Skip for now**. If the setup session failed, the panel shows the error, and the owner can skip.
   - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Shell.** Each signed-in page has a rail at the left. The page of the route fills the other space.
-  - The rail has the mark of Soldock, which goes to the inbox, and a link to each product: Mail,
+  - The rail has the mark of Asterra, which goes to the inbox, and a link to each product: Mail,
     Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
     Sheets are part of Drive.
   - Below a rule, the rail has **Admin** for owners, admins and the sponsors of agents. At the
@@ -361,7 +361,7 @@ MCP clients. The app has no UI-only path.
 - **Connect an agent** (`/connect/<oar_id>`). `/oauth/authorize` sends the browser of a person here
   for the request of an MCP client. A person who is not signed in signs in first, and then sees the
   same page. The page loads the request (`oauth.get_authorization`) and shows the client name, the
-  host that gets the access, and a warning that Soldock does not check the name.
+  host that gets the access, and a warning that Asterra does not check the name.
   - An owner or an admin can create a new agent: the name and the address come from the client name
     and the first mail domain, and the person can change them. A person can also select an agent
     that they sponsor (each agent, for an admin). The list does not offer an archived agent.
@@ -1156,6 +1156,10 @@ ink for the main action, thin borders and almost no shadows. The app does not us
 or the app icons of Ember. The CSS is plain CSS with custom properties. The app has no CSS framework
 and no component library.
 
+The navigation rail, sign-in, setup, and OAuth pages use the same [Asterra mark](../../docs/README.md#asterra-logo).
+The app shows a black A in light mode and a white A in dark mode.
+A sheen crosses both strokes. The mark stays still when the device requests reduced motion.
+
 ### Tokens
 
 The tokens are at the top of [`src/styles.css`](src/styles.css). The light values are on `:root`. The
@@ -1172,7 +1176,7 @@ dark values are on `:root.dark`.
 | `--border` | `#e5e5e5` | `#343434` | Each divider line |
 | `--input` | `#d4d4d4` | `#404040` | The border of a text field |
 | `--muted-foreground` | `#6b6b6b` | `#a3a3a3` | Secondary text and icons that are not current |
-| `--primary`, `--primary-hover`, `--primary-foreground` | `#171717`, `#2e2e2e`, `#fafafa` | `#f5f5f5`, `#dedede`, `#171717` | The main button, the brand tile, the account avatar |
+| `--primary`, `--primary-hover`, `--primary-foreground` | `#171717`, `#2e2e2e`, `#fafafa` | `#f5f5f5`, `#dedede`, `#171717` | The main button and the account avatar |
 | `--ring` | `#737373` | `#a3a3a3` | The border and the ring of a text field with the focus |
 | `--focus` | `#171717` | `#f5f5f5` | The 2px focus outline of each other control |
 | `--link` | `#0066ef` | `#43abff` | Text links |
@@ -1321,7 +1325,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 
 | Path | What |
 | --- | --- |
-| [`index.html`](index.html) | The page shell. Its root element has `data-soldock-shell`, which the dock tests and the smoke check look for |
+| [`index.html`](index.html) | The page shell. Its root element has `data-asterra-shell`, which the dock tests and the smoke check look for |
 | [`public/_headers`](public/_headers) | The security headers. Cloudflare static assets apply them to each response |
 | [`src/main.tsx`](src/main.tsx) | The entry point |
 | [`src/App.tsx`](src/App.tsx) | Boot and the session state |
@@ -1345,9 +1349,9 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 Run these from the repository root.
 
 ```sh
-pnpm --filter @soldock/web dev          # Vite dev server. It sends /api, /auth and /mcp to wrangler dev on port 8787
-pnpm --filter @soldock/web build        # writes apps/web/dist
-pnpm --filter @soldock/web typecheck    # also checks test/
+pnpm --filter @asterra/web dev          # Vite dev server. It sends /api, /auth and /mcp to wrangler dev on port 8787
+pnpm --filter @asterra/web build        # writes apps/web/dist
+pnpm --filter @asterra/web typecheck    # also checks test/
 pnpm build                              # the same build as above
 npx vitest run --project web            # the tests in test/
 ```
@@ -1358,7 +1362,7 @@ the tests run them on real ProseMirror documents and editor states. The label qu
 ([`apps/dock/src/mail/search.ts`](../dock/src/mail/search.ts)), so a quoted label name must parse
 back to the same name.
 
-Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
+Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 
 ## Security rules
 
@@ -1398,7 +1402,7 @@ Start `pnpm --filter @soldock/dock dev` in a second terminal for the API.
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and
   no external font or CDN. `connect-src 'self'` keeps each call on the dock host.
-- **Zod runs without `eval`.** `@soldock/contracts` turns on Zod's `jitless` mode before it makes a
+- **Zod runs without `eval`.** `@asterra/contracts` turns on Zod's `jitless` mode before it makes a
   schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
   `new Function`, and the CSP reports no violation.
 - **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The app does

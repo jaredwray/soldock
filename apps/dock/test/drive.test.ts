@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS } from "@soldock/contracts";
+import { DRIVE_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, base64, codeOf, drainDrive, driveBlobKeys, fromBase64, seedOrg } from "./helpers.ts";
 

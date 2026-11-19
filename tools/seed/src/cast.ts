@@ -13,7 +13,7 @@ export interface Person {
 	password: string;
 	/** `owner` is the person that setup creates. */
 	orgRole: "owner" | "admin" | "member";
-	/** The job of the person. Soldock does not store it: the seed prints it. */
+	/** The job of the person. Asterra does not store it: the seed prints it. */
 	job: string;
 }
 

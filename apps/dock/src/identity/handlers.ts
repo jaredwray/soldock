@@ -5,7 +5,7 @@ import {
 	mentionHandle,
 	SIGN_IN_LOCK_MINUTES,
 	TEAM_MAILBOX_LIMITS,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";

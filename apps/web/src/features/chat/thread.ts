@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatThreadFollow } from "@soldock/contracts";
+import type { ChatMessage, ChatThreadFollow } from "@asterra/contracts";
 
 // The pure rules of the view of one thread. They have no DOM and no network, so apps/web/test checks them.
 

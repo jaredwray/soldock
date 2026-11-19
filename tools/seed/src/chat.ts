@@ -1,5 +1,5 @@
 // The chat rooms of the made-up organization. Each message is posted by its author, with the
-// credential of that author. Soldock sets the time of a message, so each message has the time of the
+// credential of that author. Asterra sets the time of a message, so each message has the time of the
 // seed run.
 import type { ActorKey } from "./cast.ts";
 

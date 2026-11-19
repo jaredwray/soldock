@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { type ChangePage, createRoomSync } from "../src/features/chat/sync.ts";
 

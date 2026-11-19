@@ -5,7 +5,7 @@ import {
 	type DocImageNode,
 	type DocInline,
 	type DocMark,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 // Markdown for agents and for downloads. The two functions are a pair: `markdownToDoc` reads all that
 // `docToMarkdown` writes. Markdown has no underline and no empty paragraph, so a doc loses those in

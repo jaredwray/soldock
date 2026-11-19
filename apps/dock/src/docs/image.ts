@@ -1,4 +1,4 @@
-import { DOC_LIMITS, type DocImageType } from "@soldock/contracts";
+import { DOC_LIMITS, type DocImageType } from "@asterra/contracts";
 
 // The type and the size in pixels of an image, from its bytes. The server never trusts the type that a
 // client or a web server gives. Only these four raster formats go into a doc: a file of these types

@@ -4,7 +4,7 @@ import {
 	type ChatSocketEvent,
 	EVENTS_SOCKET_PROTOCOL,
 	PrincipalEvent,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createLiveSocket,

@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, OAUTH_LIMITS, type Scope } from "@soldock/contracts";
+import { AGENT_SCOPES, OAUTH_LIMITS, type Scope } from "@asterra/contracts";
 import type { Context, Hono } from "hono";
 import {
 	audit,
@@ -61,7 +61,7 @@ function oauthError(error: string, description: string, status: 400 | 401 = 400)
  * URI is not known. The person sees it in the browser. It holds no text from the request.
  */
 function authorizePageError(message: string): Response {
-	return new Response(`Soldock cannot connect this app. ${message}\n`, {
+	return new Response(`Asterra cannot connect this app. ${message}\n`, {
 		status: 400,
 		headers: {
 			"content-type": "text/plain; charset=utf-8",
@@ -141,7 +141,7 @@ export function mountOAuthRoutes(app: OAuthApp): void {
 	});
 
 	// Dynamic client registration (RFC 7591), without a credential. Each client is public: it gets no
-	// secret and must use PKCE. Values that Soldock does not support are replaced, as RFC 7591 allows.
+	// secret and must use PKCE. Values that Asterra does not support are replaced, as RFC 7591 allows.
 	app.post("/oauth/register", async (c) => {
 		let body: unknown;
 		try {
@@ -312,7 +312,7 @@ function protectedResource(c: OAuthContext, resource: string): Response {
 			authorization_servers: [originOf(c)],
 			scopes_supported: AGENT_SCOPES,
 			bearer_methods_supported: ["header"],
-			resource_name: "Soldock",
+			resource_name: "Asterra",
 		},
 		200,
 		{ "cache-control": "public, max-age=300" },

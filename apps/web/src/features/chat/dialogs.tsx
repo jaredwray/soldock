@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";

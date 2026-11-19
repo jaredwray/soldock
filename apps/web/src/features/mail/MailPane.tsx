@@ -1,4 +1,4 @@
-import type { Label, Message, ThreadSummary } from "@soldock/contracts";
+import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";

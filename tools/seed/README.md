@@ -3,14 +3,14 @@
 > Status: **started**. The seed fills Mail, Chat, Drive, Docs and Sheets. Add a product to the seed
 > when the product gets its operations.
 
-`pnpm seed` fills an empty **local** Soldock with a made-up organization. Use it for demonstrations
+`pnpm seed` fills an empty **local** Asterra with a made-up organization. Use it for demonstrations
 and for screenshots.
 
 ```sh
 pnpm install
 pnpm build
-pnpm --filter @soldock/dock migrate:local
-pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef
+pnpm --filter @asterra/dock migrate:local
+pnpm --filter @asterra/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef
 
 # In a second terminal:
 SETUP_TOKEN=local-setup-token-0123456789abcdef pnpm seed
@@ -70,21 +70,21 @@ or has an idempotency key.
 
 ## Limits
 
-- Soldock sets the time of each message. Thus each mail message and each chat message has the time
+- Asterra sets the time of each message. Thus each mail message and each chat message has the time
   of the seed run.
-- A person has no picture and no job title in Soldock. The seed prints the job of each person.
+- A person has no picture and no job title in Asterra. The seed prints the job of each person.
 
 ## Safety
 
 - The seed refuses each URL whose host is not `localhost` or `127.0.0.1`. It creates accounts with
   passwords that everybody knows. Never change this rule.
-- The seed fills only an empty Soldock. If an owner exists, it stops and it changes nothing.
+- The seed fills only an empty Asterra instance. If an owner exists, it stops and it changes nothing.
 - The seed does not reset data. To run it again, start the Worker with a new, empty
   `--persist-to` directory and apply the migrations to that directory.
-- If the seed stops after setup, for example because the Worker stopped, the Soldock has a part of
+- If the seed stops after setup, for example because the Worker stopped, the Asterra has a part of
   the data. Start again with an empty directory.
 
 ## Tests
 
-`test/seed.test.ts` runs the seed against a Soldock that stores nothing. It checks each request body
+`test/seed.test.ts` runs the seed against an Asterra test server that stores nothing. It checks each request body
 against the input schema of its operation, so the seed cannot move away from the contracts.

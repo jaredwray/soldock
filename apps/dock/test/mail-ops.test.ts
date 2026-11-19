@@ -1,4 +1,4 @@
-import { ApiError } from "@soldock/contracts";
+import { ApiError } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, inject, rawMessage, seedOrg } from "./helpers.ts";
 

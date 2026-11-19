@@ -38,7 +38,7 @@ test("a dropped image file shows at once, goes into the doc, and stays after a r
 });
 
 const LOREM =
-	"Soldock keeps each image of a doc in the doc. The text goes around an image at the left or at the right, or it stops above the image and continues below it. ".repeat(
+	"Asterra keeps each image of a doc in the doc. The text goes around an image at the left or at the right, or it stops above the image and continues below it. ".repeat(
 		4,
 	);
 

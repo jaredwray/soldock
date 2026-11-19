@@ -1,4 +1,4 @@
-import type { ChatBody } from "@soldock/contracts";
+import type { ChatBody } from "@asterra/contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";

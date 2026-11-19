@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, type OAuthGrant, SCOPES, type Scope } from "@soldock/contracts";
+import { AGENT_SCOPES, type OAuthGrant, SCOPES, type Scope } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

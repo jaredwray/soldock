@@ -1,4 +1,4 @@
-import type { CellFormat } from "@soldock/contracts";
+import type { CellFormat } from "@asterra/contracts";
 import { type CSSProperties, memo } from "react";
 import type { ViewCell } from "./cells.ts";
 import { textColorOn } from "./formats.ts";

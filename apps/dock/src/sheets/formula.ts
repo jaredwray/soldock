@@ -1,4 +1,4 @@
-import { SHEET_ERRORS, SHEET_LIMITS, type SheetError } from "@soldock/contracts";
+import { SHEET_ERRORS, SHEET_LIMITS, type SheetError } from "@asterra/contracts";
 
 // The formula engine of Sheets. It has no access to the network, the clock or random numbers, so a
 // sheet always gives the same results. One evaluation has a work budget, so a sheet with very large

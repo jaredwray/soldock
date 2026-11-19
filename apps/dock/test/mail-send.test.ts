@@ -1,6 +1,6 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ApiError } from "@soldock/contracts";
+import { ApiError } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
@@ -463,7 +463,7 @@ describe("agent outbound policy", () => {
 		expect(await code(bot.call("mail.send", { to: ["anyone@example.org"], text: "No again" }))).toBe("policy_denied");
 	});
 
-	it("refuses the send through MCP with the same code, and marks agent mail with X-Soldock-Agent", async () => {
+	it("refuses the send through MCP with the same code, and marks agent mail with X-Asterra-Agent", async () => {
 		const result = await callTool(bot.key, "mail_send", { to: ["customer@example.org"], text: "Invoice" });
 		expect(result.isError).toBe(true);
 		expect(JSON.parse(result.content[0]?.text ?? "{}")).toEqual({
@@ -473,6 +473,7 @@ describe("agent outbound policy", () => {
 		await bot.call("mail.send", { to: ["ada@dock.test"], text: "Hello" });
 		const { objects } = await env.BLOBS.list({ prefix: `mail/raw/${bot.id}/` });
 		const raw = await (await env.BLOBS.get(objects[0]?.key as string))?.text();
+		expect(raw).toMatch(/^X-Asterra-Agent: true\r$/m);
 		expect(raw).toMatch(/^X-Soldock-Agent: true\r$/m);
 	});
 
@@ -579,7 +580,7 @@ describe("agent outbound policy", () => {
 				address: "customer@example.org",
 				kind: "external",
 				status: "failed",
-				error: "The agent is archived, so Soldock does not send this message.",
+				error: "The agent is archived, so Asterra does not send this message.",
 			},
 		]);
 	});

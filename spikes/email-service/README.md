@@ -5,7 +5,7 @@
 > directory and the workflow.
 
 The spike finds out if Cloudflare Email Service can carry person-to-person mail. Email Service is in
-beta, and its terms and quotas are for transactional mail. Soldock has no Cloudflare-only fallback
+beta, and its terms and quotas are for transactional mail. Asterra has no Cloudflare-only fallback
 for outbound mail.
 The tests need a live Cloudflare account. Only workflows that run `main` get the credentials
 ([workflow rules](../../docs/self-hosting.md#workflow-rules)). So this
@@ -19,7 +19,7 @@ The Worker `soldock-spike-email` is never the `dock` Worker. It has these parts:
 
 | Part | What |
 | --- | --- |
-| `POST /send` | For each recipient, it sends four messages: a structured message, a structured reply, a raw MIME message and a raw MIME reply. Each message has a custom `Message-ID` and an `X-Soldock-Spike` header. Each reply has `In-Reply-To` and `References`. The recipients run in parallel. The response gives the requested and the returned message IDs, or the error. The Worker also stores these results |
+| `POST /send` | For each recipient, it sends four messages: a structured message, a structured reply, a raw MIME message and a raw MIME reply. Each message has a custom `Message-ID` and an `X-Asterra-Spike` header. Each reply has `In-Reply-To` and `References`. The recipients run in parallel. The response gives the requested and the returned message IDs, or the error. The Worker also stores these results |
 | Queue consumer | It consumes `soldock-spike-email-events`, which gets the Email Service lifecycle events (`message.delivered`, `deferred`, `bounced`, `failed`, `rejected`, `complained`). It records each event once |
 | `GET /events` | It returns every recorded event and every stored send result. It deletes none, so a failed artifact upload loses no evidence |
 | `GET /ready` | It tells the workflow that the run token is live |
@@ -82,7 +82,7 @@ Run these from the repository root.
 ```sh
 pnpm test                                               # includes the workerd project "spike-email-service"
 pnpm spikes:build                                       # wrangler deploy --dry-run, with no credentials (CI)
-pnpm --filter @soldock/spike-email-service types        # regenerate worker-configuration.d.ts after you edit wrangler.jsonc
+pnpm --filter @asterra/spike-email-service types        # regenerate worker-configuration.d.ts after you edit wrangler.jsonc
 ```
 
 ## Data inventory

@@ -1,4 +1,4 @@
-import type { DriveItem, FileVersion } from "@soldock/contracts";
+import type { DriveItem, FileVersion } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";

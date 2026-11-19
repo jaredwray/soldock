@@ -8,7 +8,7 @@ import {
 	type WebhookEndpoint,
 	webhookHeaderNameProblem,
 	webhookScope,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -97,7 +97,7 @@ export function EventLines({
 	targetName?: (domain: WebhookDomain, targetId: string) => string;
 }) {
 	const groups = groupByTarget(subscriptions);
-	if (groups.length === 0) return <div className="row-note">No events. Soldock sends nothing to this webhook.</div>;
+	if (groups.length === 0) return <div className="row-note">No events. Asterra sends nothing to this webhook.</div>;
 	return (
 		<ul className="event-lines">
 			{groups.map((group) => (
@@ -146,7 +146,7 @@ export function LastDelivery({ endpoint, unknown }: { endpoint: WebhookEndpoint;
 }
 
 /**
- * Your webhooks. A webhook is a URL outside Soldock and the events that Soldock sends to it. Add and
+ * Your webhooks. A webhook is a URL outside Asterra and the events that Asterra sends to it. Add and
  * Edit open one dialog, which has a check box for each event. The signing secret shows once.
  */
 export function WebhookSettings() {
@@ -249,7 +249,7 @@ export function WebhookSettings() {
 						Webhooks
 					</h2>
 					<p className="panel-note">
-						A webhook sends a signed POST to a URL outside Soldock when an event occurs. The POST has ids only.
+						A webhook sends a signed POST to a URL outside Asterra when an event occurs. The POST has ids only.
 					</p>
 				</header>
 				<button
@@ -368,7 +368,7 @@ export function WebhookSettings() {
 							endpoint,
 							problem:
 								failures.length > 0
-									? `Soldock created the webhook, but did not add each event. ${failureText(failures)} Edit the webhook to try again.`
+									? `Asterra created the webhook, but did not add each event. ${failureText(failures)} Edit the webhook to try again.`
 									: null,
 						});
 						void load();
@@ -391,7 +391,7 @@ export function WebhookSettings() {
 					}}
 				>
 					<p>
-						Delete <strong>{deleting.label}</strong>? Soldock sends no more POST requests to {deleting.url}. You cannot
+						Delete <strong>{deleting.label}</strong>? Asterra sends no more POST requests to {deleting.url}. You cannot
 						undo this.
 					</p>
 				</ConfirmDialog>
@@ -490,7 +490,7 @@ function WebhookDialog({
 			if (applied.failures.length > 0) {
 				// A different person or tab can change the events. The next save starts from the server state.
 				setCurrent(applied.subscriptions);
-				setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
+				setError(`Asterra did not save each event. ${failureText(applied.failures)}`);
 				setBusy(false);
 				return;
 			}
@@ -538,7 +538,7 @@ function WebhookDialog({
 								className="input"
 								type="url"
 								value={url}
-								placeholder="https://hooks.example.com/soldock"
+								placeholder="https://hooks.example.com/asterra"
 								onChange={(event) => setUrl(event.target.value)}
 								aria-describedby={ids.urlHint}
 								disabled={busy}
@@ -570,7 +570,7 @@ function WebhookDialog({
 						<h3 id={ids.events} className="dialog-section-title">
 							Events
 						</h3>
-						<p className="field-hint">Select each event that Soldock sends to this webhook.</p>
+						<p className="field-hint">Select each event that Asterra sends to this webhook.</p>
 						<EventPicker
 							groups={groups}
 							selected={selected}
@@ -689,7 +689,7 @@ function KeyField({
 				disabled={disabled}
 			/>
 			<p id={hintId} className="field-hint">
-				Sent as Authorization: Bearer &lt;key&gt; on each POST. Soldock never shows it again.
+				Sent as Authorization: Bearer &lt;key&gt; on each POST. Asterra never shows it again.
 			</p>
 		</div>
 	);
@@ -743,7 +743,7 @@ function HeaderFields({
 				/>
 			</div>
 			<p id={hintId} className="field-hint">
-				Sent as it is on each POST. Soldock never shows the value again.
+				Sent as it is on each POST. Asterra never shows the value again.
 			</p>
 		</fieldset>
 	);

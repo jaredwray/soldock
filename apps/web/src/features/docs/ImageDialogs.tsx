@@ -1,5 +1,5 @@
 import "../drive/drive.css";
-import { DOC_IMAGE_TYPES, DOC_LIMITS, type DocImageCrop, DRIVE_LIMITS, type DriveItem } from "@soldock/contracts";
+import { DOC_IMAGE_TYPES, DOC_LIMITS, type DocImageCrop, DRIVE_LIMITS, type DriveItem } from "@asterra/contracts";
 import {
 	type FormEvent,
 	type KeyboardEvent,
@@ -129,7 +129,7 @@ export function ImageUrlDialog({ onApply, onClose }: ImageUrlDialogProps) {
 							</p>
 						) : (
 							<p id={ids.hint} className="field-hint">
-								Soldock downloads the image one time. The doc keeps its own copy.
+								Asterra downloads the image one time. The doc keeps its own copy.
 							</p>
 						)}
 					</div>

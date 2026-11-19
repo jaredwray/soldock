@@ -1,4 +1,4 @@
-import { operationList, operationNeedsScope, SCOPES, type Scope } from "@soldock/contracts";
+import { operationList, operationNeedsScope, SCOPES, type Scope } from "@asterra/contracts";
 import { audit, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";

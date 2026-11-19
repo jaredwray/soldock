@@ -1,4 +1,4 @@
-import type { Principal } from "@soldock/contracts";
+import type { Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { isOrgAdmin } from "../auth/session.tsx";

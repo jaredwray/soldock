@@ -4,7 +4,7 @@ import {
 	type SharedDrive,
 	type SharedDriveMember,
 	type SharedDriveRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
