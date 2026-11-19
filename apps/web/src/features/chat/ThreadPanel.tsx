@@ -127,6 +127,21 @@ export function ThreadPanel({
 		};
 	}, [roomId, parentId, watch, load]);
 
+	/**
+	 * Reads the state of the thread again, after an own call whose answer lost its part to an own reply. The
+	 * read starts after both, so it has the order of the server.
+	 */
+	const readFollowAgain = useCallback(() => {
+		const follows = keeper.current;
+		if (!follows) return;
+		const ticket = follows.ticket();
+		api
+			.call("chat.list_replies", { room_id: roomId, message_id: parentId, limit: 1 })
+			.then((page) => follows.apply(ticket, page.follow))
+			// The next read of the thread brings the state.
+			.catch(() => {});
+	}, [roomId, parentId]);
+
 	// The read marker: the first state of the thread fixes the "New" line. Then, while the view shows on a
 	// visible page, each new reply of a different principal moves the marker to the newest reply.
 	const shownThread = state.status === "ready" ? state.thread : null;
@@ -146,13 +161,15 @@ export function ThreadPanel({
 		// socket event is late stays new.
 		api
 			.call("chat.mark_thread_read", { room_id: roomId, message_id: parentId, seq: newest.seq })
-			.then((result) => follows.finish(ticket, "marker", result.follow))
+			.then((result) => {
+				if (follows.finish(ticket, "marker", result.follow)) readFollowAgain();
+			})
 			// The marker stays where it was. The next reply, or the next visible moment, tries again.
 			.catch(() => follows.finish(ticket, "marker", null))
 			.finally(() => {
 				marking.current = false;
 			});
-	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId]);
+	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId, readFollowAgain]);
 
 	async function toggleFollow() {
 		const follows = keeper.current;
@@ -166,7 +183,7 @@ export function ThreadPanel({
 				message_id: parentId,
 				following: !follow.following,
 			});
-			follows.finish(ticket, "following", result.follow);
+			if (follows.finish(ticket, "following", result.follow)) readFollowAgain();
 		} catch (error) {
 			follows.finish(ticket, "following", null);
 			setFollowError(errorMessage(error));

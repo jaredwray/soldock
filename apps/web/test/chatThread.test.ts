@@ -201,8 +201,11 @@ describe("the state of a thread for a person", () => {
 		// An own reply during a marker call moves the marker past the answer of the call.
 		const late = keeper.begin("marker");
 		keeper.local((current) => ({ ...current, last_read_seq: 9 }));
-		keeper.finish(late, "marker", { following: true, last_read_seq: 7, unread_count: 0 });
+		// The server order of the two is not known, so the keeper asks for a new read.
+		expect(keeper.finish(late, "marker", { following: true, last_read_seq: 7, unread_count: 0 })).toBe(true);
 		expect(shown.at(-1)).toEqual({ following: true, last_read_seq: 9, unread_count: 0 });
+		keeper.apply(keeper.ticket(), { following: true, last_read_seq: 7, unread_count: 0 });
+		expect(keeper.current()?.last_read_seq).toBe(7);
 	});
 });
 
