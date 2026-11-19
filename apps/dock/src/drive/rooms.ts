@@ -1,6 +1,7 @@
+import { DRIVE_LIMITS, isErrorCode } from "@asterra/contracts";
 import type { CallContext } from "../identity/index.ts";
 import { OperationError } from "../platform/index.ts";
-import { accept, openSpace, spaceStub, unknownSpaceIds } from "./access.ts";
+import { accept, actorOf, openSpace, spaceStub, unknownSpaceIds } from "./access.ts";
 import type { FileSnapshot, VersionRecord } from "./space.ts";
 
 // What Chat asks of Drive for the files of a message. A message holds files of the own drive of its
@@ -36,4 +37,40 @@ export async function roomFile(
 		throw new OperationError("not_found", NOT_FOUND);
 	}
 	return accept(await spaceStub(env, input.spaceId).roomFile(input));
+}
+
+/**
+ * A folder name from the name of a room: no slash, backslash or control character, which an item name
+ * cannot have, and at most the length of an item name.
+ */
+function folderNameOf(name: string): string {
+	// Cut by code point, so a long name never keeps half of a surrogate pair.
+	const clean = Array.from(name.replace(/[\p{Cc}\\/]/gu, "-").trim())
+		.slice(0, DRIVE_LIMITS.nameChars)
+		.join("")
+		.trim();
+	return clean === "" || clean === "." || clean === ".." ? "Room" : clean;
+}
+
+/**
+ * The folder Chat/<room name> in the own drive of the caller, for a file of a message of that room. The room
+ * gives the name, and checks that the caller is a member: a principal that is not a member gets not_found,
+ * and no folder comes.
+ */
+export async function chatFolderFor(call: CallContext, roomId: string): Promise<string> {
+	// The name of the folder is the name of a room, and the answer tells which rooms the principal is in. That
+	// is Chat data, so the credential needs chat.read, as for a read of the room.
+	if (!call.caller.scopes.has("chat.read")) {
+		throw new OperationError("forbidden", "To use room_id, the credential needs the chat.read scope.");
+	}
+	const room = call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId));
+	const answer = (await room.folderName({ roomId, actor: actorOf(call) })) as
+		| { name: string }
+		| { error: { code: string; message: string } };
+	if ("error" in answer) {
+		const code = isErrorCode(answer.error.code) ? answer.error.code : "not_found";
+		throw new OperationError(code, answer.error.message);
+	}
+	const own = await openSpace(call, undefined);
+	return accept(await own.space.chatFolder(own.ctx, { roomId, name: folderNameOf(answer.name) })).folderId;
 }

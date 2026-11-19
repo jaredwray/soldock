@@ -191,6 +191,40 @@ A message of [Chat](../chat/README.md#files-in-messages) can hold files of the o
 - A permanent delete removes the grants of the item. A move between drives removes them in the source:
   the messages name the source drive, so their files give `not_found`.
 
+### The folders of Chat
+
+`drive.upload_file` and `drive.create_upload` take `room_id`. The file then goes into the folder
+Chat/<room name> of the own drive of the caller (`chatFolder`), and the server makes the folders when
+they are not there. The web app sets it for each file of a message, and an agent can set it too.
+
+- The room gives the name of the folder (`folderName` of the `ChatRoomDO`): the name of the room, or the
+  name of the other member of a direct message. A slash, a backslash and a control character become a
+  hyphen, and an empty name, `.` or `..` becomes "Room". A principal that is not a member of the room gets
+  `not_found`, also for a public room, and no folder comes.
+- The name of the folder is the name of a room, and the answer tells which rooms the principal is in. So
+  `room_id` needs the `chat.read` scope too, apart from `drive.write`.
+- `room_id` goes with neither `parent_id` nor `space_id`: the folders of Chat are in the own drive only.
+- The drive keeps the folder of each room id (`chat_folders`), and the folder of "Chat" itself (`meta`,
+  key `chat_root_id`). So two rooms with one name have two folders.
+- A room with a new name renames its folder at the next upload, unless the person renamed the folder.
+  The drive keeps the name that it gave the folder (`named`) to see that. Known limit: an upload that read
+  the room before a rename can give the folder the old name again. The next upload gives the new name.
+- A folder that the person moved stays in use where it is now.
+- A folder in the trash, and a deleted folder, get a new folder. So does the folder of "Chat" itself.
+- While the folder of a room, or the folder of "Chat", moves to a different drive (`drive.move_to_drive`),
+  an upload for the room gets `conflict`. When the move stops, the folder stays in this drive and in use.
+  When the move completes, the folder is in the other drive, and the next upload makes a new folder here.
+- The folder of a room is one level under "Chat". When "Chat" is at the last level of folders (30), a new
+  "Chat" comes at the root.
+- The drive finds "Chat" by its id (`chat_root_id`), not by its name. A folder "Chat" that the person
+  made is not that folder. After a restore of a "Chat" from the trash, the two folders stay in use: each
+  for the rooms whose folders it holds.
+- The folders come before the checks of the upload. When the upload then fails (the limit of open
+  uploads, a bad body), the empty folder stays, and the next upload uses it.
+- The audit line of the upload covers the folders that it made or renamed. The folders send the drive
+  events (`drive.item.created`, `drive.item.updated`) and change the version of the drive.
+- A file of a message from before these folders stays where it is.
+
 ## The trash
 
 - `drive.trash_items` sets `trashed_at` on the item. Each item under a folder in the trash gets
@@ -578,6 +612,7 @@ See the [webhook module](../webhooks/README.md).
 | Items (the tree, names, sizes, the trash state, who made the last change) | `DriveSpaceDO` table `items` | One object for each principal, keyed by the principal id, and one for each shared drive, keyed by its `drv_…` id |
 | Versions of files | `DriveSpaceDO` table `versions` | The R2 key, size, MIME type, SHA-256 and author of each version, the type from its first bytes (`detected_type`), and its small picture (`preview_json`: the type, the size and the pixels) |
 | Grants of rooms of Chat | `DriveSpaceDO` table `room_grants` | The item, the room, the author of the message and the time. The room writes the rows through its outbox. A delete of the item and a move remove them |
+| The folders of Chat | `DriveSpaceDO` table `chat_folders`, and `meta` key `chat_root_id` | The room id, the folder of the room, and the name that the drive gave the folder. The folder of "Chat" itself is in `meta`. A row of a folder that is gone gets a new folder at the next upload |
 | Uploads in parts | `DriveSpaceDO` tables `uploads` and `upload_parts` | The principal, the R2 multipart upload, the ids of the item and the version, the folder, the name, the type, the size, the size of a part, the SHA-256 of the start, the state, the idempotency key, and the etag of each part. Removed 24 hours after the start |
 | Parts of an upload that is not complete | R2 `blobs`, a multipart upload to the key of the version | Stopped by `drive.abort_upload`, by the alarm after 24 hours, or by R2 after 7 days |
 | Small pictures of versions | R2 `blobs`, key `drive/<space id>/<item id>/<version id>.thumb-<id>` | One owner: the version, whose `preview_json` names the key |

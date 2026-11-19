@@ -116,7 +116,7 @@ export function ThreadPanel({
 	// The files of the reply. They go away with the view: an upload that runs stops, and a file that is in
 	// the drive goes to the trash, as for a reply that the person did not send. A file of a send never goes
 	// to the trash (`take`): the room can have the reply, also when its answer did not arrive.
-	const attachments = useMemo(() => newAttachments(), []);
+	const attachments = useMemo(() => newAttachments(roomId), [roomId]);
 	const files = useAttachments(attachments);
 	useEffect(
 		() => () => {

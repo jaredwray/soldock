@@ -8,7 +8,7 @@ import {
 	SHARED_DRIVE_LIMITS,
 	type SharedDriveRole,
 } from "@asterra/contracts";
-import { audit, log } from "../platform/index.ts";
+import { audit, log, newId } from "../platform/index.ts";
 import { type DriveWebhookEventJob, driveWebhookBoundary } from "../webhooks/index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -640,6 +640,15 @@ const MIGRATIONS: string[][] = [
 			PRIMARY KEY (item_id, room_id)
 		) WITHOUT ROWID`,
 	],
+	[
+		// The folder of each room of Chat in the own drive of the owner: Chat/<room name>. `named` is the name
+		// that the drive gave the folder. The folder of "Chat" itself is in `meta`, key `chat_root_id`.
+		`CREATE TABLE chat_folders (
+			room_id TEXT PRIMARY KEY,
+			folder_id TEXT NOT NULL,
+			named TEXT NOT NULL
+		) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -709,6 +718,8 @@ const MOVING = "The item is moving to a different drive. Try again in a moment."
 const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
 const NOT_COMPLETE = "The move did not complete. The items are in the source drive. Try again.";
 const NO_UPLOAD = "No upload has that id, or it is not your upload, or it expired. Start a new upload.";
+/** The folder at the root of a drive that holds the folder of each room of Chat. */
+const CHAT_FOLDER = "Chat";
 /** The uploads that one alarm removes after their time. The next alarm removes more. */
 const UPLOAD_SWEEP = 50;
 const LAST_MANAGER =
@@ -2072,6 +2083,93 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	// --- Files in rooms of Chat -----------------------------------------------------------------
+
+	/**
+	 * The folder of a room of Chat in the own drive of the caller: Chat/<room name>. It makes the folder of
+	 * "Chat" at the root, and the folder of the room in it, when they are not there.
+	 *
+	 * - The folder is the folder of the room id, so two rooms with one name have two folders.
+	 * - A room with a new name renames its folder, unless the person renamed the folder.
+	 * - A folder that the person moved stays in use where it is now.
+	 * - A folder in the trash, or deleted, gets a new folder.
+	 * - A folder of a move to a different drive gives the refusal of the move. When the move stops, the folder
+	 *   stays in this drive and in use. When the move completes, the next call makes a new folder.
+	 */
+	async chatFolder(call: SpaceCall, input: { roomId: string; name: string }): Promise<{ folderId: string } | Refusal> {
+		this.enter(call);
+		if (isSharedDriveId(call.spaceId) || !this.isOwner(call)) {
+			return refuse("forbidden", "The folders of Chat are in your own drive only.");
+		}
+		const boundary = await this.captureWebhookBoundary();
+		const live = (id: string | null): ItemRow | null => {
+			const row = id === null ? null : this.row(id);
+			return row && row.kind === "folder" && row.trash_root === null ? row : null;
+		};
+		// No await comes after this point, so these reads stay true in the transaction.
+		const known = this.one<{ folder_id: string; named: string }>(
+			"SELECT folder_id, named FROM chat_folders WHERE room_id = ?",
+			input.roomId,
+		);
+		const folder = live(known?.folder_id ?? null);
+		const root = folder ? null : live(this.meta("chat_root_id"));
+		if ((folder && this.busy(folder.id)) || (root && this.busy(root.id))) return refuse("conflict", MOVING);
+		const now = Date.now();
+		const actor = JSON.stringify(call.actor);
+		const create = (parentId: string | null, name: string): string => {
+			const id = newId("itm");
+			this.insertItem({ id, parentId, kind: "folder", name }, now, actor);
+			this.noteWebhook("drive.item.created", id, boundary);
+			return id;
+		};
+		let folderId = "";
+		let changed = false;
+		this.ctx.storage.transactionSync(() => {
+			if (known && folder) {
+				folderId = folder.id;
+				// The person did not rename the folder, so it takes the new name of the room. A call that read the room
+				// before a rename can give the old name back. The next upload gives the new name again.
+				if (folder.name === known.named && known.named !== input.name) {
+					this.sql.exec(
+						"UPDATE items SET name = ?, name_key = ?, modified_at = ?, modified_by_json = ? WHERE id = ?",
+						input.name,
+						nameKey(input.name),
+						now,
+						actor,
+						folder.id,
+					);
+					this.sql.exec("UPDATE items_fts SET name = ? WHERE rowid = ?", input.name, folder.seq);
+					this.sql.exec("UPDATE chat_folders SET named = ? WHERE room_id = ?", input.name, input.roomId);
+					this.noteWebhook("drive.item.updated", folder.id, boundary);
+					changed = true;
+				}
+				if (changed) this.bump();
+				return;
+			}
+			let rootId = root?.id ?? null;
+			// The folder of the room is one level under "Chat". A "Chat" that the person moved to the last level
+			// cannot hold a folder, so a new "Chat" comes at the root.
+			if (rootId !== null) {
+				const level = this.one<{ n: number }>(`${UP} SELECT COUNT(*) AS n FROM up`, rootId)?.n ?? 0;
+				if (this.tooDeep(level + 1)) rootId = null;
+			}
+			if (rootId === null) {
+				rootId = create(null, CHAT_FOLDER);
+				this.setMeta("chat_root_id", rootId);
+			}
+			folderId = create(rootId, input.name);
+			this.sql.exec(
+				`INSERT INTO chat_folders (room_id, folder_id, named) VALUES (?, ?, ?)
+				ON CONFLICT (room_id) DO UPDATE SET folder_id = excluded.folder_id, named = excluded.named`,
+				input.roomId,
+				folderId,
+				input.name,
+			);
+			this.bump();
+			changed = true;
+		});
+		if (changed) await this.schedule();
+		return { folderId };
+	}
 
 	/**
 	 * The facts of a file that a message of Chat keeps. A message holds files of the own drive of its

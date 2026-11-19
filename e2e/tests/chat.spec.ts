@@ -1,7 +1,8 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, type Route, test } from "@playwright/test";
 import {
 	composer,
 	createRoom,
+	editorReady,
 	fill,
 	markRead,
 	newest,
@@ -212,6 +213,7 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 	await ownRow.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = mine.page.getByRole("textbox", { name: "New text of the message" });
 	const changed = unique("changed reply");
+	await editorReady(editBox);
 	await editBox.fill(changed);
 	await mine.panel.getByRole("button", { name: "Save" }).click();
 	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
@@ -264,18 +266,30 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	await reply(nadia, roomId, parent.id, answer);
 	const page = await tomasz.newPage();
 	await page.goto("/chat");
-	// The first read of the list fails once (the count of the sidebar has a filter, so it does not).
+	// The view also reads the list after each event of the socket and each read of the room list, so a read can
+	// come at any time. Each read of the list fails until "Try again" shows, and waits during the click. So no
+	// read can remove the button before the click. (The count of the sidebar has a filter, so it does not fail.)
+	let phase: "fail" | "hold" | "pass" = "fail";
+	const held: Route[] = [];
 	await page.route(
 		(url) => url.pathname === "/api/v1/chat/threads" && !url.searchParams.has("filter"),
-		(route) => route.abort(),
-		{ times: 1 },
+		(route) => {
+			if (phase === "fail") return route.abort();
+			if (phase === "hold") return void held.push(route);
+			return route.fallback();
+		},
 	);
 	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
 	// A room of a different test can have a name that starts with "Threads", so the link is found by its address.
 	await page.getByRole("navigation", { name: "Rooms" }).locator('a[href="/chat/threads"]').click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
 	// A list that does not load offers to try again.
-	await page.getByRole("button", { name: "Try again" }).click();
+	const tryAgain = page.getByRole("button", { name: "Try again" });
+	await expect(tryAgain).toBeVisible();
+	phase = "hold";
+	await tryAgain.click();
+	phase = "pass";
+	for (const route of held.splice(0)) await route.fallback();
 	const card = page.getByRole("button").filter({ hasText: parent.text });
 	await expect(card).toContainText(name);
 	await expect(card).toContainText("1 new reply");
@@ -387,6 +401,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await row.hover();
 	await row.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editorReady(editBox);
 	await editBox.fill("refused text");
 	await page.getByRole("button", { name: "Save" }).click();
 	await expect(editBox).toHaveText("refused text");
@@ -876,6 +891,7 @@ test("a message shows its formats, shows HTML as text, and the box makes formats
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
 	await expect(editBox).toHaveText("I can do that");
 	await expect(editBox.locator("strong")).toHaveText("that");
+	await editorReady(editBox);
 	await editBox.press("End");
 	const tools = page.locator(".chat-edit").getByRole("toolbar", { name: "Formatting" });
 	await expect(tools.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
@@ -1037,6 +1053,7 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await thanks.hover();
 	await thanks.getByRole("button", { name: /^Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editorReady(editBox);
 	await editBox.press("End");
 	await editBox.pressSequentially(" @to");
 	const people = page.getByRole("listbox", { name: "People and agents to mention" });

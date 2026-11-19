@@ -2,6 +2,7 @@ import { DRIVE_LIMITS, type DriveUpload } from "@asterra/contracts";
 import type { CallContext } from "../identity/index.ts";
 import { log, newId, OperationError, SNIFF_BYTES, sha256StreamHex, sniffType } from "../platform/index.ts";
 import { accept, auditOk, blobKeyFor, idempotencyOf, openSpace, STORED_TYPE, toOneItem } from "./access.ts";
+import { chatFolderFor } from "./rooms.ts";
 import type { UploadRecord } from "./space.ts";
 
 // An upload in parts. The parts go to an R2 multipart upload, to the key of the version that the upload
@@ -33,6 +34,7 @@ export async function createUpload(
 	input: {
 		space_id?: string | undefined;
 		parent_id?: string | undefined;
+		room_id?: string | undefined;
 		name: string;
 		mime_type: string;
 		size: number;
@@ -46,8 +48,10 @@ export async function createUpload(
 		const earlier = await opened.space.uploadForKey(opened.ctx, idempotency.key, idempotency.requestHash);
 		if (earlier !== null) return { upload: toUpload(accept(earlier)) };
 	}
+	// A file of a message of Chat goes into Chat/<room name> of the own drive of the caller.
+	const parentId = input.room_id === undefined ? (input.parent_id ?? null) : await chatFolderFor(call, input.room_id);
 	// Refuse before R2 starts a multipart upload, so a caller without access starts nothing.
-	accept(await opened.space.checkCreate(opened.ctx, input.parent_id ?? null));
+	accept(await opened.space.checkCreate(opened.ctx, parentId));
 	const itemId = newId("itm");
 	const versionId = newId("ver");
 	const blobKey = blobKeyFor(opened.spaceId, itemId, versionId);
@@ -59,7 +63,7 @@ export async function createUpload(
 		itemId,
 		versionId,
 		blobKey,
-		parentId: input.parent_id ?? null,
+		parentId,
 		name: input.name,
 		mimeType: input.mime_type,
 		size: input.size,
