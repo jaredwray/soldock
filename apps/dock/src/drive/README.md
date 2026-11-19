@@ -77,7 +77,8 @@ keys.
   (see [Downloads](#downloads)).
 - The server finds the type of each version from its first 4 KiB (`detected_type`): PNG, JPEG, GIF,
   WebP, AVIF, HEIC, MP4, QuickTime, WebM, Matroska, PDF, ZIP, gzip, the common audio types, and UTF-8
-  text. HTML and SVG are text. The type that the client gave stays in `mime_type`. A version from
+  text. HTML and SVG are text. A JPEG needs only its first marker, because a camera puts its EXIF data
+  before the frame header. An ISO media file with an unknown brand gets no type. The type that the client gave stays in `mime_type`. A version from
   before this field has null. A copy keeps the type. A move between drives keeps it.
 - Each version of a file is one R2 object: `drive/<space id>/<item id>/<version id>`. R2 stores it
   as `application/octet-stream`. The MIME type that the client gave is in the version row.
@@ -118,6 +119,9 @@ size, of 5 MiB or more, and the base64 of 8 MiB fits in one JSON call.
 
 - An upload belongs to the principal that started it. Each other principal gets `not_found`, also an
   editor of the folder and the owner of the drive.
+- Each step of an open upload checks again that its principal can create an item in the folder: a part,
+  `drive.get_upload`, a retry of `drive.create_upload` with its key, and the completion. A principal that
+  lost its role in the drive or in the folder sends no more parts.
 - The raw path and `drive.upload_part` are one capability: the raw path runs through the invoker with the
   callers, the scopes and the audit of `drive.upload_part` (`drive.write`). With the session cookie, the
   request must come from this origin.

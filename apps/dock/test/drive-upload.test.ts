@@ -275,6 +275,78 @@ describe("an upload in parts", () => {
 		expect(await ada.call("drive.abort_upload", { upload_id: first.upload.id })).toEqual({ aborted: false });
 	});
 
+	// Review of issue 74: a second completion that failed after the first one deleted the bytes of the file.
+	it("keeps the bytes of the file when a second completion fails after the first one", async () => {
+		const bytes = bytesOf(1000);
+		const { upload } = await ada.call("drive.create_upload", { name: "a.bin", size: bytes.byteLength });
+		expect((await putPart(bearer(ada), ada.id, upload.id, 1, bytes)).status).toBe(200);
+		let firstItem = "";
+		// The first completion ends while the second one reads the joined object, and then the upload expires.
+		const blobs = new Proxy(env.BLOBS, {
+			get(target, property) {
+				if (property === "get") {
+					return async (key: string, options?: R2GetOptions) => {
+						if (firstItem === "" && options === undefined) {
+							firstItem = (await ada.call("drive.complete_upload", { upload_id: upload.id })).item.id;
+							await runInDurableObject(env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id)), (_i, state) => {
+								state.storage.sql.exec("UPDATE uploads SET expires_at = ?", Date.now() - 1);
+							});
+						}
+						return target.get(key, options as R2GetOptions);
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const second = await withBlobs(blobs)(
+			new Request(`${ORIGIN}/api/v1/drive/uploads/${upload.id}/complete`, {
+				method: "POST",
+				headers: { ...bearer(ada), "content-type": "application/json" },
+				body: "{}",
+			}),
+		);
+		expect(second.status).toBe(404);
+		await drainDrive(ada.id);
+		const got = await ada.call("drive.download_file", { item_id: firstItem });
+		expect(got.size).toBe(1000);
+	});
+
+	// Review of issue 74: a principal that lost its role in the folder sends no more parts.
+	it("stops the parts of a principal that lost the access to the folder", async () => {
+		const { item: folder } = await ada.call("drive.create_folder", { name: "Team" });
+		await ada.call("drive.share_item", { item_id: folder.id, principal_id: bot.id, role: "editor" });
+		const bytes = bytesOf(1000);
+		const { upload } = await bot.call("drive.create_upload", {
+			space_id: ada.id,
+			parent_id: folder.id,
+			name: "a.bin",
+			size: bytes.byteLength,
+		});
+		await ada.call("drive.unshare_item", { item_id: folder.id, principal_id: bot.id });
+		expect((await putPart(bearer(bot), ada.id, upload.id, 1, bytes)).status).toBe(404);
+		expect(await codeOf(bot.call("drive.get_upload", { space_id: ada.id, upload_id: upload.id }))).toBe("not_found");
+	});
+
+	// Review of issue 74: a camera JPEG has its EXIF data before the frame header, past the first 4 KiB.
+	it("finds a JPEG with a large EXIF block, so the picture gets a preview", async () => {
+		const exif = new Uint8Array(8004);
+		exif.set([0xff, 0xe1, 0x1f, 0x42]);
+		exif.set(new TextEncoder().encode("Exif\0\0"), 4);
+		const frame = [
+			0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x04, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xd9,
+		];
+		const jpeg = new Uint8Array([0xff, 0xd8, ...exif, ...frame]);
+		const { item } = await ada.call("drive.upload_file", {
+			name: "photo.jpg",
+			content_base64: btoa(Array.from(jpeg, (byte) => String.fromCharCode(byte)).join("")),
+		});
+		const { versions } = await ada.call("drive.list_versions", { item_id: item.id });
+		expect(versions[0]?.detected_type).toBe("image/jpeg");
+		const res = await request(driveDownloadPath(ada.id, item.id), { headers: bearer(ada) });
+		expect(res.headers.get("content-type")).toBe("image/jpeg");
+	});
+
 	it("removes an upload whose parts do not have the SHA-256 of the start", async () => {
 		const bytes = bytesOf(1000);
 		const { upload } = await ada.call("drive.create_upload", {

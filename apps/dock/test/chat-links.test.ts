@@ -42,7 +42,7 @@ interface Web {
  * Replaces the global `fetch` with a small web: DNS over HTTPS answers with `addresses`, and each other
  * request gets the answer of `pages`, or 404.
  */
-function fakeWeb(addresses: Record<string, string>, pages: Record<string, () => Response>): Web {
+function fakeWeb(addresses: Record<string, string | string[]>, pages: Record<string, () => Response>): Web {
 	const web: Web = { requests: [], lookups: [] };
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const req = new Request(input, init);
@@ -51,10 +51,11 @@ function fakeWeb(addresses: Record<string, string>, pages: Record<string, () => 
 			const name = url.searchParams.get("name") ?? "";
 			const type = Number(url.searchParams.get("type"));
 			web.lookups.push(name);
-			const address = addresses[name];
-			if (address === undefined) return Response.json({ Status: 3 });
-			const v6 = address.includes(":");
-			const answer = (type === 28) === v6 ? [{ type, data: address }] : [];
+			const known = addresses[name];
+			if (known === undefined) return Response.json({ Status: 3 });
+			const answer = (Array.isArray(known) ? known : [known])
+				.filter((address) => (type === 28) === address.includes(":"))
+				.map((data) => ({ type, data }));
 			return Response.json({ Status: 0, Answer: answer });
 		}
 		web.requests.push(req.url);
@@ -182,7 +183,8 @@ describe("a link preview", () => {
 		const web = fakeWeb(
 			{
 				"intranet.example.com": "10.0.0.7",
-				"mixed.example.com": "93.184.216.34",
+				// One private address among public ones stops the fetch.
+				"mixed.example.com": ["93.184.216.34", "93.184.216.35", "192.168.0.10"],
 				"redirect.example.com": "93.184.216.34",
 				"metadata.example.com": "169.254.169.254",
 				"v6.example.com": "fd00::1",
@@ -192,13 +194,21 @@ describe("a link preview", () => {
 					new Response(null, { status: 302, headers: { location: "https://metadata.example.com/latest" } }),
 			},
 		);
-		const links = ["https://intranet.example.com/wiki", "https://127.0.0.1/admin", "https://redirect.example.com/go"];
+		const links = [
+			"https://intranet.example.com/wiki",
+			"https://mixed.example.com/",
+			"https://redirect.example.com/go",
+		];
 		const { room, jobs } = await postInRoom(ada, [bot], links.join(" "));
 		await fetchPreviews(room.id, jobs);
 		expect(await previewsOf(ada, room.id)).toEqual([]);
 		// Only the public host got a request. The private hosts got none, and the IP address got no lookup.
 		expect(web.requests).toEqual(["https://redirect.example.com/go"]);
+		// An IP address gets no lookup and no request.
+		const literal = await postInRoom(ada, [bot], "https://127.0.0.1/admin");
+		await fetchPreviews(literal.room.id, literal.jobs);
 		expect(web.lookups).not.toContain("127.0.0.1");
+		expect(web.requests).toEqual(["https://redirect.example.com/go"]);
 		// An IPv6 address that is not public stops the fetch too.
 		const second = await postInRoom(ada, [bot], "https://v6.example.com/");
 		await fetchPreviews(second.room.id, second.jobs);
@@ -250,6 +260,50 @@ describe("a link preview", () => {
 		await fetchPreviews(second.room.id, second.jobs);
 		expect(web.requests).toEqual(["https://news.example.com/cached"]);
 		expect(await previewsOf(owner, second.room.id)).toHaveLength(1);
+	});
+});
+
+describe("the cache and the limits of a preview", () => {
+	// Review of issue 74: the meta data is in the head, so a large page still gets a preview.
+	it("reads the head of a page over 1 MiB", async () => {
+		const large = PAGE.replace("<body>Hello</body>", `<body>${"x".repeat(2 * 1024 * 1024)}</body>`).replace(
+			'<meta property="og:image" content="/pic.png">',
+			"",
+		);
+		fakeWeb({ "big.example.com": "93.184.216.34" }, { "https://big.example.com/": html(large) });
+		const { room, jobs } = await postInRoom(ada, [bot], "https://big.example.com/");
+		await fetchPreviews(room.id, jobs);
+		expect((await previewsOf(ada, room.id))?.map((preview) => preview.site_name)).toEqual(["Example News"]);
+	});
+
+	// Review of issue 74: the policy of one agent must not change the previews of other authors.
+	it("keeps the refusal of the policy of an agent out of the cache, and checks the policy on a hit", async () => {
+		await ada.call("directory.update_agent_policy", {
+			principal_id: bot.id,
+			mode: "allowlist",
+			allowlist: ["short.example.com"],
+		});
+		const web = fakeWeb(
+			{ "short.example.com": "93.184.216.34", "www.long.example.com": "93.184.216.35" },
+			{
+				"https://short.example.com/x": () =>
+					new Response(null, { status: 301, headers: { location: "https://www.long.example.com/x" } }),
+				"https://www.long.example.com/x": html(PAGE.replace('<meta property="og:image" content="/pic.png">', "")),
+			},
+		);
+		// The redirect goes to a host that the policy of the agent does not allow.
+		const byAgent = await postInRoom(bot, [ada], "https://short.example.com/x");
+		await fetchPreviews(byAgent.room.id, byAgent.jobs);
+		expect(await previewsOf(ada, byAgent.room.id)).toEqual([]);
+		expect(web.requests).toEqual(["https://short.example.com/x"]);
+		// A person gets the preview: the refusal of the agent is not in the cache.
+		const byPerson = await postInRoom(ada, [bot], "https://short.example.com/x");
+		await fetchPreviews(byPerson.room.id, byPerson.jobs);
+		expect(await previewsOf(ada, byPerson.room.id)).toHaveLength(1);
+		// The entry of the person names the host of the redirect, so the agent gets no preview from it.
+		const again = await postInRoom(bot, [ada], "Again https://short.example.com/x");
+		await fetchPreviews(again.room.id, again.jobs);
+		expect(await previewsOf(ada, again.room.id)).toEqual([]);
 	});
 });
 

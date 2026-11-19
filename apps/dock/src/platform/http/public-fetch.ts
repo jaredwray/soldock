@@ -172,8 +172,10 @@ export async function checkPublicHost(host: string, signal: AbortSignal): Promis
 export interface PublicFetchOptions {
 	/** The `Accept` header. */
 	accept: string;
-	/** The most bytes of the body. A larger body stops the fetch. */
+	/** The most bytes of the body. A larger body stops the fetch, or ends the body with `truncate`. */
 	maxBytes: number;
+	/** True to keep the first `maxBytes` bytes of a larger body, for example the head of a page. */
+	truncate?: boolean;
 	/** The time limit of the whole fetch, with each DNS lookup and each redirect. */
 	timeoutMs: number;
 	maxRedirects: number;
@@ -187,14 +189,16 @@ export interface PublicFetchOptions {
 export interface PublicFetchResult {
 	/** The address of the answer, after the redirects. */
 	url: string;
+	/** The host of each address that the fetch asked, in order: the first address, then each redirect. */
+	hosts: string[];
 	status: number;
 	contentType: string;
 	body: Uint8Array;
 }
 
-/** Reads a body, and stops when it has more bytes than the limit. */
-async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
-	if (Number(response.headers.get("content-length") ?? 0) > maxBytes) {
+/** Reads a body, and stops when it has more bytes than the limit: it fails, or with `truncate` it keeps the start. */
+async function readCapped(response: Response, maxBytes: number, truncate: boolean): Promise<Uint8Array> {
+	if (!truncate && Number(response.headers.get("content-length") ?? 0) > maxBytes) {
 		await response.body?.cancel();
 		throw new FetchRefused("The answer is too large.");
 	}
@@ -205,11 +209,14 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
-		size += value.byteLength;
-		if (size > maxBytes) {
+		if (size + value.byteLength > maxBytes) {
 			await reader.cancel();
-			throw new FetchRefused("The answer is too large.");
+			if (!truncate) throw new FetchRefused("The answer is too large.");
+			chunks.push(value.subarray(0, maxBytes - size));
+			size = maxBytes;
+			break;
 		}
+		size += value.byteLength;
 		chunks.push(value);
 	}
 	const bytes = new Uint8Array(size);
@@ -228,10 +235,12 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
 export async function publicFetch(address: string, options: PublicFetchOptions): Promise<PublicFetchResult> {
 	const signal = AbortSignal.timeout(options.timeoutMs);
 	let url = address;
+	const hosts: string[] = [];
 	try {
 		for (let hop = 0; hop <= options.maxRedirects; hop++) {
 			const problem = options.checkUrl(url);
 			if (problem) throw new FetchRefused(problem);
+			hosts.push(new URL(url).hostname);
 			await checkPublicHost(new URL(url).hostname, signal);
 			const response = await fetch(url, {
 				redirect: "manual",
@@ -248,10 +257,11 @@ export async function publicFetch(address: string, options: PublicFetchOptions):
 				continue;
 			}
 			let body: Uint8Array = new Uint8Array();
-			if (response.ok) body = await readCapped(response, options.maxBytes);
+			if (response.ok) body = await readCapped(response, options.maxBytes, options.truncate === true);
 			else await response.body?.cancel();
 			return {
 				url,
+				hosts,
 				status: response.status,
 				contentType: (response.headers.get("content-type") ?? "").toLowerCase(),
 				body,

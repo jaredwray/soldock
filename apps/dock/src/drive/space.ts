@@ -2148,6 +2148,17 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { row };
 	}
 
+	/**
+	 * The open upload of the caller, when the caller can still create an item in its folder. A principal
+	 * that lost its role in the drive or in the folder sends no more parts and reads no more state.
+	 */
+	private openUploadRow(call: SpaceCall, uploadId: string): { row: UploadRow } | Refusal {
+		const found = this.uploadRow(call, uploadId);
+		if ("error" in found || found.row.state !== "open") return found;
+		const allowed = this.checkCreate(call, found.row.parent_id);
+		return "error" in allowed ? allowed : found;
+	}
+
 	private uploadRecord(call: SpaceCall, row: UploadRow): UploadRecord {
 		const received = this.all<{ part_number: number }>(
 			"SELECT part_number FROM upload_parts WHERE upload_id = ? ORDER BY part_number",
@@ -2181,6 +2192,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (!row) return null;
 		if (row.request_hash !== requestHash) {
 			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		if (row.state === "open") {
+			const allowed = this.checkCreate(call, row.parent_id);
+			if ("error" in allowed) return allowed;
 		}
 		return this.uploadRecord(call, row);
 	}
@@ -2250,7 +2265,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	uploadState(call: SpaceCall, uploadId: string): UploadRecord | Refusal {
 		this.enter(call);
-		const found = this.uploadRow(call, uploadId);
+		const found = this.openUploadRow(call, uploadId);
 		return "error" in found ? found : this.uploadRecord(call, found.row);
 	}
 
@@ -2265,7 +2280,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		size: number,
 	): { blobKey: string; r2UploadId: string } | Refusal {
 		this.enter(call);
-		const found = this.uploadRow(call, uploadId);
+		const found = this.openUploadRow(call, uploadId);
 		if ("error" in found) return found;
 		const { row } = found;
 		if (row.state !== "open") return refuse("invalid", "The upload is complete. It takes no more parts.");
@@ -3184,7 +3199,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (actor.principal_id !== spaceId) notified.add(actor.principal_id);
 			this.sql.exec(`DELETE FROM versions WHERE item_id IN ${inList}`, list);
 			this.sql.exec(`DELETE FROM permissions WHERE item_id IN ${inList}`, list);
-			// The grants of rooms stay behind: a message of Chat names the drive of the file, which is not this one now.
+			// The grants of rooms do not move: a message of Chat names the drive of its file, which is this one.
+			// So the files of a moved item give not_found in the rooms.
 			this.sql.exec(`DELETE FROM room_grants WHERE item_id IN ${inList}`, list);
 			this.sql.exec(`DELETE FROM items_fts WHERE rowid IN (SELECT seq FROM items WHERE id IN ${inList})`, list);
 			this.sql.exec(`DELETE FROM items WHERE id IN ${inList}`, list);

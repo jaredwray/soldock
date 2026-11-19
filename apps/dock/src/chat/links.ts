@@ -30,6 +30,9 @@ export interface LinkState extends Partial<LinkFacts> {
 	state: "pending" | "ready" | "none" | "removed";
 }
 
+/** The longest link that gets a preview: the limit of `url` in the operations of a preview. */
+const LINK_CHARS = 2048;
+
 /** A bare https address in plain text. It stops at a space and at the marks that often close a sentence. */
 const BARE_URL = /https:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/g;
 
@@ -40,6 +43,8 @@ const BARE_URL = /https:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]}]/g;
 export function extractLinks(body: ChatBody): string[] {
 	const found: string[] = [];
 	const add = (url: string) => {
+		// A longer link cannot be named in chat.remove_link_preview, so it gets no preview.
+		if (url.length > LINK_CHARS) return;
 		if (found.length < CHAT_LIMITS.linksPerMessage && url.startsWith("https://") && !found.includes(url)) {
 			found.push(url);
 		}

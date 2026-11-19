@@ -147,11 +147,9 @@ export async function completeUpload(call: CallContext, input: { space_id?: stri
 	const object = await call.env.BLOBS.get(state.blobKey);
 	if (!object) throw new Error("the joined upload is missing from R2");
 	const sha256 = await sha256StreamHex(object.body);
-	const drop = async () => {
-		// No version names the object, so it goes with the upload.
-		await opened.space.dropUpload(opened.ctx, input.upload_id);
-		await call.env.BLOBS.delete(state.blobKey);
-	};
+	// The drive removes an open upload, and its outbox deletes the joined object. A done upload keeps its
+	// file: a second completion that fails here must never delete the bytes of the version of the first.
+	const drop = () => opened.space.dropUpload(opened.ctx, input.upload_id);
 	if (object.size !== state.size) {
 		await drop();
 		throw new OperationError("invalid", "The joined parts do not have the size of the file. Start a new upload.");

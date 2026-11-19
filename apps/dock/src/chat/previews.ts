@@ -17,14 +17,27 @@ const IMAGE_SIDE = 4096;
 const FETCH_MS = 10_000;
 const REDIRECTS = 5;
 const READY_TTL_MS = 24 * 60 * 60 * 1000;
-const NONE_TTL_MS = 60 * 60 * 1000;
+/** A failure can be a slow site or a DNS error, so it stays a short time. */
+const NONE_TTL_MS = 10 * 60 * 1000;
+/** The expired entries of the cache that one write deletes. */
+const PRUNE_BATCH = 20;
 const TITLE_CHARS = 200;
 const DESCRIPTION_CHARS = 500;
 const SITE_CHARS = 100;
 
-/** The facts of a page in the cache. The cache holds no picture: only its address. */
+/**
+ * The facts of a page in the cache. The cache holds no picture: only its address. `hosts` has the host of
+ * each address that the fetch asked, so the policy of an agent applies to a cache hit too.
+ */
 type CachedPage =
-	| { ok: true; title: string | null; description: string | null; site_name: string | null; image_url: string | null }
+	| {
+			ok: true;
+			hosts: string[];
+			title: string | null;
+			description: string | null;
+			site_name: string | null;
+			image_url: string | null;
+	  }
 	| { ok: false };
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -90,9 +103,11 @@ async function readMeta(html: Uint8Array): Promise<Record<string, string>> {
 
 /** The facts of a page, from its HTML, with the guard. Null when the address gives no page. */
 async function fetchPage(url: string, check: (url: string) => string | null): Promise<CachedPage> {
+	// The meta data is in the head of a page, so the fetch keeps the start of a large page.
 	const page = await publicFetch(url, {
 		accept: "text/html,application/xhtml+xml",
 		maxBytes: PAGE_BYTES,
+		truncate: true,
 		timeoutMs: FETCH_MS,
 		maxRedirects: REDIRECTS,
 		checkUrl: check,
@@ -119,6 +134,7 @@ async function fetchPage(url: string, check: (url: string) => string | null): Pr
 	}
 	return {
 		ok: true,
+		hosts: page.hosts,
 		title,
 		description,
 		site_name: clean(meta["og:site_name"], SITE_CHARS) ?? new URL(page.url).hostname,
@@ -126,8 +142,25 @@ async function fetchPage(url: string, check: (url: string) => string | null): Pr
 	};
 }
 
-/** The facts of a page from the cache in D1, or from a fetch that the cache then keeps. */
-async function pageFacts(env: Env, url: string, check: (url: string) => string | null): Promise<CachedPage> {
+/** True for an author whose outbound policy allows only some hosts: an agent without mode `any`. */
+function limited(author: PrincipalRecord): boolean {
+	return author.kind === "agent" && (author.outbound_mode ?? "internal-only") !== "any";
+}
+
+/**
+ * The facts of a page from the cache in D1, or from a fetch that the cache then keeps. The key is the
+ * SHA-256 of the address: the cache does not keep the address. Each write deletes some expired entries.
+ *
+ * The cache is for each author, so the policy of one agent must not change it. A failure of the fetch of
+ * an author with a limited policy can come from that policy, so it does not go into the cache. A hit for
+ * such an author needs each host of the cached fetch in its policy.
+ */
+async function pageFacts(
+	env: Env,
+	url: string,
+	author: PrincipalRecord,
+	check: (url: string) => string | null,
+): Promise<CachedPage> {
 	const hash = await sha256Hex(url);
 	const now = Date.now();
 	const cached = await env.DIRECTORY.prepare(
@@ -135,22 +168,32 @@ async function pageFacts(env: Env, url: string, check: (url: string) => string |
 	)
 		.bind(hash, now)
 		.first<{ result_json: string }>();
-	if (cached) return JSON.parse(cached.result_json) as CachedPage;
+	if (cached) {
+		const page = JSON.parse(cached.result_json) as CachedPage;
+		if (!page.ok || !limited(author)) return page;
+		if (page.hosts.every((host) => outboundHostAllowed(author, `https://${host}/`))) return page;
+		return { ok: false };
+	}
 	let result: CachedPage;
 	try {
 		result = await fetchPage(url, check);
 	} catch (error) {
 		if (!(error instanceof FetchRefused)) throw error;
 		log("info", "chat link preview refused", { reason: error.message });
+		if (limited(author)) return { ok: false };
 		result = { ok: false };
 	}
-	await env.DIRECTORY.prepare(
-		`INSERT INTO link_previews (url_hash, url, result_json, fetched_at, expires_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (url_hash) DO UPDATE SET result_json = excluded.result_json, fetched_at = excluded.fetched_at,
-			expires_at = excluded.expires_at`,
-	)
-		.bind(hash, url, JSON.stringify(result), now, now + (result.ok ? READY_TTL_MS : NONE_TTL_MS))
-		.run();
+	await env.DIRECTORY.batch([
+		env.DIRECTORY.prepare(
+			`DELETE FROM link_previews WHERE url_hash IN
+				(SELECT url_hash FROM link_previews WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)`,
+		).bind(now, PRUNE_BATCH),
+		env.DIRECTORY.prepare(
+			`INSERT INTO link_previews (url_hash, result_json, fetched_at, expires_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (url_hash) DO UPDATE SET result_json = excluded.result_json, fetched_at = excluded.fetched_at,
+				expires_at = excluded.expires_at`,
+		).bind(hash, JSON.stringify(result), now, now + (result.ok ? READY_TTL_MS : NONE_TTL_MS)),
+	]);
 	return result;
 }
 
@@ -203,7 +246,7 @@ async function previewOf(
 	const check = urlCheck(author, origin);
 	// The policy of an agent applies before the cache, so the cache gives an agent nothing that it cannot fetch.
 	if (check(target.href) !== null) return null;
-	const page = await pageFacts(env, target.href, check);
+	const page = await pageFacts(env, target.href, author, check);
 	if (!page.ok) return null;
 	const image = page.image_url === null ? null : await storeImage(env, page.image_url, check, job);
 	return { title: page.title, description: page.description, site_name: page.site_name, image };

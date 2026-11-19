@@ -37,8 +37,26 @@ function isoMedia(bytes: Uint8Array): string | null {
 	if (["heic", "heix", "heim", "heis", "mif1", "msf1"].includes(brand)) return "image/heic";
 	if (brand === "qt  ") return "video/quicktime";
 	if (brand === "M4A " || brand === "M4B ") return "audio/mp4";
-	return "video/mp4";
+	return MP4_BRANDS.has(brand) ? "video/mp4" : null;
 }
+
+/** The major brands of an MP4 video. A file with a different brand gets no type, so it is never inline. */
+const MP4_BRANDS: ReadonlySet<string> = new Set([
+	"isom",
+	"iso2",
+	"iso4",
+	"iso5",
+	"iso6",
+	"mp41",
+	"mp42",
+	"avc1",
+	"M4V ",
+	"dash",
+	"mmp4",
+	"MSNV",
+	"3gp4",
+	"3gp5",
+]);
 
 /** The type of a Matroska or WebM file, from the DocType in its EBML header. */
 function matroska(bytes: Uint8Array): string | null {
@@ -68,6 +86,9 @@ export function sniffType(head: Uint8Array): string | null {
 	const bytes = head.subarray(0, SNIFF_BYTES);
 	const image = readImageInfo(bytes);
 	if (image) return image.type;
+	// A JPEG file from a camera has its EXIF data, often with a small picture, before the frame header. So
+	// the first bytes can hold no size. The start of the image and the first marker are enough for the type.
+	if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg";
 	const media = isoMedia(bytes) ?? matroska(bytes);
 	if (media) return media;
 	if (ascii(bytes, 0, "%PDF-")) return "application/pdf";
@@ -76,6 +97,8 @@ export function sniffType(head: Uint8Array): string | null {
 	if (ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WAVE")) return "audio/wav";
 	if (ascii(bytes, 0, "OggS")) return "audio/ogg";
 	if (ascii(bytes, 0, "fLaC")) return "audio/flac";
+	// The byte order mark of UTF-16 text starts as an MP3 frame does. Such text is never inline.
+	if (startsWith(bytes, [0xff, 0xfe]) || startsWith(bytes, [0xfe, 0xff])) return "text/plain";
 	if (ascii(bytes, 0, "ID3") || (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0)) return "audio/mpeg";
 	if (isText(bytes)) return "text/plain";
 	return null;

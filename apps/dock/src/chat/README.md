@@ -778,12 +778,12 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
   private, local, shared, documentation or multicast address stops the fetch, and no request goes to the
   host. An error, an empty answer, or an answer that does not parse stops the fetch too.
 - Each redirect gets the same checks. The fetch follows at most 5.
-- The fetch has 10 seconds in all. A page has at most 1 MiB, only with status 200 and `text/html`. A
-  picture has at most 1 MiB, only PNG, JPEG, GIF or WebP from its bytes, and at most 4096 pixels on each
-  side.
+- The fetch has 10 seconds in all. The fetch reads the first 1 MiB of a page, which holds its head, only
+  with status 200 and `text/html`. A picture has at most 1 MiB, only PNG, JPEG, GIF or WebP from its
+  bytes, and at most 4096 pixels on each side.
 - The request has no cookie and no credential.
-- When the author is an agent, its outbound policy applies to the first address and to each redirect,
-  before the cache. An agent with `internal-only` gets no preview, and no request goes out.
+- When the author is an agent, its outbound policy applies to the first address and to each redirect.
+  An agent with `internal-only` gets no preview, and no request goes out.
 - Known limit: a Worker cannot fix the address of a request to the address of the check, so DNS can
   change between the two. The network of a Worker cannot reach a private network, so the check is a
   second layer.
@@ -797,8 +797,13 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
   `chat.download_link_image` or `GET /dl/chat/{room_id}/{message_id}/links/image?url=`, so the site of
   the link never sees the address of a reader. A delete of the message, a removed preview, and an edit
   that drops the link delete it through the outbox (target `blob:<key>`).
-- The cache in D1 (`link_previews`) keeps the facts of a page for 24 hours, and a failed fetch for 1 hour.
-  It holds no picture: each message fetches and stores its own picture.
+- The cache in D1 (`link_previews`) keeps the facts of a page for 24 hours, and a failed fetch for 10
+  minutes. Its key is the SHA-256 of the address: it does not keep the address. It holds no picture:
+  each message fetches and stores its own picture. Each write deletes 20 expired entries at most.
+- The cache is for each author, so the policy of one agent must not change it. A failed fetch of an
+  agent with a limited policy does not go into the cache, because the policy can be the cause. An entry
+  keeps the host of each address of its fetch, and a hit for such an agent needs each host in its
+  policy.
 
 ### Output
 
@@ -845,7 +850,7 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | Link previews | `ChatRoomDO` column `messages.links_json` | The state of each link that gets a preview, with the plain text of the preview and the R2 key of its picture. A deleted message has null |
 | Jobs of link previews | `ChatRoomDO` table `link_jobs` | The message, the origin of the post, the sends and the time of the next send. A row goes away when no link waits |
 | Pictures of link previews | R2 `blobs`, key `chat/<room id>/<message id>/link-<id>` | The message owns each object. A delete of the message, a removed preview and an edit that drops the link delete it through the outbox |
-| The cache of link previews | D1 `DIRECTORY` table `link_previews` | The SHA-256 of the address, the address, the facts of the page (no picture), the time of the fetch and the end of the entry. Rebuildable: a fetch fills it again. Migration `0015_link_previews.sql` |
+| The cache of link previews | D1 `DIRECTORY` table `link_previews` | The SHA-256 of the address (not the address), the facts of the page (no picture) with the host of each address of the fetch, the time of the fetch and the end of the entry: 24 hours, or 10 minutes for a failure. Each write deletes some expired entries. Rebuildable: a fetch fills it again. Migration `0015_link_previews.sql` |
 | Jobs of the queue of previews | Queue `soldock-chat-previews` | A room id and a message id. No text |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
