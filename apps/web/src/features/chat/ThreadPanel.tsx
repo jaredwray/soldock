@@ -86,7 +86,7 @@ export function ThreadPanel({
 		view.current = thread;
 		// The watch starts before the load, so a change during the load waits in the view and is not lost.
 		const stop = watch((event) => {
-			if (event.type === "connect") thread.connect();
+			if (event.type === "catch-up") thread.catchUp(event.roomVersion);
 			else if (inThread(event.message, parentId)) thread.receive(event.message);
 		});
 		load();
@@ -113,10 +113,12 @@ export function ThreadPanel({
 		if (draft === null) onClose();
 	};
 
+	/** The characters of the reply above the limit of a message, or 0. */
+	const replyOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
+
 	async function send() {
 		const thread = view.current?.current();
-		if (!draft || sending || !thread || thread.parent.deleted) return;
-		if (bodyText(draft).length > CHAT_LIMITS.messageChars) return;
+		if (!draft || sending || !thread || thread.parent.deleted || replyOver > 0) return;
 		const sent = draft;
 		const attempt = replyAttempt(lastAttempt.current, JSON.stringify({ body: sent, alsoInRoom }), () =>
 			crypto.randomUUID(),
@@ -235,12 +237,18 @@ export function ThreadPanel({
 										className="chat-send"
 										aria-label="Send the reply"
 										title="Send (Enter)"
-										disabled={!draft || sending}
+										disabled={!draft || sending || replyOver > 0}
 									>
 										<Icon name="arrowUp" size={18} />
 									</button>
 								</ChatComposer>
 							</div>
+							{replyOver > 0 && (
+								<p className="chat-composer-limit" role="status">
+									The reply has {plural(replyOver, "character")} more than the limit of{" "}
+									{CHAT_LIMITS.messageChars.toLocaleString()}.
+								</p>
+							)}
 							<label className="chat-thread-also">
 								<input type="checkbox" checked={alsoInRoom} onChange={(event) => setAlsoInRoom(event.target.checked)} />
 								Also send to {roomTitle}

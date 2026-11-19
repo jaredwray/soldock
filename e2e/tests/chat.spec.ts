@@ -146,6 +146,19 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(page.getByRole("complementary", { name: "Thread" }).locator(".chat-thread-replies li")).toHaveCount(4);
 	await page.getByRole("button", { name: "Close the thread" }).click();
 	await expect(page.getByRole("complementary", { name: "Thread" })).toHaveCount(0);
+
+	// On a narrow screen the view takes the width, and the room under it is hidden. After the close, the
+	// room shows again and the focus goes back to the opener.
+	await page.setViewportSize({ width: 600, height: 800 });
+	const note = sharedRow.getByRole("button", { name: "Replied in a thread" });
+	await note.focus();
+	await note.press("Enter");
+	const narrowPanel = page.getByRole("complementary", { name: "Thread" });
+	await expect(narrowPanel.locator(".chat-thread-replies li")).toHaveCount(4);
+	await expect(page.locator(".chat-messages")).toBeHidden();
+	await narrowPanel.getByRole("textbox", { name: "Reply in the thread" }).press("Escape");
+	await expect(narrowPanel).toHaveCount(0);
+	await expect(note).toBeFocused();
 });
 
 test("a send whose answers get lost shows one time, with no Not sent row", async ({ browser }) => {
@@ -821,9 +834,12 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect(box).toHaveText("");
 	const thanks = page.locator(".chat-message").filter({ hasText: "thanks @tomasz for the review" });
 	await expect(thanks.getByRole("link", { name: "@tomasz" })).toBeVisible();
-	// The box sent a mention node: the room stores the id of the principal.
-	const stored = (await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
-	expect(stored?.mentions).toHaveLength(1);
+	// The box sent a mention node: the room stores the id of the principal. The row shows before the room
+	// stores the message, so wait for the stored message.
+	const storedThanks = async () =>
+		(await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
+	await expect.poll(async () => (await storedThanks())?.mentions.length).toBe(1);
+	const stored = await storedThanks();
 
 	// "@he" offers the group @here after the people. The box sends a group node, which mentions each member.
 	await box.pressSequentially("standup @he");

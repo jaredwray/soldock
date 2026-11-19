@@ -738,8 +738,15 @@ MCP clients. The app has no UI-only path.
       (`watchMessages`) starts before the load. A change that comes during the load waits, and goes
       into the thread after it. The load reads each page of `chat.list_replies`, then the changes
       after the version of its first page, so a change during the read of a later page shows too.
-      After a new connect of the socket, the view reads the changes after its version, in pages. A
-      failed read keeps the version, so the next connect reads the same changes again.
+      After a new connect of the socket, the view reads the changes after its version, in pages. A new
+      room list gives the version of the open room. The view reads only when that version is after
+      its own version and after each version that it asked for before, or when its last read failed
+      and the wait before a retry is over. The wait is 1 s, and it doubles after each failure, up to
+      60 s, so the room lists of other rooms do not repeat a read that fails.
+      A room list during a read for the same version adds no read. A room that is not in the room list
+      has no version, so its thread reads at most one time in 15 s (`THREAD_POLL_MS`). Thus a change in a different room makes
+      no read, and the view stays current without a socket too. A failed read keeps the version, so
+      the next read asks for the same changes.
     - A send has an idempotency key for the exact reply and options that it sends (`replyAttempt`).
       A reply that fails stays in the box, with the reason. A second Enter with the same reply keeps
       the key, so it posts one time. A changed reply, or a changed "Also send to <room>", gets a new
@@ -748,8 +755,11 @@ MCP clients. The app has no UI-only path.
     - A new reply moves the list to its end when the list showed its end, and after an own send.
     - Escape closes the view when the box is empty. With a typed reply, Escape does nothing, so one
       key never deletes a reply. The close gives the focus back to the button that opened the view,
-      or to the box of the room. A load that fails shows "Try again", which gets the focus. A thread
-      whose first message was deleted shows a note in place of the box.
+      or to the box of the room, after the room shows again. A load that fails shows "Try again", which
+      gets the focus. A thread whose first message was deleted shows a note in place of the box. A
+      reply above the limit of characters disables the send, with a note of the excess.
+    - On a narrow screen, the room under the view is hidden, so the room is not read: no read marker
+      moves while the view shows.
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
       draft that stays. A thread has no unread state yet. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow

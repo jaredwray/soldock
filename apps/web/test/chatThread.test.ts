@@ -1,10 +1,12 @@
 import type { ChatMessage } from "@soldock/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
 	createThreadView,
 	mergeThread,
 	type RepliesPage,
 	replyAttempt,
+	THREAD_POLL_MS,
+	THREAD_RETRY_MS,
 	type ThreadState,
 } from "../src/features/chat/thread.ts";
 
@@ -89,14 +91,23 @@ describe("the data of the view of a thread", () => {
 		expect(view.current()?.version).toBe(12);
 	});
 
-	// After a gap with no socket, the view must get each change of the gap, also in pages.
-	it("reads the changes of a gap after a connect from the version of the last reply of each page, and again after a failure", async () => {
+	// After a gap with no socket, the view must get each change of the gap, also in pages. A room list after
+	// a change of a different room must not read the thread, and must not repeat a failed read at once.
+	it("reads the changes of a gap after a catch-up from the version of the last reply of each page, and again after a failure and a wait", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		onTestFinished(() => {
+			vi.useRealTimers();
+		});
 		const pages: (RepliesPage | Error)[] = [
 			page([], 5),
 			page([], 5),
+			page([message(2, 6, "cmsg_1", "one")], 6),
 			new Error("offline"),
-			page([message(2, 6, "cmsg_1", "one")], 6, true),
-			page([message(3, 7, "cmsg_1", "two")], 8),
+			page([message(3, 7, "cmsg_1", "two")], 7, true),
+			page([], 8),
+			page([], 8),
+			page([], 8),
+			page([], 8),
 		];
 		const calls: unknown[] = [];
 		const read = async (range: { after?: number; changed_after?: number }) => {
@@ -107,12 +118,43 @@ describe("the data of the view of a thread", () => {
 		};
 		const view = createThreadView(read, () => {});
 		await view.load();
-		view.connect();
-		await vi.waitFor(() => expect(calls).toHaveLength(3));
-		// The failed read kept the version, so the next connect asks for the same changes.
-		view.connect();
+		// The room is not after the thread, so the catch-up of a room list reads nothing.
+		view.catchUp(5);
+		expect(calls).toHaveLength(2);
+		// A second room list during the read, after a change of a different room, adds no read.
+		view.catchUp(6);
+		view.catchUp(6);
+		await vi.waitFor(() => expect(view.current()?.version).toBe(6));
+		view.catchUp(7);
+		await vi.waitFor(() => expect(calls).toHaveLength(4));
+		// After the failure, a room list for a room version that the view has waits before it reads again.
+		view.catchUp(6);
+		expect(calls).toHaveLength(4);
+		// The failed read kept the version, so the catch-up after the wait asks for the same changes.
+		vi.setSystemTime(Date.now() + THREAD_RETRY_MS);
+		view.catchUp(6);
 		await vi.waitFor(() => expect(view.current()?.version).toBe(8));
-		expect(calls.slice(2)).toEqual([{ changed_after: 5 }, { changed_after: 5 }, { changed_after: 6 }]);
+		// A catch-up with no version (a new connect of the socket) always reads.
+		view.catchUp();
+		await vi.waitFor(() => expect(calls).toHaveLength(7));
+		// A room list that does not have the room (null) reads at most one time in THREAD_POLL_MS.
+		view.catchUp(null);
+		await vi.waitFor(() => expect(calls).toHaveLength(8));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		view.catchUp(null);
+		expect(calls).toHaveLength(8);
+		vi.setSystemTime(Date.now() + THREAD_POLL_MS);
+		view.catchUp(null);
+		expect(calls).toHaveLength(9);
+		expect(calls.slice(2)).toEqual([
+			{ changed_after: 5 },
+			{ changed_after: 6 },
+			{ changed_after: 6 },
+			{ changed_after: 7 },
+			{ changed_after: 8 },
+			{ changed_after: 8 },
+			{ changed_after: 8 },
+		]);
 		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["one", "two"]);
 	});
 });
