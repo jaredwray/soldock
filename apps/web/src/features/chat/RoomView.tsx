@@ -697,15 +697,16 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				// After a refusal, the old message shows again, and the edit box opens with the new body and files,
 				// so the person does not do the edit again. A newer change of the message stays as it is.
 				if (!endChange(id, change)) return;
-				// The box shows the new text again, and keeps the values from before the edit as its base, so a second
-				// save sends the same changes again.
+				// The box shows the text of the edit: the new text, or the text that the room had when the person did not
+				// change it. A changed text keeps the text from before the edit as its base, so a second save sends it
+				// again. An unchanged text takes the text of the room as its base, so a second save does not send it.
 				setEditing(
 					(current) =>
 						current ?? {
 							id,
-							initial: textChanged ? newBody : opened.base,
-							base: opened.base,
-							body: textChanged ? newBody : opened.base,
+							initial: newBody,
+							base: textChanged ? opened.base : newBody,
+							body: newBody,
 							initialFiles: opened.initialFiles,
 							files: keptFiles,
 						},

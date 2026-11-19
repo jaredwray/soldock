@@ -1179,8 +1179,9 @@ MCP clients. The app has no UI-only path.
     the person removed a file, and the body only when the text changed (`editCallFields`). A part changed
     when it differs from the part that the edit box opened with, so a change on a different device while
     the box is open stays in each part that the person did not touch. After a refusal, the box opens
-    again with the new text, and keeps the values from before the edit as its base, so a second save
-    sends the same changes. An edit that
+    again with the text of the edit. A changed text keeps the text from before the edit as its base, so
+    a second save sends it again. An unchanged text shows the text that the room had at the save, and
+    takes it as its base, so a second save does not send it. An edit that
     waits behind an earlier call and replaces an earlier edit takes the parts that the earlier edit
     changed. When its call starts, it sends only the parts that differ from the message of the room. So a
     file-only edit keeps the mentions of the stored body, and a text-only edit keeps a file that a
