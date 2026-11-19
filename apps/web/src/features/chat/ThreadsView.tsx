@@ -32,6 +32,22 @@ async function readThreads(input: { limit: number; cursor?: string }) {
 	return page;
 }
 
+/**
+ * The first threads of the list, at least `count` (and at least one page), in pages of at most 100. A new
+ * read of the list keeps each thread that shows, also after many "Show more".
+ */
+async function readFirstThreads(count: number) {
+	const first = await readThreads({ limit: Math.min(100, Math.max(PAGE, count)) });
+	const threads = [...first.threads];
+	let cursor = first.next_cursor;
+	while (cursor !== null && threads.length < count) {
+		const page = await readThreads({ limit: Math.min(100, count - threads.length), cursor });
+		threads.push(...page.threads);
+		cursor = page.next_cursor;
+	}
+	return { threads, next_cursor: cursor };
+}
+
 /** The key of a thread in the view: the room and the first message. */
 function threadKey(thread: Pick<ChatFollowedThread, "room" | "message_id">): string {
 	return `${thread.room.id}/${thread.message_id}`;
@@ -62,11 +78,11 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 		document.title = "Threads – Asterra";
 	}, []);
 
-	// Each tick reads the first page again, with at least the threads that show.
+	// Each tick reads the list again, with at least the threads that show.
 	useEffect(() => {
 		void tick;
 		const read = ++reads.current;
-		readThreads({ limit: Math.min(100, Math.max(PAGE, shownRef.current)) })
+		readFirstThreads(shownRef.current)
 			.then((page) => {
 				if (read === reads.current) setState({ status: "ready", threads: page.threads, nextCursor: page.next_cursor });
 			})
@@ -186,7 +202,8 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 
 /**
  * One thread of the list: its room, the start of its first message, the time of its newest reply and its
- * new replies. The first message comes from `chat.list_replies`, again after each new reply.
+ * new replies. The first message comes from `chat.list_replies`, again after each change of the room: a new
+ * version of the room in a new read of the list comes with an edit or a delete of the message too.
  */
 function ThreadCard({
 	thread,
@@ -201,8 +218,10 @@ function ThreadCard({
 	const roomId = thread.room.id;
 	const messageId = thread.message_id;
 	const lastReplyAt = thread.last_reply_at;
+	const roomVersion = thread.room.version;
 	useEffect(() => {
 		void lastReplyAt;
+		void roomVersion;
 		let stopped = false;
 		api
 			.call("chat.list_replies", { room_id: roomId, message_id: messageId, limit: 1 })
@@ -214,7 +233,7 @@ function ThreadCard({
 		return () => {
 			stopped = true;
 		};
-	}, [roomId, messageId, lastReplyAt]);
+	}, [roomId, messageId, lastReplyAt, roomVersion]);
 
 	const title = roomTitle(thread.room);
 	const unread = thread.unread_count;

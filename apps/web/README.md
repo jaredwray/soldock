@@ -848,11 +848,13 @@ MCP clients. The app has no UI-only path.
     - The count of "Threads" is `unread_threads` of `chat.list_threads` (`filter: "unread"`), at most 99+.
       It reads again with each change of `threadsTick`.
     - The view shows the threads that the person follows, newest reply first, 20 at a time, with "Show
-      more". Each change of `threadsTick` reads the first page again, with at least the threads that show.
+      more". Each change of `threadsTick` reads the list again, in pages of at most 100 until it has at
+      least the threads that show, so "Show more" pages stay.
       While the first fill of the server continues, a page has no threads and a cursor: the view asks
       again, at most 10 times.
     - Each card has the room, the start of the first message (`chat.list_replies` with `limit: 1`, again
-      after each new reply), the number of replies, the time of the newest reply, and the new replies.
+      after a new reply or a new `version` of the room, so an edit or a delete of the message shows), the
+      number of replies, the time of the newest reply, and the new replies.
     - A card opens the thread in the view of a thread at the right, as in a room. That view moves the read
       marker, so the card loses its count after the next `chat.threads` event. Each change of
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.
