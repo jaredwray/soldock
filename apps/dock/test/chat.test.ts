@@ -1422,17 +1422,18 @@ describe("the mention count", () => {
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		// The room goes back to the schema before the table: the migrations after it are undone too, the
-		// table of earlier versions and the columns of threads.
+		// table of earlier versions, the columns of threads and the table of follows.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE mentions");
 			sql.exec("DROP TABLE message_edits");
+			sql.exec("DROP TABLE thread_follows");
 			sql.exec("DROP INDEX messages_parent");
 			sql.exec("DROP INDEX messages_room_list");
 			for (const column of ["parent_id", "also_in_room", "reply_count", "last_reply_at", "reply_authors_json"]) {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 3 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 4 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -1691,8 +1692,12 @@ describe("threads", () => {
 		expect(thread.replies.map((message) => message.text)).toEqual(["Looks good", "Ship it"]);
 		expect(thread.parent.thread?.reply_count).toBe(2);
 		expect(thread.parent.thread?.authors.map((author) => author.principal_id)).toEqual([ada.id, bot.id]);
+		// follow is the state of the caller: the agent follows its reply, and the reply of Ada is new for it.
 		const tool = await callTool(bot.key, "chat_list_replies", { room_id: room.id, message_id: parent.id });
-		expect(tool.structuredContent).toEqual(thread);
+		expect(tool.structuredContent).toEqual({
+			...thread,
+			follow: { following: true, last_read_seq: first.seq, unread_count: 1 },
+		});
 		// A page of one reply, then the rest.
 		const page = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id, limit: 1 });
 		expect([page.replies.map((message) => message.id), page.has_more]).toEqual([[first.id], true]);
@@ -1757,6 +1762,66 @@ describe("threads", () => {
 		// The replies of a deleted message stay.
 		const kept = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id });
 		expect([kept.parent.deleted, kept.replies.length]).toEqual([true, 3]);
+	});
+
+	// A thread tells the people in it about its new replies, and nobody else, as in other chat apps.
+	it("makes the authors and the mentioned members follow a thread, keeps a read marker for each member, and keeps a stop until a new reply", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
+		const parent = await post(ada, room.id, "Plan for Friday");
+		const target = { room_id: room.id, message_id: parent.id };
+		const follow = async (actor: Actor) => (await actor.call("chat.list_replies", target)).follow;
+		expect(await follow(ada)).toEqual({ following: false, last_read_seq: 0, unread_count: 0 });
+
+		// The author of a reply follows and has read it. The author of the first message follows.
+		const first = await reply(bot, room.id, parent.id, "Looks good");
+		expect(await follow(bot)).toEqual({ following: true, last_read_seq: first.seq, unread_count: 0 });
+		expect(await follow(ada)).toEqual({ following: true, last_read_seq: 0, unread_count: 1 });
+		expect((await follow(owner)).following).toBe(false);
+		expect((await ada.call("chat.mark_thread_read", target)).follow).toEqual({
+			following: true,
+			last_read_seq: first.seq,
+			unread_count: 0,
+		});
+
+		// A reply that mentions a member makes it follow. The replies of a member are never new for it.
+		await reply(bot, room.id, parent.id, "@owner can you check?");
+		expect(await follow(owner)).toMatchObject({ following: true, unread_count: 2 });
+		expect((await follow(ada)).unread_count).toBe(1);
+		const marked = await callTool(bot.key, "chat_mark_thread_read", { ...target, seq: first.seq });
+		expect(marked.structuredContent).toEqual({
+			follow: { following: true, last_read_seq: first.seq, unread_count: 0 },
+		});
+
+		// A stop stays after a reply of a different member, and ends with a reply of the member.
+		expect((await ada.call("chat.follow_thread", { ...target, following: false })).follow.following).toBe(false);
+		await reply(bot, room.id, parent.id, "Any news?");
+		expect((await follow(ada)).following).toBe(false);
+		await reply(ada, room.id, parent.id, "On it");
+		expect(await follow(ada)).toMatchObject({ following: true, unread_count: 0 });
+
+		// A first follow, here by an agent through MCP, starts at the newest reply.
+		const other = await post(ada, room.id, "Retro notes");
+		const point = await reply(ada, room.id, other.id, "First point");
+		const followed = await callTool(bot.key, "chat_follow_thread", {
+			room_id: room.id,
+			message_id: other.id,
+			following: true,
+		});
+		expect(followed.structuredContent).toEqual({
+			follow: { following: true, last_read_seq: point.seq, unread_count: 0 },
+		});
+
+		// A member that leaves loses its follows.
+		await owner.call("chat.remove_member", { room_id: room.id, principal_id: owner.id });
+		await owner.call("chat.join_room", { room_id: room.id });
+		expect((await follow(owner)).following).toBe(false);
+		// The first message of the thread is the target, not a reply.
+		expect(await codeOf(ada.call("chat.follow_thread", { ...target, message_id: first.id, following: true }))).toBe(
+			"invalid",
+		);
+		expect(await codeOf(ada.call("chat.mark_thread_read", { ...target, message_id: UNKNOWN_MESSAGE }))).toBe(
+			"not_found",
+		);
 	});
 
 	// The client counts each version of the room. A reply changes two messages, so the two events come in order.

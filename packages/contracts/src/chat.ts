@@ -194,6 +194,17 @@ export const ChatThread = z.object({
 });
 export type ChatThread = z.infer<typeof ChatThread>;
 
+/** The state of a thread for the caller: the follow, the read marker, and the replies after it. */
+export const ChatThreadFollow = z.object({
+	/** True when the caller follows the thread. */
+	following: z.boolean(),
+	/** The seq of the newest reply that the caller read, or 0. */
+	last_read_seq: z.number().int().nonnegative(),
+	/** The replies after the read marker that stay, without the replies of the caller. */
+	unread_count: z.number().int().nonnegative(),
+});
+export type ChatThreadFollow = z.infer<typeof ChatThreadFollow>;
+
 /**
  * The kinds of a room. Each person and each agent can find and join a `public` room. Only its
  * members can find a `private` room. A `dm` room has two members, and it has no name.
@@ -653,6 +664,7 @@ export const listReplies = defineOperation({
 		"With changed_after, returns each reply that is new, changed or deleted after that version of the room, in the order of the changes. Use the version of the result as the next changed_after.",
 		"When has_more is true with changed_after, call again with the version of the last reply as changed_after.",
 		"The replies of a deleted message stay, and this operation returns them.",
+		"follow has your state of the thread: if you follow it, your read marker, and the replies after the marker.",
 		MEMBERS_ONLY,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/replies" },
@@ -676,7 +688,52 @@ export const listReplies = defineOperation({
 		/** The version of the room at the time of the read. */
 		version: z.number().int(),
 		has_more: z.boolean(),
+		follow: ChatThreadFollow,
 	}),
+	errors: ["not_found", "invalid"],
+});
+
+/** The rule of the follows of a thread, for each operation that has a thread. */
+const FOLLOW_RULE =
+	"A new reply makes its author follow the thread, and each member that the reply mentions. The author of the first message follows when the first reply comes. A stop stays until you reply again, or until a new reply mentions you.";
+
+export const followThread = defineOperation({
+	name: "chat.follow_thread",
+	summary: "Follow a thread, or stop",
+	description: [
+		"With following: true, you follow the thread of a message. With following: false, you stop.",
+		FOLLOW_RULE,
+		"When you start to follow a thread that you never read, its replies until now count as read.",
+		"Only you see your follow. A second call with the same value changes nothing.",
+		"message_id is the first message of the thread, not a reply.",
+		MEMBERS_ONLY,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/follow" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, following: z.boolean() }),
+	output: z.object({ follow: ChatThreadFollow }),
+	errors: ["not_found", "invalid"],
+});
+
+export const markThreadRead = defineOperation({
+	name: "chat.mark_thread_read",
+	summary: "Set what you read in a thread",
+	description: [
+		"Sets your read marker in the thread of a message to the reply seq.",
+		"Without seq, the marker goes to the newest reply, so the thread is read.",
+		"A lower seq makes the thread unread again from the reply after it.",
+		"The marker does not change if you follow the thread. Only you see your marker.",
+		"message_id is the first message of the thread, not a reply.",
+		MEMBERS_ONLY,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/read" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, seq: z.number().int().min(0).optional() }),
+	output: z.object({ follow: ChatThreadFollow }),
 	errors: ["not_found", "invalid"],
 });
 
@@ -875,6 +932,8 @@ export const chatOperations = {
 	"chat.list_messages": listMessages,
 	"chat.post_message": postMessage,
 	"chat.list_replies": listReplies,
+	"chat.follow_thread": followThread,
+	"chat.mark_thread_read": markThreadRead,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
 	"chat.list_message_edits": listMessageEdits,

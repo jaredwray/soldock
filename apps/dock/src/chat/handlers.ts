@@ -1,9 +1,16 @@
-import type { ChatRoom, OperationName } from "@soldock/contracts";
+import type { ChatRoom, ChatThreadFollow, OperationName } from "@soldock/contracts";
 import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { bodyMarkdown, messageContent } from "./body.ts";
 import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
-import { type ActorRecord, messageOutput, type Refusal, type RoomCall, type RoomRecord } from "./room.ts";
+import {
+	type ActorRecord,
+	messageOutput,
+	type Refusal,
+	type RoomCall,
+	type RoomRecord,
+	type ThreadFollowRecord,
+} from "./room.ts";
 import { listPublicRooms } from "./room-index.ts";
 
 import { chatWebhookHandlers } from "./webhooks.ts";
@@ -34,6 +41,11 @@ function accept<T extends object>(value: T): Exclude<T, { error: unknown }> {
 		throw new OperationError(error.code, error.message);
 	}
 	return value as Exclude<T, { error: unknown }>;
+}
+
+/** The state of a thread for the caller, as the operations return it. */
+function followOutput(follow: ThreadFollowRecord): ChatThreadFollow {
+	return { following: follow.following, last_read_seq: follow.lastReadSeq, unread_count: follow.unreadCount };
 }
 
 function iso(ms: number): string {
@@ -238,6 +250,23 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			replies: page.replies.map(messageOutput),
 			version: page.version,
 			has_more: page.hasMore,
+			follow: followOutput(page.follow),
+		};
+	},
+
+	// A follow and a read marker of a thread change the view of the caller, not the data of the room. So they
+	// write no audit line, as for the read marker of the room.
+	async "chat.follow_thread"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		return {
+			follow: followOutput(accept(await opened.room.followThread(opened.ctx, input.message_id, input.following))),
+		};
+	},
+
+	async "chat.mark_thread_read"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		return {
+			follow: followOutput(accept(await opened.room.markThreadRead(opened.ctx, input.message_id, input.seq ?? null))),
 		};
 	},
 

@@ -315,6 +315,18 @@ const MIGRATIONS: string[][] = [
 		// The room list and the unread count read this index, so a long thread adds nothing to their reads.
 		"CREATE INDEX messages_room_list ON messages (seq) WHERE parent_id IS NULL OR also_in_room = 1",
 	],
+	// The state of a thread for each member: the follow (1) or a stop (0), and the read marker in the thread.
+	// A member that leaves loses its rows.
+	[
+		`CREATE TABLE thread_follows (
+			parent_id TEXT NOT NULL,
+			principal_id TEXT NOT NULL,
+			following INTEGER NOT NULL,
+			last_read_seq INTEGER NOT NULL,
+			PRIMARY KEY (parent_id, principal_id)
+		) WITHOUT ROWID`,
+		"CREATE INDEX thread_follows_principal ON thread_follows (principal_id)",
+	],
 ];
 
 /**
@@ -413,6 +425,13 @@ function iso(ms: number): string {
 function messageEvent(record: MessageRecord): ChatSocketEvent {
 	const message = messageOutput(record);
 	return record.parent_id !== null && !record.also_in_room ? { type: "reply", message } : { type: "message", message };
+}
+
+/** The state of a thread for one member. */
+export interface ThreadFollowRecord {
+	following: boolean;
+	lastReadSeq: number;
+	unreadCount: number;
 }
 
 /** An earlier version of a message. Times are in milliseconds. */
@@ -867,6 +886,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
@@ -1064,14 +1084,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		messageId: string,
 		input: { after: number | null; changedAfter: number | null; limit: number },
-	): { parent: MessageRecord; replies: MessageRecord[]; version: number; hasMore: boolean } | Refusal {
+	):
+		| { parent: MessageRecord; replies: MessageRecord[]; version: number; hasMore: boolean; follow: ThreadFollowRecord }
+		| Refusal {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
-		const parent = this.message(messageId);
-		if (!parent) return refuse("not_found", NO_MESSAGE);
-		if (parent.parent_id !== null) {
-			return refuse("invalid", "The message is a reply, so it has no replies. Read the replies of its parent.");
-		}
+		const thread = this.threadParent(messageId);
+		if ("error" in thread) return thread;
+		const { parent } = thread;
 		const rows =
 			input.changedAfter !== null
 				? this.all<MessageRow>(
@@ -1091,7 +1111,118 @@ export class ChatRoomDO extends DurableObject<Env> {
 			replies: this.messageRecords(opened.room.room_id, rows.slice(0, input.limit)),
 			version: opened.room.version,
 			hasMore: rows.length > input.limit,
+			follow: this.threadFollow(messageId, call.actor.principal_id),
 		};
+	}
+
+	/** The first message of a thread, or a refusal for an unknown message and for a reply. */
+	private threadParent(messageId: string): { parent: MessageRow } | Refusal {
+		const parent = this.message(messageId);
+		if (!parent) return refuse("not_found", NO_MESSAGE);
+		if (parent.parent_id !== null) {
+			return refuse("invalid", "The message is a reply, so it has no replies. Use the first message of the thread.");
+		}
+		return { parent };
+	}
+
+	/** The seq of the newest reply of a message, deleted or not, or 0 when it has none. */
+	private newestReplySeq(parentId: string): number {
+		return (
+			this.one<{ seq: number | null }>("SELECT MAX(seq) AS seq FROM messages WHERE parent_id = ?", parentId)?.seq ?? 0
+		);
+	}
+
+	/**
+	 * The state of a thread for one member: the follow, the read marker, and the replies after the marker
+	 * that stay, without the replies of the member. A member with no row has read nothing and does not follow.
+	 */
+	private threadFollow(parentId: string, principalId: string): ThreadFollowRecord {
+		const row = this.one<{ following: number; last_read_seq: number }>(
+			"SELECT following, last_read_seq FROM thread_follows WHERE parent_id = ? AND principal_id = ?",
+			parentId,
+			principalId,
+		);
+		const lastReadSeq = row?.last_read_seq ?? 0;
+		const unread = this.one<{ n: number }>(
+			"SELECT COUNT(*) AS n FROM messages WHERE parent_id = ? AND seq > ? AND author_id <> ? AND deleted_at IS NULL",
+			parentId,
+			lastReadSeq,
+			principalId,
+		);
+		return { following: row?.following === 1, lastReadSeq, unreadCount: unread?.n ?? 0 };
+	}
+
+	/**
+	 * The follows that a new reply starts. Only members follow.
+	 * - The author of the reply follows, also after a stop, and has read up to its reply.
+	 * - Each member that the reply mentions follows, also after a stop.
+	 * - The author of the parent follows, unless it stopped.
+	 */
+	private followOnReply(parent: MessageRow, authorId: string, seq: number, mentioned: readonly string[]): void {
+		this.sql.exec(
+			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, 1, ?)
+			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = 1,
+				last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`,
+			parent.id,
+			authorId,
+			seq,
+		);
+		for (const principalId of new Set(mentioned)) {
+			if (principalId === authorId) continue;
+			this.sql.exec(
+				`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+					SELECT ?1, principal_id, 1, 0 FROM members WHERE principal_id = ?2
+				ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = 1`,
+				parent.id,
+				principalId,
+			);
+		}
+		this.sql.exec(
+			`INSERT OR IGNORE INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+				SELECT ?1, principal_id, 1, 0 FROM members WHERE principal_id = ?2`,
+			parent.id,
+			parent.author_id,
+		);
+	}
+
+	/**
+	 * Starts or stops the follow of a thread by the caller. A first follow starts at the newest reply, so the
+	 * replies until now count as read. Only the caller sees its follow, so the room sends no socket event.
+	 */
+	async followThread(call: RoomCall, messageId: string, following: boolean): Promise<ThreadFollowRecord | Refusal> {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const thread = this.threadParent(messageId);
+		if ("error" in thread) return thread;
+		this.sql.exec(
+			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, ?, ?)
+			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = excluded.following`,
+			messageId,
+			call.actor.principal_id,
+			following ? 1 : 0,
+			this.newestReplySeq(messageId),
+		);
+		return this.threadFollow(messageId, call.actor.principal_id);
+	}
+
+	/**
+	 * Sets the read marker of the caller in a thread. Without `seq`, the marker goes to the newest reply. The
+	 * follow does not change: a member that does not follow keeps a marker too.
+	 */
+	async markThreadRead(call: RoomCall, messageId: string, seq: number | null): Promise<ThreadFollowRecord | Refusal> {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const thread = this.threadParent(messageId);
+		if ("error" in thread) return thread;
+		const newest = this.newestReplySeq(messageId);
+		this.sql.exec(
+			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, 0, ?)
+			ON CONFLICT (parent_id, principal_id) DO UPDATE SET last_read_seq = excluded.last_read_seq`,
+			messageId,
+			call.actor.principal_id,
+			Math.min(seq ?? newest, newest),
+		);
+		return this.threadFollow(messageId, call.actor.principal_id);
 	}
 
 	/** The messages of a page with their reactions, with one read of the reactions. */
@@ -1270,7 +1401,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
 				}
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-				if (parent) this.addToThread(parent, call.actor, now, version - 1);
+				if (parent) {
+					this.addToThread(parent, call.actor, now, version - 1);
+					this.followOnReply(parent, call.actor.principal_id, seq, mentionIds(content.body));
+				}
 				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
