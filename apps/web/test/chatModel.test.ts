@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
 	chatRows,
+	editCallFields,
 	fileDisplay,
 	type LocalChange,
 	linkPreviewCards,
@@ -325,6 +326,44 @@ describe("the messages with the changes that wait for the server", () => {
 		const messages = [message(1)];
 		expect(withLocalChanges(messages, new Map())).toBe(messages);
 		expect(withLocalChanges(messages, new Map([["cmsg_9", { kind: "delete" }]]))).toEqual(messages);
+	});
+});
+
+// Review of PR 150: a queued edit that replaced an earlier one lost its change, or it rewrote the part that
+// the person did not change.
+describe("the call of a queued edit", () => {
+	const SECOND: ChatFile = { ...FILE, item_id: "itm_01JD0000000000000000000002", name: "notes.txt" };
+	const edit = (change: Partial<Extract<LocalChange, { kind: "edit" }>>): Extract<LocalChange, { kind: "edit" }> => ({
+		kind: "edit",
+		body: textToBody("message 1"),
+		text: "message 1",
+		at: "2026-01-01T10:00:00.000Z",
+		...change,
+	});
+
+	it("sends each part that the person changed and that differs from the message of the room", () => {
+		const server = message(1, { files: [FILE, SECOND] });
+		// The person removed a file, then changed the text in a newer edit: the newer edit carries the two parts.
+		const both = edit({ body: textToBody("new text"), text: "new text", bodySet: true, files: [SECOND] });
+		expect(editCallFields(both, server)).toEqual({
+			body: textToBody("new text"),
+			file_ids: [SECOND.item_id],
+		});
+	});
+
+	it("leaves the part that the person did not change as the room has it", () => {
+		// A different device added a file. A text-only edit sends no files, so that file stays.
+		const server = message(1, { files: [FILE, SECOND] });
+		expect(editCallFields(edit({ body: textToBody("new"), text: "new", bodySet: true }), server)).toEqual({
+			body: textToBody("new"),
+		});
+		// A file-only edit sends no body, so the room keeps the mentions of its body.
+		expect(editCallFields(edit({ files: [FILE] }), server)).toEqual({ file_ids: [FILE.item_id] });
+	});
+
+	it("makes no call when each changed part is as the room has it", () => {
+		const server = message(1, { files: [FILE] });
+		expect(editCallFields(edit({ bodySet: true, files: [FILE] }), server)).toBeNull();
 	});
 });
 

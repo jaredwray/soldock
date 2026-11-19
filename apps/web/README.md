@@ -1175,7 +1175,11 @@ MCP clients. The app has no UI-only path.
     the button is "Edited. Show the earlier versions". A delete of the message while the dialog is
     open closes the dialog, because the room removes the earlier versions.
   - The edit box shows the files of the message as chips with an X. A save sends `file_ids` only when
-    the person removed a file, and the body only when the text changed. A message with text needs
+    the person removed a file, and the body only when the text changed (`editCallFields`). An edit that
+    waits behind an earlier call and replaces an earlier edit takes the parts that the earlier edit
+    changed. When its call starts, it sends only the parts that differ from the message of the room. So a
+    file-only edit keeps the mentions of the stored body, and a text-only edit keeps a file that a
+    different device added. A message with text needs
     text, because an edit without text keeps the old text. Text of only spaces is no text. A message
     with only files keeps at least one file, so **Save** is off after the X of its last file. The edit
     box cannot add a file. After the X, the focus goes to the next file, or to the edit box.

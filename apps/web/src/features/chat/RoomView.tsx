@@ -45,6 +45,7 @@ import {
 	chatRows,
 	dayLabel,
 	draftPlaceholder,
+	editCallFields,
 	type LocalChange,
 	newMessages,
 	nextReading,
@@ -269,6 +270,9 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// The person looks at the newest messages when the tab shows, and the list is at the end of the
 	// newest messages of the room. A message below the part that shows is not read.
 	const messages = view.messages;
+	/** The messages as the room has them now, for a call that starts after earlier calls. */
+	const messagesNow = useRef(messages);
+	messagesNow.current = messages;
 	// A list from the cache is not the room of now: the person reads the room after its load.
 	// On a narrow screen, the view of a thread hides the room, so the person does not read it.
 	const looking = view.status === "ready" && view.fresh && visible && atEnd && !view.hasNewer && !threadHidesRoom;
@@ -646,27 +650,34 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 		if (!textChanged && !filesChanged) return;
 		// The new body and files show at once. An edit without a new text keeps the text.
 		const newBody = textChanged && body ? body : (shown ?? editing.initial);
+		// A newer change replaces an earlier one that did not go, so it takes the parts that the earlier one
+		// changed. An edit of one part leaves the other part as the server has it.
+		const earlier = waiting?.kind === "edit" ? waiting : undefined;
+		const bodySet = textChanged || earlier?.bodySet === true;
+		const wantedFiles = filesChanged ? keptFiles : earlier?.files;
 		const change: LocalChange = {
 			kind: "edit",
 			body: newBody,
 			text: bodyText(newBody),
 			at: new Date().toISOString(),
-			files: keptFiles,
+			...(wantedFiles ? { files: wantedFiles } : {}),
+			...(bodySet ? { bodySet: true } : {}),
 		};
 		showChange(id, change);
 		afterEarlierCalls(id, async () => {
 			// A newer change replaced this one before its call started. Only the newest change goes.
 			if (latest.current.get(id) !== change) return;
+			// The call sends each changed part that differs from the message that the room has now.
+			const fields = editCallFields(
+				change,
+				messagesNow.current.find((message) => message.id === id),
+			);
+			if (fields === null) {
+				endChange(id, change);
+				return;
+			}
 			try {
-				// The call sends the whole state that the person wants, the body and the files. A newer change
-				// replaces an earlier one that did not go, so a call with only its own change would lose the
-				// change of the earlier one. The room changes nothing for a part that is the same.
-				const { message } = await api.call("chat.edit_message", {
-					room_id: roomId,
-					message_id: id,
-					body: newBody,
-					file_ids: keptFiles.map((file) => file.item_id),
-				});
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, ...fields });
 				view.apply(message);
 				endChange(id, change);
 			} catch (caught) {

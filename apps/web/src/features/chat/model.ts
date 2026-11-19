@@ -7,6 +7,7 @@ import {
 	chatLinkImagePath,
 	DRIVE_LIMITS,
 } from "@asterra/contracts";
+import { sameInBox, textToBody } from "./composerSchema.ts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
@@ -166,10 +167,12 @@ export function unseenSendsNote(outbox: OutboxState, sent: number): string | nul
 /**
  * A change of a stored message that the page shows before the answer of the server: a new text, or
  * a delete. `at` is the time of the edit on the device. `files` is the new list of the files, when the
- * edit removed a file.
+ * person changed the files in this edit or in an edit that this one replaced. `bodySet` is true when the
+ * person changed the text in this edit or in an edit that this one replaced. The call sends only these
+ * parts, so an edit of one part keeps the other part as the server has it.
  */
 export type LocalChange =
-	| { kind: "edit"; body: ChatBody; text: string; at: string; files?: readonly ChatFile[] }
+	| { kind: "edit"; body: ChatBody; text: string; at: string; files?: readonly ChatFile[]; bodySet?: boolean }
 	| { kind: "delete" };
 
 const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
@@ -354,6 +357,27 @@ function safeLinkPreviewHref(url: string): string | null {
 }
 
 /** True when two lists name the same files in the same order. */
+/**
+ * The fields of the call of a queued edit: each part that the person changed (`bodySet`, `files`) and that
+ * differs from the message that the room has now (`server`). Null when no part differs: the call is not
+ * needed. A part that the person did not change stays as the room has it: a file-only edit keeps the
+ * mentions of the stored body, and a text-only edit keeps a file that a different device added.
+ */
+export function editCallFields(
+	change: Extract<LocalChange, { kind: "edit" }>,
+	server: ChatMessage | undefined,
+): { body?: ChatBody; file_ids?: string[] } | null {
+	const serverBody = server && (server.body ?? textToBody(server.text));
+	const sendBody = change.bodySet === true && !(serverBody && sameInBox(serverBody, change.body));
+	const files = change.files;
+	const sendFiles = files !== undefined && !(server && sameFileIds(files, server.files));
+	if (!sendBody && !sendFiles) return null;
+	return {
+		...(sendBody ? { body: change.body } : {}),
+		...(sendFiles && files ? { file_ids: files.map((file) => file.item_id) } : {}),
+	};
+}
+
 export function sameFileIds(a: readonly Pick<ChatFile, "item_id">[], b: readonly Pick<ChatFile, "item_id">[]): boolean {
 	return a.length === b.length && a.every((file, index) => file.item_id === b[index]?.item_id);
 }
