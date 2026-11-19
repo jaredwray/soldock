@@ -817,7 +817,7 @@ MCP clients. The app has no UI-only path.
         call. Then the order of the two on the server is not known, so the view reads the state again
         after both. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
-      draft that stays. No list shows the unread threads yet. The view reads all pages of a thread before
+      draft that stays. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
@@ -842,7 +842,22 @@ MCP clients. The app has no UI-only path.
     it, and the page puts it at its place. After each connect (`hello`), the page reads the list
     again. A read can answer after an event, so the page keeps each change of the socket that came
     after the start of the read.
-    The page ignores the event `chat.threads` until the Threads view: it does not change the rooms.
+    The event `chat.threads` does not change the rooms. It adds 1 to `threadsTick`, as each read of the
+    room list does, and the Threads view and its count read the threads again.
+  - **The Threads view** (`/chat/threads`, `ThreadsView.tsx`). "Threads" at the top of the sidebar opens it.
+    - The count of "Threads" is `unread_threads` of `chat.list_threads` (`filter: "unread"`), at most 99+.
+      It reads again with each change of `threadsTick`.
+    - The view shows the threads that the person follows, newest reply first, 20 at a time, with "Show
+      more". Each change of `threadsTick` reads the first page again, with at least the threads that show.
+      While the first fill of the server continues, a page has no threads and a cursor: the view asks
+      again, at most 10 times.
+    - Each card has the room, the start of the first message (`chat.list_replies` with `limit: 1`, again
+      after each new reply), the number of replies, the time of the newest reply, and the new replies.
+    - A card opens the thread in the view of a thread at the right, as in a room. That view moves the read
+      marker, so the card loses its count after the next `chat.threads` event. Each change of
+      `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.
+    - The view has no members of the room, so the @ list does not put the members first. The server checks
+      each mention.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.
@@ -1316,6 +1331,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
 | `/chat/people/<prn_id>` | The profile of a person or an agent |
+| `/chat/threads` | The Threads view: the threads that the person follows |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam

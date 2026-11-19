@@ -3,6 +3,7 @@ import {
 	ADMIN_SECTIONS,
 	adminPath,
 	chatPath,
+	chatThreadsPath,
 	type DriveView,
 	drivePath,
 	isAgentMailbox,
@@ -177,6 +178,12 @@ describe("routes", () => {
 		for (const path of ["/chat/people", "/chat/people/rm_01JD0000000000000000000000", `/chat/people/${profileId}/x`]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}
+	});
+
+	// The sidebar links to the Threads view, so a reload of it must open the same view.
+	it("parses the path of the Threads view, and no longer path", () => {
+		expect(parseRoute(chatThreadsPath())).toEqual({ page: "chat", roomId: null, seq: null, threads: true });
+		expect(parseRoute(`${chatThreadsPath()}/x`)).toEqual({ page: "not-found" });
 	});
 
 	// A deep link and a reload of a section open the same section.
