@@ -282,13 +282,15 @@ function ThreadCard({
 		let stopped = false;
 		api
 			.call("chat.list_replies", { room_id: roomId, message_id: messageId, limit: 1 })
+			// A read that a newer read replaced changes nothing, so a late success cannot hide a newer failure.
 			.then((page) => {
+				if (stopped) return;
 				failed.current = false;
-				if (!stopped) setParent(page.parent);
+				setParent(page.parent);
 			})
 			// The card shows the room and the time without the message, until the next read of the list.
 			.catch(() => {
-				failed.current = true;
+				if (!stopped) failed.current = true;
 			});
 		return () => {
 			stopped = true;
