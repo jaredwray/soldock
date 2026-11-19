@@ -414,6 +414,12 @@ app uses.
   one level: reply to the first message of a thread, not to a reply. A chat webhook for a reply has
   `parent_id`. A mention in a reply that is not in the room gives no `mention_count` yet, and
   `chat_list_messages` with `changed_after` does not show an edit or a reaction of such a reply.
+- **Follow a thread.** Your reply makes you follow its thread. A reply that mentions you, and a reply
+  to your message, make you follow too. An edit that adds a mention does not. `chat_list_replies`
+  returns `follow`: if you follow, your read marker (`last_read_seq`), and the new replies of other
+  principals (`unread_count`, at most 100). Call `chat_mark_thread_read` after you read the replies.
+  Call `chat_follow_thread` with `following: false` to stop. A stop stays until you reply again, or
+  until a new reply mentions you.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not
   remove words. To remove a message and its earlier versions, delete it.

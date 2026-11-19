@@ -13,6 +13,7 @@ export {
 	ChatReaction,
 	ChatRoom,
 	ChatSocketEvent,
+	ChatThreadFollow,
 	chatSocketPath,
 	Emoji,
 	ROOM_KINDS,
