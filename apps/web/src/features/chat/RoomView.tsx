@@ -108,7 +108,13 @@ const STICK_PX = 80;
 /** The message in edit: the body and the files that the edit box opened with, and the body and the files in it now. */
 interface Editing {
 	id: string;
+	/** The body that the box shows when it opens. */
 	initial: ChatBody;
+	/**
+	 * The body before the edit: a text changed when it differs from this body. It is `initial`, except when the
+	 * box opens again after a refusal: the box then shows the refused text, and this body stays the old one.
+	 */
+	base: ChatBody;
 	/** The body in the box now, or null without text. */
 	body: ChatBody | null;
 	initialFiles: readonly ChatFile[];
@@ -129,7 +135,7 @@ function editSavable(editing: Editing): boolean {
 	const body = editedBody(editing);
 	if (body !== null) return bodyText(body).length <= CHAT_LIMITS.messageChars;
 	return (
-		bodyText(editing.initial).trim() === "" &&
+		bodyText(editing.base).trim() === "" &&
 		editing.files.length > 0 &&
 		!sameFileIds(editing.files, editing.initialFiles)
 	);
@@ -637,19 +643,21 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	function saveEdit() {
 		if (!editing || !editSavable(editing)) return;
-		const { id, files: keptFiles } = editing;
-		const body = editedBody(editing);
+		const opened = editing;
+		const { id, files: keptFiles } = opened;
+		const body = editedBody(opened);
 		setEditing(null);
 		// The body that shows: the body of an edit that waits, or the body that the room has.
 		const waiting = latest.current.get(id);
 		const stored = messages.find((message) => message.id === id);
 		const shown = waiting?.kind === "edit" ? waiting.body : stored && (stored.body ?? textToBody(stored.text));
-		const shownFiles = (waiting?.kind === "edit" ? waiting.files : undefined) ?? stored?.files ?? editing.initialFiles;
-		const textChanged = body !== null && !(shown && sameInBox(shown, body));
-		const filesChanged = !sameFileIds(keptFiles, shownFiles);
+		// A part changed when it differs from the part that the edit box opened with. The message can change on a
+		// different device while the box is open: a part that the person did not touch must not go back.
+		const textChanged = body !== null && !sameInBox(opened.base, body);
+		const filesChanged = !sameFileIds(keptFiles, opened.initialFiles);
 		if (!textChanged && !filesChanged) return;
 		// The new body and files show at once. An edit without a new text keeps the text.
-		const newBody = textChanged && body ? body : (shown ?? editing.initial);
+		const newBody = textChanged && body ? body : (shown ?? opened.base);
 		// A newer change replaces an earlier one that did not go, so it takes the parts that the earlier one
 		// changed. An edit of one part leaves the other part as the server has it.
 		const earlier = waiting?.kind === "edit" ? waiting : undefined;
@@ -687,8 +695,18 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				// After a refusal, the old message shows again, and the edit box opens with the new body and files,
 				// so the person does not do the edit again. A newer change of the message stays as it is.
 				if (!endChange(id, change)) return;
+				// The box shows the new text again, and keeps the values from before the edit as its base, so a second
+				// save sends the same changes again.
 				setEditing(
-					(current) => current ?? { id, initial: newBody, body: newBody, initialFiles: shownFiles, files: keptFiles },
+					(current) =>
+						current ?? {
+							id,
+							initial: textChanged ? newBody : opened.base,
+							base: opened.base,
+							body: textChanged ? newBody : opened.base,
+							initialFiles: opened.initialFiles,
+							files: keptFiles,
+						},
 				);
 				fail(caught);
 			}
@@ -909,6 +927,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 													setEditing({
 														id: message.id,
 														initial,
+														base: initial,
 														body: initial,
 														initialFiles: message.files,
 														files: message.files,
