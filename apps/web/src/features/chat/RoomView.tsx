@@ -20,7 +20,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
-import { createCallLine } from "./callLine.ts";
+import { createCallLine, createToggleLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
@@ -124,8 +124,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	// of the time that the room opened, so a button does not move after a click on it.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new room reads the counts again.
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId, roomId]);
-	/** The reaction calls that run, as "message id" and "emoji". */
-	const reacting = useRef(new Set<string>());
+	/** The reaction calls of each "message id" and "emoji": see `createToggleLine`. */
+	const reactions = useMemo(() => createToggleLine(), []);
 	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
 	function setDraft(body: ChatBody | null) {
 		setDraftBody(body);
@@ -601,14 +601,15 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	/**
 	 * Adds or removes a reaction of the person. The message shows the answer of the room. A second click
-	 * on the same emoji of a message while its call runs does nothing, so one reaction counts one time.
+	 * of the same kind while its call runs does nothing, so one reaction counts one time. A click of the other
+	 * kind waits for that call: the socket can show the reaction before the answer, and the click must not get
+	 * lost.
 	 */
 	function react(id: string, emoji: string, add: boolean) {
-		const call = `${id} ${emoji}`;
-		if (reacting.current.has(call)) return;
-		reacting.current.add(call);
 		const signedIn = accountChangeCount();
-		void (async () => {
+		reactions(`${id} ${emoji}`, add, async () => {
+			// A click that waited does not go out after a sign-out: the next sign-in is a different session.
+			if (accountChangeCount() !== signedIn) return;
 			try {
 				const { message } = await api.call(add ? "chat.add_reaction" : "chat.remove_reaction", {
 					room_id: roomId,
@@ -621,10 +622,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 				if (add && accountChangeCount() === signedIn) countEmoji(draftStorage(), ownId, emoji);
 			} catch (caught) {
 				fail(caught);
-			} finally {
-				reacting.current.delete(call);
 			}
-		})();
+		});
 	}
 
 	function deleteMessage(id: string) {

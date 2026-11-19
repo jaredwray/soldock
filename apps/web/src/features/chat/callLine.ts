@@ -16,3 +16,24 @@ export function createCallLine(active: () => boolean): (id: string, call: () => 
 		ends.set(id, end);
 	};
 }
+
+/**
+ * Makes a function for the calls of a toggle, such as a reaction: add or remove, for each key.
+ *
+ * - A call of the same kind as the call that runs for the key does nothing. So a double click on an emoji
+ *   sends one call, and one reaction counts one time.
+ * - A call of the other kind waits for the call that runs, then goes out. The socket of the room can show
+ *   a reaction before the answer of its call. A click to remove it then must not get lost, and the room must
+ *   get the add first.
+ */
+export function createToggleLine(): (key: string, add: boolean, call: () => Promise<void>) => void {
+	const running = new Map<string, { add: boolean; end: Promise<void> }>();
+	return (key, add, call) => {
+		const current = running.get(key);
+		if (current?.add === add) return;
+		const end: Promise<void> = (current?.end ?? Promise.resolve()).then(call).finally(() => {
+			if (running.get(key)?.end === end) running.delete(key);
+		});
+		running.set(key, { add, end });
+	};
+}
