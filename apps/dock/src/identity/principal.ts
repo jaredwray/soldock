@@ -39,6 +39,37 @@ export interface ChatRoomView {
 	version: number;
 	/** True when the principal put its star on the room. */
 	starred: boolean;
+	/**
+	 * The threads of the room that the principal follows and that have replies, newest reply first, at most
+	 * `THREADS_PER_ROOM`. A state from before threads has none.
+	 */
+	threads?: readonly ChatThreadState[] | undefined;
+}
+
+/** A thread that the principal follows, as the room sends it. Times are in milliseconds. */
+export interface ChatThreadState {
+	/** The id of the first message of the thread. */
+	parent_id: string;
+	/** The time of the newest reply that stays. */
+	last_reply_at: number;
+	/** The replies of other members after the read marker of the thread. At most `UNREAD_COUNT_MAX`. */
+	unread_count: number;
+}
+
+/** A followed thread in a list, with the room that it is in. */
+export interface ChatThreadEntry {
+	room: ChatRoomEntry;
+	parent_id: string;
+	last_reply_at: number;
+	unread_count: number;
+}
+
+export interface ChatThreadQuery {
+	/** Keep only the threads with unread replies. */
+	unread: boolean;
+	/** The place of the last thread of the page before. */
+	after: { lastReplyAt: number; roomId: string; parentId: string } | null;
+	limit: number;
 }
 
 /**
@@ -72,6 +103,9 @@ export interface ChatRoomQuery {
 
 /** The largest unread count that a room sends. A room with more unread messages sends this number. */
 export const UNREAD_COUNT_MAX = 100;
+
+/** The most followed threads of one room that the room sends to a principal: the threads with the newest replies. */
+export const THREADS_PER_ROOM = 50;
 
 /**
  * What the Worker tells the object about a new events socket, in `EVENTS_SOCKET_HEADER` of the upgrade
@@ -182,6 +216,22 @@ const MIGRATIONS: string[][] = [
 	],
 	// The mention count of the principal, from the room. A room from before has 0 until its next state.
 	["ALTER TABLE chat_rooms ADD COLUMN mention_count INTEGER NOT NULL DEFAULT 0"],
+	// The threads that the principal follows, from the state of each room. Each kept state of a room
+	// replaces the rows of that room. `threads_known` is 1 for a room that sent its threads: the first
+	// chat.list_threads asks each other joined room once (see the `chat` README).
+	[
+		`CREATE TABLE chat_threads (
+			room_id TEXT NOT NULL,
+			parent_id TEXT NOT NULL,
+			last_reply_at INTEGER NOT NULL,
+			unread_count INTEGER NOT NULL,
+			PRIMARY KEY (room_id, parent_id)
+		) WITHOUT ROWID`,
+		"CREATE INDEX chat_threads_recent ON chat_threads (last_reply_at DESC, room_id DESC, parent_id DESC)",
+		`CREATE INDEX chat_threads_unread ON chat_threads (last_reply_at DESC, room_id DESC, parent_id DESC)
+			WHERE unread_count > 0`,
+		"ALTER TABLE chat_rooms ADD COLUMN threads_known INTEGER NOT NULL DEFAULT 0",
+	],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -193,6 +243,14 @@ type EntryRow = Omit<ChatRoomEntry, "starred"> & { starred: number } & Row;
 function toEntry(row: EntryRow): ChatRoomEntry {
 	return { ...row, starred: row.starred === 1 };
 }
+
+/** The columns of `chat_rooms` with the name of the table, for a join. */
+const ROOM_COLUMNS = COLUMNS.split(",")
+	.map((column) => `chat_rooms.${column.trim()}`)
+	.join(", ");
+
+/** A row of the join of `chat_threads` and `chat_rooms`. */
+type ThreadRow = EntryRow & { parent_id: string; thread_last_reply_at: number; thread_unread_count: number };
 
 /**
  * One object for each principal. It keeps the state that other objects send to it, and sends each
@@ -233,6 +291,8 @@ export class PrincipalDO extends DurableObject<Env> {
 	 */
 	applyChatRoomStates(states: readonly ChatRoomState[]): void {
 		const kept: { room_id: string; joined: number }[] = [];
+		/** The rooms whose followed threads changed in this call. Each one gets `chat.threads`. */
+		const threadRooms: string[] = [];
 		/** The rooms that were joined before this call. Only those get `chat.room_removed`. */
 		let joinedBefore = new Set<string>();
 		this.ctx.storage.transactionSync(() => {
@@ -284,7 +344,14 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.starred ? 1 : 0,
 					view?.mention_count ?? 0,
 				);
-				kept.push(...row.toArray());
+				const accepted = row.toArray();
+				kept.push(...accepted);
+				// A state from a room on an older version has no threads: the rows of the room stay as they were.
+				const threads = view === null ? [] : view.threads;
+				if (accepted.length > 0 && threads !== undefined) {
+					if (view) this.sql.exec("UPDATE chat_rooms SET threads_known = 1 WHERE room_id = ?", state.room_id);
+					if (this.replaceThreads(state.room_id, threads)) threadRooms.push(state.room_id);
+				}
 			}
 		});
 		if (kept.length === 0 || this.ctx.getWebSockets().length === 0) return;
@@ -305,9 +372,115 @@ export class PrincipalDO extends DurableObject<Env> {
 					if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
 					else if (joinedBefore.has(row.room_id)) events.push({ type: "chat.room_removed", room_id: row.room_id });
 				}
+				for (const roomId of threadRooms) events.push({ type: "chat.threads", room_id: roomId });
 				return events;
 			}),
 		);
+	}
+
+	/**
+	 * Replaces the followed threads of one room with the threads of its new state. Returns true when they
+	 * changed. A room that the principal left sends no view, so its threads go away.
+	 */
+	private replaceThreads(roomId: string, threads: readonly ChatThreadState[]): boolean {
+		const next = threads
+			.slice(0, THREADS_PER_ROOM)
+			.map((thread) => [thread.parent_id, thread.last_reply_at, thread.unread_count] as const)
+			.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+		const before = this.sql
+			.exec<{ parent_id: string; last_reply_at: number; unread_count: number }>(
+				"SELECT parent_id, last_reply_at, unread_count FROM chat_threads WHERE room_id = ? ORDER BY parent_id",
+				roomId,
+			)
+			.toArray()
+			.map((row) => [row.parent_id, row.last_reply_at, row.unread_count] as const);
+		// Most states of a room change no thread: those write nothing.
+		if (JSON.stringify(next) === JSON.stringify(before)) return false;
+		this.sql.exec("DELETE FROM chat_threads WHERE room_id = ?", roomId);
+		for (const [parentId, lastReplyAt, unreadCount] of next) {
+			this.sql.exec(
+				"INSERT OR REPLACE INTO chat_threads (room_id, parent_id, last_reply_at, unread_count) VALUES (?, ?, ?, ?)",
+				roomId,
+				parentId,
+				lastReplyAt,
+				unreadCount,
+			);
+		}
+		return true;
+	}
+
+	/**
+	 * The state of the first fill of the threads: `seeded` as for `listChatRooms`, `filled` after each joined
+	 * room sent its threads one time, and up to `limit` joined rooms that did not, the newest activity first.
+	 */
+	threadFill(limit: number): { seeded: boolean; filled: boolean; rooms: string[] } {
+		const filled = this.sql.exec("SELECT 1 FROM meta WHERE key = 'chat_threads_filled'").toArray().length > 0;
+		const rooms = filled
+			? []
+			: this.sql
+					.exec<{ room_id: string }>(
+						`SELECT room_id FROM chat_rooms WHERE joined = 1 AND threads_known = 0
+						ORDER BY activity_at DESC, room_id DESC LIMIT ?`,
+						limit,
+					)
+					.toArray()
+					.map((row) => row.room_id);
+		return { seeded: this.chatSeeded(), filled, rooms };
+	}
+
+	/**
+	 * Keeps the states of a part of the first fill of the threads. Each room of `answered` counts as known,
+	 * also when its state was not newer than the kept one. `done` records that the fill is complete.
+	 */
+	fillChatThreads(states: readonly ChatRoomState[], answered: readonly string[], done: boolean): void {
+		this.applyChatRoomStates(states);
+		this.sql.exec(
+			"UPDATE chat_rooms SET threads_known = 1 WHERE room_id IN (SELECT value FROM json_each(?))",
+			JSON.stringify(answered),
+		);
+		if (done) this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_threads_filled', '1')");
+	}
+
+	/**
+	 * A page of the followed threads of the joined rooms, with the newest reply first. One row more than
+	 * `limit` tells that a next page exists. `unreadThreads` counts the threads with unread replies, at most
+	 * `UNREAD_COUNT_MAX`.
+	 */
+	listChatThreads(query: ChatThreadQuery): { threads: ChatThreadEntry[]; unreadThreads: number } {
+		// The page reads `chat_threads` first (CROSS JOIN), in the order of an index: `chat_threads_unread` for
+		// the filter, else `chat_threads_recent`. The conditions are in the text, so SQLite picks the index and
+		// seeks to the cursor with the row value.
+		const after = query.after;
+		const rows = this.sql
+			.exec<ThreadRow>(
+				`SELECT chat_threads.parent_id, chat_threads.last_reply_at AS thread_last_reply_at,
+					chat_threads.unread_count AS thread_unread_count, ${ROOM_COLUMNS}
+				FROM chat_threads CROSS JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
+				WHERE chat_rooms.joined = 1 ${query.unread ? "AND chat_threads.unread_count > 0" : ""}
+					${after ? "AND (chat_threads.last_reply_at, chat_threads.room_id, chat_threads.parent_id) < (?2, ?3, ?4)" : ""}
+				ORDER BY chat_threads.last_reply_at DESC, chat_threads.room_id DESC, chat_threads.parent_id DESC
+				LIMIT ?1`,
+				query.limit + 1,
+				...(after ? [after.lastReplyAt, after.roomId, after.parentId] : []),
+			)
+			.toArray();
+		const unreadThreads = this.sql
+			.exec<{ n: number }>(
+				`SELECT COUNT(*) AS n FROM (SELECT 1 FROM chat_threads
+					CROSS JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
+				WHERE chat_rooms.joined = 1 AND chat_threads.unread_count > 0 LIMIT ?)`,
+				UNREAD_COUNT_MAX,
+			)
+			.one().n;
+		return {
+			threads: rows.map(({ parent_id, thread_last_reply_at, thread_unread_count, ...room }) => ({
+				room: toEntry(room as EntryRow),
+				parent_id,
+				last_reply_at: thread_last_reply_at,
+				unread_count: thread_unread_count,
+			})),
+			unreadThreads,
+		};
 	}
 
 	/**

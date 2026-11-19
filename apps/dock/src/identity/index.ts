@@ -23,7 +23,11 @@ export {
 	type ChatRoomQuery,
 	type ChatRoomState,
 	type ChatRoomView,
+	type ChatThreadEntry,
+	type ChatThreadQuery,
+	type ChatThreadState,
 	PrincipalDO,
+	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "./principal.ts";
 export { mountAuthRoutes } from "./routes.ts";

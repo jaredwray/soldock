@@ -2,7 +2,7 @@ import type { ChatRoom, ChatThreadFollow, OperationName } from "@soldock/contrac
 import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { bodyMarkdown, messageContent } from "./body.ts";
-import { listJoinedRooms, withOwnState } from "./principal-rooms.ts";
+import { listFollowedThreads, listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import {
 	type ActorRecord,
 	messageOutput,
@@ -139,6 +139,30 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
 		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
+	},
+
+	async "chat.list_threads"(call, input) {
+		const page = await listFollowedThreads(call.env, call.caller.id, {
+			unread: input.filter === "unread",
+			cursor: input.cursor ?? null,
+			limit: input.limit ?? DEFAULT_PAGE,
+		});
+		if (page === null) {
+			throw new OperationError(
+				"invalid",
+				"The cursor is not valid. Use next_cursor from the last page of the same list.",
+			);
+		}
+		return {
+			threads: page.threads.map((thread) => ({
+				room: toRoom(thread.room),
+				message_id: thread.parentId,
+				last_reply_at: iso(thread.lastReplyAt),
+				unread_count: thread.unreadCount,
+			})),
+			next_cursor: page.nextCursor,
+			unread_threads: page.unreadThreads,
+		};
 	},
 
 	async "chat.create_room"(call, input) {

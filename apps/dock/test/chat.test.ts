@@ -32,6 +32,8 @@ beforeEach(async () => {
 
 const UNKNOWN_ROOM = "rm_01JD0000000000000000000000";
 const UNKNOWN_MESSAGE = "cmsg_01JD0000000000000000000000";
+/** A message id of the right form, in the order of `n`, for rows that a test writes in an object. */
+const fakeMessageId = (n: number) => `cmsg_01JD${String(n).padStart(22, "0")}`;
 
 const createRoom = async (actor: Actor, kind: "public" | "private", name: string, member_ids: string[] = []) =>
 	(await actor.call("chat.create_room", { kind, name, member_ids })).room;
@@ -571,6 +573,11 @@ describe("the state of each principal", () => {
 	it("returns a post after the state of its author, and sends one state to each other member for the posts of that time", async () => {
 		const room = await createRoom(ada, "private", "Launch", [bot.id, owner.id]);
 		const stub = roomStub(room.id);
+		// The states of the new room go out first, so the counts below have the posts only.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+		});
+		await runDurableObjectAlarm(stub);
 		// Plain counters: the room calls the objects of the principals through this binding.
 		const sends = new Map<string, number>();
 		await runInDurableObject(stub, (instance) => {
@@ -596,8 +603,11 @@ describe("the state of each principal", () => {
 			} as unknown as Env["PRINCIPAL"];
 			target.env = { ...target.env, PRINCIPAL: counting };
 		});
-		// Only the clock is fake, so the three posts come in one moment.
+		// Only the clock is fake, so the three posts come in one moment. The fake clock is one minute ahead: the
+		// runtime runs an alarm at its time on the real clock, so the alarm of the room cannot run by itself
+		// during slow posts, before the test runs it.
 		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(Date.now() + 60_000);
 		for (const text of ["One", "Two", "Three"]) await post(ada, room.id, text);
 		// The author has its state with each post. The other members wait.
 		expect([sends.get(ada.id), sends.get(bot.id), sends.get(owner.id)]).toEqual([3, undefined, undefined]);
@@ -773,10 +783,12 @@ describe("the scopes of a key", () => {
 			"forbidden",
 		);
 		expect(await codeOf(read("chat.follow_thread", { ...thread, following: true }))).toBe("forbidden");
+		expect((await read("chat.list_threads")).threads).toEqual([]);
 		expect(await codeOf(read("chat.mark_thread_read", thread))).toBe("forbidden");
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
 		expect(await codeOf(api(mailOnly.secret)("chat.list_rooms"))).toBe("forbidden");
+		expect(await codeOf(api(mailOnly.secret)("chat.list_threads"))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_replies", thread))).toBe("forbidden");
 
@@ -1440,7 +1452,7 @@ describe("the mention count", () => {
 			for (const column of ["parent_id", "also_in_room", "reply_count", "last_reply_at", "reply_authors_json"]) {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 4 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 5 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -1871,6 +1883,139 @@ describe("threads", () => {
 		);
 	});
 
+	// The Threads view shows the threads of each room in one list, as in other chat apps.
+	it("lists the threads that a principal follows in all its rooms, newest reply first, with the unread replies", async () => {
+		const launch = await createRoom(ada, "public", "Launch", [bot.id]);
+		const ops = await createRoom(bot, "private", "Ops", [ada.id]);
+		const plan = await post(ada, launch.id, "Plan");
+		const launchReply = await reply(bot, launch.id, plan.id, "Looks good");
+		const alert = await post(bot, ops.id, "Disk is full");
+		await reply(ada, ops.id, alert.id, "On it");
+		const threads = async (actor: Actor, input: { filter?: "all" | "unread"; cursor?: string; limit?: number } = {}) =>
+			await actor.call("chat.list_threads", input);
+		const shown = (page: Awaited<ReturnType<typeof threads>>) =>
+			page.threads.map((thread) => [thread.room.name, thread.message_id, thread.unread_count]);
+
+		// The reply of the agent is new for Ada. The state of a different member comes after a moment.
+		await soon(async () =>
+			expect(shown(await threads(ada))).toEqual([
+				["Ops", alert.id, 0],
+				["Launch", plan.id, 1],
+			]),
+		);
+		const all = await threads(ada);
+		expect(all.unread_threads).toBe(1);
+		expect(all.threads[1]?.room).toMatchObject({ id: launch.id, kind: "public", role: "owner" });
+		expect(shown(await threads(ada, { filter: "unread" }))).toEqual([["Launch", plan.id, 1]]);
+		// Pages, with the cursor of the last thread.
+		const first = await threads(ada, { limit: 1 });
+		expect([shown(first), first.next_cursor === null]).toEqual([[["Ops", alert.id, 0]], false]);
+		const rest = await threads(ada, { limit: 1, cursor: first.next_cursor ?? "" });
+		expect([shown(rest), rest.next_cursor]).toEqual([[["Launch", plan.id, 1]], null]);
+		expect(await codeOf(threads(ada, { cursor: "not-a-cursor" }))).toBe("invalid");
+
+		// A read marker and a stop show in the list when the call returns.
+		await ada.call("chat.mark_thread_read", { room_id: launch.id, message_id: plan.id });
+		expect((await threads(ada)).unread_threads).toBe(0);
+		await ada.call("chat.follow_thread", { room_id: ops.id, message_id: alert.id, following: false });
+		expect(shown(await threads(ada))).toEqual([["Launch", plan.id, 0]]);
+
+		// An agent reads its list through MCP. A room that it leaves takes its threads away.
+		await soon(async () => {
+			const tool = await callTool(bot.key, "chat_list_threads", {});
+			const page = tool.structuredContent as Awaited<ReturnType<typeof threads>>;
+			expect(shown(page)).toEqual([
+				["Ops", alert.id, 1],
+				["Launch", plan.id, 0],
+			]);
+		});
+		await bot.call("chat.remove_member", { room_id: launch.id, principal_id: bot.id });
+		expect(shown(await threads(bot))).toEqual([["Ops", alert.id, 1]]);
+		// A thread whose replies are all deleted leaves the list.
+		await ada.call("chat.delete_message", { room_id: launch.id, message_id: launchReply.id });
+		expect(shown(await threads(ada))).toEqual([]);
+	});
+
+	// The threads of a room with no change since this version must show in the list too.
+	it("asks each joined room for its threads at the first list, and keeps the order of threads with the same time", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id]);
+		const plan = await post(ada, room.id, "Plan");
+		await reply(ada, room.id, plan.id, "Done");
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+		// The object goes back to the state of a room from before this version: no threads, and not known.
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_threads");
+			state.storage.sql.exec("UPDATE chat_rooms SET threads_known = 0");
+		});
+		const list = async (input: { cursor?: string; limit?: number } = {}) => await ada.call("chat.list_threads", input);
+		expect((await list()).threads.map((thread) => thread.message_id)).toEqual([plan.id]);
+
+		// Threads with the same time keep the order of the room and the message id, also across pages.
+		await runInDurableObject(principal, (_instance, state) => {
+			for (const parent of [fakeMessageId(1), fakeMessageId(2), fakeMessageId(3)]) {
+				state.storage.sql.exec(
+					"INSERT INTO chat_threads (room_id, parent_id, last_reply_at, unread_count) VALUES (?, ?, 4102444800000, 0)",
+					room.id,
+					parent,
+				);
+			}
+		});
+		const pages: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await list({ limit: 1, ...(cursor ? { cursor } : {}) });
+			pages.push(...page.threads.map((thread) => thread.message_id));
+			cursor = page.next_cursor ?? undefined;
+		} while (cursor);
+		expect(pages).toEqual([fakeMessageId(3), fakeMessageId(2), fakeMessageId(1), plan.id]);
+	});
+
+	// A principal in many rooms: a later part of the fill must not put a thread before a cursor of a page.
+	it("keeps the list empty while the first fill has more rooms to ask, then starts at the top", async () => {
+		const room = await createRoom(bot, "public", "Launch", [ada.id]);
+		const alert = await post(bot, room.id, "Disk is full");
+		await reply(ada, room.id, alert.id, "On it");
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+		// The object goes back to before this version, with 201 more joined rooms that sent no threads.
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_threads");
+			state.storage.sql.exec("UPDATE chat_rooms SET threads_known = 0");
+			for (let n = 1; n <= 201; n++) {
+				state.storage.sql.exec(
+					"INSERT INTO chat_rooms (room_id, stamp, joined, activity_at) VALUES (?, 0, 1, ?)",
+					`rm_01JD${String(n).padStart(22, "0")}`,
+					n,
+				);
+			}
+		});
+		// The first call asks 200 rooms. One room is left, so the page is empty, with a cursor to go on.
+		const first = await ada.call("chat.list_threads", {});
+		expect([first.threads, first.next_cursor === null]).toEqual([[], false]);
+		const next = await ada.call("chat.list_threads", { cursor: first.next_cursor ?? "" });
+		expect([next.threads.map((thread) => thread.message_id), next.next_cursor]).toEqual([[alert.id], null]);
+	});
+
+	// The state of a room has a limit of threads, so its cost has one too.
+	it("sends at most 50 followed threads of one room, the threads with the newest replies", async () => {
+		const room = await createRoom(ada, "public", "Launch");
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			for (let n = 1; n <= 51; n++) {
+				state.storage.sql.exec(
+					`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq, last_reply_at)
+					VALUES (?, ?, 1, 0, ?)`,
+					fakeMessageId(n),
+					ada.id,
+					n,
+				);
+			}
+		});
+		// A star sends a new state of the room to the object of Ada.
+		await ada.call("chat.star_room", { room_id: room.id, starred: true });
+		const listed = (await ada.call("chat.list_threads", { limit: CHAT_LIMITS.pageSize })).threads;
+		expect(listed).toHaveLength(50);
+		expect([listed[0]?.message_id, listed[49]?.message_id]).toEqual([fakeMessageId(51), fakeMessageId(2)]);
+	});
+
 	// The threads from before the table of follows must keep their people after the change of the schema.
 	it("fills the follows from the replies from before the table, at the start of the object", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
@@ -1882,7 +2027,7 @@ describe("threads", () => {
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE thread_follows");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 2 AS TEXT) WHERE key = 'schema_version'");
 		});
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message

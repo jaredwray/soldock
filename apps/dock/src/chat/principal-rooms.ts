@@ -137,6 +137,109 @@ export async function listJoinedRooms(
 	return { rooms: shown.map(toRecord), nextCursor };
 }
 
+/** A followed thread of a page, with the room as a record. */
+export interface FollowedThread {
+	room: RoomRecord;
+	parentId: string;
+	lastReplyAt: number;
+	unreadCount: number;
+}
+
+/**
+ * The first fill of the threads. A joined room sends its threads with each state since this version. A
+ * room with no change since then sent none, so the first lists ask each such room for its state, in the
+ * same parts as `seed`. A room that does not answer stays for the next list. The fill is complete when each
+ * joined room answered one time.
+ *
+ * Returns true while rooms remain that the fill did not ask yet: more than `SEED_MAX`, or rooms of a fill of
+ * the room list that is not complete. Their threads can sort before each place in the list, so the list waits.
+ */
+async function fillThreads(env: Env, principalId: string): Promise<boolean> {
+	const principal = principalStub(env, principalId);
+	let fill = await principal.threadFill(SEED_MAX + 1);
+	if (fill.filled) return false;
+	// The rooms from before the object come with the fill of the room list first.
+	if (!fill.seeded) {
+		await seed(env, principalId);
+		fill = await principal.threadFill(SEED_MAX + 1);
+	}
+	const asked = fill.rooms.slice(0, SEED_MAX);
+	let failed = 0;
+	for (let start = 0; start < asked.length; start += SEED_PARALLEL) {
+		const part = asked.slice(start, start + SEED_PARALLEL);
+		const answers = await Promise.allSettled(
+			part.map((roomId) => env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).stateFor(principalId)),
+		);
+		const states: ChatRoomState[] = [];
+		const answered: string[] = [];
+		answers.forEach((answer, index) => {
+			if (answer.status === "rejected") {
+				failed += 1;
+				return;
+			}
+			answered.push(part[index] as string);
+			if (answer.value) states.push(answer.value);
+		});
+		await principal.fillChatThreads(states, answered, false);
+	}
+	if (failed > 0) log("warn", "chat thread fill: rooms did not answer", { rooms: failed });
+	const more = fill.rooms.length > SEED_MAX || !fill.seeded;
+	if (failed === 0 && !more) await principal.fillChatThreads([], [], true);
+	return more;
+}
+
+/** The cursor of a list while the first fill of the threads continues: the next call asks the next rooms. */
+const FILL_CURSOR = encodeCursor(["fill"]);
+
+/**
+ * A page of the threads that a principal follows, from its `PrincipalDO`, with the newest reply first.
+ * Returns null for a cursor that is not from this list.
+ *
+ * While the first fill asks more rooms (`fillThreads`), the page is empty, and its cursor asks for the next
+ * part of the fill. The first page after the fill starts at the top. So a cursor of a place in the list comes
+ * only from a complete fill, and a later part of the fill cannot put a thread before it.
+ */
+export async function listFollowedThreads(
+	env: Env,
+	principalId: string,
+	input: { unread: boolean; cursor: string | null; limit: number },
+): Promise<{ threads: FollowedThread[]; nextCursor: string | null; unreadThreads: number } | null> {
+	const filling = input.cursor !== null && decodeCursor<[string]>(input.cursor, ["string"])?.[0] === "fill";
+	const cursor =
+		input.cursor === null || filling
+			? null
+			: decodeCursor<[number, string, string]>(input.cursor, ["number", "string", "string"]);
+	if (input.cursor !== null && !filling && cursor === null) return null;
+	if (await fillThreads(env, principalId)) {
+		const { unreadThreads } = await principalStub(env, principalId).listChatThreads({
+			unread: true,
+			after: null,
+			limit: 1,
+		});
+		return { threads: [], nextCursor: FILL_CURSOR, unreadThreads };
+	}
+	const listed = await principalStub(env, principalId).listChatThreads({
+		unread: input.unread,
+		after: cursor === null ? null : { lastReplyAt: cursor[0], roomId: cursor[1], parentId: cursor[2] },
+		limit: input.limit,
+	});
+	const shown = listed.threads.slice(0, input.limit);
+	const last = shown[shown.length - 1];
+	return {
+		threads: shown.map((thread) => ({
+			room: toRecord(thread.room),
+			parentId: thread.parent_id,
+			lastReplyAt: thread.last_reply_at,
+			unreadCount: thread.unread_count,
+		})),
+		nextCursor:
+			listed.threads.length > input.limit && last
+				? encodeCursor([last.last_reply_at, last.room.room_id, last.parent_id])
+				: null,
+		unreadThreads: listed.unreadThreads,
+	};
+}
+
 /**
  * The rooms of a page with the state of the principal in each room that it joined: the role, the read
  * marker, the unread count and the star. The index in D1 has no read marker and no star. A room that the `PrincipalDO` does

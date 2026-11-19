@@ -138,6 +138,8 @@ export function useRooms() {
 					void refresh();
 					return;
 				}
+				// The Threads view comes in a later part. The rooms do not change with this event.
+				if (event.type === "chat.threads") return;
 				const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
 				const room = event.type === "chat.room" ? event.room : null;
 				const at = ++events.current;

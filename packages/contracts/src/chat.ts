@@ -717,6 +717,48 @@ export const followThread = defineOperation({
 	errors: ["not_found", "invalid"],
 });
 
+/** A thread that the caller follows, with the room that it is in. */
+export const ChatFollowedThread = z.object({
+	room: ChatRoom,
+	/** The id of the first message of the thread. Read the thread with chat.list_replies. */
+	message_id: MessageId,
+	/** The time of the newest reply that stays. */
+	last_reply_at: Timestamp,
+	/** The replies of other principals after your read marker of the thread. At most 100. */
+	unread_count: z.number().int().nonnegative(),
+});
+export type ChatFollowedThread = z.infer<typeof ChatFollowedThread>;
+
+export const listThreads = defineOperation({
+	name: "chat.list_threads",
+	summary: "List the threads that you follow",
+	description: [
+		"Returns the threads that you follow in your rooms and direct messages, with the newest reply first.",
+		"Each thread has its room, the id of its first message, the time of its newest reply, and unread_count: the new replies of other principals.",
+		"With filter: unread, returns only the threads with new replies. unread_threads counts them, at most 100.",
+		"Read the replies of a thread with chat.list_replies, then call chat.mark_thread_read.",
+		"A thread with no reply that stays is not in the list. Each room sends at most the 50 threads with the newest replies.",
+		"Each room sends its changes to the list after the change. A list can be a moment behind a change.",
+		"Pass next_cursor as cursor to get the next page. The first list of a principal in many rooms can return no threads with a next_cursor: call again with it until the threads come.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/threads" },
+	scopes: ["chat.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({
+		filter: z.enum(["all", "unread"]).default("all"),
+		cursor: z.string().max(500).optional(),
+		limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
+	}),
+	output: z.object({
+		threads: z.array(ChatFollowedThread),
+		next_cursor: z.string().nullable(),
+		/** The threads with new replies, at most 100. */
+		unread_threads: z.number().int().nonnegative(),
+	}),
+	errors: ["invalid"],
+});
+
 export const markThreadRead = defineOperation({
 	name: "chat.mark_thread_read",
 	summary: "Set what you read in a thread",
@@ -934,6 +976,7 @@ export const chatOperations = {
 	"chat.list_replies": listReplies,
 	"chat.follow_thread": followThread,
 	"chat.mark_thread_read": markThreadRead,
+	"chat.list_threads": listThreads,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
 	"chat.list_message_edits": listMessageEdits,

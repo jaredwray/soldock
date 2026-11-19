@@ -7,6 +7,7 @@ export {
 	ChatBody,
 	type ChatBodyBlock,
 	type ChatBodyInline,
+	ChatFollowedThread,
 	ChatMember,
 	ChatMessage,
 	ChatMessageEdit,

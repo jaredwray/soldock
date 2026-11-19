@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): table `chat_rooms` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, and `chat_seeded` after the first fill), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms` and `chat_threads` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -27,6 +27,17 @@ to it, so a list of that state reads one object and not the directory.
   principal. A row has the state of the room for the principal: the read marker, the unread count,
   the mention count and the star. Each `ChatRoomDO` sends the state of its room to the objects of its members. The
   [`chat`](../chat/README.md#the-state-of-a-principal) module has the rules of the delivery.
+- The table `chat_threads` has the threads that the principal follows: one row for each thread, with
+  its room, the time of its newest reply and its unread count. Each state of a room has the followed
+  threads of that room (at most 50, `THREADS_PER_ROOM`). A kept state replaces the rows of its room,
+  and a state without the room removes them. A state that changes no thread writes nothing. A state
+  without `threads` (from a room on an older version) keeps the rows.
+- `listChatThreads` reads them for `chat.list_threads`, with the newest reply first, and only for the
+  joined rooms. It reads `chat_threads` first, in the order of the index `chat_threads_recent`, or of the
+  partial index `chat_threads_unread` for the unread filter, and seeks to the cursor.
+- `chat_rooms.threads_known` is 1 for a room that sent its threads. The first fill of the threads
+  (`threadFill`, `fillChatThreads`) asks the other joined rooms one time, then records `chat_threads_filled`
+  in `meta`.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.
 - The object has no operation of its own. Its methods check no access: only the Worker and other
@@ -48,6 +59,7 @@ contract of the socket.
 | `hello` | The first event of a socket | `protocol`. The client then calls `chat.list_rooms`, to get what changed while it had no socket |
 | `chat.room` | The object kept a new state of a joined room | `room`: the room as `chat.list_rooms` returns it |
 | `chat.room_removed` | The principal is not a member of the room now | `room_id` |
+| `chat.threads` | The object kept a state that changed the followed threads of a room: a new reply, a read marker, a follow or a stop | `room_id`. The client calls `chat.list_threads` again |
 
 - The socket carries events only. Each change is an operation, with REST and MCP. A message from a
   client closes the socket with code `1008`. The text `ping` is the exception: the runtime answers

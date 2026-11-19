@@ -35,10 +35,13 @@ export const EVENTS_SOCKET_CLOSE = {
  * - `chat.room` has a room of the principal as chat.list_rooms returns it, after a change: a new
  *   message, a changed name, a read marker, a new member. Replace the room that you have.
  * - `chat.room_removed` tells that the principal is not a member of the room now.
+ * - `chat.threads` tells that the threads that the principal follows in a room changed: a new reply, a
+ *   read marker, a follow or a stop. Call chat.list_threads again.
  */
 export const PrincipalEvent = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("hello"), protocol: z.number().int() }),
 	z.object({ type: z.literal("chat.room"), room: ChatRoom }),
 	z.object({ type: z.literal("chat.room_removed"), room_id: z.string() }),
+	z.object({ type: z.literal("chat.threads"), room_id: z.string() }),
 ]);
 export type PrincipalEvent = z.infer<typeof PrincipalEvent>;

@@ -108,6 +108,28 @@ describe("the events socket", () => {
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: 1, starred: false } });
 	});
 
+	// The Threads view reads the list again only when the followed threads of a room change.
+	it("sends chat.threads when the followed threads of a room change, and not for a change of the room only", async () => {
+		const room = await privateRoom(ada, "Launch", [bot.id]);
+		const parent = (await ada.call("chat.post_message", { room_id: room.id, text: "Plan" })).message;
+		const person = await connect(bearer(ada.key));
+		// A reply makes the author of the first message follow, so its threads change after the room.
+		await bot.call("chat.post_message", { room_id: room.id, parent_id: parent.id, text: "Done" });
+		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
+		expect(await person.next()).toEqual({ type: "chat.threads", room_id: room.id });
+		// A read marker of the thread changes its unread count.
+		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
+		expect(await person.next()).toMatchObject({ type: "chat.room" });
+		expect(await person.next()).toEqual({ type: "chat.threads", room_id: room.id });
+		// A second read marker changes nothing, so it sends no state. A message of the room leaves the threads
+		// as they were. So the next events are the message and the star.
+		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
+		await ada.call("chat.post_message", { room_id: room.id, text: "Next" });
+		await ada.call("chat.star_room", { room_id: room.id, starred: true });
+		expect(await person.next()).toMatchObject({ type: "chat.room", room: { last_seq: 3 } });
+		expect(await person.next()).toMatchObject({ type: "chat.room", room: { starred: true } });
+	});
+
 	// A room can send the same state two times, after a failure. The sockets must not get it two times.
 	it("sends nothing for a state that the object does not keep", async () => {
 		const room = await privateRoom(ada, "Launch", [bot.id]);
