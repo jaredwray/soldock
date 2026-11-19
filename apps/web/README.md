@@ -813,8 +813,8 @@ MCP clients. The app has no UI-only path.
         So a reply whose socket event is late stays new.
       - The follow and the marker are two parts (`createFollowKeeper`). An own call adds 1 to the count
         of its part at its start and at its end, so an answer that started during the call does not show
-        that part. The answer of the own call always sets its part. A read sets each part that had no own
-        change since the read started. So a read of the marker never hides a change of the follow.
+        that part. The answer of the own call sets its part, unless an own reply changed it during the
+        call. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
       draft that stays. No list shows the unread threads yet. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow

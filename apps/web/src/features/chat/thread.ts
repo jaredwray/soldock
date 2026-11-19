@@ -77,8 +77,8 @@ export interface FollowTicket {
  * are two parts, each with a count of own changes.
  * - An own call (`begin`, then `finish`) adds 1 to the count of its part at its start and at its end. So a
  *   response that started during the call does not show that part: the server can answer it before the call.
- * - The response of the own call always sets its own part. It sets the other part only when that part had
- *   no own change since the call started.
+ * - The response of the own call sets its own part, unless an own reply (`local`) changed it during the call.
+ *   It sets the other part only when that part had no own change since the call started.
  * - A read (`ticket`, then `apply`) sets each part that had no own change since the read started.
  */
 export interface FollowKeeper {
@@ -124,10 +124,12 @@ export function createFollowKeeper(show: (follow: ChatThreadFollow) => void): Fo
 		},
 		finish(ticket, part, follow) {
 			const other: FollowPart = part === "following" ? "marker" : "following";
+			// An own reply during the call (`local`) changed the part after the server did the call.
+			const ownKept = ticket[part] === counts[part];
 			const otherKept = ticket[other] === counts[other];
 			counts[part] += 1;
 			if (!follow) return;
-			const next = merge(follow, { [part]: true, [other]: otherKept } as Record<FollowPart, boolean>);
+			const next = merge(follow, { [part]: ownKept, [other]: otherKept } as Record<FollowPart, boolean>);
 			if (next) set(next);
 		},
 		local(change) {

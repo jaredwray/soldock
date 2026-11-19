@@ -198,7 +198,10 @@ describe("the state of a thread for a person", () => {
 		expect(keeper.current()).toEqual({ following: true, last_read_seq: 5, unread_count: 0 });
 		// A read that starts now shows both parts. An own reply changes both.
 		keeper.apply(keeper.ticket(), { following: true, last_read_seq: 6, unread_count: 0 });
+		// An own reply during a marker call moves the marker past the answer of the call.
+		const late = keeper.begin("marker");
 		keeper.local((current) => ({ ...current, last_read_seq: 9 }));
+		keeper.finish(late, "marker", { following: true, last_read_seq: 7, unread_count: 0 });
 		expect(shown.at(-1)).toEqual({ following: true, last_read_seq: 9, unread_count: 0 });
 	});
 });
