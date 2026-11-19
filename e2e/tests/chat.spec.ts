@@ -726,6 +726,37 @@ test("the quick reactions add and remove a reaction, and the next room puts the 
 	expect(await quick(first)).toEqual(["🎉", "👍", "❤️"]);
 });
 
+// The socket of the room can bring a reaction before the answer of its call. A click that removes it then
+// must not get lost.
+test("a click that removes a reaction before the answer of its add came removes it", async ({ browser }) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const roomId = await createRoom(tomasz, unique("Toggle"), [nadia]);
+	await post(tomasz, roomId, "a message to react to");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+	const row = page.locator(".chat-message").filter({ hasText: "a message to react to" });
+	// The room takes the add at once. Only its answer waits, so the socket shows the reaction first.
+	let releaseAnswer = () => {};
+	const answerHeld = new Promise<void>((done) => {
+		releaseAnswer = done;
+	});
+	await page.route("**/api/v1/chat/rooms/*/messages/*/reactions", async (route) => {
+		if (route.request().method() !== "POST") return route.continue();
+		const response = await route.fetch();
+		await answerHeld;
+		await route.fulfill({ response });
+	});
+	await row.hover();
+	const thumbs = row.getByRole("button", { name: "React with thumbs up" });
+	await thumbs.click();
+	await expect(thumbs).toHaveAttribute("aria-pressed", "true");
+	await thumbs.click();
+	releaseAnswer();
+	await expect(row.getByRole("button", { name: /^thumbs up:/ })).toHaveCount(0);
+	await expect(thumbs).toHaveAttribute("aria-pressed", "false");
+});
+
 test("a reaction from the picker shows on the message, a reaction of a different person arrives live, and a click removes it", async ({
 	browser,
 }) => {

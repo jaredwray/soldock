@@ -923,8 +923,11 @@ MCP clients. The app has no UI-only path.
       pressed. The browser counts each reaction that the person adds. The most uses come first,
       and the most recent use first for one count. Before the person has 3 counts, 👍, ❤️ and 😂
       fill the places. The buttons show the counts of the time that the room opened, so a button
-      does not move after a click. A second click on the same emoji of a message while its call
-      runs does nothing, so one reaction counts one time. Known limit: the counts are in this
+      does not move after a click. A second click of the same kind on the same emoji of a message
+      while its call runs does nothing, so one reaction counts one time. A click of the other kind
+      waits for that call, then goes out (`createToggleLine`). The socket of the room can show the
+      reaction before the answer of its call, so a click that removes it then must not get lost.
+      Known limit: the counts are in this
       browser only. A browser that refuses `localStorage` keeps no counts and shows the default
       emoji.
     - The action **Add a reaction** (an outline face) opens a list of common emoji with a search box. The
