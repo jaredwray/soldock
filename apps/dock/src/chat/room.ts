@@ -203,6 +203,27 @@ const MENTIONS_BACKFILL = `INSERT OR IGNORE INTO mentions (principal_id, seq)
 		AND json_extract(messages.body_json, node.path || '.attrs.id') IS NOT NULL
 		AND json_extract(messages.body_json, node.path || '.attrs.id') <> messages.author_id`;
 
+/**
+ * The follows of the threads from before the table: each member that wrote a reply follows, and has read up
+ * to its newest reply. Members only, as for a new reply.
+ */
+const THREAD_FOLLOWS_BACKFILL_REPLIES = `INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+	SELECT replies.parent_id, replies.author_id, 1, MAX(replies.seq)
+	FROM messages AS replies JOIN members ON members.principal_id = replies.author_id
+	WHERE replies.parent_id IS NOT NULL
+	GROUP BY replies.parent_id, replies.author_id`;
+
+/**
+ * The author of each message with replies from before the table follows, if it is a member. Its marker goes
+ * to the newest reply, so the replies from before the table do not show as new.
+ */
+const THREAD_FOLLOWS_BACKFILL_PARENTS = `INSERT OR IGNORE INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+	SELECT parents.id, parents.author_id, 1, MAX(replies.seq)
+	FROM messages AS parents
+		JOIN messages AS replies ON replies.parent_id = parents.id
+		JOIN members ON members.principal_id = parents.author_id
+	GROUP BY parents.id`;
+
 const MIGRATIONS: string[][] = [
 	[
 		`CREATE TABLE room (
@@ -315,17 +336,19 @@ const MIGRATIONS: string[][] = [
 		// The room list and the unread count read this index, so a long thread adds nothing to their reads.
 		"CREATE INDEX messages_room_list ON messages (seq) WHERE parent_id IS NULL OR also_in_room = 1",
 	],
-	// The state of a thread for each member: the follow (1) or a stop (0), and the read marker in the thread.
-	// A member that leaves loses its rows.
+	// The state of a thread for each member: the follow (1), a stop (0) or a read marker only (null), and the
+	// read marker in the thread. A member that leaves loses its rows.
 	[
 		`CREATE TABLE thread_follows (
 			parent_id TEXT NOT NULL,
 			principal_id TEXT NOT NULL,
-			following INTEGER NOT NULL,
+			following INTEGER,
 			last_read_seq INTEGER NOT NULL,
 			PRIMARY KEY (parent_id, principal_id)
 		) WITHOUT ROWID`,
 		"CREATE INDEX thread_follows_principal ON thread_follows (principal_id)",
+		THREAD_FOLLOWS_BACKFILL_REPLIES,
+		THREAD_FOLLOWS_BACKFILL_PARENTS,
 	],
 ];
 
@@ -616,7 +639,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Keeps the mentions of a message: each principal of its body, except its author, and a row for each
 	 * group (`groupRow`). A reply that is not in the room list keeps no row: the room counts the messages
-	 * of the room list only. The follows of a thread come later.
+	 * of the room list only. A mention in a reply starts a follow of its thread (`followOnReply`).
 	 */
 	private setMentions(seq: number, authorId: string, body: ChatBody, inRoomList = true): void {
 		this.sql.exec("DELETE FROM mentions WHERE seq = ?", seq);
@@ -1135,6 +1158,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * The state of a thread for one member: the follow, the read marker, and the replies after the marker
 	 * that stay, without the replies of the member. A member with no row has read nothing and does not follow.
+	 * The count stops at `UNREAD_COUNT_MAX`, as the counts of the room, so its cost has a limit.
 	 */
 	private threadFollow(parentId: string, principalId: string): ThreadFollowRecord {
 		const row = this.one<{ following: number; last_read_seq: number }>(
@@ -1144,10 +1168,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 		);
 		const lastReadSeq = row?.last_read_seq ?? 0;
 		const unread = this.one<{ n: number }>(
-			"SELECT COUNT(*) AS n FROM messages WHERE parent_id = ? AND seq > ? AND author_id <> ? AND deleted_at IS NULL",
+			`SELECT COUNT(*) AS n FROM (SELECT 1 FROM messages
+			WHERE parent_id = ? AND seq > ? AND author_id <> ? AND deleted_at IS NULL LIMIT ?)`,
 			parentId,
 			lastReadSeq,
 			principalId,
+			UNREAD_COUNT_MAX,
 		);
 		return { following: row?.following === 1, lastReadSeq, unreadCount: unread?.n ?? 0 };
 	}
@@ -1155,8 +1181,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * The follows that a new reply starts. Only members follow.
 	 * - The author of the reply follows, also after a stop, and has read up to its reply.
-	 * - Each member that the reply mentions follows, also after a stop.
-	 * - The author of the parent follows, unless it stopped.
+	 * - Each member that the reply mentions follows, also after a stop. Its marker stays, so the earlier
+	 *   replies are new for it: they are the context of the mention.
+	 * - The author of the parent follows, unless it stopped. A row with a read marker only is no stop.
 	 */
 	private followOnReply(parent: MessageRow, authorId: string, seq: number, mentioned: readonly string[]): void {
 		this.sql.exec(
@@ -1178,8 +1205,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 			);
 		}
 		this.sql.exec(
-			`INSERT OR IGNORE INTO thread_follows (parent_id, principal_id, following, last_read_seq)
-				SELECT ?1, principal_id, 1, 0 FROM members WHERE principal_id = ?2`,
+			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+				SELECT ?1, principal_id, 1, 0 FROM members WHERE principal_id = ?2
+			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = 1 WHERE following IS NULL`,
 			parent.id,
 			parent.author_id,
 		);
@@ -1187,7 +1215,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Starts or stops the follow of a thread by the caller. A first follow starts at the newest reply, so the
-	 * replies until now count as read. Only the caller sees its follow, so the room sends no socket event.
+	 * replies until now count as read. A stop keeps the marker, and a stop with no row has read nothing. Only
+	 * the caller sees its follow, so the room sends no socket event.
 	 */
 	async followThread(call: RoomCall, messageId: string, following: boolean): Promise<ThreadFollowRecord | Refusal> {
 		const opened = this.openAsMember(call);
@@ -1200,14 +1229,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 			messageId,
 			call.actor.principal_id,
 			following ? 1 : 0,
-			this.newestReplySeq(messageId),
+			following ? this.newestReplySeq(messageId) : 0,
 		);
 		return this.threadFollow(messageId, call.actor.principal_id);
 	}
 
 	/**
 	 * Sets the read marker of the caller in a thread. Without `seq`, the marker goes to the newest reply. The
-	 * follow does not change: a member that does not follow keeps a marker too.
+	 * follow does not change: a member that does not follow keeps a marker too, with a null follow. A message
+	 * with no reply gets no new row, so a loop over the history writes nothing.
 	 */
 	async markThreadRead(call: RoomCall, messageId: string, seq: number | null): Promise<ThreadFollowRecord | Refusal> {
 		const opened = this.openAsMember(call);
@@ -1215,8 +1245,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const thread = this.threadParent(messageId);
 		if ("error" in thread) return thread;
 		const newest = this.newestReplySeq(messageId);
+		if (newest === 0) return this.threadFollow(messageId, call.actor.principal_id);
 		this.sql.exec(
-			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, 0, ?)
+			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, NULL, ?)
 			ON CONFLICT (parent_id, principal_id) DO UPDATE SET last_read_seq = excluded.last_read_seq`,
 			messageId,
 			call.actor.principal_id,

@@ -73,6 +73,8 @@ describe("a public room", () => {
 			// The replies of a thread are messages too.
 			const thread = { room_id: room.id, message_id: first.id };
 			expect(await codeOf(other.call("chat.list_replies", thread))).toBe("forbidden");
+			expect(await codeOf(other.call("chat.follow_thread", { ...thread, following: true }))).toBe("forbidden");
+			expect(await codeOf(other.call("chat.mark_thread_read", thread))).toBe("forbidden");
 			const replyInput = { room_id: room.id, parent_id: first.id, text: "Hello" };
 			expect(await codeOf(other.call("chat.post_message", replyInput))).toBe("forbidden");
 			expect(await codeOf(other.call("chat.mark_read", { room_id: room.id }))).toBe("forbidden");
@@ -117,6 +119,9 @@ describe("a private room", () => {
 			expect(await codeOf(other.call("chat.list_messages", target))).toBe("not_found");
 			expect(await codeOf(other.call("chat.post_message", { ...target, text: "Hello" }))).toBe("not_found");
 			expect(await codeOf(other.call("chat.list_replies", { ...target, message_id: message.id }))).toBe("not_found");
+			const thread = { ...target, message_id: message.id };
+			expect(await codeOf(other.call("chat.follow_thread", { ...thread, following: true }))).toBe("not_found");
+			expect(await codeOf(other.call("chat.mark_thread_read", thread))).toBe("not_found");
 			expect(await codeOf(other.call("chat.post_message", { ...target, parent_id: message.id, text: "x" }))).toBe(
 				"not_found",
 			);
@@ -761,12 +766,14 @@ describe("the scopes of a key", () => {
 			await codeOf(read("chat.add_reaction", { room_id: room.id, message_id: first?.id ?? "", emoji: "👍" })),
 		).toBe("forbidden");
 		expect(await codeOf(read("chat.create_room", { kind: "public", name: "Mine" }))).toBe("forbidden");
-		// The key reads a thread, and cannot reply in it.
+		// The key reads a thread, and cannot reply in it, follow it or mark it read.
 		const thread = { room_id: room.id, message_id: first?.id ?? "" };
 		expect((await read("chat.list_replies", thread)).replies).toEqual([]);
 		expect(await codeOf(read("chat.post_message", { room_id: room.id, parent_id: thread.message_id, text: "x" }))).toBe(
 			"forbidden",
 		);
+		expect(await codeOf(read("chat.follow_thread", { ...thread, following: true }))).toBe("forbidden");
+		expect(await codeOf(read("chat.mark_thread_read", thread))).toBe("forbidden");
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
 		expect(await codeOf(api(mailOnly.secret)("chat.list_rooms"))).toBe("forbidden");
@@ -1811,10 +1818,33 @@ describe("threads", () => {
 			follow: { following: true, last_read_seq: point.seq, unread_count: 0 },
 		});
 
-		// A member that leaves loses its follows.
+		// A member that leaves loses its follows, and a mention of a principal that is not a member starts none.
+		const notes = await post(owner, room.id, "Owner notes");
+		const notesThread = { room_id: room.id, message_id: notes.id };
+		await reply(bot, room.id, notes.id, "Noted");
 		await owner.call("chat.remove_member", { room_id: room.id, principal_id: owner.id });
+		await reply(bot, room.id, parent.id, "@owner are you there?");
 		await owner.call("chat.join_room", { room_id: room.id });
 		expect((await follow(owner)).following).toBe(false);
+		// A read marker is no stop: a new reply makes the author of the first message follow again.
+		expect((await owner.call("chat.mark_thread_read", notesThread)).follow.following).toBe(false);
+		await reply(bot, room.id, notes.id, "Again");
+		expect((await owner.call("chat.list_replies", notesThread)).follow).toMatchObject({
+			following: true,
+			unread_count: 1,
+		});
+		// The unread count has a limit, so its cost has one too.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			for (let n = 0; n < 101; n++) {
+				state.storage.sql.exec(
+					"INSERT INTO messages (id, author_id, author_json, text, created_at, version, parent_id) VALUES (?, ?, '{}', 'x', 0, 0, ?)",
+					`cmsg_cap${n}`,
+					bot.id,
+					notes.id,
+				);
+			}
+		});
+		expect((await owner.call("chat.list_replies", { ...notesThread, limit: 1 })).follow.unread_count).toBe(100);
 		// The first message of the thread is the target, not a reply.
 		expect(await codeOf(ada.call("chat.follow_thread", { ...target, message_id: first.id, following: true }))).toBe(
 			"invalid",
@@ -1822,6 +1852,28 @@ describe("threads", () => {
 		expect(await codeOf(ada.call("chat.mark_thread_read", { ...target, message_id: UNKNOWN_MESSAGE }))).toBe(
 			"not_found",
 		);
+	});
+
+	// The threads from before the table of follows must keep their people after the change of the schema.
+	it("fills the follows from the replies from before the table, at the start of the object", async () => {
+		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
+		const plan = await post(ada, room.id, "Plan");
+		await reply(owner, room.id, plan.id, "Early");
+		const done = await reply(bot, room.id, plan.id, "Done");
+		// The room goes back to the schema before the table.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			const sql = state.storage.sql;
+			sql.exec("DROP TABLE thread_follows");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'");
+		});
+		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
+		// Each author of a reply follows, with its marker at its newest reply. The author of the first message
+		// follows, and the replies from before do not show as new.
+		const follow = async (actor: Actor) =>
+			(await actor.call("chat.list_replies", { room_id: room.id, message_id: plan.id })).follow;
+		expect(await follow(bot)).toEqual({ following: true, last_read_seq: done.seq, unread_count: 0 });
+		expect(await follow(ada)).toEqual({ following: true, last_read_seq: done.seq, unread_count: 0 });
+		expect(await follow(owner)).toMatchObject({ following: true, unread_count: 1 });
 	});
 
 	// The client counts each version of the room. A reply changes two messages, so the two events come in order.

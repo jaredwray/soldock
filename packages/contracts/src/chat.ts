@@ -200,7 +200,7 @@ export const ChatThreadFollow = z.object({
 	following: z.boolean(),
 	/** The seq of the newest reply that the caller read, or 0. */
 	last_read_seq: z.number().int().nonnegative(),
-	/** The replies after the read marker that stay, without the replies of the caller. */
+	/** The replies after the read marker that stay, without the replies of the caller. At most 100. */
 	unread_count: z.number().int().nonnegative(),
 });
 export type ChatThreadFollow = z.infer<typeof ChatThreadFollow>;
@@ -695,7 +695,7 @@ export const listReplies = defineOperation({
 
 /** The rule of the follows of a thread, for each operation that has a thread. */
 const FOLLOW_RULE =
-	"A new reply makes its author follow the thread, and each member that the reply mentions. The author of the first message follows when the first reply comes. A stop stays until you reply again, or until a new reply mentions you.";
+	"A new reply makes its author follow the thread, and each member that the reply mentions. The author of the first message follows when a reply comes, unless it stopped. A stop stays until you reply again, or until a new reply mentions you.";
 
 export const followThread = defineOperation({
 	name: "chat.follow_thread",
@@ -724,7 +724,7 @@ export const markThreadRead = defineOperation({
 		"Sets your read marker in the thread of a message to the reply seq.",
 		"Without seq, the marker goes to the newest reply, so the thread is read.",
 		"A lower seq makes the thread unread again from the reply after it.",
-		"The marker does not change if you follow the thread. Only you see your marker.",
+		"This call does not change your follow. Only you see your marker.",
 		"message_id is the first message of the thread, not a reply.",
 		MEMBERS_ONLY,
 	].join(" "),
