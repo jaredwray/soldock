@@ -71,8 +71,11 @@ export function ThreadPanel({
 	const [sendError, setSendError] = useState<string | null>(null);
 	/** The last send that got no answer: a second send of the same reply posts it one time. */
 	const lastAttempt = useRef<ReplyAttempt | null>(null);
-	/** The keys of the reply sends whose answer did not come, so the room can have stored the reply. */
-	const uncertainKeys = useRef(new Set<string>());
+	/**
+	 * The files of the reply sends whose answer did not come: the room can have stored a reply with them. A
+	 * later refusal, also of a send with a different key, never puts them in the trash.
+	 */
+	const uncertainFiles = useRef(new Set<string>());
 	const composer = useRef<ChatComposerHandle>(null);
 	const body = useRef<HTMLDivElement>(null);
 	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
@@ -303,11 +306,12 @@ export function ThreadPanel({
 			}
 		} catch (error) {
 			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
-			// A refusal is an answer: that attempt stored nothing. When no attempt with the key lost its answer,
-			// the room surely has no reply, so the files are part of no send, and a close puts them in the trash.
+			// A refusal is an answer: that attempt stored nothing. A file that no send with a lost answer took is
+			// surely in no reply, so it is part of no send, and a close puts it in the trash. A file of a send
+			// with a lost answer stays protected, also after a refusal of a later send with a different key.
 			const refused = error instanceof ApiError && error.status < 500;
-			if (refused && !uncertainKeys.current.has(attempt.key)) attachments.unmark(sentFiles);
-			else uncertainKeys.current.add(attempt.key);
+			if (refused) attachments.unmark(sentFiles.filter((file) => !uncertainFiles.current.has(file.item_id)));
+			else for (const file of sentFiles) uncertainFiles.current.add(file.item_id);
 			setSendError(errorMessage(error));
 		} finally {
 			setSending(false);
