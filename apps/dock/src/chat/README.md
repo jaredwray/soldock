@@ -236,7 +236,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       of the mention.
     - A mention of a group does not start a follow. An edit that adds a mention starts no follow.
     - `chat.follow_thread` starts or stops the follow of the caller. A first follow puts the marker at the
-      newest reply, so the replies until then count as read. A stop keeps the marker.
+      newest reply, so the replies until then count as read. A stop keeps the marker. A follow after a
+      stop with nothing read starts at the newest reply too.
     - `chat.mark_thread_read` sets the marker: to a reply `seq`, or to the newest reply. A member that
       does not follow keeps a marker too, with `following` null. A message with no reply gets no new
       row, so a loop over the history writes nothing.
@@ -246,7 +247,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       room.
     - The migration that adds the table fills it for the threads from before it: each member that
       wrote a reply follows, with its marker at its newest reply. The author of each parent follows,
-      with its marker at the newest reply. A mention from before the table starts no follow.
+      with its marker at the newest reply, also when it wrote a reply. A mention from before the table starts no follow.
     - A member that leaves loses its rows. A follow and a marker change the view of the caller only:
       they send no socket event, and they write no audit line.
   - Known limits, for the next parts of threads: the list of rooms and the `PrincipalDO` know nothing of

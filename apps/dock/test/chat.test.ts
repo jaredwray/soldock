@@ -1817,6 +1817,18 @@ describe("threads", () => {
 		expect(followed.structuredContent).toEqual({
 			follow: { following: true, last_read_seq: point.seq, unread_count: 0 },
 		});
+		// A stop before a first follow reads nothing. The follow after it starts at the newest reply.
+		const otherThread = { room_id: room.id, message_id: other.id };
+		expect((await owner.call("chat.follow_thread", { ...otherThread, following: false })).follow).toEqual({
+			following: false,
+			last_read_seq: 0,
+			unread_count: 1,
+		});
+		expect((await owner.call("chat.follow_thread", { ...otherThread, following: true })).follow).toEqual({
+			following: true,
+			last_read_seq: point.seq,
+			unread_count: 0,
+		});
 
 		// A member that leaves loses its follows, and a mention of a principal that is not a member starts none.
 		const notes = await post(owner, room.id, "Owner notes");
@@ -1858,6 +1870,7 @@ describe("threads", () => {
 	it("fills the follows from the replies from before the table, at the start of the object", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
 		const plan = await post(ada, room.id, "Plan");
+		await reply(ada, room.id, plan.id, "Kickoff");
 		await reply(owner, room.id, plan.id, "Early");
 		const done = await reply(bot, room.id, plan.id, "Done");
 		// The room goes back to the schema before the table.
@@ -1868,7 +1881,7 @@ describe("threads", () => {
 		});
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message
-		// follows, and the replies from before do not show as new.
+		// follows, and the replies from before do not show as new, also when it wrote a reply.
 		const follow = async (actor: Actor) =>
 			(await actor.call("chat.list_replies", { room_id: room.id, message_id: plan.id })).follow;
 		expect(await follow(bot)).toEqual({ following: true, last_read_seq: done.seq, unread_count: 0 });

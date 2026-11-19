@@ -215,14 +215,18 @@ const THREAD_FOLLOWS_BACKFILL_REPLIES = `INSERT INTO thread_follows (parent_id, 
 
 /**
  * The author of each message with replies from before the table follows, if it is a member. Its marker goes
- * to the newest reply, so the replies from before the table do not show as new.
+ * to the newest reply, so the replies from before the table do not show as new. An author that also wrote a
+ * reply has a row already: its marker moves up to the newest reply too.
  */
-const THREAD_FOLLOWS_BACKFILL_PARENTS = `INSERT OR IGNORE INTO thread_follows (parent_id, principal_id, following, last_read_seq)
+const THREAD_FOLLOWS_BACKFILL_PARENTS = `INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq)
 	SELECT parents.id, parents.author_id, 1, MAX(replies.seq)
 	FROM messages AS parents
 		JOIN messages AS replies ON replies.parent_id = parents.id
 		JOIN members ON members.principal_id = parents.author_id
-	GROUP BY parents.id`;
+	WHERE true
+	GROUP BY parents.id
+	ON CONFLICT (parent_id, principal_id) DO UPDATE SET
+		last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`;
 
 const MIGRATIONS: string[][] = [
 	[
@@ -1215,8 +1219,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Starts or stops the follow of a thread by the caller. A first follow starts at the newest reply, so the
-	 * replies until now count as read. A stop keeps the marker, and a stop with no row has read nothing. Only
-	 * the caller sees its follow, so the room sends no socket event.
+	 * replies until now count as read. A stop keeps the marker, and a stop with no row has read nothing. A
+	 * follow after such a stop, with nothing read, starts at the newest reply too. Only the caller sees its
+	 * follow, so the room sends no socket event.
 	 */
 	async followThread(call: RoomCall, messageId: string, following: boolean): Promise<ThreadFollowRecord | Refusal> {
 		const opened = this.openAsMember(call);
@@ -1225,7 +1230,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if ("error" in thread) return thread;
 		this.sql.exec(
 			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, ?, ?)
-			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = excluded.following`,
+			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = excluded.following,
+				last_read_seq = CASE WHEN excluded.following = 1 AND last_read_seq = 0
+					THEN excluded.last_read_seq ELSE last_read_seq END`,
 			messageId,
 			call.actor.principal_id,
 			following ? 1 : 0,
