@@ -2,15 +2,18 @@
 
 > Status: **started**. The first end-to-end layer exists: folders, files with versions, docs and
 > sheets as items, the trash, stars, search, access for people and agents with roles, shared
-> drives with members, and moves between drives. Keep
+> drives with members, moves between drives, uploads in parts up to 1 GiB, streamed downloads, the
+> type of a file from its first bytes, small pictures for pictures and videos, and the grants of
+> rooms of Chat. Keep
 > this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Drive backend: spaces (My Drive and shared drives), item tree, uploads/downloads, versions, trash, permissions and inheritance, link sharing, shared-with-me fan-out, previews, search, access checks for native items. |
-| **Owns** | `DriveSpaceDO` (items, versions, permissions, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
-| **Depends on** | `platform`, `identity`, `webhooks`, `collab` (the content of a doc or a sheet, for a copy). |
-| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive`, `drive.create_webhook_subscription`, `drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription` |
+| **Owns** | `DriveSpaceDO` (items, versions, permissions, the grants of rooms of Chat, uploads in parts, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes and small pictures in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
+| **Depends on** | `platform`, `identity`, `webhooks`, `collab` (the content of a doc or a sheet, for a copy), `api` (the call of a request on `/blob/` and `/dl/`). |
+| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.set_preview`, `drive.create_upload`, `drive.upload_part`, `drive.get_upload`, `drive.complete_upload`, `drive.abort_upload`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive`, `drive.create_webhook_subscription`, `drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription` |
+| **Transfers** | `PUT /blob/drive/{space_id}/uploads/{upload_id}/parts/{part_number}` (the raw bytes of `drive.upload_part`) and `GET /dl/drive/{space_id}/{item_id}` (the stream of `drive.download_file`). See [Uploads in parts](#uploads-in-parts) and [Downloads](#downloads). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -23,6 +26,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `access.ts` | What the handlers of `drive`, `docs` and `sheets` share: the drive of a call (`openSpace`), the output form of an item, the audit line, idempotency keys, and the read and write of doc and sheet content |
 | `shared-index.ts` | The reads of the index of the shared drives in D1: the list of drives, and the check that an id is a live shared drive |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the drive of the call, move bytes to and from R2, and call the `DriveSpaceDO` |
+| `upload.ts` | The steps of an upload in parts in the Worker: the R2 multipart upload, each part, the completion with the SHA-256 and the type of the file |
+| `transfer.ts` | The two paths outside the registry: the raw part of an upload (`/blob/drive/…`) and the stream of a download (`/dl/drive/…`) |
+| `preview.ts` | `drive.set_preview`: the checks of a small picture, and its bytes in R2 |
+| `rooms.ts` | What Chat asks of Drive: the facts of the files of a new message, and the bytes of a file for a member of a room |
 
 ## Drives
 
@@ -64,7 +71,14 @@ keys.
 
 ## Files and versions
 
-- An upload is base64 in JSON, at most 10 MiB (`DRIVE_LIMITS.fileBytes`). A download is the same.
+- `drive.upload_file` and `drive.upload_version` take base64 in JSON, at most 10 MiB
+  (`DRIVE_LIMITS.fileBytes`). One answer of `drive.download_file` has the same limit. A larger file
+  uploads in parts (see [Uploads in parts](#uploads-in-parts)), and downloads in ranges or as a stream
+  (see [Downloads](#downloads)).
+- The server finds the type of each version from its first 4 KiB (`detected_type`): PNG, JPEG, GIF,
+  WebP, AVIF, HEIC, MP4, QuickTime, WebM, Matroska, PDF, ZIP, gzip, the common audio types, and UTF-8
+  text. HTML and SVG are text. The type that the client gave stays in `mime_type`. A version from
+  before this field has null. A copy keeps the type. A move between drives keeps it.
 - Each version of a file is one R2 object: `drive/<space id>/<item id>/<version id>`. R2 stores it
   as `application/octet-stream`. The MIME type that the client gave is in the version row.
 - `drive.upload_version` adds a version and makes it the current version. A file keeps 50
@@ -81,6 +95,95 @@ keys.
 - `drive.copy_item` copies the current version of a file to a new R2 object, or the content of a
   doc or a sheet to a new `DocumentDO`. The copy is in the own drive of the caller, or in the shared
   drive `target_space_id`, where the caller needs the editor role.
+
+## Uploads in parts
+
+A file of up to 1 GiB (`DRIVE_LIMITS.uploadBytes`) uploads in parts of 8 MiB
+(`DRIVE_LIMITS.uploadPartBytes`). The last part has the bytes that are left. R2 needs parts of the same
+size, of 5 MiB or more, and the base64 of 8 MiB fits in one JSON call.
+
+1. `drive.create_upload` checks that the caller can create an item in the folder, then starts an R2
+   multipart upload to the key of the new version. The `DriveSpaceDO` stores the upload (`uploads`), with
+   the ids of the item and the version.
+2. The client sends each part, in any order, with `drive.upload_part` (base64) or with
+   `PUT /blob/drive/{space_id}/uploads/{upload_id}/parts/{part_number}` (the raw bytes, with
+   `Content-Length`). The drive checks the number and the exact size before R2 gets a byte. It stores the
+   etag of each part (`upload_parts`), because the R2 binding cannot list the parts.
+3. A part that fails goes again: the new bytes replace that part. `drive.get_upload` returns
+   `parts_received`, so a client sends only the parts that are not there.
+4. `drive.complete_upload` checks each part, checks the folder again, and joins the parts in R2. The
+   Worker then reads the object one time as a stream for its SHA-256, and reads its first bytes for its
+   type. When `drive.create_upload` had `sha256`, a different hash removes the upload and its object,
+   with `conflict`. The drive makes the file in one transaction with the end of the upload.
+
+- An upload belongs to the principal that started it. Each other principal gets `not_found`, also an
+  editor of the folder and the owner of the drive.
+- The raw path and `drive.upload_part` are one capability: the raw path runs through the invoker with the
+  callers, the scopes and the audit of `drive.upload_part` (`drive.write`). With the session cookie, the
+  request must come from this origin.
+- A principal has at most 20 open uploads in one drive (`DRIVE_LIMITS.openUploads`).
+- An upload goes away 24 hours after its start (`DRIVE_LIMITS.uploadTtlMs`). The alarm of the drive
+  removes the rows, stops the R2 multipart upload, and deletes the key of the version through the outbox.
+  A done upload stays until then, so a second `drive.complete_upload` returns the same file.
+- `drive.abort_upload` stops an open upload of the caller in the same way. A done upload keeps its file.
+- When the folder is in the trash at the completion, the call gets `invalid` before R2 joins the parts.
+  The parts stay, and a later call can complete the upload. When the drive refuses the file after R2
+  joined the parts, the upload goes away with its object.
+- R2 also stops an R2 multipart upload after 7 days without a completion.
+- An upload makes a new file only. `drive.upload_version` stays at 10 MiB.
+
+## Downloads
+
+- `drive.download_file` returns at most 10 MiB in one answer. A larger file gets `payload_too_large`
+  without `length`. `offset` and `length` give one range of bytes. `variant: preview` gives the small
+  picture of the version.
+- `GET /dl/drive/{space_id}/{item_id}` (`?version_id=`, `?variant=preview`) streams the bytes. It runs
+  through the invoker with the callers and the scopes of `drive.download_file` (`drive.read`), and each
+  request makes the access check of the drive. The credential is a bearer token or the session cookie.
+  No address works without one: there is no signed address. With the session cookie, a request that
+  `Sec-Fetch-Site` shows from a different site gets `forbidden`.
+- `HEAD` gives the length. One range (`bytes=a-b`, `a-`, `-n`) gives `206`, and a range after the end
+  gives `416`. `If-Range` with a different version gives all the bytes.
+- Each answer has `X-Content-Type-Options: nosniff`, the policy
+  `default-src 'none'; sandbox; frame-ancestors 'none'`, `Cache-Control: private, no-store`,
+  `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer`, and the version as its
+  `ETag`.
+- The answer is an attachment (`application/octet-stream`), unless the server found a PNG, JPEG, GIF or
+  WebP picture or an MP4 or WebM video in the first bytes. Such a file shows inline with that type. SVG,
+  HTML, XML, PDF and text are always attachments. A small picture is always inline.
+- Each download has a log line (`drive download`) with the principal, the credential, the drive, the item
+  and the version. It is a read, so it has no audit line.
+
+## Previews
+
+- `drive.set_preview` stores a small picture of a picture or a video file. The browser of the uploader
+  makes it, because a Worker cannot decode a picture or a video.
+- The server checks it: a PNG, JPEG or WebP picture from its bytes, at most 640 pixels on each side
+  (`DRIVE_LIMITS.previewSide`) and 256 KiB (`DRIVE_LIMITS.previewBytes`). The first bytes of the file
+  must show a picture or a video. For a picture whose size the server can read in its first 64 KiB, the
+  small picture must have the same shape (1 pixel or 2 %). The server keeps the size of the picture.
+- The server cannot check that the small picture shows the file. It proves only that the small picture
+  is a small picture with no script.
+- The bytes are in R2 at the key of the version with `.thumb`. The version owns them: a delete of the
+  version deletes them through the outbox. A second call replaces them. The editor role is needed.
+- Known limit: a move between drives and a copy do not keep the small picture.
+
+## Files in rooms of Chat
+
+A message of [Chat](../chat/README.md#files-in-messages) can hold files of the own drive of its author.
+
+- `fileForRoom` gives Chat the facts of a file for a new message: the caller must be the owner of the
+  drive, and the file must be outside the trash and not in a move.
+- A room of Chat gets a grant on a file while a message of the room holds the file (`room_grants`). The
+  room writes it through its outbox (`setRoomGrant`), with the current state, so a second call changes
+  nothing. A room id never goes into `permissions`: a room has no drive, so it gets no `share` row.
+- A member of the room downloads through Chat. The room checks the member and the message, then
+  `roomFile` checks the grant of the room and that the file is outside the trash. A member of the room has
+  no access to the file through the Drive operations.
+- The owner sees the rooms in `drive.list_permissions` (`room_grants`). A file with a room grant has
+  `shared: true`.
+- A permanent delete removes the grants of the item. A move between drives removes them in the source:
+  the messages name the source drive, so their files give `not_found`.
 
 ## The trash
 
@@ -407,12 +510,16 @@ Effects on other objects go through the `outbox` table and the alarm of the `Dri
   have in delivery. Without `AUTOINCREMENT`, a new row can get the id of such a row, and the alarm
   then deletes the new row.
 - The alarm does its work in this order: the writes to the index in D1, the moves between drives,
-  then the outbox.
+  the uploads after their time, then the outbox.
 
 ## Idempotency
 
-- `drive.create_folder`, `drive.upload_file`, `drive.copy_item`, `drive.create_shared_drive`,
-  `docs.create` and `sheets.create` take `idempotency_key` (REST: also the `Idempotency-Key` header).
+- `drive.create_folder`, `drive.upload_file`, `drive.create_upload`, `drive.copy_item`,
+  `drive.create_shared_drive`, `docs.create` and `sheets.create` take `idempotency_key` (REST: also the
+  `Idempotency-Key` header). The key of `drive.create_upload` is in the row of the upload, and returns
+  the same upload while the upload exists.
+- `drive.upload_part`, `drive.complete_upload` and `drive.abort_upload` are safe to repeat: a part
+  replaces the same part, a second completion returns the same file, and a second stop answers false.
 - The key of `drive.create_shared_drive` is in the own drive of the caller, with the id of the new
   shared drive. A second call gets that id, and the object of that id creates the drive one time.
 - A retry of `drive.create_shared_drive` gets the first drive before the check of the members. Thus
@@ -446,8 +553,9 @@ See the [webhook module](../webhooks/README.md).
 
 ## Safety
 
-- File bytes never go to a browser from this origin as a page. A download is base64 in JSON, and
-  the web app saves it as `application/octet-stream`.
+- File bytes never run as active content on this origin. A download under `/dl/` is an attachment,
+  except a picture or a video that the server found in the bytes, and each answer has a policy that
+  blocks scripts, frames and plugins. See [Downloads](#downloads).
 - Each change writes an audit line (`audit: true`), with the field `space` when the drive is not
   the own drive of the actor. A shared drive always has the field. A refused change is audited by the operation invoker.
 - Drive holds content that principals of this organization put there. No operation brings in
@@ -462,7 +570,11 @@ See the [webhook module](../webhooks/README.md).
 | State | Where | Notes |
 | --- | --- | --- |
 | Items (the tree, names, sizes, the trash state, who made the last change) | `DriveSpaceDO` table `items` | One object for each principal, keyed by the principal id, and one for each shared drive, keyed by its `drv_…` id |
-| Versions of files | `DriveSpaceDO` table `versions` | The R2 key, size, MIME type, SHA-256 and author of each version |
+| Versions of files | `DriveSpaceDO` table `versions` | The R2 key, size, MIME type, SHA-256 and author of each version, the type from its first bytes (`detected_type`), and its small picture (`preview_json`: the type, the size and the pixels) |
+| Grants of rooms of Chat | `DriveSpaceDO` table `room_grants` | The item, the room, the author of the message and the time. The room writes the rows through its outbox. A delete of the item and a move remove them |
+| Uploads in parts | `DriveSpaceDO` tables `uploads` and `upload_parts` | The principal, the R2 multipart upload, the ids of the item and the version, the folder, the name, the type, the size, the size of a part, the SHA-256 of the start, the state, the idempotency key, and the etag of each part. Removed 24 hours after the start |
+| Parts of an upload that is not complete | R2 `blobs`, a multipart upload to the key of the version | Stopped by `drive.abort_upload`, by the alarm after 24 hours, or by R2 after 7 days |
+| Small pictures of versions | R2 `blobs`, key `drive/<space id>/<item id>/<version id>.thumb` | One owner: the version |
 | Grants | `DriveSpaceDO` table `permissions` | The principal, the role and who gave it |
 | Search index | `DriveSpaceDO` FTS5 table `items_fts` | Rebuildable from the items and the content of each doc and sheet |
 | Stars of the owner | `DriveSpaceDO` table `stars` | Pointers to items of this drive and of other drives |
@@ -478,13 +590,18 @@ See the [webhook module](../webhooks/README.md).
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |
 | Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source, without the text for the search index. Deleted at the commit, at a refusal, when the source stops the move, or after 30 days. The record of a commit (`seq` -1) is kept 30 days |
 | Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0012_shared_drives.sql` |
-| File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key |
+| File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key. An upload in parts writes the same key |
 
 Blob reference counts: each object has exactly one owner, the version row with its key. A copy
 makes a new object. A permanent delete and a version over the limit delete the object through the
 outbox. A move between drives makes a new object for each version, and deletes the old object
 through the outbox after the target has the version rows. An error after an R2 write and before the drive answers can leave an orphan, which blob GC
 will collect.
+
+A small picture has one owner too: the version whose key it extends. A delete of the version, a version
+over the limit, and a move delete it through the outbox. An upload in parts writes the key of its
+version only at the completion. The key of an open upload that goes away is deleted through the outbox,
+in case R2 joined the parts before the drive refused the file.
 
 A directory reset gives each new account a new principal id, and thus a new, empty drive. The
 drives of the old accounts stay in storage. No account can open them. The reset also drops the
@@ -496,7 +613,12 @@ Backups: not built yet. Originals also come with Takeout.
 
 | Limit | Value | Source |
 | --- | --- | --- |
-| One uploaded file | 10 MiB | Memory: base64 JSON holds several copies, and an isolate has 128 MB |
+| One JSON call (`drive.upload_file`, `drive.upload_version`, one answer of `drive.download_file`) | 10 MiB | Memory: base64 JSON holds several copies, and an isolate has 128 MB |
+| One file that uploads in parts | 1 GiB | `DRIVE_LIMITS.uploadBytes`. The completion reads the object one time for its SHA-256 |
+| One part | 8 MiB | `DRIVE_LIMITS.uploadPartBytes`. R2 needs parts of the same size, of 5 MiB or more |
+| Open uploads of one principal in one drive | 20 | `DRIVE_LIMITS.openUploads` |
+| Life of an upload | 24 hours | `DRIVE_LIMITS.uploadTtlMs` |
+| Small picture | 640 pixels on each side, 256 KiB | `DRIVE_LIMITS.previewSide`, `DRIVE_LIMITS.previewBytes` |
 | Versions of one file | 50 | |
 | Levels of folders | 30 | |
 | Name | 255 characters | |
@@ -516,9 +638,11 @@ Backups: not built yet. Originals also come with Takeout.
 - A way for an agent to leave a shared drive
 - Link sharing (anyone with the link), and sharing with people outside the organization
 - A commenter role, and sharing by editors
-- Streamed uploads and downloads (`/blob/`, `/dl/`) for files over 10 MiB, and resumable uploads
+- A new version of a file in parts (`drive.upload_version` over 10 MiB)
+- Small pictures that a move or a copy keeps
+- Files of a shared drive in a message of Chat
 - Storage quotas for each drive and for the organization
-- Previews and thumbnails made on the server, and the text of files in the search index
+- Small pictures made on the server, and the text of files in the search index
 - Search in the items that others shared, and search operators (`type:`, `owner:`, dates)
 - A recent view with the items of other drives that the person opened
 - Copy of a folder, and upload of a folder

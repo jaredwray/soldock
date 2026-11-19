@@ -18,7 +18,11 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `http/cursor.ts`: the cursor of a list with pages: base64url of the JSON of the sort key of the last item. Chat and the directory use it.
 - `http/problem.ts`: RFC 9457 problem details (`application/problem+json`), the error envelope for every Worker-owned path.
 - `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
-- `crypto/crypto.ts`: SHA-256, HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.
+- `crypto/crypto.ts`: SHA-256 (also of a stream, with `DigestStream`), HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.
+- `http/download.ts`: the answer of a download under `/dl/`: one range at most (`206`, `416`, `If-Range`), `Content-Disposition` with the name in UTF-8, and the headers that keep user content inert on the origin (`nosniff`, a policy with `sandbox`, `private, no-store`, `same-origin` resource policy). Only a type that the server found in the bytes shows inline.
+- `http/public-fetch.ts`: the guard of a fetch of a web address from outside (link previews). The host is a DNS name. Each A and AAAA address from DNS over HTTPS at Cloudflare must be public, each redirect gets the same checks, and the fetch has a limit of time and of bytes. The caller adds its own checks of each address, such as the outbound policy of an agent.
+- `media/image.ts`: the type and the size in pixels of a PNG, JPEG, GIF or WebP file, from its bytes.
+- `media/sniff.ts`: the type of a file from its first 4 KiB, and the types that a page can show inline (`INLINE_TYPES`).
 - `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@asterra/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`.

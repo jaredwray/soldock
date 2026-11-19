@@ -151,6 +151,17 @@ describe("a file in a message", () => {
 		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages[0]?.files).toHaveLength(1);
 	});
 
+	// An agent puts files in a message as a person does, through MCP.
+	it("lets an agent post a file of its own drive through MCP, for the members to download", async () => {
+		const room = await createRoom(ada, "private", [bot.id]);
+		const file = await uploadText(bot, "report.txt", "the report");
+		const posted = await callTool(bot.key, "chat_post_message", { room_id: room.id, file_ids: [file.id] });
+		expect(posted.isError).not.toBe(true);
+		const message = (posted.structuredContent as { message: { id: string } }).message;
+		expect(await download(ada, room.id, message.id, file.id)).toEqual({ status: 200, text: "the report" });
+		expect(await download(owner, room.id, message.id, file.id)).toEqual({ status: 404, text: null });
+	});
+
 	it("takes files of the own drive of the author only, with the drive.share scope", async () => {
 		const room = await createRoom(ada, "private", [bot.id]);
 		const file = await uploadText(ada, "mine.txt", "mine");
