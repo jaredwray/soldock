@@ -1,10 +1,20 @@
 const encoder = new TextEncoder();
 
+function toHex(digest: ArrayBuffer): string {
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** The SHA-256 of a string or bytes, as lowercase hex. */
 export async function sha256Hex(data: string | ArrayBuffer | Uint8Array): Promise<string> {
 	const bytes = typeof data === "string" ? encoder.encode(data) : data;
-	const digest = await crypto.subtle.digest("SHA-256", bytes);
-	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+	return toHex(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+/** The SHA-256 of a stream, as lowercase hex. The bytes go through one time, and they do not stay in memory. */
+export async function sha256StreamHex(stream: ReadableStream<Uint8Array>): Promise<string> {
+	const digest = new crypto.DigestStream("SHA-256");
+	await stream.pipeTo(digest);
+	return toHex(await digest.digest);
 }
 
 /** The HMAC-SHA256 of a string with a key of raw bytes. */

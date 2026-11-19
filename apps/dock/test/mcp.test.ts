@@ -70,7 +70,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(121);
+		expect(all).toHaveLength(130);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"directory_list_mail_domains",
@@ -86,6 +86,8 @@ describe("the MCP endpoint", () => {
 			"chat_create_webhook_subscription",
 			"chat_delete_message",
 			"chat_delete_webhook_subscription",
+			"chat_download_file",
+			"chat_download_link_image",
 			"chat_edit_message",
 			"chat_follow_thread",
 			"chat_get_room",
@@ -99,6 +101,7 @@ describe("the MCP endpoint", () => {
 			"chat_mark_thread_read",
 			"chat_open_dm",
 			"chat_post_message",
+			"chat_remove_link_preview",
 			"chat_remove_member",
 			"chat_remove_reaction",
 			"chat_star_room",
@@ -112,8 +115,11 @@ describe("the MCP endpoint", () => {
 			"docs_import_image",
 			"docs_update",
 			"docs_upload_image",
+			"drive_abort_upload",
+			"drive_complete_upload",
 			"drive_copy_item",
 			"drive_create_folder",
+			"drive_create_upload",
 			"drive_create_webhook_subscription",
 			"drive_delete_items",
 			"drive_delete_webhook_subscription",
@@ -122,6 +128,7 @@ describe("the MCP endpoint", () => {
 			"drive_get_about",
 			"drive_get_item",
 			"drive_get_shared_drive",
+			"drive_get_upload",
 			"drive_list_items",
 			"drive_list_permissions",
 			"drive_list_shared_drives",
@@ -132,11 +139,13 @@ describe("the MCP endpoint", () => {
 			"drive_rename_item",
 			"drive_restore_items",
 			"drive_restore_version",
+			"drive_set_preview",
 			"drive_share_item",
 			"drive_star_items",
 			"drive_trash_items",
 			"drive_unshare_item",
 			"drive_upload_file",
+			"drive_upload_part",
 			"drive_upload_version",
 			"mail_create_label",
 			"mail_create_webhook_subscription",

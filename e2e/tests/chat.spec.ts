@@ -189,10 +189,8 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	const page = await tomasz.newPage();
 	await page.goto("/chat");
 	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
-	await page
-		.getByRole("navigation", { name: "Rooms" })
-		.getByRole("link", { name: /^Threads/ })
-		.click();
+	// A room of a different test can have a name that starts with "Threads", so the link is found by its address.
+	await page.getByRole("navigation", { name: "Rooms" }).locator('a[href="/chat/threads"]').click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
 	const card = page.getByRole("button").filter({ hasText: parent.text });
 	await expect(card).toContainText(name);

@@ -24,6 +24,8 @@ function stored(seq: number, key: string | null, author: ChatMessage["author"] =
 		parent_id: null,
 		also_in_room: false,
 		thread: null,
+		files: [],
+		link_previews: [],
 	};
 }
 

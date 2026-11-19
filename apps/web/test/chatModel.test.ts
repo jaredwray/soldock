@@ -1,9 +1,19 @@
-import type { ChatMessage, ChatRoom } from "@asterra/contracts";
+import {
+	type ChatFile,
+	type ChatLinkPreview,
+	type ChatMessage,
+	type ChatRoom,
+	chatLinkImagePath,
+	DRIVE_LIMITS,
+} from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
 	chatRows,
+	editCallFields,
+	fileDisplay,
 	type LocalChange,
+	linkPreviewCards,
 	newMessages,
 	nextReading,
 	sidebarRooms,
@@ -18,6 +28,25 @@ import {
 
 const ADA = { principal_id: "prn_01JD0000000000000000000ADA", kind: "human", display_name: "Ada Lovelace" } as const;
 const BOT = { principal_id: "prn_01JD0000000000000000000B0T", kind: "agent", display_name: "Deploy Bot" } as const;
+
+const FILE: ChatFile = {
+	item_id: "itm_01JD0000000000000000000001",
+	space_id: ADA.principal_id,
+	name: "plan.pdf",
+	mime_type: "application/pdf",
+	size: 2048,
+	kind: "file",
+	preview: null,
+};
+
+const PREVIEW: ChatLinkPreview = {
+	url: "https://example.com/",
+	title: "Example",
+	description: null,
+	site_name: null,
+	image: null,
+	untrusted: true,
+};
 
 function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 	return {
@@ -37,6 +66,8 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		parent_id: null,
 		also_in_room: false,
 		thread: null,
+		files: [],
+		link_previews: [],
 		...change,
 	};
 }
@@ -73,7 +104,7 @@ describe("the rows of the message list", () => {
 		error: state === "failed" ? "No connection." : null,
 		uncertain: state === "failed",
 	});
-	const outbox = (pending: ReturnType<typeof waiting>[], keys: [string, string][] = []) => ({
+	const outbox = (pending: (ReturnType<typeof waiting> & { files?: ChatFile[] })[], keys: [string, string][] = []) => ({
 		pending,
 		keys: new Map(keys),
 		sendingKey: pending.find((entry) => entry.state === "sending")?.key ?? null,
@@ -84,7 +115,7 @@ describe("the rows of the message list", () => {
 	it("keeps the key of a send for the stored message, and puts the messages that wait at the end", () => {
 		const rows = chatRows(
 			[message(1, { author: BOT, idempotency_key: "bot-key" }), message(2, { idempotency_key: "k2" })],
-			outbox([waiting("k3", "third", "sending"), waiting("k4", "fourth")], [["cmsg_2", "k2"]]),
+			outbox([waiting("k3", "third", "sending"), { ...waiting("k4", "fourth"), files: [FILE] }], [["cmsg_2", "k2"]]),
 			ADA,
 			ROOM,
 		);
@@ -97,6 +128,8 @@ describe("the rows of the message list", () => {
 		// A message that waits shows as a message of the person, after the last stored message.
 		expect(rows[2]?.message).toMatchObject({ id: "k3", room_id: ROOM, seq: 3, author: ADA, deleted: false });
 		expect(rows[3]?.message.seq).toBe(4);
+		// A message with files shows them while it waits.
+		expect([rows[2]?.message.files, rows[3]?.message.files]).toEqual([[], [FILE]]);
 	});
 
 	// The socket can bring the stored message before the answer of the call. The list must not show the message two times.
@@ -244,21 +277,32 @@ describe("the messages with the changes that wait for the server", () => {
 	// The person sees the result of an edit or a delete before the answer of the server.
 	it("show the new text of an edit with the edited mark, and a delete without its text", () => {
 		const messages = [
-			message(1, { markdown: "message 1", body: textToBody("message 1") }),
-			message(2),
+			message(1, { markdown: "message 1", body: textToBody("message 1"), files: [FILE] }),
+			message(2, { files: [FILE], link_previews: [PREVIEW] }),
 			message(3, { edited_at: "2026-01-01T09:30:00.000Z" }),
+			message(4, { files: [FILE] }),
 		];
 		const shown = withLocalChanges(
 			messages,
 			new Map<string, LocalChange>([
 				["cmsg_1", { kind: "edit", body: textToBody("new text"), text: "new text", at: AT }],
 				["cmsg_2", { kind: "delete" }],
+				["cmsg_4", { kind: "edit", body: textToBody("message 4"), text: "message 4", at: AT, files: [] }],
 			]),
 		);
 		expect(shown.map((entry) => [entry.id, entry.text, entry.edited_at, entry.deleted])).toEqual([
 			["cmsg_1", "new text", AT, false],
 			["cmsg_2", "", null, true],
 			["cmsg_3", "message 3", "2026-01-01T09:30:00.000Z", false],
+			["cmsg_4", "message 4", AT, false],
+		]);
+		// An edit of the text keeps the files. An edit that removed a file shows the files that stay. A deleted
+		// message has no files and no link previews.
+		expect(shown.map((entry) => [entry.files.length, entry.link_previews.length])).toEqual([
+			[1, 0],
+			[0, 0],
+			[0, 0],
+			[0, 0],
 		]);
 		// The new body shows. The server makes its Markdown, so the message has none until the answer.
 		expect(shown[0]?.body).toEqual(textToBody("new text"));
@@ -282,6 +326,44 @@ describe("the messages with the changes that wait for the server", () => {
 		const messages = [message(1)];
 		expect(withLocalChanges(messages, new Map())).toBe(messages);
 		expect(withLocalChanges(messages, new Map([["cmsg_9", { kind: "delete" }]]))).toEqual(messages);
+	});
+});
+
+// Review of PR 150: a queued edit that replaced an earlier one lost its change, or it rewrote the part that
+// the person did not change.
+describe("the call of a queued edit", () => {
+	const SECOND: ChatFile = { ...FILE, item_id: "itm_01JD0000000000000000000002", name: "notes.txt" };
+	const edit = (change: Partial<Extract<LocalChange, { kind: "edit" }>>): Extract<LocalChange, { kind: "edit" }> => ({
+		kind: "edit",
+		body: textToBody("message 1"),
+		text: "message 1",
+		at: "2026-01-01T10:00:00.000Z",
+		...change,
+	});
+
+	it("sends each part that the person changed and that differs from the message of the room", () => {
+		const server = message(1, { files: [FILE, SECOND] });
+		// The person removed a file, then changed the text in a newer edit: the newer edit carries the two parts.
+		const both = edit({ body: textToBody("new text"), text: "new text", bodySet: true, files: [SECOND] });
+		expect(editCallFields(both, server)).toEqual({
+			body: textToBody("new text"),
+			file_ids: [SECOND.item_id],
+		});
+	});
+
+	it("leaves the part that the person did not change as the room has it", () => {
+		// A different device added a file. A text-only edit sends no files, so that file stays.
+		const server = message(1, { files: [FILE, SECOND] });
+		expect(editCallFields(edit({ body: textToBody("new"), text: "new", bodySet: true }), server)).toEqual({
+			body: textToBody("new"),
+		});
+		// A file-only edit sends no body, so the room keeps the mentions of its body.
+		expect(editCallFields(edit({ files: [FILE] }), server)).toEqual({ file_ids: [FILE.item_id] });
+	});
+
+	it("makes no call when each changed part is as the room has it", () => {
+		const server = message(1, { files: [FILE] });
+		expect(editCallFields(edit({ bodySet: true, files: [FILE] }), server)).toBeNull();
 	});
 });
 
@@ -411,5 +493,78 @@ describe("the parts of the sidebar", () => {
 		]);
 		const ids = (rooms: readonly ChatRoom[]) => rooms.map((room) => room.id);
 		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([["dm_b", "rm_c"], ["rm_a"], ["dm_d"]]);
+	});
+});
+
+describe("the files and the links of a message", () => {
+	// A picture without a small picture loads the file itself. A large file would load megabytes in a list.
+	it("shows a picture with its small picture, a small picture file in a fixed box, and a large one as a chip", () => {
+		const picture = { ...FILE, kind: "image" as const };
+		// The box comes before the picture loads, so the list does not move. It keeps the shape, and it is
+		// never larger than the small picture.
+		const box = (width: number, height: number) => {
+			const shown = fileDisplay({ ...picture, preview: { width, height } });
+			return shown.as === "chip" ? null : shown.box;
+		};
+		expect(fileDisplay({ ...picture, preview: { width: 640, height: 480 } })).toEqual({
+			as: "image",
+			preview: true,
+			box: { width: 360, height: 270 },
+		});
+		expect(box(480, 640)).toEqual({ width: 210, height: 280 });
+		expect(box(100, 50)).toEqual({ width: 100, height: 50 });
+		expect(box(640, 1)).toEqual({ width: 360, height: 1 });
+		expect(fileDisplay({ ...picture, size: DRIVE_LIMITS.fileBytes })).toEqual({
+			as: "image",
+			preview: false,
+			box: { width: 360, height: 240 },
+		});
+		expect(fileDisplay({ ...picture, size: DRIVE_LIMITS.fileBytes + 1 })).toEqual({ as: "chip" });
+		// A video loads only its metadata until it plays.
+		expect(fileDisplay({ ...FILE, kind: "video", size: 500 * 1024 * 1024 })).toMatchObject({ as: "video" });
+		expect(fileDisplay(FILE)).toEqual({ as: "chip" });
+	});
+
+	// The site of the link must never see a reader, and only the author removes a preview.
+	it("gives a link preview the picture of the server, a link with no access to the page, and an X for its author only", () => {
+		const message = (author: typeof ADA | typeof BOT) => ({
+			id: "cmsg_1",
+			room_id: "rm_01JD0000000000000000000001",
+			author,
+			link_previews: [{ ...PREVIEW, image: { width: 1200, height: 600 }, site_name: "Example" }],
+		});
+		const [card] = linkPreviewCards(message(ADA), { ownId: ADA.principal_id, pending: false });
+		expect(card).toEqual({
+			url: PREVIEW.url,
+			href: PREVIEW.url,
+			rel: "noopener noreferrer nofollow",
+			title: "Example",
+			site: "Example",
+			description: null,
+			image: {
+				src: chatLinkImagePath("rm_01JD0000000000000000000001", "cmsg_1", PREVIEW.url),
+				width: 96,
+				height: 48,
+			},
+			removable: true,
+		});
+		expect(linkPreviewCards(message(BOT), { ownId: ADA.principal_id, pending: false })[0]?.removable).toBe(false);
+		expect(linkPreviewCards(message(ADA), { ownId: ADA.principal_id, pending: true })[0]?.removable).toBe(false);
+		// A preview without a title shows its address.
+		const untitled = { ...message(ADA), link_previews: [{ ...PREVIEW, title: null }] };
+		expect(linkPreviewCards(untitled, { ownId: ADA.principal_id, pending: false })[0]).toMatchObject({
+			title: PREVIEW.url,
+			image: null,
+		});
+		// A preview is content from outside. Its link must never run a script on the page.
+		const hrefOf = (url: string) =>
+			linkPreviewCards(
+				{ ...message(ADA), link_previews: [{ ...PREVIEW, url }] },
+				{ ownId: ADA.principal_id, pending: false },
+			)[0]?.href;
+		expect(hrefOf("http://example.com")).toBe("http://example.com/");
+		expect(hrefOf("javascript:alert(1)")).toBeNull();
+		expect(hrefOf("data:text/html,hi")).toBeNull();
+		expect(hrefOf("/relative")).toBeNull();
 	});
 });

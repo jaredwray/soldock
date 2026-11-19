@@ -1,4 +1,13 @@
-import type { ChatBody, ChatMessage, ChatRoom } from "@asterra/contracts";
+import {
+	type ChatBody,
+	type ChatFile,
+	type ChatLinkPreview,
+	type ChatMessage,
+	type ChatRoom,
+	chatLinkImagePath,
+	DRIVE_LIMITS,
+} from "@asterra/contracts";
+import { sameInBox, textToBody } from "./composerSchema.ts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
@@ -105,6 +114,8 @@ export function chatRows(
 				parent_id: null,
 				also_in_room: false,
 				thread: null,
+				files: [...(pending.files ?? [])],
+				link_previews: [],
 			},
 			pending,
 		});
@@ -155,9 +166,14 @@ export function unseenSendsNote(outbox: OutboxState, sent: number): string | nul
 
 /**
  * A change of a stored message that the page shows before the answer of the server: a new text, or
- * a delete. `at` is the time of the edit on the device.
+ * a delete. `at` is the time of the edit on the device. `files` is the new list of the files, when the
+ * person changed the files in this edit or in an edit that this one replaced. `bodySet` is true when the
+ * person changed the text in this edit or in an edit that this one replaced. The call sends only these
+ * parts, so an edit of one part keeps the other part as the server has it.
  */
-export type LocalChange = { kind: "edit"; body: ChatBody; text: string; at: string } | { kind: "delete" };
+export type LocalChange =
+	| { kind: "edit"; body: ChatBody; text: string; at: string; files?: readonly ChatFile[]; bodySet?: boolean }
+	| { kind: "delete" };
 
 const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
 
@@ -165,8 +181,8 @@ const NO_CHANGES: ReadonlyMap<string, LocalChange> = new Map();
  * The messages as the person sees them: each message with its change that waits for the server. So
  * an edit and a delete show at once.
  *
- * - An edit shows the new text, with the edited mark.
- * - A delete shows the message as deleted, without its text.
+ * - An edit shows the new text, with the edited mark, and the files that the edit kept.
+ * - A delete shows the message as deleted, without its text, its files and its link previews.
  * - A message that the room deleted stays deleted: an edit of it shows nothing.
  *
  * Without a change, the result is the same list, so a list that did not change makes no new rows.
@@ -179,10 +195,11 @@ export function withLocalChanges(
 	return messages.map((message) => {
 		const change = changes.get(message.id);
 		if (!change || message.deleted) return message;
-		if (change.kind === "delete") return { ...message, text: "", deleted: true };
+		if (change.kind === "delete") return { ...message, text: "", deleted: true, files: [], link_previews: [] };
 		// The server makes the Markdown of the new body. Until its answer, the message has none.
 		const { markdown: _old, ...rest } = message;
-		return { ...rest, body: change.body, text: change.text, edited_at: change.at };
+		const files = change.files ? { files: [...change.files] } : {};
+		return { ...rest, body: change.body, text: change.text, edited_at: change.at, ...files };
 	});
 }
 
@@ -310,4 +327,126 @@ export function sidebarRooms(rooms: readonly ChatRoom[]): {
 		named: others.filter((room) => room.kind !== "dm"),
 		direct: others.filter((room) => room.kind === "dm"),
 	};
+}
+
+/**
+ * The box of a picture of `size` pixels in a message: as large as the picture, and at most `max`. The
+ * picture keeps its shape. The list gives the box before the picture loads, so a row keeps its height.
+ */
+function fitBox(
+	size: { width: number; height: number },
+	max: { width: number; height: number },
+): { width: number; height: number } | null {
+	if (!(size.width > 0 && size.height > 0)) return null;
+	const scale = Math.min(1, max.width / size.width, max.height / size.height);
+	return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) };
+}
+
+/**
+ * The link of a link preview, when it is an http or https address. Null for each other address, so a
+ * preview never gets a link that runs a script. The server fetches only https links, so null is a
+ * second layer.
+ */
+function safeLinkPreviewHref(url: string): string | null {
+	try {
+		const parsed = new URL(url);
+		return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when two lists name the same files in the same order. */
+/**
+ * The fields of the call of a queued edit: each part that the person changed (`bodySet`, `files`) and that
+ * differs from the message that the room has now (`server`). Null when no part differs: the call is not
+ * needed. A part that the person did not change stays as the room has it: a file-only edit keeps the
+ * mentions of the stored body, and a text-only edit keeps a file that a different device added.
+ */
+export function editCallFields(
+	change: Extract<LocalChange, { kind: "edit" }>,
+	server: ChatMessage | undefined,
+): { body?: ChatBody; file_ids?: string[] } | null {
+	const serverBody = server && (server.body ?? textToBody(server.text));
+	const sendBody = change.bodySet === true && !(serverBody && sameInBox(serverBody, change.body));
+	const files = change.files;
+	const sendFiles = files !== undefined && !(server && sameFileIds(files, server.files));
+	if (!sendBody && !sendFiles) return null;
+	return {
+		...(sendBody ? { body: change.body } : {}),
+		...(sendFiles && files ? { file_ids: files.map((file) => file.item_id) } : {}),
+	};
+}
+
+export function sameFileIds(a: readonly Pick<ChatFile, "item_id">[], b: readonly Pick<ChatFile, "item_id">[]): boolean {
+	return a.length === b.length && a.every((file, index) => file.item_id === b[index]?.item_id);
+}
+
+/** The largest box of a picture or a video in a message, in CSS pixels. */
+const MEDIA_BOX = { width: 360, height: 280 };
+/** The box of a picture without a small picture. The picture fits in it, so the row does not move. */
+const PICTURE_BOX = { width: 360, height: 240 };
+/** The box of a video without a small picture: the shape of most videos. */
+const VIDEO_BOX = { width: 360, height: 203 };
+
+/**
+ * How a message shows a file: a picture, a video, or a chip with a download link. `preview` is true when
+ * the picture is the small picture of the file. `box` is the size of the element before it loads.
+ */
+export type FileDisplay =
+	| { as: "chip" }
+	| { as: "image" | "video"; preview: boolean; box: { width: number; height: number } };
+
+/**
+ * The display of a file of a message. A picture or a video with a small picture gets a box of its shape.
+ * A picture without one loads the file itself, so a picture over `DRIVE_LIMITS.fileBytes` shows as a chip,
+ * and a smaller one gets a fixed box. A video loads only its metadata until it plays.
+ */
+export function fileDisplay(file: Pick<ChatFile, "kind" | "size" | "preview">): FileDisplay {
+	if (file.kind === "file") return { as: "chip" };
+	const box = file.preview ? fitBox(file.preview, MEDIA_BOX) : null;
+	if (box) return { as: file.kind, preview: true, box };
+	if (file.kind === "image" && file.size > DRIVE_LIMITS.fileBytes) return { as: "chip" };
+	return { as: file.kind, preview: false, box: file.kind === "image" ? PICTURE_BOX : VIDEO_BOX };
+}
+
+/** The `rel` of the link of a link preview: the page of the link gets no access to this page. */
+const LINK_PREVIEW_REL = "noopener noreferrer nofollow";
+/** The largest box of the picture of a link preview. */
+const LINK_IMAGE_BOX = { width: 96, height: 96 };
+
+/** The data of the card of one link preview. Each text is plain text. */
+export interface LinkPreviewCard {
+	url: string;
+	/** The link of the title, or null for an address that is not http or https. */
+	href: string | null;
+	rel: string;
+	title: string;
+	site: string | null;
+	description: string | null;
+	/** The picture that the server stored, never the address of the picture on the site. */
+	image: { src: string; width: number; height: number } | null;
+	/** True when the reader can remove the preview: only the author, and only for a stored message. */
+	removable: boolean;
+}
+
+/** The cards of the link previews of a message, for the reader `ownId`. */
+export function linkPreviewCards(
+	message: Pick<ChatMessage, "id" | "room_id" | "author" | "link_previews">,
+	reader: { ownId: string; pending: boolean },
+): LinkPreviewCard[] {
+	const removable = !reader.pending && message.author.principal_id === reader.ownId;
+	return message.link_previews.map((preview: ChatLinkPreview) => {
+		const box = preview.image ? fitBox(preview.image, LINK_IMAGE_BOX) : null;
+		return {
+			url: preview.url,
+			href: safeLinkPreviewHref(preview.url),
+			rel: LINK_PREVIEW_REL,
+			title: preview.title ?? preview.url,
+			site: preview.site_name,
+			description: preview.description,
+			image: box && { src: chatLinkImagePath(message.room_id, message.id, preview.url), ...box },
+			removable,
+		};
+	});
 }

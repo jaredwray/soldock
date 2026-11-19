@@ -1,7 +1,9 @@
 import type { ChatRoom, ChatThreadFollow, OperationName } from "@asterra/contracts";
+import { filesForMessage } from "../drive/index.ts";
 import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import { bodyMarkdown, messageContent } from "./body.ts";
+import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
+import { downloadChatFile, downloadLinkImage } from "./files.ts";
 import { listFollowedThreads, listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import {
 	type ActorRecord,
@@ -41,6 +43,16 @@ function accept<T extends object>(value: T): Exclude<T, { error: unknown }> {
 		throw new OperationError(error.code, error.message);
 	}
 	return value as Exclude<T, { error: unknown }>;
+}
+
+/** The content of a new or changed message. A message with files can have no text. */
+function contentOf(input: {
+	text?: string | undefined;
+	markdown?: string | undefined;
+	body?: unknown;
+}): MessageContent | null {
+	if (input.text === undefined && input.markdown === undefined && input.body === undefined) return null;
+	return messageContent(input as Parameters<typeof messageContent>[0]);
 }
 
 /** The state of a thread for the caller, as the operations return it. */
@@ -246,11 +258,21 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.post_message"(call, input) {
 		const opened = openRoom(call, input.room_id);
+		const idempotency = await idempotencyOf(call, "chat.post_message", input);
+		// A retry gets the message of its first call, also when a file of that call is not in the drive now.
+		if (idempotency && input.file_ids !== undefined) {
+			const earlier = await opened.room.postedMessage(opened.ctx, idempotency);
+			if (earlier !== null) return { message: messageOutput(accept(earlier).message) };
+		}
+		// The files come before the post: a call without access to them posts nothing.
+		const files = await filesForMessage(call, input.file_ids ?? []);
 		const posted = accept(
 			await opened.room.postMessage(opened.ctx, {
 				id: newId("cmsg"),
-				content: messageContent(input),
-				idempotency: await idempotencyOf(call, "chat.post_message", input),
+				content: contentOf(input) ?? { body: textBody(""), text: "" },
+				files,
+				linkOrigin: call.origin,
+				idempotency,
 				clientKey: input.idempotency_key ?? null,
 				parentId: input.parent_id ?? null,
 				alsoInRoom: input.also_in_room ?? false,
@@ -296,7 +318,19 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.edit_message"(call, input) {
 		const opened = openRoom(call, input.room_id);
-		const edited = accept(await opened.room.editMessage(opened.ctx, input.message_id, messageContent(input)));
+		let files: { order: string[]; added: Awaited<ReturnType<typeof filesForMessage>> } | null = null;
+		if (input.file_ids !== undefined) {
+			// Only a file that the edit adds needs the checks in Drive. A file that the message holds stays.
+			const held = new Set(accept(await opened.room.messageFileIds(opened.ctx, input.message_id)).itemIds);
+			const added = await filesForMessage(
+				call,
+				input.file_ids.filter((itemId) => !held.has(itemId)),
+			);
+			files = { order: input.file_ids, added };
+		}
+		const edited = accept(
+			await opened.room.editMessage(opened.ctx, input.message_id, contentOf(input), files, call.origin),
+		);
 		if (edited.changed) auditOk(call, "chat.edit_message", `${input.room_id}:${input.message_id}`);
 		return { message: messageOutput(edited.message) };
 	},
@@ -306,6 +340,16 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const result = accept(await opened.room.deleteMessage(opened.ctx, input.message_id));
 		if (result.deleted) auditOk(call, "chat.delete_message", `${input.room_id}:${input.message_id}`);
 		return result;
+	},
+
+	"chat.download_file": downloadChatFile,
+	"chat.download_link_image": downloadLinkImage,
+
+	async "chat.remove_link_preview"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const result = accept(await opened.room.removeLinkPreview(opened.ctx, input.message_id, input.url ?? null));
+		auditOk(call, "chat.remove_link_preview", `${input.room_id}:${input.message_id}`);
+		return { message: messageOutput(result.message) };
 	},
 
 	async "chat.list_message_edits"(call, input) {

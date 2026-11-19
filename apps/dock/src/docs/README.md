@@ -99,7 +99,7 @@ The `image` node is in the text of a paragraph or a heading. It has no bytes and
 | Operation | Source | Notes |
 | --- | --- | --- |
 | `docs.upload_image` | Bytes as base64 | |
-| `docs.copy_image` | An image file of Drive (`from_item_id`), or an image of a different doc (`from_item_id` and `from_image_id`) | Needs the viewer role for the source. An image of a doc keeps its id, and a second copy returns the first one |
+| `docs.copy_image` | An image file of Drive (`from_item_id`), or an image of a different doc (`from_item_id` and `from_image_id`) | Needs the viewer role for the source. An image of a doc keeps its id, and a second copy returns the first one. A file of Drive over 10 MiB gets `payload_too_large` before its bytes are in memory: a file that uploaded in parts can have 1 GiB |
 | `docs.import_image` | A web address | See [An image from a web address](#an-image-from-a-web-address) |
 
 - Each one needs the editor role for the doc, and refuses a doc in the trash.

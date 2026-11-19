@@ -20,6 +20,8 @@ function message(seq: number, version: number): ChatMessage {
 		parent_id: null,
 		also_in_room: false,
 		thread: null,
+		files: [],
+		link_previews: [],
 	};
 }
 

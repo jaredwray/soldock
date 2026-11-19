@@ -41,6 +41,15 @@ export function blobKeyFor(spaceId: string, itemId: string, versionId: string): 
 	return `drive/${spaceId}/${itemId}/${versionId}`;
 }
 
+/**
+ * A new R2 key for the small picture of a version: the key of the version, `.thumb-` and a random id. The
+ * version owns it, as it owns its bytes. Each call of `drive.set_preview` writes a new key, so two calls at
+ * the same time cannot mix the bytes of one with the facts of the other.
+ */
+export function newPreviewKey(blobKey: string): string {
+	return `${blobKey}.thumb-${crypto.randomUUID()}`;
+}
+
 /** True for the id of a shared drive. A personal drive has the id of its owner. */
 export function isSharedDriveId(spaceId: string): boolean {
 	return spaceId.startsWith("drv_");
@@ -113,6 +122,20 @@ export interface ItemRecord {
 	shared: boolean;
 }
 
+/** The small picture of a version of a picture or a video, which the browser made and the server checked. */
+export interface PreviewRecord {
+	/** The R2 key of the bytes of the small picture. */
+	key: string;
+	/** The type of the small picture: PNG, JPEG or WebP. */
+	type: string;
+	width: number;
+	height: number;
+	size: number;
+	/** The pixels of the picture, or of a frame of the video, from the file itself when the server can read them. */
+	media_width: number | null;
+	media_height: number | null;
+}
+
 export interface VersionRecord {
 	id: string;
 	size: number;
@@ -121,6 +144,20 @@ export interface VersionRecord {
 	created_at: number;
 	created_by: ActorRecord | null;
 	current: boolean;
+	/** The type that the server found from the first bytes, or null. */
+	detected_type: string | null;
+	preview: PreviewRecord | null;
+}
+
+/** What a message of Chat keeps about a file: a copy of the facts at the time of the post. */
+export interface FileSnapshot {
+	item_id: string;
+	space_id: string;
+	name: string;
+	mime_type: string;
+	size: number;
+	detected_type: string | null;
+	preview: { width: number; height: number } | null;
 }
 
 export interface PermissionRecord {
@@ -144,6 +181,8 @@ export interface NewVersion {
 	size: number;
 	sha256: string;
 	mimeType: string;
+	/** The type that the server found from the first bytes, or null. */
+	detectedType?: string | null;
 }
 
 export interface CreateInput {
@@ -154,6 +193,50 @@ export interface CreateInput {
 	version?: NewVersion;
 	/** The key of the caller and the SHA-256 of the request, so a reused key with another request is a conflict. */
 	idempotency?: { key: string; requestHash: string } | undefined;
+}
+
+/** An upload in parts, as the object returns it. Times are in milliseconds. */
+export interface UploadRecord {
+	id: string;
+	space_id: string;
+	parent_id: string | null;
+	name: string;
+	mime_type: string;
+	size: number;
+	part_size: number;
+	part_count: number;
+	parts_received: number[];
+	state: "open" | "done";
+	/** The new file, when the state is `done`. */
+	item_id: string | null;
+	created_at: number;
+	expires_at: number;
+}
+
+/** A new upload in parts. The Worker makes the ids and the R2 multipart upload first. */
+export interface NewUpload {
+	id: string;
+	r2UploadId: string;
+	itemId: string;
+	versionId: string;
+	blobKey: string;
+	parentId: string | null;
+	name: string;
+	mimeType: string;
+	size: number;
+	partSize: number;
+	sha256: string | null;
+	idempotency?: { key: string; requestHash: string } | undefined;
+}
+
+/** What the Worker needs to complete the R2 multipart upload of an open upload. */
+export interface UploadParts {
+	blobKey: string;
+	r2UploadId: string;
+	size: number;
+	/** The SHA-256 that the caller gave at the start, or null. */
+	sha256: string | null;
+	parts: { partNumber: number; etag: string }[];
 }
 
 /** The change of a doc or a sheet, from its `DocumentDO`. A change with an old revision is dropped. */
@@ -218,6 +301,8 @@ export interface StagedItem {
 		sha256: string;
 		created_at: number;
 		created_by_json: string | null;
+		/** Absent in a part that a source from before this field staged. */
+		detected_type?: string | null;
 	}[];
 	grants: { principal_id: string; role: "editor" | "viewer"; granted_by_json: string | null; created_at: number }[];
 }
@@ -257,6 +342,28 @@ interface VersionRow extends Row {
 	sha256: string;
 	created_at: number;
 	created_by_json: string | null;
+	detected_type: string | null;
+	preview_json: string | null;
+}
+
+interface UploadRow extends Row {
+	id: string;
+	principal_id: string;
+	r2_upload_id: string;
+	blob_key: string;
+	item_id: string;
+	version_id: string;
+	parent_id: string | null;
+	name: string;
+	mime_type: string;
+	size: number;
+	part_size: number;
+	sha256: string | null;
+	state: "open" | "done";
+	idempotency_key: string | null;
+	request_hash: string | null;
+	created_at: number;
+	expires_at: number;
 }
 
 interface OutboxRow extends Row {
@@ -483,6 +590,56 @@ const MIGRATIONS: string[][] = [
 	["ALTER TABLE webhook_outbox ADD COLUMN members_json TEXT"],
 	// Null means the event was stored before this column. Delivery then sends it to each active subscription.
 	["ALTER TABLE webhook_outbox ADD COLUMN subscription_sequence INTEGER"],
+	[
+		// An upload in parts. The parts are in an R2 multipart upload, to the key of the version that the
+		// upload makes. The row stays until `expires_at`, so a second complete call gets the same file.
+		`CREATE TABLE uploads (
+			id TEXT PRIMARY KEY,
+			principal_id TEXT NOT NULL,
+			r2_upload_id TEXT NOT NULL,
+			blob_key TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			version_id TEXT NOT NULL,
+			parent_id TEXT,
+			name TEXT NOT NULL,
+			mime_type TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			part_size INTEGER NOT NULL,
+			sha256 TEXT,
+			state TEXT NOT NULL CHECK (state IN ('open', 'done')),
+			idempotency_key TEXT,
+			request_hash TEXT,
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL
+		)`,
+		"CREATE UNIQUE INDEX uploads_key ON uploads (idempotency_key) WHERE idempotency_key IS NOT NULL",
+		"CREATE INDEX uploads_expires ON uploads (expires_at)",
+		// The parts that R2 has, with the etag that the completion of the multipart upload needs.
+		`CREATE TABLE upload_parts (
+			upload_id TEXT NOT NULL,
+			part_number INTEGER NOT NULL,
+			etag TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			PRIMARY KEY (upload_id, part_number)
+		) WITHOUT ROWID`,
+	],
+	[
+		// The type that the server found from the first bytes of a version, or null. Null for a version from
+		// before this column, which is never inline.
+		"ALTER TABLE versions ADD COLUMN detected_type TEXT",
+		// The small picture of a version (`PreviewRecord`), whose bytes are at the key of the version with
+		// `.thumb`. Null without one.
+		"ALTER TABLE versions ADD COLUMN preview_json TEXT",
+		// The rooms of Chat whose members can read a file through the room. The room writes these rows
+		// through its outbox. A room id never goes into `permissions`: a room has no drive.
+		`CREATE TABLE room_grants (
+			item_id TEXT NOT NULL,
+			room_id TEXT NOT NULL,
+			granted_by_json TEXT,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (item_id, room_id)
+		) WITHOUT ROWID`,
+	],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -528,7 +685,8 @@ const RANK: Record<DriveRole, number> = { viewer: 1, editor: 2, manager: 3, owne
 
 const ITEM_COLUMNS = `i.seq, i.id, i.parent_id, i.kind, i.name, i.name_key, i.mime_type, i.size, i.head_version_id,
 	i.content_revision, i.created_at, i.modified_at, i.modified_by_json, i.trashed_at, i.trash_root,
-	EXISTS (SELECT 1 FROM permissions p WHERE p.item_id = i.id) AS shared`;
+	(EXISTS (SELECT 1 FROM permissions p WHERE p.item_id = i.id)
+		OR EXISTS (SELECT 1 FROM room_grants r WHERE r.item_id = i.id)) AS shared`;
 
 /** The folders from an item up to the root. Depth 0 is the item. */
 const UP = `WITH RECURSIVE up (id, parent_id, name, depth) AS (
@@ -550,6 +708,9 @@ const IN_TRASH = "The item is in the trash. Restore it first.";
 const MOVING = "The item is moving to a different drive. Try again in a moment.";
 const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
 const NOT_COMPLETE = "The move did not complete. The items are in the source drive. Try again.";
+const NO_UPLOAD = "No upload has that id, or it is not your upload, or it expired. Start a new upload.";
+/** The uploads that one alarm removes after their time. The next alarm removes more. */
+const UPLOAD_SWEEP = 50;
 const LAST_MANAGER =
 	"A shared drive needs at least one manager who is a person. Give a different person the manager role first.";
 
@@ -657,7 +818,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM outbox")?.n ?? 0) +
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM transfers")?.n ?? 0) +
 				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n ?? 0) +
-				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM webhook_outbox")?.n ?? 0);
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM webhook_outbox")?.n ?? 0) +
+				(this.one<{ n: number }>("SELECT COUNT(*) AS n FROM uploads")?.n ?? 0);
 			if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
 	}
@@ -1143,7 +1305,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			: null;
 	}
 
-	permissions(call: SpaceCall, itemId: string): { owner_id: string; permissions: PermissionRecord[] } | Refusal {
+	permissions(
+		call: SpaceCall,
+		itemId: string,
+	):
+		| {
+				owner_id: string;
+				permissions: PermissionRecord[];
+				room_grants: { room_id: string; granted_by: ActorRecord | null; created_at: number }[];
+		  }
+		| Refusal {
 		this.enter(call);
 		const found = this.open(call, itemId, "viewer");
 		if ("error" in found) return found;
@@ -1160,6 +1331,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			itemId,
 			found.access.visibleDepth,
 		);
+		// The rooms that can read the item are for the owner of the drive, or a manager of a shared drive.
+		const rooms =
+			RANK[found.access.role] >= RANK.manager
+				? this.all<{ room_id: string; granted_by_json: string | null; created_at: number }>(
+						"SELECT room_id, granted_by_json, created_at FROM room_grants WHERE item_id = ? ORDER BY created_at, room_id",
+						itemId,
+					)
+				: [];
 		return {
 			owner_id: call.spaceId,
 			permissions: rows.map((row) => ({
@@ -1169,6 +1348,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				inherited: row.depth > 0,
 				granted_by: parseActor(row.granted_by_json),
 				created_at: row.created_at,
+			})),
+			room_grants: rooms.map((room) => ({
+				room_id: room.room_id,
+				granted_by: parseActor(room.granted_by_json),
+				created_at: room.created_at,
 			})),
 		};
 	}
@@ -1182,6 +1366,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			created_at: row.created_at,
 			created_by: parseActor(row.created_by_json),
 			current: row.id === headId,
+			detected_type: row.detected_type ?? null,
+			preview: row.preview_json === null ? null : (JSON.parse(row.preview_json) as PreviewRecord),
 		};
 	}
 
@@ -1357,23 +1543,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const now = Date.now();
 		const actor = JSON.stringify(call.actor);
 		this.ctx.storage.transactionSync(() => {
-			const seq = this.one<{ seq: number }>(
-				`INSERT INTO items (id, parent_id, kind, name, name_key, mime_type, size, head_version_id, created_at, modified_at, modified_by_json)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
-				input.id,
-				input.parentId,
-				input.kind,
-				input.name,
-				nameKey(input.name),
-				input.version?.mimeType ?? null,
-				input.version?.size ?? 0,
-				input.version?.id ?? null,
-				now,
-				now,
-				actor,
-			)?.seq as number;
-			this.sql.exec("INSERT INTO items_fts (rowid, name, content) VALUES (?, ?, '')", seq, input.name);
-			if (input.version) this.insertVersion(input.id, input.version, now, actor);
+			this.insertItem(input, now, actor);
 			if (input.idempotency) {
 				this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
 				this.sql.exec(
@@ -1391,9 +1561,31 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return { item: this.recordOf(call, input.id), duplicate: false };
 	}
 
+	/** Stores a new item, its name in the search index, and its first version. Call it in a transaction. */
+	private insertItem(input: Omit<CreateInput, "idempotency">, now: number, actor: string): void {
+		const seq = this.one<{ seq: number }>(
+			`INSERT INTO items (id, parent_id, kind, name, name_key, mime_type, size, head_version_id, created_at, modified_at, modified_by_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+			input.id,
+			input.parentId,
+			input.kind,
+			input.name,
+			nameKey(input.name),
+			input.version?.mimeType ?? null,
+			input.version?.size ?? 0,
+			input.version?.id ?? null,
+			now,
+			now,
+			actor,
+		)?.seq as number;
+		this.sql.exec("INSERT INTO items_fts (rowid, name, content) VALUES (?, ?, '')", seq, input.name);
+		if (input.version) this.insertVersion(input.id, input.version, now, actor);
+	}
+
 	private insertVersion(itemId: string, version: NewVersion, now: number, actor: string): void {
 		this.sql.exec(
-			"INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at, created_by_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			`INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at, created_by_json, detected_type)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			version.id,
 			itemId,
 			version.blobKey,
@@ -1402,7 +1594,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			version.sha256,
 			now,
 			actor,
+			version.detectedType ?? null,
 		);
+	}
+
+	/** Deletes the bytes of a version and of its small picture, through the outbox. */
+	private dropVersionBlobs(version: { blob_key: string; preview_json: string | null }): void {
+		this.enqueue("blob", version.blob_key, {});
+		if (version.preview_json !== null) {
+			this.enqueue("blob", (JSON.parse(version.preview_json) as PreviewRecord).key, {});
+		}
 	}
 
 	/** Stores new content for a file. The version over the limit, the oldest, goes away with its bytes. */
@@ -1444,7 +1645,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			);
 			for (const version of extra) {
 				this.sql.exec("DELETE FROM versions WHERE id = ?", version.id);
-				this.enqueue("blob", version.blob_key, {});
+				this.dropVersionBlobs(version);
 			}
 			this.bump();
 			this.noteWebhook("drive.item.updated", itemId, boundary);
@@ -1716,8 +1917,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		);
 		const spaceId = this.meta("space_id") as string;
 		for (const row of rows) {
-			for (const version of this.all<{ blob_key: string }>("SELECT blob_key FROM versions WHERE item_id = ?", row.id)) {
-				this.enqueue("blob", version.blob_key, {});
+			for (const version of this.all<{ blob_key: string; preview_json: string | null }>(
+				"SELECT blob_key, preview_json FROM versions WHERE item_id = ?",
+				row.id,
+			)) {
+				this.dropVersionBlobs(version);
 			}
 			for (const grant of this.all<{ principal_id: string }>(
 				"SELECT principal_id FROM permissions WHERE item_id = ?",
@@ -1728,6 +1932,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (row.kind === "doc" || row.kind === "sheet") this.enqueue("document", row.id, {});
 			this.sql.exec("DELETE FROM versions WHERE item_id = ?", row.id);
 			this.sql.exec("DELETE FROM permissions WHERE item_id = ?", row.id);
+			this.sql.exec("DELETE FROM room_grants WHERE item_id = ?", row.id);
 			this.sql.exec("DELETE FROM stars WHERE space_id = ? AND item_id = ?", spaceId, row.id);
 			this.sql.exec("DELETE FROM items_fts WHERE rowid = ?", row.seq);
 			this.sql.exec("DELETE FROM items WHERE id = ?", row.id);
@@ -1804,6 +2009,491 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		});
 		await this.schedule();
 		return { removed };
+	}
+
+	// --- Previews -------------------------------------------------------------------------------
+
+	/**
+	 * The version that gets a small picture: the current version, or `versionId`. The caller needs the
+	 * editor role and an item outside the trash, and the server must have found a picture or a video in
+	 * the first bytes of the version.
+	 */
+	previewTarget(
+		call: SpaceCall,
+		itemId: string,
+		versionId: string | null,
+	): { versionId: string; blobKey: string; size: number; detectedType: string } | Refusal {
+		this.enter(call);
+		const found = this.open(call, itemId, "editor");
+		if ("error" in found) return found;
+		if (found.item.kind !== "file") return refuse("invalid", "Only a file has a preview.");
+		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
+		const version = this.one<VersionRow>(
+			"SELECT * FROM versions WHERE item_id = ? AND id = ?",
+			itemId,
+			versionId ?? found.item.head_version_id,
+		);
+		if (!version) return refuse("not_found", "The file has no version with that id.");
+		const detected = version.detected_type;
+		if (detected === null || !(detected.startsWith("image/") || detected.startsWith("video/"))) {
+			return refuse("invalid", "Only a picture or a video has a preview. The bytes of this file are not one.");
+		}
+		return { versionId: version.id, blobKey: version.blob_key, size: version.size, detectedType: detected };
+	}
+
+	/**
+	 * Records the small picture of a version, after the Worker stored its bytes at a new key. A second call
+	 * replaces it, and the outbox deletes the bytes of the small picture before it.
+	 */
+	async setPreview(
+		call: SpaceCall,
+		itemId: string,
+		versionId: string,
+		preview: PreviewRecord,
+	): Promise<VersionRecord | Refusal> {
+		const target = this.previewTarget(call, itemId, versionId);
+		if ("error" in target) return target;
+		const before = this.one<{ preview_json: string | null }>(
+			"SELECT preview_json FROM versions WHERE id = ?",
+			versionId,
+		)?.preview_json;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("UPDATE versions SET preview_json = ? WHERE id = ?", JSON.stringify(preview), versionId);
+			if (before) {
+				const old = (JSON.parse(before) as PreviewRecord).key;
+				if (old !== preview.key) this.enqueue("blob", old, {});
+			}
+			this.bump();
+		});
+		await this.schedule();
+		const row = this.row(itemId) as ItemRow;
+		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", versionId) as VersionRow;
+		return this.versionRecord(version, row.head_version_id);
+	}
+
+	// --- Files in rooms of Chat -----------------------------------------------------------------
+
+	/**
+	 * The facts of a file that a message of Chat keeps. A message holds files of the own drive of its
+	 * author: the caller must be the owner of this drive, and the file must be outside the trash.
+	 */
+	fileForRoom(call: SpaceCall, itemId: string): FileSnapshot | Refusal {
+		this.enter(call);
+		if (isSharedDriveId(call.spaceId) || !this.isOwner(call)) {
+			return refuse("forbidden", "A message can hold files of your own drive only.");
+		}
+		const item = this.row(itemId);
+		if (!item) return this.missing(call, itemId, NOT_FOUND);
+		if (item.kind !== "file")
+			return refuse("invalid", `The item ${itemId} is a ${item.kind}. A message can hold files only.`);
+		if (item.trash_root !== null) return refuse("invalid", `The file ${itemId} is in the trash. Restore it first.`);
+		if (this.busy(itemId)) return refuse("conflict", MOVING);
+		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", item.head_version_id);
+		const preview = version?.preview_json ? (JSON.parse(version.preview_json) as PreviewRecord) : null;
+		return {
+			item_id: item.id,
+			space_id: call.spaceId,
+			name: item.name,
+			mime_type: item.mime_type ?? "application/octet-stream",
+			size: item.size,
+			detected_type: version?.detected_type ?? null,
+			preview: preview && {
+				width: preview.media_width ?? preview.width,
+				height: preview.media_height ?? preview.height,
+			},
+		};
+	}
+
+	/**
+	 * From the outbox of a room of Chat: the room wants a grant on a file (`present`), or wants no grant.
+	 * A room wants a grant while one of its messages that stay holds the file. A second call changes
+	 * nothing. A file that is not here gets no grant.
+	 */
+	setRoomGrant(input: {
+		spaceId: string;
+		itemId: string;
+		roomId: string;
+		present: boolean;
+		by: ActorRecord | null;
+	}): void {
+		if (this.meta("space_id") !== input.spaceId) return;
+		let changed = 0;
+		this.ctx.storage.transactionSync(() => {
+			if (input.present) {
+				if (!this.row(input.itemId)) return;
+				changed = this.sql.exec(
+					"INSERT OR IGNORE INTO room_grants (item_id, room_id, granted_by_json, created_at) VALUES (?, ?, ?, ?)",
+					input.itemId,
+					input.roomId,
+					input.by === null ? null : JSON.stringify(input.by),
+					Date.now(),
+				).rowsWritten;
+			} else {
+				changed = this.sql.exec(
+					"DELETE FROM room_grants WHERE item_id = ? AND room_id = ?",
+					input.itemId,
+					input.roomId,
+				).rowsWritten;
+			}
+			if (changed > 0) this.bump();
+		});
+	}
+
+	/**
+	 * The bytes of a file for a member of a room of Chat. The room checked the member and the message. This
+	 * drive checks its own rules: a grant for the room on the file, and a file outside the trash.
+	 */
+	roomFile(input: {
+		spaceId: string;
+		itemId: string;
+		roomId: string;
+	}): { name: string; version: VersionRecord; blobKey: string } | Refusal {
+		if (this.meta("space_id") !== input.spaceId) return refuse("not_found", NOT_FOUND);
+		const item = this.row(input.itemId);
+		if (item?.kind !== "file" || item.trash_root !== null) return refuse("not_found", NOT_FOUND);
+		const granted = this.one(
+			"SELECT 1 AS found FROM room_grants WHERE item_id = ? AND room_id = ?",
+			input.itemId,
+			input.roomId,
+		);
+		if (!granted) return refuse("not_found", NOT_FOUND);
+		const version = this.one<VersionRow>("SELECT * FROM versions WHERE id = ?", item.head_version_id);
+		if (!version) return refuse("not_found", NOT_FOUND);
+		return { name: item.name, version: this.versionRecord(version, item.head_version_id), blobKey: version.blob_key };
+	}
+
+	// --- Uploads in parts -----------------------------------------------------------------------
+
+	/** The open or done upload of the caller, or a refusal. An upload of a different principal is `not_found`. */
+	private uploadRow(call: SpaceCall, uploadId: string): { row: UploadRow } | Refusal {
+		const row = this.one<UploadRow>("SELECT * FROM uploads WHERE id = ?", uploadId);
+		if (!row || row.principal_id !== call.actor.principal_id || row.expires_at <= Date.now()) {
+			return refuse("not_found", NO_UPLOAD);
+		}
+		return { row };
+	}
+
+	/**
+	 * The open upload of the caller, when the caller can still create an item in its folder. A principal
+	 * that lost its role in the drive or in the folder sends no more parts and reads no more state.
+	 */
+	private openUploadRow(call: SpaceCall, uploadId: string): { row: UploadRow } | Refusal {
+		const found = this.uploadRow(call, uploadId);
+		if ("error" in found || found.row.state !== "open") return found;
+		const allowed = this.checkCreate(call, found.row.parent_id);
+		return "error" in allowed ? allowed : found;
+	}
+
+	private uploadRecord(call: SpaceCall, row: UploadRow): UploadRecord {
+		const received = this.all<{ part_number: number }>(
+			"SELECT part_number FROM upload_parts WHERE upload_id = ? ORDER BY part_number",
+			row.id,
+		).map((part) => part.part_number);
+		return {
+			id: row.id,
+			space_id: call.spaceId,
+			parent_id: row.parent_id,
+			name: row.name,
+			mime_type: row.mime_type,
+			size: row.size,
+			part_size: row.part_size,
+			part_count: Math.max(1, Math.ceil(row.size / row.part_size)),
+			parts_received: received,
+			state: row.state,
+			item_id: row.state === "done" ? row.item_id : null,
+			created_at: row.created_at,
+			expires_at: row.expires_at,
+		};
+	}
+
+	/** The upload of an idempotency key that was used with the same request, or null when the key is new. */
+	uploadForKey(call: SpaceCall, key: string, requestHash: string): UploadRecord | Refusal | null {
+		this.enter(call);
+		const row = this.one<UploadRow>(
+			"SELECT * FROM uploads WHERE idempotency_key = ? AND expires_at > ?",
+			key,
+			Date.now(),
+		);
+		if (!row) return null;
+		if (row.request_hash !== requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		if (row.state === "open") {
+			const allowed = this.checkCreate(call, row.parent_id);
+			if ("error" in allowed) return allowed;
+		}
+		return this.uploadRecord(call, row);
+	}
+
+	/**
+	 * Starts an upload in parts. The caller needs the access to create an item in the folder. A second
+	 * call with the same idempotency key returns the first upload, with `duplicate`. The Worker then
+	 * stops the R2 multipart upload that it made for this call.
+	 */
+	async openUpload(call: SpaceCall, input: NewUpload): Promise<{ upload: UploadRecord; duplicate: boolean } | Refusal> {
+		this.enter(call);
+		if (input.idempotency) {
+			const earlier = this.uploadForKey(call, input.idempotency.key, input.idempotency.requestHash);
+			if (earlier !== null) return "error" in earlier ? earlier : { upload: earlier, duplicate: true };
+		}
+		const allowed = this.checkCreate(call, input.parentId);
+		if ("error" in allowed) return allowed;
+		const now = Date.now();
+		const open =
+			this.one<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM uploads WHERE principal_id = ? AND state = 'open' AND expires_at > ?",
+				call.actor.principal_id,
+				now,
+			)?.n ?? 0;
+		if (open >= DRIVE_LIMITS.openUploads) {
+			return refuse(
+				"conflict",
+				`You have ${DRIVE_LIMITS.openUploads} open uploads in this drive. Complete one, or stop one with drive.abort_upload.`,
+			);
+		}
+		// An upload after its time keeps its key until the alarm removes it. A new upload takes the key.
+		const stale = input.idempotency
+			? this.one<UploadRow>("SELECT * FROM uploads WHERE idempotency_key = ?", input.idempotency.key)
+			: null;
+		this.ctx.storage.transactionSync(() => {
+			if (stale) this.removeUpload(stale);
+			this.sql.exec(
+				`INSERT INTO uploads (id, principal_id, r2_upload_id, blob_key, item_id, version_id, parent_id, name, mime_type,
+					size, part_size, sha256, state, idempotency_key, request_hash, created_at, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+				input.id,
+				call.actor.principal_id,
+				input.r2UploadId,
+				input.blobKey,
+				input.itemId,
+				input.versionId,
+				input.parentId,
+				input.name,
+				input.mimeType,
+				input.size,
+				input.partSize,
+				input.sha256,
+				input.idempotency?.key ?? null,
+				input.idempotency?.requestHash ?? null,
+				now,
+				now + DRIVE_LIMITS.uploadTtlMs,
+			);
+		});
+		if (stale) {
+			await this.schedule();
+			if (stale.state === "open") await this.abortMultipart(stale.blob_key, stale.r2_upload_id);
+		}
+		await this.scheduleUploads();
+		const row = this.one<UploadRow>("SELECT * FROM uploads WHERE id = ?", input.id) as UploadRow;
+		return { upload: this.uploadRecord(call, row), duplicate: false };
+	}
+
+	uploadState(call: SpaceCall, uploadId: string): UploadRecord | Refusal {
+		this.enter(call);
+		const found = this.openUploadRow(call, uploadId);
+		return "error" in found ? found : this.uploadRecord(call, found.row);
+	}
+
+	/**
+	 * Where the Worker sends part `partNumber` of an open upload. The part must have its exact size: each
+	 * part has `part_size` bytes, and the last part has the bytes that are left.
+	 */
+	partTarget(
+		call: SpaceCall,
+		uploadId: string,
+		partNumber: number,
+		size: number,
+	): { blobKey: string; r2UploadId: string } | Refusal {
+		this.enter(call);
+		const found = this.openUploadRow(call, uploadId);
+		if ("error" in found) return found;
+		const { row } = found;
+		if (row.state !== "open") return refuse("invalid", "The upload is complete. It takes no more parts.");
+		const count = Math.max(1, Math.ceil(row.size / row.part_size));
+		if (partNumber < 1 || partNumber > count) {
+			return refuse("invalid", `The upload has ${count} parts. part_number must be from 1 to ${count}.`);
+		}
+		const expected = Math.min(row.part_size, row.size - (partNumber - 1) * row.part_size);
+		if (size !== expected) return refuse("invalid", `Part ${partNumber} must have ${expected} bytes. It has ${size}.`);
+		return { blobKey: row.blob_key, r2UploadId: row.r2_upload_id };
+	}
+
+	/** Records a part that R2 has. A part with the same number replaces the record of the part before. */
+	recordPart(
+		call: SpaceCall,
+		uploadId: string,
+		partNumber: number,
+		etag: string,
+		size: number,
+	): UploadRecord | Refusal {
+		this.enter(call);
+		const found = this.uploadRow(call, uploadId);
+		if ("error" in found) return found;
+		const { row } = found;
+		if (row.state !== "open") return refuse("invalid", "The upload is complete. It takes no more parts.");
+		this.sql.exec(
+			`INSERT INTO upload_parts (upload_id, part_number, etag, size) VALUES (?, ?, ?, ?)
+			ON CONFLICT (upload_id, part_number) DO UPDATE SET etag = excluded.etag, size = excluded.size`,
+			uploadId,
+			partNumber,
+			etag,
+			size,
+		);
+		return this.uploadRecord(call, row);
+	}
+
+	/** The file of a done upload, or a refusal when it does not exist now or the caller cannot read it. */
+	private uploadedItem(call: SpaceCall, row: UploadRow): ItemRecord | Refusal {
+		const item = this.row(row.item_id);
+		if (!item || !this.access(call, item)) return refuse("conflict", "The file of this upload does not exist now.");
+		return this.recordOf(call, row.item_id);
+	}
+
+	/**
+	 * What the Worker needs to complete an open upload in R2: each part, with its etag. A done upload
+	 * returns its file. The caller must still be able to create an item in the folder.
+	 */
+	uploadParts(call: SpaceCall, uploadId: string): UploadParts | { item: ItemRecord } | Refusal {
+		this.enter(call);
+		const found = this.uploadRow(call, uploadId);
+		if ("error" in found) return found;
+		const { row } = found;
+		if (row.state === "done") {
+			const item = this.uploadedItem(call, row);
+			return "error" in item ? item : { item };
+		}
+		const parts = this.all<{ part_number: number; etag: string }>(
+			"SELECT part_number, etag FROM upload_parts WHERE upload_id = ? ORDER BY part_number",
+			uploadId,
+		);
+		const count = Math.max(1, Math.ceil(row.size / row.part_size));
+		const have = new Set(parts.map((part) => part.part_number));
+		const missing: number[] = [];
+		for (let number = 1; number <= count; number++) if (!have.has(number)) missing.push(number);
+		if (missing.length > 0) {
+			const shown = missing.slice(0, 20).join(", ");
+			return refuse(
+				"invalid",
+				`The upload does not have each part. Send part ${shown}${missing.length > 20 ? ", and more" : ""}, then call again.`,
+			);
+		}
+		const allowed = this.checkCreate(call, row.parent_id);
+		if ("error" in allowed) return allowed;
+		return {
+			blobKey: row.blob_key,
+			r2UploadId: row.r2_upload_id,
+			size: row.size,
+			sha256: row.sha256,
+			parts: parts.map((part) => ({ partNumber: part.part_number, etag: part.etag })),
+		};
+	}
+
+	/**
+	 * Makes the file of an upload, after R2 joined its parts into the object of the version. The checks
+	 * of the folder run again, in the same step as the change. A second call returns the same file.
+	 */
+	async finishUpload(
+		call: SpaceCall,
+		uploadId: string,
+		sha256: string,
+		detectedType: string | null,
+	): Promise<{ item: ItemRecord; duplicate: boolean } | Refusal> {
+		this.enter(call);
+		const boundary = await this.captureWebhookBoundary();
+		const found = this.uploadRow(call, uploadId);
+		if ("error" in found) return found;
+		const { row } = found;
+		if (row.state === "done") {
+			const item = this.uploadedItem(call, row);
+			return "error" in item ? item : { item, duplicate: true };
+		}
+		const allowed = this.checkCreate(call, row.parent_id);
+		if ("error" in allowed) return allowed;
+		const now = Date.now();
+		const actor = JSON.stringify(call.actor);
+		this.ctx.storage.transactionSync(() => {
+			this.insertItem(
+				{
+					id: row.item_id,
+					parentId: row.parent_id,
+					kind: "file",
+					name: row.name,
+					version: {
+						id: row.version_id,
+						blobKey: row.blob_key,
+						size: row.size,
+						sha256,
+						mimeType: row.mime_type,
+						detectedType,
+					},
+				},
+				now,
+				actor,
+			);
+			this.sql.exec("UPDATE uploads SET state = 'done' WHERE id = ?", uploadId);
+			this.sql.exec("DELETE FROM upload_parts WHERE upload_id = ?", uploadId);
+			this.bump();
+			this.noteWebhook("drive.item.created", row.item_id, boundary);
+		});
+		await this.schedule();
+		return { item: this.recordOf(call, row.item_id), duplicate: false };
+	}
+
+	/**
+	 * Stops an open upload of the caller, and the R2 multipart upload. The rows go at once. The object of
+	 * the version can exist when R2 joined the parts and the drive then refused the file, so the outbox
+	 * deletes that key. A done upload keeps its file: the answer is false.
+	 */
+	async dropUpload(call: SpaceCall, uploadId: string): Promise<{ aborted: boolean }> {
+		this.enter(call);
+		const row = this.one<UploadRow>(
+			"SELECT * FROM uploads WHERE id = ? AND principal_id = ?",
+			uploadId,
+			call.actor.principal_id,
+		);
+		if (row?.state !== "open") return { aborted: false };
+		this.ctx.storage.transactionSync(() => this.removeUpload(row));
+		await this.schedule();
+		await this.abortMultipart(row.blob_key, row.r2_upload_id);
+		return { aborted: true };
+	}
+
+	/** Deletes the rows of an upload. For an open upload, the outbox deletes the key of its version. */
+	private removeUpload(row: UploadRow): void {
+		this.sql.exec("DELETE FROM upload_parts WHERE upload_id = ?", row.id);
+		this.sql.exec("DELETE FROM uploads WHERE id = ?", row.id);
+		if (row.state === "open") this.enqueue("blob", row.blob_key, {});
+	}
+
+	/** Stops an R2 multipart upload. A failure is logged: R2 also stops a multipart upload after 7 days. */
+	private async abortMultipart(blobKey: string, r2UploadId: string): Promise<void> {
+		try {
+			await this.env.BLOBS.resumeMultipartUpload(blobKey, r2UploadId).abort();
+		} catch (error) {
+			log("warn", "drive upload abort failed", { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/** Removes the uploads after their time: the rows, the R2 multipart upload of an open upload, and its key. */
+	private async sweepUploads(now: number): Promise<void> {
+		const rows = this.all<UploadRow>(
+			"SELECT * FROM uploads WHERE expires_at <= ? ORDER BY expires_at LIMIT ?",
+			now,
+			UPLOAD_SWEEP,
+		);
+		if (rows.length === 0) return;
+		this.ctx.storage.transactionSync(() => {
+			for (const row of rows) this.removeUpload(row);
+		});
+		for (const row of rows) if (row.state === "open") await this.abortMultipart(row.blob_key, row.r2_upload_id);
+	}
+
+	/** Moves the alarm to the end of the first upload, when that is before the alarm. */
+	private async scheduleUploads(): Promise<void> {
+		const next = this.one<{ at: number | null }>("SELECT MIN(expires_at) AS at FROM uploads")?.at ?? null;
+		if (next === null) return;
+		const set = await this.ctx.storage.getAlarm();
+		if (set === null || set > next) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
 
 	// --- Shared drive ---------------------------------------------------------------------------
@@ -2472,7 +3162,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			trashed_at: item.trashed_at,
 			trash_root: item.trash_root,
 			versions: this.all<StagedItem["versions"][number] & Row>(
-				"SELECT id, size, mime_type, sha256, created_at, created_by_json FROM versions WHERE item_id = ? ORDER BY created_at, id",
+				"SELECT id, size, mime_type, sha256, created_at, created_by_json, detected_type FROM versions WHERE item_id = ? ORDER BY created_at, id",
 				item.id,
 			),
 			grants: this.all<StagedItem["grants"][number] & Row>(
@@ -2518,11 +3208,11 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			).map((item) => item.item_id);
 			const list = JSON.stringify(itemIds);
 			const inList = "(SELECT value FROM json_each(?1))";
-			for (const version of this.all<{ blob_key: string }>(
-				`SELECT blob_key FROM versions WHERE item_id IN ${inList}`,
+			for (const version of this.all<{ blob_key: string; preview_json: string | null }>(
+				`SELECT blob_key, preview_json FROM versions WHERE item_id IN ${inList}`,
 				list,
 			)) {
-				this.enqueue("blob", version.blob_key, {});
+				this.dropVersionBlobs(version);
 			}
 			const notified = new Set(
 				this.all<{ principal_id: string }>(
@@ -2534,6 +3224,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			if (actor.principal_id !== spaceId) notified.add(actor.principal_id);
 			this.sql.exec(`DELETE FROM versions WHERE item_id IN ${inList}`, list);
 			this.sql.exec(`DELETE FROM permissions WHERE item_id IN ${inList}`, list);
+			// The grants of rooms do not move: a message of Chat names the drive of its file, which is this one.
+			// So the files of a moved item give not_found in the rooms.
+			this.sql.exec(`DELETE FROM room_grants WHERE item_id IN ${inList}`, list);
 			this.sql.exec(`DELETE FROM items_fts WHERE rowid IN (SELECT seq FROM items WHERE id IN ${inList})`, list);
 			this.sql.exec(`DELETE FROM items WHERE id IN ${inList}`, list);
 			this.sql.exec(
@@ -2797,8 +3490,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		// The text of a doc or a sheet comes after the commit, with the `refresh` step of the source.
 		this.sql.exec("INSERT INTO items_fts (rowid, name, content) VALUES (?, ?, '')", seq, item.name);
 		for (const version of item.versions) {
+			// A small picture does not move: its bytes stay in the source, which deletes them.
 			this.sql.exec(
-				"INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at, created_by_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				`INSERT INTO versions (id, item_id, blob_key, size, mime_type, sha256, created_at, created_by_json, detected_type)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				version.id,
 				item.id,
 				blobKeyFor(spaceId, item.id, version.id),
@@ -2807,6 +3502,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				version.sha256,
 				version.created_at,
 				version.created_by_json,
+				version.detected_type ?? null,
 			);
 		}
 		for (const grant of item.grants) {
@@ -3286,7 +3982,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 	}
 
-	/** The work of one alarm: the writes to the index in D1, then the moves between drives, then the outbox. */
+	/**
+	 * The work of one alarm: the writes to the index in D1, then the moves between drives, then the uploads
+	 * after their time, then the outbox.
+	 */
 	private async runAlarm(): Promise<void> {
 		await this.drainWebhooks();
 		if (this.one<{ n: number }>("SELECT COUNT(*) AS n FROM index_outbox")?.n) await this.flush();
@@ -3294,10 +3993,12 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			await this.runMoves({ deadline: Date.now() + MOVE_BUDGET_MS, calls: 0 });
 		}
 		this.forget(Date.now());
+		await this.sweepUploads(Date.now());
 		await this.drain();
 		await this.drainWebhooks();
 		await this.scheduleIndex();
 		await this.scheduleTransfers();
+		await this.scheduleUploads();
 	}
 
 	/**

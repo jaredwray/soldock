@@ -1,13 +1,21 @@
 import "./drive.css";
 import type { DriveItem } from "@asterra/contracts";
-import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type DragEvent as ReactDragEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { fileToBase64 } from "../../lib/base64.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { formatBytes, plural } from "../../lib/format.ts";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { uploadFile } from "../../lib/upload.ts";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { type DriveView, drivePath, isSharedDriveId, itemPath, SHARED_DRIVES_PATH } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
@@ -60,7 +68,6 @@ import {
 	spaceBatches,
 	spaceInput,
 	spacePath,
-	uploadMimeType,
 	uploadRefusal,
 	viewTitle,
 } from "./model.ts";
@@ -69,6 +76,7 @@ import { ShareDialog } from "./ShareDialog.tsx";
 import { SharedDriveList } from "./SharedDriveList.tsx";
 import { SharedDriveMembersDialog } from "./SharedDriveMembers.tsx";
 import { canManageDrive, ROLE_NAMES } from "./sharedDrives.ts";
+import { createUploadQueue, type UploadJob, type UploadQueueEvent } from "./uploadQueue.ts";
 import { VersionsDialog } from "./VersionsDialog.tsx";
 
 export interface DriveAppProps {
@@ -135,14 +143,6 @@ function navEntry(view: DriveView, foreign: boolean): NavEntry {
 	return view.kind === "search" ? null : view.kind;
 }
 
-/** One file of the upload queue, and the folder that gets it. */
-interface UploadJob {
-	file: File;
-	target: CreateTarget;
-	/** The name of the folder, for the toast. */
-	destination: string;
-}
-
 /** The files of a drop, and the names of its folders. Drive uploads only files. */
 function droppedFiles(data: DataTransfer): { files: File[]; folders: string[] } {
 	const files: File[] = [];
@@ -176,7 +176,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const [order, setOrder] = useState<ItemOrder>("name");
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [dialog, setDialog] = useState<DriveDialog>(null);
-	const [upload, setUpload] = useState<{ done: number; total: number; name: string; size: number } | null>(null);
+
 	const [drop, setDrop] = useState<DropZone | null>(null);
 	// The items of a drag from the list, and the drives that can get them.
 	const [drag, setDrag] = useState<{ items: DriveItem[]; targets: MoveTarget[] } | null>(null);
@@ -184,8 +184,31 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const creatingRef = useRef(false);
 	const closeNavRef = useRef(onCloseNav);
-	const queueRef = useRef<UploadJob[]>([]);
-	const uploadingRef = useRef(false);
+	/** What the upload queue tells the page, with the toast and the refresh of the current render. */
+	const uploadEventRef = useRef<(event: UploadQueueEvent) => void>(() => {});
+	// The upload queue: one file at a time, each with `uploadFile`, so a file with content goes in parts
+	// with the progress in bytes. Cancel stops the file that uploads now.
+	const uploads = useMemo(
+		() =>
+			createUploadQueue({
+				upload: (job, onProgress, signal) =>
+					uploadFile(job.file, {
+						...(job.target.space_id ? { spaceId: job.target.space_id } : {}),
+						...(job.target.parent_id ? { parentId: job.target.parent_id } : {}),
+						onProgress,
+						signal,
+					}),
+				refusal: (file) => uploadRefusal(file),
+				discard: (item) => {
+					// The file stays when the call fails. The person can put it in the trash.
+					api.call("drive.trash_items", { ...spaceInput(item.space_id, ownId), item_ids: [item.id] }).catch(() => {});
+				},
+				notify: (event) => uploadEventRef.current(event),
+			}),
+		[ownId],
+	);
+	/** The file that uploads now, with the bytes that went out, and the count of the files of the queue. */
+	const upload = useSyncExternalStore(uploads.subscribe, uploads.getState);
 
 	const viewKey = drivePath(view);
 	const foreign = isForeignFolder(view, ownId);
@@ -256,6 +279,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	useEffect(() => {
 		closeNavRef.current = onCloseNav;
 		changedRef.current = changed;
+		uploadEventRef.current = onUploadEvent;
 	});
 
 	useOnChange(viewKey, () => {
@@ -453,7 +477,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 			case "open":
 				return open(item);
 			case "download":
-				return void downloadFile(item, ownId).catch(fail);
+				return void downloadFile(item).catch(fail);
 			case "rename":
 				return setDialog({ type: "rename", item });
 			case "move":
@@ -521,56 +545,27 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 		}
 	}
 
-	/**
-	 * Adds files to the upload queue. The queue uploads one file at a time, so the files of a drop
-	 * during an upload wait for their turn.
-	 */
+	/** Adds files to the upload queue. The files of a drop during an upload wait for their turn. */
 	function enqueueUploads(files: readonly File[], uploadTarget: CreateTarget, destination: string) {
-		if (files.length === 0) return;
-		queueRef.current.push(...files.map((file) => ({ file, target: uploadTarget, destination })));
-		if (uploadingRef.current) setUpload((current) => current && { ...current, total: current.total + files.length });
-		else void runUploads();
+		uploads.add(files.map((file): UploadJob => ({ file, target: uploadTarget, destination })));
 	}
 
-	/** Uploads the queue, each file with an idempotency key. A file over the limit is refused before it is read. */
-	async function runUploads() {
-		uploadingRef.current = true;
-		const queue = queueRef.current;
-		// The name of each folder that got a file, by its target: two folders can have the same name.
-		const destinations = new Map<string, string>();
-		let done = 0;
-		let uploaded = 0;
-		for (let job = queue.shift(); job; job = queue.shift()) {
-			const { file } = job;
-			setUpload({ done, total: done + 1 + queue.length, name: file.name, size: file.size });
-			const refusal = uploadRefusal(file);
-			if (refusal) {
-				toast({ message: refusal, tone: "error" });
-			} else {
-				try {
-					const mimeType = uploadMimeType(file.type);
-					await api.call("drive.upload_file", {
-						...job.target,
-						name: file.name,
-						...(mimeType ? { mime_type: mimeType } : {}),
-						content_base64: await fileToBase64(file),
-						idempotency_key: crypto.randomUUID(),
-					});
-					uploaded += 1;
-					destinations.set(JSON.stringify(job.target), job.destination);
-				} catch (caught) {
-					toast({ message: `“${file.name}” did not upload. ${errorMessage(caught)}`, tone: "error" });
-				}
+	/** Tells the person what the upload queue did. */
+	function onUploadEvent(event: UploadQueueEvent) {
+		switch (event.type) {
+			case "refused":
+				toast({ message: event.message, tone: "error" });
+				return;
+			case "failed":
+				toast({ message: `“${event.name}” did not upload. ${errorMessage(event.error)}`, tone: "error" });
+				return;
+			case "finished": {
+				if (event.uploaded === 0) return;
+				const files = plural(event.uploaded, "file");
+				const [only] = event.destinations;
+				toast({ message: event.destinations.length === 1 ? `Uploaded ${files} to ${only}.` : `Uploaded ${files}.` });
+				changedRef.current();
 			}
-			done += 1;
-		}
-		uploadingRef.current = false;
-		setUpload(null);
-		if (uploaded > 0) {
-			const [only] = destinations.values();
-			const files = plural(uploaded, "file");
-			toast({ message: destinations.size === 1 ? `Uploaded ${files} to ${only}.` : `Uploaded ${files}.` });
-			changedRef.current();
 		}
 	}
 
@@ -883,19 +878,43 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 						</span>
 					</div>
 				)}
-				<div className={upload ? "drive-upload" : "visually-hidden"} role="status">
-					{upload && (
+				<div className={upload.current ? "drive-upload" : "visually-hidden"}>
+					{upload.current && (
 						<>
 							<span className="drive-upload-head">
-								<strong className="drive-upload-name">{upload.name}</strong>
-								<span className="drive-upload-size">{formatBytes(upload.size)}</span>
+								<strong className="drive-upload-name">{upload.current.name}</strong>
+								<span className="drive-upload-size">
+									{upload.current.sent > 0 ? `${formatBytes(upload.current.sent)} of ` : ""}
+									{formatBytes(upload.current.size)}
+								</span>
+								<button
+									type="button"
+									className="icon-button icon-button-small"
+									aria-label={`Cancel the upload of ${upload.current.name}`}
+									title="Cancel the upload"
+									onClick={uploads.cancel}
+								>
+									<Icon name="close" size={16} />
+								</button>
 							</span>
-							<progress className="drive-upload-bar" max={upload.total} value={upload.done} aria-hidden="true" />
-							<span className="drive-upload-text">
-								{`Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…`}
-							</span>
+							{/* The bar shows the bytes of the file that uploads now. The status line below tells the count only,
+							    so a screen reader does not read each change of the bytes. */}
+							<progress
+								className="drive-upload-bar"
+								max={Math.max(1, upload.current.size)}
+								value={upload.current.sent}
+								aria-label={`Upload of ${upload.current.name}`}
+							/>
+							{upload.total - upload.done > 1 && (
+								<button type="button" className="link-button drive-upload-cancel-all" onClick={uploads.cancelAll}>
+									Cancel all {upload.total - upload.done} uploads
+								</button>
+							)}
 						</>
 					)}
+					<span className="drive-upload-text" role="status">
+						{upload.current ? `Uploading file ${Math.min(upload.done + 1, upload.total)} of ${upload.total}…` : ""}
+					</span>
 				</div>
 				<input
 					ref={fileInputRef}

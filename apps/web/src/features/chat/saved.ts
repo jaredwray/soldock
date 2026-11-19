@@ -1,4 +1,4 @@
-import { ChatBody } from "@asterra/contracts";
+import { ChatBody, ChatFile } from "@asterra/contracts";
 import { textToBody } from "./composerSchema.ts";
 import type { PendingMessage } from "./outbox.ts";
 
@@ -18,6 +18,8 @@ export interface SavedMessage {
 	text: string;
 	/** The body of the message. A record from before the box had formats has none. */
 	body?: ChatBody;
+	/** The files of the message, in the drive of the person. A record without files has none. */
+	files?: readonly ChatFile[];
 	created_at: string;
 	state: PendingMessage["state"];
 	error: string | null;
@@ -33,6 +35,8 @@ export const RESTORE_SEND_MS = 12 * 60 * 60 * 1000;
 
 export const TOO_OLD = "This message waited too long. Send it again if it is still correct.";
 
+const SavedFiles = ChatFile.array();
+
 /** The record of one message that waits. */
 export function toSaved(message: PendingMessage, owner: string, roomId: string): SavedMessage {
 	return {
@@ -41,6 +45,7 @@ export function toSaved(message: PendingMessage, owner: string, roomId: string):
 		roomId,
 		text: message.text,
 		...(message.body ? { body: message.body } : {}),
+		...(message.files ? { files: message.files } : {}),
 		created_at: message.created_at,
 		state: message.state,
 		error: message.error,
@@ -67,10 +72,14 @@ export function fromSaved(saved: readonly SavedMessage[], now: number): PendingM
 			// text is the Markdown that the person typed.
 			const body =
 				record.body === undefined ? undefined : (ChatBody.safeParse(record.body).data ?? textToBody(record.text));
+			// The files are from the storage too. A list that the contract does not take goes, and the server
+			// then refuses a message without text, which shows "Not sent".
+			const files = record.files === undefined ? undefined : SavedFiles.safeParse(record.files).data;
 			const message: PendingMessage = {
 				key: record.key,
 				text: record.text,
 				...(body ? { body } : {}),
+				...(files && files.length > 0 ? { files } : {}),
 				created_at: record.created_at,
 				state: "waiting",
 				error: null,

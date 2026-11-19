@@ -1,6 +1,7 @@
 // Composition root of the dock Worker. Every handler, Durable Object and Workflow class is
 // exported from here. The operation handlers of each domain are joined in handlers.ts.
 import { createApp } from "./app.ts";
+import { CHAT_PREVIEW_QUEUE, handleLinkPreviewBatch } from "./chat/index.ts";
 import { events, handlers, watchers } from "./handlers.ts";
 import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
@@ -37,6 +38,10 @@ export default {
 		}
 		if (batch.queue === WEBHOOK_QUEUE) {
 			await handleWebhookBatch(batch, env);
+			return;
+		}
+		if (batch.queue === CHAT_PREVIEW_QUEUE) {
+			await handleLinkPreviewBatch(batch, env);
 			return;
 		}
 		// A queue without a consumer here. Acknowledge so nothing redelivers forever.

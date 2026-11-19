@@ -1,7 +1,14 @@
-import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry, type SharedDrive } from "@asterra/contracts";
+import {
+	ApiError,
+	DRIVE_LIMITS,
+	type DriveItem,
+	driveDownloadPath,
+	type OutputOf,
+	type PathEntry,
+	type SharedDrive,
+} from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorMessage } from "../../lib/api.ts";
-import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
+import { api, errorMessage, noteStatus } from "../../lib/api.ts";
 import type { ListInput } from "./model.ts";
 
 export type About = OutputOf<"drive.get_about">;
@@ -315,12 +322,36 @@ export function useFolder(spaceInputValue: { space_id?: string }, folderId: stri
 	return { ...state, reload: load };
 }
 
-/** Gets the content of a file, or of one of its versions, and saves it as a download. */
-export async function downloadFile(item: DriveItem, ownSpaceId: string, versionId?: string): Promise<void> {
-	const result = await api.call("drive.download_file", {
-		...(item.space_id !== ownSpaceId ? { space_id: item.space_id } : {}),
-		item_id: item.id,
-		...(versionId ? { version_id: versionId } : {}),
-	});
-	saveBytes(base64ToBytes(result.content_base64), result.name);
+/** The message for a refused download, from the status of the answer. A HEAD answer has no body. */
+function downloadProblem(status: number): string {
+	if (status === 401) return "Sign in again to download the file.";
+	if (status === 403) return "You have no access to this file.";
+	if (status === 404) return "The file is not there now, or you have no access to it.";
+	return "The file did not download. Try again.";
+}
+
+/**
+ * Saves a file, or one of its versions, as a download. The browser gets the bytes from `/dl/` as a
+ * stream with the session cookie, so a large file never goes through the memory of the page. The server
+ * sends each file as an attachment, unless it found a picture or a video in its bytes.
+ *
+ * A HEAD request to the same path comes first. The browser shows no reason for a download that the
+ * server refuses, so the call throws that reason for a toast. A 401 shows the sign-in page.
+ */
+export async function downloadFile(
+	item: Pick<DriveItem, "id" | "space_id" | "name">,
+	versionId?: string,
+): Promise<void> {
+	const path = driveDownloadPath(item.space_id, item.id, versionId);
+	const check = await fetch(path, { method: "HEAD", credentials: "same-origin" });
+	noteStatus(check.status);
+	if (!check.ok) throw new ApiError(check.status, { detail: downloadProblem(check.status) });
+	const anchor = document.createElement("a");
+	anchor.href = path;
+	anchor.download = item.name || "download";
+	anchor.rel = "noopener";
+	anchor.hidden = true;
+	document.body.append(anchor);
+	anchor.click();
+	anchor.remove();
 }

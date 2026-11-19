@@ -543,6 +543,16 @@ button.drive-name-link:hover .drive-name-text {
 	flex: none;
 }
 
+.drive-upload-head .icon-button {
+	align-self: center;
+	margin: -6px -8px -6px 0;
+}
+
+.drive-upload-cancel-all {
+	justify-self: start;
+	font-size: 12px;
+}
+
 .drive-upload-bar {
 	display: block;
 	width: 100%;
