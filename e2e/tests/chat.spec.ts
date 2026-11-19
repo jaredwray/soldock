@@ -180,7 +180,8 @@ test("the Threads view lists the followed threads with their new replies, and a 
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const nadia = await signIn(browser, "nadia");
-	const name = unique("Threads room");
+	// The name of the room must not start with "Threads": the link of the view is the link whose name does.
+	const name = unique("Room with a followed thread");
 	const roomId = await createRoom(tomasz, name, [nadia]);
 	const parent = await post(tomasz, roomId, unique("thread to follow"));
 	const answer = unique("answer");
