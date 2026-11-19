@@ -1,6 +1,6 @@
 import { DRIVE_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Actor, api, base64, callTool, codeOf, seedOrg } from "./helpers.ts";
+import { type Actor, api, base64, breakR2, callTool, codeOf, runMoves, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -135,6 +135,55 @@ describe("the folder of a room in Drive", () => {
 		await ada.call("drive.trash_items", { item_ids: [chat as string] });
 		const again = await uploadFor(ada, room.id, "d.txt");
 		expect(await pathOf(ada, again.id)).toEqual(["Chat", "Design"]);
+	});
+
+	// Review: an item of a move to a different drive stays in this drive when the move stops.
+	it("refuses an upload while the folder moves to a different drive, and makes a new folder only after the move", async () => {
+		const room = await createRoom(ada, "Design");
+		const first = await uploadFor(ada, room.id);
+		const folderId = first.parent_id as string;
+		const archive = async () =>
+			(
+				await owner.call("drive.create_shared_drive", {
+					name: "Archive",
+					members: [
+						{ principal_id: owner.id, role: "manager" },
+						{ principal_id: ada.id, role: "editor" },
+					],
+				})
+			).shared_drive.id;
+		// R2 fails, so the move stays open after the call. An upload for the room waits for the move.
+		const target = await archive();
+		const repair = await breakR2(ada.id);
+		const move = { item_ids: [folderId], target_space_id: target };
+		expect((await ada.call("drive.move_to_drive", move)).status).toBe("moving");
+		const upload = { room_id: room.id, name: "b.txt", content_base64: base64("b") };
+		expect(await codeOf(ada.call("drive.upload_file", upload))).toBe("conflict");
+		expect(await codeOf(ada.call("drive.create_upload", { room_id: room.id, name: "b.bin", size: 10 }))).toBe(
+			"conflict",
+		);
+		// Ada loses the target drive, so the target refuses the items. The move stops, and the folder stays in use.
+		await owner.call("drive.remove_shared_drive_member", { drive_id: target, principal_id: ada.id });
+		await repair();
+		await runMoves(ada.id);
+		expect((await uploadFor(ada, room.id, "c.txt")).parent_id).toBe(folderId);
+		const chat = (await ada.call("drive.get_item", { item_id: folderId })).item.parent_id as string;
+		const rooms = async () => (await ada.call("drive.list_items", { parent_id: chat })).items.map((item) => item.id);
+		expect(await rooms()).toEqual([folderId]);
+		// A move that completes takes the folder out of the own drive. The next upload makes a new folder.
+		expect((await ada.call("drive.move_to_drive", { ...move, target_space_id: await archive() })).status).toBe("done");
+		const next = await uploadFor(ada, room.id, "d.txt");
+		expect(next.parent_id).not.toBe(folderId);
+		expect(await pathOf(ada, next.id)).toEqual(["Chat", "Design"]);
+		// The folder "Chat" of a move waits for the move too.
+		const other = await createRoom(ada, "Other");
+		const repairAgain = await breakR2(ada.id);
+		const moveChat = { item_ids: [chat], target_space_id: await archive() };
+		expect((await ada.call("drive.move_to_drive", moveChat)).status).toBe("moving");
+		expect(
+			await codeOf(ada.call("drive.upload_file", { room_id: other.id, name: "e.txt", content_base64: base64("e") })),
+		).toBe("conflict");
+		await repairAgain();
 	});
 
 	it("works for an agent through MCP", async () => {

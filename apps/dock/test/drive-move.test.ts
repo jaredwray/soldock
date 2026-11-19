@@ -6,12 +6,15 @@ import {
 	type Actor,
 	api,
 	base64,
+	breakR2,
 	codeOf,
 	createActor,
 	drainDrive,
 	driveBlobKeys,
 	fromBase64,
+	openMoves,
 	PASSWORD,
+	runMoves,
 	seedOrg,
 } from "./helpers.ts";
 
@@ -94,43 +97,6 @@ async function failureOf(promise: Promise<unknown>): Promise<{ code: string; mes
 	return { code: error.code, message: error.message };
 }
 
-/** The moves of a drive that are not complete. */
-const openMoves = (spaceId: string) =>
-	runInDurableObject(
-		stubOf(spaceId),
-		(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM transfers").one().n,
-	);
-
-/**
- * R2 is a boundary of the drive object. This makes each call of one R2 method by one drive fail until
- * `repair()`, after the first `allow` calls. Without `get`, a move stops in its copy step, after the target drive got the items of the
- * move. Without `delete`, the old objects stay and their deletes wait in the outbox.
- */
-async function breakR2(spaceId: string, method: "get" | "delete" = "get", allow = 0): Promise<() => Promise<void>> {
-	const real = await runInDurableObject(stubOf(spaceId), (instance) => {
-		const target = instance as unknown as { env: Env };
-		const before = target.env;
-		let calls = 0;
-		const broken = new Proxy(before.BLOBS, {
-			get(blobs, property) {
-				const value = Reflect.get(blobs, property);
-				if (property !== method) return typeof value === "function" ? value.bind(blobs) : value;
-				// The first `allow` calls work.
-				return (...args: unknown[]) =>
-					calls++ < allow
-						? (value as (...values: unknown[]) => unknown).apply(blobs, args)
-						: Promise.reject(new Error("R2 is not available"));
-			},
-		});
-		target.env = { ...before, BLOBS: broken };
-		return before;
-	});
-	return () =>
-		runInDurableObject(stubOf(spaceId), (instance) => {
-			(instance as unknown as { env: Env }).env = real;
-		});
-}
-
 /** Runs SQL in the storage of a drive, and returns the rows. */
 const sqlOf = <T extends Record<string, SqlStorageValue>>(
 	spaceId: string,
@@ -170,17 +136,6 @@ async function auditLines(run: () => Promise<unknown>): Promise<Record<string, u
 	} finally {
 		spy.mockRestore();
 	}
-}
-
-/** Makes each waiting step of the moves of a drive due, and runs the alarm until no move is open. */
-async function runMoves(spaceId: string, rounds = 12): Promise<void> {
-	for (let round = 0; round < rounds && (await openMoves(spaceId)) > 0; round++) {
-		await runInDurableObject(stubOf(spaceId), (_instance, state) => {
-			state.storage.sql.exec("UPDATE transfers SET next_attempt_at = 0");
-		});
-		await runDurableObjectAlarm(stubOf(spaceId));
-	}
-	expect(await openMoves(spaceId)).toBe(0);
 }
 
 describe("drive.move_to_drive from My Drive to a shared drive", () => {

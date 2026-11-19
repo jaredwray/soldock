@@ -211,6 +211,9 @@ they are not there. The web app sets it for each file of a message, and an agent
   the room before a rename can give the folder the old name again. The next upload gives the new name.
 - A folder that the person moved stays in use where it is now.
 - A folder in the trash, and a deleted folder, get a new folder. So does the folder of "Chat" itself.
+- While the folder of a room, or the folder of "Chat", moves to a different drive (`drive.move_to_drive`),
+  an upload for the room gets `conflict`. When the move stops, the folder stays in this drive and in use.
+  When the move completes, the folder is in the other drive, and the next upload makes a new folder here.
 - The folder of a room is one level under "Chat". When "Chat" is at the last level of folders (30), a new
   "Chat" comes at the root.
 - The drive finds "Chat" by its id (`chat_root_id`), not by its name. A folder "Chat" that the person

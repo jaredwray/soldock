@@ -2092,6 +2092,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * - A room with a new name renames its folder, unless the person renamed the folder.
 	 * - A folder that the person moved stays in use where it is now.
 	 * - A folder in the trash, or deleted, gets a new folder.
+	 * - A folder of a move to a different drive gives the refusal of the move. When the move stops, the folder
+	 *   stays in this drive and in use. When the move completes, the next call makes a new folder.
 	 */
 	async chatFolder(call: SpaceCall, input: { roomId: string; name: string }): Promise<{ folderId: string } | Refusal> {
 		this.enter(call);
@@ -2101,8 +2103,16 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const boundary = await this.captureWebhookBoundary();
 		const live = (id: string | null): ItemRow | null => {
 			const row = id === null ? null : this.row(id);
-			return row && row.kind === "folder" && row.trash_root === null && !this.busy(row.id) ? row : null;
+			return row && row.kind === "folder" && row.trash_root === null ? row : null;
 		};
+		// No await comes after this point, so these reads stay true in the transaction.
+		const known = this.one<{ folder_id: string; named: string }>(
+			"SELECT folder_id, named FROM chat_folders WHERE room_id = ?",
+			input.roomId,
+		);
+		const folder = live(known?.folder_id ?? null);
+		const root = folder ? null : live(this.meta("chat_root_id"));
+		if ((folder && this.busy(folder.id)) || (root && this.busy(root.id))) return refuse("conflict", MOVING);
 		const now = Date.now();
 		const actor = JSON.stringify(call.actor);
 		const create = (parentId: string | null, name: string): string => {
@@ -2114,11 +2124,6 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		let folderId = "";
 		let changed = false;
 		this.ctx.storage.transactionSync(() => {
-			const known = this.one<{ folder_id: string; named: string }>(
-				"SELECT folder_id, named FROM chat_folders WHERE room_id = ?",
-				input.roomId,
-			);
-			const folder = live(known?.folder_id ?? null);
 			if (known && folder) {
 				folderId = folder.id;
 				// The person did not rename the folder, so it takes the new name of the room. A call that read the room
@@ -2140,7 +2145,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				if (changed) this.bump();
 				return;
 			}
-			let rootId = live(this.meta("chat_root_id"))?.id ?? null;
+			let rootId = root?.id ?? null;
 			// The folder of the room is one level under "Chat". A "Chat" that the person moved to the last level
 			// cannot hold a folder, so a new "Chat" comes at the root.
 			if (rootId !== null) {
