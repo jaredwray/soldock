@@ -97,6 +97,32 @@ describe("the messages that wait, after a reload of the page", () => {
 		expect(fromSaved([saved("k3")], NOW)[0]?.body).toBeUndefined();
 	});
 
+	// A message with files waits with their ids: the files are in the drive. The record is in the storage of
+	// the browser, so a list that the contract does not take goes.
+	it("keep the files of a message, and drop a list of files that the contract does not take", () => {
+		const files = [
+			{
+				item_id: "itm_01JD0000000000000000000001",
+				space_id: "prn_01JD0000000000000000000ADA",
+				name: "plan.pdf",
+				mime_type: "application/pdf",
+				size: 2048,
+				kind: "file" as const,
+				preview: null,
+			},
+		];
+		expect(toSaved(pending("k1", { text: "", files }), "prn_ada", "rm_1").files).toEqual(files);
+		const [kept, dropped] = fromSaved(
+			[
+				saved("k1", { text: "", files, created_at: minutesAgo(3) }),
+				saved("k2", { files: [{ item_id: 7 }] as never, created_at: minutesAgo(1) }),
+			],
+			NOW,
+		);
+		expect(kept).toMatchObject({ key: "k1", text: "", files, state: "waiting" });
+		expect(dropped?.files).toBeUndefined();
+	});
+
 	it("have the person and the room of the message in their record", () => {
 		expect(toSaved(pending("k1", { state: "sending" }), "prn_ada", "rm_1")).toEqual({
 			key: "k1",

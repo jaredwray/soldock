@@ -11,6 +11,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
+import { uploadFile } from "../../lib/upload.ts";
+import { type Attachments, createAttachments } from "./attachments.ts";
 import { inRoomList } from "./model.ts";
 import { createOutbox, type Outbox, postContent } from "./outbox.ts";
 import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
@@ -263,6 +265,10 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 				).message,
 			describe: errorMessage,
 			active: () => currentAccount() === ownId,
+			discardFiles: (files) => {
+				// The files stay in the drive when the call fails. The person can delete them there.
+				api.call("drive.trash_items", { item_ids: files.map((file) => file.item_id) }).catch(() => {});
+			},
 		});
 		outboxes.set(name, outbox);
 		keepSaved(outbox, ownId, roomId);
@@ -345,11 +351,51 @@ export function restoreOutboxes(ownId: string): Promise<void> {
 
 // The page sends each call with the session of its person. After a sign-out, or a sign-in as a
 // different person, a message that waits must not go out: it would be a message of the new person.
+/**
+ * The files of a new message, for the box of a room or of a thread. Each file uploads to the root of the
+ * own drive (`uploadFile`). A file that the person removes before the send goes to the trash of Drive.
+ */
+export function newAttachments(): Attachments {
+	return createAttachments({
+		upload: (file, onProgress, signal) => uploadFile(file, { onProgress: (sent) => onProgress(sent), signal }),
+		discard: (item) => {
+			// The file stays in the drive when the call fails. The person can delete it there.
+			api.call("drive.trash_items", { item_ids: [item.id] }).catch(() => {});
+		},
+		describe: errorMessage,
+	});
+}
+
+/**
+ * The files of the box of each room that this page showed, by person and room. They stay while the page
+ * stays, so a file still uploads, and stays in the box, after the person opens a different room. A
+ * reload loses them, as a reload loses an upload that runs.
+ */
+const roomAttachments = new Map<string, Attachments>();
+
+export function attachmentsOf(ownId: string, roomId: string): Attachments {
+	const name = `${ownId}/${roomId}`;
+	let attachments = roomAttachments.get(name);
+	if (!attachments) {
+		attachments = newAttachments();
+		roomAttachments.set(name, attachments);
+	}
+	return attachments;
+}
+
+/** The state of the files of a box. */
+export function useAttachments(attachments: Attachments) {
+	return useSyncExternalStore(attachments.subscribe, attachments.getState);
+}
+
 onAccountChange(() => {
 	accountChanges += 1;
 	roomCache.clear();
 	for (const outbox of outboxes.values()) outbox.stop();
 	outboxes.clear();
+	// An upload of the person from before must not continue with the session of a different person.
+	for (const attachments of roomAttachments.values()) attachments.stop();
+	roomAttachments.clear();
 	restores.clear();
 	restored.clear();
 });

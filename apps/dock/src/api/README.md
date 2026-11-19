@@ -25,3 +25,18 @@ Public surface: `index.ts` only. Other domains must not import files from this f
    runs the handler and validates the output.
 6. Errors are `application/problem+json` (RFC 9457) with the `code` from the error catalogue.
    A missing or bad credential gets `401` with `WWW-Authenticate: Bearer`.
+
+## The call of a request outside the registry
+
+`callOf()` gives the call of a request for a path that is a second transport of one operation, without
+JSON: the raw parts of a Drive upload (`/blob/drive/…`, `drive.upload_part`) and the streams of Drive
+and Chat downloads (`/dl/drive/…`, `drive.download_file`; `/dl/chat/…`, `chat.download_file` and
+`chat.download_link_image`). The route then runs the operation through the shared invoker, with a copy of
+the operation whose input has no bytes and whose output is the `Response`. So the callers, the scopes,
+the validation of the ids and the audit of a refusal are the same as for REST and MCP.
+
+- A change with the session cookie must have the `Origin` of this host, as for REST.
+- A read with the session cookie (`ownSiteRead`) must not come from a page of a different site: a
+  request whose `Sec-Fetch-Site` is `cross-site` or `same-site` gets `forbidden`. A browser sends the
+  cookie with a link or an image of a different site. A REST read does not need this rule: its answer is
+  JSON, which a page of a different site cannot read.

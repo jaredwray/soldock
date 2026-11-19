@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage } from "@asterra/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
 import { useCallback, useId, useRef, useState } from "react";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -8,12 +8,54 @@ import { ChatComposer } from "./ChatComposer.tsx";
 import { bodyText } from "./composerSchema.ts";
 import { emojiName } from "./emoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
+import { EditFiles, LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
 import type { MentionContext } from "./mentions.ts";
-import { timeLabel } from "./model.ts";
+import { sameFileIds, timeLabel } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 import { ReactionPicker, Reactions } from "./Reactions.tsx";
 
 // One message with its actions: the rows of the room list, and the messages of the view of a thread.
+
+/** The message in edit: the body and the files that the edit box opened with, and the body and the files in it now. */
+export interface Editing {
+	id: string;
+	/** The body that the box shows when it opens. */
+	initial: ChatBody;
+	/**
+	 * The body before the edit: a text changed when it differs from this body. It is `initial`, except when the
+	 * box opens again after a refusal: the box then shows the refused text, and this body stays the old one.
+	 */
+	base: ChatBody;
+	/** The body in the box now, or null without text. */
+	body: ChatBody | null;
+	initialFiles: readonly ChatFile[];
+	files: readonly ChatFile[];
+}
+
+/** The edit state of a message when its edit box opens. */
+export function startEditing(message: ChatMessage, initial: ChatBody): Editing {
+	return { id: message.id, initial, base: initial, body: initial, initialFiles: message.files, files: message.files };
+}
+
+/** The body of the edit box, or null when it has no text: a body of only spaces counts as no text. */
+export function editedBody(editing: Editing): ChatBody | null {
+	return editing.body !== null && bodyText(editing.body).trim() !== "" ? editing.body : null;
+}
+
+/**
+ * True when the edit box can save. The text keeps its limit. A message with text needs text: an edit
+ * without text keeps the old text on the server. A message with only files can remove some of them, and
+ * keeps at least one.
+ */
+export function editSavable(editing: Editing): boolean {
+	const body = editedBody(editing);
+	if (body !== null) return bodyText(body).length <= CHAT_LIMITS.messageChars;
+	return (
+		bodyText(editing.base).trim() === "" &&
+		editing.files.length > 0 &&
+		!sameFileIds(editing.files, editing.initialFiles)
+	);
+}
 
 export interface MessageItemProps {
 	message: ChatMessage;
@@ -31,10 +73,18 @@ export interface MessageItemProps {
 	head: boolean;
 	own: boolean;
 	canDelete: boolean;
-	/** The bodies of the edit box, or null when the message is not in edit. */
-	editing: { initial: ChatBody; body: ChatBody | null } | null;
+	/** The bodies and the files of the edit box, or null when the message is not in edit. */
+	editing: Editing | null;
 	onEditStart: () => void;
 	onEditChange: (body: ChatBody | null) => void;
+	/** Removes a file from the message in the edit box. */
+	onEditRemoveFile: (itemId: string) => void;
+	/** Removes the preview of a link of an own message. */
+	onRemovePreview: (url: string) => void;
+	/** Gives the focus to the box for a new message, after the X of the last link preview. */
+	onFocusBox: () => void;
+	/** Runs when a picture or a video of the message gets its size, so the list keeps its place. */
+	onMediaLoad: () => void;
 	onEditSave: () => void;
 	onEditCancel: () => void;
 	onDelete: () => void;
@@ -72,6 +122,10 @@ export function MessageItem({
 	editing,
 	onEditStart,
 	onEditChange,
+	onEditRemoveFile,
+	onRemovePreview,
+	onFocusBox,
+	onMediaLoad,
 	onEditSave,
 	onEditCancel,
 	onDelete,
@@ -165,15 +219,16 @@ export function MessageItem({
 							// The person asked for the edit box, so the focus goes to it.
 							autofocus
 						/>
+						<EditFiles
+							files={editing.files}
+							onRemove={onEditRemoveFile}
+							onFocusAway={() => document.getElementById(editId)?.focus()}
+						/>
 						<span className="chat-edit-actions">
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
 							</button>
-							<button
-								type="submit"
-								className="button button-small button-primary"
-								disabled={!editing.body || bodyText(editing.body).length > CHAT_LIMITS.messageChars}
-							>
+							<button type="submit" className="button button-small button-primary" disabled={!editSavable(editing)}>
 								Save
 							</button>
 						</span>
@@ -184,25 +239,45 @@ export function MessageItem({
 				) : message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
-					<div className="chat-text">
-						<MessageBody body={message.body} text={message.text} mentions={mentions} />
-						{message.edited_at &&
-							(onShowEdits ? (
-								<button
-									type="button"
-									className="chat-edited link-button"
-									title={fullDate(message.edited_at)}
-									aria-label="Edited. Show the earlier versions"
-									onClick={onShowEdits}
-								>
-									(edited)
-								</button>
-							) : (
-								<span className="chat-edited" title={fullDate(message.edited_at)}>
-									(edited)
-								</span>
-							))}
-					</div>
+					<>
+						{/* A message with only files has no text to show. */}
+						{(message.text !== "" || message.files.length === 0 || message.edited_at) && (
+							<div className="chat-text">
+								<MessageBody body={message.body} text={message.text} mentions={mentions} />
+								{message.edited_at &&
+									(onShowEdits ? (
+										<button
+											type="button"
+											className="chat-edited link-button"
+											title={fullDate(message.edited_at)}
+											aria-label="Edited. Show the earlier versions"
+											onClick={onShowEdits}
+										>
+											(edited)
+										</button>
+									) : (
+										<span className="chat-edited" title={fullDate(message.edited_at)}>
+											(edited)
+										</span>
+									))}
+							</div>
+						)}
+						<MessageFiles
+							files={message.files}
+							roomId={message.room_id}
+							messageId={message.id}
+							pending={pending !== null}
+							onMediaLoad={onMediaLoad}
+						/>
+						<LinkPreviews
+							message={message}
+							ownId={ownId}
+							pending={pending !== null}
+							onRemove={onRemovePreview}
+							onFocusAway={onFocusBox}
+							onMediaLoad={onMediaLoad}
+						/>
+					</>
 				)}
 				{pending === null && !message.deleted && (
 					<Reactions reactions={message.reactions} ownId={ownId} nameOf={nameOf} onToggle={onReact} />

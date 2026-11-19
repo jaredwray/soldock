@@ -44,6 +44,14 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
   metadata.
 - `/ws/chat/rooms/{room_id}`: the WebSocket of a chat room, for its members
   ([`src/chat/`](src/chat/README.md#the-socket-of-a-room)). It carries events from the room only.
+- `PUT /blob/drive/{space_id}/uploads/{upload_id}/parts/{part_number}`: the raw bytes of one part of a
+  Drive upload, the same as `drive.upload_part` ([`src/drive/`](src/drive/README.md#uploads-in-parts)).
+- `GET /dl/drive/{space_id}/{item_id}`, `GET /dl/chat/{room_id}/{message_id}/{item_id}` and
+  `GET /dl/chat/{room_id}/{message_id}/links/image`: streamed downloads with the access check on each
+  request, the same as `drive.download_file`, `chat.download_file` and `chat.download_link_image`. An
+  answer is an attachment, or a picture or a video that the server found in the bytes, with a policy that
+  blocks scripts ([`src/drive/`](src/drive/README.md#downloads)). Each other path under `/blob/` and `/dl/`
+  gets `404`.
 - `/ws/events`: the WebSocket of a principal, with each change of its rooms
   ([`src/identity/`](src/identity/README.md#the-events-socket)). It carries events only.
   Each other path under `/ws/` gets `404`.
@@ -57,7 +65,8 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound` and `soldock-webhooks`, and acknowledges batches of other queues.
+  `soldock-mail-inbound`, `soldock-webhooks` and `soldock-chat-previews` (the link previews of Chat),
+  and acknowledges batches of other queues.
   `scheduled` logs.
 
 ## Bindings
@@ -66,9 +75,10 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
 | `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, and the webhooks of Mail and Chat |
-| `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, and the bytes of each version of each Drive file |
+| `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, the bytes and the small picture of each version of each Drive file, the parts of an upload in progress, the images of docs, and the pictures of link previews of Chat |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
+| `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal, and one for each shared drive |
@@ -114,9 +124,13 @@ with injected inbound mail.
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
-| File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>` |
+| File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |
+| Uploads in parts that are not complete | [`drive`](src/drive/README.md#uploads-in-parts) | `DriveSpaceDO` tables `uploads`, `upload_parts`; R2 multipart uploads |
 | The content of each doc and each sheet, with its revision | [`collab`](src/collab/README.md) | `DocumentDO` SQLite |
-| Rooms and direct messages (members, read markers, messages, outbox, idempotency keys) | [`chat`](src/chat/README.md) | `ChatRoomDO` SQLite |
+| Rooms and direct messages (members, read markers, messages with their files and link previews, outbox, idempotency keys) | [`chat`](src/chat/README.md) | `ChatRoomDO` SQLite |
+| Pictures of link previews | [`chat`](src/chat/README.md#link-previews) | R2 `BLOBS`, `chat/<room id>/<message id>/link-<id>` |
+| The cache of link previews | [`chat`](src/chat/README.md#link-previews) | D1 `DIRECTORY`, table `link_previews` |
+| Jobs of link previews | [`chat`](src/chat/README.md#link-previews) | Queue `soldock-chat-previews` |
 | The room index of Chat (a copy for the lists) | [`chat`](src/chat/README.md) | D1 `DIRECTORY`, tables `chat_rooms` and `chat_members` |
 
 `MailboxDO`, `DriveSpaceDO` and `ChatRoomDO` do not extend a `AsterraObject` base class yet. Each has its own

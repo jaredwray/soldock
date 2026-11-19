@@ -82,6 +82,8 @@ describe("the socket of an open room", () => {
 			parent_id: null,
 			also_in_room: false,
 			thread: null,
+			files: [],
+			link_previews: [],
 		};
 		const { handlers } = server.last();
 		handlers.message(HELLO);

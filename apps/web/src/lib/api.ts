@@ -12,11 +12,19 @@ export function onUnauthenticated(listener: Listener): () => void {
 	};
 }
 
-const sessionFetch: FetchLike = async (url, init) => {
-	const response = await fetch(url, init);
-	if (response.status === 401) {
+/**
+ * Tells the listeners when a request of the session got 401. Each request that does not use the typed
+ * client calls it too, for example the upload of a part (`lib/upload.ts`).
+ */
+export function noteStatus(status: number): void {
+	if (status === 401) {
 		for (const listener of unauthenticatedListeners) listener();
 	}
+}
+
+const sessionFetch: FetchLike = async (url, init) => {
+	const response = await fetch(url, init);
+	noteStatus(response.status);
 	return response;
 };
 

@@ -30,6 +30,8 @@ function message(seq: number, version: number, parentId: string | null, text = `
 		parent_id: parentId,
 		also_in_room: false,
 		thread: null,
+		files: [],
+		link_previews: [],
 	};
 }
 

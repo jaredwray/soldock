@@ -7,10 +7,13 @@ export {
 	type OpenSpace,
 	openSpace,
 	readDocument,
+	spaceStub,
 	toOneItem,
 	writeDocument,
 } from "./access.ts";
-export { driveHandlers } from "./handlers.ts";
-export { DriveSpaceDO, type ItemRecord } from "./space.ts";
+export { contentOf, driveHandlers } from "./handlers.ts";
+export { filesForMessage, roomFile } from "./rooms.ts";
+export { DriveSpaceDO, type FileSnapshot, type ItemRecord } from "./space.ts";
+export { mountDriveTransfer, versionResponse } from "./transfer.ts";
 export { driveWatchers } from "./watch.ts";
 export { enableDriveEvents } from "./webhooks.ts";

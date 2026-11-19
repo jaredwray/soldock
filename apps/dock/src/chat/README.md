@@ -4,18 +4,19 @@
 > messages, messages with plain text, the read marker, and access for people and agents. The
 > second layer has the live socket of a room. Outbound webhooks notify members of new messages. The
 > third layer starts with the state of each principal in its `PrincipalDO`: the joined rooms, the
-> read markers and the unread counts. Layer 8 starts with stars: a member can put its star on a
-> room. Keep this README current as the module grows. It is
+> read markers and the unread counts. Layer 5 has files in messages, through Drive, and link
+> previews. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
 > the module's contract. The plan for the next layers is in
 > [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads. Later: files, search, browser notifications. |
-| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages, the outbox, idempotency keys, its live sockets); the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it. |
-| **Depends on** | `platform`, `webhooks`, `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.edit_message`, `chat.delete_message`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews. Later: search, browser notifications. |
+| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it. |
+| **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/`). |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
+| **Downloads** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture) and `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview). See [Files in messages](#files-in-messages) and [Link previews](#link-previews). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -36,6 +37,9 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `mentions.ts` | The mention nodes of a body: from the handles and name aliases in its text, with the directory |
 | `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
 | `webhooks.ts` | The Chat adapter for shared webhook operations |
+| `files.ts` | `chat.download_file`, `chat.download_link_image`, and the routes of the two under `/dl/chat/` |
+| `links.ts` | The links of a body that get a preview, the state of each preview, and the output of a preview |
+| `previews.ts` | The consumer of the queue `soldock-chat-previews`: the fetch of each preview with the guard, the cache, and the picture |
 | `watch.ts` | The change feeds of the `chat.room` and `chat.rooms` resources, for MCP `subscriptions/listen` |
 
 ## Rooms
@@ -692,15 +696,143 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
   A new account has a new principal id, so it has a different object. No new account gets those
   states.
 
+## Files in messages
+
+A file in a message is an item of the Drive of its author. Chat stores no bytes. Each member of the
+room can download the file, and nobody else can.
+
+- `chat.post_message` and `chat.edit_message` take `file_ids`: at most 10 files
+  (`CHAT_LIMITS.filesPerMessage`) of the own drive of the caller, in order. A message with files can
+  have no text. An edit with `file_ids` replaces the list, and an empty list removes each file.
+  Without a text form, such an edit keeps the text.
+- A call with files needs the `drive.share` scope too, because it gives each member of the room
+  access to the files. So a token with only the Chat scopes cannot show the Drive of its principal to a
+  room.
+- The Worker checks each file in the drive of the caller before the room stores the message
+  (`fileForRoom`): an item of that drive, a file, outside the trash, and not in a move. A refused file
+  posts nothing. An edit checks only the files that it adds.
+- A retry with the same idempotency key gets the message of its first call before the check of the files
+  (`postedMessage`). So a retry works also after the author put a file of the first call in the trash.
+- The message keeps the facts of each file at the time of the post (`message_files`): the name, the
+  type that the author gave, the size, the type that the server found in the first bytes, and the size
+  of its small picture. The output has `files`, with `kind` `image` or `video` only for a type that a
+  browser can show. A deleted message keeps no file.
+
+### The grant of a room
+
+- The drive of a file keeps a grant for each room that holds it (`room_grants` in the
+  [`DriveSpaceDO`](../drive/README.md#files-in-rooms-of-chat)). The owner of the file sees the rooms in
+  `drive.list_permissions` (`room_grants`).
+- The room writes the grant through its outbox, with the target `grant:<space id>:<item id>`. The target
+  holds no change: the room sends the current state, a grant while a message of the room that stays holds
+  the file, else no grant. So a post, an edit and a delete cannot reach Drive in the wrong order, and a
+  second delivery changes nothing. The author of the newest such message is the author of the grant.
+- A new message with files, and an edit that adds files, send their grants before the socket event, so
+  a member that gets the event can download the files. A grant that fails waits in the outbox, and the
+  alarm tries it again (1 minute, doubled, at most 1 hour).
+
+### A download
+
+- `chat.download_file` returns base64, with at most 10 MiB in one answer, and `offset` and `length` for a
+  larger file. `GET /dl/chat/{room_id}/{message_id}/{item_id}` streams the file, with one range at most.
+  `variant: preview` gives the small picture of a picture or a video. The two run through the invoker
+  with the callers and the scopes of `chat.download_file` (`chat.read`).
+- Each download makes two checks. The room checks that the caller is a member now, and that the message
+  holds the file and is not deleted (`fileRef`). The drive of the file checks its grant for the room, and
+  that the file is outside the trash (`roomFile`). A principal that is not a member gets `not_found`, also
+  for a public room and for an owner or an admin of the organization: the file is for the members.
+- A member that leaves, or that the owner removes, fails the first check at once. Drive needs no change.
+- Drive rules win. A file that its author put in the trash, deleted, or moved to a different drive gives
+  `not_found`. The message keeps its facts. A file that comes back from the trash works again.
+- The answer of `/dl/` is the answer of Drive: an attachment, or inline only for a picture or a video
+  that the server found in the bytes, with a policy that blocks scripts. See
+  [Downloads](../drive/README.md#downloads).
+- Known limit: a download that passed the checks before a leave can complete.
+- Known limit: a moved file has a different drive, and a message keeps the drive of the post. Such a file
+  gives `not_found` in the room.
+
+## Link previews
+
+The server fetches a preview for the first 3 https links of a message (`CHAT_LIMITS.linksPerMessage`):
+the link marks of the body, and the bare addresses in text that is not code. A client cannot send a
+preview: no input field takes one.
+
+- The post stores the link states (`links_json`), each one `pending`, and a row in `link_jobs`. The
+  post never waits for a site.
+- The alarm of the room sends the job to the queue `soldock-chat-previews`. The consumer asks the room
+  for the links that wait (`linkJob`), fetches each preview, and gives the results to the room
+  (`setLinkPreviews`). The room changes the message with a new version, and sends it to the sockets. The
+  preview changes no `edited_at`, sends no webhook, and uses no message allowance.
+- The room sends a job again after 10 minutes without a result. After 3 sends, each preview that waits
+  gets `none`. A result for a link that does not wait now changes nothing, and its picture goes from R2.
+- An edit keeps the state of each link that stays. A new link waits for a fetch. The picture of a link
+  that went away goes from R2.
+
+### The fetch
+
+The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules of Ember:
+
+- The address follows the rules of `publicUrlProblem`: https, the default port, a host name and not an IP
+  address, no user name, and not the host of this deployment. The fetch drops the fragment.
+- The host has labels of 1 to 63 letters, digits or hyphens. A host in an old form of an IPv4 address is
+  refused.
+- DNS over HTTPS at Cloudflare gives the A and AAAA addresses of the host. Each one must be public. One
+  private, local, shared, documentation or multicast address stops the fetch, and no request goes to the
+  host. An error, an empty answer, or an answer that does not parse stops the fetch too.
+- Each redirect gets the same checks. The fetch follows at most 5.
+- The fetch has 10 seconds in all. The fetch reads the first 1 MiB of a page, which holds its head, only
+  with status 200 and `text/html`. A picture has at most 1 MiB, only PNG, JPEG, GIF or WebP from its
+  bytes, and at most 4096 pixels on each side.
+- The request has no cookie and no credential.
+- When the author is an agent, its outbound policy applies to the first address and to each redirect.
+  An agent with `internal-only` gets no preview, and no request goes out.
+- Each author has a budget of 120 fetches (pages and pictures) in one hour (`link_preview_budget`). The
+  message limits are for each room, so the budget bounds the work that one author starts across many
+  rooms. A cache hit costs nothing. A link over the budget gets no preview, and no request goes out. The
+  empty budget does not go into the cache.
+- At most 2 consumers of the queue run at one time (`max_concurrency`).
+- Known limit: a Worker cannot fix the address of a request to the address of the check, so DNS can
+  change between the two. The network of a Worker cannot reach a private network, so the check is a
+  second layer.
+
+### What the room stores
+
+- The preview has the title, the description and the name of the site, from the Open Graph and Twitter
+  meta data, the `<title>` and the description. Each one is plain text: the character references are
+  decoded, the control characters go, and the lengths are 200, 500 and 100 characters.
+- The picture is in R2 for the message (`chat/<room id>/<message id>/link-<id>`). A member gets it from
+  `chat.download_link_image` or `GET /dl/chat/{room_id}/{message_id}/links/image?url=`, so the site of
+  the link never sees the address of a reader. A delete of the message, a removed preview, and an edit
+  that drops the link delete it through the outbox (target `blob:<key>`).
+- The cache in D1 (`link_previews`) keeps the facts of a page for 24 hours, and a failed fetch for 10
+  minutes. Its key is the SHA-256 of the address: it does not keep the address. It holds no picture:
+  each message fetches and stores its own picture. Each write deletes 20 expired entries at most.
+- The cache is for each author, so the policy of one agent must not change it. A failed fetch of an
+  agent with a limited policy does not go into the cache, because the policy can be the cause. An entry
+  keeps the host of each address of its fetch, and a hit for such an agent needs each host in its
+  policy.
+
+### Output
+
+- `link_previews` of a message has each ready preview, with `untrusted: true`. MCP puts the untrusted
+  notice before such output. `chat.download_link_image` has `untrusted: true` too.
+- `chat.remove_link_preview` removes the preview of one link of a message, or of each link. Only the
+  author can, and it writes an audit line. The preview does not come back, also after an edit that keeps
+  the link.
+
 ## Safety
 
 - Each change writes an audit line (`audit: true`): the room, and the message or the principal. The
   line has no text of a message. `chat.mark_read`, `chat.star_room`, `chat.follow_thread` and `chat.mark_thread_read` write no line: they change
   the view of the member, not the data of the room. A call that changed nothing writes no line. The operation invoker audits a change that got `forbidden`. A change on a room
   that the caller cannot see gets `not_found`, which has no line.
-- Chat holds text that principals of this organization wrote. No operation brings in content from
-  outside, so no output has `untrusted: true`. When a bot or a webhook can post text from outside,
-  those messages must get the mark.
+- Chat holds text that principals of this organization wrote. A link preview is content from outside:
+  each one has `untrusted: true`. When a bot or a webhook can post text from outside, those messages
+  must get the mark too.
+- The fetch of a link preview never reaches a private address. See [The fetch](#the-fetch).
+- A file never runs as active content on this origin. See [A download](#a-download). Each download has a
+  log line (`chat file download`) with the principal, the credential, the room, the message and the
+  item. It is a read, so it has no audit line.
 - The object does not read the text of a message. It never goes into a log.
 - A socket with the session cookie needs the `Origin` of this host. So a page of a different site
   cannot open a socket with the session of a person, and cannot read a room.
@@ -720,7 +852,14 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
 | Earlier versions | `ChatRoomDO` table `message_edits` | One row for each edit of a message: the text and the body before the edit, the version of the room, the time of the write and the time of the edit. The 100 newest rows of each message stay. A delete of the message removes its rows |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
-| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind. A row goes away after its write |
+| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), and the R2 objects to delete (`blob:<key>`). A row goes away after its write |
+| Files of messages | `ChatRoomDO` table `message_files` | One row for each file of a message that stays: the position, the drive, the item and the facts of the file at the time of the post. No bytes. A delete of the message, and an edit that removes the file, remove the row |
+| Link previews | `ChatRoomDO` column `messages.links_json` | The state of each link that gets a preview, with the plain text of the preview and the R2 key of its picture. A deleted message has null |
+| Jobs of link previews | `ChatRoomDO` table `link_jobs` | The message, the origin of the post, the sends and the time of the next send. A row goes away when no link waits |
+| Pictures of link previews | R2 `blobs`, key `chat/<room id>/<message id>/link-<id>` | The message owns each object. A delete of the message, a removed preview and an edit that drops the link delete it through the outbox |
+| The cache of link previews | D1 `DIRECTORY` table `link_previews` | The SHA-256 of the address (not the address), the facts of the page (no picture) with the host of each address of the fetch, the time of the fetch and the end of the entry: 24 hours, or 10 minutes for a failure. Each write deletes some expired entries. Rebuildable: a fetch fills it again. Migration `0015_link_previews.sql` |
+| Jobs of the queue of previews | Queue `soldock-chat-previews` | A room id and a message id. No text |
+| The budget of fetches of each author | D1 `DIRECTORY` table `link_preview_budget` | The principal, the start of its window and the fetches in it. One row for each author of a link. Migration `0015_link_previews.sql` |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
@@ -729,10 +868,14 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql`. `chat_members.last_read_seq` has the marker at the time of the join only |
 
+Blob reference counts: each picture of a link preview has one owner, the link state of its message. An
+error after the R2 write and before the room answers can leave an orphan, which blob GC will collect. The
+files of messages are items of Drive: the room holds no reference to their bytes.
+
 ## Later layers
 
-Not built yet: threads, mention counts and notifications, files in messages
-(through Drive), search, the MCP resource for the events of a principal, presence, typing,
+Not built yet: notifications of mentions, files of a shared drive in a message, the files of a moved
+item in a message, search, the MCP resource for the events of a principal, presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots,
 sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.

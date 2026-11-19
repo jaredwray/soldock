@@ -21,9 +21,9 @@ import {
 	previewKind,
 	previewNeighbors,
 	spaceBatches,
-	uploadMimeType,
 	uploadRefusal,
 } from "../src/features/drive/model.ts";
+import { uploadMimeType } from "../src/lib/upload.ts";
 import type { DriveView } from "../src/routes.ts";
 
 const ME = "prn_01JD00000000000000000000ME";
@@ -385,10 +385,13 @@ describe("moves", () => {
 });
 
 describe("previewKind", () => {
-	// An SVG image can hold a script, so it never goes into an <img> from a blob: URL.
-	it("shows only raster images as images", () => {
+	// An SVG image can hold a script, so it never goes into an <img>. The dialog loads all of an image, so a
+	// large image gets the card with no preview.
+	it("shows only raster images of at most 10 MiB as images", () => {
 		expect(previewKind("image/png", 10)).toBe("image");
 		expect(previewKind("IMAGE/JPEG", 10)).toBe("image");
+		expect(previewKind("image/jpeg", DRIVE_LIMITS.fileBytes)).toBe("image");
+		expect(previewKind("image/jpeg", DRIVE_LIMITS.fileBytes + 1)).toBe("none");
 		expect(previewKind("image/svg+xml", 10)).toBe("none");
 		expect(previewKind(null, 10)).toBe("none");
 	});
@@ -498,9 +501,14 @@ describe("linkPath and backPath", () => {
 });
 
 describe("uploads", () => {
+	// A new file goes in parts, up to 1 GiB. A new version goes in one call of base64, up to 10 MiB.
 	it("refuses a file over the limit, and accepts a file at the limit", () => {
-		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes })).toBeNull();
-		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes + 1 })).toMatch(/a\.bin.*10 MB/);
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.uploadBytes })).toBeNull();
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.uploadBytes + 1 })).toMatch(/a\.bin.*1 GB/);
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes }, DRIVE_LIMITS.fileBytes)).toBeNull();
+		expect(uploadRefusal({ name: "a.bin", size: DRIVE_LIMITS.fileBytes + 1 }, DRIVE_LIMITS.fileBytes)).toMatch(
+			/a\.bin.*10 MB/,
+		);
 	});
 
 	// A browser gives an empty type for an unknown extension. The server refuses such a mime_type.
