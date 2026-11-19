@@ -45,7 +45,19 @@ async function readFirstThreads(count: number) {
 		threads.push(...page.threads);
 		cursor = page.next_cursor;
 	}
-	return { threads, next_cursor: cursor };
+	// The pages have no snapshot: a thread that moved during the read can come two times.
+	return { threads: uniqueThreads(threads), next_cursor: cursor };
+}
+
+/** The threads with each thread one time, at its first place. */
+function uniqueThreads(threads: readonly ChatFollowedThread[]): ChatFollowedThread[] {
+	const seen = new Set<string>();
+	return threads.filter((thread) => {
+		const key = threadKey(thread);
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
 
 /** The key of a thread in the view: the room and the first message. */
@@ -64,6 +76,12 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 	const [state, setState] = useState<ListState>({ status: "loading" });
 	const [open, setOpen] = useState<ChatFollowedThread | null>(null);
 	const [loadingMore, setLoadingMore] = useState(false);
+	/** The reason of a "Show more" that failed. The list stays. */
+	const [moreError, setMoreError] = useState<string | null>(null);
+	/** "Try again" of a list that did not load adds 1, for a new read at once. */
+	const [retries, setRetries] = useState(0);
+	/** Each read of the list that loaded adds 1. A card whose read failed tries again after it. */
+	const [listReads, setListReads] = useState(0);
 	/** The threads that show, so a new read of the first page keeps as many. */
 	const shown = state.status === "ready" ? state.threads.length : 0;
 	const shownRef = useRef(shown);
@@ -78,13 +96,16 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 		document.title = "Threads – Asterra";
 	}, []);
 
-	// Each tick reads the list again, with at least the threads that show.
+	// Each tick, and each "Try again", reads the list again, with at least the threads that show.
 	useEffect(() => {
 		void tick;
+		void retries;
 		const read = ++reads.current;
 		readFirstThreads(shownRef.current)
 			.then((page) => {
-				if (read === reads.current) setState({ status: "ready", threads: page.threads, nextCursor: page.next_cursor });
+				if (read !== reads.current) return;
+				setState({ status: "ready", threads: page.threads, nextCursor: page.next_cursor });
+				setListReads((count) => count + 1);
 			})
 			.catch((error: unknown) => {
 				if (read !== reads.current) return;
@@ -93,22 +114,28 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 			});
 		// The open thread reads what changed. A tick has no version of the room, so it always reads.
 		for (const listener of listeners.current) listener({ type: "catch-up" });
-	}, [tick]);
+	}, [tick, retries]);
 
 	async function showMore() {
 		if (state.status !== "ready" || state.nextCursor === null || loadingMore) return;
 		setLoadingMore(true);
+		setMoreError(null);
 		const read = reads.current;
 		try {
 			const page = await readThreads({ limit: PAGE, cursor: state.nextCursor });
 			if (read !== reads.current) return;
 			setState((current) =>
 				current.status === "ready"
-					? { status: "ready", threads: [...current.threads, ...page.threads], nextCursor: page.next_cursor }
+					? {
+							status: "ready",
+							threads: uniqueThreads([...current.threads, ...page.threads]),
+							nextCursor: page.next_cursor,
+						}
 					: current,
 			);
 		} catch (error) {
-			setState({ status: "error", error: errorMessage(error) });
+			// A newer read of the list replaced the page that this one continued. Else the list stays.
+			if (read === reads.current) setMoreError(errorMessage(error));
 		} finally {
 			setLoadingMore(false);
 		}
@@ -148,9 +175,19 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 				</p>
 			)}
 			{state.status === "error" && (
-				<p className="list-state" role="alert">
-					{state.error}
-				</p>
+				<div className="list-state" role="alert">
+					<p>{state.error}</p>
+					<button
+						type="button"
+						className="button"
+						onClick={() => {
+							setState({ status: "loading" });
+							setRetries((count) => count + 1);
+						}}
+					>
+						Try again
+					</button>
+				</div>
 			)}
 			{state.status === "ready" && state.threads.length === 0 && (
 				<div className="chat-empty chat-empty-page">
@@ -165,6 +202,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 							<li key={threadKey(thread)}>
 								<ThreadCard
 									thread={thread}
+									listReads={listReads}
 									active={open !== null && threadKey(open) === threadKey(thread)}
 									onOpen={(button) => {
 										opener.current = button;
@@ -179,6 +217,11 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 							<button type="button" className="button" disabled={loadingMore} onClick={() => void showMore()}>
 								{loadingMore ? "Loading…" : "Show more"}
 							</button>
+						</p>
+					)}
+					{moreError && (
+						<p className="chat-threads-more-error" role="alert">
+							More threads did not load. {moreError}
 						</p>
 					)}
 				</div>
@@ -207,14 +250,27 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
  */
 function ThreadCard({
 	thread,
+	listReads,
 	active,
 	onOpen,
 }: {
 	thread: ChatFollowedThread;
+	/** The reads of the list that loaded. After a failure, the card reads again with the next one. */
+	listReads: number;
 	active: boolean;
 	onOpen: (button: HTMLButtonElement) => void;
 }) {
 	const [parent, setParent] = useState<ChatMessage | null>(null);
+	/**
+	 * True after a read that failed. It is a ref, not a state, so a failure and a success never start a read
+	 * by themselves: only the next read of the list does (`attempt`).
+	 */
+	const failed = useRef(false);
+	const [attempt, setAttempt] = useState(0);
+	useEffect(() => {
+		void listReads;
+		if (failed.current) setAttempt((count) => count + 1);
+	}, [listReads]);
 	const roomId = thread.room.id;
 	const messageId = thread.message_id;
 	const lastReplyAt = thread.last_reply_at;
@@ -222,18 +278,24 @@ function ThreadCard({
 	useEffect(() => {
 		void lastReplyAt;
 		void roomVersion;
+		void attempt;
 		let stopped = false;
 		api
 			.call("chat.list_replies", { room_id: roomId, message_id: messageId, limit: 1 })
+			// A read that a newer read replaced changes nothing, so a late success cannot hide a newer failure.
 			.then((page) => {
-				if (!stopped) setParent(page.parent);
+				if (stopped) return;
+				failed.current = false;
+				setParent(page.parent);
 			})
-			// The card shows the room and the time without the message.
-			.catch(() => {});
+			// The card shows the room and the time without the message, until the next read of the list.
+			.catch(() => {
+				if (!stopped) failed.current = true;
+			});
 		return () => {
 			stopped = true;
 		};
-	}, [roomId, messageId, lastReplyAt, roomVersion]);
+	}, [roomId, messageId, lastReplyAt, roomVersion, attempt]);
 
 	const title = roomTitle(thread.room);
 	const unread = thread.unread_count;

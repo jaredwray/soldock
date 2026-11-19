@@ -879,10 +879,15 @@ MCP clients. The app has no UI-only path.
       least the threads that show, so "Show more" pages stay.
       While the first fill of the server continues, a page has no threads and a cursor: the view asks
       again, at most 10 times.
+    - A list that does not load shows the reason and "Try again". A "Show more" that fails keeps the list
+      and shows its reason under the button. An answer of an older read never replaces a newer list.
     - A first message with only files shows the number of its files on its card.
     - Each card has the room, the start of the first message (`chat.list_replies` with `limit: 1`, again
       after a new reply or a new `version` of the room, so an edit or a delete of the message shows), the
-      number of replies, the time of the newest reply, and the new replies.
+      number of replies, the time of the newest reply, and the new replies. A card whose read failed
+      reads again with the next read of the list that loads, and never by itself: the failure is a ref,
+      so a failure or a success starts no read. A refresh of several pages can bring a thread two times
+      while threads move, so the view keeps each thread one time.
     - A card opens the thread in the view of a thread at the right, as in a room. That view moves the read
       marker, so the card loses its count after the next `chat.threads` event. Each change of
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.
@@ -935,8 +940,11 @@ MCP clients. The app has no UI-only path.
       pressed. The browser counts each reaction that the person adds. The most uses come first,
       and the most recent use first for one count. Before the person has 3 counts, 👍, ❤️ and 😂
       fill the places. The buttons show the counts of the time that the room opened, so a button
-      does not move after a click. A second click on the same emoji of a message while its call
-      runs does nothing, so one reaction counts one time. Known limit: the counts are in this
+      does not move after a click. A second click of the same kind on the same emoji of a message
+      while its call runs does nothing, so one reaction counts one time. A click of the other kind
+      waits for that call, then goes out (`createToggleLine`). The socket of the room can show the
+      reaction before the answer of its call, so a click that removes it then must not get lost.
+      Known limit: the counts are in this
       browser only. A browser that refuses `localStorage` keeps no counts and shows the default
       emoji.
     - The action **Add a reaction** (an outline face) opens a list of common emoji with a search box. The

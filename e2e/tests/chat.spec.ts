@@ -180,7 +180,7 @@ test("the Threads view lists the followed threads with their new replies, and a 
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const nadia = await signIn(browser, "nadia");
-	const name = unique("Threads room");
+	const name = unique("Followed room");
 	const roomId = await createRoom(tomasz, name, [nadia]);
 	const parent = await post(tomasz, roomId, unique("thread to follow"));
 	const answer = unique("answer");
@@ -188,10 +188,18 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	await reply(nadia, roomId, parent.id, answer);
 	const page = await tomasz.newPage();
 	await page.goto("/chat");
+	// The first read of the list fails once (the count of the sidebar has a filter, so it does not).
+	await page.route(
+		(url) => url.pathname === "/api/v1/chat/threads" && !url.searchParams.has("filter"),
+		(route) => route.abort(),
+		{ times: 1 },
+	);
 	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
 	// A room of a different test can have a name that starts with "Threads", so the link is found by its address.
 	await page.getByRole("navigation", { name: "Rooms" }).locator('a[href="/chat/threads"]').click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
+	// A list that does not load offers to try again.
+	await page.getByRole("button", { name: "Try again" }).click();
 	const card = page.getByRole("button").filter({ hasText: parent.text });
 	await expect(card).toContainText(name);
 	await expect(card).toContainText("1 new reply");
@@ -645,6 +653,37 @@ test("the quick reactions add and remove a reaction, and the next room puts the 
 	await expect(page.locator(".chat-composer")).toBeVisible();
 	await first.hover();
 	expect(await quick(first)).toEqual(["🎉", "👍", "❤️"]);
+});
+
+// The socket of the room can bring a reaction before the answer of its call. A click that removes it then
+// must not get lost.
+test("a click that removes a reaction before the answer of its add came removes it", async ({ browser }) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const roomId = await createRoom(tomasz, unique("Toggle"), [nadia]);
+	await post(tomasz, roomId, "a message to react to");
+	const page = await nadia.newPage();
+	await openRoom(page, roomId);
+	const row = page.locator(".chat-message").filter({ hasText: "a message to react to" });
+	// The room takes the add at once. Only its answer waits, so the socket shows the reaction first.
+	let releaseAnswer = () => {};
+	const answerHeld = new Promise<void>((done) => {
+		releaseAnswer = done;
+	});
+	await page.route("**/api/v1/chat/rooms/*/messages/*/reactions", async (route) => {
+		if (route.request().method() !== "POST") return route.continue();
+		const response = await route.fetch();
+		await answerHeld;
+		await route.fulfill({ response });
+	});
+	await row.hover();
+	const thumbs = row.getByRole("button", { name: "React with thumbs up" });
+	await thumbs.click();
+	await expect(thumbs).toHaveAttribute("aria-pressed", "true");
+	await thumbs.click();
+	releaseAnswer();
+	await expect(row.getByRole("button", { name: /^thumbs up:/ })).toHaveCount(0);
+	await expect(thumbs).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a reaction from the picker shows on the message, a reaction of a different person arrives live, and a click removes it", async ({
