@@ -1836,6 +1836,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return row ? { message: this.messageRecord(opened.room.room_id, row) } : null;
 	}
 
+	/**
+	 * The name of the folder of the room in the drive of a member, for the files that the member puts in its
+	 * messages: the name of the room, or the name of the other member of a direct message. A principal that
+	 * is not a member gets not_found, also for a public room.
+	 */
+	folderName(call: RoomCall): { name: string } | Refusal {
+		const room = this.room();
+		if (!room || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
+		if (room.kind === "dm") {
+			const peer = this.peerJson(room, call.actor.principal_id);
+			return { name: peer ? (JSON.parse(peer) as ActorRecord).display_name : "Direct message" };
+		}
+		return { name: room.name ?? "Room" };
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,

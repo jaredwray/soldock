@@ -704,7 +704,9 @@ A file in a message is an item of the Drive of its author. Chat stores no bytes.
 room can download the file, and nobody else can.
 
 - `chat.post_message` and `chat.edit_message` take `file_ids`: at most 10 files
-  (`CHAT_LIMITS.filesPerMessage`) of the own drive of the caller, in order. A message with files can
+  (`CHAT_LIMITS.filesPerMessage`) of the own drive of the caller, in order. An upload with `room_id` puts
+  a file in the folder Chat/<room name> of that drive ([The folders of
+  Chat](../drive/README.md#the-folders-of-chat)). The room gives the name (`folderName`). A message with files can
   have no text. An edit with `file_ids` replaces the list, and an empty list removes each file.
   Without a text form, such an edit keeps the text.
 - A call with files needs the `drive.share` scope too, because it gives each member of the room

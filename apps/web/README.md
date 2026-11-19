@@ -1005,8 +1005,9 @@ MCP clients. The app has no UI-only path.
     at the left of the send button opens the file dialog of the browser, for one or more files. A
     paste of files, for example a screenshot, adds them too. A drop of files on the list or on the
     box adds them.
-    - Each file uploads at once to the root of the own drive (`uploadFile`, see [Uploads](#uploads)).
-      Chat has no folder of its own in Drive.
+    - Each file uploads at once to the folder Chat/<room name> of the own drive (`uploadFile` with
+      `roomId`, see [Uploads](#uploads)). The server makes the folders. For a direct message, the folder
+      has the name of the other person.
     - Each file shows as a chip in the box: an icon, the name, and the size. While the file uploads,
       the chip shows the bytes that went out and a bar (`role="progressbar"`, with `aria-valuenow` in
       percent). A failed upload shows "Not uploaded" with the reason, a button to try again, and the

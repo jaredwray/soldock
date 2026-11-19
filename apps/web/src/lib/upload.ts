@@ -345,7 +345,7 @@ function stopOnPageHide(): void {
 }
 
 /** The calls of the server for the upload of `file`. */
-function serverTransport(file: Blob, place: { spaceId?: string; parentId?: string }): UploadTransport {
+function serverTransport(file: Blob, place: { spaceId?: string; parentId?: string; roomId?: string }): UploadTransport {
 	const of = (upload: DriveUpload) => ({ space_id: upload.space_id, upload_id: upload.id });
 	return {
 		create: async (input) =>
@@ -353,6 +353,7 @@ function serverTransport(file: Blob, place: { spaceId?: string; parentId?: strin
 				await api.call("drive.create_upload", {
 					...(place.spaceId ? { space_id: place.spaceId } : {}),
 					...(place.parentId ? { parent_id: place.parentId } : {}),
+					...(place.roomId ? { room_id: place.roomId } : {}),
 					...input,
 				})
 			).upload,
@@ -393,6 +394,11 @@ export interface UploadFileOptions extends UploadOptions {
 	spaceId?: string;
 	/** The folder that gets the file. Without it, the root of the drive. */
 	parentId?: string;
+	/**
+	 * The room of Chat of the message that gets the file. The file then goes into the folder Chat/<room name>
+	 * of the own drive, which the server makes. Not with `spaceId` or `parentId`.
+	 */
+	roomId?: string;
 }
 
 /** The files that upload now in the page. */
@@ -417,6 +423,7 @@ async function uploadNow(file: File, options: UploadFileOptions): Promise<DriveI
 		const { item } = await api.call("drive.upload_file", {
 			...(options.spaceId ? { space_id: options.spaceId } : {}),
 			...(options.parentId ? { parent_id: options.parentId } : {}),
+			...(options.roomId ? { room_id: options.roomId } : {}),
 			name: file.name,
 			...(mimeType ? { mime_type: mimeType } : {}),
 			content_base64: "",

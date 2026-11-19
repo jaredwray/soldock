@@ -141,6 +141,17 @@ export function composer(page: Page, name: string) {
 }
 
 /**
+ * Waits until a box of Chat that has the focus keeps a selection that the test makes. ProseMirror writes its own
+ * selection into the page 20 ms after the box gets the focus. A selection that only the page has, for example
+ * from `locator.fill` or the End key, can go away at that time. A timer of the page with a longer delay runs
+ * after the timer of ProseMirror.
+ */
+export async function editorReady(box: Locator): Promise<void> {
+	await expect(box).toBeFocused();
+	await box.evaluate(() => new Promise((resolve) => setTimeout(resolve, 25)));
+}
+
+/**
  * The texts of the messages that wait for the server, from the store of the browser (`outboxStore.ts`
  * of the web app). A record goes when its message settles, so an empty list means that the outbox is done.
  */
@@ -162,15 +173,4 @@ export function waitingRecords(page: Page): Promise<string[]> {
 				};
 			}),
 	);
-}
-
-/**
- * Puts `text` in place of the text of a message box. `fill` selects the text in the DOM only, and the box
- * can put back its own selection before the input, so the old text stays. The select-all key goes through
- * the box itself, so its selection has all the text.
- */
-export async function replaceText(box: Locator, text: string): Promise<void> {
-	await box.focus();
-	await box.press("ControlOrMeta+a");
-	await box.page().keyboard.insertText(text);
 }

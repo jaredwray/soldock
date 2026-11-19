@@ -336,6 +336,61 @@ export async function driveBlobKeys(principalId: string): Promise<string[]> {
 	return listed.objects.map((object) => object.key);
 }
 
+/** The object of a drive. */
+const driveStub = (spaceId: string) => env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));
+
+/** The moves of a drive that are not complete. */
+export const openMoves = (spaceId: string) =>
+	runInDurableObject(
+		driveStub(spaceId),
+		(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM transfers").one().n,
+	);
+
+/**
+ * R2 is a boundary of the drive object. This makes each call of one R2 method by one drive fail until
+ * `repair()`, after the first `allow` calls. Without `get`, a move stops in its copy step, after the target drive got the items of the
+ * move. Without `delete`, the old objects stay and their deletes wait in the outbox.
+ */
+export async function breakR2(
+	spaceId: string,
+	method: "get" | "delete" = "get",
+	allow = 0,
+): Promise<() => Promise<void>> {
+	const real = await runInDurableObject(driveStub(spaceId), (instance) => {
+		const target = instance as unknown as { env: Env };
+		const before = target.env;
+		let calls = 0;
+		const broken = new Proxy(before.BLOBS, {
+			get(blobs, property) {
+				const value = Reflect.get(blobs, property);
+				if (property !== method) return typeof value === "function" ? value.bind(blobs) : value;
+				// The first `allow` calls work.
+				return (...args: unknown[]) =>
+					calls++ < allow
+						? (value as (...values: unknown[]) => unknown).apply(blobs, args)
+						: Promise.reject(new Error("R2 is not available"));
+			},
+		});
+		target.env = { ...before, BLOBS: broken };
+		return before;
+	});
+	return () =>
+		runInDurableObject(driveStub(spaceId), (instance) => {
+			(instance as unknown as { env: Env }).env = real;
+		});
+}
+
+/** Makes each waiting step of the moves of a drive due, and runs the alarm until no move is open. */
+export async function runMoves(spaceId: string, rounds = 12): Promise<void> {
+	for (let round = 0; round < rounds && (await openMoves(spaceId)) > 0; round++) {
+		await runInDurableObject(driveStub(spaceId), (_instance, state) => {
+			state.storage.sql.exec("UPDATE transfers SET next_attempt_at = 0");
+		});
+		await runDurableObjectAlarm(driveStub(spaceId));
+	}
+	expect(await openMoves(spaceId)).toBe(0);
+}
+
 /** Sends one JSON-RPC request to /mcp. */
 export async function mcp(key: string | null, method: string, params?: unknown, headers: Record<string, string> = {}) {
 	const res = await request("/mcp", {

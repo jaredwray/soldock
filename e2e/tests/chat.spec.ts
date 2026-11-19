@@ -1,7 +1,8 @@
-import { type BrowserContext, expect, type Page, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, type Route, test } from "@playwright/test";
 import {
 	composer,
 	createRoom,
+	editorReady,
 	fill,
 	markRead,
 	newest,
@@ -9,7 +10,6 @@ import {
 	post,
 	postMarkdown,
 	react,
-	replaceText,
 	reply,
 	rowsWithText,
 	signIn,
@@ -302,7 +302,8 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 	await ownRow.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = mine.page.getByRole("textbox", { name: "New text of the message" });
 	const changed = unique("changed reply");
-	await replaceText(editBox, changed);
+	await editorReady(editBox);
+	await editBox.fill(changed);
 	await mine.panel.getByRole("button", { name: "Save" }).click();
 	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
 	await expect(other.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
@@ -353,37 +354,34 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	// A reply makes the author of the first message follow the thread, and the reply is new for it.
 	await reply(nadia, roomId, parent.id, answer);
 	const page = await tomasz.newPage();
-	// Tests that run at the same time give Tomasz new threads, and each `chat.threads` event reads the list again.
-	// A read that loads removes "Try again" before the click. So the events socket of the page holds the events
-	// of the server until the list loaded after "Try again".
-	let holding = true;
-	const releases: (() => void)[] = [];
-	await page.routeWebSocket(/\/ws\/events$/, (socket) => {
-		const server = socket.connectToServer();
-		const held: (string | Buffer)[] = [];
-		server.onMessage((message) => (holding ? held.push(message) : socket.send(message)));
-		releases.push(() => {
-			for (const message of held.splice(0)) socket.send(message);
-		});
-	});
 	await page.goto("/chat");
-	// The first read of the list fails once (the count of the sidebar has a filter, so it does not).
+	// The view also reads the list after each event of the socket and each read of the room list, so a read can
+	// come at any time. Each read of the list fails until "Try again" shows, and waits during the click. So no
+	// read can remove the button before the click. (The count of the sidebar has a filter, so it does not fail.)
+	let phase: "fail" | "hold" | "pass" = "fail";
+	const held: Route[] = [];
 	await page.route(
 		(url) => url.pathname === "/api/v1/chat/threads" && !url.searchParams.has("filter"),
-		(route) => route.abort(),
-		{ times: 1 },
+		(route) => {
+			if (phase === "fail") return route.abort();
+			if (phase === "hold") return void held.push(route);
+			return route.fallback();
+		},
 	);
 	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
 	// A room of a different test can have a name that starts with "Threads", so the link is found by its address.
 	await page.getByRole("navigation", { name: "Rooms" }).locator('a[href="/chat/threads"]').click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
 	// A list that does not load offers to try again.
-	await page.getByRole("button", { name: "Try again" }).click();
+	const tryAgain = page.getByRole("button", { name: "Try again" });
+	await expect(tryAgain).toBeVisible();
+	phase = "hold";
+	await tryAgain.click();
+	phase = "pass";
+	for (const route of held.splice(0)) await route.fallback();
 	const card = page.getByRole("button").filter({ hasText: parent.text });
 	await expect(card).toContainText(name);
 	await expect(card).toContainText("1 new reply");
-	holding = false;
-	for (const release of releases) release();
 
 	// The card opens the thread beside the list. The view reads the reply, so the card loses its count.
 	await card.click();
@@ -492,7 +490,8 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await row.hover();
 	await row.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
-	await replaceText(editBox, "refused text");
+	await editorReady(editBox);
+	await editBox.fill("refused text");
 	await page.getByRole("button", { name: "Save" }).click();
 	await expect(editBox).toHaveText("refused text");
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
@@ -500,7 +499,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	// The change goes through: the new text shows at once, with the edited mark.
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 	const editAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/edit", "POST");
-	await replaceText(editBox, "changed text");
+	await editBox.fill("changed text");
 	await page.getByRole("button", { name: "Save" }).click();
 	const changed = page.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(changed.locator(".chat-edited")).toBeVisible();
@@ -981,6 +980,7 @@ test("a message shows its formats, shows HTML as text, and the box makes formats
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
 	await expect(editBox).toHaveText("I can do that");
 	await expect(editBox.locator("strong")).toHaveText("that");
+	await editorReady(editBox);
 	await editBox.press("End");
 	const tools = page.locator(".chat-edit").getByRole("toolbar", { name: "Formatting" });
 	await expect(tools.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
@@ -1142,6 +1142,7 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await thanks.hover();
 	await thanks.getByRole("button", { name: /^Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editorReady(editBox);
 	await editBox.press("End");
 	await editBox.pressSequentially(" @to");
 	const people = page.getByRole("listbox", { name: "People and agents to mention" });
