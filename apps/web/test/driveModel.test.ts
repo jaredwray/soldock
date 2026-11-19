@@ -385,10 +385,13 @@ describe("moves", () => {
 });
 
 describe("previewKind", () => {
-	// An SVG image can hold a script, so it never goes into an <img> from a blob: URL.
-	it("shows only raster images as images", () => {
+	// An SVG image can hold a script, so it never goes into an <img>. The dialog loads all of an image, so a
+	// large image gets the card with no preview.
+	it("shows only raster images of at most 10 MiB as images", () => {
 		expect(previewKind("image/png", 10)).toBe("image");
 		expect(previewKind("IMAGE/JPEG", 10)).toBe("image");
+		expect(previewKind("image/jpeg", DRIVE_LIMITS.fileBytes)).toBe("image");
+		expect(previewKind("image/jpeg", DRIVE_LIMITS.fileBytes + 1)).toBe("none");
 		expect(previewKind("image/svg+xml", 10)).toBe("none");
 		expect(previewKind(null, 10)).toBe("none");
 	});

@@ -224,6 +224,10 @@ function outboxOf(ownId: string, roomId: string): Outbox {
 				).message,
 			describe: errorMessage,
 			active: () => currentAccount() === ownId,
+			discardFiles: (files) => {
+				// The files stay in the drive when the call fails. The person can delete them there.
+				api.call("drive.trash_items", { item_ids: files.map((file) => file.item_id) }).catch(() => {});
+			},
 		});
 		outboxes.set(name, outbox);
 		keepSaved(outbox, ownId, roomId);

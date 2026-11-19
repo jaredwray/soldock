@@ -1,13 +1,13 @@
-import { ApiError, type DriveItem, type DriveUpload, driveUploadPartPath } from "@asterra/contracts";
+import { ApiError, type DriveItem, type DriveUpload, driveUploadPartPath, operations } from "@asterra/contracts";
 import { api, noteStatus } from "./api.ts";
 import { fileToBase64 } from "./base64.ts";
 import { makePreview, wantsPreview } from "./filePreview.ts";
+import { createLimiter } from "./limiter.ts";
 
 // The upload of a file to Drive. A file with content goes in parts (`drive.create_upload`): the browser
 // sends the raw bytes of each part with a PUT, so the page gets the progress in bytes. A file of 0 bytes
-// goes with `drive.upload_file`, because an upload in parts needs at least one byte. The pure parts
-// (the plan of the parts, the sum of the progress, the order of the calls) have no DOM, so
-// apps/web/test checks them through `uploadInParts`.
+// goes with `drive.upload_file`, because an upload in parts needs at least one byte. The order of the
+// calls has no DOM, so apps/web/test checks it through `uploadInParts`.
 
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 
@@ -21,17 +21,23 @@ export function uploadMimeType(browserType: string): string | undefined {
 	return type.length <= 127 && MIME_TYPE.test(type) ? type : undefined;
 }
 
-/** The parts that go at the same time. */
-export const PART_CONCURRENCY = 3;
+/** The parts of one file that go at the same time. */
+const PART_CONCURRENCY = 3;
+
+/** The files that upload at the same time in the page. The other files wait in a queue. */
+const FILE_CONCURRENCY = 3;
 
 /** The waits before a new attempt of a call that can succeed later. After the last one, the call failed. */
-export const RETRY_WAITS_MS = [1000, 2000, 4000];
+const RETRY_WAITS_MS = [1000, 2000, 4000];
 
 /**
  * The reads of `drive.get_upload` after a part failed each attempt. Each read gives the parts that the
  * server has, and the upload sends the other parts again.
  */
-export const RESUME_ROUNDS = 2;
+const RESUME_ROUNDS = 2;
+
+/** The time without progress after which the PUT of a part stops, and goes again. */
+const STALL_MS = 60_000;
 
 /** One part of a file: its number (from 1) and its bytes from `start` up to `end`. */
 export interface PartRange {
@@ -41,7 +47,7 @@ export interface PartRange {
 }
 
 /** The parts of a file of `size` bytes, each of `partSize` bytes, and the last one with the bytes that are left. */
-export function partPlan(size: number, partSize: number): PartRange[] {
+function partPlan(size: number, partSize: number): PartRange[] {
 	if (!(size > 0 && partSize > 0)) return [];
 	const parts: PartRange[] = [];
 	for (let start = 0, number = 1; start < size; start += partSize, number += 1) {
@@ -54,11 +60,7 @@ export function partPlan(size: number, partSize: number): PartRange[] {
  * The bytes that the server has or gets now: each part in `done` in full, and the bytes of each part
  * in `loaded` that went out. A part that fails goes back to 0.
  */
-export function sentBytes(
-	plan: readonly PartRange[],
-	done: ReadonlySet<number>,
-	loaded: ReadonlyMap<number, number>,
-): number {
+function sentBytes(plan: readonly PartRange[], done: ReadonlySet<number>, loaded: ReadonlyMap<number, number>): number {
 	let sent = 0;
 	for (const part of plan) {
 		const length = part.end - part.start;
@@ -81,6 +83,8 @@ export interface UploadTransport {
 	status(upload: DriveUpload): Promise<DriveUpload>;
 	complete(upload: DriveUpload): Promise<DriveItem>;
 	abort(upload: DriveUpload): Promise<void>;
+	/** The file that a completed upload made. */
+	item(upload: DriveUpload, itemId: string): Promise<DriveItem>;
 }
 
 export interface UploadOptions {
@@ -94,7 +98,7 @@ export interface UploadOptions {
  * True when a later attempt can succeed: the network failed, the server had a failure, or the rate
  * limit refused the call. Each other refusal is final, for example an upload that is not there now.
  */
-export function canRetry(error: unknown): boolean {
+function canRetry(error: unknown): boolean {
 	if (error instanceof ApiError) return error.status >= 500 || error.status === 408 || error.code === "rate_limited";
 	return !(error instanceof DOMException && error.name === "AbortError");
 }
@@ -139,14 +143,19 @@ async function withRetries<T>(call: () => Promise<T>, signal: AbortSignal): Prom
 /**
  * Uploads a file in parts, and returns the new file.
  *
- * - `drive.create_upload` has a random idempotency key, so a second attempt of the call starts no
- *   second upload.
+ * - `drive.create_upload` has one random idempotency key for each upload. Each attempt of the call
+ *   sends the same key, so a lost answer starts no second upload.
  * - At most `PART_CONCURRENCY` parts go at the same time. A part that fails goes again after the waits
  *   of `RETRY_WAITS_MS`. The other parts continue.
  * - After a part failed each attempt, the upload reads the parts that the server has
  *   (`drive.get_upload`), and sends only the others, at most `RESUME_ROUNDS` times.
+ * - `drive.complete_upload` goes again after a failure: a second call gives the same file. When it
+ *   fails each attempt, the upload reads its state: the server can have made the file, and the answer
+ *   got lost. A new attempt of the person then makes no second file.
  * - The signal stops the upload, and the server removes the parts (`drive.abort_upload`). A failed
  *   upload removes its parts too: a new attempt starts a new upload.
+ * - A completion that runs when the signal aborts can make the file. The call then gives that file, so
+ *   the caller can remove it.
  */
 export async function uploadInParts(
 	source: { name: string; size: number; mimeType?: string },
@@ -155,16 +164,13 @@ export async function uploadInParts(
 ): Promise<DriveItem> {
 	const signal = options.signal ?? new AbortController().signal;
 	signal.throwIfAborted();
-	let upload = await withRetries(
-		() =>
-			transport.create({
-				name: source.name,
-				...(source.mimeType ? { mime_type: source.mimeType } : {}),
-				size: source.size,
-				idempotency_key: crypto.randomUUID(),
-			}),
-		signal,
-	);
+	const create = {
+		name: source.name,
+		...(source.mimeType ? { mime_type: source.mimeType } : {}),
+		size: source.size,
+		idempotency_key: crypto.randomUUID(),
+	};
+	let upload = await withRetries(() => transport.create(create), signal);
 	const plan = partPlan(upload.size, upload.part_size);
 	let done = new Set(upload.parts_received);
 	const loaded = new Map<number, number>();
@@ -227,7 +233,15 @@ export async function uploadInParts(
 			report();
 		}
 		signal.throwIfAborted();
-		return await withRetries(() => transport.complete(upload), signal);
+		try {
+			return await withRetries(() => transport.complete(upload), signal);
+		} catch (error) {
+			signal.throwIfAborted();
+			// The server can have made the file, and each answer got lost.
+			const state = await transport.status(upload).catch(() => null);
+			if (state?.state === "done" && state.item_id) return await transport.item(state, state.item_id);
+			throw error;
+		}
 	} catch (error) {
 		const stopped = upload;
 		void transport.abort(stopped).catch(() => {});
@@ -258,9 +272,25 @@ function putPart(url: string, body: Blob, onProgress: (loaded: number) => void, 
 		}
 		const request = new XMLHttpRequest();
 		const stop = () => request.abort();
+		// A connection that sends nothing for `STALL_MS` stops. The part then goes again, as after a
+		// failure of the network.
+		let stalled = false;
+		let timer = 0;
+		const watch = () => {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				stalled = true;
+				request.abort();
+			}, STALL_MS);
+		};
 		request.open("PUT", url);
 		request.setRequestHeader("accept", "application/json");
-		request.upload.onprogress = (event) => onProgress(event.loaded);
+		request.upload.onprogress = (event) => {
+			watch();
+			onProgress(event.loaded);
+		};
+		// After the last byte, the server has the same time to answer.
+		request.upload.onload = watch;
 		request.onload = () => {
 			noteStatus(request.status);
 			if (request.status >= 200 && request.status < 300) resolve();
@@ -268,10 +298,49 @@ function putPart(url: string, body: Blob, onProgress: (loaded: number) => void, 
 		};
 		// The same error as a fetch that fails, so `errorMessage` tells about the connection.
 		request.onerror = () => reject(new TypeError("The connection failed."));
-		request.onabort = () => reject(abortError(signal));
-		request.onloadend = () => signal.removeEventListener("abort", stop);
+		request.onabort = () =>
+			reject(stalled ? new TypeError("The connection sent nothing for 60 seconds.") : abortError(signal));
+		request.onloadend = () => {
+			window.clearTimeout(timer);
+			signal.removeEventListener("abort", stop);
+		};
 		signal.addEventListener("abort", stop, { once: true });
+		watch();
 		request.send(body);
+	});
+}
+
+/**
+ * The uploads of this page that run, by their id. When the page closes, the page asks the server to stop
+ * each one, so its parts do not stay for 24 hours.
+ */
+const running = new Map<string, DriveUpload>();
+let stopsOnPageHide = false;
+
+/**
+ * Sends `drive.abort_upload` for each upload that runs when the page closes. A `keepalive` request
+ * continues after the page is gone. It is the best that the page can do: an upload that the server does
+ * not stop goes away after 24 hours.
+ */
+function stopOnPageHide(): void {
+	if (stopsOnPageHide) return;
+	stopsOnPageHide = true;
+	const route = operations["drive.abort_upload"].http;
+	window.addEventListener("pagehide", () => {
+		for (const upload of running.values()) {
+			try {
+				void fetch(route.path.replace("{upload_id}", encodeURIComponent(upload.id)), {
+					method: route.method,
+					keepalive: true,
+					credentials: "same-origin",
+					headers: { accept: "application/json", "content-type": "application/json" },
+					body: JSON.stringify({ space_id: upload.space_id }),
+				}).catch(() => {});
+			} catch {
+				// The browser refused the request. The server removes the upload after 24 hours.
+			}
+		}
+		running.clear();
 	});
 }
 
@@ -299,6 +368,8 @@ function serverTransport(file: Blob, place: { spaceId?: string; parentId?: strin
 		abort: async (upload) => {
 			await api.call("drive.abort_upload", of(upload));
 		},
+		item: async (upload, itemId) =>
+			(await api.call("drive.get_item", { space_id: upload.space_id, item_id: itemId })).item,
 	};
 }
 
@@ -324,20 +395,28 @@ export interface UploadFileOptions extends UploadOptions {
 	parentId?: string;
 }
 
+/** The files that upload now in the page. */
+const files = createLimiter(FILE_CONCURRENCY);
+
 /**
- * Uploads a file to Drive and returns the new file. A picture or a video also gets its preview before
- * the call ends, because a chat message keeps the facts of a file at the time of the post.
+ * Uploads a file to Drive and returns the new file. At most 3 files upload at the same time in the page:
+ * the others wait. A picture or a video also gets its preview before the call ends, because a chat
+ * message keeps the facts of a file at the time of the post.
+ *
+ * When the signal aborts during the completion, the file can exist: the call then gives it without a
+ * preview, and the caller removes it.
  */
-export async function uploadFile(file: File, options: UploadFileOptions = {}): Promise<DriveItem> {
+export function uploadFile(file: File, options: UploadFileOptions = {}): Promise<DriveItem> {
+	return files.run(() => uploadNow(file, options), options.signal);
+}
+
+async function uploadNow(file: File, options: UploadFileOptions): Promise<DriveItem> {
 	const mimeType = uploadMimeType(file.type);
-	const place = {
-		...(options.spaceId ? { space_id: options.spaceId } : {}),
-		...(options.parentId ? { parent_id: options.parentId } : {}),
-	};
 	if (file.size === 0) {
 		options.signal?.throwIfAborted();
 		const { item } = await api.call("drive.upload_file", {
-			...place,
+			...(options.spaceId ? { space_id: options.spaceId } : {}),
+			...(options.parentId ? { parent_id: options.parentId } : {}),
 			name: file.name,
 			...(mimeType ? { mime_type: mimeType } : {}),
 			content_base64: "",
@@ -347,12 +426,29 @@ export async function uploadFile(file: File, options: UploadFileOptions = {}): P
 		return item;
 	}
 	// The preview is made while the parts go.
-	const preview = wantsPreview(file.type) ? makePreview(file) : Promise.resolve(null);
-	const item = await uploadInParts(
-		{ name: file.name, size: file.size, ...(mimeType ? { mimeType } : {}) },
-		serverTransport(file, options),
-		options,
-	);
-	await storePreview(item, preview);
+	const preview = wantsPreview(file.type, file.size) ? makePreview(file) : Promise.resolve(null);
+	const server = serverTransport(file, options);
+	const started: { upload: DriveUpload | null } = { upload: null };
+	const transport: UploadTransport = {
+		...server,
+		create: async (input) => {
+			const upload = await server.create(input);
+			started.upload = upload;
+			running.set(upload.id, upload);
+			stopOnPageHide();
+			return upload;
+		},
+	};
+	let item: DriveItem;
+	try {
+		item = await uploadInParts(
+			{ name: file.name, size: file.size, ...(mimeType ? { mimeType } : {}) },
+			transport,
+			options,
+		);
+	} finally {
+		if (started.upload) running.delete(started.upload.id);
+	}
+	if (!options.signal?.aborted) await storePreview(item, preview);
 	return item;
 }

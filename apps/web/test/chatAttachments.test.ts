@@ -1,6 +1,6 @@
 import { ApiError, CHAT_LIMITS, DRIVE_LIMITS, type DriveItem } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
-import { canSendWith, createAttachments, filesNote } from "../src/features/chat/attachments.ts";
+import { canSendWith, createAttachments, filesNote, pasteTakesFiles } from "../src/features/chat/attachments.ts";
 
 interface Upload {
 	file: File;
@@ -77,12 +77,12 @@ describe("the files of a new message", () => {
 		]);
 		expect(uploads).toHaveLength(2);
 		expect(canSendWith(true, box.getState().list)).toBe(false);
-		expect(box.files()).toBeNull();
+		expect(box.take()).toBeNull();
 		await uploads[1]?.succeed();
 		expect(canSendWith(true, box.getState().list)).toBe(false);
 		await uploads[0]?.succeed();
 		expect(canSendWith(false, box.getState().list)).toBe(true);
-		expect(box.files()?.map((one) => one.name)).toEqual(["a.pdf", "b.pdf"]);
+		expect(box.take()?.map((one) => one.name)).toEqual(["a.pdf", "b.pdf"]);
 		expect(filesNote(box.getState().list)).toBeNull();
 	});
 
@@ -123,12 +123,59 @@ describe("the files of a new message", () => {
 		expect(uploads[0]?.signal.aborted).toBe(true);
 		box.remove(b?.key ?? "");
 		expect(discarded).toEqual(["b.pdf"]);
-		// The answer of the stopped upload does not bring its file back.
+		// The upload of a.pdf stopped too late: the server made the file. The chip stays gone, and the file
+		// goes to the trash.
 		await uploads[0]?.succeed();
 		expect(list()).toEqual([["c.pdf", "ready"]]);
-		const sent = box.files() ?? [];
+		expect(discarded).toEqual(["b.pdf", "a.pdf"]);
+		const sent = box.take() ?? [];
 		box.release(sent);
 		expect(list()).toEqual([]);
+		expect(discarded).toEqual(["b.pdf", "a.pdf"]);
+	});
+
+	// The room can store a message whose answer got lost. Its files must stay in the drive.
+	it("never put the files of a send in the trash, also when the view closes after a failed send", async () => {
+		const { box, uploads, discarded, list } = fakeBox();
+		box.add([file("a.pdf")]);
+		await uploads[0]?.succeed();
+		expect(box.take()?.map((one) => one.name)).toEqual(["a.pdf"]);
+		// The send failed without an answer. The person adds a file, and the view closes.
+		box.add([file("b.pdf"), file("c.pdf")]);
+		await uploads[1]?.succeed();
+		box.removeAll();
+		expect(list()).toEqual([]);
 		expect(discarded).toEqual(["b.pdf"]);
+		expect(uploads[2]?.signal.aborted).toBe(true);
+	});
+
+	// After a sign-out, each call would have the session of a different person.
+	it("make no call after a stop, also for an upload that the server completes later", async () => {
+		const { box, uploads, discarded, list } = fakeBox();
+		box.add([file("a.pdf"), file("b.pdf")]);
+		await uploads[0]?.succeed();
+		box.stop();
+		await uploads[1]?.succeed();
+		expect(list()).toEqual([]);
+		expect(discarded).toEqual([]);
+	});
+});
+
+describe("a paste in the box", () => {
+	const PNG = ["image.png"];
+	// A screenshot, a copy of an office text, and a copy of files in a file manager.
+	it("gives the files without text, keeps text with HTML, and gives the files of a file manager", () => {
+		expect(pasteTakesFiles({ names: PNG, text: "", html: false, parsedText: false })).toBe(true);
+		// A picture copied from a page has HTML with its address. The box finds no text in it.
+		expect(pasteTakesFiles({ names: PNG, text: "", html: true, parsedText: false })).toBe(true);
+		expect(pasteTakesFiles({ names: PNG, text: "Q3 numbers", html: true, parsedText: true })).toBe(false);
+		expect(
+			pasteTakesFiles({ names: ["a b.pdf", "c.txt"], text: "c.txt\na b.pdf", html: false, parsedText: true }),
+		).toBe(true);
+		expect(
+			pasteTakesFiles({ names: ["a b.pdf"], text: "file:///home/ada/a%20b.pdf", html: false, parsedText: true }),
+		).toBe(true);
+		expect(pasteTakesFiles({ names: ["a.pdf"], text: "see a.pdf", html: false, parsedText: true })).toBe(false);
+		expect(pasteTakesFiles({ names: [], text: "hello", html: false, parsedText: true })).toBe(false);
 	});
 });

@@ -1,4 +1,5 @@
 import {
+	ApiError,
 	DRIVE_LIMITS,
 	type DriveItem,
 	driveDownloadPath,
@@ -7,7 +8,7 @@ import {
 	type SharedDrive,
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorMessage } from "../../lib/api.ts";
+import { api, errorMessage, noteStatus } from "../../lib/api.ts";
 import type { ListInput } from "./model.ts";
 
 export type About = OutputOf<"drive.get_about">;
@@ -321,14 +322,32 @@ export function useFolder(spaceInputValue: { space_id?: string }, folderId: stri
 	return { ...state, reload: load };
 }
 
+/** The message for a refused download, from the status of the answer. A HEAD answer has no body. */
+function downloadProblem(status: number): string {
+	if (status === 401) return "Sign in again to download the file.";
+	if (status === 403) return "You have no access to this file.";
+	if (status === 404) return "The file is not there now, or you have no access to it.";
+	return "The file did not download. Try again.";
+}
+
 /**
  * Saves a file, or one of its versions, as a download. The browser gets the bytes from `/dl/` as a
  * stream with the session cookie, so a large file never goes through the memory of the page. The server
  * sends each file as an attachment, unless it found a picture or a video in its bytes.
+ *
+ * A HEAD request to the same path comes first. The browser shows no reason for a download that the
+ * server refuses, so the call throws that reason for a toast. A 401 shows the sign-in page.
  */
-export function downloadFile(item: Pick<DriveItem, "id" | "space_id" | "name">, versionId?: string): void {
+export async function downloadFile(
+	item: Pick<DriveItem, "id" | "space_id" | "name">,
+	versionId?: string,
+): Promise<void> {
+	const path = driveDownloadPath(item.space_id, item.id, versionId);
+	const check = await fetch(path, { method: "HEAD", credentials: "same-origin" });
+	noteStatus(check.status);
+	if (!check.ok) throw new ApiError(check.status, { detail: downloadProblem(check.status) });
 	const anchor = document.createElement("a");
-	anchor.href = driveDownloadPath(item.space_id, item.id, versionId);
+	anchor.href = path;
 	anchor.download = item.name || "download";
 	anchor.rel = "noopener";
 	anchor.hidden = true;

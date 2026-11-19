@@ -48,6 +48,9 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 	const kind = previewKind(item.mime_type, item.size);
 	const [content, setContent] = useState<Content>(() => initialContent(item, kind));
 	const [shownId, setShownId] = useState(item.id);
+	// The person can go to a different file before the check of a download ends. The error keeps the id of
+	// its file, so it shows only with that file.
+	const [downloadError, setDownloadError] = useState<{ itemId: string; message: string } | null>(null);
 	const previousRef = useRef<HTMLButtonElement>(null);
 	const nextRef = useRef<HTMLButtonElement>(null);
 	const downloadRef = useRef<HTMLButtonElement>(null);
@@ -58,6 +61,7 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 	if (shownId !== item.id) {
 		setShownId(item.id);
 		setContent(initialContent(item, kind));
+		setDownloadError(null);
 	}
 
 	useEffect(() => {
@@ -105,6 +109,18 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 			active = false;
 		};
 	}, [kind, item.id, item.space_id, ownId]);
+
+	async function download() {
+		const itemId = item.id;
+		setDownloadError(null);
+		try {
+			await downloadFile(item);
+		} catch (caught) {
+			setDownloadError({ itemId, message: errorMessage(caught) });
+		}
+	}
+
+	const shownError = downloadError?.itemId === item.id ? downloadError.message : null;
 
 	return (
 		<Dialog title={item.name} onClose={onClose} className="drive-preview">
@@ -170,6 +186,11 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						</dd>
 					</div>
 				</dl>
+				{shownError && (
+					<p className="form-error" role="alert">
+						{shownError}
+					</p>
+				)}
 				{/* Previous, Download and Next. Above 600px, Previous and Next are at the left and right edges of the
 				    file. On a phone, the three buttons are in one row at the bottom, with Download in the center. */}
 				<div className="drive-preview-actions">
@@ -189,7 +210,7 @@ export function PreviewDialog({ item, neighbors, onShow, onClose }: PreviewDialo
 						ref={downloadRef}
 						type="button"
 						className="button button-primary"
-						onClick={() => downloadFile(item)}
+						onClick={() => void download()}
 						data-autofocus
 					>
 						<Icon name="download" size={16} />

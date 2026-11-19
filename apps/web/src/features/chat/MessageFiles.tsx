@@ -1,18 +1,14 @@
-import { type ChatFile, type ChatLinkPreview, chatFilePath, chatLinkImagePath } from "@asterra/contracts";
+import { type ChatFile, type ChatMessage, chatFilePath } from "@asterra/contracts";
 import { useState } from "react";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { fitBox, safeLinkPreviewHref } from "./model.ts";
+import { useFocusAfterRemove } from "./focusAfterRemove.ts";
+import { fileDisplay, linkPreviewCards } from "./model.ts";
 
 // The files and the link previews of a message. Each file comes from `/dl/chat/…` with the session
 // cookie: the server sends a picture or a video inline only when it found that type in the bytes, and
 // each other file as an attachment. A link preview is content from outside the organization: its texts
 // are React text nodes, and its picture comes from the server, never from the site of the link.
-
-/** The largest box of a picture or a video in a message, in CSS pixels. */
-const MEDIA_BOX = { width: 360, height: 280 };
-/** The largest box of the picture of a link preview. */
-const LINK_IMAGE_BOX = { width: 96, height: 96 };
 
 /** The name, the size and the download link under a picture or a video. */
 function MediaCaption({ file, url }: { file: ChatFile; url: string }) {
@@ -58,9 +54,9 @@ function FileChip({ file, url, note }: { file: ChatFile; url: string | null; not
 }
 
 /**
- * One file of a stored message. A picture shows its small picture, or the file without one, and opens
- * the file in a new tab. A video plays in the page. A file that does not load (its author removed it
- * from Drive, for example) shows as a chip with a note.
+ * One file of a stored message, as `fileDisplay` tells. A picture opens the file in a new tab. A video
+ * plays in the page. A picture or a video that does not load (its author removed it from Drive, for
+ * example) shows as a chip with a note, until its address changes.
  */
 function MessageFile({
 	file,
@@ -73,52 +69,52 @@ function MessageFile({
 	messageId: string;
 	onMediaLoad?: (() => void) | undefined;
 }) {
-	const [broken, setBroken] = useState(false);
 	const url = chatFilePath(roomId, messageId, file.item_id);
-	if (broken) return <FileChip file={file} url={url} note="The file does not load now." />;
-	// The size of the small picture gives the box before the picture loads, so the list does not move.
-	const box = file.preview ? fitBox(file.preview, MEDIA_BOX) : null;
-	const poster = file.preview ? chatFilePath(roomId, messageId, file.item_id, "preview") : undefined;
-	if (file.kind === "image") {
+	const display = fileDisplay(file);
+	const src = display.as !== "chip" && display.preview ? chatFilePath(roomId, messageId, file.item_id, "preview") : url;
+	/** The address that did not load. A new address (a new small picture, for example) tries again. */
+	const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
+	if (display.as === "chip" || brokenSrc === src) {
+		return <FileChip file={file} url={url} {...(brokenSrc === src ? { note: "The file does not load now." } : {})} />;
+	}
+	const fixed = display.preview ? "" : " chat-file-media-fixed";
+	if (display.as === "image") {
 		return (
-			<figure className="chat-file-media">
+			<figure className={`chat-file-media${fixed}`}>
 				<a href={url} target="_blank" rel="noopener noreferrer" className="chat-file-image" title="Open in a new tab">
 					<img
-						src={poster ?? url}
+						src={src}
 						alt={file.name}
-						width={box?.width}
-						height={box?.height}
+						width={display.box.width}
+						height={display.box.height}
 						loading="lazy"
 						decoding="async"
 						onLoad={onMediaLoad}
-						onError={() => setBroken(true)}
+						onError={() => setBrokenSrc(src)}
 					/>
 				</a>
 				<MediaCaption file={file} url={url} />
 			</figure>
 		);
 	}
-	if (file.kind === "video") {
-		return (
-			<figure className="chat-file-media">
-				{/* biome-ignore lint/a11y/useMediaCaption: a member uploaded the video, and the file has no captions. */}
-				<video
-					className="chat-file-video"
-					controls
-					preload="metadata"
-					poster={poster}
-					src={url}
-					width={box?.width}
-					height={box?.height}
-					aria-label={file.name}
-					onLoadedMetadata={onMediaLoad}
-					onError={() => setBroken(true)}
-				/>
-				<MediaCaption file={file} url={url} />
-			</figure>
-		);
-	}
-	return <FileChip file={file} url={url} />;
+	return (
+		<figure className={`chat-file-media${fixed}`}>
+			{/* biome-ignore lint/a11y/useMediaCaption: a member uploaded the video, and the file has no captions. */}
+			<video
+				className="chat-file-video"
+				controls
+				preload="metadata"
+				poster={display.preview ? src : undefined}
+				src={url}
+				width={display.box.width}
+				height={display.box.height}
+				aria-label={file.name}
+				onLoadedMetadata={onMediaLoad}
+				onError={() => setBrokenSrc(src)}
+			/>
+			<MediaCaption file={file} url={url} />
+		</figure>
+	);
 }
 
 /**
@@ -156,80 +152,96 @@ export function MessageFiles({
 }
 
 /**
- * The previews of the links of a message: the site, the title as a link, the description and the
- * picture. The author removes a preview with the X (`onRemove`). Null for each other person.
+ * The previews of the links of a message (`linkPreviewCards`): the site, the title as a link, the
+ * description and the picture. The author removes a preview with the X. After the X, the focus goes to
+ * the next preview, or to `onFocusAway`.
  */
 export function LinkPreviews({
-	previews,
-	roomId,
-	messageId,
+	message,
+	ownId,
+	pending,
 	onRemove,
+	onFocusAway,
 	onMediaLoad,
 }: {
-	previews: readonly ChatLinkPreview[];
-	roomId: string;
-	messageId: string;
-	onRemove: ((url: string) => void) | null;
+	message: Pick<ChatMessage, "id" | "room_id" | "author" | "link_previews">;
+	ownId: string;
+	pending: boolean;
+	onRemove: (url: string) => void;
+	onFocusAway: () => void;
 	onMediaLoad?: (() => void) | undefined;
 }) {
-	if (previews.length === 0) return null;
+	const cards = linkPreviewCards(message, { ownId, pending });
+	const focus = useFocusAfterRemove(cards, (card) => card.url, onFocusAway);
+	if (cards.length === 0) return null;
 	return (
-		<ul className="chat-link-previews" aria-label="Link previews">
-			{previews.map((preview) => {
-				const href = safeLinkPreviewHref(preview.url);
-				const title = preview.title ?? preview.url;
-				const box = preview.image ? fitBox(preview.image, LINK_IMAGE_BOX) : null;
-				return (
-					<li key={preview.url} className="chat-link-preview">
-						<div className="chat-link-preview-text">
-							{preview.site_name && <p className="chat-link-preview-site">{preview.site_name}</p>}
-							<p className="chat-link-preview-title">
-								{href ? (
-									<a href={href} target="_blank" rel="noopener noreferrer nofollow" className="chat-link">
-										{title}
-									</a>
-								) : (
-									title
-								)}
-							</p>
-							{preview.description && <p className="chat-link-preview-description">{preview.description}</p>}
-						</div>
-						{box && (
-							<img
-								className="chat-link-preview-image"
-								src={chatLinkImagePath(roomId, messageId, preview.url)}
-								alt=""
-								width={box.width}
-								height={box.height}
-								loading="lazy"
-								decoding="async"
-								onLoad={onMediaLoad}
-							/>
-						)}
-						{onRemove && (
-							<button
-								type="button"
-								className="icon-button icon-button-small chat-link-preview-remove"
-								aria-label={`Remove the preview of ${title}`}
-								title="Remove the preview"
-								onClick={() => onRemove(preview.url)}
-							>
-								<Icon name="close" size={14} />
-							</button>
-						)}
-					</li>
-				);
-			})}
+		<ul className="chat-link-previews" aria-label="Link previews" ref={focus.list}>
+			{cards.map((card, index) => (
+				<li key={card.url} className="chat-link-preview">
+					<div className="chat-link-preview-text">
+						{card.site && <p className="chat-link-preview-site">{card.site}</p>}
+						<p className="chat-link-preview-title">
+							{card.href ? (
+								<a href={card.href} target="_blank" rel={card.rel} className="chat-link">
+									{card.title}
+								</a>
+							) : (
+								card.title
+							)}
+						</p>
+						{card.description && <p className="chat-link-preview-description">{card.description}</p>}
+					</div>
+					{card.image && (
+						<img
+							className="chat-link-preview-image"
+							src={card.image.src}
+							alt=""
+							width={card.image.width}
+							height={card.image.height}
+							loading="lazy"
+							decoding="async"
+							onLoad={onMediaLoad}
+						/>
+					)}
+					{card.removable && (
+						<button
+							type="button"
+							data-remove
+							className="icon-button icon-button-small chat-link-preview-remove"
+							aria-label={`Remove the preview of ${card.title}`}
+							title="Remove the preview"
+							onClick={() => {
+								focus.removing(card.url, index);
+								onRemove(card.url);
+							}}
+						>
+							<Icon name="close" size={14} />
+						</button>
+					)}
+				</li>
+			))}
 		</ul>
 	);
 }
 
-/** The files of a message in its edit box. The author removes a file with the X. */
-export function EditFiles({ files, onRemove }: { files: readonly ChatFile[]; onRemove: (itemId: string) => void }) {
+/**
+ * The files of a message in its edit box. The author removes a file with the X. After the X, the focus
+ * goes to the next file, or to `onFocusAway` (the edit box).
+ */
+export function EditFiles({
+	files,
+	onRemove,
+	onFocusAway,
+}: {
+	files: readonly ChatFile[];
+	onRemove: (itemId: string) => void;
+	onFocusAway: () => void;
+}) {
+	const focus = useFocusAfterRemove(files, (file) => file.item_id, onFocusAway);
 	if (files.length === 0) return null;
 	return (
-		<ul className="chat-attachment-list chat-edit-files" aria-label="Files of the message">
-			{files.map((file) => (
+		<ul className="chat-attachment-list chat-edit-files" aria-label="Files of the message" ref={focus.list}>
+			{files.map((file, index) => (
 				<li key={file.item_id} className="chat-attachment chat-attachment-ready">
 					<span className="chat-attachment-icon" aria-hidden="true">
 						<Icon name={file.kind === "image" ? "image" : "file"} size={16} />
@@ -242,10 +254,14 @@ export function EditFiles({ files, onRemove }: { files: readonly ChatFile[]; onR
 					</span>
 					<button
 						type="button"
+						data-remove
 						className="icon-button icon-button-small"
 						aria-label={`Remove ${file.name} from the message`}
 						title="Remove from the message"
-						onClick={() => onRemove(file.item_id)}
+						onClick={() => {
+							focus.removing(file.item_id, index);
+							onRemove(file.item_id);
+						}}
 					>
 						<Icon name="close" size={16} />
 					</button>

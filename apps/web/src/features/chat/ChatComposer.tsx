@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { initials, plural } from "../../lib/format.ts";
 import { FormatToolbar, LinkDialog, placeholderPlugin, shortcut, type Tool } from "../mail/RichTextEditor.tsx";
 import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
+import { pasteTakesFiles } from "./attachments.ts";
 import {
 	composerKeys,
 	insertTypedEmoji,
@@ -137,8 +138,8 @@ interface ChatComposerProps {
 	/** The chips of the files of the message, between the text and the bar. */
 	files?: ReactNode;
 	/**
-	 * Gets the files of a paste. Without it, the box takes no file. A paste with text and files keeps the
-	 * text: an office app puts a picture of the copied text on the clipboard too.
+	 * Gets the files of a paste (`pasteTakesFiles`). Without it, the box takes no file. A paste with text
+	 * and files keeps the text: an office app puts a picture of the copied text on the clipboard too.
 	 */
 	onFiles?: (files: File[]) => void;
 }
@@ -274,10 +275,18 @@ export function ChatComposer({
 			clipboardTextParser: (text, $context) => plainTextSlice(text, $context.marks()),
 			handlePaste(_view, event, slice) {
 				// A copy of one picture has its bytes and, often, HTML with its address. The schema has no
-				// picture, so the slice has no text, and the bytes go to the files of the message.
+				// picture, so the slice has no text, and the bytes go to the files of the message. The rule is
+				// `pasteTakesFiles`.
 				const take = callbacks.current.onFiles;
-				const pasted = [...(event.clipboardData?.files ?? [])];
-				if (take && pasted.length > 0 && !hasText(slice)) {
+				const data = event.clipboardData;
+				const pasted = [...(data?.files ?? [])];
+				const files = pasteTakesFiles({
+					names: pasted.map((file) => file.name),
+					text: data?.getData("text/plain") ?? "",
+					html: data?.types.includes("text/html") ?? false,
+					parsedText: hasText(slice),
+				});
+				if (take && files) {
 					take(pasted);
 					return true;
 				}

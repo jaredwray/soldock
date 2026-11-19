@@ -52,14 +52,25 @@ export interface Attachments {
 	retry(key: string): void;
 	/**
 	 * Removes a file. An upload that runs stops, and the server removes its parts. A file that is in the
-	 * drive goes to the trash: the person uploaded it only for this message.
+	 * drive goes to the trash: the person uploaded it only for this message. A file of a send never goes
+	 * to the trash, because the room can have stored the message (`take`). An upload that stops too late,
+	 * after the server made the file, puts that file in the trash when it ends.
 	 */
 	remove(key: string): void;
-	/** The files for a send, in order, when each file is ready. Null while a file uploads or failed. */
-	files(): ChatFile[] | null;
+	/** Removes each file, as `remove` does. A view that closes calls it. */
+	removeAll(): void;
+	/**
+	 * The files for a send, in order, when each file is ready. Null while a file uploads or failed. From
+	 * now on, the files are part of a send: the box never puts them in the trash, also when the send fails
+	 * without an answer.
+	 */
+	take(): ChatFile[] | null;
 	/** Removes the files of a send from the box. They stay in the drive: the message has them. */
 	release(sent: readonly ChatFile[]): void;
-	/** Stops each upload and removes each file, for example when the person of the page changes. */
+	/**
+	 * Stops each upload and removes each file, without a call to the server, for example when the person
+	 * of the page changes: each later call would have the session of a different person.
+	 */
 	stop(): void;
 }
 
@@ -67,7 +78,7 @@ export interface Attachments {
  * The state of the files for the send button: `none` without files, `uploading` while a file uploads,
  * `failed` when a file did not upload, and `ready` when each file is in the drive.
  */
-export function filesState(list: readonly Pick<Attachment, "state">[]): "none" | "uploading" | "failed" | "ready" {
+function filesState(list: readonly Pick<Attachment, "state">[]): "none" | "uploading" | "failed" | "ready" {
 	if (list.length === 0) return "none";
 	if (list.some((file) => file.state === "uploading")) return "uploading";
 	if (list.some((file) => file.state === "failed")) return "failed";
@@ -96,7 +107,7 @@ export function filesNote(list: readonly Pick<Attachment, "state">[]): string | 
 }
 
 /** A file of a message, from the file in the drive. The room finds the kind and the preview after the post. */
-export function chatFileOf(item: DriveItem): ChatFile {
+function chatFileOf(item: DriveItem): ChatFile {
 	return {
 		item_id: item.id,
 		space_id: item.space_id,
@@ -108,8 +119,49 @@ export function chatFileOf(item: DriveItem): ChatFile {
 	};
 }
 
+/**
+ * True when a paste gives files to the message, not text.
+ *
+ * - A paste of files without text, for example a screenshot or a picture copied from a page, gives
+ *   files. The schema of the box has no picture, so a copy of HTML with only a picture has no text.
+ * - A paste with text keeps the text: an office app puts a picture of the copied text on the clipboard
+ *   too.
+ * - A file manager puts the names (or the paths) of the copied files on the clipboard as text, without
+ *   HTML. Such a paste gives the files.
+ */
+export function pasteTakesFiles(paste: {
+	/** The names of the files on the clipboard. */
+	names: readonly string[];
+	/** The `text/plain` of the clipboard. */
+	text: string;
+	/** True when the clipboard has `text/html`. */
+	html: boolean;
+	/** True when the box found text in the paste. */
+	parsedText: boolean;
+}): boolean {
+	if (paste.names.length === 0) return false;
+	if (!paste.parsedText) return true;
+	if (paste.html) return false;
+	const nameOf = (line: string) => {
+		const last = line.split(/[\\/]/).pop() ?? line;
+		try {
+			return decodeURIComponent(last);
+		} catch {
+			return last;
+		}
+	};
+	const lines = paste.text
+		.split(/[\r\n]+/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.map(nameOf)
+		.sort();
+	const names = [...paste.names].sort();
+	return lines.length === names.length && lines.every((line, index) => line === names[index]);
+}
+
 /** The files that go into the box, and the notice about the others. */
-export function admit(
+function admit(
 	count: number,
 	files: readonly { name: string; size: number }[],
 ): { admitted: number[]; notice: string | null } {
@@ -150,6 +202,10 @@ export function createAttachments(options: AttachmentsOptions): Attachments {
 	/** The file and the upload of each chip. */
 	const files = new Map<string, File>();
 	const uploads = new Map<string, AbortController>();
+	/** The keys of the chips that the person removed while they uploaded. */
+	const cancelled = new Set<string>();
+	/** The ids of the files of a send. They never go to the trash. */
+	const sent = new Set<string>();
 	let stopped = false;
 
 	function change(next: Partial<AttachmentsState>): void {
@@ -179,18 +235,37 @@ export function createAttachments(options: AttachmentsOptions): Attachments {
 			)
 			.then(
 				(item) => {
-					if (!current()) return;
+					if (!current()) {
+						// The server made the file before the upload could stop. The person removed it.
+						if (cancelled.delete(key) && !stopped) options.discard(item);
+						return;
+					}
 					uploads.delete(key);
 					files.delete(key);
 					update(key, { state: "ready", sent: item.size, item });
 				},
 				(error: unknown) => {
 					// A removed file stopped its upload. Its chip is gone.
+					cancelled.delete(key);
 					if (!current() || controller.signal.aborted) return;
 					uploads.delete(key);
 					update(key, { state: "failed", sent: 0, error: options.describe(error) });
 				},
 			);
+	}
+
+	function remove(key: string): void {
+		const entry = state.list.find((one) => one.key === key);
+		if (!entry) return;
+		const upload = uploads.get(key);
+		if (upload) {
+			cancelled.add(key);
+			upload.abort();
+		}
+		uploads.delete(key);
+		files.delete(key);
+		if (entry.item && !sent.has(entry.item.id)) options.discard(entry.item);
+		change({ list: state.list.filter((one) => one.key !== key), notice: null });
 	}
 
 	return {
@@ -229,21 +304,18 @@ export function createAttachments(options: AttachmentsOptions): Attachments {
 			update(key, { state: "uploading", sent: 0, error: null });
 			start(key);
 		},
-		remove(key) {
-			const entry = state.list.find((one) => one.key === key);
-			if (!entry) return;
-			uploads.get(key)?.abort();
-			uploads.delete(key);
-			files.delete(key);
-			if (entry.item) options.discard(entry.item);
-			change({ list: state.list.filter((one) => one.key !== key), notice: null });
+		remove,
+		removeAll() {
+			for (const entry of state.list) remove(entry.key);
 		},
-		files() {
+		take() {
 			if (filesState(state.list) !== "ready") return null;
-			return state.list.flatMap((entry) => (entry.item ? [chatFileOf(entry.item)] : []));
+			const taken = state.list.flatMap((entry) => (entry.item ? [chatFileOf(entry.item)] : []));
+			for (const file of taken) sent.add(file.item_id);
+			return taken;
 		},
-		release(sent) {
-			const ids = new Set(sent.map((file) => file.item_id));
+		release(released) {
+			const ids = new Set(released.map((file) => file.item_id));
 			change({ list: state.list.filter((entry) => !(entry.item && ids.has(entry.item.id))), notice: null });
 		},
 		stop() {
@@ -251,6 +323,7 @@ export function createAttachments(options: AttachmentsOptions): Attachments {
 			for (const controller of uploads.values()) controller.abort();
 			uploads.clear();
 			files.clear();
+			cancelled.clear();
 			change({ list: [], notice: null });
 		},
 	};

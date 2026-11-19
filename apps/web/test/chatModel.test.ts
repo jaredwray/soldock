@@ -1,13 +1,20 @@
-import type { ChatFile, ChatLinkPreview, ChatMessage, ChatRoom } from "@asterra/contracts";
+import {
+	type ChatFile,
+	type ChatLinkPreview,
+	type ChatMessage,
+	type ChatRoom,
+	chatLinkImagePath,
+	DRIVE_LIMITS,
+} from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {
 	chatRows,
-	fitBox,
+	fileDisplay,
 	type LocalChange,
+	linkPreviewCards,
 	newMessages,
 	nextReading,
-	safeLinkPreviewHref,
 	sidebarRooms,
 	startReading,
 	startsDay,
@@ -451,22 +458,74 @@ describe("the parts of the sidebar", () => {
 });
 
 describe("the files and the links of a message", () => {
-	// The box of a picture comes before the picture loads, so the list does not move. It must keep the shape.
-	it("gives a picture a box with its shape, never larger than the picture or the limit", () => {
-		const max = { width: 360, height: 280 };
-		expect(fitBox({ width: 640, height: 480 }, max)).toEqual({ width: 360, height: 270 });
-		expect(fitBox({ width: 480, height: 640 }, max)).toEqual({ width: 210, height: 280 });
-		expect(fitBox({ width: 100, height: 50 }, max)).toEqual({ width: 100, height: 50 });
-		expect(fitBox({ width: 640, height: 1 }, max)).toEqual({ width: 360, height: 1 });
-		expect(fitBox({ width: 0, height: 50 }, max)).toBeNull();
+	// A picture without a small picture loads the file itself. A large file would load megabytes in a list.
+	it("shows a picture with its small picture, a small picture file in a fixed box, and a large one as a chip", () => {
+		const picture = { ...FILE, kind: "image" as const };
+		// The box comes before the picture loads, so the list does not move. It keeps the shape, and it is
+		// never larger than the small picture.
+		const box = (width: number, height: number) => {
+			const shown = fileDisplay({ ...picture, preview: { width, height } });
+			return shown.as === "chip" ? null : shown.box;
+		};
+		expect(fileDisplay({ ...picture, preview: { width: 640, height: 480 } })).toEqual({
+			as: "image",
+			preview: true,
+			box: { width: 360, height: 270 },
+		});
+		expect(box(480, 640)).toEqual({ width: 210, height: 280 });
+		expect(box(100, 50)).toEqual({ width: 100, height: 50 });
+		expect(box(640, 1)).toEqual({ width: 360, height: 1 });
+		expect(fileDisplay({ ...picture, size: DRIVE_LIMITS.fileBytes })).toEqual({
+			as: "image",
+			preview: false,
+			box: { width: 360, height: 240 },
+		});
+		expect(fileDisplay({ ...picture, size: DRIVE_LIMITS.fileBytes + 1 })).toEqual({ as: "chip" });
+		// A video loads only its metadata until it plays.
+		expect(fileDisplay({ ...FILE, kind: "video", size: 500 * 1024 * 1024 })).toMatchObject({ as: "video" });
+		expect(fileDisplay(FILE)).toEqual({ as: "chip" });
 	});
 
-	// A link preview is content from outside. Its link must never run a script on the page.
-	it("links a preview only to an http or https address", () => {
-		expect(safeLinkPreviewHref("https://example.com/a?b=1")).toBe("https://example.com/a?b=1");
-		expect(safeLinkPreviewHref("http://example.com")).toBe("http://example.com/");
-		expect(safeLinkPreviewHref("javascript:alert(1)")).toBeNull();
-		expect(safeLinkPreviewHref("data:text/html,hi")).toBeNull();
-		expect(safeLinkPreviewHref("/relative")).toBeNull();
+	// The site of the link must never see a reader, and only the author removes a preview.
+	it("gives a link preview the picture of the server, a link with no access to the page, and an X for its author only", () => {
+		const message = (author: typeof ADA | typeof BOT) => ({
+			id: "cmsg_1",
+			room_id: "rm_01JD0000000000000000000001",
+			author,
+			link_previews: [{ ...PREVIEW, image: { width: 1200, height: 600 }, site_name: "Example" }],
+		});
+		const [card] = linkPreviewCards(message(ADA), { ownId: ADA.principal_id, pending: false });
+		expect(card).toEqual({
+			url: PREVIEW.url,
+			href: PREVIEW.url,
+			rel: "noopener noreferrer nofollow",
+			title: "Example",
+			site: "Example",
+			description: null,
+			image: {
+				src: chatLinkImagePath("rm_01JD0000000000000000000001", "cmsg_1", PREVIEW.url),
+				width: 96,
+				height: 48,
+			},
+			removable: true,
+		});
+		expect(linkPreviewCards(message(BOT), { ownId: ADA.principal_id, pending: false })[0]?.removable).toBe(false);
+		expect(linkPreviewCards(message(ADA), { ownId: ADA.principal_id, pending: true })[0]?.removable).toBe(false);
+		// A preview without a title shows its address.
+		const untitled = { ...message(ADA), link_previews: [{ ...PREVIEW, title: null }] };
+		expect(linkPreviewCards(untitled, { ownId: ADA.principal_id, pending: false })[0]).toMatchObject({
+			title: PREVIEW.url,
+			image: null,
+		});
+		// A preview is content from outside. Its link must never run a script on the page.
+		const hrefOf = (url: string) =>
+			linkPreviewCards(
+				{ ...message(ADA), link_previews: [{ ...PREVIEW, url }] },
+				{ ownId: ADA.principal_id, pending: false },
+			)[0]?.href;
+		expect(hrefOf("http://example.com")).toBe("http://example.com/");
+		expect(hrefOf("javascript:alert(1)")).toBeNull();
+		expect(hrefOf("data:text/html,hi")).toBeNull();
+		expect(hrefOf("/relative")).toBeNull();
 	});
 });

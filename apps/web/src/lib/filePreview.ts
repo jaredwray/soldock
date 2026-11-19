@@ -1,4 +1,5 @@
 import { DRIVE_LIMITS } from "@asterra/contracts";
+import { createLimiter } from "./limiter.ts";
 
 // The small picture of a picture or a video file (`drive.set_preview`). The browser makes it, because a
 // Worker cannot decode a picture or a video. Each failure gives null: the file works without a preview.
@@ -31,43 +32,62 @@ export function previewSize(
 	return h > side ? null : { width: w, height: h };
 }
 
-/** True for a file that can get a preview: a picture or a video, from the type that the browser gives. */
-export function wantsPreview(type: string): boolean {
-	return /^(image|video)\//i.test(type);
+/**
+ * The pictures that a browser can draw on a canvas. Most browsers cannot draw TIFF or HEIC, so the list has
+ * no such type.
+ */
+const PICTURE_TYPES: ReadonlySet<string> = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/avif",
+]);
+/** The videos that a browser can play. */
+const VIDEO_TYPES: ReadonlySet<string> = new Set(["video/mp4", "video/webm"]);
+/**
+ * The largest picture that gets a preview. The browser decodes all of the picture, so a larger one could
+ * use too much memory. A video decodes only its first frames, so it has no limit.
+ */
+const PICTURE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * True for a file that can get a preview: a picture of a type that a browser can draw, of at most 20 MiB,
+ * or a video of a type that a browser can play. The type is the type that the browser gave.
+ */
+export function wantsPreview(type: string, size: number): boolean {
+	const base = type.toLowerCase().split(";")[0]?.trim() ?? "";
+	if (!(size > 0)) return false;
+	return VIDEO_TYPES.has(base) || (PICTURE_TYPES.has(base) && size <= PICTURE_BYTES);
 }
 
-/** Rejects after `ms`, so a picture or a video that does not decode cannot stop an upload. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error("The preview took too long.")), ms);
-		promise.then(
-			(value) => {
-				clearTimeout(timer);
-				resolve(value);
-			},
-			(error: unknown) => {
-				clearTimeout(timer);
-				reject(error);
-			},
-		);
+/** Rejects when the signal aborts: the preview took too long. */
+function untilAbort(signal: AbortSignal): Promise<never> {
+	return new Promise((_resolve, reject) => {
+		if (signal.aborted) reject(signal.reason);
+		else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
 	});
 }
 
-function once(target: EventTarget, success: string): Promise<void> {
-	return new Promise((resolve, reject) => {
-		const done = () => {
-			target.removeEventListener(success, done);
+/** Waits for the event `success` of an element. An error event, and the end of the time, reject. */
+function once(target: EventTarget, success: string, signal: AbortSignal): Promise<void> {
+	const done = new Promise<void>((resolve, reject) => {
+		const end = () => {
+			target.removeEventListener(success, ok);
 			target.removeEventListener("error", fail);
+		};
+		const ok = () => {
+			end();
 			resolve();
 		};
 		const fail = () => {
-			target.removeEventListener(success, done);
-			target.removeEventListener("error", fail);
+			end();
 			reject(new Error("The file did not decode."));
 		};
-		target.addEventListener(success, done);
+		target.addEventListener(success, ok);
 		target.addEventListener("error", fail);
 	});
+	return Promise.race([done, untilAbort(signal)]);
 }
 
 /** Draws a source of `width` × `height` pixels on a canvas of the preview size. */
@@ -116,9 +136,20 @@ async function encode(canvas: HTMLCanvasElement): Promise<Blob | null> {
 	return null;
 }
 
-async function pictureCanvas(file: Blob): Promise<HTMLCanvasElement | null> {
+async function pictureCanvas(file: Blob, signal: AbortSignal): Promise<HTMLCanvasElement | null> {
 	// The bitmap follows the EXIF orientation of a JPEG file, as the server does when it checks the shape.
-	const bitmap = await createImageBitmap(file);
+	const decoding = createImageBitmap(file);
+	// A bitmap that comes after the end of the time is closed at once.
+	signal.addEventListener(
+		"abort",
+		() =>
+			void decoding.then(
+				(late) => late.close(),
+				() => {},
+			),
+		{ once: true },
+	);
+	const bitmap = await Promise.race([decoding, untilAbort(signal)]);
 	try {
 		return draw(bitmap, bitmap.width, bitmap.height);
 	} finally {
@@ -126,42 +157,54 @@ async function pictureCanvas(file: Blob): Promise<HTMLCanvasElement | null> {
 	}
 }
 
-async function videoCanvas(file: Blob): Promise<HTMLCanvasElement | null> {
+async function videoCanvas(file: Blob, signal: AbortSignal): Promise<HTMLCanvasElement | null> {
 	const url = URL.createObjectURL(file);
 	const video = document.createElement("video");
 	video.muted = true;
 	video.playsInline = true;
 	video.preload = "auto";
 	try {
-		const loaded = once(video, "loadeddata");
+		const loaded = once(video, "loadeddata", signal);
 		video.src = url;
 		await loaded;
 		const duration = Number.isFinite(video.duration) ? video.duration : 0;
 		const at = Math.min(VIDEO_FRAME_S, duration / 2);
 		if (at > 0) {
-			const seeked = once(video, "seeked");
+			const seeked = once(video, "seeked", signal);
 			video.currentTime = at;
 			await seeked;
 		}
 		return draw(video, video.videoWidth, video.videoHeight);
 	} finally {
+		// Also at the end of the time: the element stops its load, and the address of the file goes.
 		video.removeAttribute("src");
 		video.load();
 		URL.revokeObjectURL(url);
 	}
 }
 
+/** One preview at a time, so ten pictures of a message do not decode at the same time. */
+const previews = createLimiter(1);
+
 /**
  * The preview of a picture or a video file, or null. It is a WebP or JPEG picture of at most 640 pixels
- * on each side and 256 KiB. A picture keeps its shape. A video shows a frame near its start.
+ * on each side and 256 KiB. A picture keeps its shape. A video shows a frame near its start. Call it only
+ * for a file that `wantsPreview` accepts.
  */
-export async function makePreview(file: Blob): Promise<Blob | null> {
-	try {
-		const type = file.type.toLowerCase();
-		const making = type.startsWith("video/") ? videoCanvas(file) : pictureCanvas(file);
-		const canvas = await withTimeout(making, PREVIEW_MS);
-		return canvas ? await encode(canvas) : null;
-	} catch {
-		return null;
-	}
+export function makePreview(file: Blob): Promise<Blob | null> {
+	return previews
+		.run(async () => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(new Error("The preview took too long.")), PREVIEW_MS);
+			try {
+				const making = file.type.toLowerCase().startsWith("video/")
+					? videoCanvas(file, controller.signal)
+					: pictureCanvas(file, controller.signal);
+				const canvas = await making;
+				return canvas ? await encode(canvas) : null;
+			} finally {
+				clearTimeout(timer);
+			}
+		})
+		.catch(() => null);
 }

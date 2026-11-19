@@ -1,4 +1,12 @@
-import type { ChatBody, ChatFile, ChatMessage, ChatRoom } from "@asterra/contracts";
+import {
+	type ChatBody,
+	type ChatFile,
+	type ChatLinkPreview,
+	type ChatMessage,
+	type ChatRoom,
+	chatLinkImagePath,
+	DRIVE_LIMITS,
+} from "@asterra/contracts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
@@ -322,7 +330,7 @@ export function sidebarRooms(rooms: readonly ChatRoom[]): {
  * The box of a picture of `size` pixels in a message: as large as the picture, and at most `max`. The
  * picture keeps its shape. The list gives the box before the picture loads, so a row keeps its height.
  */
-export function fitBox(
+function fitBox(
 	size: { width: number; height: number },
 	max: { width: number; height: number },
 ): { width: number; height: number } | null {
@@ -336,7 +344,7 @@ export function fitBox(
  * preview never gets a link that runs a script. The server fetches only https links, so null is a
  * second layer.
  */
-export function safeLinkPreviewHref(url: string): string | null {
+function safeLinkPreviewHref(url: string): string | null {
 	try {
 		const parsed = new URL(url);
 		return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
@@ -348,4 +356,73 @@ export function safeLinkPreviewHref(url: string): string | null {
 /** True when two lists name the same files in the same order. */
 export function sameFileIds(a: readonly Pick<ChatFile, "item_id">[], b: readonly Pick<ChatFile, "item_id">[]): boolean {
 	return a.length === b.length && a.every((file, index) => file.item_id === b[index]?.item_id);
+}
+
+/** The largest box of a picture or a video in a message, in CSS pixels. */
+const MEDIA_BOX = { width: 360, height: 280 };
+/** The box of a picture without a small picture. The picture fits in it, so the row does not move. */
+const PICTURE_BOX = { width: 360, height: 240 };
+/** The box of a video without a small picture: the shape of most videos. */
+const VIDEO_BOX = { width: 360, height: 203 };
+
+/**
+ * How a message shows a file: a picture, a video, or a chip with a download link. `preview` is true when
+ * the picture is the small picture of the file. `box` is the size of the element before it loads.
+ */
+export type FileDisplay =
+	| { as: "chip" }
+	| { as: "image" | "video"; preview: boolean; box: { width: number; height: number } };
+
+/**
+ * The display of a file of a message. A picture or a video with a small picture gets a box of its shape.
+ * A picture without one loads the file itself, so a picture over `DRIVE_LIMITS.fileBytes` shows as a chip,
+ * and a smaller one gets a fixed box. A video loads only its metadata until it plays.
+ */
+export function fileDisplay(file: Pick<ChatFile, "kind" | "size" | "preview">): FileDisplay {
+	if (file.kind === "file") return { as: "chip" };
+	const box = file.preview ? fitBox(file.preview, MEDIA_BOX) : null;
+	if (box) return { as: file.kind, preview: true, box };
+	if (file.kind === "image" && file.size > DRIVE_LIMITS.fileBytes) return { as: "chip" };
+	return { as: file.kind, preview: false, box: file.kind === "image" ? PICTURE_BOX : VIDEO_BOX };
+}
+
+/** The `rel` of the link of a link preview: the page of the link gets no access to this page. */
+const LINK_PREVIEW_REL = "noopener noreferrer nofollow";
+/** The largest box of the picture of a link preview. */
+const LINK_IMAGE_BOX = { width: 96, height: 96 };
+
+/** The data of the card of one link preview. Each text is plain text. */
+export interface LinkPreviewCard {
+	url: string;
+	/** The link of the title, or null for an address that is not http or https. */
+	href: string | null;
+	rel: string;
+	title: string;
+	site: string | null;
+	description: string | null;
+	/** The picture that the server stored, never the address of the picture on the site. */
+	image: { src: string; width: number; height: number } | null;
+	/** True when the reader can remove the preview: only the author, and only for a stored message. */
+	removable: boolean;
+}
+
+/** The cards of the link previews of a message, for the reader `ownId`. */
+export function linkPreviewCards(
+	message: Pick<ChatMessage, "id" | "room_id" | "author" | "link_previews">,
+	reader: { ownId: string; pending: boolean },
+): LinkPreviewCard[] {
+	const removable = !reader.pending && message.author.principal_id === reader.ownId;
+	return message.link_previews.map((preview: ChatLinkPreview) => {
+		const box = preview.image ? fitBox(preview.image, LINK_IMAGE_BOX) : null;
+		return {
+			url: preview.url,
+			href: safeLinkPreviewHref(preview.url),
+			rel: LINK_PREVIEW_REL,
+			title: preview.title ?? preview.url,
+			site: preview.site_name,
+			description: preview.description,
+			image: box && { src: chatLinkImagePath(message.room_id, message.id, preview.url), ...box },
+			removable,
+		};
+	});
 }

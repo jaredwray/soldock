@@ -15,6 +15,7 @@ interface Call {
 function fakeRoom() {
 	const calls: Call[] = [];
 	const sent: ChatMessage[] = [];
+	const trashed: string[] = [];
 	const page = { account: "ada" };
 	let seq = 0;
 	const outbox = createOutbox({
@@ -62,10 +63,11 @@ function fakeRoom() {
 				});
 			}),
 		describe: (error) => (error instanceof ApiError ? error.message : "No connection."),
+		discardFiles: (files) => void trashed.push(...files.map((file) => file.name)),
 	});
 	outbox.attach({ deliver: (message) => void sent.push(message) });
 	const pending = () => outbox.getState().pending.map((message) => [message.text, message.state]);
-	return { outbox, calls, sent, pending, page };
+	return { outbox, calls, sent, pending, page, trashed };
 }
 
 const refusal = (status: number, code: string, detail: string) => new ApiError(status, { code, detail });
@@ -208,6 +210,25 @@ describe("the outbox of a room", () => {
 		room.outbox.discard(key);
 		expect(room.pending()).toEqual([]);
 		expect(room.sent).toEqual([]);
+	});
+
+	// The files of a message are in the drive of the person. A message that the room can have keeps them.
+	it("puts the files of a removed message in the trash only when the server surely does not have it", async () => {
+		const room = fakeRoom();
+		room.outbox.send("Refused", undefined, [FILE]);
+		await room.calls[0]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
+		room.outbox.send("No answer", undefined, [{ ...FILE, name: "kept.pdf" }]);
+		for (const wait of [0, ...RETRY_WAITS_MS]) {
+			await vi.advanceTimersByTimeAsync(wait);
+			await room.calls[room.calls.length - 1]?.fail(new TypeError("Failed to fetch"));
+		}
+		expect(room.outbox.getState().pending).toMatchObject([
+			{ text: "Refused", state: "failed", uncertain: false },
+			{ text: "No answer", state: "failed", uncertain: true },
+		]);
+		for (const message of room.outbox.getState().pending) room.outbox.discard(message.key);
+		expect(room.pending()).toEqual([]);
+		expect(room.trashed).toEqual(["plan.pdf"]);
 	});
 
 	it("tells its listeners about each change, and gives a stored message to nobody while no list shows the room", async () => {

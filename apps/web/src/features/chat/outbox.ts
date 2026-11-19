@@ -87,6 +87,12 @@ export interface OutboxOptions {
 	 * the session of its person, so an outbox of a different person must not send.
 	 */
 	active(): boolean;
+	/**
+	 * Puts the files of a message that the person removed in the trash of Drive. The outbox calls it only
+	 * for a message that the server surely does not have (`uncertain` is false): the files of a message
+	 * that the room can have stay.
+	 */
+	discardFiles?(files: readonly ChatFile[]): void;
 }
 
 export interface Outbox {
@@ -113,7 +119,10 @@ export interface Outbox {
 	resume(): void;
 	/** Sends a failed message again, with the same key. */
 	retry(key: string): void;
-	/** Removes a message that failed or that waits. A message whose call runs stays. */
+	/**
+	 * Removes a message that failed or that waits. A message whose call runs stays. The files of a message
+	 * that the server surely does not have go to the trash (`discardFiles`).
+	 */
 	discard(key: string): void;
 	/**
 	 * Records that the server has a failed message as the message `id`: the room has a message with
@@ -273,7 +282,10 @@ export function createOutbox(options: OutboxOptions): Outbox {
 		},
 		discard(key) {
 			if (key === state.sendingKey) return;
+			const removed = state.pending.find((message) => message.key === key);
+			if (!removed) return;
 			change({ pending: state.pending.filter((message) => message.key !== key) });
+			if (!removed.uncertain && removed.files && removed.files.length > 0) options.discardFiles?.(removed.files);
 		},
 		settle(key, id) {
 			if (!state.pending.some((message) => message.key === key && message.state === "failed")) return;

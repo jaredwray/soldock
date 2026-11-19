@@ -83,12 +83,13 @@ export function ThreadPanel({
 	const visible = usePageVisible();
 	const toast = useToast();
 	// The files of the reply. They go away with the view: an upload that runs stops, and a file that is in
-	// the drive goes to the trash, as for a reply that the person did not send.
+	// the drive goes to the trash, as for a reply that the person did not send. A file of a send never goes
+	// to the trash (`take`): the room can have the reply, also when its answer did not arrive.
 	const attachments = useMemo(() => newAttachments(), []);
 	const files = useAttachments(attachments);
 	useEffect(
 		() => () => {
-			for (const file of attachments.getState().list) attachments.remove(file.key);
+			attachments.removeAll();
 		},
 		[attachments],
 	);
@@ -231,6 +232,9 @@ export function ThreadPanel({
 		if (element && replyCount > 0 && stick.current) element.scrollTop = element.scrollHeight;
 	}, [replyCount]);
 
+	/** Gives the focus to the box of the reply. */
+	const focusBox = useCallback(() => composer.current?.focus(), []);
+
 	/** Keeps the list at its end when a picture or a video gets its size, if the list showed its end. */
 	const keepEnd = useCallback(() => {
 		const element = body.current;
@@ -259,8 +263,9 @@ export function ThreadPanel({
 		const thread = view.current?.current();
 		if (!canSend || sending || !thread || thread.parent.deleted) return;
 		const sent = draft;
-		// Each file is in the drive. The files stay in the box until the room has the reply.
-		const sentFiles = attachments.files() ?? [];
+		// Each file is in the drive. The files stay in the box until the room has the reply, and from now on
+		// nothing puts them in the trash.
+		const sentFiles = attachments.take() ?? [];
 		const fileIds = sentFiles.map((file) => file.item_id);
 		const attempt = replyAttempt(lastAttempt.current, JSON.stringify({ body: sent, alsoInRoom, fileIds }), () =>
 			crypto.randomUUID(),
@@ -369,7 +374,9 @@ export function ThreadPanel({
 						<ThreadMessage
 							message={thread.parent}
 							mentions={mentions}
-							onRemovePreview={thread.parent.author.principal_id === ownId ? removePreview : null}
+							ownId={ownId}
+							onRemovePreview={removePreview}
+							onFocusBox={focusBox}
 							onMediaLoad={keepEnd}
 						/>
 						<p className="chat-thread-count">
@@ -388,7 +395,9 @@ export function ThreadPanel({
 											<ThreadMessage
 												message={reply}
 												mentions={mentions}
-												onRemovePreview={reply.author.principal_id === ownId ? removePreview : null}
+												ownId={ownId}
+												onRemovePreview={removePreview}
+												onFocusBox={focusBox}
 												onMediaLoad={keepEnd}
 											/>
 										</li>
@@ -428,6 +437,7 @@ export function ThreadPanel({
 											busy={sending}
 											onRetry={attachments.retry}
 											onRemove={attachments.remove}
+											onFocusAway={focusBox}
 										/>
 									}
 								>
@@ -475,17 +485,22 @@ export function ThreadPanel({
 
 /**
  * One message of the thread: its author, its time, its body, its files and its link previews. The author
- * removes a link preview with `onRemovePreview`. Null for each other person.
+ * removes a link preview with `onRemovePreview` (`linkPreviewCards` decides who sees the X).
  */
 function ThreadMessage({
 	message,
 	mentions,
+	ownId,
 	onRemovePreview,
+	onFocusBox,
 	onMediaLoad,
 }: {
 	message: ChatMessage;
 	mentions: MentionContext;
-	onRemovePreview: ((id: string, url: string) => void) | null;
+	ownId: string;
+	onRemovePreview: (id: string, url: string) => void;
+	/** Gives the focus to the box of the reply, after the X of the last link preview. */
+	onFocusBox: () => void;
 	/** Runs when a picture or a video of the message gets its size. */
 	onMediaLoad: () => void;
 }) {
@@ -528,10 +543,11 @@ function ThreadMessage({
 							onMediaLoad={onMediaLoad}
 						/>
 						<LinkPreviews
-							previews={message.link_previews}
-							roomId={message.room_id}
-							messageId={message.id}
-							onRemove={onRemovePreview && ((url) => onRemovePreview(message.id, url))}
+							message={message}
+							ownId={ownId}
+							pending={false}
+							onRemove={(url) => onRemovePreview(message.id, url)}
+							onFocusAway={onFocusBox}
 							onMediaLoad={onMediaLoad}
 						/>
 					</>

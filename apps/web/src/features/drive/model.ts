@@ -261,11 +261,12 @@ export function previewNeighbors<T extends Pick<DriveItem, "id" | "kind">>(
 
 /**
  * What the preview dialog can show for a file. Only raster images go into an `<img>`: an SVG image
- * can hold a script. Text shows as plain text. Each other type gets a download only.
+ * can hold a script. An image over `DRIVE_LIMITS.fileBytes` gets none: the dialog would load all of
+ * it. Text shows as plain text. Each other type gets a download only.
  */
 export function previewKind(mimeType: string | null, size: number): PreviewKind {
 	const type = (mimeType ?? "").toLowerCase().split(";")[0]?.trim() ?? "";
-	if (IMAGE_PREVIEW_TYPES.has(type)) return "image";
+	if (IMAGE_PREVIEW_TYPES.has(type)) return size <= DRIVE_LIMITS.fileBytes ? "image" : "none";
 	if ((type.startsWith("text/") || type === "application/json") && size <= TEXT_PREVIEW_BYTES) return "text";
 	return "none";
 }

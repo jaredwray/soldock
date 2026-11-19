@@ -1868,7 +1868,7 @@ a.chat-author:hover {
 	border-radius: var(--radius-md);
 }
 
-/* The box comes from the size of the small picture. Without one, the picture has a box at most. */
+/* The box comes from the size of the small picture (`fileDisplay` in model.ts). */
 .chat-file-image img,
 .chat-file-video {
 	display: block;
@@ -1881,9 +1881,14 @@ a.chat-author:hover {
 	object-fit: contain;
 }
 
-/* A video without a small picture has no size before its metadata loads. */
-.chat-file-video:not([width]) {
-	width: 360px;
+/* A picture or a video without a small picture has a fixed shape, so its row keeps its height when it
+   loads. The file fits in the box. */
+.chat-file-media-fixed .chat-file-image img {
+	aspect-ratio: 3 / 2;
+}
+
+.chat-file-media-fixed .chat-file-video {
+	aspect-ratio: 16 / 9;
 }
 
 .chat-file-caption {

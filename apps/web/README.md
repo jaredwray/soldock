@@ -447,6 +447,10 @@ MCP clients. The app has no UI-only path.
     - The bar changes at each whole percent, so a large file does not render the page for each event.
     - The status line for a screen reader tells only the count of files, not each change of the bytes.
       The bar has the name of the file.
+    - The X of the card cancels the file that uploads now: the server removes its parts, and the next
+      file starts. When more files wait, **Cancel all** also removes them from the queue. A cancelled
+      file gets no toast. When the server made the file before the stop arrived, the file goes to the
+      trash. The queue is in [`uploadQueue.ts`](src/features/drive/uploadQueue.ts).
   - Files that the person drags from the computer upload where they drop (`uploadFile`):
     - A folder row takes the files when the person is its owner or an editor. The row gets a fill and
       a line around it.
@@ -466,6 +470,8 @@ MCP clients. The app has no UI-only path.
     shows a card with no preview. The content of a file never goes into the page as HTML.
     - The server sends a picture inline only when it found a raster picture in the bytes. When the
       picture does not load, the dialog says so and offers **Download**.
+    - A picture over `DRIVE_LIMITS.fileBytes` (10 MB) shows the card with no preview, because the
+      dialog would load all of it.
     - Text of 1 MB at most loads with `drive.download_file` as base64. The server refuses a file over
       10 MiB in one answer, so the app never gets a larger file as base64.
     - Round Previous and Next buttons at the left and right edges show the other files of the list
@@ -497,6 +503,9 @@ MCP clients. The app has no UI-only path.
   - **Download** (in the More menu, the preview and the versions dialog) clicks a temporary
     `<a download>` with the `/dl/` path of the file or of the version. The browser gets the bytes as a
     stream with the session cookie, so a large file never goes through the memory of the page.
+    - A `HEAD` request to the same path comes first, because the browser shows no reason for a
+      download that the server refuses. A refusal shows its reason (a toast, or a line in the dialog),
+      and a 401 shows the sign-in page.
   - The menus close on Escape, and the focus goes back to the button. The arrow keys, Home and End
     move between the entries.
   - The app polls `drive.get_about` every 15 seconds while the tab is visible, and on window focus.
@@ -831,8 +840,9 @@ MCP clients. The app has no UI-only path.
         after both. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
     - A reply takes files and shows files and link previews, as a message of the room does. The files
       of a reply stay in the box while a send runs. The X of a chip is off during the send. When the
-      view closes, an upload that runs stops, and a file that is in the drive goes to the trash. Escape
-      does not close a view that has files in its box.
+      view closes, an upload that runs stops, and a file that is in the drive goes to the trash, except
+      a file of a send (see the X of a chip below). Escape does not close a view that has files in its
+      box.
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
       draft that stays. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow
@@ -964,9 +974,16 @@ MCP clients. The app has no UI-only path.
       the chip shows the bytes that went out and a bar (`role="progressbar"`, with `aria-valuenow` in
       percent). A failed upload shows "Not uploaded" with the reason, a button to try again, and the
       chip gets the color of an error.
-    - The X of a chip cancels an upload that runs: the server removes its parts. The X of a file that
-      is in the drive puts the file in the trash of Drive, because the person uploaded it only for this
-      message.
+    - The X of a chip cancels an upload that runs: the server removes its parts. When the server made
+      the file before the stop arrived, the file goes to the trash when the upload ends. The X of a file
+      that is in the drive puts the file in the trash of Drive, because the person uploaded it only for
+      this message.
+    - A file of a send never goes to the trash (`take` in `attachments.ts`): the room can store a
+      message whose answer got lost. This is true for the X of a chip after a failed reply, and when the
+      view of a thread closes. A sign-out stops each upload and makes no call.
+    - After the X, the focus goes to the X of the next chip, or to the box when no chip follows.
+    - At most 3 files upload at the same time in the page. The other chips wait, with "0 B of" their
+      size.
     - A message has at most 10 files (`CHAT_LIMITS.filesPerMessage`), and a file has at most 1 GB. The
       box tells why a file did not go in. The paperclip is off when the message has 10 files.
     - The send button works when the message has text or files, and each file is in the drive. While
@@ -974,7 +991,8 @@ MCP clients. The app has no UI-only path.
       A message never goes without a file that the person added.
     - A paste with text and files keeps the text, as in Docs: an office app puts a picture of the
       copied text on the clipboard too. A paste of only a picture, also with HTML that has its address,
-      adds the picture as a file.
+      adds the picture as a file. A file manager puts the names or the paths of the copied files on
+      the clipboard as text, with no HTML: such a paste adds the files (`pasteTakesFiles`).
     - During a drag of files, the list shows "Drop the files to add them to your message" in a dashed
       frame, and the box gets a dashed border. A folder in the drop does not go in, and a toast tells
       the person to drop its files. The listeners are on the window, as in Drive, so a drop on a part
@@ -985,6 +1003,9 @@ MCP clients. The app has no UI-only path.
       (`file_ids`, in the order of the chips). The message shows at once, and its files show as chips
       without a link until the room stores it. A message that waits in the outbox keeps its files after
       a reload, as it keeps its text: the files are in the drive already.
+    - **Delete** on a "Not sent" message puts its files in the trash only when the server refused each
+      attempt (`uncertain` is false), so the server surely does not have the message. The files of a
+      message that the room can have stay in the drive.
     - A message with only files has no text. It shows no empty line of text.
   - The message in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
     different room, and after a reload of the page. A send, and an empty box, remove it. The page
@@ -1152,8 +1173,9 @@ MCP clients. The app has no UI-only path.
     open closes the dialog, because the room removes the earlier versions.
   - The edit box shows the files of the message as chips with an X. A save sends `file_ids` only when
     the person removed a file, and the body only when the text changed. A message with text needs
-    text, because an edit without text keeps the old text. A message with only files keeps at least
-    one file. The edit box cannot add a file.
+    text, because an edit without text keeps the old text. Text of only spaces is no text. A message
+    with only files keeps at least one file, so **Save** is off after the X of its last file. The edit
+    box cannot add a file. After the X, the focus goes to the next file, or to the edit box.
   - Under the edit box, a note tells the author that owners and admins of the organization can read
     the text before an edit, and that a delete removes it.
   - After a refusal, the message shows as before, with a notice of the reason. For a change, the
@@ -1213,15 +1235,19 @@ MCP clients. The app has no UI-only path.
     number of members.
   - **Files in a message** (`MessageFiles.tsx`). The files show under the text, in their order. Each
     one comes from `chatFilePath` (`/dl/chat/…`) with the session cookie.
-    - A picture (`kind: "image"`) shows its small picture (`variant=preview`), or the file when it has
-      none. The small picture gives the size of the box. A click opens the file in a new tab. Under the
-      picture, a line has the name, the size and a download link.
+    - A picture (`kind: "image"`) shows its small picture (`variant=preview`). The small picture gives
+      the size of the box. A click opens the file in a new tab. Under the picture, a line has the name,
+      the size and a download link (`fileDisplay` in `model.ts`).
+    - A picture without a small picture shows the file itself in a fixed box (3 by 2), so the row does
+      not move when it loads. A picture over `DRIVE_LIMITS.fileBytes` (10 MB) without a small picture
+      shows as a chip, because the list would load all of it.
     - A video (`kind: "video"`) plays in the page (`<video controls preload="metadata">`), with the
-      small picture as its poster. The same line is under it.
+      small picture as its poster, or in a fixed box (16 by 9) without one. The same line is under it.
     - Each other file is a chip with an icon, the name and the size, and the chip is a link
       `<a href=… download>`.
     - A picture or a video that does not load (its author removed the file from Drive, for example)
-      shows as a chip with "The file does not load now."
+      shows as a chip with "The file does not load now." A new address, for example after a new small
+      picture, tries again.
   - **Link previews** (`LinkPreviews` in `MessageFiles.tsx`). The server fetches the previews after the
     post, and they come later as a change of the message (socket or sync).
     - A preview is a card under the files: the name of the site, the title as a link, the description
@@ -1230,7 +1256,9 @@ MCP clients. The app has no UI-only path.
     - The texts are content from outside the organization. They are React text nodes. The link opens
       in a new tab with `rel="noopener noreferrer nofollow"`, and only an http or https address gets a
       link (`safeLinkPreviewHref`).
-    - The author of the message sees an X on each preview, which calls `chat.remove_link_preview`.
+    - The author of the message sees an X on each preview, which calls `chat.remove_link_preview`. A
+      message that waits for the server has no X (`linkPreviewCards` in `model.ts`). When the preview
+      goes, the focus goes to the X of the next preview, or to the box for a new message.
   - The members dialog lists the
     members, adds a person or an agent, lets the owner remove a member, and has **Leave the room**.
     The owner changes the name and the topic in a second dialog.
@@ -1385,26 +1413,45 @@ for each value that the user selects from a list.
 
 [`src/lib/upload.ts`](src/lib/upload.ts) uploads a file to Drive. Drive and Chat use it.
 
-- A file with content goes in parts (`drive.create_upload`, with a random idempotency key). The
+- A file with content goes in parts (`drive.create_upload`). Each upload has one random idempotency
+  key, and each attempt of the call sends the same key, so a lost answer starts no second upload. The
   browser sends the raw bytes of each part with a PUT to `driveUploadPartPath`, through
   `XMLHttpRequest`, which gives the progress in bytes. The request has the session cookie, and the
   browser sends the `Origin` of the page, which the server needs for a change.
 - A file of 0 bytes goes with `drive.upload_file`, because an upload in parts needs at least one byte.
-- At most 3 parts go at the same time (`PART_CONCURRENCY`). A part that fails because of the network,
-  a failure of the server or the rate limit goes again after 1, 2 and 4 seconds. The other parts
-  continue. After a part failed each attempt, the upload reads the parts that the server has
-  (`drive.get_upload`) and sends only the others, two times at most. Then `drive.complete_upload`
-  makes the file.
+- At most 3 files upload at the same time in the page, from Drive and Chat together. The other files
+  wait in a queue (`createLimiter` in [`limiter.ts`](src/lib/limiter.ts)). So 10 files of a message do
+  not send 30 parts at the same time.
+- At most 3 parts of a file go at the same time. A part that fails because of the network, a failure
+  of the server or the rate limit goes again after 1, 2 and 4 seconds. The other parts continue. A PUT
+  that sends nothing for 60 seconds, or gets no answer 60 seconds after its last byte, stops and goes
+  again in the same way. After a part failed each attempt, the upload reads the parts that the server
+  has (`drive.get_upload`) and sends only the others, two times at most.
+- Then `drive.complete_upload` makes the file. It goes again after a failure, because a second call
+  gives the same file. When each attempt fails, the upload reads its state: when the server made the
+  file and the answers got lost, the upload gives that file (`drive.get_item`). So "Try again" makes no
+  second file.
 - A refusal that a new attempt cannot change stops the upload at once. A failed upload, and an upload
   that the person cancels (the signal), call `drive.abort_upload`, so the server removes the parts. A
   new attempt starts a new upload.
+- A completion that runs when the person cancels can make the file. The upload then gives the file
+  without a small picture, and the caller puts it in the trash: the X of a chip in Chat, and Cancel in
+  Drive.
+- When the page closes (`pagehide`), it sends `drive.abort_upload` for each upload that runs, as a
+  `keepalive` request that continues after the page. This is the best that the page can do.
+- The server keeps at most 20 open uploads for each principal and drive
+  (`DRIVE_LIMITS.openUploads`). An upload that the page could not stop, for example after a crash of
+  the browser, goes away with its parts after 24 hours (`DRIVE_LIMITS.uploadTtlMs`).
 - The upload sends no `sha256`: a browser can hash a file only when it holds all of it in memory.
 - The progress is the sum of the parts that the server has and of the bytes that went out of each
-  other part (`sentBytes`). A part that fails goes back to 0.
-- **Small pictures** ([`filePreview.ts`](src/lib/filePreview.ts)). For a file with an `image/` or a
-  `video/` type, the browser makes a small picture while the parts go, and the upload sends it with
-  `drive.set_preview` before it ends. A chat message keeps the facts of a file at the time of the
-  post, so the small picture must be there first.
+  other part. A part that fails goes back to 0.
+- **Small pictures** ([`filePreview.ts`](src/lib/filePreview.ts)). The browser makes a small picture
+  while the parts go, and the upload sends it with `drive.set_preview` before it ends. A chat message
+  keeps the facts of a file at the time of the post, so the small picture must be there first.
+  - Only a PNG, JPEG, GIF, WebP or AVIF picture of at most 20 MiB, and an MP4 or WebM video, get a try
+    (`wantsPreview`). The browser decodes all of a picture, so a larger picture gets none. Most
+    browsers cannot draw TIFF or HEIC.
+  - The page makes one small picture at a time.
   - A picture goes through `createImageBitmap`, which follows the EXIF orientation as the server does.
     A video loads from a `blob:` address in a `<video>` element, and the frame at 1 second (or at the
     middle of a short video) goes on a canvas.
@@ -1413,7 +1460,8 @@ for each value that the user selects from a list.
     640 times as high as it is wide gets none.
   - It is WebP, or JPEG on white when the browser cannot write WebP, at most 256 KiB.
   - Each failure (a type that the browser cannot decode, more than 15 seconds, a refusal of the
-    server) gives no small picture, and the file works without it.
+    server) gives no small picture, and the file works without it. After 15 seconds, the video element
+    stops its load and its `blob:` address goes.
 
 ## Routes
 
@@ -1461,14 +1509,14 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
-| [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, and the document header that the editors share |
+| [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`) and the small picture of a picture or a video (`filePreview.ts`) |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
-| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts and the size of a small picture, the first values of the OAuth approval page, the icons and the appearance rules |
+| [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts, the limit of the uploads, the upload queue of Drive and the small pictures, the first values of the OAuth approval page, the icons and the appearance rules |
 
 ## Commands
 

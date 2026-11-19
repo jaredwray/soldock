@@ -114,13 +114,19 @@ interface Editing {
 	files: readonly ChatFile[];
 }
 
+/** The body of the edit box, or null when it has no text: a body of only spaces counts as no text. */
+function editedBody(editing: Editing): ChatBody | null {
+	return editing.body !== null && bodyText(editing.body).trim() !== "" ? editing.body : null;
+}
+
 /**
  * True when the edit box can save. The text keeps its limit. A message with text needs text: an edit
  * without text keeps the old text on the server. A message with only files can remove some of them, and
  * keeps at least one.
  */
 function editSavable(editing: Editing): boolean {
-	if (editing.body !== null) return bodyText(editing.body).length <= CHAT_LIMITS.messageChars;
+	const body = editedBody(editing);
+	if (body !== null) return bodyText(body).length <= CHAT_LIMITS.messageChars;
 	return (
 		bodyText(editing.initial).trim() === "" &&
 		editing.files.length > 0 &&
@@ -530,7 +536,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	function send() {
 		if (!canSend) return;
 		// Each file is in the drive, so the outbox carries only the files. They leave the box at once.
-		const sentFiles = attachments.files() ?? [];
+		const sentFiles = attachments.take() ?? [];
 		// A new message goes after the newest message of the room. When the list is not there, it goes
 		// there. The outbox takes the message now, so the text is the text of this moment, and it stays
 		// after a reload and after a different room opens.
@@ -627,7 +633,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 
 	function saveEdit() {
 		if (!editing || !editSavable(editing)) return;
-		const { id, body, files: keptFiles } = editing;
+		const { id, files: keptFiles } = editing;
+		const body = editedBody(editing);
 		setEditing(null);
 		// The body that shows: the body of an edit that waits, or the body that the room has.
 		const waiting = latest.current.get(id);
@@ -904,6 +911,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 												// A reply that also went to the room opens the thread of its parent.
 												onOpenThread={pending === null ? () => openThread(message.parent_id ?? message.id) : null}
 												onRemovePreview={(url) => removePreview(message.id, url)}
+												onFocusBox={() => composer.current?.focus()}
 												onMediaLoad={holdPlace}
 												onSendAgain={() => outbox.retry(key)}
 												onSendCancel={() => outbox.discard(key)}
@@ -979,6 +987,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 										notice={files.notice}
 										onRetry={attachments.retry}
 										onRemove={attachments.remove}
+										onFocusAway={() => composer.current?.focus()}
 									/>
 								}
 							>
@@ -1114,6 +1123,8 @@ interface MessageItemProps {
 	onEditRemoveFile: (itemId: string) => void;
 	/** Removes the preview of a link of an own message. */
 	onRemovePreview: (url: string) => void;
+	/** Gives the focus to the box for a new message, after the X of the last link preview. */
+	onFocusBox: () => void;
 	/** Runs when a picture or a video of the message gets its size, so the list keeps its place. */
 	onMediaLoad: () => void;
 	onEditSave: () => void;
@@ -1167,6 +1178,7 @@ function MessageItem({
 	onEditChange,
 	onEditRemoveFile,
 	onRemovePreview,
+	onFocusBox,
 	onMediaLoad,
 	onEditSave,
 	onEditCancel,
@@ -1258,7 +1270,11 @@ function MessageItem({
 							// The person asked for the edit box, so the focus goes to it.
 							autofocus
 						/>
-						<EditFiles files={editing.files} onRemove={onEditRemoveFile} />
+						<EditFiles
+							files={editing.files}
+							onRemove={onEditRemoveFile}
+							onFocusAway={() => document.getElementById(editId)?.focus()}
+						/>
 						<span className="chat-edit-actions">
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
@@ -1305,10 +1321,11 @@ function MessageItem({
 							onMediaLoad={onMediaLoad}
 						/>
 						<LinkPreviews
-							previews={message.link_previews}
-							roomId={message.room_id}
-							messageId={message.id}
-							onRemove={own && pending === null ? onRemovePreview : null}
+							message={message}
+							ownId={ownId}
+							pending={pending !== null}
+							onRemove={onRemovePreview}
+							onFocusAway={onFocusBox}
 							onMediaLoad={onMediaLoad}
 						/>
 					</>

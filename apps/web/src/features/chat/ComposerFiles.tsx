@@ -3,6 +3,7 @@ import { useRef } from "react";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import type { Attachment } from "./attachments.ts";
+import { useFocusAfterRemove } from "./focusAfterRemove.ts";
 
 // The files of a message in the box: the attach button, and a chip for each file with its progress.
 
@@ -45,7 +46,7 @@ function progressOf(file: Attachment): number {
 /**
  * A chip for each file of the box: the name, the size, a bar while it uploads, the reason and "Try again"
  * after a failure, and a button that cancels the upload or removes the file. `busy` keeps the files while
- * a send runs.
+ * a send runs. After the X, the focus goes to the next chip, or to `onFocusAway` (the box).
  */
 export function AttachmentChips({
 	files,
@@ -53,19 +54,22 @@ export function AttachmentChips({
 	busy = false,
 	onRetry,
 	onRemove,
+	onFocusAway,
 }: {
 	files: readonly Attachment[];
 	notice: string | null;
 	busy?: boolean;
 	onRetry: (key: string) => void;
 	onRemove: (key: string) => void;
+	onFocusAway: () => void;
 }) {
+	const focus = useFocusAfterRemove(files, (file) => file.key, onFocusAway);
 	if (files.length === 0 && notice === null) return null;
 	return (
 		<div className="chat-attachments">
 			{files.length > 0 && (
-				<ul className="chat-attachment-list" aria-label="Files of the message">
-					{files.map((file) => {
+				<ul className="chat-attachment-list" aria-label="Files of the message" ref={focus.list}>
+					{files.map((file, index) => {
 						const progress = progressOf(file);
 						return (
 							<li key={file.key} className={`chat-attachment chat-attachment-${file.state}`}>
@@ -113,11 +117,15 @@ export function AttachmentChips({
 								)}
 								<button
 									type="button"
+									data-remove
 									className="icon-button icon-button-small"
 									aria-label={file.state === "uploading" ? `Cancel the upload of ${file.name}` : `Remove ${file.name}`}
 									title={file.state === "uploading" ? "Cancel the upload" : "Remove"}
 									disabled={busy}
-									onClick={() => onRemove(file.key)}
+									onClick={() => {
+										focus.removing(file.key, index);
+										onRemove(file.key);
+									}}
 								>
 									<Icon name="close" size={16} />
 								</button>

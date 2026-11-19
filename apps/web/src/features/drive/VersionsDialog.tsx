@@ -126,7 +126,7 @@ export function VersionsDialog({
 									aria-label={`Download the version of ${fullDate(version.created_at)}`}
 									title="Download"
 									disabled={busy !== null}
-									onClick={() => downloadFile(item, version.id)}
+									onClick={() => void run("Getting the version…", () => downloadFile(item, version.id))}
 								>
 									<Icon name="download" size={18} />
 								</button>
