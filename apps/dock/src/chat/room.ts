@@ -1220,8 +1220,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Starts or stops the follow of a thread by the caller. A first follow starts at the newest reply, so the
 	 * replies until now count as read. A stop keeps the marker, and a stop with no row has read nothing. A
-	 * follow after such a stop, with nothing read, starts at the newest reply too. Only the caller sees its
-	 * follow, so the room sends no socket event.
+	 * follow after such a stop, with nothing read, starts at the newest reply too. A follow that runs already
+	 * keeps its marker, so a second call changes nothing. Only the caller sees its follow, so the room sends
+	 * no socket event.
 	 */
 	async followThread(call: RoomCall, messageId: string, following: boolean): Promise<ThreadFollowRecord | Refusal> {
 		const opened = this.openAsMember(call);
@@ -1231,7 +1232,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.sql.exec(
 			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, ?, ?)
 			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = excluded.following,
-				last_read_seq = CASE WHEN excluded.following = 1 AND last_read_seq = 0
+				last_read_seq = CASE WHEN excluded.following = 1 AND following = 0 AND last_read_seq = 0
 					THEN excluded.last_read_seq ELSE last_read_seq END`,
 			messageId,
 			call.actor.principal_id,

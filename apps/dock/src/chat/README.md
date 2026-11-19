@@ -237,7 +237,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     - A mention of a group does not start a follow. An edit that adds a mention starts no follow.
     - `chat.follow_thread` starts or stops the follow of the caller. A first follow puts the marker at the
       newest reply, so the replies until then count as read. A stop keeps the marker. A follow after a
-      stop with nothing read starts at the newest reply too.
+      stop with nothing read starts at the newest reply too. A follow that runs already keeps its
+      marker.
     - `chat.mark_thread_read` sets the marker: to a reply `seq`, or to the newest reply. A member that
       does not follow keeps a marker too, with `following` null. A message with no reply gets no new
       row, so a loop over the history writes nothing.

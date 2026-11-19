@@ -1793,6 +1793,11 @@ describe("threads", () => {
 		// A reply that mentions a member makes it follow. The replies of a member are never new for it.
 		await reply(bot, room.id, parent.id, "@owner can you check?");
 		expect(await follow(owner)).toMatchObject({ following: true, unread_count: 2 });
+		// A second follow changes nothing: the earlier replies stay new, as the context of the mention.
+		expect((await owner.call("chat.follow_thread", { ...target, following: true })).follow).toEqual(
+			await follow(owner),
+		);
+		expect((await follow(owner)).unread_count).toBe(2);
 		expect((await follow(ada)).unread_count).toBe(1);
 		const marked = await callTool(bot.key, "chat_mark_thread_read", { ...target, seq: first.seq });
 		expect(marked.structuredContent).toEqual({
