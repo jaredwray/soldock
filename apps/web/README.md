@@ -857,7 +857,9 @@ MCP clients. The app has no UI-only path.
     - Each card has the room, the start of the first message (`chat.list_replies` with `limit: 1`, again
       after a new reply or a new `version` of the room, so an edit or a delete of the message shows), the
       number of replies, the time of the newest reply, and the new replies. A card whose read failed
-      reads again with the next read of the list.
+      reads again with the next read of the list that loads, and never by itself: the failure is a ref,
+      so a failure or a success starts no read. A refresh of several pages can bring a thread two times
+      while threads move, so the view keeps each thread one time.
     - A card opens the thread in the view of a thread at the right, as in a room. That view moves the read
       marker, so the card loses its count after the next `chat.threads` event. Each change of
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.

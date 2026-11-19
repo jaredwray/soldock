@@ -45,7 +45,19 @@ async function readFirstThreads(count: number) {
 		threads.push(...page.threads);
 		cursor = page.next_cursor;
 	}
-	return { threads, next_cursor: cursor };
+	// The pages have no snapshot: a thread that moved during the read can come two times.
+	return { threads: uniqueThreads(threads), next_cursor: cursor };
+}
+
+/** The threads with each thread one time, at its first place. */
+function uniqueThreads(threads: readonly ChatFollowedThread[]): ChatFollowedThread[] {
+	const seen = new Set<string>();
+	return threads.filter((thread) => {
+		const key = threadKey(thread);
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
 
 /** The key of a thread in the view: the room and the first message. */
@@ -68,6 +80,8 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 	const [moreError, setMoreError] = useState<string | null>(null);
 	/** "Try again" of a list that did not load adds 1, for a new read at once. */
 	const [retries, setRetries] = useState(0);
+	/** Each read of the list that loaded adds 1. A card whose read failed tries again after it. */
+	const [listReads, setListReads] = useState(0);
 	/** The threads that show, so a new read of the first page keeps as many. */
 	const shown = state.status === "ready" ? state.threads.length : 0;
 	const shownRef = useRef(shown);
@@ -89,7 +103,9 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 		const read = ++reads.current;
 		readFirstThreads(shownRef.current)
 			.then((page) => {
-				if (read === reads.current) setState({ status: "ready", threads: page.threads, nextCursor: page.next_cursor });
+				if (read !== reads.current) return;
+				setState({ status: "ready", threads: page.threads, nextCursor: page.next_cursor });
+				setListReads((count) => count + 1);
 			})
 			.catch((error: unknown) => {
 				if (read !== reads.current) return;
@@ -110,7 +126,11 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 			if (read !== reads.current) return;
 			setState((current) =>
 				current.status === "ready"
-					? { status: "ready", threads: [...current.threads, ...page.threads], nextCursor: page.next_cursor }
+					? {
+							status: "ready",
+							threads: uniqueThreads([...current.threads, ...page.threads]),
+							nextCursor: page.next_cursor,
+						}
 					: current,
 			);
 		} catch (error) {
@@ -182,6 +202,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 							<li key={threadKey(thread)}>
 								<ThreadCard
 									thread={thread}
+									listReads={listReads}
 									active={open !== null && threadKey(open) === threadKey(thread)}
 									onOpen={(button) => {
 										opener.current = button;
@@ -229,17 +250,27 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
  */
 function ThreadCard({
 	thread,
+	listReads,
 	active,
 	onOpen,
 }: {
 	thread: ChatFollowedThread;
+	/** The reads of the list that loaded. After a failure, the card reads again with the next one. */
+	listReads: number;
 	active: boolean;
 	onOpen: (button: HTMLButtonElement) => void;
 }) {
 	const [parent, setParent] = useState<ChatMessage | null>(null);
-	const [failed, setFailed] = useState(false);
-	// After a failure, each new read of the list (a new object of the thread) tries again.
-	const retryKey = failed ? thread : null;
+	/**
+	 * True after a read that failed. It is a ref, not a state, so a failure and a success never start a read
+	 * by themselves: only the next read of the list does (`attempt`).
+	 */
+	const failed = useRef(false);
+	const [attempt, setAttempt] = useState(0);
+	useEffect(() => {
+		void listReads;
+		if (failed.current) setAttempt((count) => count + 1);
+	}, [listReads]);
 	const roomId = thread.room.id;
 	const messageId = thread.message_id;
 	const lastReplyAt = thread.last_reply_at;
@@ -247,23 +278,22 @@ function ThreadCard({
 	useEffect(() => {
 		void lastReplyAt;
 		void roomVersion;
-		void retryKey;
+		void attempt;
 		let stopped = false;
 		api
 			.call("chat.list_replies", { room_id: roomId, message_id: messageId, limit: 1 })
 			.then((page) => {
-				if (stopped) return;
-				setParent(page.parent);
-				setFailed(false);
+				failed.current = false;
+				if (!stopped) setParent(page.parent);
 			})
 			// The card shows the room and the time without the message, until the next read of the list.
 			.catch(() => {
-				if (!stopped) setFailed(true);
+				failed.current = true;
 			});
 		return () => {
 			stopped = true;
 		};
-	}, [roomId, messageId, lastReplyAt, roomVersion, retryKey]);
+	}, [roomId, messageId, lastReplyAt, roomVersion, attempt]);
 
 	const title = roomTitle(thread.room);
 	const unread = thread.unread_count;
