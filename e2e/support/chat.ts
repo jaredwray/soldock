@@ -1,4 +1,4 @@
-import type { APIRequestContext, Browser, BrowserContext, Page } from "@playwright/test";
+import type { APIRequestContext, Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { BASE_URL } from "./server.ts";
 
@@ -138,6 +138,17 @@ export async function openRoom(page: Page, roomId: string): Promise<void> {
 /** The box for a new message of a room with the name `name`. */
 export function composer(page: Page, name: string) {
 	return page.getByRole("textbox", { name: `Message to ${name}` });
+}
+
+/**
+ * Waits until a box of Chat that has the focus keeps a selection that the test makes. ProseMirror writes its own
+ * selection into the page 20 ms after the box gets the focus. A selection that only the page has, for example
+ * from `locator.fill` or the End key, can go away at that time. A timer of the page with a longer delay runs
+ * after the timer of ProseMirror.
+ */
+export async function editorReady(box: Locator): Promise<void> {
+	await expect(box).toBeFocused();
+	await box.evaluate(() => new Promise((resolve) => setTimeout(resolve, 25)));
 }
 
 /**

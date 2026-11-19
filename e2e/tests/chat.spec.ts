@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
 	composer,
 	createRoom,
+	editorReady,
 	fill,
 	markRead,
 	newest,
@@ -212,6 +213,7 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 	await ownRow.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = mine.page.getByRole("textbox", { name: "New text of the message" });
 	const changed = unique("changed reply");
+	await editorReady(editBox);
 	await editBox.fill(changed);
 	await mine.panel.getByRole("button", { name: "Save" }).click();
 	await expect(mine.panel.locator(".chat-thread-reply").filter({ hasText: changed })).toHaveCount(1);
@@ -387,6 +389,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await row.hover();
 	await row.getByRole("button", { name: /Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editorReady(editBox);
 	await editBox.fill("refused text");
 	await page.getByRole("button", { name: "Save" }).click();
 	await expect(editBox).toHaveText("refused text");
@@ -876,6 +879,7 @@ test("a message shows its formats, shows HTML as text, and the box makes formats
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
 	await expect(editBox).toHaveText("I can do that");
 	await expect(editBox.locator("strong")).toHaveText("that");
+	await editorReady(editBox);
 	await editBox.press("End");
 	const tools = page.locator(".chat-edit").getByRole("toolbar", { name: "Formatting" });
 	await expect(tools.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
@@ -1037,6 +1041,7 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await thanks.hover();
 	await thanks.getByRole("button", { name: /^Change your message/ }).click();
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
+	await editorReady(editBox);
 	await editBox.press("End");
 	await editBox.pressSequentially(" @to");
 	const people = page.getByRole("listbox", { name: "People and agents to mention" });
