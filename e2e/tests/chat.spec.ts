@@ -175,6 +175,42 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(note).toBeFocused();
 });
 
+test("the Threads view lists the followed threads with their new replies, and a thread read there loses its count", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("Threads room");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	const parent = await post(tomasz, roomId, unique("thread to follow"));
+	const answer = unique("answer");
+	// A reply makes the author of the first message follow the thread, and the reply is new for it.
+	await reply(nadia, roomId, parent.id, answer);
+	const page = await tomasz.newPage();
+	await page.goto("/chat");
+	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
+	await page
+		.getByRole("navigation", { name: "Rooms" })
+		.getByRole("link", { name: /^Threads/ })
+		.click();
+	await expect(page).toHaveURL(/\/chat\/threads$/);
+	const card = page.getByRole("button").filter({ hasText: parent.text });
+	await expect(card).toContainText(name);
+	await expect(card).toContainText("1 new reply");
+
+	// The card opens the thread beside the list. The view reads the reply, so the card loses its count.
+	await card.click();
+	const panel = page.getByRole("complementary", { name: "Thread" });
+	await expect(panel.locator(".chat-thread-reply")).toHaveText([new RegExp(answer)]);
+	await expect(card).not.toContainText("new repl");
+
+	// With the thread closed, a new reply shows on the card at once, from the events socket.
+	await panel.getByRole("button", { name: "Close the thread" }).click();
+	await expect(card).toBeFocused();
+	await reply(nadia, roomId, parent.id, unique("later answer"));
+	await expect(card).toContainText("1 new reply");
+});
+
 test("a send whose answers get lost shows one time, with no Not sent row", async ({ browser }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const name = unique("Lost");

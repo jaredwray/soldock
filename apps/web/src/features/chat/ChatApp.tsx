@@ -1,11 +1,12 @@
 import "./chat.css";
 import type { ChatRoom } from "@asterra/contracts";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { api } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
-import { chatPath } from "../../routes.ts";
+import { chatPath, chatThreadsPath } from "../../routes.ts";
 import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
@@ -16,6 +17,7 @@ import { mentionDirectory } from "./mentions.ts";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
+import { ThreadsView } from "./ThreadsView.tsx";
 
 export interface ChatAppProps {
 	/** The open room, or null for the page without a room. */
@@ -24,6 +26,8 @@ export interface ChatAppProps {
 	messageSeq: number | null;
 	/** The person or the agent whose profile shows, or null. */
 	profileId: string | null;
+	/** True for the Threads view: the threads that the person follows. */
+	threads: boolean;
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
@@ -32,8 +36,9 @@ export interface ChatAppProps {
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
-export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: ChatAppProps) {
+export function ChatApp({ roomId, messageSeq, profileId, threads, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
+	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
 	const ownId = useSession().whoami.principal.id;
 	// The directory gives the handles of the mentions, and the profiles. It loads one time for the page.
@@ -47,8 +52,8 @@ export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: 
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null) document.title = "Chat – Asterra";
-	}, [roomId, profileId]);
+		if (roomId === null && profileId === null && !threads) document.title = "Chat – Asterra";
+	}, [roomId, profileId, threads]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {
@@ -62,6 +67,8 @@ export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: 
 			<ChatSidebar
 				rooms={rooms}
 				activeId={roomId}
+				threadsActive={threads}
+				unreadThreads={unreadThreads}
 				open={navOpen}
 				onClose={onCloseNav}
 				onNewRoom={() => setDialog("new-room")}
@@ -78,6 +85,8 @@ export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: 
 						directory={directory}
 						onOpened={open}
 					/>
+				) : threads ? (
+					<ThreadsView tick={rooms.threadsTick} directory={directory} />
 				) : roomId === null ? (
 					<>
 						<PageHeader title="Chat" icon="chat" />
@@ -121,6 +130,10 @@ export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: 
 interface ChatSidebarProps {
 	rooms: RoomsState;
 	activeId: string | null;
+	/** True while the Threads view shows. */
+	threadsActive: boolean;
+	/** The threads with new replies, at most 100. */
+	unreadThreads: number;
 	open: boolean;
 	onClose: () => void;
 	onNewRoom: () => void;
@@ -129,7 +142,17 @@ interface ChatSidebarProps {
 }
 
 /** The sidebar of Chat. At 900px and below it is part of the drawer that the menu button opens. */
-function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNewDm }: ChatSidebarProps) {
+function ChatSidebar({
+	rooms,
+	activeId,
+	threadsActive,
+	unreadThreads,
+	open,
+	onClose,
+	onNewRoom,
+	onBrowse,
+	onNewDm,
+}: ChatSidebarProps) {
 	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
@@ -164,6 +187,30 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 					<Icon name="plus" size={16} />
 					New room
 				</button>
+				<ul className="nav-list chat-nav-views">
+					<li>
+						<Link
+							to={chatThreadsPath()}
+							className={[
+								"nav-item",
+								threadsActive ? "nav-item-active" : "",
+								unreadThreads > 0 ? "chat-nav-unread" : "",
+							]
+								.filter(Boolean)
+								.join(" ")}
+							aria-current={threadsActive ? "page" : undefined}
+						>
+							<Icon name="chat" />
+							<span className="nav-name">Threads</span>
+							{unreadThreads > 0 && (
+								<span className="chat-nav-count">
+									<span aria-hidden="true">{unreadLabel(unreadThreads)}</span>
+									<span className="visually-hidden">{threadsText(unreadThreads)}</span>
+								</span>
+							)}
+						</Link>
+					</li>
+				</ul>
 				{starred.length > 0 && (
 					<>
 						<div className="nav-section nav-section-first">
@@ -227,6 +274,34 @@ function ChatSidebar({ rooms, activeId, open, onClose, onNewRoom, onBrowse, onNe
 			</nav>
 		</>
 	);
+}
+
+/**
+ * The threads with new replies, for the count of "Threads" in the sidebar. Each change of `tick` (a
+ * `chat.threads` event, or a read of the room list) reads the count again.
+ */
+function useUnreadThreads(tick: number): number {
+	const [count, setCount] = useState(0);
+	useEffect(() => {
+		void tick;
+		let stopped = false;
+		api
+			.call("chat.list_threads", { filter: "unread", limit: 1 })
+			.then((page) => {
+				if (!stopped) setCount(page.unread_threads);
+			})
+			// The count stays as it was. The next tick reads it again.
+			.catch(() => {});
+		return () => {
+			stopped = true;
+		};
+	}, [tick]);
+	return count;
+}
+
+function threadsText(count: number): string {
+	if (count > 99) return "More than 99 threads with new replies";
+	return count === 1 ? "1 thread with new replies" : `${count} threads with new replies`;
 }
 
 /** The count of the sidebar. The server stops the count at 100, so 100 means 100 or more. */

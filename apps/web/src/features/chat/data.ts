@@ -76,6 +76,11 @@ function connectEvents(handlers: SocketHandlers): Connection {
  */
 export function useRooms() {
 	const [state, setState] = useState<RoomsState>({ status: "loading", rooms: [], error: null, tick: 0 });
+	/**
+	 * Goes up with each `chat.threads` event, and after each read of the room list (a connect, a poll, a
+	 * focus). The Threads view and its count in the sidebar read the threads again when it changes.
+	 */
+	const [threadsTick, setThreadsTick] = useState(0);
 	const started = useRef(0);
 	const applied = useRef(0);
 	/** True while the events socket is connected. Then the list polls each minute only. */
@@ -108,6 +113,7 @@ export function useRooms() {
 			const rooms = withChangesSince(page, changes.current, since);
 			forgetChangesUpTo(changes.current, since);
 			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
+			setThreadsTick((current) => current + 1);
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
 			setState((current) =>
@@ -138,8 +144,11 @@ export function useRooms() {
 					void refresh();
 					return;
 				}
-				// The Threads view comes in a later part. The rooms do not change with this event.
-				if (event.type === "chat.threads") return;
+				// The followed threads of a room changed: the Threads view and its count read them again.
+				if (event.type === "chat.threads") {
+					setThreadsTick((current) => current + 1);
+					return;
+				}
 				const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
 				const room = event.type === "chat.room" ? event.room : null;
 				const at = ++events.current;
@@ -174,7 +183,7 @@ export function useRooms() {
 		};
 	}, [refresh]);
 
-	return { ...state, refresh };
+	return { ...state, refresh, threadsTick };
 }
 
 /** One WebSocket connection to the socket of a room. The session cookie authenticates it. */
