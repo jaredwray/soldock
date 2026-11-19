@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@soldock/contracts";
+import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import {

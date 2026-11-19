@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRoom } from "@soldock/contracts";
+import type { ChatMessage, ChatRoom } from "@asterra/contracts";
 
 // The last list of each room that the page showed. A room that opens again shows that list at once,
 // before the answer of the server. It has no DOM and no network, so apps/web/test checks it.

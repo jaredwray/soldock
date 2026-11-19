@@ -1,4 +1,4 @@
-import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@soldock/contracts";
+import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

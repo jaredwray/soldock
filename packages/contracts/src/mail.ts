@@ -542,7 +542,7 @@ const createWebhookSubscription = defineOperation({
 	name: "mail.create_webhook_subscription",
 	summary: "Send new mail to an endpoint",
 	description: [
-		"Adds a subscription. Soldock sends a signed POST when new mail arrives in the inbox.",
+		"Adds a subscription. Asterra sends a signed POST when new mail arrives in the inbox.",
 		"Use your own mailbox, a team mailbox that you belong to, or the mailbox of an agent that you sponsor.",
 		"The POST has no mail content. Read the inbox with your own credential.",
 		"The endpoint must be yours and active. One endpoint can watch more than one mailbox.",

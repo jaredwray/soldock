@@ -1,4 +1,4 @@
-import { AllowlistEntry, type OutboundPolicy } from "@soldock/contracts";
+import { AllowlistEntry, type OutboundPolicy } from "@asterra/contracts";
 
 export const POLICY_MODES: readonly { mode: OutboundPolicy["mode"]; title: string; hint: string }[] = [
 	{

@@ -1,4 +1,4 @@
-import { type Address, MAIL_LIMITS, type Message } from "@soldock/contracts";
+import { type Address, MAIL_LIMITS, type Message } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	addressTokenAt,
@@ -10,7 +10,7 @@ import {
 	replyDraft,
 } from "../src/features/mail/compose.ts";
 
-const ME = "me@soldock.test";
+const ME = "me@asterra.test";
 
 function address(value: string, name: string | null = null): Address {
 	return { name, address: value };
@@ -129,7 +129,7 @@ describe("replyDraft", () => {
 
 	it("replies to all without your own address and without duplicates", () => {
 		const original = message({
-			to: [address("ME@soldock.test"), address("bob@example.com"), address("ada@example.com")],
+			to: [address("ME@asterra.test"), address("bob@example.com"), address("ada@example.com")],
 			cc: [address("carol@example.com"), address("Bob@example.com"), address(ME)],
 		});
 		const draft = replyDraft(original, ME, true);

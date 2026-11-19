@@ -1,4 +1,4 @@
-import { isErrorCode, operations, RoomId } from "@soldock/contracts";
+import { isErrorCode, operations, RoomId } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
 import { type AuthContext, authenticate, credentialRef, isSameOrigin } from "../identity/index.ts";

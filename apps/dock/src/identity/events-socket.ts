@@ -1,4 +1,4 @@
-import { EVENTS_SOCKET_PATH, operations } from "@soldock/contracts";
+import { EVENTS_SOCKET_PATH, operations } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
 import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";

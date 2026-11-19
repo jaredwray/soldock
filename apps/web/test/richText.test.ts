@@ -1,4 +1,4 @@
-import type { Address, Message } from "@soldock/contracts";
+import type { Address, Message } from "@asterra/contracts";
 import type { Mark, Node } from "prosemirror-model";
 import { describe, expect, it } from "vitest";
 import { replyDraft } from "../src/features/mail/compose.ts";
@@ -137,7 +137,7 @@ describe("textToDoc", () => {
 			thread_id: "thr_1",
 			message_id_header: "<1@example.com>",
 			from: address("ada@example.com", "Ada"),
-			to: [address("me@soldock.test")],
+			to: [address("me@asterra.test")],
 			cc: [],
 			bcc: [],
 			reply_to: [],
@@ -160,7 +160,7 @@ describe("textToDoc", () => {
 			delivery: null,
 			sent_by: null,
 		};
-		const draft = replyDraft(original, "me@soldock.test", false);
+		const draft = replyDraft(original, "me@asterra.test", false);
 		const result = textToDoc(draft.text);
 		expect(result.childCount).toBe(4);
 		const quote = result.child(3);

@@ -1,4 +1,4 @@
-import type { Address, Label, Message } from "@soldock/contracts";
+import type { Address, Label, Message } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";

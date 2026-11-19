@@ -20,7 +20,7 @@ export const DRIVE_LIMITS = {
 	queryChars: 500,
 } as const;
 
-/** The kinds of an item. `doc` and `sheet` are the native documents of Soldock. */
+/** The kinds of an item. `doc` and `sheet` are the native documents of Asterra. */
 export const ITEM_KINDS = ["folder", "file", "doc", "sheet"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 

@@ -5,7 +5,7 @@ import {
 	EVENTS_SOCKET_CLOSE,
 	EVENTS_SOCKET_PROTOCOL,
 	type PrincipalEvent,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { log } from "../platform/index.ts";
 import { type CredentialCheck, type CredentialRef, checkCredentials } from "./access.ts";
 

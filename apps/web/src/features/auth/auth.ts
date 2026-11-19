@@ -1,4 +1,4 @@
-import { ApiError, type SignInInput, SignInResult } from "@soldock/contracts";
+import { ApiError, type SignInInput, SignInResult } from "@asterra/contracts";
 
 // The /auth/* endpoints are not operations, so they use plain fetch. Each other call goes through
 // the typed client in lib/api.ts.
@@ -38,7 +38,7 @@ export async function endSession(): Promise<void> {
 
 export const SIGN_OUT_FAILED = "Sign-out did not finish, so you are still signed in. Try again.";
 
-const UNAVAILABLE = "Soldock is not available. Examine your connection, then try again.";
+const UNAVAILABLE = "Asterra is not available. Examine your connection, then try again.";
 
 export function signInErrorMessage(error: unknown): string {
 	if (error instanceof ApiError) {

@@ -102,7 +102,7 @@ contract of the socket.
 
 - A **human** has an organization role: `owner`, `admin` or `member`. First-run setup creates the
   only owner.
-- A human signs in to the web app with their Soldock address and a **password**. Two-step
+- A human signs in to the web app with their Asterra address and a **password**. Two-step
   verification with a TOTP code from an authenticator app is optional. Only `account.whoami` shows
   the sign-in state (`sign_in.password_set`, `sign_in.totp_enabled`), to its owner. A `CHECK` in D1
   stops an agent from having a password or a TOTP secret. Agents never sign in to the web app.
@@ -268,7 +268,7 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   After a correct token, it returns `SetupVerifyResult`: `empty`, `has_accounts`, or `unknown`.
   The value `unknown` means that the directory query failed, for example with an old schema.
   A failed query does not fail the request, so a fresh start stays available.
-- The schemas of these routes are in `@soldock/contracts` (`SetupStatus`, `SetupVerifyResult`,
+- The schemas of these routes are in `@asterra/contracts` (`SetupStatus`, `SetupVerifyResult`,
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
@@ -289,9 +289,9 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   The reset lease expires after ten minutes. A later reset can replace an abandoned lease.
   The directory transaction checks lease ownership, so an older request cannot replace the newer result.
   Delete `SETUP_TOKEN` after setup to disable this option.
-- The schemas of the sign-in route are in `@soldock/contracts` (`SignInInput`, `SignInResult`,
+- The schemas of the sign-in route are in `@asterra/contracts` (`SignInInput`, `SignInResult`,
   `Password`, `TotpCode`, `SIGN_IN_MAX_FAILURES`, `SIGN_IN_LOCK_MINUTES`).
-- `POST /auth/session` (`{ address, password, totp_code? }`): sign-in. The address is a Soldock
+- `POST /auth/session` (`{ address, password, totp_code? }`): sign-in. The address is an Asterra
   address of the human, in any case.
   - A correct password, for a person without two-step verification, gives `200 { "status": "signed_in" }`
     and the session cookie.
@@ -340,10 +340,10 @@ These routes are ceremonies, not operations, because the client has no credentia
   same document for the origin.
 - `GET /.well-known/oauth-authorization-server`: the server metadata. The issuer is the origin.
 - `POST /oauth/register`: registration without a credential. Each client is public: it gets no
-  secret and must use PKCE. Soldock replaces other values of `token_endpoint_auth_method`,
+  secret and must use PKCE. Asterra replaces other values of `token_endpoint_auth_method`,
   `grant_types` and `response_types`, as RFC 7591 allows.
   - A client has 1 to 5 redirect URIs (`OAUTH_LIMITS.redirectUris`), each at most 2,000 characters.
-  - A redirect URI uses `https:`, `http:` with a loopback host, or the scheme of a native app. Soldock
+  - A redirect URI uses `https:`, `http:` with a loopback host, or the scheme of a native app. Asterra
     refuses `javascript:`, `data:`, `file:` and other schemes that can run code or read files, and
     system handlers such as `tel:`, `intent:`, `ms-*:` and `search-ms:`. The web app sends the browser
     to the redirect URI, so a refused scheme cannot run code on this origin.
@@ -354,7 +354,7 @@ These routes are ceremonies, not operations, because the client has no credentia
     A client with a request or a grant stays. So the stored rows have a fixed limit, and a flood of
     registrations removes only unused registrations.
   - The client name is cut to 100 characters, without control characters. The approval page says that
-    Soldock does not check it. `oauth.get_authorization` and `oauth.list_grants` mark their result
+    Asterra does not check it. `oauth.get_authorization` and `oauth.list_grants` mark their result
     `untrusted: true`, so MCP puts the untrusted notice first.
 - `GET /oauth/authorize`: each error gets a `400` text page, and never a redirect. Anybody can
   register a redirect URI, so a redirect before a person acts would make this origin an open redirect
@@ -434,7 +434,7 @@ Known limits:
 ## Two-step verification
 
 1. `account.create_totp_secret` makes a random 20-byte secret, keeps it in `totp_pending_secret`,
-   and returns it once with an `otpauth://totp/Soldock:<address>` URI for a QR code. Sign-in does
+   and returns it once with an `otpauth://totp/Asterra:<address>` URI for a QR code. Sign-in does
    not change. A new call replaces the waiting secret.
 2. `account.enable_totp` checks a code against the waiting secret. A correct code moves it to
    `totp_secret` and records its step, so that code cannot also sign in. It also ends the other
@@ -471,7 +471,7 @@ Each call passes three checks:
 1. **Caller kind and scopes** (the shared invoker): the operation lists the principal kinds that
    can call it and the scopes that the credential must hold. A key holds the scopes that it was
    given, and never more than the ceiling of its principal kind: agents can hold only the scopes in
-   `AGENT_SCOPES` of `@soldock/contracts`, which has no `account.keys` and no `directory.write`. A session holds
+   `AGENT_SCOPES` of `@asterra/contracts`, which has no `account.keys` and no `directory.write`. A session holds
    every human scope, because only a credential with every human scope can set a password.
 2. **Role and resource** (the handler):
    - Only owners and admins create, change, archive, restore and delete principals. Only the owner

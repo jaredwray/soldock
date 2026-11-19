@@ -8,7 +8,7 @@ export function mcpEndpointUrl(origin: string = window.location.origin): string 
 
 /**
  * The full URL of the MCP endpoint, with a copy button. An agent connects with OAuth: its MCP client
- * opens a page of Soldock, and a person approves it there and gives it an address and scopes.
+ * opens a page of Asterra, and a person approves it there and gives it an address and scopes.
  */
 export function McpEndpointBanner() {
 	const url = mcpEndpointUrl();
@@ -35,7 +35,7 @@ export function McpEndpointBanner() {
 					MCP endpoint
 				</label>
 				<p id={hintId} className="panel-note">
-					Add this URL to the MCP client of the agent. The client opens Soldock in a browser. Approve it there, and give
+					Add this URL to the MCP client of the agent. The client opens Asterra in a browser. Approve it there, and give
 					the agent its address and its access. Clients without OAuth can use an API key instead.
 				</p>
 			</div>

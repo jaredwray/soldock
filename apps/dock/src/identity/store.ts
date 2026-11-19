@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@soldock/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@asterra/contracts";
 import { newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 export type PrincipalKind = "human" | "agent";

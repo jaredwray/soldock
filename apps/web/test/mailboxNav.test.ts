@@ -1,4 +1,4 @@
-import type { Mailbox } from "@soldock/contracts";
+import type { Mailbox } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { isExpanded, mailboxNav } from "../src/features/mail/mailboxNav.ts";
 

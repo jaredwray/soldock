@@ -8,7 +8,7 @@ import {
 	SIGN_IN_LOCK_MINUTES,
 	SignInInput,
 	type SignInResult,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
 import {
@@ -57,7 +57,7 @@ function authorizeSetup(request: Request, env: Env): boolean {
 		);
 	const fromBrowser = request.headers.has("origin");
 	if (fromBrowser && !isSameOrigin(request))
-		throw new OperationError("forbidden", "Run setup from the Soldock web app.");
+		throw new OperationError("forbidden", "Run setup from the Asterra web app.");
 	if (!sameSecret(request.headers.get("authorization") ?? "", `Bearer ${token}`))
 		throw new OperationError("unauthenticated", "Send the setup token as a bearer token.");
 	return fromBrowser;
@@ -81,7 +81,7 @@ async function jsonBody(request: Request): Promise<unknown> {
 
 /**
  * The `/auth/*` ceremonies. They are not operations: they create credentials. A human signs in with
- * their Soldock address, their password and, when they turned it on, a TOTP code.
+ * their Asterra address, their password and, when they turned it on, a TOTP code.
  */
 export function mountAuthRoutes(app: AuthApp): void {
 	// A valid setup secret permits recovery without a query against an old directory schema.
@@ -187,7 +187,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 	// Sign-in: the address and the password, and a TOTP code when the person turned it on. Each refusal
 	// gets the same 401, so the answer does not tell which part is wrong, or if the address has an account.
 	app.post("/auth/session", async (c) => {
-		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Soldock web app.");
+		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Asterra web app.");
 		const parsed = SignInInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
 		const outcome = await signInWithPassword(c.env.DIRECTORY, parsed.data);
@@ -223,7 +223,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 	});
 
 	app.post("/auth/sign-out", async (c) => {
-		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign out from the Soldock web app.");
+		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign out from the Asterra web app.");
 		const token = readCookie(c.req.raw, SESSION_COOKIE);
 		if (token) {
 			const hash = await sha256Hex(token);

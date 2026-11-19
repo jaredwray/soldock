@@ -1,5 +1,5 @@
 // Public surface of the api module: the REST adapter, generated from the operation registry.
-import { type Operation, type OperationName, operationList, pathParams } from "@soldock/contracts";
+import { type Operation, type OperationName, operationList, pathParams } from "@asterra/contracts";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import { authenticate, type CallContext, isSameOrigin } from "../identity/index.ts";
@@ -20,7 +20,7 @@ export function unauthenticatedResponse(requestId: string, instance: string): Re
 		requestId,
 		instance,
 	});
-	response.headers.set("www-authenticate", 'Bearer realm="soldock"');
+	response.headers.set("www-authenticate", 'Bearer realm="asterra"');
 	return response;
 }
 

@@ -1,4 +1,4 @@
-import type { ThreadSummary } from "@soldock/contracts";
+import type { ThreadSummary } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	actionChange,

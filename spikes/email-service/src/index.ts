@@ -98,12 +98,12 @@ async function sendToOne(
 	recipient: string,
 	index: number,
 ): Promise<SendResult[]> {
-	const tag = { "X-Soldock-Spike": runId };
+	const tag = { "X-Asterra-Spike": runId };
 	const structuredId = messageId(runId, "structured", index, from);
 	const structuredReplyId = messageId(runId, "structured-reply", index, from);
 	const rawId = messageId(runId, "raw", index, from);
 	const rawReplyId = messageId(runId, "raw-reply", index, from);
-	const subject = `Soldock spike ${runId}`;
+	const subject = `Asterra spike ${runId}`;
 
 	// The elements of an array literal are evaluated in order, so each send waits for the one before.
 	return [

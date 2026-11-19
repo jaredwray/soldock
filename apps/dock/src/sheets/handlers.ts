@@ -1,4 +1,4 @@
-import { type OperationName, SHEET_LIMITS } from "@soldock/contracts";
+import { type OperationName, SHEET_LIMITS } from "@asterra/contracts";
 import {
 	accept,
 	auditOk,

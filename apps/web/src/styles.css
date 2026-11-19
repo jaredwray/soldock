@@ -1,4 +1,4 @@
-/* Soldock web app. Plain CSS with custom properties. The names and the values of the colors follow
+/* Asterra web app. Plain CSS with custom properties. The names and the values of the colors follow
    Ember (https://github.com/NYLLON-SOFTWARE/ember-cloudflare, MIT). The `dark` class on <html> selects
    the dark colors. src/lib/appearance.ts sets it from the Light, Dark or System choice. */
 
@@ -772,7 +772,7 @@ fieldset {
 	text-align: center;
 }
 
-/* The mark of Soldock, 48px wide, above the title. */
+/* The mark of Asterra, 48px wide, above the title. */
 .auth-logo {
 	display: grid;
 	place-items: center;
@@ -900,20 +900,27 @@ fieldset {
 	}
 }
 .brand-mark {
-	display: inline-grid;
-	place-items: center;
+	display: inline-block;
 	flex: none;
 	width: 34px;
 	height: 34px;
-	border-radius: var(--radius);
-	background: var(--primary);
-	color: var(--primary-foreground);
+	background: url("../../../docs/brand/asterra-modern-for-light.svg?no-inline") center / contain no-repeat;
+}
+
+:where(:root.dark) .brand-mark {
+	background-image: url("../../../docs/brand/asterra-modern-for-dark.svg?no-inline");
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.brand-mark {
+		background: light-dark(black, white);
+		mask: url("/favicon.svg") center / contain no-repeat;
+	}
 }
 
 .auth-logo .brand-mark {
 	width: 48px;
 	height: 48px;
-	border-radius: 12px;
 }
 
 /* App frame: the rail at the left, and the page of the route. */

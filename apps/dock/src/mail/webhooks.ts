@@ -1,4 +1,4 @@
-import type { MailWebhookSubscription } from "@soldock/contracts";
+import type { MailWebhookSubscription } from "@asterra/contracts";
 import type { CallContext } from "../identity/index.ts";
 import type { HandlerMap } from "../platform/index.ts";
 import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/index.ts";

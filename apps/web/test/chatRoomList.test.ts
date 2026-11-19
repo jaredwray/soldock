@@ -1,5 +1,5 @@
-import type { ChatRoom } from "@soldock/contracts";
-import { CHAT_LIMITS } from "@soldock/contracts";
+import type { ChatRoom } from "@asterra/contracts";
+import { CHAT_LIMITS } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	forgetChangesUpTo,

@@ -1,4 +1,4 @@
-import type { Label, Message } from "@soldock/contracts";
+import type { Label, Message } from "@asterra/contracts";
 import { useEffect, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import type { ThreadState } from "./data.ts";

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#000000" role="img" aria-labelledby="orbit-modern-light-title">
+  <title id="orbit-modern-light-title">Black Asterra A with a white sheen</title>
+  <defs>
+    <path id="orbit-modern-light-mark" d="M18.62 224.78L106.72 39.96C112.13 28.62 128.12 28.21 134.1 39.27L178.27 121.02C169.78 122.46 161.29 124.43 152.8 126.95L121.17 68.37L64.15 188.19C116.82 149.85 169.49 130.74 222.16 129.4C168.42 140.83 114.69 173.35 60.96 224.78Z M100.94 207.65C133.54 176.96 166.13 163.59 198.72 155L237.04 224.78L208.22 224.78L181.53 176.23C154.67 180.16 127.81 191.05 100.94 207.65Z"/>
+    <clipPath id="orbit-modern-light-clip">
+      <use href="#orbit-modern-light-mark"/>
+    </clipPath>
+    <linearGradient id="orbit-modern-light-band">
+      <stop stop-color="white" stop-opacity="0"/>
+      <stop offset=".30" stop-color="white" stop-opacity=".04"/>
+      <stop offset=".46" stop-color="white" stop-opacity=".18"/>
+      <stop offset=".59" stop-color="white" stop-opacity=".60"/>
+      <stop offset=".64" stop-color="white"/>
+      <stop offset=".68" stop-color="white"/>
+      <stop offset=".73" stop-color="white" stop-opacity=".68"/>
+      <stop offset=".81" stop-color="white" stop-opacity=".16"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    @keyframes asterra-face-pass {
+      0% { transform: translateX(-122px); }
+      57%, 100% { transform: translateX(336px); }
+    }
+    #orbit-modern-light-sweep { visibility: hidden; }
+    @media (prefers-reduced-motion: no-preference) {
+      #orbit-modern-light-sweep { visibility: visible; animation: asterra-face-pass 4.8s ease-in-out -1.3s infinite; }
+    }
+  </style>
+  <g clip-path="url(#orbit-modern-light-clip)">
+    <rect width="256" height="256" fill="currentColor"/>
+    <g id="orbit-modern-light-sweep">
+      <rect width="118" height="256" transform="skewX(-16)" fill="url(#orbit-modern-light-band)"/>
+    </g>
+  </g>
+</svg>

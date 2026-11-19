@@ -103,18 +103,18 @@ describe("the resource registry", () => {
 
 	// The adapter finds the resource of a URI with this match. A loose match would accept a URI that names something else.
 	it("matches a URI only when each variable is one whole path segment", () => {
-		const template = "soldock://mail/{mailbox_id}/inbox";
+		const template = "asterra://mail/{mailbox_id}/inbox";
 		const id = "tmb_01JC0000000000000000000000";
 		expect(matchTemplate(template, expandTemplate(template, { mailbox_id: id }))).toEqual({ mailbox_id: id });
-		expect(expandTemplate(template, { mailbox_id: "a/b" })).toBe("soldock://mail/a%2Fb/inbox");
-		expect(matchTemplate(template, "soldock://mail/a%2Fb/inbox")).toEqual({ mailbox_id: "a/b" });
+		expect(expandTemplate(template, { mailbox_id: "a/b" })).toBe("asterra://mail/a%2Fb/inbox");
+		expect(matchTemplate(template, "asterra://mail/a%2Fb/inbox")).toEqual({ mailbox_id: "a/b" });
 		for (const uri of [
-			"soldock://mail//inbox",
-			"soldock://mail/a/b/inbox",
-			`soldock://mail/${id}/inbox?x=1`,
-			`soldock://mail/${id}/inbox/`,
-			`xsoldock://mail/${id}/inbox`,
-			"soldock://mail/%E0%A4%A/inbox",
+			"asterra://mail//inbox",
+			"asterra://mail/a/b/inbox",
+			`asterra://mail/${id}/inbox?x=1`,
+			`asterra://mail/${id}/inbox/`,
+			`xasterra://mail/${id}/inbox`,
+			"asterra://mail/%E0%A4%A/inbox",
 		]) {
 			expect(matchTemplate(template, uri), uri).toBeNull();
 		}

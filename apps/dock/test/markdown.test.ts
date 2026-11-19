@@ -1,4 +1,4 @@
-import { DOC_LIMITS, DocContent } from "@soldock/contracts";
+import { DOC_LIMITS, DocContent } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { checkDoc, docText } from "../src/docs/content.ts";
 import { docToMarkdown, markdownToDoc } from "../src/docs/markdown.ts";

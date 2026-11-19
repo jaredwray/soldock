@@ -1,13 +1,13 @@
 // Usage: node tools/seed/seed.ts [--url http://localhost:8787] [--setup-token <token>]
-// Fills an empty local Soldock with a made-up organization, for demonstrations and screenshots.
+// Fills an empty local Asterra instance with a made-up organization, for demonstrations and screenshots.
 import { parseArgs } from "node:util";
-import { ApiError } from "@soldock/contracts";
+import { ApiError } from "@asterra/contracts";
 import { createHttpApi, localOrigin, SeedStop } from "./src/api.ts";
 import { runSeed, signInLines } from "./src/run.ts";
 
 const USAGE = `Usage: pnpm seed [--url <url>] [--setup-token <token>]
 
-Fills an empty local Soldock with a made-up organization.
+Fills an empty local Asterra instance with a made-up organization.
 
   --url <url>            The local Worker. Default: http://localhost:8787
   --setup-token <token>  The SETUP_TOKEN of the Worker. Default: the SETUP_TOKEN environment variable

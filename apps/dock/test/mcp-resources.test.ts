@@ -6,7 +6,7 @@ import {
 	EVENTS_SOCKET_CLOSE,
 	EVENTS_SOCKET_PATH,
 	UNTRUSTED_NOTICE,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.ts";
 import {
@@ -25,9 +25,9 @@ import {
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
-const inbox = (mailboxId: string) => `soldock://mail/${mailboxId}/inbox`;
-const roomMessages = (roomId: string) => `soldock://chat/${roomId}/messages`;
-const ROOMS = "soldock://chat/rooms";
+const inbox = (mailboxId: string) => `asterra://mail/${mailboxId}/inbox`;
+const roomMessages = (roomId: string) => `asterra://chat/${roomId}/messages`;
+const ROOMS = "asterra://chat/rooms";
 
 /** The owner, Ada and the agent Bot, with a team mailbox that Bot is a member of and one that Bot is not. */
 async function seedTeams() {
@@ -95,11 +95,11 @@ describe("MCP resources", () => {
 		]);
 		const templates = (await modern(bot.key, "resources/templates/list")).body?.result as Record<string, unknown>;
 		expect(templates.resourceTemplates).toEqual([
-			expect.objectContaining({ uriTemplate: "soldock://mail/{mailbox_id}/inbox", name: "mail.inbox" }),
-			expect.objectContaining({ uriTemplate: "soldock://chat/{room_id}/messages", name: "chat.room" }),
-			expect.objectContaining({ uriTemplate: "soldock://chat/rooms", name: "chat.rooms" }),
-			expect.objectContaining({ uriTemplate: "soldock://drive/{space_id}/items/{item_id}", name: "drive.item" }),
-			expect.objectContaining({ uriTemplate: "soldock://drive/{drive_id}", name: "drive.space" }),
+			expect.objectContaining({ uriTemplate: "asterra://mail/{mailbox_id}/inbox", name: "mail.inbox" }),
+			expect.objectContaining({ uriTemplate: "asterra://chat/{room_id}/messages", name: "chat.room" }),
+			expect.objectContaining({ uriTemplate: "asterra://chat/rooms", name: "chat.rooms" }),
+			expect.objectContaining({ uriTemplate: "asterra://drive/{space_id}/items/{item_id}", name: "drive.item" }),
+			expect.objectContaining({ uriTemplate: "asterra://drive/{drive_id}", name: "drive.space" }),
 		]);
 
 		// Parity: the read runs mail.list_threads, so it returns what REST returns, after the untrusted notice.
@@ -112,6 +112,11 @@ describe("MCP resources", () => {
 			[inbox(bot.id), "text/plain"],
 			[inbox(bot.id), "application/json"],
 		]);
+		const savedUri = `soldock://mail/${bot.id}/inbox`;
+		const saved = await modern(bot.key, "resources/read", { uri: savedUri });
+		expect(saved.body?.result).toMatchObject({
+			contents: read.contents.map((content) => ({ ...content, uri: savedUri })),
+		});
 		expect(read.contents[0]?.text).toBe(UNTRUSTED_NOTICE);
 		expect(JSON.parse(read.contents[1]?.text ?? "null")).toEqual(
 			await bot.call("mail.list_threads", { query: "in:inbox" }),
@@ -120,7 +125,7 @@ describe("MCP resources", () => {
 		// The read checks the mailbox as the operation does. Legacy clients get the not-found code of their protocol.
 		const refused = await modern(bot.key, "resources/read", { uri: inbox(finance.id) });
 		expect(refused.body?.error).toMatchObject({ code: -32602, data: { uri: inbox(finance.id), code: "forbidden" } });
-		expect((await modern(bot.key, "resources/read", { uri: "soldock://mail/nope/inbox" })).body?.error).toMatchObject({
+		expect((await modern(bot.key, "resources/read", { uri: "asterra://mail/nope/inbox" })).body?.error).toMatchObject({
 			code: -32602,
 			message: "Resource not found",
 		});
@@ -154,7 +159,7 @@ describe("MCP resources", () => {
 		await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
 
 		const listed = (await modern(bot.key, "resources/list")).body?.result as { resources: Record<string, unknown>[] };
-		expect(listed.resources.filter((resource) => String(resource.uri).startsWith("soldock://chat/"))).toEqual([
+		expect(listed.resources.filter((resource) => String(resource.uri).startsWith("asterra://chat/"))).toEqual([
 			expect.objectContaining({ uri: roomMessages(room.id), title: "Messages of #Launch" }),
 			expect.objectContaining({ uri: roomMessages(dm.id), title: "Direct message with Ada Lovelace" }),
 			expect.objectContaining({ uri: ROOMS, name: "chat.rooms", title: "Your rooms" }),
@@ -193,9 +198,10 @@ describe("MCP subscriptions/listen", () => {
 		const { ada, bot, support, finance } = await seedTeams();
 		// An alias with other percent-encoding names no resource, so one request cannot watch a mailbox many times.
 		const alias = inbox(support.id).replace("tmb_", "%74mb_");
+		const savedInbox = `soldock://mail/${bot.id}/inbox`;
 		const stream = await listen(
 			bot.key,
-			[inbox(bot.id), inbox(support.id), inbox(finance.id), "soldock://x", inbox(bot.id), alias],
+			[savedInbox, inbox(support.id), inbox(finance.id), "asterra://x", inbox(bot.id), inbox(support.id), alias],
 			{ toolsListChanged: true },
 		);
 		// The acknowledgment comes first. It keeps only what the caller can watch, and gives no reason for the rest.
@@ -204,7 +210,7 @@ describe("MCP subscriptions/listen", () => {
 			method: "notifications/subscriptions/acknowledged",
 			params: {
 				_meta: { "io.modelcontextprotocol/subscriptionId": "sub-1" },
-				notifications: { resourceSubscriptions: [inbox(bot.id), inbox(support.id)] },
+				notifications: { resourceSubscriptions: [savedInbox, inbox(support.id)] },
 			},
 		});
 		// A person who is a member watches the same team inbox with a human key.
@@ -229,7 +235,7 @@ describe("MCP subscriptions/listen", () => {
 			"finance@dock.test",
 		);
 		await inject(rawMessage({ from: "x@internet.example", to: "bot@dock.test", subject: "Hello" }), "bot@dock.test");
-		expect(await stream.next()).toEqual(updated(inbox(bot.id)));
+		expect(await stream.next()).toEqual(updated(savedInbox));
 		await inject(
 			rawMessage({ from: "x@internet.example", to: "support@dock.test", subject: "Help" }),
 			"support@dock.test",
@@ -241,7 +247,7 @@ describe("MCP subscriptions/listen", () => {
 		// Mail that a mailbox sends to itself is new mail in its inbox too.
 		const sent = await callTool(bot.key, "mail_send", { to: ["bot@dock.test"], subject: "Note to self", text: "Hi." });
 		expect(sent.isError).toBeUndefined();
-		expect(await stream.next()).toEqual(updated(inbox(bot.id)));
+		expect(await stream.next()).toEqual(updated(savedInbox));
 		// A send to another person does not change the inbox of the sender.
 		await callTool(bot.key, "mail_send", { to: ["ada@dock.test"], subject: "Hi Ada", text: "Hi." });
 		await inject(

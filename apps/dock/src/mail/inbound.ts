@@ -1,4 +1,4 @@
-import { MAIL_LIMITS } from "@soldock/contracts";
+import { MAIL_LIMITS } from "@asterra/contracts";
 import { addressTag, resolveMailboxAddress } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { deliverStoredRaw, storeRaw } from "./delivery.ts";

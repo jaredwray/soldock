@@ -1,4 +1,4 @@
-import { DOC_LIMITS, DocContent, type DocImage } from "@soldock/contracts";
+import { DOC_LIMITS, DocContent, type DocImage } from "@asterra/contracts";
 import { history, redo, undo } from "prosemirror-history";
 import type { Node } from "prosemirror-model";
 import { type Command, EditorState, NodeSelection, type TextSelection } from "prosemirror-state";

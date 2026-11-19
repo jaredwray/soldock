@@ -9,7 +9,7 @@ import {
 	WEBHOOK_LIMITS,
 	type WebhookDomain,
 	webhookScope,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { z } from "zod";
 import { type CallContext, credentialBinding } from "../identity/index.ts";
 import {
@@ -155,7 +155,7 @@ async function verifyCallback(id: string, url: string, secret: string): Promise<
 			method: "POST",
 			headers: {
 				"content-type": "application/json",
-				"user-agent": "Soldock-Webhooks/1",
+				"user-agent": "Asterra-Webhooks/1",
 				"webhook-id": messageId,
 				"webhook-timestamp": timestamp,
 				"webhook-signature": await webhookSignature(secret, messageId, timestamp, body),

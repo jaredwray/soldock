@@ -1,4 +1,4 @@
-import type { Message } from "@soldock/contracts";
+import type { Message } from "@asterra/contracts";
 
 // Security rules for message bodies:
 // - The app never puts message HTML into the page DOM. It never uses dangerouslySetInnerHTML.
@@ -113,7 +113,7 @@ export function MessageBody({ body, subject }: { body: Message["body"]; subject:
 				<p className="notice notice-small">Remote images are hidden to protect your privacy.</p>
 			)}
 			{body.truncated && (
-				<p className="notice notice-small">This message is too large to show in full. Soldock shows the first part.</p>
+				<p className="notice notice-small">This message is too large to show in full. Asterra shows the first part.</p>
 			)}
 		</div>
 	);

@@ -1,6 +1,6 @@
-// Fills an empty Soldock with the made-up organization. Each step is a call that a person or an
+// Fills an empty Asterra instance with the made-up organization. Each step is a call that a person or an
 // agent can make: the seed has no access to a database or to a Durable Object.
-import { ApiError, type InputOf } from "@soldock/contracts";
+import { ApiError, type InputOf } from "@asterra/contracts";
 import { type SeedApi, SeedStop } from "./api.ts";
 import {
 	type ActorKey,
@@ -82,7 +82,7 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 	} catch (error) {
 		if (error instanceof ApiError && error.code === "conflict") {
 			throw new SeedStop(
-				"This Soldock has an owner already. The seed fills only an empty Soldock, and it changed nothing. " +
+				"This Asterra instance has an owner already. The seed fills only an empty Asterra instance, and it changed nothing. " +
 					"Start the Worker with a new, empty --persist-to directory, apply the migrations to it, and run the seed again.",
 			);
 		}

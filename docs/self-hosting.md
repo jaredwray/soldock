@@ -1,8 +1,8 @@
-# Self-hosting Soldock
+# Self-hosting Asterra
 
 > Status: **first draft**. It grows as features are added. Later, it becomes part of the docs site.
 
-Soldock runs only on Cloudflare.
+Asterra runs only on Cloudflare.
 The dock Worker has two deployment environments, `development` and `production`, and no others.
 GitHub Actions deploys both. No developer machine or agent session holds a Cloudflare token.
 
@@ -11,10 +11,13 @@ GitHub Actions deploys both. No developer machine or agent session holds a Cloud
 | `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
 | `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
 
+Asterra keeps the original Cloudflare resource names so upgrades reach the same mailboxes, files, and queues.
+Existing session cookies and browser storage keys still work after the upgrade.
+
 The domains in this document are the domains of this instance. On your own instance, use your own
 domains.
 
-The development environment is also the project's own Soldock: the team uses it for its mail on
+The development environment is also the project's own Asterra instance: the team uses it for its mail on
 `soldock.org`. So its data stays from one deploy to the next. The D1 migrations only add, and a
 deploy never deletes a mailbox. Each Worker serves only its custom domain. `workers.dev` and Preview
 URLs are off, because each one is a second origin with the same data.
@@ -116,7 +119,7 @@ adds a binding, it adds the permission to this table too.
 - To run the same smoke check against the built Worker on your computer:
 
   ```sh
-  pnpm --filter @soldock/dock dev            # wrangler dev, on http://localhost:8787
+  pnpm --filter @asterra/dock dev            # wrangler dev, on http://localhost:8787
   scripts/smoke-check.sh http://localhost:8787
   ```
 
@@ -136,7 +139,7 @@ top-level only and applies to each environment. So it cannot hold a rule for one
 
 1. Choose a domain you own for email. Enter it during first-run setup below.
    The directory database stores mail domains. Owners and admins manage them under **Admin › Email domains**.
-   Changes need no environment variable or new deployment. Mail between addresses on saved domains stays inside Soldock.
+   Changes need no environment variable or new deployment. Mail between addresses on saved domains stays inside Asterra.
 2. Receive: in the dashboard, open the mail zone, then **Email › Email Routing**.
    - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
      providers.
@@ -199,7 +202,7 @@ Configure Email Routing, Email Service, and DNS for each added domain as describ
 The saved list does not confirm that mail delivery is ready.
 
 On upgrade, migration `0003_mail_domains.sql` copies domains from existing mailbox addresses into settings.
-Add any unused domains from the old `MAIL_DOMAINS` configuration on the Admin page. Soldock no longer reads that variable.
+Add any unused domains from the old `MAIL_DOMAINS` configuration on the Admin page. Asterra no longer reads that variable.
 
 ### Start fresh from setup
 
@@ -271,7 +274,7 @@ An inbound job that fails 5 times, or that cannot be read, goes to the queue
 `soldock-mail-inbound-dlq`. The raw message stays in R2. Look at the queue in the dashboard
 (**Storage & Databases › Queues**). The Worker logs each dead letter with the principal id.
 
-A webhook job that cannot be read, or that fails 10 times in Soldock itself (for example while D1 is
+A webhook job that cannot be read, or that fails 10 times in Asterra itself (for example while D1 is
 down), goes to the queue `soldock-webhooks-dlq`. A job holds ids only, never mail, chat or file content or
 secrets. A failed POST to the receiver does not go there: the endpoint records the failure, and it
 stops after 5 failed events in a row. The log line `webhook endpoint disabled` gives the endpoint,

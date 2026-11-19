@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatMessage } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";

@@ -1,4 +1,4 @@
-import { type Label, MAIL_LIMITS } from "@soldock/contracts";
+import { type Label, MAIL_LIMITS } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

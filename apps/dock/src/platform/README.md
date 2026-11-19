@@ -4,8 +4,8 @@
 
 | | |
 | --- | --- |
-| **Purpose** | Cross-cutting runtime services every domain uses: HTTP plumbing, errors, IDs, config, logging, metrics, blob store and blob index, jobs/queues/workflows, outbox, events, the `SoldockObject` base class, search framework. |
-| **Owns** | Blob store (opaque keys in R2 `blobs`) and `BlobIndexDO` (dedup + refcounts, 256 shards) with blob GC; `SoldockObject` (migrations, `changes`, outbox, idempotency); the object registry. |
+| **Purpose** | Cross-cutting runtime services every domain uses: HTTP plumbing, errors, IDs, config, logging, metrics, blob store and blob index, jobs/queues/workflows, outbox, events, the `AsterraObject` base class, search framework. |
+| **Owns** | Blob store (opaque keys in R2 `blobs`) and `BlobIndexDO` (dedup + refcounts, 256 shards) with blob GC; `AsterraObject` (migrations, `changes`, outbox, idempotency); the object registry. |
 | **Depends on** | Nothing in `apps/dock/src` (imports no domain). May import `packages/contracts`. |
 | **Operations** | — |
 | **Data inventory** | `BlobIndexDO` shards; R2 `blobs`; D1 `objects` registry; `TestObject` (tests only). Backups: not built yet. The backup contract and format arrive here as `platform/backup` later, and orchestration lives in `archive`. Interim: `admin.objects.restore_to_time` (native PITR). |
@@ -20,7 +20,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `ids/ids.ts`: `newId(prefix)`, prefixed time-sortable ids (`<prefix>_<26 Crockford base32 characters of a UUIDv7>`).
 - `crypto/crypto.ts`: SHA-256, HMAC-SHA256, random tokens, base64 and a constant-time secret comparison.
 - `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
-- `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@soldock/contracts`.
+- `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@asterra/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`.
 - `events/subscriptions.ts`: `EventSubscriptions`, the subscriptions of MCP Events, and `EventCallbackError`. The `webhooks` module implements it, and the MCP adapter uses it for `events/list`, `events/subscribe` and `events/unsubscribe`.
 - `operations/invoke.ts`: `invokeOperation()`, which REST and MCP share. It checks the caller kind and the scopes, refuses input with more than 64 levels of objects and lists (a schema reads its input with recursion), validates the input, runs the handler, validates the output (which also drops undeclared fields) and audits refused changes, and the refused calls of an operation with `auditDenied` (a read of sensitive data).

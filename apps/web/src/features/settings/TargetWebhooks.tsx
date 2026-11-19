@@ -1,4 +1,4 @@
-import type { WebhookDomain, WebhookEndpoint } from "@soldock/contracts";
+import type { WebhookDomain, WebhookEndpoint } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -99,7 +99,7 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 						{heading}
 					</h2>
 					<p className="panel-note">
-						Soldock sends a signed POST to each webhook when one of its events occurs. The POST has ids only.
+						Asterra sends a signed POST to each webhook when one of its events occurs. The POST has ids only.
 						{note && ` ${note}`}
 					</p>
 				</header>
@@ -257,7 +257,7 @@ function TargetEventsDialog({
 			// A different person or tab can change the events. The next save starts from the server state.
 			setCurrent(applied.subscriptions);
 			setStarted(true);
-			setError(`Soldock did not save each event. ${failureText(applied.failures)}`);
+			setError(`Asterra did not save each event. ${failureText(applied.failures)}`);
 			setBusy(false);
 			return;
 		}

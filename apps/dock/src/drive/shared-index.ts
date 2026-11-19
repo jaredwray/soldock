@@ -1,4 +1,4 @@
-import type { SharedDriveRole } from "@soldock/contracts";
+import type { SharedDriveRole } from "@asterra/contracts";
 
 // Reads of the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). Each
 // `DriveSpaceDO` of a shared drive writes its own rows. The index is a copy for the lists, and it tells

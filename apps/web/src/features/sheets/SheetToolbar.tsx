@@ -1,4 +1,4 @@
-import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@soldock/contracts";
+import { type CellFormat, type FormatPatch, SHEET_LIMITS } from "@asterra/contracts";
 import { type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Menu, type MenuItem } from "../drive/Menu.tsx";

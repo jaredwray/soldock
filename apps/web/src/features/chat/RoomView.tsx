@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@soldock/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
 import {
 	Fragment,
 	useCallback,
@@ -196,7 +196,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });
 
 	useEffect(() => {
-		document.title = `${title} – Soldock Chat`;
+		document.title = `${title} – Asterra Chat`;
 	}, [title]);
 
 	// The membership changed in a different tab, or a different member changed it: load the room again.

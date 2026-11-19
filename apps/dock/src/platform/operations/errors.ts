@@ -1,4 +1,4 @@
-import { ERRORS, type ErrorCode } from "@soldock/contracts";
+import { ERRORS, type ErrorCode } from "@asterra/contracts";
 import { type ProblemDetails, problemResponse } from "../http/problem.ts";
 
 /**

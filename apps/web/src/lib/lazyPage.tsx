@@ -12,7 +12,7 @@ function PageUnavailable() {
 		<main id="main" className="page" tabIndex={-1}>
 			<h1>This page did not load</h1>
 			<p role="alert">
-				The connection can be down, or a new version of Soldock is available. Reload the page, then try again.
+				The connection can be down, or a new version of Asterra is available. Reload the page, then try again.
 			</p>
 			<p>
 				<button type="button" className="button button-primary" onClick={() => window.location.reload()}>

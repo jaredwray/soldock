@@ -1,9 +1,9 @@
 // subscriptions/listen (protocol 2026-07-28): one long-lived SSE response with resource change notifications.
-import type { ResourceName } from "@soldock/contracts";
+import type { ResourceName } from "@asterra/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { log, type ResourceWatcher, type Watch, type WatcherMap } from "../platform/index.ts";
 import { isObject, type JsonRpcId, META, RPC_ERRORS, rpcError, SERVER_INFO } from "./protocol.ts";
-import { type ResolvedResource, resolveUri } from "./resources.ts";
+import { canonicalResourceUri, type ResolvedResource, resolveUri } from "./resources.ts";
 
 /** An SSE comment goes out at this interval, so idle timeouts of proxies and clients do not close the stream. */
 export const KEEPALIVE_MS = 30_000;
@@ -62,7 +62,12 @@ function requestedUris(id: JsonRpcId, params: Record<string, unknown>): string[]
 	if (uris.length > MAX_SUBSCRIPTIONS) {
 		return invalid(id, `notifications.resourceSubscriptions can have at most ${MAX_SUBSCRIPTIONS} URIs.`);
 	}
-	return [...new Set(uris as string[])];
+	const unique = new Map<string, string>();
+	for (const uri of uris as string[]) {
+		const key = canonicalResourceUri(uri);
+		if (!unique.has(key)) unique.set(key, uri);
+	}
+	return [...unique.values()];
 }
 
 /**

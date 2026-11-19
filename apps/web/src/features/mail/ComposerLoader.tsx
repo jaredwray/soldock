@@ -17,7 +17,7 @@ function ComposerUnavailable({ onClose }: Pick<ComposerProps, "onClose">) {
 	return (
 		<Dialog title="The composer did not load" onClose={onClose} className="dialog-small">
 			<div className="dialog-body">
-				<p>The connection can be down, or a new version of Soldock is available. Reload the page, then try again.</p>
+				<p>The connection can be down, or a new version of Asterra is available. Reload the page, then try again.</p>
 			</div>
 			<div className="dialog-actions">
 				<button type="button" className="button" onClick={onClose}>

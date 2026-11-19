@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import type { OutboxState, PendingMessage } from "../src/features/chat/outbox.ts";
 import { createSendSettler } from "../src/features/chat/settle.ts";

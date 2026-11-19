@@ -6,7 +6,7 @@ import {
 	patchFormat,
 	SHEET_LIMITS,
 	type Tab,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type CellPosition, cellName, ErrorValue, parseCellName, type TabInputs, type Value } from "./formula.ts";
 
 // The stored form of a sheet and its output form. A sheet has one or more tabs. Each tab stores the

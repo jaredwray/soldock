@@ -1,4 +1,4 @@
-import { WEBHOOK_LIMITS } from "@soldock/contracts";
+import { WEBHOOK_LIMITS } from "@asterra/contracts";
 import type { PrincipalRecord } from "../identity/index.ts";
 
 /** Host names that never reach a public server. A webhook cannot use them. */
@@ -24,7 +24,7 @@ export function publicUrlProblem(value: string, dockOrigin: string): string | nu
 	try {
 		url = new URL(value);
 	} catch {
-		return "The URL must be an absolute URL, such as https://hooks.example.com/soldock.";
+		return "The URL must be an absolute URL, such as https://hooks.example.com/asterra.";
 	}
 	if (url.protocol !== "https:") return "The URL must use https.";
 	if (url.username || url.password) return "The URL must not contain a user name or a password.";

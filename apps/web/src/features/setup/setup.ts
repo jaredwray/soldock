@@ -1,4 +1,4 @@
-import { ApiError, type SetupInput, type SetupResult, SetupStatus, SetupVerifyResult } from "@soldock/contracts";
+import { ApiError, type SetupInput, type SetupResult, SetupStatus, SetupVerifyResult } from "@asterra/contracts";
 
 // The /auth/setup endpoints are not operations, so they use plain fetch, like features/auth/auth.ts.
 
@@ -66,5 +66,5 @@ export function setupErrorMessage(error: unknown): string {
 		if (error.status === 401) return "The setup token is not correct. Examine the SETUP_TOKEN secret, then try again.";
 		return error.message;
 	}
-	return "Soldock is not available. Examine your connection, then try again.";
+	return "Asterra is not available. Examine your connection, then try again.";
 }

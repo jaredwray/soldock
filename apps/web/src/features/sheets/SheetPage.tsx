@@ -1,5 +1,5 @@
 import "./sheets.css";
-import { ApiError } from "@soldock/contracts";
+import { ApiError } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Link } from "../../lib/router.tsx";
@@ -66,7 +66,7 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	}, [store]);
 
 	useEffect(() => {
-		document.title = `${name ?? "Sheet"} – Soldock Sheets`;
+		document.title = `${name ?? "Sheet"} – Asterra Sheets`;
 	}, [name]);
 
 	// Other people can change the sheet. While no change of this page waits, get the sheet again

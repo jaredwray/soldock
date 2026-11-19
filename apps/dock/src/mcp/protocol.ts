@@ -16,7 +16,7 @@ export const MCP_PROTOCOL_VERSIONS = [...MODERN_PROTOCOL_VERSIONS, ...LEGACY_PRO
 /** `modern`: protocol 2026-07-28 and later. `legacy`: the versions with an `initialize` handshake. */
 export type Era = "modern" | "legacy";
 
-export const SERVER_INFO = { name: "soldock", title: "Soldock", version: "0.0.0" } as const;
+export const SERVER_INFO = { name: "asterra", title: "Asterra", version: "0.0.0" } as const;
 
 export const META = {
 	protocolVersion: "io.modelcontextprotocol/protocolVersion",

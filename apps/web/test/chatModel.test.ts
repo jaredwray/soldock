@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRoom } from "@soldock/contracts";
+import type { ChatMessage, ChatRoom } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { textToBody } from "../src/features/chat/composerSchema.ts";
 import {

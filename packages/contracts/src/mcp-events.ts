@@ -5,7 +5,7 @@ import { WEBHOOK_EVENTS, type WebhookDomain, type WebhookEvent, webhookDomain } 
 import { z } from "./zod.ts";
 
 // MCP Events: an MCP client subscribes to an event with events/subscribe, and gives a callback URL and
-// a signing secret. Soldock then sends each event to that URL as one signed POST. Each event here is a
+// a signing secret. Asterra then sends each event to that URL as one signed POST. Each event here is a
 // webhook event, so MCP Events and the webhook operations give the same changes.
 
 /** Limits for the subscriptions that an MCP client creates with events/subscribe. */
@@ -20,7 +20,7 @@ export const MCP_EVENT_LIMITS = {
 	verifyTimeoutMs: 10_000,
 	/** The verification POSTs that one principal can cause in one hour. More get the error `rate_limited`. */
 	verificationsPerHour: 100,
-	/** The most bytes that Soldock reads from the answer to the verification POST. */
+	/** The most bytes that Asterra reads from the answer to the verification POST. */
 	verifyResponseBytes: 4096,
 	/** After a verification, the same principal, URL and secret need no new verification for this time. */
 	verifiedMs: 5 * 60 * 1000,

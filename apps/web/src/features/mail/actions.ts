@@ -1,4 +1,4 @@
-import { MAIL_LIMITS, type ThreadSummary } from "@soldock/contracts";
+import { MAIL_LIMITS, type ThreadSummary } from "@asterra/contracts";
 import { api } from "../../lib/api.ts";
 import type { MailView } from "../../routes.ts";
 import { mailboxInput } from "./mailbox.tsx";

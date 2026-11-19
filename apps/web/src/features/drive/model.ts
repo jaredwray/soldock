@@ -6,7 +6,7 @@ import {
 	type PathEntry,
 	type SharedDrive,
 	type SharedDriveRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import type { IconName } from "../../lib/icons.tsx";
 import { DRIVE_PATH, type DriveView, drivePath, isSharedDriveId, itemPath, sharedDrivePath } from "../../routes.ts";
 

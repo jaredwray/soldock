@@ -1,6 +1,6 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
-import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@soldock/contracts";
+import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@asterra/contracts";
 import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import type { WebhookEventJob } from "../webhooks/index.ts";
@@ -1452,16 +1452,16 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Stops an external delivery when the agent that sent the message cannot reach that address. A
 	 * missing agent, an archived agent, or a policy refusal fails the row with no retry.
-	 * A human has no policy. Soldock does not check a message that has no sent_by. Each send stores
+	 * A human has no policy. Asterra does not check a message that has no sent_by. Each send stores
 	 * one. A directory error throws, so the row retries and sends nothing.
 	 */
 	private async assertAgentMaySend(sentByJson: string | null, address: string): Promise<void> {
 		const sentBy = sentByOf(sentByJson);
 		if (sentBy?.kind !== "agent") return;
 		const principal = await getPrincipal(this.env.DIRECTORY, sentBy.principal_id);
-		if (!principal) throw new SenderUnavailable("The agent does not exist, so Soldock does not send this message.");
+		if (!principal) throw new SenderUnavailable("The agent does not exist, so Asterra does not send this message.");
 		if (principal.archived_at !== null) {
-			throw new SenderUnavailable("The agent is archived, so Soldock does not send this message.");
+			throw new SenderUnavailable("The agent is archived, so Asterra does not send this message.");
 		}
 		const denied = deniedOutboundAddresses(principal, [address.trim().toLowerCase()]);
 		if (denied.length > 0) {

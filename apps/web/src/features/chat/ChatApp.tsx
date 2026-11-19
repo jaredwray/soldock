@@ -1,5 +1,5 @@
 import "./chat.css";
-import type { ChatRoom } from "@soldock/contracts";
+import type { ChatRoom } from "@asterra/contracts";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -47,7 +47,7 @@ export function ChatApp({ roomId, messageSeq, profileId, navOpen, onCloseNav }: 
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null) document.title = "Chat – Soldock";
+		if (roomId === null && profileId === null) document.title = "Chat – Asterra";
 	}, [roomId, profileId]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */

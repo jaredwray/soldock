@@ -1,4 +1,4 @@
-import { MAIL_LIMITS } from "@soldock/contracts";
+import { MAIL_LIMITS } from "@asterra/contracts";
 import { OperationError } from "../operations/errors.ts";
 
 /**

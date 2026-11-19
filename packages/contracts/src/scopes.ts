@@ -3,7 +3,7 @@
  * only limit what a token can do: the owner's role and the resource still decide the rest.
  */
 export const SCOPES = {
-	"chat.webhooks": "Create a webhook endpoint and choose which chat message events Soldock sends to it",
+	"chat.webhooks": "Create a webhook endpoint and choose which chat message events Asterra sends to it",
 	"account.read": "Read your own account",
 	"account.keys":
 		"Create, list and revoke API keys and OAuth connections for yourself and for the agents that you sponsor, approve OAuth requests, and change passwords and two-step verification",

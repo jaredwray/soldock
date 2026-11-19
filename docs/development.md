@@ -11,8 +11,8 @@ binding.
 ```sh
 pnpm install
 pnpm build                                   # the SPA, into apps/web/dist
-pnpm --filter @soldock/dock migrate:local    # the D1 migrations, into the local database
-pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
+pnpm --filter @asterra/dock migrate:local    # the D1 migrations, into the local database
+pnpm --filter @asterra/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
 ```
 
 Run `pnpm build` again after you pull or change `apps/web` or `packages/contracts`. Otherwise
@@ -38,12 +38,12 @@ curl -X POST http://localhost:8787/auth/setup \
 Then open http://localhost:8787 and sign in with `owner@example.com` and the password. While the
 `SETUP_TOKEN` var is set, the setup page shows first: select **Continue with the existing accounts**.
 
-For the SPA with hot reload, run `pnpm --filter @soldock/web dev` as well, and open the Vite URL.
+For the SPA with hot reload, run `pnpm --filter @asterra/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.
 
 ## Sample data
 
-`pnpm seed` fills an empty local Soldock with a made-up organization: people, agents, a shared
+`pnpm seed` fills an empty local Asterra instance with a made-up organization: people, agents, a shared
 mailbox, mail, chat rooms and drive items. Use it for demonstrations and screenshots.
 
 ```sh

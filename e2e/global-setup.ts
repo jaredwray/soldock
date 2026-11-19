@@ -84,7 +84,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 	if (!existsSync(join(ROOT, "apps/web/dist/index.html"))) {
 		throw new Error("The Worker serves the build of the web app. Run `pnpm build` first.");
 	}
-	const state = mkdtempSync(join(tmpdir(), "soldock-e2e-"));
+	const state = mkdtempSync(join(tmpdir(), "asterra-e2e-"));
 	const removeState = () => rmSync(state, { recursive: true, force: true });
 	try {
 		// `wrangler d1 migrations apply` asks before it changes the database.

@@ -16,7 +16,7 @@ import {
 
 const workerDir = resolve(process.argv[2] ?? "apps/dock");
 const budgets = parseBudgets(JSON.parse(readFileSync(join(workerDir, "budgets.json"), "utf8")));
-const work = mkdtempSync(join(tmpdir(), "soldock-budgets-"));
+const work = mkdtempSync(join(tmpdir(), "asterra-budgets-"));
 
 function wrangler(...args: string[]): void {
 	execFileSync("pnpm", ["exec", "wrangler", ...args], {

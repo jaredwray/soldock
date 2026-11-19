@@ -1,5 +1,5 @@
 import "prosemirror-view/style/prosemirror.css";
-import type { ChatBody } from "@soldock/contracts";
+import type { ChatBody } from "@asterra/contracts";
 import { baseKeymap, toggleMark } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { inputRules } from "prosemirror-inputrules";

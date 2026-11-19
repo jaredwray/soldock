@@ -1,4 +1,4 @@
-import { type ApiKey, type CreatedApiKey, SCOPES, type Scope } from "@soldock/contracts";
+import { type ApiKey, type CreatedApiKey, SCOPES, type Scope } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -9,7 +9,7 @@ import { SecretDialog } from "./SecretDialog.tsx";
 
 /**
  * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
- * outside Soldock, so the webhook scopes are among them.
+ * outside Asterra, so the webhook scopes are among them.
  */
 const PRIVILEGED: readonly Scope[] = [
 	"account.keys",

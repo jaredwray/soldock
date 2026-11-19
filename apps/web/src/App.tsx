@@ -92,14 +92,14 @@ export function App() {
 				return (
 					<div className="boot" aria-live="polite">
 						<span className="spinner" aria-hidden="true" />
-						<span>Loading Soldock…</span>
+						<span>Loading Asterra…</span>
 					</div>
 				);
 			case "error":
 				// A reload gets the current SPA. The old code of a tab from before a deploy cannot recover.
 				return (
 					<main className="boot">
-						<h1 className="boot-title">Soldock is not available</h1>
+						<h1 className="boot-title">Asterra is not available</h1>
 						<p role="alert">{state.message}</p>
 						<button type="button" className="button button-primary" onClick={() => window.location.reload()}>
 							Try again

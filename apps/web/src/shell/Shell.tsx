@@ -158,13 +158,13 @@ export function Shell() {
 
 function NotFound() {
 	useEffect(() => {
-		document.title = "Not found – Soldock";
+		document.title = "Not found – Asterra";
 	}, []);
 	return (
 		<main id="main" className="page-main" tabIndex={-1}>
 			<PageHeader title="Page not found" />
 			<div className="page">
-				<p>This address does not match a page in Soldock.</p>
+				<p>This address does not match a page in Asterra.</p>
 				<p>
 					<Link to={INBOX_PATH}>Go to the inbox</Link>
 				</p>

@@ -7,7 +7,7 @@ import {
 	type DocContent,
 	type DocInline,
 	type GroupMention,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { docToMarkdown, markdownToDoc } from "../docs/index.ts";
 import { OperationError } from "../platform/index.ts";
 

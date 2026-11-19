@@ -6,7 +6,7 @@ import {
 	EVENTS_SOCKET_PATH,
 	SCOPES,
 	UNTRUSTED_NOTICE,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MEMBER_DELAY_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import { EVENTS_SOCKET_RECHECK_MS } from "../src/identity/principal.ts";
@@ -140,7 +140,7 @@ describe("OAuth discovery", () => {
 		const res = await request("/mcp", { method: "POST", body: "{}" });
 		expect(res.status).toBe(401);
 		expect(res.headers.get("www-authenticate")).toBe(
-			`Bearer realm="soldock", resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
+			`Bearer realm="asterra", resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
 		);
 		const stale = await request("/mcp", { method: "POST", headers: { authorization: "Bearer sdo_expired" } });
 		expect(stale.status).toBe(401);

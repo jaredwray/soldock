@@ -1,4 +1,4 @@
-import { OAUTH_LIMITS, type Scope } from "@soldock/contracts";
+import { OAUTH_LIMITS, type Scope } from "@asterra/contracts";
 import { newId, randomToken, sha256Hex } from "../platform/index.ts";
 import { getPrincipal, type PrincipalRecord } from "./store.ts";
 

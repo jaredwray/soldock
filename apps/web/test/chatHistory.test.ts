@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { type History, withChanges, withNewer, withOlder } from "../src/features/chat/history.ts";
 

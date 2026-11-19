@@ -74,7 +74,7 @@ const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: 
 const ENDPOINT_SCOPES = ["mail.webhooks", "chat.webhooks", "drive.webhooks"] as const;
 
 /**
- * Header names that a webhook cannot set: Soldock sets them itself, the HTTP layer owns them, they
+ * Header names that a webhook cannot set: Asterra sets them itself, the HTTP layer owns them, they
  * claim a client address or a different method, or Cloudflare uses them. A name that starts with one of
  * `WEBHOOK_RESERVED_HEADER_PREFIXES` is refused too.
  */
@@ -114,7 +114,7 @@ export function webhookHeaderNameProblem(name: string, withAuthKey: boolean): st
 		(WEBHOOK_RESERVED_HEADERS as readonly string[]).includes(lower) ||
 		WEBHOOK_RESERVED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix))
 	) {
-		return `Soldock sets the header ${name} itself, so a webhook cannot set it.`;
+		return `Asterra sets the header ${name} itself, so a webhook cannot set it.`;
 	}
 	if (withAuthKey && lower === "authorization") {
 		return "The auth key uses the Authorization header. Use the auth key or a custom Authorization header, not both.";
@@ -123,7 +123,7 @@ export function webhookHeaderNameProblem(name: string, withAuthKey: boolean): st
 }
 
 const WebhookUrl = z
-	.url({ protocol: /^https$/, error: "must be an absolute https URL, such as https://hooks.example.com/soldock" })
+	.url({ protocol: /^https$/, error: "must be an absolute https URL, such as https://hooks.example.com/asterra" })
 	.max(WEBHOOK_LIMITS.urlChars);
 
 const WebhookAuthKey = z
@@ -132,7 +132,7 @@ const WebhookAuthKey = z
 	.min(1)
 	.max(WEBHOOK_LIMITS.authKeyChars)
 	.regex(/^[\x21-\x7E]+$/, "must be printable ASCII without spaces")
-	.describe("A token that your receiver checks. Soldock sends it as Authorization: Bearer <key> on each POST.");
+	.describe("A token that your receiver checks. Asterra sends it as Authorization: Bearer <key> on each POST.");
 
 const WebhookHeader = z
 	.strictObject({
@@ -153,7 +153,7 @@ const WebhookHeader = z
 		const problem = webhookHeaderNameProblem(header.name, false);
 		if (problem) ctx.addIssue({ code: "custom", message: problem, path: ["name"] });
 	})
-	.describe("A custom header that Soldock sends on each POST, for example X-Api-Key for your receiver.");
+	.describe("A custom header that Asterra sends on each POST, for example X-Api-Key for your receiver.");
 
 /** The auth key and the custom header may not both use `Authorization`. */
 export function authorizationConflict(input: {
@@ -185,7 +185,7 @@ const EndpointDisabledReason = z.enum(["failures", "gone", "credential_revoked",
 const SubscriptionDisabledReason = z.enum(["access_lost", "credential_revoked"]);
 
 /**
- * A webhook endpoint: a URL outside Soldock. A subscription chooses which events Soldock POSTs to it.
+ * A webhook endpoint: a URL outside Asterra. A subscription chooses which events Asterra POSTs to it.
  * The POST holds ids only. The receiver reads the resource with its own credential.
  */
 export const WebhookEndpoint = z.object({
@@ -194,7 +194,7 @@ export const WebhookEndpoint = z.object({
 	label: z.string(),
 	/** The person or agent that created the endpoint. Its access is checked again before each POST. */
 	created_by: z.string(),
-	/** `disabled`: Soldock sends nothing more. Delete the endpoint and create a new one. */
+	/** `disabled`: Asterra sends nothing more. Delete the endpoint and create a new one. */
 	status: z.enum(["active", "disabled"]),
 	/**
 	 * Why the endpoint stopped. `failures`: too many deliveries failed in a row. `gone`: the receiver
@@ -211,9 +211,9 @@ export const WebhookEndpoint = z.object({
 	 * of the receiver is never stored.
 	 */
 	last_error: z.string().nullable(),
-	/** True when Soldock sends an auth key (`Authorization: Bearer`). The key itself is never returned. */
+	/** True when Asterra sends an auth key (`Authorization: Bearer`). The key itself is never returned. */
 	has_auth_key: z.boolean(),
-	/** The name of the custom header that Soldock sends, or null. Its value is never returned. */
+	/** The name of the custom header that Asterra sends, or null. Its value is never returned. */
 	header_name: z.string().nullable(),
 	created_at: Timestamp,
 });
@@ -262,7 +262,7 @@ const createEndpoint = defineOperation({
 	name: "webhooks.create_endpoint",
 	summary: "Create a webhook endpoint",
 	description: [
-		"Creates an endpoint. Soldock can send a signed POST to its URL.",
+		"Creates an endpoint. Asterra can send a signed POST to its URL.",
 		"The result shows the signing secret once. Add a subscription to choose the events.",
 		"The URL must use https and a public host name.",
 		"An agent can use only a host that its outbound policy allows.",
@@ -327,7 +327,7 @@ const deleteEndpoint = defineOperation({
 	name: "webhooks.delete_endpoint",
 	summary: "Delete a webhook endpoint",
 	description:
-		"Deletes an endpoint and its subscriptions. Soldock sends no more POST requests to its URL. Only the creator can delete the endpoint.",
+		"Deletes an endpoint and its subscriptions. Asterra sends no more POST requests to its URL. Only the creator can delete the endpoint.",
 	http: { method: "DELETE", path: "/api/v1/webhooks/endpoints/{endpoint_id}" },
 	scopes: [],
 	anyOfScopes: ENDPOINT_SCOPES,

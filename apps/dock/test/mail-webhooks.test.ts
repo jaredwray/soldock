@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { WEBHOOK_LIMITS } from "@soldock/contracts";
+import { WEBHOOK_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webhookMigration from "../migrations/0009_webhooks.sql?raw";
 import chatWebhookMigration from "../migrations/0011_chat_webhooks.sql?raw";
@@ -23,11 +23,11 @@ import {
 	webhookEventRows,
 } from "./helpers.ts";
 
-// Webhooks: a URL outside Soldock gets a signed POST, with no mail content, when new mail arrives in the
+// Webhooks: a URL outside Asterra gets a signed POST, with no mail content, when new mail arrives in the
 // inbox of a mailbox. The rules of who can watch which mailbox are the rules of subscriptions/listen, and
 // a person can also watch the mailbox of an agent that they sponsor.
 
-const HOOK = "https://hooks.example.com/soldock";
+const HOOK = "https://hooks.example.com/asterra";
 
 let owner: Actor;
 let ada: Actor;
@@ -212,16 +212,16 @@ describe("creating webhooks", () => {
 	// A POST to a private or local host, or to the deployment itself, must never leave the Worker.
 	it("refuses a URL that is not https with a public host name", async () => {
 		for (const url of [
-			"http://hooks.example.com/soldock",
-			"https://127.0.0.1/soldock",
-			"https://0x7f.1/soldock",
-			"https://[::1]/soldock",
-			"https://localhost/soldock",
-			"https://intranet/soldock",
-			"https://printer.local/soldock",
-			"https://user:secret@hooks.example.com/soldock",
-			"https://hooks.example.com:8443/soldock",
-			"https://hooks.example.com/soldock#part",
+			"http://hooks.example.com/asterra",
+			"https://127.0.0.1/asterra",
+			"https://0x7f.1/asterra",
+			"https://[::1]/asterra",
+			"https://localhost/asterra",
+			"https://intranet/asterra",
+			"https://printer.local/asterra",
+			"https://user:secret@hooks.example.com/asterra",
+			"https://hooks.example.com:8443/asterra",
+			"https://hooks.example.com/asterra#part",
 			"https://dock.test/hooks",
 			"not a url",
 		]) {
@@ -256,7 +256,7 @@ describe("creating webhooks", () => {
 			allowlist: ["hooks.example.com"],
 		});
 		expect((await createMail(bot, { url: HOOK })).webhook.created_by).toBe(bot.id);
-		const other = "https://other.example.org/soldock";
+		const other = "https://other.example.org/asterra";
 		expect(await codeOf(createMail(bot, { url: other }))).toBe("policy_denied");
 		await allowAnyHost();
 		expect((await createMail(bot, { url: other })).webhook.url).toBe(other);
@@ -389,7 +389,7 @@ describe("delivery", () => {
 		expect(JSON.parse(post.body)).toEqual({
 			type: "mail.inbox.updated",
 			timestamp: expect.any(String),
-			data: { webhook_id: webhook.id, mailbox_id: ada.id, uri: `soldock://mail/${ada.id}/inbox` },
+			data: { webhook_id: webhook.id, mailbox_id: ada.id, uri: `asterra://mail/${ada.id}/inbox` },
 		});
 		expect(post.body).not.toContain("Secret plans");
 		const id = post.headers.get("webhook-id") ?? "";
@@ -444,7 +444,7 @@ describe("delivery", () => {
 		expect(events).toEqual([expect.objectContaining({ kind: "event", mailboxId: ada.id })]);
 	});
 
-	// A failure of Soldock itself must run the job again, and not lose the event.
+	// A failure of Asterra itself must run the job again, and not lose the event.
 	it("runs an event job again when the queue refuses its jobs", async () => {
 		await createMail(ada, { url: HOOK });
 		const event = { v: 1, kind: "event", mailboxId: ada.id, eventId: eventId(1), occurredAt: Date.now() };
@@ -506,7 +506,7 @@ describe("delivery", () => {
 
 	it("disables a webhook after its events fail in a row, and at once after 410 Gone", async () => {
 		const failing = (await createMail(ada, { url: HOOK })).webhook;
-		const gone = (await createMail(ada, { url: "https://gone.example.com/soldock" })).webhook;
+		const gone = (await createMail(ada, { url: "https://gone.example.com/asterra" })).webhook;
 		const posts = receiveWebhooks((post) => new Response(null, { status: post.url.includes("gone") ? 410 : 502 }));
 		const lastAttempt = (n: number) => deliveryJob(failing, eventId(n), WEBHOOK_LIMITS.attempts);
 		// A redelivery of the last attempt of one event counts that event one time.
@@ -553,7 +553,7 @@ describe("the auth key and the custom header", () => {
 		expect(post.headers.get("webhook-signature")).toMatch(/^v1,/);
 	});
 
-	// A custom header must never replace a header that Soldock sets, or split into a second header.
+	// A custom header must never replace a header that Asterra sets, or split into a second header.
 	it("refuses a reserved header name, a value that is not printable ASCII, and two Authorization headers", async () => {
 		for (const name of ["webhook-signature", "Content-Type", "Host", "cf-connecting-ip", "X-Forwarded-For", "X Api"]) {
 			const refused = createMail(ada, { url: HOOK, header: { name, value: "x" } });

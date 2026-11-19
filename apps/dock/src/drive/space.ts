@@ -7,7 +7,7 @@ import {
 	type ItemKind,
 	SHARED_DRIVE_LIMITS,
 	type SharedDriveRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { audit, log } from "../platform/index.ts";
 import { type DriveWebhookEventJob, driveWebhookBoundary } from "../webhooks/index.ts";
 

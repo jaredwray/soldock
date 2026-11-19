@@ -1,4 +1,4 @@
-import type { Principal } from "@soldock/contracts";
+import type { Principal } from "@asterra/contracts";
 import { initials } from "../../lib/format.ts";
 import { AdminCard } from "./AdminCard.tsx";
 import { AgentDetails } from "./AgentDetails.tsx";

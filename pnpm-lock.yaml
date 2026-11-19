@@ -27,7 +27,7 @@ importers:
 
   apps/dock:
     dependencies:
-      '@soldock/contracts':
+      '@asterra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       hono:
@@ -55,7 +55,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@soldock/contracts':
+      '@asterra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       prosemirror-commands:
@@ -157,7 +157,7 @@ importers:
 
   tools/seed:
     dependencies:
-      '@soldock/contracts':
+      '@asterra/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
 

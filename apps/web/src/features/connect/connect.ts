@@ -1,4 +1,4 @@
-import type { Scope } from "@soldock/contracts";
+import type { Scope } from "@asterra/contracts";
 
 // The first values of the approval page. The person can change each of them.
 

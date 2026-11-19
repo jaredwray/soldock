@@ -1,4 +1,4 @@
-import { WEBHOOK_LIMITS, type WebhookDomain, type WebhookEndpoint, type WebhookEvent } from "@soldock/contracts";
+import { WEBHOOK_LIMITS, type WebhookDomain, type WebhookEndpoint, type WebhookEvent } from "@asterra/contracts";
 import type { CredentialBinding } from "../identity/index.ts";
 import { audit, bytesToBase64, log } from "../platform/index.ts";
 import { adoptChatBoundary } from "./legacy.ts";

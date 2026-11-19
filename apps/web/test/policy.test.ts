@@ -1,4 +1,4 @@
-import type { OutboundPolicy } from "@soldock/contracts";
+import type { OutboundPolicy } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	draftAfterPolicyChange,

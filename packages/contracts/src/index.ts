@@ -1,4 +1,4 @@
-// Public surface of @soldock/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
+// Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
 export {
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,

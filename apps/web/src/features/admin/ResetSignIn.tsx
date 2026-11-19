@@ -1,4 +1,4 @@
-import type { Principal } from "@soldock/contracts";
+import type { Principal } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

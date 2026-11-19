@@ -7,7 +7,7 @@ import {
 	EVENTS_SOCKET_PATH,
 	EVENTS_SOCKET_PROTOCOL,
 	PrincipalEvent,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";

@@ -7,7 +7,7 @@ import {
 	type SetupInput,
 	type SetupResult,
 	type SetupVerifyResult,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { BrandMark } from "../../shell/BrandMark.tsx";
@@ -51,7 +51,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 	}
 
 	useEffect(() => {
-		document.title = "Set up – Soldock";
+		document.title = "Set up – Asterra";
 	}, []);
 
 	return (
@@ -61,7 +61,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 					<div className="auth-logo">
 						<BrandMark />
 					</div>
-					<h1 className="auth-title">Set up Soldock</h1>
+					<h1 className="auth-title">Set up Asterra</h1>
 				</header>
 				{created ? (
 					keyCopied ? (
@@ -226,7 +226,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 
 	return (
 		<div className="auth-form">
-			<p>Soldock has no owner yet. A setup token proves that you operate this deployment.</p>
+			<p>Asterra has no owner yet. A setup token proves that you operate this deployment.</p>
 			<div aria-live="polite">
 				{tooShort && (
 					<p className="notice">
@@ -393,7 +393,7 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 					<span className="address-domain">{domain.trim().toLowerCase() || "example.com"}</span>
 				</div>
 				<p id={ids.hint} className="field-hint">
-					Use this address to sign in to Soldock. Configure DNS and Cloudflare email for this domain to receive and send
+					Use this address to sign in to Asterra. Configure DNS and Cloudflare email for this domain to receive and send
 					mail.
 				</p>
 			</div>

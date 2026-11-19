@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { SHEET_LIMITS, TabName } from "@soldock/contracts";
+import { SHEET_LIMITS, TabName } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, api, codeOf, seedOrg } from "./helpers.ts";
 

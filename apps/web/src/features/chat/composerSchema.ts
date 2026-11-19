@@ -4,7 +4,7 @@ import {
 	type ChatBodyBlock,
 	type ChatBodyInline,
 	groupMentionOf,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { Fragment, type Mark, type Node, Schema, Slice } from "prosemirror-model";
 import { safeHref } from "../mail/richText.ts";
 

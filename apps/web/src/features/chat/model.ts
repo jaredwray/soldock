@@ -1,4 +1,4 @@
-import type { ChatBody, ChatMessage, ChatRoom } from "@soldock/contracts";
+import type { ChatBody, ChatMessage, ChatRoom } from "@asterra/contracts";
 import type { OutboxState, PendingMessage } from "./outbox.ts";
 
 // The pure rules of the Chat page. They have no DOM and no network, so apps/web/test checks them.
