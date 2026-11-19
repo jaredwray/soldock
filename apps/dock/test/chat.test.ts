@@ -573,6 +573,11 @@ describe("the state of each principal", () => {
 	it("returns a post after the state of its author, and sends one state to each other member for the posts of that time", async () => {
 		const room = await createRoom(ada, "private", "Launch", [bot.id, owner.id]);
 		const stub = roomStub(room.id);
+		// The states of the new room go out first, so the counts below have the posts only.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+		});
+		await runDurableObjectAlarm(stub);
 		// Plain counters: the room calls the objects of the principals through this binding.
 		const sends = new Map<string, number>();
 		await runInDurableObject(stub, (instance) => {
@@ -598,8 +603,11 @@ describe("the state of each principal", () => {
 			} as unknown as Env["PRINCIPAL"];
 			target.env = { ...target.env, PRINCIPAL: counting };
 		});
-		// Only the clock is fake, so the three posts come in one moment.
+		// Only the clock is fake, so the three posts come in one moment. The fake clock is one minute ahead: the
+		// runtime runs an alarm at its time on the real clock, so the alarm of the room cannot run by itself
+		// during slow posts, before the test runs it.
 		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(Date.now() + 60_000);
 		for (const text of ["One", "Two", "Three"]) await post(ada, room.id, text);
 		// The author has its state with each post. The other members wait.
 		expect([sends.get(ada.id), sends.get(bot.id), sends.get(owner.id)]).toEqual([3, undefined, undefined]);
