@@ -13,7 +13,7 @@ import { AttachButton, AttachmentChips } from "./ComposerFiles.tsx";
 import { createCallLine, createToggleLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { type MessageWatch, newAttachments, useAttachments, usePageVisible } from "./data.ts";
-import { draftStorage } from "./drafts.ts";
+import { createDraftStore, draftStorage, threadDraftKey } from "./drafts.ts";
 import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { useFileDrop } from "./fileDrop.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
@@ -79,13 +79,22 @@ export function ThreadPanel({
 	onClose: () => void;
 }) {
 	const [state, setState] = useState<LoadState>({ status: "loading" });
-	const [draft, setDraft] = useState<ChatBody | null>(null);
+	const self = useSession().whoami.principal;
+	const ownId = self.id;
+	// The reply in the box stays after a close and a reload, in the store of the drafts of the rooms.
+	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
+	const draftKey = threadDraftKey(roomId, parentId);
+	const [draft, setDraft] = useState<ChatBody | null>(() => drafts.get(draftKey));
 	/** The body in the box now, for the end of a send: text typed during the send stays. */
-	const draftNow = useRef<ChatBody | null>(null);
-	const changeDraft = useCallback((next: ChatBody | null) => {
-		draftNow.current = next;
-		setDraft(next);
-	}, []);
+	const draftNow = useRef<ChatBody | null>(draft);
+	const changeDraft = useCallback(
+		(next: ChatBody | null) => {
+			draftNow.current = next;
+			setDraft(next);
+			drafts.set(draftKey, next);
+		},
+		[drafts, draftKey],
+	);
 	const [alsoInRoom, setAlsoInRoom] = useState(false);
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
@@ -104,8 +113,6 @@ export function ThreadPanel({
 	const retry = useRef<HTMLButtonElement>(null);
 	const boxId = useId();
 	const headingId = useId();
-	const self = useSession().whoami.principal;
-	const ownId = self.id;
 	const readsEdits = isOrgAdmin(self);
 	const visible = usePageVisible();
 	/** The message in edit: its id, the body that the box started with, and the body in the box now. */
@@ -648,7 +655,7 @@ export function ThreadPanel({
 									id={boxId}
 									label="Reply in the thread"
 									placeholder="Reply…"
-									initial={null}
+									initial={draft}
 									onChange={changeDraft}
 									onSubmit={() => void send()}
 									onCancel={closeUnlessTyped}

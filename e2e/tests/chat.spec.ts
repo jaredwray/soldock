@@ -655,6 +655,47 @@ test("the draft of a room stays after a change of room and a reload, and a sign-
 	expect(drafts).toEqual([]);
 });
 
+test("the draft of a reply stays after a close of the thread and a reload, apart from the draft of the room", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const name = unique("Thread draft");
+	const roomId = await createRoom(tomasz, name);
+	const parent = await post(tomasz, roomId, unique("thread with a draft"));
+	await reply(tomasz, roomId, parent.id, unique("first reply"));
+	const page = await tomasz.newPage();
+	await openRoom(page, roomId);
+	const panel = page.getByRole("complementary", { name: "Thread" });
+	const box = panel.getByRole("textbox", { name: "Reply in the thread" });
+	const openThread = () =>
+		page
+			.locator(".chat-messages .chat-message")
+			.filter({ hasText: parent.text })
+			.getByRole("button", { name: /\d+ repl/ })
+			.click();
+
+	await openThread();
+	await box.fill("a reply that stays");
+	await panel.getByRole("button", { name: "Close the thread" }).click();
+	await expect(panel).toHaveCount(0);
+	// The box of the room does not get the draft of the thread.
+	await expect(composer(page, name)).toHaveText("");
+	await openThread();
+	await expect(box).toHaveText("a reply that stays");
+	await page.reload();
+	await openThread();
+	await expect(box).toHaveText("a reply that stays");
+
+	// A send removes the draft.
+	await box.press("Enter");
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(2);
+	await expect(box).toHaveText("");
+	await page.reload();
+	await openThread();
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(2);
+	await expect(box).toHaveText("");
+});
+
 test("a room that opens again shows its last list before the answer of the server", async ({ browser }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const name = unique("Cache");
