@@ -217,7 +217,8 @@ const MIGRATIONS: string[][] = [
 	// The mention count of the principal, from the room. A room from before has 0 until its next state.
 	["ALTER TABLE chat_rooms ADD COLUMN mention_count INTEGER NOT NULL DEFAULT 0"],
 	// The threads that the principal follows, from the state of each room. Each kept state of a room
-	// replaces the rows of that room. A room from before has none until its next state.
+	// replaces the rows of that room. `threads_known` is 1 for a room that sent its threads: the first
+	// chat.list_threads asks each other joined room once (see the `chat` README).
 	[
 		`CREATE TABLE chat_threads (
 			room_id TEXT NOT NULL,
@@ -227,6 +228,9 @@ const MIGRATIONS: string[][] = [
 			PRIMARY KEY (room_id, parent_id)
 		) WITHOUT ROWID`,
 		"CREATE INDEX chat_threads_recent ON chat_threads (last_reply_at DESC, room_id DESC, parent_id DESC)",
+		`CREATE INDEX chat_threads_unread ON chat_threads (last_reply_at DESC, room_id DESC, parent_id DESC)
+			WHERE unread_count > 0`,
+		"ALTER TABLE chat_rooms ADD COLUMN threads_known INTEGER NOT NULL DEFAULT 0",
 	],
 ];
 
@@ -342,8 +346,11 @@ export class PrincipalDO extends DurableObject<Env> {
 				);
 				const accepted = row.toArray();
 				kept.push(...accepted);
-				if (accepted.length > 0 && this.replaceThreads(state.room_id, view?.threads ?? [])) {
-					threadRooms.push(state.room_id);
+				// A state from a room on an older version has no threads: the rows of the room stay as they were.
+				const threads = view === null ? [] : view.threads;
+				if (accepted.length > 0 && threads !== undefined) {
+					if (view) this.sql.exec("UPDATE chat_rooms SET threads_known = 1 WHERE room_id = ?", state.room_id);
+					if (this.replaceThreads(state.room_id, threads)) threadRooms.push(state.room_id);
 				}
 			}
 		});
@@ -376,26 +383,62 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * changed. A room that the principal left sends no view, so its threads go away.
 	 */
 	private replaceThreads(roomId: string, threads: readonly ChatThreadState[]): boolean {
-		const read = () =>
-			this.sql
-				.exec<{ rows: string }>(
-					`SELECT json_group_array(json_array(parent_id, last_reply_at, unread_count)) AS rows
-					FROM (SELECT * FROM chat_threads WHERE room_id = ? ORDER BY parent_id)`,
-					roomId,
-				)
-				.one().rows;
-		const before = read();
+		const next = threads
+			.slice(0, THREADS_PER_ROOM)
+			.map((thread) => [thread.parent_id, thread.last_reply_at, thread.unread_count] as const)
+			.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+		const before = this.sql
+			.exec<{ parent_id: string; last_reply_at: number; unread_count: number }>(
+				"SELECT parent_id, last_reply_at, unread_count FROM chat_threads WHERE room_id = ? ORDER BY parent_id",
+				roomId,
+			)
+			.toArray()
+			.map((row) => [row.parent_id, row.last_reply_at, row.unread_count] as const);
+		// Most states of a room change no thread: those write nothing.
+		if (JSON.stringify(next) === JSON.stringify(before)) return false;
 		this.sql.exec("DELETE FROM chat_threads WHERE room_id = ?", roomId);
-		for (const thread of threads.slice(0, THREADS_PER_ROOM)) {
+		for (const [parentId, lastReplyAt, unreadCount] of next) {
 			this.sql.exec(
 				"INSERT OR REPLACE INTO chat_threads (room_id, parent_id, last_reply_at, unread_count) VALUES (?, ?, ?, ?)",
 				roomId,
-				thread.parent_id,
-				thread.last_reply_at,
-				thread.unread_count,
+				parentId,
+				lastReplyAt,
+				unreadCount,
 			);
 		}
-		return read() !== before;
+		return true;
+	}
+
+	/**
+	 * The state of the first fill of the threads: `seeded` as for `listChatRooms`, `filled` after each joined
+	 * room sent its threads one time, and up to `limit` joined rooms that did not, the newest activity first.
+	 */
+	threadFill(limit: number): { seeded: boolean; filled: boolean; rooms: string[] } {
+		const filled = this.sql.exec("SELECT 1 FROM meta WHERE key = 'chat_threads_filled'").toArray().length > 0;
+		const rooms = filled
+			? []
+			: this.sql
+					.exec<{ room_id: string }>(
+						`SELECT room_id FROM chat_rooms WHERE joined = 1 AND threads_known = 0
+						ORDER BY activity_at DESC, room_id DESC LIMIT ?`,
+						limit,
+					)
+					.toArray()
+					.map((row) => row.room_id);
+		return { seeded: this.chatSeeded(), filled, rooms };
+	}
+
+	/**
+	 * Keeps the states of a part of the first fill of the threads. Each room of `answered` counts as known,
+	 * also when its state was not newer than the kept one. `done` records that the fill is complete.
+	 */
+	fillChatThreads(states: readonly ChatRoomState[], answered: readonly string[], done: boolean): void {
+		this.applyChatRoomStates(states);
+		this.sql.exec(
+			"UPDATE chat_rooms SET threads_known = 1 WHERE room_id IN (SELECT value FROM json_each(?))",
+			JSON.stringify(answered),
+		);
+		if (done) this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_threads_filled', '1')");
 	}
 
 	/**
@@ -404,27 +447,27 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * `UNREAD_COUNT_MAX`.
 	 */
 	listChatThreads(query: ChatThreadQuery): { threads: ChatThreadEntry[]; unreadThreads: number } {
+		// The page reads `chat_threads` first (CROSS JOIN), in the order of an index: `chat_threads_unread` for
+		// the filter, else `chat_threads_recent`. The conditions are in the text, so SQLite picks the index and
+		// seeks to the cursor with the row value.
+		const after = query.after;
 		const rows = this.sql
 			.exec<ThreadRow>(
 				`SELECT chat_threads.parent_id, chat_threads.last_reply_at AS thread_last_reply_at,
 					chat_threads.unread_count AS thread_unread_count, ${ROOM_COLUMNS}
-				FROM chat_threads JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
-				WHERE chat_rooms.joined = 1 AND (?1 = 0 OR chat_threads.unread_count > 0)
-					AND (?2 IS NULL OR chat_threads.last_reply_at < ?2 OR (chat_threads.last_reply_at = ?2
-						AND (chat_threads.room_id < ?3 OR (chat_threads.room_id = ?3 AND chat_threads.parent_id < ?4))))
+				FROM chat_threads CROSS JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
+				WHERE chat_rooms.joined = 1 ${query.unread ? "AND chat_threads.unread_count > 0" : ""}
+					${after ? "AND (chat_threads.last_reply_at, chat_threads.room_id, chat_threads.parent_id) < (?2, ?3, ?4)" : ""}
 				ORDER BY chat_threads.last_reply_at DESC, chat_threads.room_id DESC, chat_threads.parent_id DESC
-				LIMIT ?5`,
-				query.unread ? 1 : 0,
-				query.after?.lastReplyAt ?? null,
-				query.after?.roomId ?? null,
-				query.after?.parentId ?? null,
+				LIMIT ?1`,
 				query.limit + 1,
+				...(after ? [after.lastReplyAt, after.roomId, after.parentId] : []),
 			)
 			.toArray();
 		const unreadThreads = this.sql
 			.exec<{ n: number }>(
 				`SELECT COUNT(*) AS n FROM (SELECT 1 FROM chat_threads
-					JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
+					CROSS JOIN chat_rooms ON chat_rooms.room_id = chat_threads.room_id
 				WHERE chat_rooms.joined = 1 AND chat_threads.unread_count > 0 LIMIT ?)`,
 				UNREAD_COUNT_MAX,
 			)

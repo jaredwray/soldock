@@ -121,7 +121,9 @@ describe("the events socket", () => {
 		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 		expect(await person.next()).toMatchObject({ type: "chat.room" });
 		expect(await person.next()).toEqual({ type: "chat.threads", room_id: room.id });
-		// A message of the room leaves the threads as they were, so the next event is the star.
+		// A second read marker changes nothing, so it sends no state. A message of the room leaves the threads
+		// as they were. So the next events are the message and the star.
+		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 		await ada.call("chat.post_message", { room_id: room.id, text: "Next" });
 		await ada.call("chat.star_room", { room_id: room.id, starred: true });
 		expect(await person.next()).toMatchObject({ type: "chat.room", room: { last_seq: 3 } });

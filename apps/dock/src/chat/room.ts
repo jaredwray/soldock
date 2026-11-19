@@ -356,6 +356,15 @@ const MIGRATIONS: string[][] = [
 		THREAD_FOLLOWS_BACKFILL_REPLIES,
 		THREAD_FOLLOWS_BACKFILL_PARENTS,
 	],
+	// The time of the newest reply of the thread on each follow, so the state of a member reads only its 50
+	// newest followed threads (`followedThreads`) through one index, also when it follows many threads.
+	[
+		"ALTER TABLE thread_follows ADD COLUMN last_reply_at INTEGER",
+		`UPDATE thread_follows SET last_reply_at =
+			(SELECT last_reply_at FROM messages WHERE messages.id = thread_follows.parent_id)`,
+		`CREATE INDEX thread_follows_recent ON thread_follows (principal_id, last_reply_at DESC, parent_id DESC)
+			WHERE following = 1 AND last_reply_at IS NOT NULL`,
+	],
 ];
 
 /**
@@ -735,18 +744,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * The threads that a member follows and that have replies, newest reply first, at most
-	 * `THREADS_PER_ROOM`, each with its unread count (at most `UNREAD_COUNT_MAX`). A member that follows
-	 * nothing costs one read of the index `thread_follows_principal`.
+	 * `THREADS_PER_ROOM`, each with its unread count (at most `UNREAD_COUNT_MAX`). The inner query reads the
+	 * 50 newest follows from the index `thread_follows_recent`, and only those get a count. So the cost has a
+	 * limit, also for a member that follows many threads.
 	 */
 	private followedThreads(principalId: string): ChatThreadState[] {
 		return this.all<{ parent_id: string; last_reply_at: number; unread_count: number }>(
-			`SELECT follows.parent_id, parents.last_reply_at,
+			`SELECT newest.parent_id, newest.last_reply_at,
 				(SELECT COUNT(*) FROM (SELECT 1 FROM messages AS replies
-					WHERE replies.parent_id = follows.parent_id AND replies.seq > follows.last_read_seq
-						AND replies.author_id <> follows.principal_id AND replies.deleted_at IS NULL LIMIT ?2)) AS unread_count
-			FROM thread_follows AS follows JOIN messages AS parents ON parents.id = follows.parent_id
-			WHERE follows.principal_id = ?1 AND follows.following = 1 AND parents.last_reply_at IS NOT NULL
-			ORDER BY parents.last_reply_at DESC, follows.parent_id DESC LIMIT ?3`,
+					WHERE replies.parent_id = newest.parent_id AND replies.seq > newest.last_read_seq
+						AND replies.author_id <> ?1 AND replies.deleted_at IS NULL LIMIT ?2)) AS unread_count
+			FROM (SELECT parent_id, last_read_seq, last_reply_at FROM thread_follows
+				WHERE principal_id = ?1 AND following = 1 AND last_reply_at IS NOT NULL
+				ORDER BY last_reply_at DESC, parent_id DESC LIMIT ?3) AS newest
+			ORDER BY newest.last_reply_at DESC, newest.parent_id DESC`,
 			principalId,
 			UNREAD_COUNT_MAX,
 			THREADS_PER_ROOM,
@@ -1124,6 +1135,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			version,
 			parentId,
 		);
+		this.sql.exec("UPDATE thread_follows SET last_reply_at = ? WHERE parent_id = ?", summary?.last ?? null, parentId);
 	}
 
 	/**
@@ -1252,9 +1264,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if ("error" in opened) return opened;
 		const thread = this.threadParent(messageId);
 		if ("error" in thread) return thread;
-		await this.changeThreadState(call.actor.principal_id, () =>
+		await this.changeThreadState(call.actor.principal_id, messageId, () =>
 			this.sql.exec(
-				`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, ?, ?)
+				`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq, last_reply_at)
+				VALUES (?, ?, ?, ?, ?)
 				ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = excluded.following,
 					last_read_seq = CASE WHEN excluded.following = 1 AND following = 0 AND last_read_seq = 0
 						THEN excluded.last_read_seq ELSE last_read_seq END`,
@@ -1262,22 +1275,35 @@ export class ChatRoomDO extends DurableObject<Env> {
 				call.actor.principal_id,
 				following ? 1 : 0,
 				following ? this.newestReplySeq(messageId) : 0,
+				thread.parent.last_reply_at,
 			),
 		);
 		return this.threadFollow(messageId, call.actor.principal_id);
 	}
 
 	/**
-	 * Writes a change of the follows or of a read marker of a thread, and records in the same transaction
-	 * that the `PrincipalDO` of the caller is behind. It has the new state when the call returns, so
-	 * `chat.list_threads` shows the change, as for `chat.mark_read`.
+	 * Writes a change of the follows or of a read marker of a thread. When the row changed, it records in the
+	 * same transaction that the `PrincipalDO` of the caller is behind, and waits for the send. So
+	 * `chat.list_threads` has the change when the call returns, as for `chat.mark_read`. A call that changes
+	 * nothing sends no state, as for `chat.mark_read` and `chat.star_room`.
 	 */
-	private async changeThreadState(principalId: string, write: () => void): Promise<void> {
+	private async changeThreadState(principalId: string, parentId: string, write: () => void): Promise<void> {
+		const read = () =>
+			JSON.stringify(
+				this.one(
+					"SELECT following, last_read_seq FROM thread_follows WHERE parent_id = ? AND principal_id = ?",
+					parentId,
+					principalId,
+				) ?? null,
+			);
+		let changed = false;
 		this.ctx.storage.transactionSync(() => {
+			const before = read();
 			write();
-			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
+			changed = read() !== before;
+			if (changed) this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 		});
-		await this.flush();
+		if (changed) await this.flush();
 	}
 
 	/**
@@ -1292,13 +1318,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if ("error" in thread) return thread;
 		const newest = this.newestReplySeq(messageId);
 		if (newest === 0) return this.threadFollow(messageId, call.actor.principal_id);
-		await this.changeThreadState(call.actor.principal_id, () =>
+		await this.changeThreadState(call.actor.principal_id, messageId, () =>
 			this.sql.exec(
-				`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, NULL, ?)
+				`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq, last_reply_at)
+				VALUES (?, ?, NULL, ?, ?)
 				ON CONFLICT (parent_id, principal_id) DO UPDATE SET last_read_seq = excluded.last_read_seq`,
 				messageId,
 				call.actor.principal_id,
 				Math.min(seq ?? newest, newest),
+				thread.parent.last_reply_at,
 			),
 		);
 		return this.threadFollow(messageId, call.actor.principal_id);
@@ -1483,6 +1511,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				if (parent) {
 					this.addToThread(parent, call.actor, now, version - 1);
 					this.followOnReply(parent, call.actor.principal_id, seq, mentionIds(content.body));
+					// Each follow of the thread keeps the time of its newest reply, for `followedThreads`.
+					this.sql.exec("UPDATE thread_follows SET last_reply_at = ? WHERE parent_id = ?", now, parent.id);
 				}
 				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
 				if (input.idempotency) {

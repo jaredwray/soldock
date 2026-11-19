@@ -146,6 +146,44 @@ export interface FollowedThread {
 }
 
 /**
+ * The first fill of the threads. A joined room sends its threads with each state since this version. A
+ * room with no change since then sent none, so the first lists ask each such room for its state, in the
+ * same parts as `seed`. A room that does not answer stays for the next list. The fill is complete when each
+ * joined room answered one time.
+ */
+async function fillThreads(env: Env, principalId: string): Promise<void> {
+	const principal = principalStub(env, principalId);
+	let fill = await principal.threadFill(SEED_MAX + 1);
+	if (fill.filled) return;
+	// The rooms from before the object come with the fill of the room list first.
+	if (!fill.seeded) {
+		await seed(env, principalId);
+		fill = await principal.threadFill(SEED_MAX + 1);
+	}
+	const asked = fill.rooms.slice(0, SEED_MAX);
+	let failed = 0;
+	for (let start = 0; start < asked.length; start += SEED_PARALLEL) {
+		const part = asked.slice(start, start + SEED_PARALLEL);
+		const answers = await Promise.allSettled(
+			part.map((roomId) => env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).stateFor(principalId)),
+		);
+		const states: ChatRoomState[] = [];
+		const answered: string[] = [];
+		answers.forEach((answer, index) => {
+			if (answer.status === "rejected") {
+				failed += 1;
+				return;
+			}
+			answered.push(part[index] as string);
+			if (answer.value) states.push(answer.value);
+		});
+		await principal.fillChatThreads(states, answered, false);
+	}
+	if (failed > 0) log("warn", "chat thread fill: rooms did not answer", { rooms: failed });
+	if (failed === 0 && fill.rooms.length <= SEED_MAX && fill.seeded) await principal.fillChatThreads([], [], true);
+}
+
+/**
  * A page of the threads that a principal follows, from its `PrincipalDO`, with the newest reply first.
  * Returns null for a cursor that is not from this list.
  */
@@ -157,6 +195,7 @@ export async function listFollowedThreads(
 	const cursor =
 		input.cursor === null ? null : decodeCursor<[number, string, string]>(input.cursor, ["number", "string", "string"]);
 	if (input.cursor !== null && cursor === null) return null;
+	await fillThreads(env, principalId);
 	const listed = await principalStub(env, principalId).listChatThreads({
 		unread: input.unread,
 		after: cursor === null ? null : { lastReplyAt: cursor[0], roomId: cursor[1], parentId: cursor[2] },
