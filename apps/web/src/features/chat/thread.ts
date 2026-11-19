@@ -289,11 +289,15 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 				if (thread === null) return;
 				const kept = duringOlder;
 				// The page goes before the first reply. The replies that the view took during the read are newer
-				// copies, or the same, so they go in after it.
+				// copies, or the same, so they go in after it. While the thread has replies before the page, a kept
+				// reply before the first reply of the page stays out (`mergeThread`), so the list has no gap.
 				const older = page.replies.filter((reply) => reply.parent_id === thread?.parent.id && reply.seq < first.seq);
-				const joined: ThreadState = { ...thread, replies: [...older, ...thread.replies], hasOlder: false };
-				const merged = mergeThread(joined, [page.parent, ...kept]);
-				set({ ...merged, hasOlder: page.has_more && older.length > 0 });
+				const joined: ThreadState = {
+					...thread,
+					replies: [...older, ...thread.replies],
+					hasOlder: page.has_more && older.length > 0,
+				};
+				set(mergeThread(joined, [page.parent, ...kept]));
 			} finally {
 				duringOlder = null;
 			}

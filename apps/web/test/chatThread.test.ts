@@ -121,6 +121,30 @@ describe("the data of the view of a thread", () => {
 		expect(calls).toHaveLength(3);
 	});
 
+	// A change of a reply before the page that a read brings must not go in: the next read would start
+	// from that reply, and skip the replies between it and the page.
+	it("keeps a change of a reply before the older page out, and reads the next page from the first reply of the page", async () => {
+		let release: (value: RepliesPage) => void = () => {};
+		const calls: unknown[] = [];
+		const read = (range: { newest?: "true"; before?: number; changed_after?: number }) => {
+			calls.push(range);
+			if (range.newest) return Promise.resolve(page([message(9, 9, "cmsg_1", "newest")], 9, true));
+			if (range.before === 9) return new Promise<RepliesPage>((resolve) => (release = resolve));
+			if (range.before) return Promise.resolve(page([message(2, 2, "cmsg_1", "oldest")], 9, false));
+			return Promise.resolve(page([], 9));
+		};
+		const view = createThreadView(read, () => {});
+		await view.load();
+		const loading = view.loadOlder();
+		view.receive(message(2, 10, "cmsg_1", "oldest, changed"));
+		release(page([message(5, 5, "cmsg_1", "middle")], 9, true));
+		await loading;
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["middle", "newest"]);
+		expect(view.current()?.hasOlder).toBe(true);
+		await view.loadOlder();
+		expect(calls.at(-1)).toEqual({ before: 5 });
+	});
+
 	// After a gap with no socket, the view must get each change of the gap, also in pages. A room list after
 	// a change of a different room must not read the thread, and must not repeat a failed read at once.
 	it("reads the changes of a gap after a catch-up from the version of the last reply of each page, and again after a failure and a wait", async () => {
