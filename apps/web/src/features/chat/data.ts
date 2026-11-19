@@ -186,6 +186,47 @@ export function useRooms() {
 	return { ...state, refresh, threadsTick };
 }
 
+/**
+ * The messages of the socket of one room, for a view of a thread outside the room (the Threads view): each
+ * new, changed or deleted message and reply, and a catch-up after each connect. Null opens no socket. A new
+ * room closes the socket of the old one.
+ */
+export function useRoomWatch(roomId: string | null) {
+	const watchers = useRef(new Set<(event: MessageWatch) => void>());
+	const watch = useCallback((listener: (event: MessageWatch) => void) => {
+		watchers.current.add(listener);
+		return () => {
+			watchers.current.delete(listener);
+		};
+	}, []);
+	useEffect(() => {
+		if (roomId === null) return;
+		const socket = createRoomSocket({
+			connect: (handlers) => connectRoom(roomId, handlers),
+			onEvent(event) {
+				if (event.type === "hello") {
+					for (const watcher of watchers.current) watcher({ type: "catch-up" });
+				} else if (event.type === "message" || event.type === "reply") {
+					for (const watcher of watchers.current) watcher({ type: "message", message: event.message });
+				}
+			},
+			// The view of the thread reads its changes with the next catch-up of the Threads view.
+			onEnd: () => {},
+		});
+		const wake = () => {
+			if (document.visibilityState === "visible") socket.wake();
+		};
+		document.addEventListener("visibilitychange", wake);
+		window.addEventListener("online", wake);
+		return () => {
+			document.removeEventListener("visibilitychange", wake);
+			window.removeEventListener("online", wake);
+			socket.close();
+		};
+	}, [roomId]);
+	return watch;
+}
+
 /** One WebSocket connection to the socket of a room. The session cookie authenticates it. */
 function connectRoom(roomId: string, handlers: SocketHandlers): Connection {
 	const url = new URL(chatSocketPath(roomId), window.location.href);

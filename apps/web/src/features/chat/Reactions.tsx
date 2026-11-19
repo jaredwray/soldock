@@ -83,7 +83,8 @@ export function ReactionPicker({
 	useLayoutEffect(() => {
 		const picker = root.current;
 		const row = picker?.parentElement;
-		const area = picker?.closest(".chat-scroll");
+		// The scroll area of the room list, or of the view of a thread.
+		const area = picker?.closest(".chat-scroll, .chat-thread-body");
 		if (!picker || !row || !area) return;
 		const box = area.getBoundingClientRect();
 		const place = row.getBoundingClientRect();

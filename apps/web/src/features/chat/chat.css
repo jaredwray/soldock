@@ -1505,9 +1505,12 @@ a.chat-author:hover {
 	padding: 4px 16px;
 }
 
-.chat-thread .chat-message .chat-message-actions {
-	top: -14px;
-	right: 12px;
+/* On a touch screen, the actions keep the place that the room gives them. */
+@media (hover: hover) {
+	.chat-thread .chat-message .chat-message-actions {
+		top: -14px;
+		right: 12px;
+	}
 }
 
 .chat-thread-action-error {

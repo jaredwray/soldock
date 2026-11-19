@@ -199,7 +199,12 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 		return { page, panel };
 	};
 	const mine = await openThread(tomasz);
-	const other = await openThread(nadia);
+	// The other person opens the thread from the Threads view: it follows the thread, because it replied.
+	const otherPage = await nadia.newPage();
+	await otherPage.goto("/chat/threads");
+	await otherPage.getByRole("button").filter({ hasText: parent.text }).click();
+	const other = { page: otherPage, panel: otherPage.getByRole("complementary", { name: "Thread" }) };
+	await expect(other.panel.locator(".chat-thread-reply")).toHaveCount(2);
 
 	// The author changes its reply in the view. The other view shows the new text.
 	const ownRow = mine.panel.locator(".chat-thread-reply").filter({ hasText: own });
@@ -226,8 +231,15 @@ test("a reply in the view of a thread can change, get a reaction and be deleted,
 			.getByRole("button", { name: /^thumbs up: 1 reaction/ }),
 	).toBeVisible();
 
-	// The author deletes its reply, after a confirmation. Each view shows the reply as deleted.
+	// Escape in the confirmation closes the confirmation only, not the thread.
 	const changedRow = mine.panel.locator(".chat-thread-reply").filter({ hasText: changed });
+	await changedRow.hover();
+	await changedRow.getByRole("button", { name: /Delete the message/ }).click();
+	await expect(mine.page.getByRole("dialog")).toBeVisible();
+	await mine.page.keyboard.press("Escape");
+	await expect(mine.page.getByRole("dialog")).toHaveCount(0);
+	await expect(mine.panel).toBeVisible();
+	// The author deletes its reply, after a confirmation. Each view shows the reply as deleted.
 	await changedRow.hover();
 	await changedRow.getByRole("button", { name: /Delete the message/ }).click();
 	await mine.page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
@@ -244,7 +256,7 @@ test("the Threads view lists the followed threads with their new replies, and a 
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const nadia = await signIn(browser, "nadia");
-	const name = unique("Threads room");
+	const name = unique("Followed room");
 	const roomId = await createRoom(tomasz, name, [nadia]);
 	const parent = await post(tomasz, roomId, unique("thread to follow"));
 	const answer = unique("answer");
@@ -252,10 +264,11 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	await reply(nadia, roomId, parent.id, answer);
 	const page = await tomasz.newPage();
 	await page.goto("/chat");
-	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
+	// The sidebar links to the view: its name is "Threads", with the count of the threads with new replies.
+	// Other tests can add threads, so the test reads the card of its own thread.
 	await page
 		.getByRole("navigation", { name: "Rooms" })
-		.getByRole("link", { name: /^Threads/ })
+		.getByRole("link", { name: /^Threads( .* with new replies)?$/ })
 		.click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
 	const card = page.getByRole("button").filter({ hasText: parent.text });

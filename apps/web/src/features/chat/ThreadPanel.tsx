@@ -7,6 +7,7 @@ import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
+import { createCallLine } from "./callLine.ts";
 import { bodyText, textToBody } from "./composerSchema.ts";
 import { type MessageWatch, usePageVisible } from "./data.ts";
 import { draftStorage } from "./drafts.ts";
@@ -99,6 +100,8 @@ export function ThreadPanel({
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId]);
 	/** The reaction calls that run, as "message id" and "emoji". */
 	const reacting = useRef(new Set<string>());
+	// The edits of one message go one at a time, in order, so the room gets the newest edit last.
+	const editLine = useMemo(() => createCallLine(() => view.current !== null), []);
 	/** The state of the thread for the person, as the keeper has it. Null before the first read. */
 	const [follow, setFollow] = useState<ChatThreadFollow | null>(null);
 	/** Keeps the follow and the marker apart, so an older answer never hides an own change (`createFollowKeeper`). */
@@ -282,14 +285,16 @@ export function ThreadPanel({
 		const { id, body } = editing;
 		setEditing(null);
 		setActionError(null);
-		try {
-			const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, body });
-			view.current?.receive(message);
-		} catch (error) {
-			// The edit box opens again with the new body, so the person does not write it again.
-			setEditing((current) => current ?? { id, initial: body, body });
-			setActionError(errorMessage(error));
-		}
+		editLine(id, async () => {
+			try {
+				const { message } = await api.call("chat.edit_message", { room_id: roomId, message_id: id, body });
+				view.current?.receive(message);
+			} catch (error) {
+				// The edit box opens again with the new body, so the person does not write it again.
+				setEditing((current) => current ?? { id, initial: body, body });
+				setActionError(errorMessage(error));
+			}
+		});
 	}
 
 	/** Adds or removes a reaction of the person. A second click while the call runs does nothing. */
@@ -327,6 +332,7 @@ export function ThreadPanel({
 			pending: null,
 			mentions,
 			head: true,
+			fullDates: true,
 			own,
 			canDelete: own || canDeleteAll,
 			editing: editing?.id === message.id ? editing : null,
@@ -356,7 +362,9 @@ export function ThreadPanel({
 			className="chat-thread"
 			aria-labelledby={headingId}
 			onKeyDown={(event) => {
-				if (event.key === "Escape" && !event.defaultPrevented) {
+				// Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that dialog only.
+				const inDialog = event.target instanceof Element && event.target.closest('dialog, [role="dialog"]') !== null;
+				if (event.key === "Escape" && !event.defaultPrevented && !inDialog) {
 					event.preventDefault();
 					closeUnlessTyped();
 				}

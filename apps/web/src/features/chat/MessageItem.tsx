@@ -54,6 +54,8 @@ export interface MessageItemProps {
 	onReact: (emoji: string, add: boolean) => void;
 	/** One more class of the row, for a list that has rows of other kinds too. */
 	className?: string | undefined;
+	/** True for a list with no line for each day (the view of a thread): the time shows its day too. */
+	fullDates?: boolean | undefined;
 }
 
 /** One message: its author, its body, its reactions and its thread, with the actions of the person. */
@@ -81,6 +83,7 @@ export function MessageItem({
 	quickEmoji,
 	onReact,
 	className,
+	fullDates,
 }: MessageItemProps) {
 	const editId = useId();
 	const [picking, setPicking] = useState(false);
@@ -137,7 +140,7 @@ export function MessageItem({
 					)}
 					{message.author.kind === "agent" && <span className="kind kind-agent">agent</span>}
 					<time className="chat-time" dateTime={message.created_at} title={fullDate(message.created_at)}>
-						{timeLabel(message.created_at)}
+						{fullDates ? shortDate(message.created_at) : timeLabel(message.created_at)}
 					</time>
 				</p>
 				{editing !== null ? (

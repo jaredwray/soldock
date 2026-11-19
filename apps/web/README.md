@@ -825,8 +825,12 @@ MCP clients. The app has no UI-only path.
         view reads the changes of the thread. The socket of the room brings each change to each other open
         view.
       - A refused change opens the edit box again with the new text. A refusal shows its reason under the
-        first message.
-      - A reply has no "Copy a link": no path opens a thread yet.
+        first message. The edits of one message go one at a time, in order (`createCallLine`), so the
+        room gets the newest edit last.
+      - A reply has no "Copy a link": no path opens a thread yet. The time of each message shows its day
+        too (`fullDates`), because the view has no line for each day.
+      - Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that
+        dialog only. The list of emoji finds its space in the scroll area of the view too.
     - Known limits, for the next parts: the view keeps no draft after a reload. The view reads all pages
       of a thread before it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
@@ -870,6 +874,8 @@ MCP clients. The app has no UI-only path.
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.
     - The view has no members of the room, so the @ list does not put the members first. The server checks
       each mention.
+    - The open thread has the socket of its room (`useRoomWatch`), so the edits, reactions and deletes of
+      other people show at once, as in the room.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.
