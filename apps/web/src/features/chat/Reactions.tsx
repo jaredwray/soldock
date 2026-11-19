@@ -1,4 +1,4 @@
-import type { ChatReaction } from "@soldock/contracts";
+import type { ChatReaction } from "@asterra/contracts";
 import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { emojiName, findEmoji } from "./emoji.ts";
 

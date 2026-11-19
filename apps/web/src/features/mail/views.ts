@@ -1,4 +1,4 @@
-import type { Label } from "@soldock/contracts";
+import type { Label } from "@asterra/contracts";
 import type { IconName } from "../../lib/icons.tsx";
 import type { MailView, SystemView } from "../../routes.ts";
 

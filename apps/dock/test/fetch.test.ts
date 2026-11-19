@@ -135,7 +135,7 @@ describe("SPA fallback", () => {
 			const res = await get(path, { "sec-fetch-mode": "navigate", accept: "text/html" });
 			expect(res.status).toBe(200);
 			expect(res.headers.get("content-type")).toMatch(/^text\/html/);
-			expect(await res.text()).toContain("data-soldock-shell");
+			expect(await res.text()).toContain("data-asterra-shell");
 		},
 	);
 });

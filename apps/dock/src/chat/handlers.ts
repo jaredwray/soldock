@@ -1,4 +1,4 @@
-import type { ChatRoom, ChatThreadFollow, OperationName } from "@soldock/contracts";
+import type { ChatRoom, ChatThreadFollow, OperationName } from "@asterra/contracts";
 import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { bodyMarkdown, messageContent } from "./body.ts";

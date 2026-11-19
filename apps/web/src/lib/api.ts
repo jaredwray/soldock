@@ -1,4 +1,4 @@
-import { ApiError, createClient, type FetchLike } from "@soldock/contracts";
+import { ApiError, createClient, type FetchLike } from "@asterra/contracts";
 
 type Listener = () => void;
 
@@ -37,7 +37,7 @@ export function errorMessage(error: unknown): string {
 		if (error.code === "rate_limited") return "Too many requests. Wait a moment, then try again.";
 		return error.message;
 	}
-	if (error instanceof TypeError) return "Soldock is not available. Examine your connection, then try again.";
+	if (error instanceof TypeError) return "Asterra is not available. Examine your connection, then try again.";
 	if (error instanceof Error) return error.message;
 	return "An unknown error occurred.";
 }

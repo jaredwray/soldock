@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { WEBHOOK_LIMITS } from "@soldock/contracts";
+import { WEBHOOK_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import migration from "../migrations/0013_webhook_endpoints.sql?raw";
 import {
@@ -182,7 +182,7 @@ describe("drive webhook events", () => {
 		expect(added).toEqual([
 			expect.objectContaining({
 				type: "drive.members.changed",
-				data: { webhook_id: expect.any(String), space_id: driveId, uri: `soldock://drive/${driveId}` },
+				data: { webhook_id: expect.any(String), space_id: driveId, uri: `asterra://drive/${driveId}` },
 			}),
 		]);
 		expect(added[0]?.data).not.toHaveProperty("item_id");

@@ -1,4 +1,4 @@
-import { DIRECTORY_LIMITS, type DirectoryEntry, type Principal } from "@soldock/contracts";
+import { DIRECTORY_LIMITS, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 import type { SelectOption } from "./Select.tsx";

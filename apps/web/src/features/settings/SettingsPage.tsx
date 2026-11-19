@@ -1,4 +1,4 @@
-import { ALL_SCOPES } from "@soldock/contracts";
+import { ALL_SCOPES } from "@asterra/contracts";
 import { useEffect, useId } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -18,7 +18,7 @@ export function SettingsPage() {
 	const ids = { account: useId(), signOut: useId() };
 
 	useEffect(() => {
-		document.title = "Settings – Soldock";
+		document.title = "Settings – Asterra";
 	}, []);
 
 	return (
@@ -66,7 +66,7 @@ export function SettingsPage() {
 						Sign out
 					</h2>
 					<div className="panel-card setting-action">
-						<p className="setting-action-text">Sign out of Soldock in this browser.</p>
+						<p className="setting-action-text">Sign out of Asterra in this browser.</p>
 						<button
 							type="button"
 							className="button"

@@ -1,4 +1,4 @@
-import { Emoji } from "@soldock/contracts";
+import { Emoji } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	EMOJI,

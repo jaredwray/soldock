@@ -1,4 +1,4 @@
-import { DocContent } from "@soldock/contracts";
+import { DocContent } from "@asterra/contracts";
 import type { Node } from "prosemirror-model";
 import { describe, expect, it } from "vitest";
 import {

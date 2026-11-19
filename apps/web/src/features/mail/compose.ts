@@ -1,4 +1,4 @@
-import { type Address, EmailAddress, MAIL_LIMITS, type Message } from "@soldock/contracts";
+import { type Address, EmailAddress, MAIL_LIMITS, type Message } from "@asterra/contracts";
 import { formatAddress, fullDate, sameAddress } from "../../lib/format.ts";
 
 /** The first values of a composer. Address fields are comma-separated text. */

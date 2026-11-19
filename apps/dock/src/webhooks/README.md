@@ -1,6 +1,6 @@
 # `webhooks` module
 
-An endpoint is a URL outside Soldock. A subscription chooses one event and one target for that URL.
+An endpoint is a URL outside Asterra. A subscription chooses one event and one target for that URL.
 Mail, Chat and Drive use the same signature, the same queue and the same retry rules.
 Each product exposes its own subscription operations. Endpoint operations are shared.
 
@@ -20,7 +20,7 @@ Other modules import `index.ts` only.
 
 ## Events
 
-| Event | When Soldock sends it |
+| Event | When Asterra sends it |
 | --- | --- |
 | `mail.inbox.updated` | New mail arrives in an inbox. Spam, a label and an archive send nothing |
 | `chat.message.created` | A member posts a message. The author gets no POST |
@@ -106,7 +106,7 @@ An MCP client can subscribe to an event with `events/subscribe` on [`/mcp`](../m
 ChatGPT does this for a Work chat or a dot. The client gives the callback URL and the signing secret.
 `createEventSubscriptions` implements `EventSubscriptions` of `platform`, and the composition root
 gives it to the MCP adapter. The events are the webhook events of the table above. The catalog is
-`mcpEventList` in [`@soldock/contracts`](../../../../packages/contracts/README.md).
+`mcpEventList` in [`@asterra/contracts`](../../../../packages/contracts/README.md).
 
 | Event | Arguments | `data` of a POST |
 | --- | --- | --- |
@@ -130,12 +130,12 @@ retries and the rules that disable an endpoint are those of each webhook. These 
 - **Callback URL.** The URL has the rules of each webhook URL (`url.ts`): `https`, the default port, a
   public host name, no IP address, no user name and not the host of the deployment. Each POST refuses
   a redirect. The MCP Events text of OpenAI asks a server to resolve the host and to connect to the
-  address that it examined. A Worker cannot select the address of a `fetch`, so Soldock does not do
+  address that it examined. A Worker cannot select the address of a `fetch`, so Asterra does not do
   this. A Worker also cannot reach a private network of the operator, and the POST has ids only.
-- **Verification.** Before Soldock stores a subscription, it sends a signed POST with
+- **Verification.** Before Asterra stores a subscription, it sends a signed POST with
   `{"type":"verification","challenge":"…"}` and a `webhook-id` that starts with `msg_verification_`.
   The receiver must answer 2xx in 10 seconds, with at most 4 KiB of JSON that has the same
-  `challenge`. Soldock compares the two values in constant time. A receiver that passed needs no new
+  `challenge`. Asterra compares the two values in constant time. A receiver that passed needs no new
   POST for 5 minutes, for the same principal, URL and secret. A failure stores nothing. One principal
   can cause 100 verification POSTs in one hour. A caller can change the secret or the path for each
   call, so this count, not the 5 minutes, limits the POSTs to a host. More get the error `rate_limited`.

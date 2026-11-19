@@ -5,10 +5,10 @@ import { z } from "./zod.ts";
 // creates a credential, so it is a ceremony and not an operation: it has no REST route in the registry
 // and no MCP tool. The dock Worker and the web app share these schemas.
 
-/** The shortest password that Soldock accepts. Length gives more strength than character rules. */
+/** The shortest password that Asterra accepts. Length gives more strength than character rules. */
 export const PASSWORD_MIN_LENGTH = 12;
 
-/** The longest password that Soldock accepts. The limit keeps the hash work small. */
+/** The longest password that Asterra accepts. The limit keeps the hash work small. */
 export const PASSWORD_MAX_LENGTH = 128;
 
 /** A new password: at least 12 and at most 128 characters. Spaces are part of the password. */
@@ -37,7 +37,7 @@ export const SIGN_IN_MAX_FAILURES = 10;
 export const SIGN_IN_LOCK_MINUTES = 15;
 
 /**
- * The body of `POST /auth/session`. The address is a Soldock address of the person. A person with
+ * The body of `POST /auth/session`. The address is an Asterra address of the person. A person with
  * two-step verification also sends `totp_code`. The password has no minimum length here, so a short
  * guess gets the same answer as each other wrong password.
  */

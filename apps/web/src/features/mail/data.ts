@@ -5,7 +5,7 @@ import {
 	type OutputOf,
 	type Thread,
 	type ThreadSummary,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import type { MailView } from "../../routes.ts";

@@ -21,7 +21,7 @@
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
 The design follows [Ember](https://github.com/NYLLON-SOFTWARE/ember-cloudflare) (MIT): one Durable
-Object for each room, which holds the messages of that room. The code is new, because Soldock has
+Object for each room, which holds the messages of that room. The code is new, because Asterra has
 its own principals, operation registry and MCP surface. No code comes from Ember.
 
 ## What exists
@@ -606,7 +606,7 @@ A socket stays open after its request. It must not outlive the access that opene
 ### Agents
 
 - An agent can open the socket with its API key or its OAuth access token.
-- An MCP client subscribes to the resource `chat.room` (`soldock://chat/{room_id}/messages`) with
+- An MCP client subscribes to the resource `chat.room` (`asterra://chat/{room_id}/messages`) with
   `subscriptions/listen` ([`mcp`](../mcp/README.md#subscriptions)). The read operation of the
   resource is `chat.list_messages`. Its list operation is `chat.list_rooms`, with the first 100
   rooms of the caller.
@@ -616,7 +616,7 @@ A socket stays open after its request. It must not outlive the access that opene
 - A feed counts for the limit of 8 sockets of one member in one room. The room never closes a feed
   to make room for a new socket, because the end of one feed ends its stream with all of its other
   feeds. At the limit, the room refuses a new feed, and the new stream leaves the room out.
-- The resource `chat.rooms` (`soldock://chat/rooms`) has each room of the caller. One subscription
+- The resource `chat.rooms` (`asterra://chat/rooms`) has each room of the caller. One subscription
   follows each room, also a room that the caller joins later. Its read operation is
   `chat.list_rooms`, with the first 100 rooms. Each principal that can call `chat.list_rooms` can
   watch it.
@@ -671,7 +671,7 @@ Later subscriptions get no earlier event.
 The alarm sends due events to `WEBHOOKS` and removes each row only after the queue accepts it.
 
 The POST data has `webhook_id`, `principal_id`, `room_id`, `message_id` and `uri`.
-It has no message text. The URI is `soldock://chat/<room_id>/messages`.
+It has no message text. The URI is `asterra://chat/<room_id>/messages`.
 The receiver reads the room with its own credential.
 Each delivery checks the membership again, so a stale index gives no access.
 A deleted message can still notify a `chat.message.deleted` subscription.

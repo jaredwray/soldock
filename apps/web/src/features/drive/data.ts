@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry, type SharedDrive } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem, type OutputOf, type PathEntry, type SharedDrive } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";

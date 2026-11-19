@@ -1,5 +1,5 @@
-import type { ChatBody } from "@soldock/contracts";
-import { ChatBody as ChatBodySchema } from "@soldock/contracts";
+import type { ChatBody } from "@asterra/contracts";
+import { ChatBody as ChatBodySchema } from "@asterra/contracts";
 import { inputRules, undoInputRule } from "prosemirror-inputrules";
 import type { Node } from "prosemirror-model";
 import { EditorState, Selection, TextSelection, type Transaction } from "prosemirror-state";

@@ -1,4 +1,4 @@
-import type { CreatedApiKey, Principal } from "@soldock/contracts";
+import type { CreatedApiKey, Principal } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { navigate } from "../../lib/router.tsx";
@@ -78,7 +78,7 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	}, [load]);
 
 	useEffect(() => {
-		document.title = `${title} – Admin – Soldock`;
+		document.title = `${title} – Admin – Asterra`;
 	}, [title]);
 
 	// `/admin` gets the path of the section that it shows, so a reload and the back button stay in that section.

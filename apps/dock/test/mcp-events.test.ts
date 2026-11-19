@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { MCP_EVENT_LIMITS, mcpEvents, WEBHOOK_LIMITS } from "@soldock/contracts";
+import { MCP_EVENT_LIMITS, mcpEvents, WEBHOOK_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
@@ -20,7 +20,7 @@ import {
 } from "./helpers.ts";
 
 // MCP Events: an MCP client, such as a dot of ChatGPT, subscribes to an event with events/subscribe and
-// gives a callback URL and a signing secret. Soldock verifies the callback, then sends each event to it
+// gives a callback URL and a signing secret. Asterra verifies the callback, then sends each event to it
 // as one signed POST. The outbound request is the boundary of each test.
 
 const CALLBACK = "https://receiver.example.com/mcp-events/callback_1";
@@ -248,7 +248,7 @@ describe("events/subscribe", () => {
 			eventId: expect.any(String),
 			name: "chat.message.created",
 			timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/),
-			data: { room_id: room.id, message_id: message.id, uri: `soldock://chat/${room.id}/messages` },
+			data: { room_id: room.id, message_id: message.id, uri: `asterra://chat/${room.id}/messages` },
 			cursor: null,
 		});
 		// The catalog and the POST must agree, because the client checks `data` against the payload schema.
@@ -616,7 +616,7 @@ describe("event delivery", () => {
 		const body = JSON.parse(post?.body ?? "{}");
 		expect(body).toMatchObject({
 			name: "mail.inbox.updated",
-			data: { mailbox_id: ada.id, uri: `soldock://mail/${ada.id}/inbox` },
+			data: { mailbox_id: ada.id, uri: `asterra://mail/${ada.id}/inbox` },
 			cursor: null,
 		});
 		expect(mcpEvents.get("mail.inbox.updated")?.payload.safeParse(body.data).success).toBe(true);
@@ -642,7 +642,7 @@ describe("event delivery", () => {
 		const body = JSON.parse(events()[0]?.body ?? "{}");
 		expect(body).toMatchObject({
 			name: "drive.item.created",
-			data: { space_id: ada.id, item_id: item.id, uri: `soldock://drive/${ada.id}/items/${item.id}` },
+			data: { space_id: ada.id, item_id: item.id, uri: `asterra://drive/${ada.id}/items/${item.id}` },
 		});
 		expect(mcpEvents.get("drive.item.created")?.payload.safeParse(body.data).success).toBe(true);
 	});

@@ -1,0 +1,105 @@
+<section id="asterra-finishes" aria-label="Asterra in two finishes">
+  <style>
+    #asterra-finishes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      max-width: 64rem;
+      margin-inline: auto;
+    }
+    #asterra-finishes svg {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      height: auto;
+      padding: 7.5%;
+    }
+    @keyframes asterra-face-pass {
+      0% { transform: translateX(-122px); }
+      57%, 100% { transform: translateX(336px); }
+    }
+  </style>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#ffffff" style="background: #000000" role="img" aria-labelledby="orbit-modern-dark-title">
+    <title id="orbit-modern-dark-title">Asterra in white on black</title>
+    <defs>
+      <path id="orbit-modern-dark-mark" d="M18.62 224.78L106.72 39.96C112.13 28.62 128.12 28.21 134.1 39.27L178.27 121.02C169.78 122.46 161.29 124.43 152.8 126.95L121.17 68.37L64.15 188.19C116.82 149.85 169.49 130.74 222.16 129.4C168.42 140.83 114.69 173.35 60.96 224.78Z M100.94 207.65C133.54 176.96 166.13 163.59 198.72 155L237.04 224.78L208.22 224.78L181.53 176.23C154.67 180.16 127.81 191.05 100.94 207.65Z"/>
+      <clipPath id="orbit-modern-dark-clip">
+        <use href="#orbit-modern-dark-mark"/>
+      </clipPath>
+      <rect id="orbit-modern-dark-stripe" width="118" height="256" transform="skewX(-16)"/>
+      <linearGradient id="orbit-modern-dark-density">
+        <stop offset="0" stop-opacity="0"/>
+        <stop offset="0.27" stop-opacity="0.06"/>
+        <stop offset="0.47" stop-opacity="0.28"/>
+        <stop offset="0.6" stop-opacity="0.12"/>
+        <stop offset="0.68" stop-opacity="0"/>
+        <stop offset="0.81" stop-opacity="0.08"/>
+        <stop offset="1" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="orbit-modern-dark-band">
+        <stop offset="0" stop-color="currentColor" stop-opacity="0"/>
+        <stop offset="0.48" stop-color="currentColor" stop-opacity="0"/>
+        <stop offset="0.6" stop-color="currentColor" stop-opacity="0.22"/>
+        <stop offset="0.67" stop-color="currentColor" stop-opacity="1"/>
+        <stop offset="0.74" stop-color="currentColor" stop-opacity="0.34"/>
+        <stop offset="0.88" stop-color="currentColor" stop-opacity="0"/>
+        <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
+      </linearGradient>
+      <mask id="orbit-modern-dark-tone" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+        <rect width="256" height="256" fill="white"/>
+        <g id="orbit-modern-dark-shade">
+          <use href="#orbit-modern-dark-stripe" fill="url(#orbit-modern-dark-density)"/>
+        </g>
+      </mask>
+      <filter id="orbit-modern-dark-bloom" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256" color-interpolation-filters="sRGB">
+        <feGaussianBlur stdDeviation="3.2" result="halo"/>
+        <feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <style>
+      #orbit-modern-dark-shade, #orbit-modern-dark-sweep { visibility: hidden; }
+      @media (prefers-reduced-motion: no-preference) {
+        #orbit-modern-dark-shade, #orbit-modern-dark-sweep { visibility: visible; animation: asterra-face-pass 4.8s ease-in-out -1.3s infinite; }
+      }
+    </style>
+    <use href="#orbit-modern-dark-mark" fill="currentColor" mask="url(#orbit-modern-dark-tone)"/>
+    <g filter="url(#orbit-modern-dark-bloom)">
+      <g clip-path="url(#orbit-modern-dark-clip)">
+        <g id="orbit-modern-dark-sweep">
+          <use href="#orbit-modern-dark-stripe" fill="url(#orbit-modern-dark-band)"/>
+        </g>
+      </g>
+    </g>
+  </svg>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#000000" style="background: #ffffff" role="img" aria-labelledby="orbit-modern-light-title">
+    <title id="orbit-modern-light-title">Black Asterra A with a white sheen</title>
+    <defs>
+      <path id="orbit-modern-light-mark" d="M18.62 224.78L106.72 39.96C112.13 28.62 128.12 28.21 134.1 39.27L178.27 121.02C169.78 122.46 161.29 124.43 152.8 126.95L121.17 68.37L64.15 188.19C116.82 149.85 169.49 130.74 222.16 129.4C168.42 140.83 114.69 173.35 60.96 224.78Z M100.94 207.65C133.54 176.96 166.13 163.59 198.72 155L237.04 224.78L208.22 224.78L181.53 176.23C154.67 180.16 127.81 191.05 100.94 207.65Z"/>
+      <clipPath id="orbit-modern-light-clip">
+        <use href="#orbit-modern-light-mark"/>
+      </clipPath>
+      <linearGradient id="orbit-modern-light-band">
+        <stop stop-color="white" stop-opacity="0"/>
+        <stop offset=".30" stop-color="white" stop-opacity=".04"/>
+        <stop offset=".46" stop-color="white" stop-opacity=".18"/>
+        <stop offset=".59" stop-color="white" stop-opacity=".60"/>
+        <stop offset=".64" stop-color="white"/>
+        <stop offset=".68" stop-color="white"/>
+        <stop offset=".73" stop-color="white" stop-opacity=".68"/>
+        <stop offset=".81" stop-color="white" stop-opacity=".16"/>
+        <stop offset="1" stop-color="white" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <style>
+      #orbit-modern-light-sweep { visibility: hidden; }
+      @media (prefers-reduced-motion: no-preference) {
+        #orbit-modern-light-sweep { visibility: visible; animation: asterra-face-pass 4.8s ease-in-out -1.3s infinite; }
+      }
+    </style>
+    <g clip-path="url(#orbit-modern-light-clip)">
+      <rect width="256" height="256" fill="currentColor"/>
+      <g id="orbit-modern-light-sweep">
+        <rect width="118" height="256" transform="skewX(-16)" fill="url(#orbit-modern-light-band)"/>
+      </g>
+    </g>
+  </svg>
+</section>

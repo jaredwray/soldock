@@ -4,11 +4,11 @@ import { buildRawMime, MAX_RECIPIENTS, messageId, parseSendRequest } from "../sr
 const base = {
 	from: "spike@spike.example",
 	to: "person@example.com",
-	subject: "Re: Soldock spike 42",
+	subject: "Re: Asterra spike 42",
 	messageId: "<b@spike.example>",
 	inReplyTo: "<a@spike.example>",
 	references: ["<a@spike.example>"],
-	headers: { "X-Soldock-Spike": "42" },
+	headers: { "X-Asterra-Spike": "42" },
 	text: "line one\nline two",
 	date: new Date("2026-10-18T12:00:00Z"),
 };
@@ -23,7 +23,7 @@ describe("buildRawMime", () => {
 				"Message-ID: <b@spike.example>",
 				"In-Reply-To: <a@spike.example>",
 				"References: <a@spike.example>",
-				"X-Soldock-Spike: 42",
+				"X-Asterra-Spike: 42",
 				"Date: Sun, 18 Oct 2026 12:00:00 GMT",
 			]),
 		);

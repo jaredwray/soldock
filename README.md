@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/banner.png" alt="Soldock: mail, chat and documents on your own Cloudflare account. Open source, on one hostname. AI agents are users, through MCP. No fee for each person.">
+  <img src="docs/screenshots/banner.png" alt="Asterra: mail, chat and documents on your own Cloudflare account. Open source, on one hostname. AI agents are users, through MCP. No fee for each person.">
 </p>
 
 <p align="center">
@@ -18,11 +18,11 @@
 > **Status:** early development. Mail, Chat, and Drive with Docs and Sheets each have their first
 > end-to-end layer. People use them in the browser, and agents use them through MCP. Meet and Slides
 > do not exist yet. Backups, exports and retention do not exist yet. Do not move an organization to
-> Soldock today. [What it does](#what-it-does) and the README of each module show what exists.
+> Asterra today. [What it does](#what-it-does) and the README of each module show what exists.
 
-## Why Soldock
+## Why Asterra
 
-**Your data is in your account.** Soldock runs in your own Cloudflare account. The mail, the chat
+**Your data is in your account.** Asterra runs in your own Cloudflare account. The mail, the chat
 messages and the files stay in Durable Objects, D1 and R2 that you control. The code has the MIT
 license: you can read it, change it and run it.
 
@@ -34,14 +34,14 @@ sponsor is accountable for it.
 such as `dock.example.com`. Each capability is one operation. The web app, REST and MCP use the same
 operations.
 
-**No fee for each person.** Soldock is free. You pay Cloudflare for the account and for what you
+**No fee for each person.** Asterra is free. You pay Cloudflare for the account and for what you
 use, not for the number of people. Google Workspace has a price for each person, each month.
 
 ## What it does
 
 ### Mail
 
-Soldock receives mail through Cloudflare Email Routing and sends mail through Cloudflare Email
+Asterra receives mail through Cloudflare Email Routing and sends mail through Cloudflare Email
 Service. The web app has threads, labels, stars, search, attachments and keyboard shortcuts. A shared
 mailbox, such as `support@example.com`, gives a team one address with shared threads and one read
 state. Owners and admins can read the mailbox of each agent.
@@ -52,7 +52,7 @@ state. Owners and admins can read the mailbox of each agent.
   <sub>The people and the messages in these screenshots are made up. They are the Wrenfield Studio team that <code>pnpm seed</code> creates.</sub>
 </p>
 
-Mail from outside is untrusted content. Soldock sanitizes the HTML of a message before it shows the
+Mail from outside is untrusted content. Asterra sanitizes the HTML of a message before it shows the
 message. The app has a Light, a Dark and a System appearance.
 
 ![An open thread of Mail in dark mode, with its labels and two messages](docs/screenshots/dark.png)
@@ -96,13 +96,13 @@ decimals, bold, italic, colors and alignment. An agent sets the same formats.
 
 ### Agents
 
-Give an agent one URL: the MCP endpoint of your Soldock. The MCP client opens Soldock in a browser,
+Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client opens Asterra in a browser,
 and you approve the connection and select its access. A client without OAuth can use an API key.
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,
 `docs_update` or `chat_post_message`. An agent can also subscribe to an inbox and get a notification
 for new mail. A client with MCP Events, such as a dot of ChatGPT, can subscribe to new mail, chat
-messages and drive changes, and Soldock sends it each event.
+messages and drive changes, and Asterra sends it each event.
 
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
@@ -120,18 +120,18 @@ address and a password, and can add two-step verification with an authenticator 
 ### On a phone
 
 The web app adapts to a narrow screen: the sidebar becomes a drawer, and the lists use the full
-width. Soldock has no native app, no offline mode and no push notifications.
+width. Asterra has no native app, no offline mode and no push notifications.
 
-![Soldock on three phones: the inbox, the Design room, and a doc in dark mode](docs/screenshots/phones.png)
+![Asterra on three phones: the inbox, the Design room, and a doc in dark mode](docs/screenshots/phones.png)
 
 ## What it costs
 
-Soldock is free. Cloudflare runs it, at the prices of Cloudflare. These prices are those listed in
+Asterra is free. Cloudflare runs it, at the prices of Cloudflare. These prices are those listed in
 November 2026.
 
 | | What you pay Cloudflare |
 |---|---|
-| **The account** | $5 a month for [Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/), for the full account. It includes 10 million requests and 30 million CPU milliseconds a month. Soldock needs Workers Paid to send mail to all recipients. |
+| **The account** | $5 a month for [Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/), for the full account. It includes 10 million requests and 30 million CPU milliseconds a month. Asterra needs Workers Paid to send mail to all recipients. |
 | **Mailboxes, drives, documents and rooms** | Durable Objects, in Workers Paid. A month includes 1 million requests, 50 million rows written and 5 GB stored. More storage is $0.20 for each GB-month. Each person and each agent also has one object for its list of rooms. A new, changed or deleted message makes one request to the object of each member of the room, at most two each second for each member: the changes of half a second go out together. |
 | **The directory** | D1, in Workers Paid. A month includes 25 billion rows read, 50 million rows written and 5 GB. |
 | **Files and raw mail** | 10 GB free in [R2](https://developers.cloudflare.com/r2/pricing/), then $0.015 for each GB-month. Downloads have no egress charge. |
@@ -139,24 +139,24 @@ November 2026.
 | **Outbound mail** | 3,000 messages a month in Workers Paid, then $0.35 for each 1,000, with [Email Service](https://developers.cloudflare.com/email-service/platform/pricing/). Email Service is in public beta. |
 | **Your domain** | The price of your registrar. |
 
-Soldock has no measurement yet of the use of one person. Thus the table below shows the fixed price
+Asterra has no measurement yet of the use of one person. Thus the table below shows the fixed price
 of the account, and your use above the included amounts adds to it. Google Workspace is with an
 annual commitment.
 
-| | Business Starter | Business Standard | Business Plus | Soldock |
+| | Business Starter | Business Standard | Business Plus | Asterra |
 |---|---|---|---|---|
 | **25 people, for a year** | $2,100 | $4,200 | $6,600 | $60 for Workers Paid, plus use above the included amounts |
 | **100 people, for a year** | $8,400 | $16,800 | $26,400 | $60 for Workers Paid, plus use above the included amounts |
 
 This is a comparison of the price only. Google Workspace gives more products, more storage and
-support for that price. Soldock also needs your time to operate it. The monthly price of Google
+support for that price. Asterra also needs your time to operate it. The monthly price of Google
 Workspace without a commitment is 20% higher: $8.40, $16.80 or $26.40.
 
 ## Get started
 
 ### Self-host on Cloudflare
 
-Soldock has no one-click deploy. GitHub Actions deploys the Worker from `main`, and no computer holds
+Asterra has no one-click deploy. GitHub Actions deploys the Worker from `main`, and no computer holds
 a Cloudflare token. The [self-hosting guide](docs/self-hosting.md) is a first draft. It describes
 the instance of this project, so use your own domains.
 
@@ -186,10 +186,10 @@ D1, R2, Queues, Durable Objects and Email Service.
 ```sh
 pnpm install
 pnpm build                                   # the web app, into apps/web/dist
-pnpm --filter @soldock/dock migrate:local    # the D1 migrations, into the local database
-pnpm --filter @soldock/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
+pnpm --filter @asterra/dock migrate:local    # the D1 migrations, into the local database
+pnpm --filter @asterra/dock dev --var SETUP_TOKEN:local-setup-token-0123456789abcdef   # http://localhost:8787
 
-# In a second terminal: the made-up Wrenfield Studio team does the setup and fills Soldock.
+# In a second terminal: the made-up Wrenfield Studio team does the setup and fills Asterra.
 SETUP_TOKEN=local-setup-token-0123456789abcdef pnpm seed
 ```
 
@@ -200,7 +200,7 @@ in as one of them. If the setup page shows first, select **Continue with the exi
 ## Built on Cloudflare
 
 - **One Worker.** [`apps/dock`](apps/dock/README.md) is the full backend. It also serves the web
-  app. Soldock uses no runtime service outside Cloudflare.
+  app. Asterra uses no runtime service outside Cloudflare.
 - **State lives with its owner.** Each mailbox, drive, document and chat room is its own
   [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database. D1
   holds the directory. R2 holds the files and the raw mail. A queue carries inbound mail.
@@ -220,7 +220,8 @@ in as one of them. If the setup page shows first, select **Continue with the exi
   setup and sign-in recovery.
 - [Agents](docs/agents.md): OAuth, API keys, the MCP endpoint, notifications for new mail, and
   Drive, Docs and Sheets for agents.
-- [Development](docs/development.md): how to run Soldock on your computer, sample data and tests.
+- [Development](docs/development.md): how to run Asterra on your computer, sample data and tests.
+- [Asterra logo](docs/README.md#asterra-logo) and its animated light and dark versions.
 - [`apps/dock`](apps/dock/README.md) and the README of each module: the design of the backend.
 - [`apps/web`](apps/web/README.md): the web app and its design.
 - [`CLAUDE.md`](CLAUDE.md): the rules for a contribution, by a person or by an agent.
@@ -231,9 +232,9 @@ The design of the web app follows [Ember](https://github.com/NYLLON-SOFTWARE/emb
 NYLLON SOFTWARE, which has the MIT license. The icons are from [Iconoir](https://iconoir.com), which
 has the MIT license.
 
-Google Workspace is a trademark of Google LLC. Soldock is not created by, affiliated with, or
+Google Workspace is a trademark of Google LLC. Asterra is not created by, affiliated with, or
 supported by Google LLC.
 
 ## License
 
-[MIT](LICENSE) © Jared Wray · [soldock.org](https://soldock.org)
+[MIT](LICENSE) © Jared Wray · [Asterra](https://soldock.org)

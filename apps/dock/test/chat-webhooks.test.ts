@@ -165,7 +165,7 @@ it("notifies all joined room kinds and later joins, without text, self notificat
 			data: {
 				webhook_id: webhook.id,
 				principal_id: bot.id,
-				uri: expect.stringMatching(/^soldock:\/\/chat\//),
+				uri: expect.stringMatching(/^asterra:\/\/chat\//),
 			},
 		});
 		const bytes = Uint8Array.from(atob(webhook.secret.slice(6)), (char) => char.charCodeAt(0));

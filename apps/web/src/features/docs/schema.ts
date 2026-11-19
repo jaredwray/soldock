@@ -8,7 +8,7 @@ import {
 	type DocImageNode,
 	type DocInline,
 	type DocMark,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { Fragment, type Mark, type Node, Schema, Slice } from "prosemirror-model";
 import { safeHref } from "../mail/richText.ts";
 

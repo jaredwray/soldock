@@ -1,4 +1,4 @@
-import type { Label, Mailbox } from "@soldock/contracts";
+import type { Label, Mailbox } from "@asterra/contracts";
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";

@@ -1,4 +1,4 @@
-import type { GroupMention } from "@soldock/contracts";
+import type { GroupMention } from "@asterra/contracts";
 import { chainCommands, liftEmptyBlock, newlineInCode, splitBlock, toggleMark } from "prosemirror-commands";
 import { redo, undo } from "prosemirror-history";
 import { InputRule, textblockTypeInputRule, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";

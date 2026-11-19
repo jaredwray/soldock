@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, chatSocketPath } from "@soldock/contracts";
+import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, chatSocketPath } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SOCKET_MAX_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {

@@ -1,9 +1,9 @@
 ---
 name: steward
-description: Repository conventions for driving Soldock pull requests to a mergeable state (CI failures, review comments, merge conflicts). Read before acting on PR events in this repo.
+description: Repository conventions for driving Asterra pull requests to a mergeable state (CI failures, review comments, merge conflicts). Read before acting on PR events in this repo.
 ---
 
-# Driving Soldock PRs
+# Driving Asterra PRs
 
 - **The CI gate is `pnpm verify`.** Reproduce failures locally with the same command before pushing a fix.
 - **Conflicts:** merge the base branch into the PR branch. Don't rebase branches that

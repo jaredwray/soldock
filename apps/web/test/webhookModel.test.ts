@@ -1,4 +1,4 @@
-import type { WebhookEndpoint } from "@soldock/contracts";
+import type { WebhookEndpoint } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	applyPlan,

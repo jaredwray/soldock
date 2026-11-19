@@ -71,7 +71,7 @@ jobs:
           # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
           package-manager-cache: false
       # Only the dock Worker, the SPA and the workspace packages that they use, and no secrets in this step.
-      - run: sfw pnpm install --frozen-lockfile --filter "@soldock/dock..." --filter "@soldock/web..."
+      - run: sfw pnpm install --frozen-lockfile --filter "@asterra/dock..." --filter "@asterra/web..."
 
       # The dock Worker serves apps/web/dist as its static assets.
       - name: Build the SPA (apps/web)

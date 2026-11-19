@@ -40,9 +40,9 @@ export const OAuthAuthorization = z.object({
 	untrusted: z.literal(true),
 	client: z.object({
 		id: z.string(),
-		/** The name that the client gave itself. Soldock does not check it. */
+		/** The name that the client gave itself. Asterra does not check it. */
 		name: z.string(),
-		/** The web page that the client gave for itself, or null. Soldock does not check it. */
+		/** The web page that the client gave for itself, or null. Asterra does not check it. */
 		uri: z.string().nullable(),
 	}),
 	/** The address that gets the authorization code. */

@@ -11,7 +11,7 @@ import {
 	type GroupMention,
 	type RoomKind,
 	type RoomRole,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import {
 	type ChatRoomState,
 	type ChatThreadState,

@@ -1,4 +1,4 @@
-import type { ChatRoom, Principal } from "@soldock/contracts";
+import type { ChatRoom, Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
@@ -35,7 +35,7 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 	const name = person?.display_name ?? null;
 
 	useEffect(() => {
-		document.title = `${name ?? "Profile"} – Soldock Chat`;
+		document.title = `${name ?? "Profile"} – Asterra Chat`;
 	}, [name]);
 
 	async function message(target: Principal) {
@@ -124,7 +124,7 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 						</div>
 					)}
 					<div className="setting-row">
-						<dt>In Soldock since</dt>
+						<dt>In Asterra since</dt>
 						<dd>
 							<time dateTime={person.created_at}>{dayLabel(person.created_at)}</time>
 						</dd>

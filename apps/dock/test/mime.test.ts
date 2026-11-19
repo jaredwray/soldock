@@ -36,7 +36,7 @@ describe("composeMessage", () => {
 				inReplyTo: "<ref-7@example.org>",
 				references,
 				attachments: [{ filename: "Übersicht 2026.pdf", mimeType: "application/pdf", content: pdf }],
-				headers: [["X-Soldock-Agent", "true"]],
+				headers: [["X-Asterra-Agent", "true"]],
 			}),
 		);
 		const parsed = await parse(raw);
@@ -57,7 +57,7 @@ describe("composeMessage", () => {
 		expect([...(attachment?.content ?? [])]).toEqual([...pdf]);
 		// Bcc never appears in the bytes that every recipient gets.
 		expect(raw).not.toMatch(/^bcc:/im);
-		expect(raw).toMatch(/^X-Soldock-Agent: true\r$/m);
+		expect(raw).toMatch(/^X-Asterra-Agent: true\r$/m);
 	});
 
 	// RFC 5322 allows 998 characters on a line. These inputs are all inside the operation's limits.

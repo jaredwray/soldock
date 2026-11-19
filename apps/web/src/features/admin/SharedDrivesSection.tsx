@@ -1,4 +1,4 @@
-import { type Principal, SHARED_DRIVE_LIMITS, type SharedDrive, type SharedDriveRole } from "@soldock/contracts";
+import { type Principal, SHARED_DRIVE_LIMITS, type SharedDrive, type SharedDriveRole } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

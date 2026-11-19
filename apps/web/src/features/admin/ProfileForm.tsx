@@ -1,4 +1,4 @@
-import type { InputOf, Principal } from "@soldock/contracts";
+import type { InputOf, Principal } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Select } from "../../lib/Select.tsx";

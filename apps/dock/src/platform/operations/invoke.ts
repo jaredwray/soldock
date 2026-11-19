@@ -4,7 +4,7 @@ import {
 	type OperationName,
 	type Operations,
 	type PrincipalKind,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { z } from "zod";
 import { audit } from "../log/log.ts";
 import { OperationError } from "./errors.ts";

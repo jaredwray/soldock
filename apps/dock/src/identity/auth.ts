@@ -1,4 +1,4 @@
-import { ALL_SCOPES, type Scope } from "@soldock/contracts";
+import { ALL_SCOPES, type Scope } from "@asterra/contracts";
 import { type Caller, sha256Hex } from "../platform/index.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";

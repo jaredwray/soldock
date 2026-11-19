@@ -1,4 +1,4 @@
-import { ChatBody } from "@soldock/contracts";
+import { ChatBody } from "@asterra/contracts";
 import { textToBody } from "./composerSchema.ts";
 import type { PendingMessage } from "./outbox.ts";
 

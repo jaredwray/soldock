@@ -8,7 +8,7 @@ import {
 	mentionDirectory,
 	mentionFits,
 	textParts,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { listPrincipals, type PrincipalRecord } from "../identity/index.ts";
 import { bodyText, checkedContent, groupMentions, type MessageContent, mentionsOf } from "./body.ts";
 

@@ -1,4 +1,4 @@
-import { DOC_IMAGE_TYPES, DOC_LIMITS, type DocImage, type DocImageType } from "@soldock/contracts";
+import { DOC_IMAGE_TYPES, DOC_LIMITS, type DocImage, type DocImageType } from "@asterra/contracts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, bytesToBase64 } from "../../lib/base64.ts";
 

@@ -65,7 +65,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   is never accepted, so a web page cannot drive MCP with a person's session. A request with a
   different `Origin` gets `403`.
 - A request without a valid token gets `401` with
-  `WWW-Authenticate: Bearer realm="soldock", resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp"`.
+  `WWW-Authenticate: Bearer realm="asterra", resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp"`.
   An MCP client starts OAuth from there (RFC 9728). When the request had a token, the header also has
   `error="invalid_token"`, so the client refreshes it. The OAuth server is in the
   [`identity`](../identity/README.md#oauth-for-agents) module.
@@ -97,17 +97,20 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 
 ## Resources
 
-The resource registry of [`@soldock/contracts`](../../../../packages/contracts/README.md) defines
+The resource registry of [`@asterra/contracts`](../../../../packages/contracts/README.md) defines
 each resource kind. An operation reads each resource, and an operation lists them. So a resource
 gives the same data as REST.
 
+New resource URIs use `asterra://`. Clients can still read or subscribe to a saved `soldock://` URI.
+If both schemes identify one subscription, the server uses the first URI in the request for its notifications.
+
 | Resource kind | URI template | Read | List |
 | --- | --- | --- | --- |
-| `mail.inbox` | `soldock://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
-| `chat.room` | `soldock://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
-| `chat.rooms` | `soldock://chat/rooms` | `chat.list_rooms`, the first 100 rooms of the caller | One resource for each caller that can call `chat.list_rooms` |
-| `drive.item` | `soldock://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
-| `drive.space` | `soldock://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
+| `mail.inbox` | `asterra://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
+| `chat.room` | `asterra://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
+| `chat.rooms` | `asterra://chat/rooms` | `chat.list_rooms`, the first 100 rooms of the caller | One resource for each caller that can call `chat.list_rooms` |
+| `drive.item` | `asterra://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
+| `drive.space` | `asterra://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
 
 - A credential sees a resource kind only when it can call the read operation and the list
   operation. A key without `mail.read` sees no inbox.

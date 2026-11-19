@@ -9,12 +9,12 @@ function builtIndex(entry: string): string {
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<title>Soldock</title>
+		<title>Asterra</title>
 		<script type="module" crossorigin src="${entry}"></script>
 		<link rel="modulepreload" crossorigin href="/assets/routes-C5N99zaL.js">
 		<link rel="stylesheet" crossorigin href="/assets/index-q_i1prC3.css">
 	</head>
-	<body><div id="root" data-soldock-shell></div></body>
+	<body><div id="root" data-asterra-shell></div></body>
 </html>`;
 }
 
@@ -40,7 +40,7 @@ describe("a new version of the SPA", () => {
 			async () => new Response(builtIndex("/assets/index-Dn3wV9xQ.js"), { status: 503 }),
 			false,
 		],
-		["the answer is not a page of Soldock", async () => new Response("<html><body>Bad gateway</body></html>"), false],
+		["the answer is not a page of Asterra", async () => new Response("<html><body>Bad gateway</body></html>"), false],
 	])("when %s gives %s", async (_case, answer, expected) => {
 		vi.stubGlobal("fetch", vi.fn(answer));
 		expect(await newVersionAvailable(CURRENT)).toBe(expected);

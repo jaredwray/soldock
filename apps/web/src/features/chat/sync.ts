@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 
 // The sync of one open room. It has no DOM and no network of its own, so apps/web/test checks it.
 

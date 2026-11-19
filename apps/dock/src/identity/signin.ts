@@ -1,4 +1,4 @@
-import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@soldock/contracts";
+import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@asterra/contracts";
 import { verifyPassword } from "./password.ts";
 import { createSessionIf, type PrincipalRecord, resolveAddress } from "./store.ts";
 import { matchTotp } from "./totp.ts";

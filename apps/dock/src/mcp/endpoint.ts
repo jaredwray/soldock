@@ -157,7 +157,7 @@ export function mountMcp(
 			const tokenError = c.req.header("authorization") === undefined ? "" : ', error="invalid_token"';
 			response.headers.set(
 				"www-authenticate",
-				`Bearer realm="soldock", resource_metadata="${protectedResourceMetadataUrl(c.req.url)}"${tokenError}`,
+				`Bearer realm="asterra", resource_metadata="${protectedResourceMetadataUrl(c.req.url)}"${tokenError}`,
 			);
 			return response;
 		}

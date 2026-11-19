@@ -1,4 +1,4 @@
-import type { DocImage } from "@soldock/contracts";
+import type { DocImage } from "@asterra/contracts";
 import { closeHistory } from "prosemirror-history";
 import { Fragment, type Node } from "prosemirror-model";
 import { type Command, type EditorState, NodeSelection, Selection, type Transaction } from "prosemirror-state";

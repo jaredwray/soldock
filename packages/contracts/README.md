@@ -1,4 +1,4 @@
-# `@soldock/contracts`
+# `@asterra/contracts`
 
 > Status: **started**. The registry holds the Mail, Drive, Docs, Sheets, Chat, account and directory
 > operations, and the resource kinds of MCP. Events and the SDK build come later.

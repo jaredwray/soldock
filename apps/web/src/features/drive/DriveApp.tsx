@@ -1,5 +1,5 @@
 import "./drive.css";
-import type { DriveItem } from "@soldock/contracts";
+import type { DriveItem } from "@asterra/contracts";
 import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
@@ -275,7 +275,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const bulk = bulkActions(selectedItems, roles);
 
 	useEffect(() => {
-		document.title = `${title} – Soldock`;
+		document.title = `${title} – Asterra`;
 	}, [title]);
 
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });

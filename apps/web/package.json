@@ -1,8 +1,8 @@
 {
-	"name": "@soldock/web",
+	"name": "@asterra/web",
 	"version": "0.0.0",
 	"private": true,
-	"description": "The Soldock web app: a React single-page app that dock serves as static assets.",
+	"description": "The Asterra web app: a React single-page app that dock serves as static assets.",
 	"license": "MIT",
 	"type": "module",
 	"scripts": {
@@ -11,7 +11,7 @@
 		"typecheck": "tsc -p tsconfig.json"
 	},
 	"dependencies": {
-		"@soldock/contracts": "workspace:*",
+		"@asterra/contracts": "workspace:*",
 		"prosemirror-commands": "1.7.2",
 		"prosemirror-dropcursor": "1.8.2",
 		"prosemirror-history": "1.5.1",

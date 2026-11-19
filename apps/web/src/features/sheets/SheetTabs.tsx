@@ -1,4 +1,4 @@
-import { SHEET_LIMITS, type Tab } from "@soldock/contracts";
+import { SHEET_LIMITS, type Tab } from "@asterra/contracts";
 import { type CSSProperties, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

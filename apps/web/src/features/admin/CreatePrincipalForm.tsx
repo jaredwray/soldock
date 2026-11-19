@@ -10,7 +10,7 @@ import {
 	type Principal,
 	SCOPES,
 	type Scope,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";

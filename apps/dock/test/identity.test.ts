@@ -1,6 +1,6 @@
 import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ALL_SCOPES, ApiError } from "@soldock/contracts";
+import { ALL_SCOPES, ApiError } from "@asterra/contracts";
 import { describe, expect, it, vi } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
@@ -363,7 +363,7 @@ describe("credentials", () => {
 		for (const authorization of [undefined, "Bearer sdk_not-a-key", "Basic abc"]) {
 			const res = await request("/api/v1/account", authorization ? { headers: { authorization } } : {});
 			expect(res.status).toBe(401);
-			expect(res.headers.get("www-authenticate")).toBe('Bearer realm="soldock"');
+			expect(res.headers.get("www-authenticate")).toBe('Bearer realm="asterra"');
 		}
 	});
 
@@ -733,11 +733,11 @@ describe("two-step verification", () => {
 		expect(first.secret).toMatch(/^[A-Z2-7]{32}$/);
 		const uri = new URL(first.otpauth_uri);
 		expect(`${uri.protocol}//${uri.host}${decodeURIComponent(uri.pathname)}`).toBe(
-			"otpauth://totp/Soldock:owner@dock.test",
+			"otpauth://totp/Asterra:owner@dock.test",
 		);
 		expect(Object.fromEntries(uri.searchParams)).toEqual({
 			secret: first.secret,
-			issuer: "Soldock",
+			issuer: "Asterra",
 			algorithm: "SHA1",
 			digits: "6",
 			period: "30",

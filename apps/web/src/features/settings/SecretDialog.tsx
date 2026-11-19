@@ -1,4 +1,4 @@
-import type { CreatedApiKey, CreatedWebhookEndpoint } from "@soldock/contracts";
+import type { CreatedApiKey, CreatedWebhookEndpoint } from "@asterra/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";

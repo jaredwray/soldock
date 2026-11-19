@@ -54,14 +54,14 @@ describe("the quick reactions of a person", () => {
 				"🚀": { count: 2, at: 1 },
 			}),
 			[`soldock:chat-emoji:${BOB}`]: JSON.stringify({ "🎉": { count: 1, at: 1 } }),
-			"soldock:other": "stays",
+			"asterra:other": "stays",
 		});
 		expect(frequentEmoji(storage, ADA)).toEqual(["🚀", "👍", "❤️"]);
 		countEmoji(storage, ADA, "not an emoji");
 		expect(frequentEmoji(storage, ADA)).toEqual(["🚀", "👍", "❤️"]);
 		forgetOtherEmoji(storage, ADA);
-		expect([...storage.items.keys()].sort()).toEqual([`soldock:chat-emoji:${ADA}`, "soldock:other"]);
+		expect([...storage.items.keys()].sort()).toEqual(["asterra:other", `soldock:chat-emoji:${ADA}`]);
 		forgetOtherEmoji(storage, null);
-		expect([...storage.items.keys()]).toEqual(["soldock:other"]);
+		expect([...storage.items.keys()]).toEqual(["asterra:other"]);
 	});
 });

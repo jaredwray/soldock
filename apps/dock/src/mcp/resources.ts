@@ -6,7 +6,7 @@ import {
 	type ResourceDefinition,
 	resourceList,
 	UNTRUSTED_NOTICE,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";
 import { canCall, hasUntrusted } from "./tools.ts";
@@ -30,6 +30,11 @@ function describe(resource: ResourceDefinition): string {
 	return `${resource.description} ${resource.updates}`;
 }
 
+/** A saved link can use the scheme from before the rename. */
+export function canonicalResourceUri(uri: string): string {
+	return uri.replace(/^soldock:\/\//, "asterra://");
+}
+
 /**
  * The resource of a URI, or null. The URI must match a template of a resource kind that the
  * credential can read, and the read input from its variables must be valid. Only the canonical form
@@ -39,11 +44,12 @@ function describe(resource: ResourceDefinition): string {
  */
 export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource | null {
 	if (typeof uri !== "string" || uri.length > MAX_URI_CHARS) return null;
+	const canonical = canonicalResourceUri(uri);
 	for (const resource of resourceList) {
 		if (!canRead(caller, resource)) continue;
-		const vars = matchTemplate(resource.uriTemplate, uri);
+		const vars = matchTemplate(resource.uriTemplate, canonical);
 		if (!vars) continue;
-		if (expandTemplate(resource.uriTemplate, vars) !== uri) return null;
+		if (expandTemplate(resource.uriTemplate, vars) !== canonical) return null;
 		const input = operations[resource.read.operation].input.safeParse(resource.read.input(vars));
 		return input.success ? { uri, resource, vars } : null;
 	}

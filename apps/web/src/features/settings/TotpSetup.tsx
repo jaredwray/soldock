@@ -1,4 +1,4 @@
-import { TOTP_DIGITS } from "@soldock/contracts";
+import { TOTP_DIGITS } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { QrCode } from "../../lib/QrCode.tsx";

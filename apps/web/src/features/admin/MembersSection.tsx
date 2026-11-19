@@ -1,4 +1,4 @@
-import type { CreatedApiKey, Principal } from "@soldock/contracts";
+import type { CreatedApiKey, Principal } from "@asterra/contracts";
 import { useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";

@@ -1,4 +1,4 @@
-import type { DriveItem } from "@soldock/contracts";
+import type { DriveItem } from "@asterra/contracts";
 import { documentStub } from "../collab/index.ts";
 import { type CallContext, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { audit, OperationError, sha256Hex } from "../platform/index.ts";

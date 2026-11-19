@@ -1,6 +1,6 @@
 import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ApiError, TEAM_MAILBOX_LIMITS } from "@soldock/contracts";
+import { ApiError, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
 import {
@@ -393,7 +393,7 @@ describe("mail in a team mailbox", () => {
 				address: "cy@customer.example",
 				kind: "external",
 				status: "failed",
-				error: "The agent does not exist, so Soldock does not send this message.",
+				error: "The agent does not exist, so Asterra does not send this message.",
 			},
 		]);
 	});

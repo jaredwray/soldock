@@ -1,4 +1,4 @@
-import { type Cell, type CellFormat, type FormatPatch, patchFormat, SHEET_LIMITS } from "@soldock/contracts";
+import { type Cell, type CellFormat, type FormatPatch, patchFormat, SHEET_LIMITS } from "@asterra/contracts";
 import { cellName, parseRange } from "./a1.ts";
 
 // The formats of cells on the page: the formats from the server with the changes that wait on top,

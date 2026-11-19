@@ -1,4 +1,4 @@
-# `@soldock/cli` (`soldock`)
+# `@asterra/cli` (`asterra`)
 
 > Status: **planned**. The first command is `provision`. Later commands are `restore`, `dr rebuild` and `init`.
 

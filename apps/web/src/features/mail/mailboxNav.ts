@@ -1,4 +1,4 @@
-import type { Mailbox } from "@soldock/contracts";
+import type { Mailbox } from "@asterra/contracts";
 import { isAgentMailbox } from "../../routes.ts";
 
 /** One mailbox in the sidebar. Under it, the sidebar shows its folders and labels when it is expanded. */

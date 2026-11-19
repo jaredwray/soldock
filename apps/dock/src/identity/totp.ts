@@ -1,4 +1,4 @@
-import { TOTP_DIGITS, TOTP_PERIOD_SECONDS } from "@soldock/contracts";
+import { TOTP_DIGITS, TOTP_PERIOD_SECONDS } from "@asterra/contracts";
 import { sameSecret } from "../platform/index.ts";
 
 // Time-based one-time passwords (RFC 6238) with HMAC-SHA1, 6 digits and a 30-second step: the
@@ -96,7 +96,7 @@ export async function matchTotp(
 }
 
 /** The URI that an authenticator app reads from a QR code. The label names the issuer and the address. */
-export function otpauthUri(secret: string, address: string, issuer = "Soldock"): string {
+export function otpauthUri(secret: string, address: string, issuer = "Asterra"): string {
 	const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(address)}`;
 	const params = new URLSearchParams({
 		secret,

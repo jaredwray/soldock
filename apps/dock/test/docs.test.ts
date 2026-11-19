@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { DOC_LIMITS, type DocContent } from "@soldock/contracts";
+import { DOC_LIMITS, type DocContent } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type Actor, codeOf, drainDrive, seedOrg } from "./helpers.ts";
 

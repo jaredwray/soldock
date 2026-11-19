@@ -3,7 +3,7 @@
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
 > read and send, in the own mailbox of a principal and in team mailboxes. Owners and admins can read
 > the mailbox of each agent. An MCP client can subscribe to an inbox and get a notification for new
-> mail. A [webhook](#webhooks) sends a signed POST to a URL outside Soldock for new mail. Keep this
+> mail. A [webhook](#webhooks) sends a signed POST to a URL outside Asterra for new mail. Keep this
 > README current as the module grows. It is the module's contract.
 
 | | |
@@ -72,7 +72,7 @@ A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part
   time). `sent_by` is in the stored message only. The mail that leaves has no header that names the member.
 - The outbound policy of an agent applies to each send of that agent, also from a team mailbox. So
   a team mailbox never lets an agent reach more recipients. Mail from an agent keeps the header
-  `X-Soldock-Agent: true`.
+  `X-Asterra-Agent: true`.
 - In a team mailbox, each idempotency key of `mail.send` belongs to its caller (the stored key has
   the principal id in front). The key of one member cannot return or stop the send of a different member.
 - `from:me` and `to:me` in a search mean the address of the mailbox: in a team mailbox, the team address.
@@ -242,7 +242,7 @@ web app uses it to complete an address while the person types it.
 - The migration that adds the table fills it from the sent mail that exists, with the same rules.
   The migration runs when the object starts. It reads each message, so a mailbox with very much mail
   starts more slowly one time.
-- A mistyped address stays a suggestion. No operation removes a suggestion yet, and Soldock does not
+- A mistyped address stays a suggestion. No operation removes a suggestion yet, and Asterra does not
   read bounces yet.
 
 ## Outbound
@@ -286,13 +286,14 @@ A directory reset pauses all old mailboxes and waits for their active deliveries
 The pause marker survives object eviction. A paused mailbox refuses new sends and starts no further deliveries.
 After the reset, setup cancels the old outboxes. A failed directory transaction resumes the mailboxes.
 
-Agent mail carries `X-Soldock-Agent: true`. Mail to yourself is stored once, with `SENT` and
+Agent mail carries `X-Asterra-Agent: true`. It also carries `X-Soldock-Agent: true` for existing mail filters.
+Mail to yourself is stored once, with `SENT` and
 `INBOX`, and the label of its [tag](#tags).
 
 ## Notifications of new mail
 
 The inbox of each mailbox is the MCP resource `mail.inbox`, with the URI
-`soldock://mail/<mailbox id>/inbox`. A read of it runs `mail.list_threads` with `in:inbox`. An MCP
+`asterra://mail/<mailbox id>/inbox`. A read of it runs `mail.list_threads` with `in:inbox`. An MCP
 client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 ([`mcp`](../mcp/README.md#subscriptions)).
 
@@ -319,7 +320,7 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 Mail uses the [shared webhook module](../webhooks/README.md) for subscription storage, signatures and queue delivery.
 Chat has separate subscriptions and events. Existing mail subscriptions keep their behavior.
 
-A webhook sends a signed POST to a URL outside Soldock when new mail arrives in the inbox of a
+A webhook sends a signed POST to a URL outside Asterra when new mail arrives in the inbox of a
 mailbox. It is for a client that cannot keep a `subscriptions/listen` stream open, for example a bot
 on a server, a REST client or an MCP client of an older protocol.
 
@@ -351,11 +352,11 @@ on a server, a REST client or an MCP client of an older protocol.
 
 Some receivers accept a POST only with a token, for example n8n, Zapier or the endpoint of a bot.
 
-- `auth_key`: Soldock sends it on each POST as `Authorization: Bearer <key>`. Printable ASCII
+- `auth_key`: Asterra sends it on each POST as `Authorization: Bearer <key>`. Printable ASCII
   without spaces, at most 1,024 characters.
 - `header`: one more header, `{ "name", "value" }`, for example `X-Api-Key`. The value is printable
   ASCII, at most 2,048 characters, so it cannot add a line break or a second header.
-- The header cannot use a name that Soldock or the HTTP layer sets (`content-type`, `host`,
+- The header cannot use a name that Asterra or the HTTP layer sets (`content-type`, `host`,
   `user-agent`, the encodings and the hop-by-hop headers), a name that claims a client address
   (`x-real-ip`, `true-client-ip`, `via` and others) or another method (`x-http-method-override`),
   or the prefixes `webhook-`, `cf-`, `proxy-`, `sec-` and `x-forwarded-` (`WEBHOOK_RESERVED_HEADERS`
@@ -365,7 +366,7 @@ Some receivers accept a POST only with a token, for example n8n, Zapier or the e
 - The key and the header value are write-only. A result shows `has_auth_key` and `header_name` only.
   D1 keeps them in clear text (migration `0010`), because each POST needs them, as the signing
   secret. No log line or audit line holds them.
-- The headers that Soldock sets go after the custom header, so they always win.
+- The headers that Asterra sets go after the custom header, so they always win.
 - The signature does not cover these headers: Standard Webhooks signs the id, the time and the body.
 
 ### Delivery
@@ -385,7 +386,7 @@ Some receivers accept a POST only with a token, for example n8n, Zapier or the e
    30 minutes. After the fifth attempt the event failed. After 5 failed events in a row, the webhook
    is disabled (`failures`).
 
-- The attempt is in the job, not in the queue delivery count. So a failure of Soldock itself, such
+- The attempt is in the job, not in the queue delivery count. So a failure of Asterra itself, such
   as D1, runs the same job again and uses no attempt of the receiver. After 10 such failures the
   queue moves the job to `soldock-webhooks-dlq`.
 - While a failed POST of one event waits for its retry (`retry_until`, `retry_event_id`), a different
@@ -402,7 +403,7 @@ and mailbox checks of REST:
 {
   "type": "mail.inbox.updated",
   "timestamp": "2026-11-14T17:40:18.000Z",
-  "data": { "webhook_id": "whk_…", "mailbox_id": "prn_…", "uri": "soldock://mail/prn_…/inbox" }
+  "data": { "webhook_id": "whk_…", "mailbox_id": "prn_…", "uri": "asterra://mail/prn_…/inbox" }
 }
 ```
 

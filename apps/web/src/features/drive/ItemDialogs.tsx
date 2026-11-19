@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type DriveItem } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";

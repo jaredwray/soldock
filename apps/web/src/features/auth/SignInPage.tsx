@@ -1,4 +1,4 @@
-import { EmailAddress, TOTP_DIGITS } from "@soldock/contracts";
+import { EmailAddress, TOTP_DIGITS } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { createSession, signInErrorMessage } from "./auth.ts";
@@ -10,7 +10,7 @@ interface SignInPageProps {
 }
 
 /**
- * Sign-in with the Soldock address and the password. When the person has two-step verification, a
+ * Sign-in with the Asterra address and the password. When the person has two-step verification, a
  * second step asks for the code from the authenticator app, and the page sends the password again
  * with the code. The password stays in memory only for this page.
  */
@@ -35,7 +35,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 	}, [focusRequest, busy]);
 
 	useEffect(() => {
-		document.title = "Sign in – Soldock";
+		document.title = "Sign in – Asterra";
 	}, []);
 
 	useEffect(() => {
@@ -45,7 +45,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 	async function submitPassword(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!EmailAddress.safeParse(address).success) {
-			setError("Enter your Soldock address, such as ada@example.com.");
+			setError("Enter your Asterra address, such as ada@example.com.");
 			setFocusRequest({ field: "address" });
 			return;
 		}
@@ -117,11 +117,11 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 					</div>
 					<h1 className="auth-title">Sign in</h1>
 					{step === "password" ? (
-						<p className="auth-subtitle">Use your Soldock address and your password.</p>
+						<p className="auth-subtitle">Use your Asterra address and your password.</p>
 					) : (
 						<p className="auth-subtitle">
 							Two-step verification is on for <strong>{address.trim()}</strong>. Open your authenticator app and enter
-							the code for Soldock.
+							the code for Asterra.
 						</p>
 					)}
 				</header>

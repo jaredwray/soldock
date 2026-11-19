@@ -1,8 +1,8 @@
 @AGENTS.md
 
-# Soldock: guide for agents (and humans)
+# Asterra: guide for agents (and humans)
 
-Soldock is an open-source Google Workspace replacement (Mail, Meet, Chat, Drive, Docs, Sheets, Slides)
+Asterra is an open-source Google Workspace replacement (Mail, Meet, Chat, Drive, Docs, Sheets, Slides)
 that runs **only on Cloudflare**, is served from **one hostname**, and treats **AI agents as
 first-class users** through a full MCP endpoint. Read [`README.md`](README.md) for the big
 picture.
@@ -54,8 +54,8 @@ pnpm test               # Vitest (all projects)
 | `packages/contracts/` | The operation registry: schemas, scopes, errors, events |
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
 | `tools/licenses/`, `tools/budgets/` | License policy check, Worker bundle and startup budgets |
-| `tools/seed/` | `pnpm seed`: sample data for a local Soldock (a made-up organization) |
-| `tools/cli/`, `tools/load/` | `soldock` operator CLI (provision, init, backup, restore) and load scenarios |
+| `tools/seed/` | `pnpm seed`: sample data for a local Asterra instance (a made-up organization) |
+| `tools/cli/`, `tools/load/` | `asterra` operator CLI (provision, init, backup, restore) and load scenarios |
 | `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
 | `spikes/` | Spike harnesses that need live Cloudflare credentials, deleted when the spike is done |
 | `docs/` | User, admin, self-hosting, agent and security docs |

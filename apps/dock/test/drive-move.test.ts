@@ -1,6 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ApiError, SHARED_DRIVE_LIMITS } from "@soldock/contracts";
+import { ApiError, SHARED_DRIVE_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,

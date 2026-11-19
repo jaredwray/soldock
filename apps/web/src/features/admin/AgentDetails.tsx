@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, type OutboundPolicy, type Principal } from "@soldock/contracts";
+import { AGENT_SCOPES, type OutboundPolicy, type Principal } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";

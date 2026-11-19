@@ -3,7 +3,7 @@ import { type AnchorHTMLAttributes, type MouseEvent, type Ref, useSyncExternalSt
 // A small router on the History API. The dock Worker serves index.html for each app path, so a
 // deep link works on reload.
 
-const NAVIGATE_EVENT = "soldock:navigate";
+const NAVIGATE_EVENT = "asterra:navigate";
 
 function subscribe(callback: () => void): () => void {
 	window.addEventListener("popstate", callback);

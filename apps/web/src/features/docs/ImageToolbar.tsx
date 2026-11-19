@@ -1,4 +1,4 @@
-import type { DocImageLayout } from "@soldock/contracts";
+import type { DocImageLayout } from "@asterra/contracts";
 import { type KeyboardEvent, useRef, useState } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";

@@ -1,4 +1,4 @@
-import { MAIL_LIMITS, type OutputOf } from "@soldock/contracts";
+import { MAIL_LIMITS, type OutputOf } from "@asterra/contracts";
 import type { Node } from "prosemirror-model";
 import { type ChangeEvent, type FormEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";

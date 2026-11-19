@@ -2,7 +2,7 @@
 // The top level is production. `env.development` is the development Worker at work.soldock.org, which
 // deploy-development.yaml deploys on each push to main. The dock Worker has no other
 // deployment environments. test/config.test.ts checks that both declare the same bindings.
-// After editing bindings, run `pnpm --filter @soldock/dock types` and commit worker-configuration.d.ts.
+// After editing bindings, run `pnpm --filter @asterra/dock types` and commit worker-configuration.d.ts.
 // Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -52,7 +52,7 @@
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
 	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
 	// A MailboxDO puts each webhook event on soldock-webhooks. The consumer makes one job for each webhook
-	// and sends its POST. The consumer retries a POST by itself, so max_retries counts failures of Soldock.
+	// and sends its POST. The consumer retries a POST by itself, so max_retries counts failures of Asterra.
 	"queues": {
 		"producers": [
 			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },

@@ -6,7 +6,7 @@ import {
 	operationList,
 	toolName,
 	UNTRUSTED_NOTICE,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { z } from "zod";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";

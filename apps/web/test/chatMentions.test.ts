@@ -1,4 +1,4 @@
-import { CHAT_LIMITS } from "@soldock/contracts";
+import { CHAT_LIMITS } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	canMentionGroups,

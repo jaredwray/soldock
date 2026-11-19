@@ -1,4 +1,4 @@
-import type { Label, ThreadSummary } from "@soldock/contracts";
+import type { Label, ThreadSummary } from "@asterra/contracts";
 import { useEffect, useRef } from "react";
 import { participantsLabel, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";

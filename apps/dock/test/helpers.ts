@@ -15,7 +15,7 @@ import {
 	type InputOf,
 	type OperationName,
 	type OutputOf,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 import { expect, vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";

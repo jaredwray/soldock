@@ -1,4 +1,4 @@
-import { SHEET_LIMITS } from "@soldock/contracts";
+import { SHEET_LIMITS } from "@asterra/contracts";
 
 // Cells in A1 form. A position has a row and a column that start at 0: A1 is row 0, column 0.
 

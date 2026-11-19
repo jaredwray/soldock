@@ -1,4 +1,4 @@
-import { SHEET_LIMITS } from "@soldock/contracts";
+import { SHEET_LIMITS } from "@asterra/contracts";
 import type { CellPos } from "./a1.ts";
 
 // The selection of the grid, and the size of the grid that the page shows.

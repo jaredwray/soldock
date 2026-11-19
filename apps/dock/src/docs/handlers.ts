@@ -1,4 +1,4 @@
-import { DOC_LIMITS, DocContent, type DocImage, type OperationName } from "@soldock/contracts";
+import { DOC_LIMITS, DocContent, type DocImage, type OperationName } from "@asterra/contracts";
 import { z } from "zod";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import {
@@ -217,7 +217,7 @@ async function download(call: CallContext, address: string): Promise<Uint8Array>
 			const response = await fetch(url, {
 				redirect: "manual",
 				signal,
-				headers: { accept: "image/png, image/jpeg, image/gif, image/webp", "user-agent": "Soldock" },
+				headers: { accept: "image/png, image/jpeg, image/gif, image/webp", "user-agent": "Asterra" },
 			});
 			if (response.status >= 300 && response.status < 400) {
 				await response.body?.cancel();

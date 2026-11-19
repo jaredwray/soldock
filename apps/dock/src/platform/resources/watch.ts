@@ -1,4 +1,4 @@
-import type { ResourceName } from "@soldock/contracts";
+import type { ResourceName } from "@asterra/contracts";
 
 /** What a change feed tells its listener. */
 export interface WatchListener {

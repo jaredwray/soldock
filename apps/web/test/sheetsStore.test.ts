@@ -1,4 +1,4 @@
-import { ApiError, type Cell, type DriveItem, SHEET_LIMITS, type Tab } from "@soldock/contracts";
+import { ApiError, type Cell, type DriveItem, SHEET_LIMITS, type Tab } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import type { CellChange } from "../src/features/sheets/cells.ts";
 import { applyFormatChanges, CLEAR_FORMAT, type FormatChange, formatsOf } from "../src/features/sheets/formats.ts";

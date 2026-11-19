@@ -92,7 +92,7 @@ function segments(pathname: string): string[] | null {
 }
 
 export function parseRoute(location: string): Route {
-	const url = new URL(location, "http://soldock.invalid");
+	const url = new URL(location, "http://asterra.invalid");
 	const parts = segments(url.pathname);
 	if (parts === null) return { page: "not-found" };
 	const [first, second, third, fourth] = parts;

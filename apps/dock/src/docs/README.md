@@ -28,7 +28,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - A doc is a Drive item of the kind `doc`. The [`drive`](../drive/README.md) module owns the item:
   its name, its folder, the access, the trash and the search index.
 - The content is a tree of blocks in the JSON form of ProseMirror (`DocContent` in
-  `@soldock/contracts`). It is data, never HTML, so no script and no style can be in it.
+  `@asterra/contracts`). It is data, never HTML, so no script and no style can be in it.
   - Blocks: `paragraph`, `heading` (level 1 to 3), `bullet_list`, `ordered_list`, `list_item`,
     `blockquote`, `code_block` and `horizontal_rule`. Inline: `text`, `hard_break` and `image`.
   - Marks: `strong`, `em`, `underline`, `strike`, `code` and `link`. A link is an absolute `http`,

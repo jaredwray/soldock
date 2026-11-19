@@ -81,6 +81,6 @@ jobs:
       - name: Build the SPA (apps/web)
         run: pnpm build
       - name: Install Chromium for Playwright
-        run: pnpm --filter @soldock/e2e exec playwright install --with-deps chromium
+        run: pnpm --filter @asterra/e2e exec playwright install --with-deps chromium
       - name: End-to-end tests (Playwright, against the built Worker in wrangler dev)
         run: pnpm e2e

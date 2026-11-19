@@ -1,4 +1,4 @@
-import type { DriveItem } from "@soldock/contracts";
+import type { DriveItem } from "@asterra/contracts";
 import type { DragEvent } from "react";
 import { formatBytes, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";

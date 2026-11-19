@@ -1,4 +1,4 @@
-# `@soldock/ui`
+# `@asterra/ui`
 
 > Status: **planned** — not created yet.
 

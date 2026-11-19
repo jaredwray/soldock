@@ -1,4 +1,4 @@
-import { DRIVE_LIMITS, type DriveItem, operations } from "@soldock/contracts";
+import { DRIVE_LIMITS, type DriveItem, operations } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	backPath,

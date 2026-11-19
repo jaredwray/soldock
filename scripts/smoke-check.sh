@@ -3,7 +3,7 @@
 # workerd tests can't reach. The Playwright suite will replace this check.
 #
 # Usage: scripts/smoke-check.sh <base-url>
-# Example: scripts/smoke-check.sh http://localhost:8787 (after `pnpm --filter @soldock/dock dev`)
+# Example: scripts/smoke-check.sh http://localhost:8787 (after `pnpm --filter @asterra/dock dev`)
 set -euo pipefail
 
 base="${1:?usage: scripts/smoke-check.sh <base-url>}"
@@ -79,10 +79,10 @@ fi
 
 # A navigation to an app route must get the shell (index.html) from the assets router.
 result=$(navigate /mail)
-if [[ "$result" == "200 text/html"* ]] && grep -q "data-soldock-shell" "$page"; then
+if [[ "$result" == "200 text/html"* ]] && grep -q "data-asterra-shell" "$page"; then
 	pass "navigation to /mail returns the shell"
 else
-	fail "navigation to /mail returned \"$result\" without the shell (data-soldock-shell)"
+	fail "navigation to /mail returned \"$result\" without the shell (data-asterra-shell)"
 fi
 
 if ((failures > 0)); then

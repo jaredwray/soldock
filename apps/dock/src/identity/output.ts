@@ -1,4 +1,4 @@
-import type { ApiKey, Principal } from "@soldock/contracts";
+import type { ApiKey, Principal } from "@asterra/contracts";
 import type { ApiKeyRecord, PrincipalRecord } from "./store.ts";
 
 export function toPrincipalOutput(record: PrincipalRecord): Principal {

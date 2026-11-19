@@ -5,7 +5,7 @@ import {
 	type WebhookDomain,
 	type WebhookEndpoint,
 	type WebhookEvent,
-} from "@soldock/contracts";
+} from "@asterra/contracts";
 
 export type { WebhookDomain };
 

@@ -42,7 +42,7 @@ export function parseSendRequest(body: unknown): SendRequest {
 /** A Message-ID in the sender's domain, unique for the run, the recipient and the message. */
 export function messageId(runId: string, label: string, recipientIndex: number, from: string): string {
 	const domain = from.slice(from.lastIndexOf("@") + 1);
-	return `<soldock-spike-${runId}-${recipientIndex}-${label}@${domain}>`;
+	return `<asterra-spike-${runId}-${recipientIndex}-${label}@${domain}>`;
 }
 
 /** Builds a plain-text RFC 5322 message with CRLF line ends. Refuses CR or LF in a header value. */

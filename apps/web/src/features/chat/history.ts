@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@soldock/contracts";
+import type { ChatMessage } from "@asterra/contracts";
 
 // The part of the history of one room that the page keeps. It has no DOM and no network, so
 // apps/web/test checks it.

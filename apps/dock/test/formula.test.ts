@@ -1,4 +1,4 @@
-import { SHEET_LIMITS } from "@soldock/contracts";
+import { SHEET_LIMITS } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	cellName,

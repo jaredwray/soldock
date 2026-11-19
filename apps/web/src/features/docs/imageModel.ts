@@ -1,4 +1,4 @@
-import { DOC_LIMITS, type DocImageCrop, type DocImageLayout } from "@soldock/contracts";
+import { DOC_LIMITS, type DocImageCrop, type DocImageLayout } from "@asterra/contracts";
 
 // The geometry of an image in a doc: its shown size, a resize with a handle, and a crop. Each function
 // works on numbers only, so the Node tests can run them without a DOM.

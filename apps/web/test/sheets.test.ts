@@ -1,4 +1,4 @@
-import { type Cell, SHEET_LIMITS } from "@soldock/contracts";
+import { type Cell, SHEET_LIMITS } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { cellName, columnName, parseCell } from "../src/features/sheets/a1.ts";
 import { autoSum } from "../src/features/sheets/autosum.ts";
