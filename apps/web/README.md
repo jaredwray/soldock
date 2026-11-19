@@ -838,14 +838,29 @@ MCP clients. The app has no UI-only path.
         that part. The answer of the own call sets its part, unless an own reply changed it during the
         call. Then the order of the two on the server is not known, so the view reads the state again
         after both. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
+    - **Actions.** Each message of the view, the first message and each reply, is a row of the room
+      (`MessageItem.tsx`, which the room list uses too). It has the same actions: the quick reactions and
+      the list of emoji, change (the author only), delete (the author, or an owner of the room, after a
+      confirmation), the earlier versions (owners and admins of the organization), and a link from the
+      author to the profile. A change can remove files of the message, as in the room. It sends only the
+      parts that the person changed.
+      - The view shows the answer of the room (`receive`). A delete has no message in its answer, so the
+        view reads the changes of the thread. The socket of the room brings each change to each other open
+        view.
+      - A refused change opens the edit box again with the new text and files. A refusal shows its reason under the
+        first message. The edits of one message go one at a time, in order (`createCallLine`), so the
+        room gets the newest edit last.
+      - A reply has no "Copy a link": no path opens a thread yet. The time of each message shows its day
+        too (`fullDates`), because the view has no line for each day.
+      - Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that
+        dialog only. The list of emoji finds its space in the scroll area of the view too.
     - A reply takes files and shows files and link previews, as a message of the room does. The files
       of a reply stay in the box while a send runs. The X of a chip is off during the send. When the
       view closes, an upload that runs stops, and a file that is in the drive goes to the trash, except
       a file of a send (see the X of a chip below). Escape does not close a view that has files in its
       box.
-    - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
-      draft that stays. The view reads all pages of a thread before
-      it shows, and shows each reply, so a very long thread is slow
+    - Known limits, for the next parts: the view keeps no draft after a reload. The view reads all pages
+      of a thread before it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
     each failure up to 15 seconds, and has a random part. A ping each 25 seconds finds a connection
@@ -893,6 +908,8 @@ MCP clients. The app has no UI-only path.
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.
     - The view has no members of the room, so the @ list does not put the members first. The server checks
       each mention.
+    - The open thread has the socket of its room (`useRoomWatch`), so the edits, reactions and deletes of
+      other people show at once, as in the room.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.

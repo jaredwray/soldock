@@ -5,7 +5,7 @@ import { fullDate, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { useSession } from "../auth/session.tsx";
-import type { MessageWatch } from "./data.ts";
+import { type MessageWatch, useRoomWatch } from "./data.ts";
 import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import { roomTitle } from "./model.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
@@ -141,13 +141,20 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 		}
 	}
 
-	/** The socket of the view: the ticks of the events socket, as catch-ups. */
-	const watch = useCallback((listener: (event: MessageWatch) => void) => {
-		listeners.current.add(listener);
-		return () => {
-			listeners.current.delete(listener);
-		};
-	}, []);
+	/** The socket of the room of the open thread: each change of a message of the room. */
+	const roomWatch = useRoomWatch(open?.room.id ?? null);
+	/** The socket of the view: the changes of the room of the open thread, and the ticks as catch-ups. */
+	const watch = useCallback(
+		(listener: (event: MessageWatch) => void) => {
+			listeners.current.add(listener);
+			const stopRoom = roomWatch(listener);
+			return () => {
+				listeners.current.delete(listener);
+				stopRoom();
+			};
+		},
+		[roomWatch],
+	);
 
 	const mentions = useMemo<MentionContext | null>(
 		() =>
@@ -233,6 +240,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 					roomTitle={roomTitle(open.room)}
 					parentId={open.message_id}
 					mentions={mentions}
+					canDeleteAll={open.room.role === "owner"}
 					watch={watch}
 					// The view has no list of the room: the room shows the reply when it opens.
 					onSentToRoom={() => {}}
