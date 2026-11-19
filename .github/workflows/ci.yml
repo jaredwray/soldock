@@ -84,3 +84,34 @@ jobs:
         run: pnpm --filter @asterra/e2e exec playwright install --with-deps chromium
       - name: End-to-end tests (Playwright, against the built Worker in wrangler dev)
         run: pnpm e2e
+
+  # The local development image builds, and the Worker in it answers (tools/docker/README.md). The job
+  # has no credentials and pushes nothing. docker-publish.yaml does the same build on each push to main.
+  image:
+    name: image
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
+          package-manager-cache: false
+      # The install runs in the Docker build, where Socket Firewall cannot wrap it. So Socket Firewall
+      # examines each package of the lockfile here. No script of a package runs on the runner.
+      - name: Examine the packages of the lockfile
+        run: sfw pnpm fetch --frozen-lockfile --ignore-scripts
+      - name: Build the image
+        run: docker build --file tools/docker/Dockerfile --tag asterra:ci .
+      - name: Smoke check the image
+        run: tools/docker/smoke.sh asterra:ci

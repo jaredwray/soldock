@@ -65,13 +65,23 @@ environment. A run that names a missing environment makes GitHub create it with 
 5. For the Email Service spike only, add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of
    `soldock.org`. Find it on the zone's **Overview** page, in the **API** section. A zone ID has 32
    hex characters. It is an identifier, not a secret.
+6. For the development image only, create the `docker` environment. Set its deployment branches to
+   `main` only before you add a secret. Do this step before you merge `docker-publish.yaml`. Then add
+   these **environment** secrets to `docker`. Do not add them as repository secrets.
+   - `DOCKER_USERNAME`: the Docker Hub account, `jaredwray`.
+   - `DOCKER_PASSWORD`: a Docker Hub access token with the **Read & Write** permission. Do not use the
+     password of the account.
 
 The production deploy work adds the `production` environment, with a required reviewer,
 self-review prevented and no administrator bypass.
 
+The `docker` environment has no required reviewer, because each push to `main` publishes an image.
+It holds no Cloudflare credential, and it is not a deployment environment of the dock Worker.
+
 ## Workflow rules
 
-These rules apply to each workflow that uses a deployment environment or a `CLOUDFLARE_*` secret.
+These rules apply to each workflow that uses a deployment environment, a `CLOUDFLARE_*` secret or a
+`DOCKER_*` secret.
 Read each change to such a workflow against these rules before you merge it.
 
 - Each environment accepts deployments from `main` only.
@@ -122,6 +132,28 @@ adds a binding, it adds the permission to this table too.
   pnpm --filter @asterra/dock dev            # wrangler dev, on http://localhost:8787
   scripts/smoke-check.sh http://localhost:8787
   ```
+
+## The development image
+
+[`docker-publish.yaml`](../.github/workflows/docker-publish.yaml) publishes a local development image to
+Docker Hub as `jaredwray/asterra`, on each push to `main`. The image runs `wrangler dev` on one computer.
+[Development](development.md#run-the-development-image) shows how to run it.
+
+The image is not a Cloudflare deploy, and it is not a deployment environment of the dock Worker. It is
+not a second origin: it has no Cloudflare credential and no data of an instance. Do not use it to host
+Asterra. Asterra runs only on Cloudflare.
+
+- Each image gets two tags: a version tag for its commit, and `development`. The workflow publishes no
+  `latest` tag.
+- A version tag never changes. A second run for the same commit stops before the build.
+- The `build` job has no secrets. It builds the image and runs the smoke check against it.
+- The `publish` job holds the Docker Hub token. It runs no code from the repository: it loads the image
+  of the `build` job and pushes it.
+- Until the secrets exist, the `publish` job stops at its first step, and the error names each missing
+  secret.
+- To run the workflow again, open **Actions › docker-publish › Run workflow** and select `main`. If only
+  a push failed, select **Re-run failed jobs**. The same image then goes to Docker Hub.
+- A fork does not need this workflow. Delete it, or set `IMAGE` to your own Docker Hub repository.
 
 ## Mail
 

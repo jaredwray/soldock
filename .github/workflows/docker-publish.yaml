@@ -1,0 +1,191 @@
+name: docker-publish
+
+# Each push to main builds the local development image (tools/docker/README.md) and publishes it to
+# Docker Hub as jaredwray/asterra. The image gets two tags: a version tag for the commit, which never
+# changes, and `development`, which moves to the newest commit. The workflow publishes no `latest` tag.
+#
+# The image runs `wrangler dev` on one computer. It is not a deployment of Asterra, and this workflow
+# uses no Cloudflare credential.
+#
+# The `publish` job uses the Docker Hub token, so this workflow follows the workflow rules in
+# docs/self-hosting.md:
+# - push to main and workflow_dispatch are the only triggers.
+# - The `publish` job uses the docker environment, which accepts runs of main only.
+# - The checkout keeps no credentials and checks out only github.sha.
+# - The workflow has no inputs.
+# The `build` job has no secrets. The `publish` job runs no code from the repository and no dependency
+# code: it loads the image that the `build` job made, and pushes it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# Two publishes never run at the same time, and a run in progress always completes. A stop between the
+# two pushes leaves `development` on an old image. A queued run waits. GitHub keeps only the newest
+# queued run, so a commit between two fast merges can get no image.
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
+
+env:
+  IMAGE: jaredwray/asterra
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check the run
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Publish main only."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
+          package-manager-cache: false
+
+      # The test of tools/docker checks the same function, so the tag and its test cannot be different.
+      - name: Calculate the version tag
+        id: version
+        run: |
+          version=$(node tools/docker/version.ts)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # A version tag never changes. A second run for the same commit stops here. To push the same
+      # image again after a failed push, use "Re-run failed jobs": it does not build again.
+      - name: Check that the commit has no image on Docker Hub
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 20 --retry 3 \
+            "https://hub.docker.com/v2/repositories/$IMAGE/tags/$VERSION")
+          case "$status" in
+            404) ;;
+            200)
+              echo "::error::$IMAGE:$VERSION exists. A version tag never changes."
+              exit 1
+              ;;
+            *)
+              echo "::error::Docker Hub returned HTTP $status for the tag $VERSION."
+              exit 1
+              ;;
+          esac
+
+      # The install runs in the Docker build, where Socket Firewall cannot wrap it. So Socket Firewall
+      # examines each package of the lockfile here. The Docker build installs the same packages: the
+      # lockfile holds the hash of each one. No script of a package runs on the runner.
+      - name: Examine the packages of the lockfile
+        run: sfw pnpm fetch --frozen-lockfile --ignore-scripts
+
+      - name: Build the image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker build --file tools/docker/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --tag "$IMAGE:$VERSION" --tag "$IMAGE:development" .
+
+      - name: Smoke check the image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: tools/docker/smoke.sh "$IMAGE:$VERSION"
+
+      - name: Save the image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: docker save --output "$RUNNER_TEMP/image.tar" "$IMAGE:$VERSION" "$IMAGE:development"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          retention-days: 1
+          # A second attempt of the run replaces the image of the first attempt.
+          overwrite: true
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: docker
+      url: https://hub.docker.com/r/jaredwray/asterra/tags
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # This step runs first and gets no secret values, only whether each secret is set.
+      - name: Check the run and the Docker Hub configuration
+        env:
+          HAS_USERNAME: ${{ secrets.DOCKER_USERNAME != '' }}
+          HAS_PASSWORD: ${{ secrets.DOCKER_PASSWORD != '' }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Publish main only."
+            exit 1
+          fi
+          missing=()
+          [[ "$HAS_USERNAME" == "true" ]] || missing+=("secret DOCKER_USERNAME")
+          [[ "$HAS_PASSWORD" == "true" ]] || missing+=("secret DOCKER_PASSWORD")
+          if (( ${#missing[@]} > 0 )); then
+            printf -v list '%s, ' "${missing[@]}"
+            echo "::error::The docker environment does not have: ${list%, }. See docs/self-hosting.md."
+            exit 1
+          fi
+      - name: Install Socket Firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: firewall-free
+          firewall-version: "1.15.4"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}/image
+      - name: Load the image
+        run: docker load --input "$RUNNER_TEMP/image/image.tar"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      # The version tag goes first. Thus `development` never names an image that has no version tag.
+      - name: Push the version tag
+        run: docker push "$IMAGE:$VERSION"
+      - name: Push the development tag
+        run: docker push "$IMAGE:development"
+
+      - name: Write the job summary
+        run: |
+          {
+            echo "## Development image"
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Version tag: \`$IMAGE:$VERSION\`"
+            echo "- Moving tag: \`$IMAGE:development\`"
+            echo
+            echo "The image is for local development. It is not a deployment of Asterra."
+          } >> "$GITHUB_STEP_SUMMARY"

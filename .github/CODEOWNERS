@@ -12,3 +12,6 @@
 # The deploy workflows run these with the Cloudflare token: the deploy scripts and the wrangler config.
 /apps/dock/package.json @jaredwray
 /apps/dock/wrangler.jsonc @jaredwray
+# The docker-publish workflow publishes the image that these files define, and runs version.ts and smoke.sh.
+/tools/docker/ @jaredwray
+/.dockerignore @jaredwray

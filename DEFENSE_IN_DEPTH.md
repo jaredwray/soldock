@@ -28,13 +28,13 @@ Profile: website/app · public
 - [x] `permissions: contents: read` (or `{}` + per-job grants) on every workflow — verified 2026-10-16
 - [x] No `contents: write` except jobs whose purpose is mutating the repo (GitHub Release, Changesets version PR); generated output is a workflow artifact, never committed back from CI — verified 2026-10-16
 - [x] Every action pinned to a full commit SHA (`npx actions-up`) — PR #13
-- [x] Every job installs Socket Firewall (`SocketDev/action` SHA-pinned, `firewall-version` pinned); `pnpm install` / `npm install` run as `sfw pnpm install` / `sfw npm install` — PR #14
+- [x] Every job installs Socket Firewall (`SocketDev/action` SHA-pinned, `firewall-version` pinned); `pnpm install` / `npm install` run as `sfw pnpm install` / `sfw npm install` — PR #14. `docker-publish.yaml` and the CI `image` job install packages inside Docker, so Socket Firewall cannot wrap that install. Those jobs run `sfw pnpm fetch --frozen-lockfile --ignore-scripts` on the runner first. The lockfile holds the hash of each package.
 - [x] `.github/workflows/check-workflows.yaml` lints workflows with zizmor on every PR — PR #15
 - [x] Workflow `name:` and job `name:` contain no spaces (kebab-case) so they can be set as required status checks — verified 2026-10-16
 - [x] `persist-credentials: false` on checkouts that don't push — PR #16
 - [x] No `pull_request_target` on workflows that run untrusted PR code — verified 2026-10-16
-- [x] Artifact-publishing workflows disable `actions/setup-node` default caching (`package-manager-cache: false`) to prevent cache poisoning — verified 2026-10-16 (no artifact-publishing workflows yet)
-- [ ] No npm tokens (or other registry credentials) in Actions secrets — repository side verified 2026-10-17: no workflow reads a secret or sets registry auth, and no `.npmrc` is tracked. Deferred: the maintainer confirms the Actions secrets list, which an agent session cannot read
+- [x] Artifact-publishing workflows disable `actions/setup-node` default caching (`package-manager-cache: false`) to prevent cache poisoning. `docker-publish.yaml` publishes the development image. It sets `package-manager-cache: false`, and it uses no Docker layer cache.
+- [ ] No npm tokens in Actions secrets. Exception: `docker-publish.yaml` uses `DOCKER_USERNAME` and `DOCKER_PASSWORD` from the `docker` environment (Docker Hub only). No `.npmrc` is tracked. Deferred: the maintainer confirms the Actions secrets list, which an agent session cannot read.
 
 ## 6. Security tooling
 - [x] Aikido runs on every build — verified 2026-10-16 on pull requests (`Aikido Security: check code`). Direct pushes to `main` aren't covered until § 7 requires pull requests

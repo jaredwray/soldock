@@ -41,6 +41,39 @@ Then open http://localhost:8787 and sign in with `owner@example.com` and the pas
 For the SPA with hot reload, run `pnpm --filter @asterra/web dev` as well, and open the Vite URL.
 It sends `/api`, `/auth` and `/mcp` to `wrangler dev`.
 
+## Run the development image
+
+Each push to `main` publishes a local development image to Docker Hub as `jaredwray/asterra`. The image
+holds the dock Worker and the built SPA, and it runs `wrangler dev`. You need Docker, and no Node or
+pnpm. The image is for `linux/amd64`.
+
+The image is not a deployment of Asterra. Do not use it for production: Asterra runs only on
+Cloudflare. [Self-hosting](self-hosting.md) gives the supported procedure.
+
+```sh
+token=$(openssl rand -hex 32) && echo "$token"
+docker run --rm -p 127.0.0.1:8787:8787 -v asterra-data:/data -e SETUP_TOKEN="$token" jaredwray/asterra:development
+```
+
+Open http://localhost:8787. Enter the token, then create the owner as in
+[Run the product locally](#run-the-product-locally).
+
+- **Tags.** `development` is the image of the newest commit on `main`. Each commit also has a version
+  tag that never changes, for example `0.0.0-development.20261119231245.g61ff1b8c2d3e`. No `latest`
+  tag exists. [`tools/docker`](../tools/docker/README.md) gives the parts of the version tag.
+- **Setup token.** The image holds no token. Make a token of at least 32 characters for your
+  container. After you create the owner, stop the container, and start it again without
+  `-e SETUP_TOKEN`. The setup page then does not show.
+- **State.** The local state is in `/data`, and the `asterra-data` volume keeps it. To start fresh,
+  stop the container and run `docker volume rm asterra-data`.
+- **Address.** Use http://localhost:8787. The session cookie has the `Secure` attribute, so sign-in
+  does not work on a different HTTP address.
+- **Port.** Publish the port to `127.0.0.1` only, as the command does. `wrangler dev` is a development
+  server and has no TLS.
+
+To build the image from your checkout, run
+`docker build --file tools/docker/Dockerfile --tag asterra:local .` in the repository root.
+
 ## Sample data
 
 `pnpm seed` fills an empty local Asterra instance with a made-up organization: people, agents, a shared

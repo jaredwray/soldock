@@ -197,6 +197,10 @@ SETUP_TOKEN=local-setup-token-0123456789abcdef pnpm seed
 in as one of them. If the setup page shows first, select **Continue with the existing accounts**.
 [Development](docs/development.md) and [`tools/seed`](tools/seed/README.md) have the details.
 
+With Docker, you need no Node and no pnpm: run the `jaredwray/asterra:development` image.
+[Development](docs/development.md#run-the-development-image) shows the command. The image is for a
+local test only. To host Asterra, use Cloudflare.
+
 ## Built on Cloudflare
 
 - **One Worker.** [`apps/dock`](apps/dock/README.md) is the full backend. It also serves the web

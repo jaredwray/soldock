@@ -1,0 +1,32 @@
+# The build context of the local development image (tools/docker/Dockerfile).
+# Docker gets only the files that the Dockerfile copies. The last pattern that matches a file wins.
+*
+!/package.json
+!/pnpm-lock.yaml
+!/pnpm-workspace.yaml
+!/tsconfig.base.json
+!/apps
+!/apps/dock
+!/apps/dock/**
+!/apps/web
+!/apps/web/**
+!/packages
+!/packages/contracts
+!/packages/contracts/**
+!/docs
+!/docs/brand
+!/docs/brand/asterra-modern-for-light.svg
+!/docs/brand/asterra-modern-for-dark.svg
+!/tools
+!/tools/docker
+!/tools/docker/entrypoint.sh
+
+# Not in the context: dependencies, build output, local state and local secrets. The Docker build
+# installs the dependencies and builds the SPA.
+**/node_modules
+**/dist
+**/.wrangler
+**/.dev.vars
+**/.dev.vars.*
+**/.env
+**/.env.*

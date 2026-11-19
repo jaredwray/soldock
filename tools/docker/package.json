@@ -1,0 +1,8 @@
+{
+	"name": "@asterra/tool-docker",
+	"version": "0.0.0",
+	"private": true,
+	"description": "The local development image, and the version tag of each published image.",
+	"type": "module",
+	"license": "MIT"
+}
