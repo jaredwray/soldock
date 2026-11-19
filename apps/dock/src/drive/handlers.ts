@@ -1,4 +1,5 @@
 import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@soldock/contracts";
+import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { loseDriveAccess } from "../webhooks/store.ts";
@@ -76,13 +77,48 @@ async function copyBlob(call: CallContext, from: string, to: string): Promise<vo
 }
 
 /**
+ * Copies attachments of a document (the images of a doc) to its copy, with the same ids. An
+ * attachment that the copy holds is not copied again, so a second call continues the work of the
+ * first one.
+ */
+async function copyAttachments(call: CallContext, used: readonly AttachmentRecord[], copyId: string): Promise<void> {
+	if (used.length === 0) return;
+	const copy = documentStub(call.env, copyId);
+	const held = new Set((await copy.attachments()).map((attachment) => attachment.id));
+	for (const attachment of used) {
+		if (held.has(attachment.id)) continue;
+		const blobKey = attachmentKey(copyId, attachment.id);
+		await copyBlob(call, attachment.blobKey, blobKey);
+		const answer = await copy.addAttachment({
+			id: attachment.id,
+			blobKey,
+			size: attachment.size,
+			meta: attachment.meta,
+			used: true,
+			limit: used.length,
+		});
+		if ("error" in answer) throw new Error(`the copy refused an attachment: ${answer.error.message}`);
+	}
+}
+
+/**
  * Writes the content of a doc or a sheet into its copy, when the copy has no content yet. A copy with
  * content stays as it is, so a second call never replaces what a person wrote in the copy.
+ *
+ * The content and the attachments that it uses come from the source in one call, so a change of the
+ * source during the copy cannot give content that names an attachment which the copy does not get.
+ * The attachments go first, because the content names them. The source keeps an attachment for 24
+ * hours after its last use, so its bytes are there for the copy.
  */
 async function fillCopy(call: CallContext, own: OpenSpace, sourceId: string, copyId: string): Promise<void> {
 	if ((await readDocument(call, copyId)) !== null) return;
-	const state = await readDocument(call, sourceId);
+	const { state, attachments } = await documentStub(call.env, sourceId).snapshot();
 	if (!state) return;
+	await copyAttachments(
+		call,
+		attachments.filter((attachment) => attachment.unusedSince === null),
+		copyId,
+	);
 	try {
 		await writeDocument(call, own, copyId, { content: state.content, text: state.text, baseRevision: 0 });
 	} catch (error) {

@@ -1,5 +1,9 @@
 // Public surface of the collab module. Other modules import from here, never from its files.
 export {
+	ATTACHMENT_KEEP_MS,
+	type AttachmentInput,
+	type AttachmentRecord,
+	attachmentKey,
 	type DocumentAuthor,
 	DocumentDO,
 	type DocumentRefusal,

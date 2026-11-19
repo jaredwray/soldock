@@ -10,7 +10,7 @@ Each product exposes its own subscription operations. Endpoint operations are sh
 | `subscriptions.ts` | Subscription records and the target check |
 | `store.ts` | The D1 rows and the delivery state |
 | `legacy.ts` | A copy of rows that the previous Worker inserts after migration `0013` |
-| `url.ts` | Public HTTPS URLs and the outbound policy of an agent |
+| `url.ts` | Public HTTPS URLs and the outbound policy of an agent. `docs.import_image` uses the same rules (`publicUrlProblem`, `outboundHostAllowed`) |
 | `delivery.ts` | The `soldock-webhooks` consumer, the signed POST and the retries |
 | `events.ts` | MCP Events: the event catalog, `events/subscribe` with the callback verification, and `events/unsubscribe` |
 

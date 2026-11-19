@@ -26,7 +26,7 @@ import {
 	targetLoadSql,
 	toEndpoint,
 } from "./store.ts";
-import { webhookHostAllowed } from "./url.ts";
+import { outboundHostAllowed } from "./url.ts";
 
 export interface SubscriptionView {
 	id: string;
@@ -217,7 +217,7 @@ export function createSubscriptionHandlers(
 				throw new OperationError("conflict", "The endpoint is disabled. Create a new endpoint.");
 			}
 			const targetId = await creatableTarget(call, input.mailbox_id, domain);
-			if (!webhookHostAllowed(call.caller.principal, endpoint.url)) {
+			if (!outboundHostAllowed(call.caller.principal, endpoint.url)) {
 				throw new OperationError(
 					"policy_denied",
 					`The outbound policy of this agent (${call.caller.principal.outbound_mode ?? "internal-only"}) does not allow a webhook to ${new URL(endpoint.url).hostname}. Ask its sponsor to add the host to the allowlist.`,

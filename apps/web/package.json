@@ -13,6 +13,7 @@
 	"dependencies": {
 		"@soldock/contracts": "workspace:*",
 		"prosemirror-commands": "1.7.2",
+		"prosemirror-dropcursor": "1.8.2",
 		"prosemirror-history": "1.5.1",
 		"prosemirror-inputrules": "1.5.1",
 		"prosemirror-keymap": "1.2.3",

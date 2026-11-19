@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the webhook check boxes and the reload after a deploy have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the webhook check boxes, the reload after a deploy and the images of a doc have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -26,8 +26,9 @@ pnpm e2e
   ([`tools/seed`](../tools/seed)). A Worker with a setup token shows the setup page, so it then starts
   the Worker again without the token. After the run, it stops the Worker and removes the state.
 - Port 8799 is not the port of `pnpm dev`, so the two can run at the same time.
-- Each test makes its own room or its own webhook, so the tests run at the same time against one Worker. A test signs
-  in as a person of the seed data ([`support/chat.ts`](support/chat.ts)).
+- Each test makes its own room, its own webhook or its own doc, so the tests run at the same time against one Worker. A test signs
+  in as a person of the seed data ([`support/chat.ts`](support/chat.ts)). [`support/docs.ts`](support/docs.ts) makes a doc, a PNG
+  file that a browser shows, and a drop of files.
 - No test is tried again after a failure. A test that fails some of the time is a defect to fix.
 - In CI, the job installs Chromium with `playwright install --with-deps chromium`. Cloud sessions
   have Chromium. Do not run `playwright install` there.
@@ -38,6 +39,7 @@ pnpm e2e
 | --- | --- |
 | [`tests/chat.spec.ts`](tests/chat.spec.ts) | A send shows at once and goes out one time. A send with lost answers shows one time. A failed send shows "Not sent", and **Try again** sends it. A message that waits stays after a reload. A change and a delete show at once, and come back after a refusal. A page of older messages keeps the place of the list. The **New messages** line and the button to the newest messages. The draft of a room after a change of room, a reload and a sign-out. A room from the cache before the answer of the server. A link to one message. The unread count of the sidebar from the events socket, without a read of the list, and its end after a read on a different device. A star moves a room to the **Starred** part, also on a second page of the person without a read of the list, and **Remove star** moves it back. A reply in a thread stays out of the room list of an open page. A thread opens beside the room, shows each new reply, keeps the actions of the room usable, sends a reply and a reply that also goes to the room, keeps a typed reply on Escape, and gives the focus back to its opener |
 | [`tests/webhooks.spec.ts`](tests/webhooks.spec.ts) | A new webhook with its events from check boxes. **Edit** shows the saved events, and a save adds and removes only the difference. The menu of a second target, a shared drive. A delete. A save that fails in part: the problem shows in the secret dialog after **Add webhook** and in the dialog after **Edit**, and a second save sends only the event that failed. A sponsor sends the events of an agent to a webhook. An admin can clear an event of that agent, but cannot set one |
+| [`tests/docsImages.spec.ts`](tests/docsImages.spec.ts) | A dropped image file shows, goes into the doc and stays after a reload. The image toolbar: the layout, the side, the size, the alt text, the caption, Undo and **Remove image**. A corner changes the size. The crop dialog with the keyboard. A pasted picture, and a picture in pasted HTML. A picture with a web address goes through the server, and a failure removes it. **Insert image** from this computer and from Drive. A file that is not an image. A viewer. A copy of an image from one doc to a different doc. The doc is not saved while an image uploads |
 | [`tests/newVersion.spec.ts`](tests/newVersion.spec.ts) | A page chunk that a deploy removed: the page reloads one time and shows Drive of the new version. A person who goes back to Mail before the version check ends stays on Mail, and the reload waits until Drive shows again. A page chunk that does not load in the current version: the page asks for a reload, and does not reload by itself |
 
 The first flows to cover, because they are tested by hand only:

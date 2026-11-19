@@ -30,7 +30,7 @@ import {
 import { webhookSignature } from "./delivery.ts";
 import { getDelivery, targetLoadSql } from "./store.ts";
 import { creatableTarget } from "./subscriptions.ts";
-import { webhookHostAllowed, webhookUrlProblem } from "./url.ts";
+import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 
 /** The header of MCP Events that names the subscription of a POST. */
 export const SUBSCRIPTION_ID_HEADER = "x-mcp-subscription-id";
@@ -252,7 +252,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				.first();
 			if (!member) throw new OperationError("not_found", "No room has that id, or you are not a member.");
 		}
-		if (!webhookHostAllowed(principal, url)) {
+		if (!outboundHostAllowed(principal, url)) {
 			throw new OperationError(
 				"policy_denied",
 				`The outbound policy of this agent (${principal.outbound_mode ?? "internal-only"}) does not allow events to ${new URL(url).hostname}. Ask its sponsor to add the host to the allowlist.`,
