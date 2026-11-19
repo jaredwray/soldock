@@ -1735,6 +1735,29 @@ describe("threads", () => {
 			after: first.seq,
 		});
 		expect(rest.replies.map((message) => message.id)).toEqual([second.id]);
+		// The newest page comes in one read, and the older replies before the seq of its first reply.
+		const newest = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			newest: "true",
+			limit: 1,
+		});
+		expect([newest.replies.map((message) => message.id), newest.has_more]).toEqual([[second.id], true]);
+		const older = await ada.call("chat.list_replies", {
+			room_id: room.id,
+			message_id: parent.id,
+			before: second.seq,
+			limit: 1,
+		});
+		expect([older.replies.map((message) => message.id), older.has_more]).toEqual([[first.id], false]);
+		// A newest page with space for each reply has them oldest first, and no older reply.
+		const all = await ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id, newest: "true" });
+		expect([all.replies.map((message) => message.id), all.has_more]).toEqual([[first.id, second.id], false]);
+		expect(
+			await codeOf(
+				ada.call("chat.list_replies", { room_id: room.id, message_id: parent.id, newest: "true", after: 0 }),
+			),
+		).toBe("invalid");
 
 		// An edit of a reply comes with changed_after of the thread.
 		await bot.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "Looks great" });

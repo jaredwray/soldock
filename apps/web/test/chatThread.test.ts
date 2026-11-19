@@ -36,7 +36,7 @@ function message(seq: number, version: number, parentId: string | null, text = `
 }
 
 const parent = message(1, 1, null, "plan");
-const start: ThreadState = { parent, replies: [message(3, 3, "cmsg_1")], version: 3 };
+const start: ThreadState = { parent, replies: [message(3, 3, "cmsg_1")], version: 3, hasOlder: false };
 
 describe("the view of a thread", () => {
 	// The socket and a read can bring the same message, in each order. The view must show each reply one
@@ -58,6 +58,9 @@ describe("the view of a thread", () => {
 		expect(mergeThread(merged, [message(3, 3, "cmsg_1"), { ...parent, version: 2 }])).toBe(merged);
 		// The read of a catch-up keeps the version of the thread: the panel sets it.
 		expect(merged.version).toBe(3);
+		// With older replies that do not show, a reply before the first one would make a gap: it waits for its page.
+		const newestOnly = { ...start, hasOlder: true };
+		expect(mergeThread(newestOnly, [message(2, 5, "cmsg_1", "older reply")])).toBe(newestOnly);
 	});
 });
 
@@ -70,29 +73,76 @@ const page = (replies: ChatMessage[], version: number, has_more = false): Replie
 });
 
 describe("the data of the view of a thread", () => {
-	// A reply can come on the socket while the first read runs. It must show after the load.
-	it("keeps a change of the socket during the load, and reads the changes after the version of the first page", async () => {
+	// A thread of many replies must show its newest replies after one request. A reply can come on the socket
+	// while that read runs, and must show after the load.
+	it("reads the newest page in one request, keeps a change of the socket during the load, and reads the changes after the version of the page", async () => {
 		const calls: unknown[] = [];
 		let release: (value: RepliesPage) => void = () => {};
-		const read = (range: { after?: number; changed_after?: number }) => {
+		const read = (range: { newest?: "true"; before?: number; changed_after?: number }) => {
 			calls.push(range);
 			if (calls.length === 1) return new Promise<RepliesPage>((resolve) => (release = resolve));
-			if (calls.length === 2) return Promise.resolve(page([message(3, 9, "cmsg_1", "second page")], 9));
-			return Promise.resolve(page([message(2, 11, "cmsg_1", "changed during the load")], 12));
+			return Promise.resolve(page([message(5, 11, "cmsg_1", "changed during the load")], 12));
 		};
-		const shown: ThreadState[] = [];
-		const view = createThreadView(read, (thread) => shown.push(thread));
+		const view = createThreadView(read, () => {});
 		const loading = view.load();
-		view.receive(message(4, 13, "cmsg_1", "from the socket"));
-		release(page([message(2, 8, "cmsg_1", "first page")], 10, true));
+		view.receive(message(6, 13, "cmsg_1", "from the socket"));
+		release(page([message(5, 8, "cmsg_1", "newest page")], 10, true));
 		await loading;
-		expect(calls).toEqual([{}, { after: 2 }, { changed_after: 10 }]);
-		expect(view.current()?.replies.map((reply) => reply.text)).toEqual([
-			"changed during the load",
-			"second page",
-			"from the socket",
-		]);
+		expect(calls).toEqual([{ newest: "true" }, { changed_after: 10 }]);
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["changed during the load", "from the socket"]);
 		expect(view.current()?.version).toBe(12);
+		expect(view.current()?.hasOlder).toBe(true);
+	});
+
+	// An older page can be at a version before a change that the socket brought during its read. The old copy
+	// of the page must not replace the newer copy.
+	it("reads the page before the first reply, and keeps a newer copy that came during the read", async () => {
+		let release: (value: RepliesPage) => void = () => {};
+		const calls: unknown[] = [];
+		const read = (range: { newest?: "true"; before?: number; changed_after?: number }) => {
+			calls.push(range);
+			if (range.newest) return Promise.resolve(page([message(5, 5, "cmsg_1", "newest")], 5, true));
+			if (range.before) return new Promise<RepliesPage>((resolve) => (release = resolve));
+			return Promise.resolve(page([], 5));
+		};
+		const view = createThreadView(read, () => {});
+		await view.load();
+		const loading = view.loadOlder();
+		// A second call while the read runs adds no read.
+		void view.loadOlder();
+		view.receive(message(2, 7, "cmsg_1", "older, changed"));
+		release(page([message(2, 4, "cmsg_1", "older"), message(3, 3, "cmsg_1", "middle")], 6, false));
+		await loading;
+		expect(calls).toEqual([{ newest: "true" }, { changed_after: 5 }, { before: 5 }]);
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["older, changed", "middle", "newest"]);
+		expect(view.current()?.hasOlder).toBe(false);
+		// With no older replies, nothing more is read.
+		await view.loadOlder();
+		expect(calls).toHaveLength(3);
+	});
+
+	// A change of a reply before the page that a read brings must not go in: the next read would start
+	// from that reply, and skip the replies between it and the page.
+	it("keeps a change of a reply before the older page out, and reads the next page from the first reply of the page", async () => {
+		let release: (value: RepliesPage) => void = () => {};
+		const calls: unknown[] = [];
+		const read = (range: { newest?: "true"; before?: number; changed_after?: number }) => {
+			calls.push(range);
+			if (range.newest) return Promise.resolve(page([message(9, 9, "cmsg_1", "newest")], 9, true));
+			if (range.before === 9) return new Promise<RepliesPage>((resolve) => (release = resolve));
+			if (range.before) return Promise.resolve(page([message(2, 2, "cmsg_1", "oldest")], 9, false));
+			return Promise.resolve(page([], 9));
+		};
+		const view = createThreadView(read, () => {});
+		await view.load();
+		const loading = view.loadOlder();
+		view.receive(message(2, 10, "cmsg_1", "oldest, changed"));
+		release(page([message(5, 5, "cmsg_1", "middle")], 9, true));
+		await loading;
+		expect(view.current()?.replies.map((reply) => reply.text)).toEqual(["middle", "newest"]);
+		expect(view.current()?.hasOlder).toBe(true);
+		await view.loadOlder();
+		expect(calls.at(-1)).toEqual({ before: 5 });
 	});
 
 	// After a gap with no socket, the view must get each change of the gap, also in pages. A room list after
@@ -114,7 +164,7 @@ describe("the data of the view of a thread", () => {
 			page([], 8),
 		];
 		const calls: unknown[] = [];
-		const read = async (range: { after?: number; changed_after?: number }) => {
+		const read = async (range: { newest?: "true"; before?: number; changed_after?: number }) => {
 			calls.push(range);
 			const next = pages.shift();
 			if (!next || next instanceof Error) throw next ?? new Error("no page");

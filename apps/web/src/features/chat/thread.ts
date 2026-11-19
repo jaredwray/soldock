@@ -2,23 +2,30 @@ import type { ChatMessage, ChatThreadFollow } from "@asterra/contracts";
 
 // The pure rules of the view of one thread. They have no DOM and no network, so apps/web/test checks them.
 
-/** The view of one thread: the message that starts it, its replies oldest first, and the version of the read. */
+/**
+ * The view of one thread: the message that starts it, the newest part of its replies oldest first, and the
+ * version of the read.
+ */
 export interface ThreadState {
 	parent: ChatMessage;
 	replies: readonly ChatMessage[];
 	/** The version of the room at the last read of the thread. A catch-up reads the changes after it. */
 	version: number;
+	/** True when the thread has replies before the first reply that shows. `loadOlder` reads them. */
+	hasOlder: boolean;
 }
 
 /**
  * The thread with `messages` in it: the newer copy of the parent, and each new or newer reply of this
  * parent, in the order of the seq. A message of a different thread or of the room list changes nothing.
  * A copy that is not newer than the one that shows changes nothing, so the socket and a read can bring
- * the same message in each order.
+ * the same message in each order. A reply before the first reply that shows changes nothing when the
+ * thread has older replies: the list must not have a gap. The read of the older page brings it.
  */
 export function mergeThread(state: ThreadState, messages: readonly ChatMessage[]): ThreadState {
 	let parent = state.parent;
 	const replies = new Map(state.replies.map((reply) => [reply.id, reply]));
+	const first = state.hasOlder ? state.replies[0]?.seq : undefined;
 	let changed = false;
 	for (const message of messages) {
 		if (message.id === parent.id) {
@@ -26,7 +33,7 @@ export function mergeThread(state: ThreadState, messages: readonly ChatMessage[]
 				parent = message;
 				changed = true;
 			}
-		} else if (message.parent_id === parent.id) {
+		} else if (message.parent_id === parent.id && !(first !== undefined && message.seq < first)) {
 			const shown = replies.get(message.id);
 			if (!shown || message.version > shown.version) {
 				replies.set(message.id, message);
@@ -154,12 +161,20 @@ export interface RepliesPage {
 	follow?: ChatThreadFollow | undefined;
 }
 
-/** Reads one page of the replies: the first page, the page after a seq, or the changes after a version. */
-export type ReadReplies = (range: { after?: number; changed_after?: number }) => Promise<RepliesPage>;
+/** Reads one page of the replies: the newest page, the page before a seq, or the changes after a version. */
+export type ReadReplies = (range: { newest?: "true"; before?: number; changed_after?: number }) => Promise<RepliesPage>;
 
 export interface ThreadView {
-	/** Reads each page of the thread, then the changes of the time of the read. Throws when a read fails. */
+	/**
+	 * Reads the newest page of the thread in one request, then the changes of the time of the read. Throws
+	 * when a read fails.
+	 */
 	load(): Promise<void>;
+	/**
+	 * Reads the page before the first reply that shows. It does nothing before the load, while a read of an
+	 * older page runs, and when the thread has no older replies. Throws when the read fails.
+	 */
+	loadOlder(): Promise<void>;
 	/** Takes one message from the socket of the room. A message before the end of the load waits for it. */
 	receive(message: ChatMessage): void;
 	/**
@@ -177,7 +192,9 @@ export interface ThreadView {
 /**
  * The data of the view of one thread, with no DOM and no network of its own. A message of the socket that
  * comes during the load waits, and goes into the thread after it. The load reads the changes after the
- * version of its first page, so a change during the read of a later page shows too. One catch-up runs at
+ * version of its page. An older page can be at a version before the thread: while its read runs, each
+ * message that the view takes is kept, and goes into the thread again after the page, so the page cannot
+ * put back an old copy of a reply. One catch-up runs at
  * a time. A call during a catch-up makes it run one more time. A failed catch-up keeps the version, so the
  * next catch-up asks for the same changes again. For the same room version, it waits first: 1 s, then
  * twice as long after each failure, up to 60 s.
@@ -197,11 +214,18 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 	/** The time (ms) after which a room list with no version of the room reads again. */
 	let pollAt = 0;
 	let again = false;
+	/** The messages that the view took while the read of an older page runs, or null when no read runs. */
+	let duringOlder: ChatMessage[] | null = null;
 
 	const set = (next: ThreadState) => {
 		if (next === thread) return;
 		thread = next;
 		show(next);
+	};
+	/** Puts messages into the thread, and keeps them for the end of the read of an older page. */
+	const take = (current: ThreadState, messages: readonly ChatMessage[]): ThreadState => {
+		duringOlder?.push(...messages);
+		return mergeThread(current, messages);
 	};
 
 	async function readChanges(): Promise<void> {
@@ -217,7 +241,7 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 				let after = thread.version;
 				for (;;) {
 					const page = await read({ changed_after: after });
-					const merged = mergeThread(thread, [page.parent, ...page.replies]);
+					const merged = take(thread, [page.parent, ...page.replies]);
 					const last = page.replies[page.replies.length - 1];
 					const more = page.has_more && last !== undefined;
 					// A page that is not the last one continues from the version of its last reply.
@@ -240,25 +264,47 @@ export function createThreadView(read: ReadReplies, show: (thread: ThreadState) 
 
 	return {
 		async load() {
-			let page = await read({});
-			// The changes after the first page come with the catch-up below, so the thread keeps its version.
-			const version = page.version;
-			const replies = [...page.replies];
-			while (page.has_more) {
-				const last = replies[replies.length - 1];
-				if (!last) break;
-				page = await read({ after: last.seq });
-				replies.push(...page.replies);
-			}
-			const loaded = mergeThread({ parent: page.parent, replies, version }, waiting);
+			const page = await read({ newest: "true" });
+			// The changes after the page come with the catch-up below, so the thread keeps the version of the page.
+			const loaded = mergeThread(
+				{
+					parent: page.parent,
+					replies: page.replies,
+					version: page.version,
+					hasOlder: page.has_more && page.replies.length > 0,
+				},
+				waiting,
+			);
 			waiting = [];
 			thread = null;
 			set(loaded);
 			await readChanges();
 		},
+		async loadOlder() {
+			const first = thread?.hasOlder ? thread.replies[0] : undefined;
+			if (!first || duringOlder !== null) return;
+			duringOlder = [];
+			try {
+				const page = await read({ before: first.seq });
+				if (thread === null) return;
+				const kept = duringOlder;
+				// The page goes before the first reply. The replies that the view took during the read are newer
+				// copies, or the same, so they go in after it. While the thread has replies before the page, a kept
+				// reply before the first reply of the page stays out (`mergeThread`), so the list has no gap.
+				const older = page.replies.filter((reply) => reply.parent_id === thread?.parent.id && reply.seq < first.seq);
+				const joined: ThreadState = {
+					...thread,
+					replies: [...older, ...thread.replies],
+					hasOlder: page.has_more && older.length > 0,
+				};
+				set(mergeThread(joined, [page.parent, ...kept]));
+			} finally {
+				duringOlder = null;
+			}
+		},
 		receive(message) {
 			if (thread === null) waiting.push(message);
-			else set(mergeThread(thread, [message]));
+			else set(take(thread, [message]));
 		},
 		catchUp(roomVersion) {
 			// Before the end of the load there is nothing to do: the load reads the changes at its end.

@@ -1,4 +1,4 @@
-import { expect, type Page, type Route, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, type Route, test } from "@playwright/test";
 import {
 	composer,
 	createRoom,
@@ -87,6 +87,95 @@ test("a reply in a thread stays out of the room list of an open page", async ({ 
 	await expect(rowsWithText(page, later)).toHaveCount(1);
 	await expect(page.locator(".chat-message").filter({ hasText: hidden })).toHaveCount(0);
 	await expect(rowsWithText(page, parent.text)).toHaveCount(1);
+});
+
+test("a long thread shows its newest replies after one read, and the older replies come before them", async ({
+	browser,
+}) => {
+	const people = await Promise.all(
+		(["tomasz", "nadia", "chidi", "meiling"] as const).map((person) => signIn(browser, person)),
+	);
+	const [tomasz] = people;
+	if (!tomasz) throw new Error("no context");
+	const roomId = await createRoom(tomasz, unique("Long thread"), people.slice(1));
+	const parent = await post(tomasz, roomId, unique("long thread start"));
+	// More replies than one page (50), from the people in turn, inside the rate limit of each.
+	const replies = [];
+	for (let index = 0; index < 60; index++) {
+		replies.push(await reply(people[index % people.length] as BrowserContext, roomId, parent.id, `r${index + 1}`));
+	}
+	const page = await tomasz.newPage();
+	const pageReads: string[] = [];
+	page.on("request", (request) => {
+		const url = new URL(request.url());
+		if (url.pathname.endsWith(`/messages/${parent.id}/replies`) && !url.searchParams.has("changed_after")) {
+			pageReads.push(url.search);
+		}
+	});
+	await openRoom(page, roomId);
+	await page
+		.locator(".chat-messages .chat-message")
+		.filter({ hasText: parent.text })
+		.getByRole("button", { name: /60 replies/ })
+		.click();
+	const panel = page.getByRole("complementary", { name: "Thread" });
+	const replyRow = (text: string) =>
+		panel.locator(".chat-thread-reply .chat-text").filter({ hasText: new RegExp(`^${text}$`) });
+	await expect(replyRow("r60")).toHaveCount(1);
+	await expect(replyRow("r10")).toHaveCount(0);
+	await expect(panel.locator(".chat-thread-count")).toHaveText("60 replies");
+	// One read of a page showed the newest replies.
+	expect(pageReads).toHaveLength(1);
+	expect(new URL(`http://x${pageReads[0]}`).searchParams.get("newest")).toBe("true");
+
+	// A scroll to the top reads the replies before the first reply that shows: the newest page has r11 to r60.
+	// The reply that showed stays at its place.
+	await expect(panel.getByRole("button", { name: "Show older replies" })).toBeVisible();
+	const offsetOf11 = () =>
+		replyRow("r11").evaluate((element) => {
+			const body = element.closest(".chat-thread-body") as HTMLElement;
+			return Math.round(element.getBoundingClientRect().top - body.getBoundingClientRect().top);
+		});
+	await panel.locator(".chat-thread-body").evaluate((element) => {
+		element.scrollTop = 0;
+	});
+	const before = await offsetOf11();
+	await expect(replyRow("r1")).toHaveCount(1);
+	await expect(panel.getByRole("button", { name: "Show older replies" })).toHaveCount(0);
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(60);
+	expect(await offsetOf11()).toBe(before);
+	expect(pageReads).toHaveLength(2);
+	expect(new URL(`http://x${pageReads[1]}`).searchParams.get("before")).toBe(String(replies[10]?.seq));
+});
+
+test("a long thread with many new replies reads back to the read marker, and the New line marks the first new reply", async ({
+	browser,
+}) => {
+	const people = await Promise.all(
+		(["tomasz", "nadia", "chidi", "meiling"] as const).map((person) => signIn(browser, person)),
+	);
+	const [tomasz, ...others] = people;
+	if (!tomasz) throw new Error("no context");
+	const roomId = await createRoom(tomasz, unique("Unread thread"), others);
+	// Tomasz starts the thread, so he follows it with nothing read. The 60 replies of the others are new for him.
+	const parent = await post(tomasz, roomId, unique("unread thread start"));
+	const replies = [];
+	for (let index = 0; index < 60; index++) {
+		replies.push(await reply(others[index % others.length] as BrowserContext, roomId, parent.id, `u${index + 1}`));
+	}
+	const page = await tomasz.newPage();
+	await openRoom(page, roomId);
+	await page
+		.locator(".chat-messages .chat-message")
+		.filter({ hasText: parent.text })
+		.getByRole("button", { name: /60 replies/ })
+		.click();
+	const panel = page.getByRole("complementary", { name: "Thread" });
+	// The first new reply is older than the newest page. The view reads back to it before the marker moves.
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(60);
+	await expect(panel.locator(".chat-new")).toHaveCount(1);
+	await expect(panel.locator(".chat-new + li .chat-text")).toHaveText("u1");
+	await expect.poll(async () => (await threadFollow(tomasz, roomId, parent.id)).last_read_seq).toBe(replies[59]?.seq);
 });
 
 test("a thread opens beside the room, shows each new reply, and sends a reply, also to the room", async ({

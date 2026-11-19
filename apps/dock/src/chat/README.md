@@ -222,7 +222,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     versions of the room has each one, and the room list of a client gets the new summary. A delete
     of a reply gives the reply the next version and the parent the version after it.
   - `chat.list_replies` returns the parent and its replies, oldest first, in pages (`after`), or the
-    replies that changed after a version of the room (`changed_after`).
+    replies that changed after a version of the room (`changed_after`). `newest: "true"` returns the
+    newest page, and `before` the page before a seq. So a client shows a long thread after one read.
+    The index `messages_parent` (`parent_id`, `seq`) serves each of these reads.
   - The webhook event of a reply has `parent_id`, so a receiver reads the reply with
     `chat.list_replies`.
   - The index `messages_room_list` has the messages of the room list only. So the room list and the
