@@ -15,6 +15,9 @@ import {
 
 const NOT_FOUND = "No item has that id, or you have no access to it.";
 
+/** R2 holds the bytes of a file with a neutral type. Only `/dl/` serves them to a browser, as an attachment. */
+export const STORED_TYPE = { httpMetadata: { contentType: "application/octet-stream" } };
+
 export function spaceStub(env: Pick<Env, "DRIVE_SPACE">, spaceId: string) {
 	return env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));
 }

@@ -286,3 +286,10 @@ Chat rooms apply their object migration on their next start. No new Cloudflare r
 
 Migration `0014_mcp_events.sql` adds columns to the two tables and one small table for [MCP Events](agents.md#get-events-in-chatgpt-mcp-events).
 It needs no new Cloudflare resource and no secret. A subscription of MCP Events uses the same queue.
+
+Migration `0015_link_previews.sql` adds the cache of the link previews of Chat, and the budget of
+fetches of each author. The previews need one new
+queue, `soldock-chat-previews` (binding `CHAT_PREVIEWS`), which the next deploy creates by name. It has no
+dead letter queue: a room sends a job again when no result came, and after 3 sends the links get no
+preview. The fetch of a preview asks DNS over HTTPS at `cloudflare-dns.com`, a service of Cloudflare, to
+check that each address of a host is public. It needs no secret.

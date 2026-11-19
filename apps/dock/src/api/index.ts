@@ -1,4 +1,5 @@
-// Public surface of the api module: the REST adapter, generated from the operation registry.
+// Public surface of the api module: the REST adapter, generated from the operation registry, and the
+// call of a request for the paths outside the registry that serve one operation (`/blob/`, `/dl/`).
 import { type Operation, type OperationName, operationList, pathParams } from "@asterra/contracts";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
@@ -12,7 +13,7 @@ import {
 	readBodyText,
 } from "../platform/index.ts";
 
-type ApiEnv = { Bindings: Env; Variables: RequestIdVariables };
+export type ApiEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /** Wraps a Bearer challenge around a 401, so clients know to send a key. */
 export function unauthenticatedResponse(requestId: string, instance: string): Response {
@@ -55,6 +56,34 @@ async function readInput(c: Context<ApiEnv>, operation: Operation): Promise<Reco
 }
 
 /**
+ * The call of a request: an API key, an OAuth token, or the session cookie. Null when the request has
+ * no valid credential.
+ *
+ * - `change`: a change made with the cookie must come from this origin.
+ * - `ownSiteRead`: a read made with the cookie must not come from a page of a different site. A browser
+ *   sends the cookie with a link or an image of a different site, and `Sec-Fetch-Site` tells. A REST
+ *   read does not need it: its answer is JSON, which a page of a different site cannot read.
+ */
+export async function callOf(
+	c: Context<ApiEnv>,
+	options: { change: boolean; ownSiteRead?: boolean },
+): Promise<CallContext | null> {
+	const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
+	const caller = await authenticate(c.req.raw, c.env, waitUntil, { allowSession: true });
+	if (!caller) return null;
+	if (caller.credential === "session") {
+		if (options.change && !isSameOrigin(c.req.raw)) {
+			throw new OperationError("forbidden", "A change made with the session cookie must come from this origin.");
+		}
+		const site = c.req.header("sec-fetch-site");
+		if (options.ownSiteRead && (site === "cross-site" || site === "same-site")) {
+			throw new OperationError("forbidden", "A request with the session cookie must come from this origin.");
+		}
+	}
+	return { caller, env: c.env, requestId: c.var.requestId, origin: new URL(c.req.url).origin, waitUntil };
+}
+
+/**
  * Mounts one route for each operation under `/api/v1`. Each route authenticates (an API key or the
  * session cookie), refuses a cross-origin change made with the cookie, and runs the operation
  * through the shared invoker.
@@ -65,20 +94,9 @@ export function mountRestApi(app: Hono<ApiEnv>, handlers: HandlerMap<CallContext
 		const path = operation.http.path.replace(/\{([a-z_]+)\}/g, ":$1");
 		app.on(operation.http.method, path, async (c) => {
 			const instance = new URL(c.req.url).pathname;
-			const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
-			const caller = await authenticate(c.req.raw, c.env, waitUntil, { allowSession: true });
-			if (!caller) return unauthenticatedResponse(c.var.requestId, instance);
-			if (caller.credential === "session" && operation.http.method !== "GET" && !isSameOrigin(c.req.raw)) {
-				throw new OperationError("forbidden", "A change made with the session cookie must come from this origin.");
-			}
+			const call = await callOf(c, { change: operation.http.method !== "GET" });
+			if (!call) return unauthenticatedResponse(c.var.requestId, instance);
 			const input = await readInput(c, operation);
-			const call: CallContext = {
-				caller,
-				env: c.env,
-				requestId: c.var.requestId,
-				origin: new URL(c.req.url).origin,
-				waitUntil,
-			};
 			const output = await invokeOperation(operation, handler, call, input);
 			return c.json(output as object, 200, { "cache-control": "no-store" });
 		});

@@ -1,10 +1,11 @@
-import { ApiError, type ChatBody, type ChatMessage } from "@asterra/contracts";
+import { ApiError, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOutbox, postContent, RETRY_WAITS_MS } from "../src/features/chat/outbox.ts";
 
 interface Call {
 	text: string;
 	body: ChatBody | undefined;
+	files: readonly ChatFile[] | undefined;
 	key: string;
 	succeed(): Promise<void>;
 	fail(error: unknown): Promise<void>;
@@ -14,11 +15,12 @@ interface Call {
 function fakeRoom() {
 	const calls: Call[] = [];
 	const sent: ChatMessage[] = [];
+	const trashed: string[] = [];
 	const page = { account: "ada" };
 	let seq = 0;
 	const outbox = createOutbox({
 		active: () => page.account === "ada",
-		post: ({ text, body, key }) =>
+		post: ({ text, body, files, key }) =>
 			new Promise<ChatMessage>((resolve, reject) => {
 				// The answers go through the promise, as the answers of fetch do.
 				const settle = async () => {
@@ -28,6 +30,7 @@ function fakeRoom() {
 				calls.push({
 					text,
 					body,
+					files,
 					key,
 					succeed() {
 						seq += 1;
@@ -48,6 +51,8 @@ function fakeRoom() {
 							parent_id: null,
 							also_in_room: false,
 							thread: null,
+							files: [],
+							link_previews: [],
 						});
 						return settle();
 					},
@@ -58,13 +63,24 @@ function fakeRoom() {
 				});
 			}),
 		describe: (error) => (error instanceof ApiError ? error.message : "No connection."),
+		discardFiles: (files) => void trashed.push(...files.map((file) => file.name)),
 	});
 	outbox.attach({ deliver: (message) => void sent.push(message) });
 	const pending = () => outbox.getState().pending.map((message) => [message.text, message.state]);
-	return { outbox, calls, sent, pending, page };
+	return { outbox, calls, sent, pending, page, trashed };
 }
 
 const refusal = (status: number, code: string, detail: string) => new ApiError(status, { code, detail });
+
+const FILE: ChatFile = {
+	item_id: "itm_01JD0000000000000000000001",
+	space_id: "prn_01JD0000000000000000000ADA",
+	name: "plan.pdf",
+	mime_type: "application/pdf",
+	size: 2048,
+	kind: "file",
+	preview: null,
+};
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -99,26 +115,36 @@ describe("the outbox of a room", () => {
 	});
 
 	// The server takes one form. A message from before the box had formats has the Markdown that the person typed.
+	// A message with files has their ids, and a message with only files has no form of the text.
 	it("posts the body of a message, or the text of a message without a body as Markdown, never both", () => {
 		const body: ChatBody = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "a" }] }] };
 		expect(postContent({ text: "a", body })).toEqual({ body });
 		expect(postContent({ text: "**old** draft" })).toEqual({ markdown: "**old** draft" });
+		const files = [FILE, { ...FILE, item_id: "itm_01JD0000000000000000000002" }];
+		expect(postContent({ text: "a", body, files })).toEqual({
+			body,
+			file_ids: ["itm_01JD0000000000000000000001", "itm_01JD0000000000000000000002"],
+		});
+		expect(postContent({ text: "", files })).toEqual({
+			file_ids: ["itm_01JD0000000000000000000001", "itm_01JD0000000000000000000002"],
+		});
 	});
 
-	// The box sends a body with formats. A message from before the box had formats has only its text.
-	it("posts the body of a message with its text, also after a failure", async () => {
+	// The box sends a body with formats. A message from before the box had formats has only its text. The
+	// idempotency key returns the first message only for the same input, so a new attempt has the same files.
+	it("posts the body and the files of a message with its text, also after a failure", async () => {
 		const room = fakeRoom();
 		const body: ChatBody = {
 			type: "doc",
 			content: [{ type: "paragraph", content: [{ type: "text", text: "Ship", marks: [{ type: "strong" }] }] }],
 		};
-		room.outbox.send("Ship", body);
-		expect(room.outbox.getState().pending[0]?.body).toEqual(body);
+		room.outbox.send("Ship", body, [FILE]);
+		expect(room.outbox.getState().pending[0]).toMatchObject({ body, files: [FILE] });
 		await room.calls[0]?.fail(refusal(503, "unavailable", "Try again."));
 		await vi.advanceTimersByTimeAsync(RETRY_WAITS_MS[0] ?? 0);
-		expect(room.calls.map((call) => [call.text, call.body])).toEqual([
-			["Ship", body],
-			["Ship", body],
+		expect(room.calls.map((call) => [call.text, call.body, call.files])).toEqual([
+			["Ship", body, [FILE]],
+			["Ship", body, [FILE]],
 		]);
 	});
 
@@ -184,6 +210,25 @@ describe("the outbox of a room", () => {
 		room.outbox.discard(key);
 		expect(room.pending()).toEqual([]);
 		expect(room.sent).toEqual([]);
+	});
+
+	// The files of a message are in the drive of the person. A message that the room can have keeps them.
+	it("puts the files of a removed message in the trash only when the server surely does not have it", async () => {
+		const room = fakeRoom();
+		room.outbox.send("Refused", undefined, [FILE]);
+		await room.calls[0]?.fail(refusal(403, "forbidden", "You are not a member of this room."));
+		room.outbox.send("No answer", undefined, [{ ...FILE, name: "kept.pdf" }]);
+		for (const wait of [0, ...RETRY_WAITS_MS]) {
+			await vi.advanceTimersByTimeAsync(wait);
+			await room.calls[room.calls.length - 1]?.fail(new TypeError("Failed to fetch"));
+		}
+		expect(room.outbox.getState().pending).toMatchObject([
+			{ text: "Refused", state: "failed", uncertain: false },
+			{ text: "No answer", state: "failed", uncertain: true },
+		]);
+		for (const message of room.outbox.getState().pending) room.outbox.discard(message.key);
+		expect(room.pending()).toEqual([]);
+		expect(room.trashed).toEqual(["plan.pdf"]);
 	});
 
 	it("tells its listeners about each change, and gives a stored message to nobody while no list shows the room", async () => {

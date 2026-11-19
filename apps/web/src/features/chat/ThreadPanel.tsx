@@ -1,13 +1,18 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@asterra/contracts";
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { ApiError, CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@asterra/contracts";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
+import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
+import { AttachButton, AttachmentChips } from "./ComposerFiles.tsx";
 import { bodyText } from "./composerSchema.ts";
-import { type MessageWatch, usePageVisible } from "./data.ts";
+import { type MessageWatch, newAttachments, useAttachments, usePageVisible } from "./data.ts";
+import { useFileDrop } from "./fileDrop.ts";
 import { MessageBody } from "./MessageBody.tsx";
+import { LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
 import type { MentionContext } from "./mentions.ts";
 import {
 	createFollowKeeper,
@@ -66,6 +71,11 @@ export function ThreadPanel({
 	const [sendError, setSendError] = useState<string | null>(null);
 	/** The last send that got no answer: a second send of the same reply posts it one time. */
 	const lastAttempt = useRef<ReplyAttempt | null>(null);
+	/**
+	 * The files of the reply sends whose answer did not come: the room can have stored a reply with them. A
+	 * later refusal, also of a send with a different key, never puts them in the trash.
+	 */
+	const uncertainFiles = useRef(new Set<string>());
 	const composer = useRef<ChatComposerHandle>(null);
 	const body = useRef<HTMLDivElement>(null);
 	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
@@ -76,6 +86,29 @@ export function ThreadPanel({
 	const headingId = useId();
 	const ownId = useSession().whoami.principal.id;
 	const visible = usePageVisible();
+	const toast = useToast();
+	// The files of the reply. They go away with the view: an upload that runs stops, and a file that is in
+	// the drive goes to the trash, as for a reply that the person did not send. A file of a send never goes
+	// to the trash (`take`): the room can have the reply, also when its answer did not arrive.
+	const attachments = useMemo(() => newAttachments(), []);
+	const files = useAttachments(attachments);
+	useEffect(
+		() => () => {
+			attachments.removeAll();
+		},
+		[attachments],
+	);
+	const addFiles = useCallback(
+		(added: File[], folders: readonly string[] = []) => {
+			if (folders.length > 0) {
+				toast({ message: "A folder cannot go into a message. Drop the files that are in it.", tone: "error" });
+			}
+			attachments.add(added);
+		},
+		[attachments, toast],
+	);
+	/** True while the person drags files over the view of the thread. */
+	const dropping = useFileDrop("thread", addFiles);
 	/** The state of the thread for the person, as the keeper has it. Null before the first read. */
 	const [follow, setFollow] = useState<ChatThreadFollow | null>(null);
 	/** Keeps the follow and the marker apart, so an older answer never hides an own change (`createFollowKeeper`). */
@@ -204,19 +237,42 @@ export function ThreadPanel({
 		if (element && replyCount > 0 && stick.current) element.scrollTop = element.scrollHeight;
 	}, [replyCount]);
 
-	/** Closes the view, unless the box has a reply: one key must not delete a reply. */
+	/** Gives the focus to the box of the reply. */
+	const focusBox = useCallback(() => composer.current?.focus(), []);
+
+	/** Keeps the list at its end when a picture or a video gets its size, if the list showed its end. */
+	const keepEnd = useCallback(() => {
+		const element = body.current;
+		if (element && stick.current) element.scrollTop = element.scrollHeight;
+	}, []);
+
+	/** Closes the view, unless the box has a reply or files: one key must not delete a reply. */
 	const closeUnlessTyped = () => {
-		if (draft === null) onClose();
+		if (draft === null && files.list.length === 0) onClose();
 	};
 
 	/** The characters of the reply above the limit of a message, or 0. */
 	const replyOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
+	/** True when the reply has text or files, and each file is in the drive. */
+	const canSend = canSendWith(draft !== null, files.list) && replyOver === 0;
+
+	/** Removes the preview of a link of an own reply. The link stays in the text. */
+	function removePreview(id: string, url: string) {
+		api.call("chat.remove_link_preview", { room_id: roomId, message_id: id, url }).then(
+			({ message }) => view.current?.receive(message),
+			(error: unknown) => toast({ message: errorMessage(error), tone: "error" }),
+		);
+	}
 
 	async function send() {
 		const thread = view.current?.current();
-		if (!draft || sending || !thread || thread.parent.deleted || replyOver > 0) return;
+		if (!canSend || sending || !thread || thread.parent.deleted) return;
 		const sent = draft;
-		const attempt = replyAttempt(lastAttempt.current, JSON.stringify({ body: sent, alsoInRoom }), () =>
+		// Each file is in the drive. The files stay in the box until the room has the reply, and from now on
+		// nothing puts them in the trash.
+		const sentFiles = attachments.take() ?? [];
+		const fileIds = sentFiles.map((file) => file.item_id);
+		const attempt = replyAttempt(lastAttempt.current, JSON.stringify({ body: sent, alsoInRoom, fileIds }), () =>
 			crypto.randomUUID(),
 		);
 		lastAttempt.current = attempt;
@@ -226,7 +282,8 @@ export function ThreadPanel({
 			const { message } = await api.call("chat.post_message", {
 				room_id: roomId,
 				parent_id: parentId,
-				body: sent,
+				...(sent ? { body: sent } : {}),
+				...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
 				idempotency_key: attempt.key,
 				...(alsoInRoom ? { also_in_room: true } : {}),
 			});
@@ -241,6 +298,7 @@ export function ThreadPanel({
 			lastAttempt.current = null;
 			stick.current = true;
 			setAlsoInRoom(false);
+			attachments.release(sentFiles);
 			// Text that the person typed during the send stays in the box.
 			if (draftNow.current === sent) {
 				composer.current?.clear();
@@ -248,6 +306,12 @@ export function ThreadPanel({
 			}
 		} catch (error) {
 			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
+			// A refusal is an answer: that attempt stored nothing. A file that no send with a lost answer took is
+			// surely in no reply, so it is part of no send, and a close puts it in the trash. A file of a send
+			// with a lost answer stays protected, also after a refusal of a later send with a different key.
+			const refused = error instanceof ApiError && error.status < 500;
+			if (refused) attachments.unmark(sentFiles.filter((file) => !uncertainFiles.current.has(file.item_id)));
+			else for (const file of sentFiles) uncertainFiles.current.add(file.item_id);
 			setSendError(errorMessage(error));
 		} finally {
 			setSending(false);
@@ -257,7 +321,8 @@ export function ThreadPanel({
 	const thread = state.status === "ready" ? state.thread : null;
 	return (
 		<aside
-			className="chat-thread"
+			className={dropping ? "chat-thread chat-thread-drop" : "chat-thread"}
+			data-file-drop="thread"
 			aria-labelledby={headingId}
 			onKeyDown={(event) => {
 				if (event.key === "Escape" && !event.defaultPrevented) {
@@ -317,7 +382,14 @@ export function ThreadPanel({
 							stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_PX;
 						}}
 					>
-						<ThreadMessage message={thread.parent} mentions={mentions} />
+						<ThreadMessage
+							message={thread.parent}
+							mentions={mentions}
+							ownId={ownId}
+							onRemovePreview={removePreview}
+							onFocusBox={focusBox}
+							onMediaLoad={keepEnd}
+						/>
 						<p className="chat-thread-count">
 							{thread.replies.length === 0 ? "No replies yet" : plural(thread.replies.length, "reply", "replies")}
 						</p>
@@ -331,7 +403,14 @@ export function ThreadPanel({
 											</li>
 										)}
 										<li className="chat-thread-reply">
-											<ThreadMessage message={reply} mentions={mentions} />
+											<ThreadMessage
+												message={reply}
+												mentions={mentions}
+												ownId={ownId}
+												onRemovePreview={removePreview}
+												onFocusBox={focusBox}
+												onMediaLoad={keepEnd}
+											/>
 										</li>
 									</Fragment>
 								))}
@@ -358,21 +437,40 @@ export function ThreadPanel({
 									onChange={changeDraft}
 									onSubmit={() => void send()}
 									onCancel={closeUnlessTyped}
+									onFiles={addFiles}
 									mentions={mentions}
 									placement="above"
 									autofocus
+									files={
+										<AttachmentChips
+											files={files.list}
+											notice={files.notice}
+											busy={sending}
+											onRetry={attachments.retry}
+											onRemove={attachments.remove}
+											onFocusAway={focusBox}
+										/>
+									}
 								>
-									<button
-										type="submit"
-										className="chat-send"
-										aria-label="Send the reply"
-										title="Send (Enter)"
-										disabled={!draft || sending || replyOver > 0}
-									>
-										<Icon name="arrowUp" size={18} />
-									</button>
+									<span className="chat-composer-actions">
+										<AttachButton count={files.list.length} onFiles={addFiles} />
+										<button
+											type="submit"
+											className="chat-send"
+											aria-label="Send the reply"
+											title="Send (Enter)"
+											disabled={!canSend || sending}
+										>
+											<Icon name="arrowUp" size={18} />
+										</button>
+									</span>
 								</ChatComposer>
 							</div>
+							{filesNote(files.list) !== null && (
+								<p className="chat-composer-files-note" role="status">
+									{filesNote(files.list)}
+								</p>
+							)}
 							{replyOver > 0 && (
 								<p className="chat-composer-limit" role="status">
 									The reply has {plural(replyOver, "character")} more than the limit of{" "}
@@ -396,8 +494,27 @@ export function ThreadPanel({
 	);
 }
 
-/** One message of the thread: its author, its time and its body. */
-function ThreadMessage({ message, mentions }: { message: ChatMessage; mentions: MentionContext }) {
+/**
+ * One message of the thread: its author, its time, its body, its files and its link previews. The author
+ * removes a link preview with `onRemovePreview` (`linkPreviewCards` decides who sees the X).
+ */
+function ThreadMessage({
+	message,
+	mentions,
+	ownId,
+	onRemovePreview,
+	onFocusBox,
+	onMediaLoad,
+}: {
+	message: ChatMessage;
+	mentions: MentionContext;
+	ownId: string;
+	onRemovePreview: (id: string, url: string) => void;
+	/** Gives the focus to the box of the reply, after the X of the last link preview. */
+	onFocusBox: () => void;
+	/** Runs when a picture or a video of the message gets its size. */
+	onMediaLoad: () => void;
+}) {
 	const author = message.author.display_name;
 	return (
 		<article className="chat-thread-message">
@@ -418,14 +535,33 @@ function ThreadMessage({ message, mentions }: { message: ChatMessage; mentions: 
 				{message.deleted ? (
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
-					<div className="chat-text">
-						<MessageBody body={message.body} text={message.text} mentions={mentions} />
-						{message.edited_at && (
-							<span className="chat-edited" title={fullDate(message.edited_at)}>
-								(edited)
-							</span>
+					<>
+						{(message.text !== "" || message.files.length === 0 || message.edited_at) && (
+							<div className="chat-text">
+								<MessageBody body={message.body} text={message.text} mentions={mentions} />
+								{message.edited_at && (
+									<span className="chat-edited" title={fullDate(message.edited_at)}>
+										(edited)
+									</span>
+								)}
+							</div>
 						)}
-					</div>
+						<MessageFiles
+							files={message.files}
+							roomId={message.room_id}
+							messageId={message.id}
+							pending={false}
+							onMediaLoad={onMediaLoad}
+						/>
+						<LinkPreviews
+							message={message}
+							ownId={ownId}
+							pending={false}
+							onRemove={(url) => onRemovePreview(message.id, url)}
+							onFocusAway={onFocusBox}
+							onMediaLoad={onMediaLoad}
+						/>
+					</>
 				)}
 			</div>
 		</article>

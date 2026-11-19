@@ -326,6 +326,10 @@ export const docsHandlers: Pick<HandlerMap<CallContext>, DocsOperation> = {
 		if (input.from_image_id === undefined) {
 			// An image file of Drive. The bytes are read again, so the type comes from the file, not from its name.
 			const file = accept(await source.space.fileContent(source.ctx, input.from_item_id, null));
+			// A file that uploaded in parts can be much larger than an image. Refuse it before its bytes are in memory.
+			if (file.version.size > DOC_LIMITS.imageBytes) {
+				throw new OperationError("payload_too_large", `An image can be at most ${DOC_LIMITS.imageBytes} bytes.`);
+			}
 			const object = await call.env.BLOBS.get(file.blobKey);
 			if (!object) throw new Error("the file content is missing from R2");
 			const bytes = new Uint8Array(await object.arrayBuffer());

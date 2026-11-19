@@ -4,6 +4,8 @@ import {
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	type ChatBody,
+	type ChatFile,
+	type ChatLinkPreview,
 	type ChatMessage,
 	type ChatReaction,
 	type ChatSocketEvent,
@@ -24,6 +26,7 @@ import {
 import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
+import { extractLinks, type LinkFacts, type LinkState, linkPreviews, mergeLinks, parseLinks } from "./links.ts";
 import { storedGroups, withMentions } from "./mentions.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
@@ -98,6 +101,51 @@ export interface MessageRecord {
 	also_in_room: boolean;
 	/** The summary of the replies, or null without replies. Times are in milliseconds. */
 	thread: { reply_count: number; last_reply_at: number; authors: ActorRecord[] } | null;
+	files: ChatFile[];
+	link_previews: ChatLinkPreview[];
+}
+
+/** The job of the queue of link previews: fetch the previews of the links of one message. */
+export interface LinkPreviewJob {
+	v: 1;
+	kind: "link_preview";
+	roomId: string;
+	messageId: string;
+}
+
+/**
+ * A file of a message, as the Worker gives it to the room: the facts of the item in the drive of the
+ * author at the time of the post. The room stores no bytes.
+ */
+export interface MessageFile {
+	item_id: string;
+	space_id: string;
+	name: string;
+	mime_type: string;
+	size: number;
+	detected_type: string | null;
+	preview: { width: number; height: number } | null;
+}
+
+/** The kind of a file that a browser can show, from the type that the server found in its bytes. */
+function fileKind(detected: string | null): ChatFile["kind"] {
+	if (detected === "image/png" || detected === "image/jpeg" || detected === "image/gif" || detected === "image/webp") {
+		return "image";
+	}
+	if (detected === "video/mp4" || detected === "video/webm") return "video";
+	return "file";
+}
+
+function toChatFile(file: MessageFile): ChatFile {
+	return {
+		item_id: file.item_id,
+		space_id: file.space_id,
+		name: file.name,
+		mime_type: file.mime_type,
+		size: file.size,
+		kind: fileKind(file.detected_type),
+		preview: file.preview,
+	};
 }
 
 /**
@@ -183,6 +231,7 @@ interface MessageRow extends Row {
 	reply_count: number;
 	last_reply_at: number | null;
 	reply_authors_json: string | null;
+	links_json: string | null;
 }
 
 interface OutboxRow extends Row {
@@ -365,6 +414,29 @@ const MIGRATIONS: string[][] = [
 		`CREATE INDEX thread_follows_recent ON thread_follows (principal_id, last_reply_at DESC, parent_id DESC)
 			WHERE following = 1 AND last_reply_at IS NOT NULL`,
 	],
+	// The files of each message that stays: the facts of an item of the drive of the author (`MessageFile`).
+	// The bytes stay in Drive. A deleted message keeps no file.
+	[
+		`CREATE TABLE message_files (
+			message_id TEXT NOT NULL,
+			position INTEGER NOT NULL,
+			space_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			file_json TEXT NOT NULL,
+			PRIMARY KEY (message_id, item_id)
+		) WITHOUT ROWID`,
+		"CREATE INDEX message_files_item ON message_files (space_id, item_id)",
+		// The link previews of a message (`LinkState`), which the server fetched. Null without links.
+		"ALTER TABLE messages ADD COLUMN links_json TEXT",
+		// The messages whose link previews wait for a fetch. The alarm sends each to the queue of previews.
+		// `origin` is the origin of the post, so the fetch never asks this deployment.
+		`CREATE TABLE link_jobs (
+			message_id TEXT PRIMARY KEY,
+			origin TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+	],
 ];
 
 /**
@@ -387,6 +459,17 @@ const ALARM_GUARD_MS = 30_000;
 /** The start of an outbox target for the `PrincipalDO` of a member: `principal:<principal id>`. */
 const PRINCIPAL_TARGET = "principal:";
 /**
+ * The start of an outbox target for the grant of the room on a file in Drive:
+ * `grant:<space id>:<item id>`. The room wants the grant while a message of the room holds the file.
+ */
+const GRANT_TARGET = "grant:";
+/** The start of an outbox target for the delete of an R2 object of the room: `blob:<key>`. */
+const BLOB_TARGET = "blob:";
+/** The time after a job of link previews goes to the queue, before the room sends it again. */
+const LINK_RESEND_MS = 10 * 60_000;
+/** The sends of one job of link previews. After them, each preview that waits gets no preview. */
+const LINK_ATTEMPTS = 3;
+/**
  * The time that the state for the `PrincipalDO` of a member waits after a change of a different
  * member. The changes of that time go out as one state.
  */
@@ -395,6 +478,7 @@ export const MEMBER_DELAY_MS = 500;
 const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
 const NO_MESSAGE = "No message has that id in this room.";
+const EMPTY_MESSAGE = "A message needs text or a file.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
 /**
  * The most message allowances that a room keeps in memory. A room has `membersPerRoom` members at
@@ -424,7 +508,7 @@ export function nameKey(name: string): string {
 	return name.normalize("NFC").toLowerCase();
 }
 
-function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): MessageRecord {
+function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[], files: ChatFile[]): MessageRecord {
 	return {
 		id: row.id,
 		room_id: roomId,
@@ -448,6 +532,8 @@ function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[]): 
 						authors: JSON.parse(row.reply_authors_json ?? "[]") as ActorRecord[],
 					}
 				: null,
+		files,
+		link_previews: row.deleted_at === null ? linkPreviews(parseLinks(row.links_json)) : [],
 	};
 }
 
@@ -1086,9 +1172,260 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return byMessage;
 	}
 
-	/** One message with its reactions. */
+	/** The files of messages, in order, by message id. */
+	private filesOf(messageIds: readonly string[]): Map<string, ChatFile[]> {
+		const byMessage = new Map<string, ChatFile[]>();
+		if (messageIds.length === 0) return byMessage;
+		const rows = this.all<{ message_id: string; file_json: string }>(
+			`SELECT message_id, file_json FROM message_files JOIN json_each(?) wanted ON wanted.value = message_id
+			ORDER BY position`,
+			JSON.stringify(messageIds),
+		);
+		for (const row of rows) {
+			const files = byMessage.get(row.message_id) ?? [];
+			files.push(toChatFile(JSON.parse(row.file_json) as MessageFile));
+			byMessage.set(row.message_id, files);
+		}
+		return byMessage;
+	}
+
+	/** One message with its reactions and its files. */
 	private messageRecord(roomId: string, row: MessageRow): MessageRecord {
-		return toMessage(roomId, row, this.reactionsOf([row.id]).get(row.id) ?? []);
+		return toMessage(
+			roomId,
+			row,
+			this.reactionsOf([row.id]).get(row.id) ?? [],
+			this.filesOf([row.id]).get(row.id) ?? [],
+		);
+	}
+
+	/**
+	 * Replaces the files of a message, in the transaction of the caller. Each file that comes or goes
+	 * makes its grant target due, so the grant of the room in Drive follows.
+	 */
+	private setFiles(messageId: string, files: readonly MessageFile[]): void {
+		const before = this.all<{ space_id: string; item_id: string }>(
+			"SELECT space_id, item_id FROM message_files WHERE message_id = ?",
+			messageId,
+		);
+		this.sql.exec("DELETE FROM message_files WHERE message_id = ?", messageId);
+		files.forEach((file, position) => {
+			this.sql.exec(
+				"INSERT INTO message_files (message_id, position, space_id, item_id, file_json) VALUES (?, ?, ?, ?, ?)",
+				messageId,
+				position,
+				file.space_id,
+				file.item_id,
+				JSON.stringify(file),
+			);
+		});
+		const targets = new Set([...before, ...files].map((file) => `${GRANT_TARGET}${file.space_id}:${file.item_id}`));
+		for (const target of targets) this.touch(target);
+	}
+
+	/**
+	 * Stores the link states of a message after a change of its text, in the transaction of the caller. A
+	 * new link waits for a fetch: the message gets a job for the queue. The picture of a link that went away
+	 * goes from R2 through the outbox.
+	 */
+	private setLinks(
+		messageId: string,
+		before: readonly LinkState[],
+		urls: readonly string[],
+		origin: string | null,
+	): void {
+		const { links, dropped } = mergeLinks(before, urls);
+		this.sql.exec(
+			"UPDATE messages SET links_json = ? WHERE id = ?",
+			links.length === 0 ? null : JSON.stringify(links),
+			messageId,
+		);
+		for (const key of dropped) this.touch(`${BLOB_TARGET}${key}`);
+		if (links.some((link) => link.state === "pending") && origin !== null) {
+			this.sql.exec(
+				`INSERT INTO link_jobs (message_id, origin, next_attempt_at) VALUES (?, ?, ?)
+				ON CONFLICT (message_id) DO UPDATE SET origin = excluded.origin, attempts = 0, next_attempt_at = excluded.next_attempt_at`,
+				messageId,
+				origin,
+				Date.now(),
+			);
+		} else if (!links.some((link) => link.state === "pending")) {
+			this.sql.exec("DELETE FROM link_jobs WHERE message_id = ?", messageId);
+		}
+	}
+
+	/** The links of a message whose preview waits for a fetch, with the author and the origin of the post. */
+	linkJob(messageId: string): { authorId: string; origin: string; urls: string[] } | null {
+		if (!this.hasTables) return null;
+		const row = this.message(messageId);
+		const job = this.one<{ origin: string }>("SELECT origin FROM link_jobs WHERE message_id = ?", messageId);
+		if (!row || !job || row.deleted_at !== null) return null;
+		const urls = parseLinks(row.links_json)
+			.filter((link) => link.state === "pending")
+			.map((link) => link.url);
+		return urls.length === 0 ? null : { authorId: row.author_id, origin: job.origin, urls };
+	}
+
+	/**
+	 * Changes the link states of a message with a new version, then sends the message to the sockets.
+	 * `change` returns true when it changed a state. The pictures in `orphans` go from R2.
+	 */
+	private async changeLinks(
+		messageId: string,
+		change: (links: LinkState[]) => boolean,
+		orphans: string[] = [],
+	): Promise<void> {
+		const row = this.message(messageId);
+		const room = this.room();
+		const links = row && row.deleted_at === null ? parseLinks(row.links_json) : [];
+		const changed = row !== null && room !== null && change(links);
+		this.ctx.storage.transactionSync(() => {
+			for (const key of orphans) this.touch(`${BLOB_TARGET}${key}`);
+			if (!changed || !row || !room) return;
+			const version = room.version + 1;
+			this.sql.exec(
+				"UPDATE messages SET links_json = ?, version = ? WHERE id = ?",
+				JSON.stringify(links),
+				version,
+				messageId,
+			);
+			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+			if (!links.some((link) => link.state === "pending"))
+				this.sql.exec("DELETE FROM link_jobs WHERE message_id = ?", messageId);
+			this.roomChanged(row.author_id);
+		});
+		if (changed && room)
+			await this.publish(messageEvent(this.messageRecord(room.room_id, this.message(messageId) as MessageRow)));
+		else await this.flush();
+	}
+
+	/**
+	 * From the queue of link previews: the result of the fetch of each link. A result for a link that does
+	 * not wait now (the author changed the text, or removed the preview, or a second delivery came) changes
+	 * nothing, and its picture goes from R2.
+	 */
+	async setLinkPreviews(messageId: string, results: { url: string; facts: LinkFacts | null }[]): Promise<void> {
+		if (!this.hasTables) return;
+		const orphans: string[] = [];
+		const row = this.message(messageId);
+		const waiting = new Set(
+			row && row.deleted_at === null
+				? parseLinks(row.links_json)
+						.filter((link) => link.state === "pending")
+						.map((link) => link.url)
+				: [],
+		);
+		for (const result of results) {
+			if (!waiting.has(result.url) && result.facts?.image) orphans.push(result.facts.image.key);
+		}
+		await this.changeLinks(
+			messageId,
+			(links) => {
+				let changed = false;
+				for (const result of results) {
+					const index = links.findIndex((link) => link.url === result.url && link.state === "pending");
+					if (index < 0) continue;
+					links[index] = result.facts
+						? { url: result.url, state: "ready", ...result.facts }
+						: { url: result.url, state: "none" };
+					changed = true;
+				}
+				return changed;
+			},
+			orphans,
+		);
+	}
+
+	/** Removes the preview of one link of a message of the caller, or of each link. Only the author can. */
+	async removeLinkPreview(
+		call: RoomCall,
+		messageId: string,
+		url: string | null,
+	): Promise<{ message: MessageRecord } | Refusal> {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const row = this.message(messageId);
+		if (!row) return refuse("not_found", NO_MESSAGE);
+		if (row.author_id !== call.actor.principal_id) {
+			return refuse("forbidden", "You can remove the preview of a message that you wrote only.");
+		}
+		const removed: string[] = [];
+		await this.changeLinks(messageId, (links) => {
+			let changed = false;
+			links.forEach((link, index) => {
+				if ((url !== null && link.url !== url) || link.state === "removed") return;
+				if (link.image) removed.push(link.image.key);
+				links[index] = { url: link.url, state: "removed" };
+				changed = true;
+			});
+			return changed;
+		});
+		if (removed.length > 0) {
+			this.ctx.storage.transactionSync(() => {
+				for (const key of removed) this.touch(`${BLOB_TARGET}${key}`);
+			});
+			await this.flush();
+		}
+		return { message: this.messageRecord(opened.room.room_id, this.message(messageId) as MessageRow) };
+	}
+
+	/** The picture of the preview of a link, for a member of the room. */
+	linkImage(call: RoomCall, messageId: string, url: string): { key: string; type: string; size: number } | Refusal {
+		const room = this.room();
+		if (!room || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
+		const row = this.message(messageId);
+		const link =
+			row && row.deleted_at === null ? parseLinks(row.links_json).find((entry) => entry.url === url) : undefined;
+		if (link?.state !== "ready" || !link.image) return refuse("not_found", "The link has no picture.");
+		return { key: link.image.key, type: link.image.type, size: link.image.size };
+	}
+
+	/** Sends the jobs of link previews that are due to the queue. A job without a result after its sends gets no preview. */
+	private async sendLinkJobs(roomId: string): Promise<void> {
+		const rows = this.all<{ message_id: string; attempts: number }>(
+			"SELECT message_id, attempts FROM link_jobs WHERE next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?",
+			Date.now(),
+			OUTBOX_BATCH,
+		);
+		for (const row of rows) {
+			if (row.attempts >= LINK_ATTEMPTS) {
+				await this.changeLinks(row.message_id, (links) => {
+					let changed = false;
+					links.forEach((link, index) => {
+						if (link.state !== "pending") return;
+						links[index] = { url: link.url, state: "none" };
+						changed = true;
+					});
+					return changed;
+				});
+				this.sql.exec("DELETE FROM link_jobs WHERE message_id = ?", row.message_id);
+				continue;
+			}
+			const job: LinkPreviewJob = { v: 1, kind: "link_preview", roomId, messageId: row.message_id };
+			let wait = LINK_RESEND_MS;
+			try {
+				await this.env.CHAT_PREVIEWS.send(job);
+			} catch (error) {
+				wait = backoff(row.attempts + 1);
+				log("warn", "chat link preview queue send failed", {
+					messageId: row.message_id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			this.sql.exec(
+				"UPDATE link_jobs SET attempts = attempts + 1, next_attempt_at = ? WHERE message_id = ?",
+				Date.now() + wait,
+				row.message_id,
+			);
+		}
+	}
+
+	/** The stored files of a message, in order. */
+	private storedFiles(messageId: string): MessageFile[] {
+		return this.all<{ file_json: string }>(
+			"SELECT file_json FROM message_files WHERE message_id = ? ORDER BY position",
+			messageId,
+		).map((row) => JSON.parse(row.file_json) as MessageFile);
 	}
 
 	/**
@@ -1334,8 +1671,43 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** The messages of a page with their reactions, with one read of the reactions. */
 	private messageRecords(roomId: string, rows: readonly MessageRow[]): MessageRecord[] {
-		const reactions = this.reactionsOf(rows.map((row) => row.id));
-		return rows.map((row) => toMessage(roomId, row, reactions.get(row.id) ?? []));
+		const ids = rows.map((row) => row.id);
+		const reactions = this.reactionsOf(ids);
+		const files = this.filesOf(ids);
+		return rows.map((row) => toMessage(roomId, row, reactions.get(row.id) ?? [], files.get(row.id) ?? []));
+	}
+
+	/**
+	 * The ids of the files of a message of the caller, for an edit: the Worker then checks in Drive only
+	 * the files that the edit adds.
+	 */
+	messageFileIds(call: RoomCall, messageId: string): { itemIds: string[] } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const row = this.message(messageId);
+		if (!row) return refuse("not_found", NO_MESSAGE);
+		if (row.author_id !== call.actor.principal_id) {
+			return refuse("forbidden", "You can change only a message that you wrote.");
+		}
+		return { itemIds: this.storedFiles(messageId).map((file) => file.item_id) };
+	}
+
+	/**
+	 * The drive and the item of a file of a message, for a member of the room. A principal that is not a
+	 * member gets not_found, also for a public room: the file is for the members only. A deleted message
+	 * holds no file.
+	 */
+	fileRef(call: RoomCall, messageId: string, itemId: string): { spaceId: string; itemId: string } | Refusal {
+		const room = this.room();
+		if (!room || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
+		const file = this.one<{ space_id: string }>(
+			`SELECT f.space_id FROM message_files f JOIN messages m ON m.id = f.message_id
+			WHERE f.message_id = ? AND f.item_id = ? AND m.deleted_at IS NULL`,
+			messageId,
+			itemId,
+		);
+		if (!file) return refuse("not_found", "The message holds no file with that id.");
+		return { spaceId: file.space_id, itemId };
 	}
 
 	/**
@@ -1429,6 +1801,30 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 	}
 
+	/**
+	 * The message that a call with this idempotency key stored, for a member of the room, or null when the
+	 * key is new. A retry of a post with files gets its message here before the files are checked again: the
+	 * author can have put a file in the trash after the first post.
+	 */
+	postedMessage(
+		call: RoomCall,
+		idempotency: { key: string; requestHash: string },
+	): { message: MessageRecord } | Refusal | null {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const earlier = this.one<{ request_hash: string; message_id: string }>(
+			"SELECT request_hash, message_id FROM idempotency WHERE key = ? AND created_at > ?",
+			idempotency.key,
+			Date.now() - IDEMPOTENCY_TTL_MS,
+		);
+		if (!earlier) return null;
+		if (earlier.request_hash !== idempotency.requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		const row = this.message(earlier.message_id);
+		return row ? { message: this.messageRecord(opened.room.room_id, row) } : null;
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,
@@ -1443,6 +1839,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 			parentId: string | null;
 			/** True for a reply that also goes to the room list. */
 			alsoInRoom: boolean;
+			/** The files of the message, which the Worker checked in the drive of the caller. */
+			files?: MessageFile[];
+			/** The origin of the call. The fetch of a link preview never asks it. */
+			linkOrigin?: string;
 		},
 	): Promise<{ message: MessageRecord; parent: MessageRecord | null; duplicate: boolean } | Refusal> {
 		// Hold room calls until the subscription boundary and message commit agree on their order.
@@ -1480,6 +1880,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (limited) return limited;
 			const content = await this.mentionedContent(opened.room, input.content);
 			if ("error" in content) return content;
+			const files = input.files ?? [];
+			if (content.text.trim() === "" && files.length === 0) return refuse("invalid", EMPTY_MESSAGE);
 			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, []);
 			if (groupRefusal) return groupRefusal;
 			// A reply changes its parent too. The parent gets the first version and the reply the next, so a
@@ -1515,6 +1917,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.sql.exec("UPDATE thread_follows SET last_reply_at = ? WHERE parent_id = ?", now, parent.id);
 				}
 				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
+				if (files.length > 0) this.setFiles(input.id, files);
+				this.setLinks(input.id, [], extractLinks(content.body), input.linkOrigin ?? null);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
 					this.sql.exec(
@@ -1544,6 +1948,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return { message, parent: changedParent, duplicate: false };
 		});
 		if (!("error" in posted) && !posted.duplicate) {
+			// The grants of the room on the files come before the event, so a member that gets the event can
+			// download the files. A grant that fails here waits in the outbox, and the alarm tries it again.
+			if (posted.message.files.length > 0) await this.flush();
 			// The parent first: its version comes before the version of the reply.
 			if (posted.parent) await this.publish(messageEvent(posted.parent));
 			await this.publish(messageEvent(posted.message));
@@ -1551,11 +1958,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return posted;
 	}
 
-	/** Replaces the content of a message. Only its author can do this. */
+	/**
+	 * Replaces the content of a message, its files, or the two. Only its author can do this. `input` null
+	 * keeps the content, and `files` null keeps the files. `files.order` is the new list of item ids:
+	 * each one is in `files.added`, which the Worker checked in Drive, or in the message now.
+	 */
 	async editMessage(
 		call: RoomCall,
 		messageId: string,
-		input: MessageContent,
+		input: MessageContent | null,
+		files: { order: string[]; added: MessageFile[] } | null = null,
+		linkOrigin: string | null = null,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		// Hold other room calls until the new version and the webhook event are stored.
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
@@ -1569,15 +1982,35 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
-			const content = await this.mentionedContent(room, input);
+			const storedBody = row.body_json ?? JSON.stringify(textBody(row.text));
+			const content =
+				input === null
+					? { text: row.text, body: JSON.parse(storedBody) as ChatBody }
+					: await this.mentionedContent(room, input);
 			if ("error" in content) return content;
 			const bodyJson = JSON.stringify(content.body);
-			const same = row.text === content.text && (row.body_json ?? JSON.stringify(textBody(row.text))) === bodyJson;
+			const stored = this.storedFiles(messageId);
+			let nextFiles = stored;
+			if (files !== null) {
+				const known = new Map([...stored, ...files.added].map((file) => [file.item_id, file]));
+				const picked = files.order.map((itemId) => known.get(itemId));
+				if (picked.some((file) => file === undefined)) {
+					return refuse("conflict", "The files of the message changed during the edit. Try again.");
+				}
+				nextFiles = picked as MessageFile[];
+			}
+			const sameFiles =
+				nextFiles.length === stored.length && nextFiles.every((file, index) => file.item_id === stored[index]?.item_id);
+			const same = row.text === content.text && storedBody === bodyJson && sameFiles;
 			if (same) return { message: this.messageRecord(room.room_id, row), changed: false as const };
+			if (content.text.trim() === "" && nextFiles.length === 0) return refuse("invalid", EMPTY_MESSAGE);
 			const limited = this.spendAllowance(call, Date.now());
 			if (limited) return limited;
-			const stored = row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody);
-			const groupRefusal = this.groupMentionRefusal(call.actor.principal_id, content.body, storedGroups(stored));
+			const groupRefusal = this.groupMentionRefusal(
+				call.actor.principal_id,
+				content.body,
+				storedGroups(JSON.parse(storedBody) as ChatBody),
+			);
 			if (groupRefusal) return groupRefusal;
 			const version = room.version + 1;
 			const now = Date.now();
@@ -1592,6 +2025,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 					messageId,
 				);
 				this.setMentions(row.seq, row.author_id, content.body, row.parent_id === null || row.also_in_room === 1);
+				if (!sameFiles) this.setFiles(messageId, nextFiles);
+				if (input !== null)
+					this.setLinks(messageId, parseLinks(row.links_json), extractLinks(content.body), linkOrigin);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent(
@@ -1609,6 +2045,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return { message, changed: true as const };
 		});
 		if (!("error" in edited) && edited.changed) {
+			// A file that the edit added gets its grant before the event, as for a new message.
+			if (files !== null && files.added.length > 0) await this.flush();
 			await this.publish(messageEvent(edited.message));
 		}
 		return edited;
@@ -1695,7 +2133,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 					messageId,
 				);
 				if (row.parent_id !== null) this.refreshThread(row.parent_id, version + 1);
-				// A deleted message keeps no reaction, no mention and no earlier version.
+				// A deleted message keeps no reaction, no mention, no file, no link preview and no earlier version.
+				this.setFiles(messageId, []);
+				this.setLinks(messageId, parseLinks(row.links_json), [], null);
 				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
 				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
 				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
@@ -1965,7 +2405,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private async schedule(): Promise<void> {
 		const next =
 			this.one<{ at: number | null }>(
-				"SELECT MIN(next_attempt_at) AS at FROM (SELECT next_attempt_at FROM outbox UNION ALL SELECT next_attempt_at FROM webhook_outbox)",
+				`SELECT MIN(next_attempt_at) AS at FROM (SELECT next_attempt_at FROM outbox
+				UNION ALL SELECT next_attempt_at FROM webhook_outbox UNION ALL SELECT next_attempt_at FROM link_jobs)`,
 			)?.at ?? null;
 		if (next === null) await this.ctx.storage.deleteAlarm();
 		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
@@ -2008,6 +2449,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				log("warn", "chat webhook queue send failed", { eventId: row.event_id, attempts });
 			}
 		}
+		const room = this.room();
+		if (room) await this.sendLinkJobs(room.room_id);
 		await this.schedule();
 	}
 
@@ -2083,13 +2526,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 				OUTBOX_BATCH,
 			);
 			if (rows.length === 0) break;
-			const indexRows = rows.filter((row) => !row.target.startsWith(PRINCIPAL_TARGET));
-			const principalRows = rows.filter((row) => row.target.startsWith(PRINCIPAL_TARGET));
-			const [indexFailed, principalsFailed] = await Promise.all([
+			const isPrincipal = (row: OutboxRow) => row.target.startsWith(PRINCIPAL_TARGET);
+			const isGrant = (row: OutboxRow) => row.target.startsWith(GRANT_TARGET);
+			const isBlob = (row: OutboxRow) => row.target.startsWith(BLOB_TARGET);
+			const indexRows = rows.filter((row) => !isPrincipal(row) && !isGrant(row) && !isBlob(row));
+			const [indexFailed, principalsFailed, grantsFailed, blobsFailed] = await Promise.all([
 				this.writeIndex(room, indexRows),
-				this.sendStates(room, principalRows),
+				this.sendStates(room, rows.filter(isPrincipal)),
+				this.sendGrants(room, rows.filter(isGrant)),
+				this.deleteBlobs(rows.filter(isBlob)),
 			]);
-			if (indexFailed || principalsFailed) break;
+			if (indexFailed || principalsFailed || grantsFailed || blobsFailed) break;
 		}
 		await this.schedule();
 	}
@@ -2150,6 +2597,61 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.retryLater(row, reason instanceof Error ? reason.message : String(reason));
 		});
 		if (failed > 0) log("warn", "chat principal state send failed", { targets: rows.length, failed });
+		return failed > 0;
+	}
+
+	/** Deletes the R2 objects of the rows: the pictures of link previews. Returns true when the delete failed. */
+	private async deleteBlobs(rows: OutboxRow[]): Promise<boolean> {
+		if (rows.length === 0) return false;
+		try {
+			await this.env.BLOBS.delete(rows.map((row) => row.target.slice(BLOB_TARGET.length)));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log("warn", "chat blob delete failed", { rows: rows.length, error: message });
+			for (const row of rows) this.retryLater(row, message);
+			return true;
+		}
+		for (const row of rows) this.done(row);
+		return false;
+	}
+
+	/**
+	 * Brings the grant of the room on each file of the rows to the current state in Drive: a grant while a
+	 * message of the room holds the file, else no grant. The author of the newest such message is the
+	 * author of the grant. Returns true when a call failed.
+	 */
+	private async sendGrants(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
+		if (rows.length === 0) return false;
+		const results = await Promise.allSettled(
+			rows.map((row) => {
+				const [spaceId = "", itemId = ""] = row.target.slice(GRANT_TARGET.length).split(":");
+				const holder = this.one<{ author_json: string }>(
+					`SELECT m.author_json FROM message_files f JOIN messages m ON m.id = f.message_id
+					WHERE f.space_id = ? AND f.item_id = ? ORDER BY m.seq DESC LIMIT 1`,
+					spaceId,
+					itemId,
+				);
+				return this.env.DRIVE_SPACE.get(this.env.DRIVE_SPACE.idFromName(spaceId)).setRoomGrant({
+					spaceId,
+					itemId,
+					roomId: room.room_id,
+					present: holder !== null,
+					by: holder === null ? null : (JSON.parse(holder.author_json) as ActorRecord),
+				});
+			}),
+		);
+		let failed = 0;
+		results.forEach((result, index) => {
+			const row = rows[index] as OutboxRow;
+			if (result.status === "fulfilled") {
+				this.done(row);
+				return;
+			}
+			failed += 1;
+			const reason = result.reason as unknown;
+			this.retryLater(row, reason instanceof Error ? reason.message : String(reason));
+		});
+		if (failed > 0) log("warn", "chat room grant failed", { targets: rows.length, failed });
 		return failed > 0;
 	}
 

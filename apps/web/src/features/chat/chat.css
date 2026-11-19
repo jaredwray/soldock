@@ -1242,6 +1242,16 @@ a.chat-author:hover {
 	.chat-composer-box .chat-format-toolbar {
 		display: none;
 	}
+
+	/* The files of the message take their own line above the text. */
+	.chat-composer-box .chat-composer-editor:has(.chat-attachments) {
+		flex-wrap: wrap;
+	}
+
+	.chat-composer-box .chat-attachments {
+		flex-basis: 100%;
+		order: -1;
+	}
 }
 
 /* Reactions: one button for each emoji, under the text of a message. */
@@ -1631,4 +1641,361 @@ a.chat-author:hover {
 	color: var(--negative);
 	font-size: 13px;
 	text-align: center;
+}
+
+/* Files of a new message: the attach button, a chip for each file, and the drop state of a box. */
+
+.chat-composer-actions {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+}
+
+.chat-attachments {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	flex: none;
+}
+
+.chat-attachment-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chat-attachment {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: min(260px, 100%);
+	min-width: 0;
+	padding: 6px 4px 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--background);
+}
+
+.chat-attachment-failed {
+	border-color: var(--negative);
+	background: var(--negative-soft);
+}
+
+.chat-attachment-icon {
+	display: grid;
+	flex: none;
+	place-items: center;
+	color: var(--muted-foreground);
+}
+
+.chat-attachment-failed .chat-attachment-icon {
+	color: var(--negative);
+}
+
+.chat-attachment-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.chat-attachment-name {
+	overflow: hidden;
+	font-size: 13px;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-attachment-detail {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.chat-attachment-failed .chat-attachment-detail {
+	color: var(--negative);
+}
+
+.chat-attachment-bar {
+	display: block;
+	height: 4px;
+	margin-top: 2px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: var(--border);
+}
+
+.chat-attachment-fill {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--foreground);
+	transition: width 0.2s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-attachment-fill {
+		transition: none;
+	}
+}
+
+.chat-attachments-notice,
+.chat-composer-files-note {
+	margin: 0;
+	font-size: 13px;
+}
+
+.chat-attachments-notice {
+	color: var(--negative);
+}
+
+.chat-composer-files-note {
+	margin: 6px 2px 0;
+	color: var(--muted-foreground);
+}
+
+/* A drag of files over the room: the list shows a hint, and the box gets a dashed line. */
+.chat-composer-box-drop {
+	border-style: dashed;
+	border-color: var(--focus);
+}
+
+.chat-drop {
+	position: absolute;
+	inset: 8px 16px;
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border: 2px dashed var(--focus);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--background) 88%, transparent);
+	color: var(--foreground);
+	font-weight: 600;
+	pointer-events: none;
+}
+
+.chat-thread-drop {
+	outline: 2px dashed var(--focus);
+	outline-offset: -4px;
+}
+
+.chat-edit-files {
+	margin-top: 2px;
+}
+
+/* Files of a message, under its text: a picture or a video in the page, and each other file as a chip. */
+
+.chat-files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+	white-space: normal;
+}
+
+.chat-file {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(320px, 100%);
+	min-width: 0;
+	padding: 8px 12px 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	color: var(--foreground);
+	text-decoration: none;
+}
+
+.chat-file-link:hover {
+	background: var(--hover);
+}
+
+.chat-file-link > .icon {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.chat-file-icon {
+	display: grid;
+	flex: none;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border-radius: var(--radius-sm);
+	background: var(--hover);
+	color: var(--muted-foreground);
+}
+
+.chat-file-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.chat-file-name {
+	overflow: hidden;
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 20px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-file-size {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.chat-file-media {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-width: 100%;
+	margin: 0;
+}
+
+.chat-file-image {
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	border-radius: var(--radius-md);
+}
+
+/* The box comes from the size of the small picture (`fileDisplay` in model.ts). */
+.chat-file-image img,
+.chat-file-video {
+	display: block;
+	max-width: min(360px, 100%);
+	max-height: 280px;
+	height: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	object-fit: contain;
+}
+
+/* A picture or a video without a small picture has a fixed shape, so its row keeps its height when it
+   loads. The file fits in the box. */
+.chat-file-media-fixed .chat-file-image img {
+	aspect-ratio: 3 / 2;
+}
+
+.chat-file-media-fixed .chat-file-video {
+	aspect-ratio: 16 / 9;
+}
+
+.chat-file-caption {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	max-width: min(360px, 100%);
+	color: var(--muted-foreground);
+	font-size: 12px;
+}
+
+.chat-file-caption-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chat-file-caption-size {
+	flex: none;
+}
+
+.chat-file-caption .icon-button {
+	margin-left: auto;
+}
+
+/* Link previews: content from outside, as plain text, with the picture that the server stored. */
+
+.chat-link-previews {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+	white-space: normal;
+}
+
+.chat-link-preview {
+	position: relative;
+	display: flex;
+	gap: 12px;
+	max-width: 520px;
+	padding: 8px 36px 8px 12px;
+	border-left: 3px solid var(--border);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	background: var(--surface);
+}
+
+.chat-link-preview-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.chat-link-preview-text p {
+	margin: 0;
+}
+
+.chat-link-preview-site {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.chat-link-preview-title {
+	font-size: 14px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.chat-link-preview-description {
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 18px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+}
+
+.chat-link-preview-image {
+	flex: none;
+	align-self: flex-start;
+	max-width: 96px;
+	max-height: 96px;
+	border-radius: var(--radius-sm);
+	object-fit: cover;
+}
+
+.chat-link-preview-remove {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+}
+
+@media (max-width: 600px) {
+	.chat-link-preview-image {
+		max-width: 64px;
+		max-height: 64px;
+	}
 }

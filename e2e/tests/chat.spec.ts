@@ -194,12 +194,9 @@ test("the Threads view lists the followed threads with their new replies, and a 
 		(route) => route.abort(),
 		{ times: 1 },
 	);
-	// The sidebar links to the view: its name is "Threads", with the count of the threads with new replies.
-	// Other tests can add threads, so the test reads the card of its own thread.
-	await page
-		.getByRole("navigation", { name: "Rooms" })
-		.getByRole("link", { name: /^Threads( .* with new replies)?$/ })
-		.click();
+	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
+	// A room of a different test can have a name that starts with "Threads", so the link is found by its address.
+	await page.getByRole("navigation", { name: "Rooms" }).locator('a[href="/chat/threads"]').click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
 	// A list that does not load offers to try again.
 	await page.getByRole("button", { name: "Try again" }).click();
