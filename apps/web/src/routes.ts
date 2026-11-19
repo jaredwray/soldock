@@ -46,8 +46,9 @@ export type Route =
 	/**
 	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
 	 * points to. `profileId` is the person or the agent whose profile shows in the place of a room.
+	 * `threads` is true for the Threads view: the threads that the person follows.
 	 */
-	| { page: "chat"; roomId: string | null; seq: number | null; profileId?: string }
+	| { page: "chat"; roomId: string | null; seq: number | null; profileId?: string; threads?: true }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -107,6 +108,9 @@ export function parseRoute(location: string): Route {
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
+		if (second === "threads") {
+			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, threads: true } : { page: "not-found" };
+		}
 		if (second === "people") {
 			return parts.length === 3 && isPrincipalId(third)
 				? { page: "chat", roomId: null, seq: null, profileId: third }
@@ -266,6 +270,11 @@ export function chatPath(roomId: string | null = null, seq: number | null = null
 	if (!roomId) return CHAT_PATH;
 	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
 	return seq === null ? room : `${room}/${seq}`;
+}
+
+/** The path of the Threads view of Chat: the threads that the person follows. */
+export function chatThreadsPath(): string {
+	return `${CHAT_PATH}/threads`;
 }
 
 /** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */
