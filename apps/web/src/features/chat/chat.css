@@ -1625,3 +1625,10 @@ a.chat-author:hover {
 	margin: 12px 0 0;
 	text-align: center;
 }
+
+.chat-threads-more-error {
+	margin: 8px 0 0;
+	color: var(--negative);
+	font-size: 13px;
+	text-align: center;
+}

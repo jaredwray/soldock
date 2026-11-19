@@ -852,9 +852,12 @@ MCP clients. The app has no UI-only path.
       least the threads that show, so "Show more" pages stay.
       While the first fill of the server continues, a page has no threads and a cursor: the view asks
       again, at most 10 times.
+    - A list that does not load shows the reason and "Try again". A "Show more" that fails keeps the list
+      and shows its reason under the button. An answer of an older read never replaces a newer list.
     - Each card has the room, the start of the first message (`chat.list_replies` with `limit: 1`, again
       after a new reply or a new `version` of the room, so an edit or a delete of the message shows), the
-      number of replies, the time of the newest reply, and the new replies.
+      number of replies, the time of the newest reply, and the new replies. A card whose read failed
+      reads again with the next read of the list.
     - A card opens the thread in the view of a thread at the right, as in a room. That view moves the read
       marker, so the card loses its count after the next `chat.threads` event. Each change of
       `threadsTick` tells the open thread to read its changes. The close gives the focus back to the card.

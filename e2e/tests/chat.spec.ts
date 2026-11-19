@@ -180,7 +180,7 @@ test("the Threads view lists the followed threads with their new replies, and a 
 }) => {
 	const tomasz = await signIn(browser, "tomasz");
 	const nadia = await signIn(browser, "nadia");
-	const name = unique("Threads room");
+	const name = unique("Followed room");
 	const roomId = await createRoom(tomasz, name, [nadia]);
 	const parent = await post(tomasz, roomId, unique("thread to follow"));
 	const answer = unique("answer");
@@ -188,12 +188,21 @@ test("the Threads view lists the followed threads with their new replies, and a 
 	await reply(nadia, roomId, parent.id, answer);
 	const page = await tomasz.newPage();
 	await page.goto("/chat");
-	// The sidebar links to the view. Other tests can add threads, so the test reads the card of its own thread.
+	// The first read of the list fails once (the count of the sidebar has a filter, so it does not).
+	await page.route(
+		(url) => url.pathname === "/api/v1/chat/threads" && !url.searchParams.has("filter"),
+		(route) => route.abort(),
+		{ times: 1 },
+	);
+	// The sidebar links to the view: its name is "Threads", with the count of the threads with new replies.
+	// Other tests can add threads, so the test reads the card of its own thread.
 	await page
 		.getByRole("navigation", { name: "Rooms" })
-		.getByRole("link", { name: /^Threads/ })
+		.getByRole("link", { name: /^Threads( .* with new replies)?$/ })
 		.click();
 	await expect(page).toHaveURL(/\/chat\/threads$/);
+	// A list that does not load offers to try again.
+	await page.getByRole("button", { name: "Try again" }).click();
 	const card = page.getByRole("button").filter({ hasText: parent.text });
 	await expect(card).toContainText(name);
 	await expect(card).toContainText("1 new reply");
