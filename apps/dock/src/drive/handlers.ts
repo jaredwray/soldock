@@ -1,7 +1,22 @@
-import { DRIVE_LIMITS, type OperationName, type SharedDrive, type SharedDriveMember } from "@asterra/contracts";
+import {
+	DRIVE_LIMITS,
+	driveDownloadPath,
+	type OperationName,
+	type SharedDrive,
+	type SharedDriveMember,
+} from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
-import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
+import {
+	base64ToBytes,
+	bytesToBase64,
+	type HandlerMap,
+	newId,
+	OperationError,
+	SNIFF_BYTES,
+	sha256Hex,
+	sniffType,
+} from "../platform/index.ts";
 import { loseDriveAccess } from "../webhooks/store.ts";
 import {
 	accept,
@@ -11,12 +26,14 @@ import {
 	type OpenSpace,
 	openSpace,
 	readDocument,
+	STORED_TYPE,
 	spaceOf,
 	toItems,
 	toOneItem,
 	unknownSpaceIds,
 	writeDocument,
 } from "./access.ts";
+import { setPreview, toVersion } from "./preview.ts";
 import { listSharedDriveRows, sharedDriveState } from "./shared-index.ts";
 import {
 	type ItemRecord,
@@ -24,21 +41,16 @@ import {
 	isSharedDriveId,
 	type MemberInput,
 	memberRefusal,
+	previewKeyFor,
 	type SharedDriveRecord,
 	type VersionRecord,
 } from "./space.ts";
+import { abortUpload, completeUpload, createUpload, getUpload, receivePart } from "./upload.ts";
 import { driveWebhookHandlers } from "./webhooks.ts";
 
 type DriveOperation = Extract<OperationName, `drive.${string}`>;
 
 const DEFAULT_PAGE = 50;
-
-/** R2 holds the bytes of a file with a neutral type. Nothing serves them from R2 to a browser. */
-const STORED_TYPE = { httpMetadata: { contentType: "application/octet-stream" } };
-
-function toVersion(version: VersionRecord) {
-	return { ...version, created_at: new Date(version.created_at).toISOString() };
-}
 
 function decode(content: string): Uint8Array {
 	try {
@@ -46,6 +58,22 @@ function decode(content: string): Uint8Array {
 	} catch {
 		throw new OperationError("invalid", "content_base64 is not valid base64.");
 	}
+}
+
+/**
+ * The bytes that a download of a version returns: its content, or its small picture. A version without a
+ * small picture has no preview: `not_found`.
+ */
+export function contentOf(
+	found: { blobKey: string; version: VersionRecord },
+	variant: "content" | "preview",
+): { key: string; size: number; mimeType: string } {
+	if (variant === "content") {
+		return { key: found.blobKey, size: found.version.size, mimeType: found.version.mime_type };
+	}
+	const { preview } = found.version;
+	if (!preview) throw new OperationError("not_found", "The file has no preview. Set one with drive.set_preview.");
+	return { key: previewKeyFor(found.blobKey), size: preview.size, mimeType: preview.type };
 }
 
 /**
@@ -223,7 +251,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		return {
 			space_id: own.spaceId,
 			...about,
-			limits: { file_bytes: DRIVE_LIMITS.fileBytes, versions_per_file: DRIVE_LIMITS.versionsPerFile },
+			limits: {
+				file_bytes: DRIVE_LIMITS.fileBytes,
+				upload_bytes: DRIVE_LIMITS.uploadBytes,
+				upload_part_bytes: DRIVE_LIMITS.uploadPartBytes,
+				versions_per_file: DRIVE_LIMITS.versionsPerFile,
+			},
 		};
 	},
 
@@ -307,6 +340,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				size: bytes.byteLength,
 				sha256: await sha256Hex(bytes),
 				mimeType: input.mime_type,
+				detectedType: sniffType(bytes.subarray(0, SNIFF_BYTES)),
 			},
 			idempotency,
 		});
@@ -329,6 +363,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			size: bytes.byteLength,
 			sha256: await sha256Hex(bytes),
 			mimeType: input.mime_type ?? null,
+			detectedType: sniffType(bytes.subarray(0, SNIFF_BYTES)),
 		});
 		// No version references the object of a refused attempt.
 		if ("error" in answer) await call.env.BLOBS.delete(blobKey);
@@ -340,15 +375,52 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	async "drive.download_file"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		const found = accept(await opened.space.fileContent(opened.ctx, input.item_id, input.version_id ?? null));
-		const object = await call.env.BLOBS.get(found.blobKey);
-		if (!object) throw new Error("the file content is missing from R2");
+		const source = contentOf(found, input.variant);
+		const size = source.size;
+		const offset = input.offset ?? 0;
+		if (offset > 0 && offset >= size) {
+			throw new OperationError("invalid", `offset must be less than the size of the file (${size} bytes).`);
+		}
+		const rest = size - offset;
+		if (input.length === undefined && rest > DRIVE_LIMITS.fileBytes) {
+			throw new OperationError(
+				"payload_too_large",
+				`The file has ${size} bytes, and one answer has at most ${DRIVE_LIMITS.fileBytes}. Set offset and length to get one range at a time, or GET ${driveDownloadPath(opened.spaceId, input.item_id)} to get all of it.`,
+			);
+		}
+		const length = Math.min(input.length ?? rest, rest);
+		let bytes = new Uint8Array();
+		if (length > 0) {
+			const object = await call.env.BLOBS.get(source.key, { range: { offset, length } });
+			if (!object) throw new Error("the file content is missing from R2");
+			bytes = new Uint8Array(await object.arrayBuffer());
+		}
 		return {
 			name: found.name,
-			mime_type: found.version.mime_type,
-			size: found.version.size,
+			mime_type: source.mimeType,
+			size,
 			version_id: found.version.id,
-			content_base64: bytesToBase64(new Uint8Array(await object.arrayBuffer())),
+			offset,
+			length,
+			content_base64: bytesToBase64(bytes),
 		};
+	},
+
+	"drive.set_preview": setPreview,
+	"drive.create_upload": createUpload,
+	"drive.get_upload": getUpload,
+	"drive.complete_upload": completeUpload,
+	"drive.abort_upload": abortUpload,
+
+	async "drive.upload_part"(call, input) {
+		const body = decode(input.content_base64);
+		return receivePart(call, {
+			spaceId: input.space_id,
+			uploadId: input.upload_id,
+			partNumber: input.part_number,
+			size: body.byteLength,
+			body,
+		});
 	},
 
 	async "drive.list_versions"(call, input) {
@@ -468,6 +540,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 					size: content.version.size,
 					sha256: content.version.sha256,
 					mimeType: content.version.mime_type,
+					detectedType: content.version.detected_type,
 				},
 				idempotency,
 			});
@@ -542,6 +615,10 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			permissions: found.permissions.map((permission) => ({
 				...permission,
 				created_at: new Date(permission.created_at).toISOString(),
+			})),
+			room_grants: found.room_grants.map((grant) => ({
+				...grant,
+				created_at: new Date(grant.created_at).toISOString(),
 			})),
 		};
 	},

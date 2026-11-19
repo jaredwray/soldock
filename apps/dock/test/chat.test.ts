@@ -1441,18 +1441,27 @@ describe("the mention count", () => {
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		// The room goes back to the schema before the table: the migrations after it are undone too, the
-		// table of earlier versions, the columns of threads and the table of follows.
+		// table of earlier versions, the columns of threads, the table of follows, and the files and links.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE mentions");
 			sql.exec("DROP TABLE message_edits");
 			sql.exec("DROP TABLE thread_follows");
+			sql.exec("DROP TABLE message_files");
+			sql.exec("DROP TABLE link_jobs");
 			sql.exec("DROP INDEX messages_parent");
 			sql.exec("DROP INDEX messages_room_list");
-			for (const column of ["parent_id", "also_in_room", "reply_count", "last_reply_at", "reply_authors_json"]) {
+			for (const column of [
+				"parent_id",
+				"also_in_room",
+				"reply_count",
+				"last_reply_at",
+				"reply_authors_json",
+				"links_json",
+			]) {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 5 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 6 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -2027,7 +2036,10 @@ describe("threads", () => {
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE thread_follows");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 2 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("DROP TABLE message_files");
+			sql.exec("DROP TABLE link_jobs");
+			sql.exec("ALTER TABLE messages DROP COLUMN links_json");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 3 AS TEXT) WHERE key = 'schema_version'");
 		});
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message

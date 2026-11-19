@@ -47,18 +47,22 @@
 	// Migrations are in ./migrations.
 	"d1_databases": [{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }],
 	// Raw MIME of each message (key mail/raw/<mailbox id>/<sha256>), the bytes of each version of
-	// each Drive file (key drive/<space id>/<item id>/<version id>), and the bytes of each image of
-	// each doc (key document/<item id>/<image id>).
+	// each Drive file (key drive/<space id>/<item id>/<version id>, its small picture with .thumb), the
+	// bytes of each image of each doc (key document/<item id>/<image id>), and the picture of each link
+	// preview of Chat (key chat/<room id>/<message id>/link-<id>).
 	"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
 	// email() puts each accepted message on soldock-mail-inbound. The consumer parses and delivers it.
 	// A MailboxDO puts each webhook event on soldock-webhooks. The consumer makes one job for each webhook
 	// and sends its POST. The consumer retries a POST by itself, so max_retries counts failures of Asterra.
+	// A ChatRoomDO puts each message with links on soldock-chat-previews. The consumer fetches the previews.
+	// The room sends a job again when no result came, so the queue needs no dead letter queue.
 	"queues": {
 		"producers": [
 			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
 			{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
 			{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
-			{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" }
+			{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
+			{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" }
 		],
 		"consumers": [
 			{
@@ -74,6 +78,12 @@
 				"max_batch_timeout": 2,
 				"max_retries": 10,
 				"dead_letter_queue": "soldock-webhooks-dlq"
+			},
+			{
+				"queue": "soldock-chat-previews",
+				"max_batch_size": 5,
+				"max_batch_timeout": 1,
+				"max_retries": 3
 			}
 		]
 	},
@@ -124,7 +134,8 @@
 					{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
 					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
 					{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
-					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" }
+					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
+					{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" }
 				],
 				"consumers": [
 					{
@@ -140,6 +151,12 @@
 						"max_batch_timeout": 2,
 						"max_retries": 10,
 						"dead_letter_queue": "soldock-webhooks-dlq"
+					},
+					{
+						"queue": "soldock-chat-previews",
+						"max_batch_size": 5,
+						"max_batch_timeout": 1,
+						"max_retries": 3
 					}
 				]
 			},
