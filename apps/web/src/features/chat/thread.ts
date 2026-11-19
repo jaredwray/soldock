@@ -1,4 +1,4 @@
-import type { ChatMessage } from "@asterra/contracts";
+import type { ChatMessage, ChatThreadFollow } from "@asterra/contracts";
 
 // The pure rules of the view of one thread. They have no DOM and no network, so apps/web/test checks them.
 
@@ -50,12 +50,108 @@ export const THREAD_RETRY_MAX_MS = 60_000;
 /** The shortest time between two reads for the room lists of a room that is not in the room list, in ms. */
 export const THREAD_POLL_MS = 15_000;
 
+/**
+ * The seq of the first new reply for a person: the first reply after the read marker of the thread that
+ * stays and that a different principal wrote, or null. The server counts `unread_count` with the same rule.
+ */
+export function firstUnread(
+	replies: readonly Pick<ChatMessage, "seq" | "deleted" | "author">[],
+	lastReadSeq: number,
+	ownId: string,
+): number | null {
+	const reply = replies.find((one) => one.seq > lastReadSeq && !one.deleted && one.author.principal_id !== ownId);
+	return reply?.seq ?? null;
+}
+
+/** A part of the state of a thread for a person: the follow, or the read marker with its unread count. */
+export type FollowPart = "following" | "marker";
+
+/** The counts of the own changes of each part when a read or a call started. */
+export interface FollowTicket {
+	following: number;
+	marker: number;
+}
+
+/**
+ * The state of a thread for a person, from reads and own calls that can overlap. The follow and the marker
+ * are two parts, each with a count of own changes.
+ * - An own call (`begin`, then `finish`) adds 1 to the count of its part at its start and at its end. So a
+ *   response that started during the call does not show that part: the server can answer it before the call.
+ * - The response of the own call sets its own part, unless an own reply (`local`) changed it during the call.
+ *   It sets the other part only when that part had no own change since the call started.
+ * - The order of the call and the own reply on the server is not known. So when the response loses its own
+ *   part to an own reply, `finish` returns true, and the caller reads the state again after both.
+ * - A read (`ticket`, then `apply`) sets each part that had no own change since the read started.
+ */
+export interface FollowKeeper {
+	current(): ChatThreadFollow | null;
+	ticket(): FollowTicket;
+	apply(ticket: FollowTicket, follow: ChatThreadFollow | undefined): void;
+	begin(part: FollowPart): FollowTicket;
+	/** Returns true when an own reply changed the part during the call: then read the state again. */
+	finish(ticket: FollowTicket, part: FollowPart, follow: ChatThreadFollow | null): boolean;
+	/** Sets the state after an own change that has no call of its own (an own reply), for both parts. */
+	local(change: (follow: ChatThreadFollow) => ChatThreadFollow): void;
+}
+
+export function createFollowKeeper(show: (follow: ChatThreadFollow) => void): FollowKeeper {
+	let state: ChatThreadFollow | null = null;
+	const counts: FollowTicket = { following: 0, marker: 0 };
+	const set = (next: ChatThreadFollow) => {
+		state = next;
+		show(next);
+	};
+	/** The state with the parts of `follow` that `keep` allows, on the current state. */
+	const merge = (follow: ChatThreadFollow, keep: Record<FollowPart, boolean>): ChatThreadFollow | null => {
+		if (state === null) return keep.following && keep.marker ? follow : null;
+		return {
+			following: keep.following ? follow.following : state.following,
+			last_read_seq: keep.marker ? follow.last_read_seq : state.last_read_seq,
+			unread_count: keep.marker ? follow.unread_count : state.unread_count,
+		};
+	};
+	return {
+		current: () => state,
+		ticket: () => ({ ...counts }),
+		apply(ticket, follow) {
+			if (!follow) return;
+			const next = merge(follow, {
+				following: ticket.following === counts.following,
+				marker: ticket.marker === counts.marker,
+			});
+			if (next) set(next);
+		},
+		begin(part) {
+			counts[part] += 1;
+			return { ...counts };
+		},
+		finish(ticket, part, follow) {
+			const other: FollowPart = part === "following" ? "marker" : "following";
+			// An own reply during the call (`local`) changed the part after the server did the call.
+			const ownKept = ticket[part] === counts[part];
+			const otherKept = ticket[other] === counts[other];
+			counts[part] += 1;
+			if (!follow) return !ownKept;
+			const next = merge(follow, { [part]: ownKept, [other]: otherKept } as Record<FollowPart, boolean>);
+			if (next) set(next);
+			return !ownKept;
+		},
+		local(change) {
+			counts.following += 1;
+			counts.marker += 1;
+			if (state) set(change(state));
+		},
+	};
+}
+
 /** One page of `chat.list_replies`. */
 export interface RepliesPage {
 	parent: ChatMessage;
 	replies: ChatMessage[];
 	version: number;
 	has_more: boolean;
+	/** The state of the thread for the caller: the follow, the read marker and the unread count. */
+	follow?: ChatThreadFollow | undefined;
 }
 
 /** Reads one page of the replies: the first page, the page after a seq, or the changes after a version. */

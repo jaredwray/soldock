@@ -801,8 +801,23 @@ MCP clients. The app has no UI-only path.
       reply above the limit of characters disables the send, with a note of the excess.
     - On a narrow screen, the room under the view is hidden, so the room is not read: no read marker
       moves while the view shows.
+    - **Follow and read marker.** Each read of `chat.list_replies` brings the state of the person
+      (`follow`). The header has "Follow" or "Following" (`aria-pressed`), which calls
+      `chat.follow_thread`. An own reply makes the person follow, as the room does.
+      - While the view shows and the page is visible, each reply of a different principal after the
+        marker moves the marker to the newest reply (`chat.mark_thread_read`). A failure keeps the
+        marker, and the next reply tries again.
+      - The first read fixes the line "New" before the first new reply (`firstUnread`, the rule of the
+        unread count of the server). The line stays while the view shows, also after the marker moves.
+      - The marker goes to the newest reply that shows (`seq`), not to the newest reply of the server.
+        So a reply whose socket event is late stays new.
+      - The follow and the marker are two parts (`createFollowKeeper`). An own call adds 1 to the count
+        of its part at its start and at its end, so an answer that started during the call does not show
+        that part. The answer of the own call sets its part, unless an own reply changed it during the
+        call. Then the order of the two on the server is not known, so the view reads the state again
+        after both. A read sets each part that had no own change since the read started. So a read of the marker never hides a change of the follow.
     - Known limits, for the next parts: the view has no edit, delete or reaction of a reply, and no
-      draft that stays. A thread has no unread state yet. The view reads all pages of a thread before
+      draft that stays. No list shows the unread threads yet. The view reads all pages of a thread before
       it shows, and shows each reply, so a very long thread is slow
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after

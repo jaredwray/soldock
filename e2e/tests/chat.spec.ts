@@ -12,6 +12,7 @@ import {
 	reply,
 	rowsWithText,
 	signIn,
+	threadFollow,
 	unique,
 	waitingRecords,
 } from "../support/chat.ts";
@@ -96,7 +97,7 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	const roomId = await createRoom(tomasz, name, [nadia]);
 	const parent = await post(nadia, roomId, unique("thread start"));
 	const first = unique("first reply");
-	await reply(nadia, roomId, parent.id, first);
+	const firstReply = await reply(nadia, roomId, parent.id, first);
 	const page = await tomasz.newPage();
 	await openRoom(page, roomId);
 
@@ -104,7 +105,12 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	const parentRow = page.locator(".chat-messages .chat-message").filter({ hasText: parent.text });
 	await parentRow.getByRole("button", { name: /1 reply/ }).click();
 	const panel = page.getByRole("complementary", { name: "Thread" });
-	await expect(panel.locator(".chat-thread-replies li")).toHaveText([new RegExp(first)]);
+	await expect(panel.locator(".chat-thread-reply")).toHaveText([new RegExp(first)]);
+	// The reply was new for Tomasz, so the line "New" is before it. The view reads it, so the marker moves.
+	await expect(panel.locator(".chat-new")).toHaveText("New");
+	const follow = panel.getByRole("button", { name: "Follow", exact: true });
+	await expect(follow).toHaveAttribute("aria-pressed", "false");
+	await expect.poll(async () => (await threadFollow(tomasz, roomId, parent.id)).last_read_seq).toBe(firstReply.seq);
 	// On a wide screen the room makes room for the view, so the actions of a message stay usable.
 	await parentRow.hover();
 	await parentRow.getByRole("button", { name: /Reply in a thread/ }).click();
@@ -112,17 +118,25 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 
 	// A reply of a different member shows at once, in the thread and in the summary.
 	const second = unique("second reply");
-	await reply(nadia, roomId, parent.id, second);
-	await expect(panel.locator(".chat-thread-replies li")).toHaveCount(2);
+	const secondReply = await reply(nadia, roomId, parent.id, second);
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(2);
 	await expect(parentRow.getByRole("button", { name: /2 replies/ })).toBeVisible();
+	// The view is open, so the new reply is read at once.
+	await expect.poll(async () => (await threadFollow(tomasz, roomId, parent.id)).last_read_seq).toBe(secondReply.seq);
 
 	// A reply stays in the thread. With the check box, it goes to the room too.
 	const box = panel.getByRole("textbox", { name: "Reply in the thread" });
 	const own = unique("own reply");
 	await box.pressSequentially(own);
 	await box.press("Enter");
-	await expect(panel.locator(".chat-thread-replies li")).toHaveCount(3);
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(3);
 	await expect(page.locator(".chat-messages .chat-message").filter({ hasText: own })).toHaveCount(0);
+	// A reply makes its author follow the thread. A click stops the follow.
+	const following = panel.getByRole("button", { name: "Following", exact: true });
+	await expect(following).toHaveAttribute("aria-pressed", "true");
+	await following.click();
+	await expect(follow).toHaveAttribute("aria-pressed", "false");
+	await expect.poll(async () => (await threadFollow(tomasz, roomId, parent.id)).following).toBe(false);
 	const shared = unique("shared reply");
 	await box.pressSequentially(shared);
 	await panel.getByRole("checkbox", { name: `Also send to ${name}` }).check();
@@ -143,7 +157,7 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await expect(parentRow.getByRole("button", { name: /Reply in a thread/ })).toBeFocused();
 	// The note of the shared reply opens its thread again.
 	await sharedRow.getByRole("button", { name: "Replied in a thread" }).click();
-	await expect(page.getByRole("complementary", { name: "Thread" }).locator(".chat-thread-replies li")).toHaveCount(4);
+	await expect(page.getByRole("complementary", { name: "Thread" }).locator(".chat-thread-reply")).toHaveCount(4);
 	await page.getByRole("button", { name: "Close the thread" }).click();
 	await expect(page.getByRole("complementary", { name: "Thread" })).toHaveCount(0);
 
@@ -154,7 +168,7 @@ test("a thread opens beside the room, shows each new reply, and sends a reply, a
 	await note.focus();
 	await note.press("Enter");
 	const narrowPanel = page.getByRole("complementary", { name: "Thread" });
-	await expect(narrowPanel.locator(".chat-thread-replies li")).toHaveCount(4);
+	await expect(narrowPanel.locator(".chat-thread-reply")).toHaveCount(4);
 	await expect(page.locator(".chat-messages")).toBeHidden();
 	await narrowPanel.getByRole("textbox", { name: "Reply in the thread" }).press("Escape");
 	await expect(narrowPanel).toHaveCount(0);
