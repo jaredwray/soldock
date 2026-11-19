@@ -711,6 +711,8 @@ room can download the file, and nobody else can.
 - The Worker checks each file in the drive of the caller before the room stores the message
   (`fileForRoom`): an item of that drive, a file, outside the trash, and not in a move. A refused file
   posts nothing. An edit checks only the files that it adds.
+- A retry with the same idempotency key gets the message of its first call before the check of the files
+  (`postedMessage`). So a retry works also after the author put a file of the first call in the trash.
 - The message keeps the facts of each file at the time of the post (`message_files`): the name, the
   type that the author gave, the size, the type that the server found in the first bytes, and the size
   of its small picture. The output has `files`, with `kind` `image` or `video` only for a type that a
@@ -784,6 +786,11 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 - The request has no cookie and no credential.
 - When the author is an agent, its outbound policy applies to the first address and to each redirect.
   An agent with `internal-only` gets no preview, and no request goes out.
+- Each author has a budget of 120 fetches (pages and pictures) in one hour (`link_preview_budget`). The
+  message limits are for each room, so the budget bounds the work that one author starts across many
+  rooms. A cache hit costs nothing. A link over the budget gets no preview, and no request goes out. The
+  empty budget does not go into the cache.
+- At most 2 consumers of the queue run at one time (`max_concurrency`).
 - Known limit: a Worker cannot fix the address of a request to the address of the check, so DNS can
   change between the two. The network of a Worker cannot reach a private network, so the check is a
   second layer.
@@ -852,6 +859,7 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | Pictures of link previews | R2 `blobs`, key `chat/<room id>/<message id>/link-<id>` | The message owns each object. A delete of the message, a removed preview and an edit that drops the link delete it through the outbox |
 | The cache of link previews | D1 `DIRECTORY` table `link_previews` | The SHA-256 of the address (not the address), the facts of the page (no picture) with the host of each address of the fetch, the time of the fetch and the end of the entry: 24 hours, or 10 minutes for a failure. Each write deletes some expired entries. Rebuildable: a fetch fills it again. Migration `0015_link_previews.sql` |
 | Jobs of the queue of previews | Queue `soldock-chat-previews` | A room id and a message id. No text |
+| The budget of fetches of each author | D1 `DIRECTORY` table `link_preview_budget` | The principal, the start of its window and the fetches in it. One row for each author of a link. Migration `0015_link_previews.sql` |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |

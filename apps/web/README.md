@@ -981,6 +981,9 @@ MCP clients. The app has no UI-only path.
     - A file of a send never goes to the trash (`take` in `attachments.ts`): the room can store a
       message whose answer got lost. This is true for the X of a chip after a failed reply, and when the
       view of a thread closes. A sign-out stops each upload and makes no call.
+    - A reply that the room refused (an answer under 500), when no attempt with its key lost its answer,
+      is surely not stored. Its files are part of no send again (`unmark`), so the X of a chip and a close
+      of the view put them in the trash.
     - After the X, the focus goes to the X of the next chip, or to the box when no chip follows.
     - At most 3 files upload at the same time in the page. The other chips wait, with "0 B of" their
       size.

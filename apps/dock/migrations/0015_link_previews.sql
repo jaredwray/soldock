@@ -10,3 +10,11 @@ CREATE TABLE link_previews (
 );
 --> statement-breakpoint
 CREATE INDEX link_previews_expires ON link_previews (expires_at);
+--> statement-breakpoint
+-- The fetches of link previews for each author in the current window. The limits of a room are for each
+-- room, so this budget bounds the work that one author can start across many rooms.
+CREATE TABLE link_preview_budget (
+	principal_id TEXT PRIMARY KEY,
+	window_start INTEGER NOT NULL,
+	fetches INTEGER NOT NULL
+);

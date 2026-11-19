@@ -1801,6 +1801,30 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 	}
 
+	/**
+	 * The message that a call with this idempotency key stored, for a member of the room, or null when the
+	 * key is new. A retry of a post with files gets its message here before the files are checked again: the
+	 * author can have put a file in the trash after the first post.
+	 */
+	postedMessage(
+		call: RoomCall,
+		idempotency: { key: string; requestHash: string },
+	): { message: MessageRecord } | Refusal | null {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const earlier = this.one<{ request_hash: string; message_id: string }>(
+			"SELECT request_hash, message_id FROM idempotency WHERE key = ? AND created_at > ?",
+			idempotency.key,
+			Date.now() - IDEMPOTENCY_TTL_MS,
+		);
+		if (!earlier) return null;
+		if (earlier.request_hash !== idempotency.requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		const row = this.message(earlier.message_id);
+		return row ? { message: this.messageRecord(opened.room.room_id, row) } : null;
+	}
+
 	/** Adds a message. The room is then read for its author. */
 	async postMessage(
 		call: RoomCall,

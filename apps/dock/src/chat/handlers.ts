@@ -258,7 +258,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.post_message"(call, input) {
 		const opened = openRoom(call, input.room_id);
-		// The files come first: a call without access to them posts nothing.
+		const idempotency = await idempotencyOf(call, "chat.post_message", input);
+		// A retry gets the message of its first call, also when a file of that call is not in the drive now.
+		if (idempotency && input.file_ids !== undefined) {
+			const earlier = await opened.room.postedMessage(opened.ctx, idempotency);
+			if (earlier !== null) return { message: messageOutput(accept(earlier).message) };
+		}
+		// The files come before the post: a call without access to them posts nothing.
 		const files = await filesForMessage(call, input.file_ids ?? []);
 		const posted = accept(
 			await opened.room.postMessage(opened.ctx, {
@@ -266,7 +272,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				content: contentOf(input) ?? { body: textBody(""), text: "" },
 				files,
 				linkOrigin: call.origin,
-				idempotency: await idempotencyOf(call, "chat.post_message", input),
+				idempotency,
 				clientKey: input.idempotency_key ?? null,
 				parentId: input.parent_id ?? null,
 				alsoInRoom: input.also_in_room ?? false,

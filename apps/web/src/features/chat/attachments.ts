@@ -68,6 +68,11 @@ export interface Attachments {
 	/** Removes the files of a send from the box. They stay in the drive: the message has them. */
 	release(sent: readonly ChatFile[]): void;
 	/**
+	 * Gives back the files of a send that the room surely did not store: each attempt got a refusal. They
+	 * stay in the box, and a later remove puts them in the trash again.
+	 */
+	unmark(files: readonly ChatFile[]): void;
+	/**
 	 * Stops each upload and removes each file, without a call to the server, for example when the person
 	 * of the page changes: each later call would have the session of a different person.
 	 */
@@ -317,6 +322,9 @@ export function createAttachments(options: AttachmentsOptions): Attachments {
 		release(released) {
 			const ids = new Set(released.map((file) => file.item_id));
 			change({ list: state.list.filter((entry) => !(entry.item && ids.has(entry.item.id))), notice: null });
+		},
+		unmark(files) {
+			for (const file of files) sent.delete(file.item_id);
 		},
 		stop() {
 			stopped = true;

@@ -149,6 +149,18 @@ describe("the files of a new message", () => {
 		expect(uploads[2]?.signal.aborted).toBe(true);
 	});
 
+	// Review of PR 150: a reply that the room refused left its files in the drive for ever.
+	it("put the files of a refused send in the trash again when the view closes", async () => {
+		const { box, uploads, discarded } = fakeBox();
+		box.add([file("a.pdf")]);
+		await uploads[0]?.succeed();
+		const sent = box.take() ?? [];
+		// The room refused the send: it stored nothing, so the files are part of no send now.
+		box.unmark(sent);
+		box.removeAll();
+		expect(discarded).toEqual(["a.pdf"]);
+	});
+
 	// After a sign-out, each call would have the session of a different person.
 	it("make no call after a stop, also for an upload that the server completes later", async () => {
 		const { box, uploads, discarded, list } = fakeBox();

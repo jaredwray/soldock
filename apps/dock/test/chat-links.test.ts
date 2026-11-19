@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { chatLinkImagePath, UNTRUSTED_NOTICE } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleLinkPreviewBatch } from "../src/chat/index.ts";
+import { PREVIEW_FETCHES } from "../src/chat/previews.ts";
 import { hostNameProblem, isPublicV4, isPublicV6 } from "../src/platform/index.ts";
 import { type Actor, bearer, callTool, codeOf, request, seedOrg } from "./helpers.ts";
 
@@ -304,6 +305,26 @@ describe("the cache and the limits of a preview", () => {
 		const again = await postInRoom(bot, [ada], "Again https://short.example.com/x");
 		await fetchPreviews(again.room.id, again.jobs);
 		expect(await previewsOf(ada, again.room.id)).toEqual([]);
+	});
+});
+
+describe("the budget of an author", () => {
+	// Review of PR 150: the limits of a room are for each room, so one author could start fetches in many rooms.
+	it("sends no request for an author whose budget of fetches is empty", async () => {
+		const web = fakeWeb({ "news.example.com": "93.184.216.34" }, { "https://news.example.com/budget": html(PAGE) });
+		await env.DIRECTORY.prepare(
+			"INSERT INTO link_preview_budget (principal_id, window_start, fetches) VALUES (?, ?, ?)",
+		)
+			.bind(ada.id, Date.now(), PREVIEW_FETCHES)
+			.run();
+		const { room, jobs } = await postInRoom(ada, [bot], "https://news.example.com/budget");
+		await fetchPreviews(room.id, jobs);
+		expect(web.requests).toEqual([]);
+		expect(await previewsOf(ada, room.id)).toEqual([]);
+		// The empty budget is not a fact of the page: a different author gets the preview.
+		const other = await postInRoom(owner, [bot], "https://news.example.com/budget");
+		await fetchPreviews(other.room.id, other.jobs);
+		expect(await previewsOf(owner, other.room.id)).toHaveLength(1);
 	});
 });
 

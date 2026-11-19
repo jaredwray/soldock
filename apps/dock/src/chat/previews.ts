@@ -21,6 +21,33 @@ const READY_TTL_MS = 24 * 60 * 60 * 1000;
 const NONE_TTL_MS = 10 * 60 * 1000;
 /** The expired entries of the cache that one write deletes. */
 const PRUNE_BATCH = 20;
+/**
+ * The fetches (pages and pictures) that the links of one author can start in one window. The message
+ * limits are for each room, so this budget bounds the work of one author across many rooms. A cache hit
+ * costs nothing.
+ */
+export const PREVIEW_FETCHES = 120;
+const BUDGET_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Takes one fetch from the budget of an author. False when the budget of the window is empty: the link
+ * then gets no preview, and no request goes out.
+ */
+async function spendFetch(env: Env, principalId: string): Promise<boolean> {
+	const now = Date.now();
+	const row = await env.DIRECTORY.prepare(
+		`INSERT INTO link_preview_budget (principal_id, window_start, fetches) VALUES (?1, ?2, 1)
+		ON CONFLICT (principal_id) DO UPDATE SET
+			fetches = CASE WHEN window_start <= ?3 THEN 1 ELSE fetches + 1 END,
+			window_start = CASE WHEN window_start <= ?3 THEN ?2 ELSE window_start END
+		RETURNING fetches`,
+	)
+		.bind(principalId, now, now - BUDGET_WINDOW_MS)
+		.first<{ fetches: number }>();
+	const allowed = (row?.fetches ?? PREVIEW_FETCHES + 1) <= PREVIEW_FETCHES;
+	if (!allowed) log("info", "chat link preview budget used", { principalId });
+	return allowed;
+}
 const TITLE_CHARS = 200;
 const DESCRIPTION_CHARS = 500;
 const SITE_CHARS = 100;
@@ -174,6 +201,9 @@ async function pageFacts(
 		if (page.hosts.every((host) => outboundHostAllowed(author, `https://${host}/`))) return page;
 		return { ok: false };
 	}
+	// The budget of the author applies before a request goes out. An empty budget is not a fact of the page,
+	// so it does not go into the cache.
+	if (!(await spendFetch(env, author.id))) return { ok: false };
 	let result: CachedPage;
 	try {
 		result = await fetchPage(url, check);
@@ -248,7 +278,10 @@ async function previewOf(
 	if (check(target.href) !== null) return null;
 	const page = await pageFacts(env, target.href, author, check);
 	if (!page.ok) return null;
-	const image = page.image_url === null ? null : await storeImage(env, page.image_url, check, job);
+	const image =
+		page.image_url !== null && (await spendFetch(env, author.id))
+			? await storeImage(env, page.image_url, check, job)
+			: null;
 	return { title: page.title, description: page.description, site_name: page.site_name, image };
 }
 

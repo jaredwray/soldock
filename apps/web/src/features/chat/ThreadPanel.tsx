@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@asterra/contracts";
+import { ApiError, CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatThreadFollow } from "@asterra/contracts";
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
@@ -71,6 +71,8 @@ export function ThreadPanel({
 	const [sendError, setSendError] = useState<string | null>(null);
 	/** The last send that got no answer: a second send of the same reply posts it one time. */
 	const lastAttempt = useRef<ReplyAttempt | null>(null);
+	/** The keys of the reply sends whose answer did not come, so the room can have stored the reply. */
+	const uncertainKeys = useRef(new Set<string>());
 	const composer = useRef<ChatComposerHandle>(null);
 	const body = useRef<HTMLDivElement>(null);
 	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
@@ -301,6 +303,11 @@ export function ThreadPanel({
 			}
 		} catch (error) {
 			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
+			// A refusal is an answer: that attempt stored nothing. When no attempt with the key lost its answer,
+			// the room surely has no reply, so the files are part of no send, and a close puts them in the trash.
+			const refused = error instanceof ApiError && error.status < 500;
+			if (refused && !uncertainKeys.current.has(attempt.key)) attachments.unmark(sentFiles);
+			else uncertainKeys.current.add(attempt.key);
 			setSendError(errorMessage(error));
 		} finally {
 			setSending(false);

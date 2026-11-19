@@ -55,7 +55,8 @@
 	// A MailboxDO puts each webhook event on soldock-webhooks. The consumer makes one job for each webhook
 	// and sends its POST. The consumer retries a POST by itself, so max_retries counts failures of Asterra.
 	// A ChatRoomDO puts each message with links on soldock-chat-previews. The consumer fetches the previews.
-	// The room sends a job again when no result came, so the queue needs no dead letter queue.
+	// The room sends a job again when no result came, so the queue needs no dead letter queue. At most 2
+	// consumers run at one time, so link previews use a bounded part of the outbound capacity.
 	"queues": {
 		"producers": [
 			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
@@ -83,7 +84,8 @@
 				"queue": "soldock-chat-previews",
 				"max_batch_size": 5,
 				"max_batch_timeout": 1,
-				"max_retries": 3
+				"max_retries": 3,
+				"max_concurrency": 2
 			}
 		]
 	},
@@ -156,7 +158,8 @@
 						"queue": "soldock-chat-previews",
 						"max_batch_size": 5,
 						"max_batch_timeout": 1,
-						"max_retries": 3
+						"max_retries": 3,
+						"max_concurrency": 2
 					}
 				]
 			},

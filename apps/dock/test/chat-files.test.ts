@@ -174,6 +174,20 @@ describe("a file in a message", () => {
 		expect(await download(owner, room.id, message.id, file.id)).toEqual({ status: 404, text: null });
 	});
 
+	// Review of PR 150: a retry checked the files in Drive before it looked for the message of its key.
+	it("returns the message of a retry with the same key, also after the author put the file in the trash", async () => {
+		const room = await createRoom(ada, "private", [bot.id]);
+		const file = await uploadText(ada, "x.txt", "x");
+		const input = { room_id: room.id, text: "x", file_ids: [file.id], idempotency_key: "k1" };
+		const first = await ada.call("chat.post_message", input);
+		await ada.call("drive.trash_items", { item_ids: [file.id] });
+		const again = await ada.call("chat.post_message", input);
+		expect(again.message.id).toBe(first.message.id);
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
+		// A different principal with the same key gets nothing from it.
+		expect(await codeOf(bot.call("chat.post_message", { ...input, file_ids: [file.id] }))).toBe("not_found");
+	});
+
 	it("takes files of the own drive of the author only, with the drive.share scope", async () => {
 		const room = await createRoom(ada, "private", [bot.id]);
 		const file = await uploadText(ada, "mine.txt", "mine");
