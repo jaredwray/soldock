@@ -189,8 +189,11 @@ export function RoomView({
 	const [editing, setEditing] = useState<Editing | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
 	const [threadId, setThreadId] = useState<string | null>(null);
-	/** The seq of the reply that the open thread goes to and marks, for a link to a reply, or null. */
-	const [threadFocus, setThreadFocus] = useState<number | null>(null);
+	/**
+	 * The reply that the open thread goes to and marks, for a link to a reply, or null. Each visit of a link
+	 * gives a new object, so the thread goes to the reply again, also for the same seq.
+	 */
+	const [threadFocus, setThreadFocus] = useState<{ seq: number } | null>(null);
 	/** A link to a reply that waits for the first message of its thread in the list. */
 	const [threadLink, setThreadLink] = useState<{ seq: number; replySeq: number } | null>(null);
 	/** The element that opened the thread. It gets the focus back when the thread closes. */
@@ -203,7 +206,7 @@ export function RoomView({
 	const openThread = useCallback((id: string, replySeq: number | null = null) => {
 		threadOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		setThreadId(id);
-		setThreadFocus(replySeq);
+		setThreadFocus(replySeq === null ? null : { seq: replySeq });
 	}, []);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// A path with a message opens the list at that message, not at its end.
@@ -1063,7 +1066,7 @@ export function RoomView({
 					roomId={roomId}
 					roomTitle={title}
 					parentId={threadId}
-					focusSeq={threadFocus}
+					focus={threadFocus}
 					mentions={mentions}
 					canDeleteAll={room.role === "owner"}
 					watch={view.watchMessages}

@@ -97,7 +97,8 @@ test("a long thread shows its newest replies after one read, and the older repli
 	);
 	const [tomasz] = people;
 	if (!tomasz) throw new Error("no context");
-	const roomId = await createRoom(tomasz, unique("Long thread"), people.slice(1));
+	const name = unique("Long thread");
+	const roomId = await createRoom(tomasz, name, people.slice(1));
 	const parent = await post(tomasz, roomId, unique("long thread start"));
 	// More replies than one page (50), from the people in turn, inside the rate limit of each.
 	const replies = [];
@@ -167,6 +168,15 @@ test("a long thread shows its newest replies after one read, and the older repli
 	await expect(marked.locator(".chat-text")).toHaveText("r5");
 	await expect(marked).toBeInViewport();
 	await expect(linked.locator(".chat-messages .chat-message-marked")).toContainText(parent.text);
+	// The room link of the sidebar keeps the thread open. Back to the link goes to the reply again.
+	await linked.getByRole("navigation", { name: "Rooms" }).getByRole("link", { name }).first().click();
+	await expect(linked).toHaveURL(new RegExp(`/chat/${roomId}$`));
+	await linkedPanel.locator(".chat-thread-body").evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	await expect(marked).not.toBeInViewport();
+	await linked.goBack();
+	await expect(marked).toBeInViewport();
 });
 
 test("a long thread with many new replies reads back to the read marker, and the New line marks the first new reply", async ({

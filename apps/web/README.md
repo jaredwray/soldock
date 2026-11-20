@@ -972,6 +972,8 @@ MCP clients. The app has no UI-only path.
       - The view reads older pages until it has the reply, at most 20 (`LINK_PAGES`: 1,000 replies).
         Then it goes to the reply and marks it, and a new reply does not move the list to its end.
       - A seq that is not a reply of the thread opens the thread and marks nothing.
+      - Each visit of a link goes to the reply again. So Back to the link, after the room link of the
+        sidebar, scrolls the open thread to the reply.
     - The link has no access of its own. The server gives the messages only to a member, as for
       each other read.
   - **Reactions** (`Reactions.tsx`, `emoji.ts`). The reactions of a message show under its text:

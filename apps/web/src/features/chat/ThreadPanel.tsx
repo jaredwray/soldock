@@ -64,7 +64,7 @@ export function ThreadPanel({
 	roomId,
 	roomTitle,
 	parentId,
-	focusSeq = null,
+	focus = null,
 	mentions,
 	canDeleteAll,
 	watch,
@@ -74,8 +74,11 @@ export function ThreadPanel({
 	roomId: string;
 	roomTitle: string;
 	parentId: string;
-	/** The seq of a reply that a link points to, or null. The view goes to that reply and marks it. */
-	focusSeq?: number | null;
+	/**
+	 * The reply that a link points to, or null. The view goes to that reply and marks it. Each visit of a
+	 * link is a new object, so the view goes to the reply again, also for the same seq.
+	 */
+	focus?: { seq: number } | null;
 	mentions: MentionContext;
 	/** True for an owner of the room, who can delete each message. */
 	canDeleteAll: boolean;
@@ -170,10 +173,10 @@ export function ThreadPanel({
 	const openMarker = useRef<number | undefined>(undefined);
 	/** The older pages that the view read by itself to get to the read marker (see `UNREAD_PAGES`). */
 	const unreadPages = useRef(0);
-	/** The seq of the reply that a link marked, or null. */
-	const [markedSeq, setMarkedSeq] = useState<number | null>(null);
-	/** The reply of the link that the view went to. A view goes to a link one time. */
-	const linkedTo = useRef<number | null>(null);
+	/** The reply that a link marked, or null. A new object for each visit, so the view scrolls to it each time. */
+	const [marked, setMarked] = useState<{ seq: number } | null>(null);
+	/** The visit of a link that the view went to. A view goes to each visit one time. */
+	const linkedTo = useRef<{ seq: number } | null>(null);
 	/** The older pages that the view read to get to the reply of a link (see `LINK_PAGES`). */
 	const linkPages = useRef(0);
 	/** True while a call of `chat.mark_thread_read` runs. */
@@ -309,27 +312,27 @@ export function ThreadPanel({
 	// A link to a reply: the view reads older pages until it has the reply, at most `LINK_PAGES`. Then it
 	// goes to the reply and marks it. A seq that is not a reply of this thread marks nothing.
 	useEffect(() => {
-		if (focusSeq === null || linkedTo.current === focusSeq || !shownThread) return;
+		if (focus === null || linkedTo.current === focus || !shownThread) return;
 		const first = shownThread.replies[0];
-		if (shownThread.hasOlder && first !== undefined && focusSeq < first.seq) {
+		if (shownThread.hasOlder && first !== undefined && focus.seq < first.seq) {
 			if (linkPages.current < LINK_PAGES && olderAnchor.current === null) {
 				linkPages.current += 1;
 				loadOlder();
 			}
 			return;
 		}
-		linkedTo.current = focusSeq;
+		linkedTo.current = focus;
 		linkPages.current = 0;
-		if (!shownThread.replies.some((reply) => reply.seq === focusSeq)) return;
+		if (!shownThread.replies.some((reply) => reply.seq === focus.seq)) return;
 		// The list stays at the reply: a new reply does not move it to its end.
 		stick.current = false;
-		setMarkedSeq(focusSeq);
-	}, [focusSeq, shownThread, loadOlder]);
+		setMarked({ seq: focus.seq });
+	}, [focus, shownThread, loadOlder]);
 
 	useEffect(() => {
-		if (markedSeq === null) return;
-		body.current?.querySelector(`[data-seq="${markedSeq}"]`)?.scrollIntoView({ block: "center" });
-	}, [markedSeq]);
+		if (marked === null) return;
+		body.current?.querySelector(`[data-seq="${marked.seq}"]`)?.scrollIntoView({ block: "center" });
+	}, [marked]);
 
 	/**
 	 * Puts a link to a message of the view on the clipboard: the link of the room for the first message, and
@@ -541,7 +544,7 @@ export function ThreadPanel({
 		return {
 			message,
 			rowKey: message.id,
-			marked: message.seq === markedSeq,
+			marked: message.seq === marked?.seq,
 			onCopyLink: () => copyLink(message),
 			pending: null,
 			mentions,
