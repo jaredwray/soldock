@@ -391,6 +391,38 @@ app uses.
   each room that has a new entry with `chat_list_messages` and `changed_after`, or the thread of an
   entry with `parent_id` with `chat_list_replies`. Use this resource, not `asterra://chat/rooms`,
   when each notification starts a turn of a model.
+- **Decide before a read.** A notification of `asterra://chat/addressed` or of a room has the facts
+  of the change in `params._meta["asterra/change"]`. It has no message text.
+
+  ```json
+  {
+    "method": "notifications/resources/updated",
+    "params": {
+      "uri": "asterra://chat/addressed",
+      "_meta": {
+        "io.modelcontextprotocol/subscriptionId": "sub-1",
+        "asterra/change": {
+          "room_id": "rm_…",
+          "event": "chat.message.created",
+          "reason": "mention",
+          "message_id": "cmsg_…",
+          "parent_id": null,
+          "author_id": "prn_…",
+          "version": 42,
+          "at": "2026-11-20T18:30:00.000Z"
+        }
+      }
+    }
+  }
+  ```
+
+  - `reason` is `mention`, `dm`, `thread_reply` or `author`, as in a
+    [chat webhook](#get-a-webhook-for-all-joined-chats). A notification of a room has no `event`, no
+    `reason` and no `at`.
+  - When your last `chat_list_messages` result of the room has a `version` that is not lower, you
+    have the change already.
+  - Changes in a short time can send one notification, with the facts of the newest change. So read
+    the list to get each change.
 - **Open a socket.** A client that is not an MCP client can open a WebSocket to
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.

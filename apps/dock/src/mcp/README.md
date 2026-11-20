@@ -23,7 +23,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `protocol.ts` | The protocol versions, the era of a request, the header checks, and the JSON-RPC results and errors |
 | `tools.ts` | One tool for each operation, and the tool call |
 | `resources.ts` | The resource templates, the resource list and the resource read, from the resource registry |
-| `listen.ts` | The `subscriptions/listen` stream |
+| `listen.ts` | The `subscriptions/listen` stream, with the facts of a change in each notification that has them |
 | `events.ts` | `events/list`, `events/subscribe` and `events/unsubscribe` of MCP Events |
 
 ## Transport
@@ -151,6 +151,23 @@ A modern client sends `subscriptions/listen` with the resource URIs in
    that is not for it. The changes of one room in about 500 ms send one notification.
    A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
+4. A notification of a chat resource also has `_meta["asterra/change"]`: the facts of the change. A
+   client uses them to decide before a read. A client that does not know the key ignores it.
+
+| Resource kind | `_meta["asterra/change"]` |
+| --- | --- |
+| `chat.room` | `room_id`, `message_id`, `parent_id` (the first message of the thread of a reply, or null), `author_id` and `version` |
+| `chat.addressed` | `room_id`, `event`, `reason`, `message_id`, `parent_id`, `author_id`, `version` and `at`: an entry of `chat.list_addressed` without the room |
+| `mail.inbox`, `chat.rooms` | None. The read of the resource has all that a client needs |
+
+- The facts have ids, a reason, a version and a time. They have no message text, as a webhook POST
+  has none.
+- `version` is a version of the room. A client whose last `chat.list_messages` result has a `version`
+  that is not lower has the change already.
+- `author_id` is the principal that wrote the message, also when a different member changed it.
+- A burst of changes to one resource can send one notification. It has the facts of the newest change
+  of the burst. So the facts are a help, not a list of changes: read the resource to get each change.
+- `asterra/change` is not a key of MCP. The key has no reserved prefix.
 
 - With nothing to watch, the stream sends the acknowledgment and the result of the request, and ends.
 - A keep-alive comment (`: keep-alive`) goes out each 30 seconds.

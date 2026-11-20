@@ -65,10 +65,17 @@ function watchSockets(mailboxId: string): Promise<number> {
 	return runInDurableObject(stub, (_instance, state) => state.getWebSockets("watch").length);
 }
 
-const updated = (uri: string, id: string | number = "sub-1") => ({
+/** A notification of a change. `change` is the facts of the change, for a resource whose feed gives them. */
+const updated = (uri: string, id: string | number = "sub-1", change?: unknown) => ({
 	jsonrpc: "2.0",
 	method: "notifications/resources/updated",
-	params: { uri, _meta: { "io.modelcontextprotocol/subscriptionId": id } },
+	params: {
+		uri,
+		_meta: {
+			"io.modelcontextprotocol/subscriptionId": id,
+			...(change === undefined ? {} : { "asterra/change": change }),
+		},
+	},
 });
 
 afterEach(() => {
@@ -337,14 +344,29 @@ describe("MCP subscriptions/listen", () => {
 		expect(await outsider.next()).toMatchObject({ params: { notifications: { resourceSubscriptions: [] } } });
 		await outsider.cancel();
 
+		// Each notification has the facts of the change, so a client that has the version reads nothing.
+		const facts = (message: { id: string; version: number }) => ({
+			room_id: room.id,
+			message_id: message.id,
+			parent_id: null,
+			author_id: ada.id,
+			version: message.version,
+		});
 		const { message } = await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
-		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
+		expect(await stream.next()).toEqual(updated(roomMessages(room.id), "sub-1", facts(message)));
 		// A new name is no change of the messages: the next notification is the edit.
 		await ada.call("chat.update_room", { room_id: room.id, name: "Launch week" });
-		await ada.call("chat.edit_message", { room_id: room.id, message_id: message.id, text: "We ship on Monday." });
-		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
+		const { message: edited } = await ada.call("chat.edit_message", {
+			room_id: room.id,
+			message_id: message.id,
+			text: "We ship on Monday.",
+		});
+		expect(edited.version).toBeGreaterThan(message.version);
+		expect(await stream.next()).toEqual(updated(roomMessages(room.id), "sub-1", facts(edited)));
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: message.id });
-		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
+		expect(await stream.next()).toEqual(
+			updated(roomMessages(room.id), "sub-1", { ...facts(edited), version: edited.version + 1 }),
+		);
 
 		// The room closes the socket of a removed member, so the stream ends at once, before its next check.
 		await ada.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
@@ -373,8 +395,10 @@ describe("MCP subscriptions/listen", () => {
 		expect(seen).toEqual(["message", "message", "reply", "message", "message", "message"]);
 
 		// The change of a different member is the first notification of the stream, and the only one.
-		await ada.call("chat.post_message", { room_id: room.id, text: "Thank you." });
-		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
+		const { message: thanks } = await ada.call("chat.post_message", { room_id: room.id, text: "Thank you." });
+		expect(await stream.next()).toEqual(
+			updated(roomMessages(room.id), "sub-1", expect.objectContaining({ message_id: thanks.id, author_id: ada.id })),
+		);
 		await ada.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
 		expect(await stream.next()).toBe("closed");
 	});
@@ -398,7 +422,7 @@ describe("MCP subscriptions/listen", () => {
 			params: { notifications: { resourceSubscriptions: [roomMessages(kept.id), inbox(bot.id)] } },
 		});
 		await ada.call("chat.post_message", { room_id: kept.id, text: "The other feeds work." });
-		expect(await stream.next()).toEqual(updated(roomMessages(kept.id)));
+		expect(await stream.next()).toMatchObject(updated(roomMessages(kept.id)));
 		await stream.cancel();
 	});
 
@@ -423,7 +447,7 @@ describe("MCP subscriptions/listen", () => {
 
 		await ada.call("chat.post_message", { room_id: room.id, text: "Each older stream works." });
 		for (const [index, stream] of streams.entries()) {
-			expect(await stream.next()).toEqual(updated(roomMessages(room.id), `sub-${index}`));
+			expect(await stream.next()).toMatchObject(updated(roomMessages(room.id), `sub-${index}`));
 			await stream.cancel();
 		}
 		await extra.cancel();
@@ -483,8 +507,20 @@ describe("MCP subscriptions/listen", () => {
 		await arrived(room.id, plain.message.seq);
 		const own = await bot.call("chat.post_message", { room_id: room.id, text: "I am ready." });
 		await arrived(room.id, own.message.seq);
+		// The notification has the facts of the change, with the reason, and no text of the message.
 		const named = await ada.call("chat.post_message", { room_id: room.id, text: "@bot can you check the invoices?" });
-		expect(await stream.next()).toEqual(updated(ADDRESSED));
+		expect(await stream.next()).toEqual(
+			updated(ADDRESSED, "sub-1", {
+				room_id: room.id,
+				event: "chat.message.created",
+				reason: "mention",
+				message_id: named.message.id,
+				parent_id: null,
+				author_id: ada.id,
+				version: named.message.version,
+				at: named.message.created_at,
+			}),
+		);
 		// Parity: the read runs chat.list_addressed, so it returns what REST returns.
 		const read = (await modern(bot.key, "resources/read", { uri: ADDRESSED })).body?.result as {
 			contents: { mimeType: string; text: string }[];
@@ -503,7 +539,13 @@ describe("MCP subscriptions/listen", () => {
 		const { room: dm } = await owner.call("chat.open_dm", { principal_id: bot.id });
 		const hello = await owner.call("chat.post_message", { room_id: dm.id, text: "Hello" });
 		await arrived(dm.id, hello.message.seq);
-		expect(await stream.next()).toEqual(updated(ADDRESSED));
+		expect(await stream.next()).toEqual(
+			updated(
+				ADDRESSED,
+				"sub-1",
+				expect.objectContaining({ room_id: dm.id, reason: "dm", message_id: hello.message.id }),
+			),
+		);
 
 		// The two notifications were the only ones: the end of the key ends the stream with no other one before.
 		await owner.call("account.revoke_api_key", { key_id: api_key.id });

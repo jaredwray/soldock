@@ -653,7 +653,9 @@ A socket stays open after its request. It must not outlive the access that opene
   rooms of the caller.
 - The change feed of the resource is a room socket that the Worker opens for the stream
   (`watch.ts`). So the room makes the same member check and the same credential check for the two.
-- Only a `message` event and a `reply` event send `notifications/resources/updated`.
+- Only a `message` event and a `reply` event send `notifications/resources/updated`. The
+  notification has the ids and the version of the message of the event
+  ([`mcp`](../mcp/README.md#subscriptions)).
 - A feed gets no event for a change that its own principal made: a post, an edit, a delete, a
   reaction, and a link preview of its message (`publish`). So an agent that answers after a
   notification gets no notification for its answer. A socket that is not a feed gets each event, so
@@ -678,7 +680,8 @@ A socket stays open after its request. It must not outlive the access that opene
 - The change feed of `chat.addressed` is an events socket of the caller too. Only a `chat.addressed`
   event sends `notifications/resources/updated`. So a message of a busy room that is not for the
   caller sends nothing. A stream that watches `chat.rooms` and `chat.addressed` has two events
-  sockets.
+  sockets. The notification has the facts of the event: the reason, the ids, the version and the
+  time.
 - The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
   one query, which wakes no room. The index is a first filter only. The room object decides when the
   feed opens. When the index is behind and the room refuses the caller, the stream leaves that room
