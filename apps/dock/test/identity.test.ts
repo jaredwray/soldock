@@ -1145,6 +1145,45 @@ describe("the directory list", () => {
 		expect(
 			(await owner.call("directory.list_principals", { query: "garcia", active_only: "true" })).principals,
 		).toEqual([]);
+		// The order "match" puts the best match first, in one page: "Carol Zed" has an address that starts
+		// with "carol", and "Abe Macaroli", first by name, has it only inside a word.
+		const abe = await person("Abe Macaroli", "abe@dock.test");
+		const carol = await person("Carol Zed", "carol.zed@dock.test");
+		const firstOf = async (input: { order?: "name" | "match" }) =>
+			(await owner.call("directory.list_principals", { query: "carol", limit: 1, ...input })).principals[0]?.id;
+		expect(await firstOf({})).toBe(abe.id);
+		expect(await firstOf({ order: "match" })).toBe(carol.id);
+		const oneMatchPage = await owner.call("directory.list_principals", { query: "carol", limit: 1, order: "match" });
+		expect(oneMatchPage.next_cursor).toBeNull();
+		expect(
+			await owner
+				.call("directory.list_principals", { query: "carol", order: "match", cursor: "x" })
+				.catch((error) => error),
+		).toMatchObject({ status: 400 });
+		// An agent gets the same search through MCP.
+		const viaTool = await callTool(bot.key, "directory_list_principals", { query: "elo", active_only: "true" });
+		expect((viaTool.structuredContent as { principals: { id: string }[] }).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		// The Worker of migration 0017 fills the aliases without name_folded, and renames without it. The search
+		// fills each such row before it reads, so it finds the name.
+		await env.DIRECTORY.prepare("UPDATE principals SET name_folded = NULL, aliases_set = 1 WHERE id = ?")
+			.bind(elodie.id)
+			.run();
+		expect((await owner.call("directory.list_principals", { query: "durand" })).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		await env.DIRECTORY.prepare("UPDATE principals SET display_name = 'Élodie Fontaine' WHERE id = ?")
+			.bind(elodie.id)
+			.run();
+		expect((await owner.call("directory.list_principals", { query: "fontaine" })).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		expect(
+			await env.DIRECTORY.prepare("SELECT name_folded FROM principals WHERE id = ?").bind(elodie.id).first(),
+		).toEqual({
+			name_folded: "elodie fontaine",
+		});
 		expect(found.next_cursor).toBeNull();
 		// A group word of Chat is never a handle. An agent finds the same through MCP.
 		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });

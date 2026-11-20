@@ -248,9 +248,11 @@ export function ChatComposer({
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
 	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
-	// A typed name whose list did not come yet: a plain Enter waits for it, so it takes a suggestion and
-	// does not send the text of the half mention.
-	const waiting = typed !== null && search.pending && count === 0;
+	// A typed name whose list did not come yet: a plain Enter waits for it, so it takes the best suggestion
+	// of the new list, not a suggestion of an older list, and does not send the text of the half mention.
+	const waiting = typed !== null && typed.query !== "" && search.pending;
+	/** The typed mention of a plain Enter that waits for its list, or null. */
+	const deferredEnter = useRef<string | null>(null);
 	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
 	const query = typed ? `@${typed.query}` : typedCode ? `:${typedCode.query}` : "";
 	const active = selected && selected.query === query ? Math.min(selected.index, count - 1) : 0;
@@ -276,6 +278,20 @@ export function ChatComposer({
 	// The keys of the list, for the handler of the view, which the first render makes.
 	const list = useRef({ open, active, count, query, waiting, choose: (_index: number) => {} });
 	list.current = { open, active, count, query, waiting, choose };
+
+	// A plain Enter that waited for the list of its mention runs when the list comes: it takes the best
+	// suggestion of the new list, or sends when the list has none, as Enter does without a list. A change of
+	// the typed mention during the wait drops it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the effect runs at the end of each wait only.
+	useEffect(() => {
+		const deferred = deferredEnter.current;
+		if (deferred === null || waiting) return;
+		deferredEnter.current = null;
+		const current = list.current;
+		if (current.query !== deferred) return;
+		if (current.open) current.choose(current.active);
+		else callbacks.current.onSubmit();
+	}, [waiting]);
 
 	// A layout effect makes the view before a dialog or a page looks for its focus.
 	useLayoutEffect(() => {
@@ -324,7 +340,10 @@ export function ChatComposer({
 				const current = list.current;
 				// Ctrl+Enter (⌘Enter) always sends, also while the list is open.
 				const sends = event.key === "Enter" && (event.ctrlKey || event.metaKey);
-				if (!sends && !composing && event.key === "Enter" && !event.shiftKey && current.waiting) return true;
+				if (!sends && !composing && event.key === "Enter" && !event.shiftKey && current.waiting) {
+					deferredEnter.current = current.query;
+					return true;
+				}
 				const action = sends
 					? ({ kind: "none" } as const)
 					: mentionKeyAction(event.key, event.shiftKey, composing, current);
@@ -444,6 +463,11 @@ export function ChatComposer({
 					? `${typedCode ? plural(count, "emoji", "emoji") : plural(count, "suggestion")}. Use the arrow keys, Enter to take one, and Escape to close the list.`
 					: ""}
 			</span>
+			{waiting && !open && (
+				<div className={`mention-list mention-list-${placement}`} role="status">
+					<div className="mention-option mention-wait">Looking for people…</div>
+				</div>
+			)}
 			{open && (
 				<div
 					id={listId}

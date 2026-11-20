@@ -125,9 +125,17 @@ contract of the socket.
     to Z of the query too, so an exact copy (`Élodie`) finds it.
     - `query` also keeps the principals whose stored name in the form of a search (`name_folded`:
       lowercase, without accents, `searchFold` in the contracts) has the query in the same form. So
-      `garcia` finds "María García", as the Chat `@` list folds a name. A row from before migration
-      `0018` gets the column at the next mention read.
+      `garcia` finds "María García", as the Chat `@` list folds a name. The folded query also matches
+      the address.
+    - A search first fills each live row without its name columns (`fillUnsetNames`): a row from
+      before migration `0017` or `0018`, or a row that an earlier Worker created or filled. The
+      partial index `principals_names_unset` has these rows (`aliases_set = 0` or `name_folded IS NULL`),
+      so after the first fill this check reads no row. `name_folded` has its own mark (NULL), because the
+      Worker of `0017` sets `aliases_set = 1` without this column.
     - `active_only: "true"` leaves out the archived principals.
+    - `order: "match"` with a query puts first each principal whose address, or a word of the name,
+      starts with the query, then the order of the names. It has one page: a cursor is refused. The
+      Chat `@` list uses it, so its page of 100 has the best matches.
   - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
     `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full
     address when a different principal has the same part or the part is a group word (`here`,

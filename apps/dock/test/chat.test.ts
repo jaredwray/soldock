@@ -1200,8 +1200,13 @@ describe("mentions", () => {
 			env.DIRECTORY.prepare("SELECT alias_first, alias_full, aliases_set FROM principals WHERE id = ?")
 				.bind(id)
 				.first();
-		// A delete clears the aliases, so a deleted principal is in no alias index.
+		// A delete clears the name columns, so a deleted principal is in no alias index and in no search.
 		expect(await row(gone.id)).toEqual({ alias_first: null, alias_full: null, aliases_set: 1 });
+		expect(
+			await env.DIRECTORY.prepare("SELECT name_folded FROM principals WHERE id = ?").bind(gone.id).first(),
+		).toEqual({
+			name_folded: null,
+		});
 		// The previous Worker renames without the alias columns. The trigger marks the row.
 		await env.DIRECTORY.prepare("UPDATE principals SET display_name = 'Javier Núñez' WHERE id = ?").bind(jose.id).run();
 		expect((await post(ada, room.id, "@jose")).mentions).toEqual([]);

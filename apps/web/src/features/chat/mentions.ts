@@ -6,6 +6,7 @@ import {
 	type MentionDirectory,
 	type MentionPerson,
 	type RoomRole,
+	searchFold,
 } from "@asterra/contracts";
 import { recipientKeyAction } from "../mail/compose.ts";
 
@@ -86,10 +87,8 @@ export function liveMention(text: string, token: MentionToken | null): MentionTo
 	return token && text.charAt(token.start) === "@" && token.end <= text.length ? token : null;
 }
 
-/** Lowercase, without accents, so "e" finds "É". */
-function fold(text: string): string {
-	return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-}
+/** Lowercase, without accents, so "e" finds "É". The server folds the stored names with the same rule. */
+const fold = searchFold;
 
 /** 0 when a handle, the address or a word of the name starts with the query. 1 when one has it. Null without a match. */
 function matchRank(query: string, handle: string, person: MentionPerson): number | null {

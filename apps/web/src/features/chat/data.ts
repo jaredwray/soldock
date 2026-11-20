@@ -48,14 +48,17 @@ export const MENTION_SEARCH_MS = 150;
  * page must be large enough that the ranking of the list (a match at the start first) finds its best 8.
  */
 const MENTION_SEARCH_LIMIT = 100;
+/** The longest wait for an answer of the `@` list, after which the list stops to wait (`pending`), in ms. */
+const MENTION_WAIT_MAX_MS = 3_000;
 
 /**
- * The principals for a typed mention, from the server: `directory.list_principals` with the query and
- * `active_only`, `MENTION_SEARCH_MS` after the last change of the query, so one ask reads at most
- * `MENTION_SEARCH_LIMIT` principals and the page needs no directory. The answer of an older query never
- * replaces a newer one. The last answer stays while the next one loads: the caller ranks it with the
- * current query, so the list does not flash. `pending` is true until the answer of the current query
- * comes, or its ask fails (the last answer then stays). Null (no query) gives an empty list.
+ * The principals for a typed mention, from the server: `directory.list_principals` with the query,
+ * `active_only` and the order of the best match first, `MENTION_SEARCH_MS` after the last change of the
+ * query, so one ask reads at most `MENTION_SEARCH_LIMIT` principals and the page needs no directory. The
+ * answer of an older query never replaces a newer one. The last answer stays while the next one loads:
+ * the caller ranks it with the current query, so the list does not flash. `pending` is true until the
+ * answer of the current query comes, its ask fails, or `MENTION_WAIT_MAX_MS` passes (the last answer then
+ * stays). Null (no query) gives an empty list.
  */
 export function useMentionSearch(query: string | null): { found: readonly DirectoryEntry[]; pending: boolean } {
 	const [state, setState] = useState<{ found: readonly DirectoryEntry[]; answered: string | null }>({
@@ -69,23 +72,26 @@ export function useMentionSearch(query: string | null): { found: readonly Direct
 			setState({ found: [], answered: null });
 			return;
 		}
+		const stopWaiting = () => {
+			if (ask === asked.current) setState((current) => ({ ...current, answered: query }));
+		};
+		const giveUp = setTimeout(stopWaiting, MENTION_SEARCH_MS + MENTION_WAIT_MAX_MS);
 		const timer = setTimeout(() => {
 			api
 				.call("directory.list_principals", {
 					query: query.slice(0, DIRECTORY_LIMITS.queryChars),
 					active_only: "true",
+					order: "match",
 					limit: MENTION_SEARCH_LIMIT,
 				})
-				.then(
-					(page) => {
-						if (ask === asked.current) setState({ found: page.principals, answered: query });
-					},
-					() => {
-						if (ask === asked.current) setState((current) => ({ ...current, answered: query }));
-					},
-				);
+				.then((page) => {
+					if (ask === asked.current) setState({ found: page.principals, answered: query });
+				}, stopWaiting);
 		}, MENTION_SEARCH_MS);
-		return () => clearTimeout(timer);
+		return () => {
+			clearTimeout(timer);
+			clearTimeout(giveUp);
+		};
 	}, [query]);
 	return { found: state.found, pending: query !== null && state.answered !== query };
 }

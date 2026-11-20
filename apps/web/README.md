@@ -1216,15 +1216,20 @@ MCP clients. The app has no UI-only path.
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
       - A typed name asks the server (`useMentionSearch`): `directory.list_principals` with the query,
-        `active_only` and a limit of 100, 150 ms after the last key. The list ranks that page with the
-        rules above (`rankMentions`), with the handle from the server. So one ask reads a bounded page,
-        also in a directory of thousands of principals. The server sorts by name, so the page is large
-        enough for the ranking to find its best 8, and has no archived principal.
+        `active_only`, `order: "match"` and a limit of 100, 150 ms after the last key. The list ranks
+        that page with the rules above (`rankMentions`), with the handle from the server. So one ask
+        reads a bounded page, also in a directory of thousands of principals. The server puts a match
+        at the start of an address or of a word of the name first, so the page has the matches that
+        the ranking puts first, and no archived principal. Known limit: the members of the room come
+        first only in that page.
       - The answer of an older query never replaces a newer one, and the last answer stays while the
         next one loads, so the list does not flash. A query without accents finds a part of each word
         of a name with accents (`garcia` finds "María García").
-      - While the list of a typed name loads, a plain Enter waits, so it does not send the half mention.
-        Ctrl+Enter still sends. A failed ask ends the wait.
+      - While the list of a typed name loads, "Looking for people…" shows, and a plain Enter waits. When
+        the list comes, the Enter takes its best suggestion, or sends when it has none. So Enter never
+        sends the half mention, and never takes a suggestion of an older list. A change of the typed
+        mention drops the waiting Enter. Ctrl+Enter still sends. A failed ask, and a wait of 3 s, end
+        the wait.
       - Only `@` alone uses the directory of the page, so the members of the room come first. The
         mention links, the dialogs and this case still read the whole directory
         ([jaredwray/soldock#131](https://github.com/jaredwray/soldock/issues/131)).

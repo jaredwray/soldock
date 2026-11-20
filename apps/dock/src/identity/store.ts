@@ -232,9 +232,9 @@ export async function mentionCandidates(
 			)
 			.bind(JSON.stringify(hits)),
 		db.prepare(
-			`${PRINCIPAL_SELECT_FROM} principals p INDEXED BY principals_aliases_unset
+			`${PRINCIPAL_SELECT_FROM} principals p INDEXED BY principals_names_unset
 			JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE p.aliases_set = 0 AND p.deleted_at IS NULL`,
+			WHERE ${NAMES_UNSET}`,
 		),
 	]);
 	const unset = unsetRows?.results ?? [];
@@ -246,6 +246,28 @@ export async function mentionCandidates(
 	}
 	const people = new Map([...(byHit?.results ?? []), ...unset].map((row) => [row.id, row]));
 	return [...people.values()].map(toPrincipal);
+}
+
+/**
+ * The live rows whose name columns (`alias_first`, `alias_full`, `name_folded`) a create or a rename did
+ * not write: the rows from before migrations 0017 and 0018, and the rows of an earlier Worker. The partial
+ * index `principals_names_unset` has these rows only.
+ */
+const NAMES_UNSET = "(p.aliases_set = 0 OR p.name_folded IS NULL) AND p.deleted_at IS NULL";
+
+/**
+ * Writes the name columns of each live row that does not have them (`NAMES_UNSET`). The search of the
+ * directory needs `name_folded` of each row, so it calls this before it reads. After the first call, the
+ * read of the index finds no row.
+ */
+export async function fillUnsetNames(db: D1Database): Promise<void> {
+	const { results } = await db
+		.prepare(`SELECT p.id, p.display_name FROM principals p INDEXED BY principals_names_unset WHERE ${NAMES_UNSET}`)
+		.all<{ id: string; display_name: string }>();
+	if (results.length === 0) return;
+	await fillAliases(db, results).catch((error: unknown) =>
+		log("warn", "name fill failed", { rows: results.length, error: String(error) }),
+	);
 }
 
 /**
@@ -305,10 +327,14 @@ export async function listPrincipalPage(
 		query: string | null;
 		folded: string | null;
 		activeOnly: boolean;
+		/** True for the order of the best match first (see `directory.list_principals`). It has one page. */
+		byMatch: boolean;
 		after: DirectoryPosition | null;
 		limit: number;
 	},
 ): Promise<DirectoryPage> {
+	// A search reads `name_folded`, so each row must have it.
+	if (options.folded !== null) await fillUnsetNames(db);
 	const { results } = await db
 		.prepare(
 			`SELECT ${PRINCIPAL_COLUMNS}, a.address,
@@ -317,10 +343,17 @@ export async function listPrincipalPage(
 					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1 AS shared_local
 			FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
 			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0
-					OR instr(p.name_folded, ?6) > 0)
+					OR instr(p.name_folded, ?6) > 0 OR instr(a.address, ?6) > 0)
 				AND (?7 = 0 OR p.archived_at IS NULL)
 				AND (?2 IS NULL OR (p.kind, p.display_name, p.id) > (?2, ?3, ?4))
-			ORDER BY p.kind, p.display_name, p.id LIMIT ?5`,
+			ORDER BY
+				-- The best match first: an address, or a word of the name, that starts with the query. The words
+				-- of a name end at a space, a "-", a "." or an apostrophe, as in the ranking of the Chat @ list.
+				CASE WHEN ?8 = 1 AND (substr(a.address, 1, length(?1)) = ?1 OR substr(a.address, 1, length(?6)) = ?6
+					OR instr(' ' || replace(replace(replace(p.name_folded, '-', ' '), '.', ' '), char(39), ' '), ' ' || ?6) > 0)
+				THEN 0 ELSE 1 END,
+				p.kind, p.display_name, p.id
+			LIMIT ?5`,
 		)
 		.bind(
 			options.query,
@@ -330,13 +363,14 @@ export async function listPrincipalPage(
 			options.limit + 1,
 			options.folded,
 			options.activeOnly ? 1 : 0,
+			options.byMatch ? 1 : 0,
 		)
 		.all<PrincipalRow & { shared_local: number }>();
 	const page = results.slice(0, options.limit);
 	const last = page[page.length - 1];
 	return {
 		principals: page.map((row) => ({ ...toPrincipal(row), sharedLocal: row.shared_local === 1 })),
-		next: results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
+		next: !options.byMatch && results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
 	};
 }
 

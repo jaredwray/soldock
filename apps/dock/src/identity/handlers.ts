@@ -195,6 +195,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "directory.list_principals"(call, input) {
 		const after =
 			input.cursor === undefined ? null : decodeCursor<DirectoryPosition>(input.cursor, ["string", "string", "string"]);
+		if (input.order === "match" && input.cursor !== undefined) {
+			throw new OperationError("invalid", 'The order "match" has one page, so it takes no cursor.');
+		}
 		if (input.cursor !== undefined && after === null) {
 			throw new OperationError(
 				"invalid",
@@ -207,6 +210,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			// A part of the name without accents: "garcia" finds "María García".
 			folded: input.query === undefined ? null : searchFold(input.query),
 			activeOnly: input.active_only === "true",
+			byMatch: input.order === "match" && input.query !== undefined,
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});
