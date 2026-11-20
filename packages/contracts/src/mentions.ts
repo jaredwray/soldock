@@ -120,20 +120,28 @@ const LOCAL_ONLY = new RegExp(`^${LOCAL}$`);
 const GROUP_WORDS: ReadonlySet<string> = new Set(["all", "channel", "everyone", "here", "room"]);
 
 /**
- * The name aliases of a display name: the first word, and the full name without spaces, in lowercase
- * and without accents. "Ada Lovelace" has "ada" and "adalovelace". An alias must have the form of a
- * handle, so a name in a different script has no alias. A word for a group, such as "here" for
- * "Here Maps", is not an alias.
+ * The name aliases of a display name, apart: the first word, and the full name without spaces, in
+ * lowercase and without accents. "Ada Lovelace" has "ada" and "adalovelace". An alias must have the form
+ * of a handle, so a name in a different script has no alias: that part is null. A word for a group, such
+ * as "here" for "Here Maps", is not an alias. The directory stores the two parts, so the server finds the
+ * principal of an alias with an index. A change of these rules (or of `LOCAL` and `GROUP_WORDS`) needs a
+ * migration that sets `aliases_set = 0` on each principal, so the server writes the stored parts again.
  */
-function nameAliases(displayName: string): string[] {
+export function nameAliasParts(displayName: string): { first: string | null; full: string | null } {
 	const words = displayName
 		.normalize("NFD")
 		.replace(/\p{M}/gu, "")
 		.toLowerCase()
 		.split(/\s+/)
 		.filter((word) => word !== "");
-	const aliases = new Set([words[0] ?? "", words.join("")]);
-	return [...aliases].filter((alias) => LOCAL_ONLY.test(alias) && !GROUP_WORDS.has(alias));
+	const alias = (word: string) => (LOCAL_ONLY.test(word) && !GROUP_WORDS.has(word) ? word : null);
+	return { first: alias(words[0] ?? ""), full: alias(words.join("")) };
+}
+
+/** The name aliases of a display name (`nameAliasParts`), each one time. */
+function nameAliases(displayName: string): string[] {
+	const { first, full } = nameAliasParts(displayName);
+	return [...new Set([first, full])].filter((alias) => alias !== null);
 }
 
 /** One part of the text of a message: plain text, a mention with its principal, or a mention of a group. */
@@ -174,12 +182,18 @@ export function textParts<P extends MentionPerson>(text: string, directory: Ment
 	return parts;
 }
 
-/** True when a text has a mention in the form of the syntax: "@" and a handle, not in an address. */
-export function hasMentionSyntax(text: string): boolean {
-	MENTION.lastIndex = 0;
-	const found = MENTION.test(text);
-	MENTION.lastIndex = 0;
-	return found;
+/**
+ * The handles and name aliases that the mentions of a text can name, in lowercase: the local part, or the
+ * full address. A server reads only the principals of these keys, so they are a superset: a mention of a
+ * group or in a link gives a key too. The rules of `mentionDirectory` then decide.
+ */
+export function mentionKeys(text: string): string[] {
+	const keys = new Set<string>();
+	for (const match of text.matchAll(MENTION)) {
+		const [, local = "", domain] = match;
+		keys.add((domain ? `${local}@${domain}` : local).toLowerCase());
+	}
+	return [...keys];
 }
 
 const BEFORE_MENTION = /[\p{L}\p{N}_.+\-/@]$/u;

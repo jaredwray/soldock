@@ -1,5 +1,5 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@asterra/contracts";
-import { newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
+import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope } from "@asterra/contracts";
+import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 export type PrincipalKind = "human" | "agent";
 export type OrgRole = "owner" | "admin" | "member";
@@ -53,6 +53,9 @@ const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_i
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
+
+/** The start of a select of principals with their primary address: the tables and the joins follow. */
+const PRINCIPAL_SELECT_FROM = `SELECT ${PRINCIPAL_COLUMNS}, a.address FROM`;
 
 const API_KEY_SELECT = "SELECT id, principal_id, label, scopes, created_at, last_used_at, revoked_at FROM api_keys";
 
@@ -169,6 +172,106 @@ export async function unknownPrincipalIds(db: D1Database, ids: readonly string[]
 		.all<{ id: string }>();
 	const known = new Set(results.map((row) => row.id));
 	return unique.filter((id) => !known.has(id));
+}
+
+/** The rows from before the alias columns that one statement writes the aliases of. */
+const ALIAS_FILL_CHUNK = 500;
+
+/**
+ * The principals that the mentions of a message can name, not the whole directory. `keys` are the
+ * lowercase handles and name aliases of the text and of the labels (`mentionKeys`), and `ids` are the
+ * principals of the mention nodes. The result has each principal that `mentionDirectory` needs to read
+ * these keys and ids as it does with the whole directory:
+ * - each principal of an id, and each principal with the same local part as one of them;
+ * - each principal with an address equal to a full key;
+ * - each principal with an address whose local part is a key, so the count of a shared local part is
+ *   right (a range of the index of the addresses: "part@" to "partA");
+ * - each principal with a name alias equal to a key (the indexes of the alias columns);
+ * - each principal from before the alias columns (`aliases_set = 0`, not deleted). This read writes the
+ *   aliases of all of them, `ALIAS_FILL_CHUNK` in each statement. So the first read after the migration
+ *   costs about as much as a read of the whole directory, one time, and later reads find no such row.
+ */
+export async function mentionCandidates(
+	db: D1Database,
+	keys: readonly string[],
+	ids: readonly string[],
+): Promise<PrincipalRecord[]> {
+	const json = (values: readonly string[]) => JSON.stringify([...new Set(values)]);
+	const words = json(keys.filter((key) => !key.includes("@")));
+	// Simple reads, each on an index (a CROSS JOIN keeps the list first), in one round trip. A compound
+	// SELECT would need more terms than D1 allows, and the planner then scans the tables.
+	const found = await db.batch<{ id: string }>([
+		db
+			.prepare(
+				`SELECT b.principal_id AS id FROM json_each(?) i
+				CROSS JOIN addresses a ON a.principal_id = i.value AND a.is_primary = 1
+				CROSS JOIN addresses b ON b.address >= substr(a.address, 1, instr(a.address, '@'))
+					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A'`,
+			)
+			.bind(json(ids)),
+		db
+			.prepare("SELECT principal_id AS id FROM addresses WHERE address IN (SELECT value FROM json_each(?))")
+			.bind(json(keys.filter((key) => key.includes("@")))),
+		db
+			.prepare(
+				`SELECT a.principal_id AS id FROM json_each(?) l
+				CROSS JOIN addresses a ON a.address >= l.value || '@' AND a.address < l.value || 'A'`,
+			)
+			.bind(words),
+		db.prepare("SELECT id FROM principals WHERE alias_first IN (SELECT value FROM json_each(?))").bind(words),
+		db.prepare("SELECT id FROM principals WHERE alias_full IN (SELECT value FROM json_each(?))").bind(words),
+	]);
+	const hits = [...new Set([...ids, ...found.flatMap((result) => result.results.map((row) => row.id))])];
+	// The principals of the hits, and each row from before the alias columns. The unset rows come from their
+	// index, not from a list of ids, so their number never makes a parameter too large.
+	const [byHit, unsetRows] = await db.batch<PrincipalRow>([
+		db
+			.prepare(
+				`${PRINCIPAL_SELECT_FROM} json_each(?) wanted CROSS JOIN principals p ON p.id = wanted.value
+				JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`,
+			)
+			.bind(JSON.stringify(hits)),
+		db.prepare(
+			`${PRINCIPAL_SELECT_FROM} principals p INDEXED BY principals_aliases_unset
+			JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
+			WHERE p.aliases_set = 0 AND p.deleted_at IS NULL`,
+		),
+	]);
+	const unset = unsetRows?.results ?? [];
+	if (unset.length > 0) {
+		// The read is right without the write, so a failed write only waits for the next read.
+		await fillAliases(db, unset).catch((error: unknown) =>
+			log("warn", "mention alias fill failed", { rows: unset.length, error: String(error) }),
+		);
+	}
+	const people = new Map([...(byHit?.results ?? []), ...unset].map((row) => [row.id, row]));
+	return [...people.values()].map(toPrincipal);
+}
+
+/**
+ * Writes the name aliases of rows from before the alias columns, in one batch with `ALIAS_FILL_CHUNK` rows
+ * in each statement. A row whose name changed since the read keeps its values: the rename wrote the
+ * aliases of the new name.
+ */
+async function fillAliases(db: D1Database, rows: readonly { id: string; display_name: string }[]): Promise<void> {
+	const statements: D1PreparedStatement[] = [];
+	for (let start = 0; start < rows.length; start += ALIAS_FILL_CHUNK) {
+		const values = rows
+			.slice(start, start + ALIAS_FILL_CHUNK)
+			.map((row) => ({ id: row.id, name: row.display_name, ...nameAliasParts(row.display_name) }));
+		statements.push(
+			db
+				.prepare(
+					`UPDATE principals SET alias_first = json_extract(j.value, '$.first'),
+						alias_full = json_extract(j.value, '$.full'), aliases_set = 1
+					FROM json_each(?) j
+					WHERE principals.id = json_extract(j.value, '$.id')
+						AND principals.display_name = json_extract(j.value, '$.name')`,
+				)
+				.bind(JSON.stringify(values)),
+		);
+	}
+	await db.batch(statements);
 }
 
 export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]> {
@@ -328,6 +431,7 @@ export async function createPrincipal(
 	const now = new Date().toISOString();
 	const id = newId("prn");
 	const keyId = newId("key");
+	const aliases = nameAliasParts(principal.display_name);
 	const secret = key ? `${API_KEY_PREFIX}${randomToken(32)}` : null;
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
 	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
@@ -361,6 +465,11 @@ export async function createPrincipal(
 					now,
 					...(options.condition?.params ?? []),
 				),
+			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
+			// this update then changes nothing.
+			db
+				.prepare("UPDATE principals SET alias_first = ?, alias_full = ?, aliases_set = 1 WHERE id = ?")
+				.bind(aliases.first, aliases.full, id),
 			db
 				.prepare(
 					"INSERT INTO addresses (address, principal_id, is_primary, created_at) SELECT ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)",
@@ -445,18 +554,33 @@ export interface PrincipalChanges {
  * when it matched no row.
  */
 export async function updatePrincipal(db: D1Database, id: string, changes: PrincipalChanges): Promise<boolean> {
+	// A new name writes its name aliases in the same update, so the mention read finds the new aliases only.
+	const aliases = changes.display_name === undefined ? null : nameAliasParts(changes.display_name);
 	const result = await db
 		.prepare(
 			`UPDATE principals SET display_name = COALESCE(?1, display_name),
+				alias_first = CASE WHEN ?1 IS NULL THEN alias_first ELSE ?5 END,
+				alias_full = CASE WHEN ?1 IS NULL THEN alias_full ELSE ?6 END,
+				aliases_set = CASE WHEN ?1 IS NULL THEN aliases_set ELSE 1 END,
 				org_role = CASE WHEN kind = 'human' THEN COALESCE(?2, org_role) ELSE org_role END,
 				sponsor_id = CASE WHEN kind = 'agent' THEN COALESCE(?3, sponsor_id) ELSE sponsor_id END
 			WHERE id = ?4 AND deleted_at IS NULL AND (?2 IS NULL OR org_role IS NOT 'owner')
 			AND (?3 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?3 AND sponsor.kind = 'human'
-				AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))`,
+				AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))
+			RETURNING id`,
 		)
-		.bind(changes.display_name ?? null, changes.org_role ?? null, changes.sponsor_id ?? null, id)
-		.run();
-	return result.meta.changes === 1;
+		.bind(
+			changes.display_name ?? null,
+			changes.org_role ?? null,
+			changes.sponsor_id ?? null,
+			id,
+			aliases?.first ?? null,
+			aliases?.full ?? null,
+		)
+		.all();
+	// The rows of the update itself: D1 also counts the write of the trigger `principals_aliases_stale` in
+	// `meta.changes`, so that count is 2 for a rename that keeps both aliases.
+	return result.results.length === 1;
 }
 
 /**
@@ -536,7 +660,8 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 		db
 			.prepare(
 				`UPDATE principals SET deleted_at = ?1, archived_at = COALESCE(archived_at, ?1), password_hash = NULL,
-					totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL
+					totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL,
+					alias_first = NULL, alias_full = NULL, aliases_set = 1
 				WHERE id = ?2 AND deleted_at IS NULL AND org_role IS NOT 'owner'
 				AND NOT EXISTS (SELECT 1 FROM principals agent WHERE agent.sponsor_id = ?2 AND agent.deleted_at IS NULL)`,
 			)

@@ -41,6 +41,7 @@ export {
 	getPrincipals,
 	listPrincipals,
 	mailDomains,
+	mentionCandidates,
 	normalizeAddress,
 	type OutboundMode,
 	type PrincipalRecord,
