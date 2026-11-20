@@ -148,6 +148,28 @@ describe("the people of a page", () => {
 	});
 });
 
+describe("the people of a page after the person leaves Chat", () => {
+	// While the server is down, a store without views must not send its failed calls again, or the calls
+	// of its queue: nothing shows their answers.
+	it("sends no call while it is not active, and sends the calls of its queue when it is active again", async () => {
+		vi.useFakeTimers();
+		const api = server([]);
+		const people = createPeople(api.lookup);
+		api.fail(true);
+		people.want({ ids: Array.from({ length: 150 }, (_, index) => `prn_${index}`) });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls).toHaveLength(1);
+		people.setActive(false);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.calls).toHaveLength(1);
+		// The views of the store show again: the ids that did not go out go out.
+		api.fail(false);
+		people.setActive(true);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls.map((call) => list(call.ids).length)).toEqual([100, 50]);
+	});
+});
+
 describe("the people that the body of a message needs", () => {
 	const body: ChatBody = {
 		type: "doc",

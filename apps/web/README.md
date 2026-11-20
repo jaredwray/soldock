@@ -1272,7 +1272,8 @@ MCP clients. The app has no UI-only path.
       - The asks of one render go in one call. An answer stays until the person leaves Chat, also the
         answer "no principal". A new visit of Chat reads the people again, for example after a change
         in Admin. The store sends a failed call again after 2 s, 2 times at most. After the last
-        failure, the next view that needs a principal asks again.
+        failure, the next view that needs a principal asks again. After the person leaves Chat, the
+        store sends no more calls.
       - A mention link, a typed mention in the box and the name of a reaction show when the answer
         comes. Until then, the mention is text and the name is "A member".
       - The dialogs for a direct message and for the members of a room still read each page of
