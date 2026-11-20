@@ -140,6 +140,8 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 2. Each change sends `notifications/resources/updated` with the URI. For `mail.inbox`, only a new
    message in the inbox is a change. A read, a label or an archive sends nothing. For `chat.room`, a
    new, changed or deleted message is a change. A read marker, a new name and a new member send nothing.
+   A change that the caller made sends nothing, so a client that answers a message gets no
+   notification for its answer.
    For `chat.rooms`, each change of a room of the caller is a change, also a read marker, a star, a
    join and a leave.
    A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.

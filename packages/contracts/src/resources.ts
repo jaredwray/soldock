@@ -80,7 +80,7 @@ export const chatRoom = defineResource({
 			})),
 	},
 	updates:
-		"A new, changed or deleted message sends notifications/resources/updated, also a reply in a thread. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
+		"A new, changed or deleted message sends notifications/resources/updated, also a reply in a thread. A change that you made sends no notification. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
 });
 
 /**

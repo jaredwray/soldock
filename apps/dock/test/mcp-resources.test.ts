@@ -12,6 +12,7 @@ import { MAX_QUEUED_EVENTS, MAX_STREAM_MS, RECHECK_MS } from "../src/mcp/listen.
 import {
 	bearer,
 	callTool,
+	connectRoomSocket,
 	drainOutbox,
 	inject,
 	mcp,
@@ -338,6 +339,34 @@ describe("MCP subscriptions/listen", () => {
 		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
 
 		// The room closes the socket of a removed member, so the stream ends at once, before its next check.
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		expect(await stream.next()).toBe("closed");
+	});
+
+	// An agent that answers after each notification must get no notification for its answer. Else each
+	// answer starts a new turn of its model.
+	it("sends a member no notification for its own changes of a room, and still sends them to its sockets", async () => {
+		const { ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const { message: first } = await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
+		const stream = await listen(bot.key, [roomMessages(room.id)]);
+		expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		// A socket of the same agent that is not a feed gets each event, as a second tab of a person does.
+		const socket = await connectRoomSocket(room.id, bearer(bot.key));
+
+		const { message: own } = await bot.call("chat.post_message", { room_id: room.id, text: "I am ready." });
+		// A reply changes the first message of its thread too.
+		await bot.call("chat.post_message", { room_id: room.id, text: "Noted.", parent_id: first.id });
+		await bot.call("chat.add_reaction", { room_id: room.id, message_id: first.id, emoji: "👍" });
+		await bot.call("chat.edit_message", { room_id: room.id, message_id: own.id, text: "I am ready now." });
+		await bot.call("chat.delete_message", { room_id: room.id, message_id: own.id });
+		const seen: unknown[] = [];
+		for (let index = 0; index < 6; index++) seen.push(((await socket.next()) as { type: string }).type);
+		expect(seen).toEqual(["message", "message", "reply", "message", "message", "message"]);
+
+		// The change of a different member is the first notification of the stream, and the only one.
+		await ada.call("chat.post_message", { room_id: room.id, text: "Thank you." });
+		expect(await stream.next()).toEqual(updated(roomMessages(room.id)));
 		await ada.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
 		expect(await stream.next()).toBe("closed");
 	});

@@ -619,7 +619,11 @@ A socket stays open after its request. It must not outlive the access that opene
   rooms of the caller.
 - The change feed of the resource is a room socket that the Worker opens for the stream
   (`watch.ts`). So the room makes the same member check and the same credential check for the two.
-- Only a `message` event sends `notifications/resources/updated`.
+- Only a `message` event and a `reply` event send `notifications/resources/updated`.
+- A feed gets no event for a change that its own principal made: a post, an edit, a delete, a
+  reaction, and a link preview of its message (`publish`). So an agent that answers after a
+  notification gets no notification for its answer. A socket that is not a feed gets each event, so
+  a tab of a person shows the message that a different tab sent.
 - A feed counts for the limit of 8 sockets of one member in one room. The room never closes a feed
   to make room for a new socket, because the end of one feed ends its stream with all of its other
   feeds. At the limit, the room refuses a new feed, and the new stream leaves the room out.
