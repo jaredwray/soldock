@@ -403,8 +403,13 @@ export function ThreadPanel({
 			// Text that the person typed during the send stays in the box.
 			if (draftNow.current === sent) {
 				composer.current?.clear();
-				changeDraft(null);
+				draftNow.current = null;
+				setDraft(null);
 			}
+			// The store loses the draft only while it has the sent reply. The view can close during the send, and
+			// a view of the thread that opened after it can have a newer draft.
+			const stored = drafts.get(draftKey);
+			if (sent && stored && sameInBox(stored, sent)) drafts.set(draftKey, null);
 		} catch (error) {
 			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
 			// A refusal is an answer: that attempt stored nothing. A file that no send with a lost answer took is

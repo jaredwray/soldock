@@ -694,6 +694,20 @@ test("the draft of a reply stays after a close of the thread and a reload, apart
 	await openThread();
 	await expect(panel.locator(".chat-thread-reply")).toHaveCount(2);
 	await expect(box).toHaveText("");
+
+	// A send that ends after a close of its view does not remove the newer draft of a view that opened later.
+	const send = await hold(page, postsOf(roomId), "POST");
+	await box.fill("a reply in flight");
+	await box.press("Enter");
+	await panel.getByRole("button", { name: "Close the thread" }).click();
+	await openThread();
+	await editorReady(box);
+	await box.fill("a newer draft");
+	send.release();
+	await expect(panel.locator(".chat-thread-reply")).toHaveCount(3);
+	await panel.getByRole("button", { name: "Close the thread" }).click();
+	await openThread();
+	await expect(box).toHaveText("a newer draft");
 });
 
 test("a room that opens again shows its last list before the answer of the server", async ({ browser }) => {

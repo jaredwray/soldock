@@ -874,7 +874,8 @@ MCP clients. The app has no UI-only path.
     - **Draft.** The reply in the box stays after a close of the view and after a reload. It is in the
       store of the drafts of the rooms (`drafts.ts`), with the key `<room id>/<first message id>`
       (`threadDraftKey`), so a sign-out removes it too. A send removes it. Text that the person typed
-      during the send stays. The files and "Also send to <room>" do not stay.
+      during the send stays. The store loses the draft only while it has the sent reply, so a send that
+      ends after a close of its view keeps the newer draft of a view that opened later. The files and "Also send to <room>" do not stay.
     - Known limits, for the next parts: the view keeps each
       reply that it read, so a thread that the person reads far back keeps many rows
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
