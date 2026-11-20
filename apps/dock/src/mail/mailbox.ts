@@ -361,6 +361,42 @@ export interface MailFilter {
 	now: number;
 }
 
+/** A message of a thread, as a thread summary needs it. */
+interface SummaryMessageRow extends Row {
+	thread_id: string;
+	from_name: string | null;
+	from_addr: string | null;
+	snippet: string;
+	origin: string;
+	has_attachments: number;
+	subject: string;
+}
+
+/** The summary of a thread, from the messages that the call can read, oldest first. */
+function summarize(
+	threadId: string,
+	lastDate: number,
+	from: { subject: string; messages: SummaryMessageRow[]; labels: string[] },
+): ThreadSummaryRecord {
+	const participants = new Map<string, MailAddress>();
+	for (const message of from.messages) {
+		if (message.from_addr && !participants.has(message.from_addr)) {
+			participants.set(message.from_addr, { name: message.from_name, address: message.from_addr });
+		}
+	}
+	return {
+		id: threadId,
+		subject: from.subject,
+		snippet: from.messages.at(-1)?.snippet ?? "",
+		participants: [...participants.values()].slice(0, 5),
+		messageCount: from.messages.length,
+		labels: from.labels,
+		hasAttachments: from.messages.some((message) => message.has_attachments === 1),
+		untrusted: from.messages.some((message) => message.origin === "external"),
+		lastMessageAt: lastDate,
+	};
+}
+
 const MESSAGE_META_COLUMNS = `seq, id, thread_id, origin, message_id_header, subject, from_name, from_addr,
 	to_json, cc_json, bcc_json, reply_to_json, sent_date, internal_date, snippet, body_truncated, attachments_json, auth_json,
 	sent_by_json`;
@@ -990,52 +1026,44 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 		const page = rows.slice(0, params.limit);
 		const last = page.at(-1);
-		return {
-			threads: page.map((row) => this.summarize(row.thread_id, row.last_date, only)),
-			nextCursor: rows.length > params.limit && last ? btoa(JSON.stringify([last.last_date, last.thread_id])) : null,
-		};
-	}
-
-	/** The summary of a thread, from its messages that the filter finds. */
-	private summarize(threadId: string, lastDate: number, only: CompiledQuery): ThreadSummaryRecord {
-		const thread = this.one<{ subject: string }>("SELECT subject FROM threads WHERE id = ?", threadId);
-		const messages = this.all<{
-			from_name: string | null;
-			from_addr: string | null;
-			snippet: string;
-			origin: string;
-			has_attachments: number;
-			subject: string;
-		}>(
-			`SELECT m.from_name, m.from_addr, m.snippet, m.origin, m.has_attachments, m.subject FROM messages m
-			WHERE m.thread_id = ? AND (${only.where}) ORDER BY m.internal_date, m.seq`,
-			threadId,
-			...only.params,
+		// Three statements read the summaries of all the threads of the page, with the filter of the key.
+		const ids = JSON.stringify(page.map((row) => row.thread_id));
+		const subjects = new Map(
+			this.all<{ id: string; subject: string }>(
+				"SELECT id, subject FROM threads WHERE id IN (SELECT value FROM json_each(?))",
+				ids,
+			).map((row) => [row.id, row.subject]),
 		);
-		const labels = this.all<{ label_id: string }>(
-			`SELECT DISTINCT ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq
-			WHERE m.thread_id = ? AND (${only.where})`,
-			threadId,
-			...only.params,
-		).map((row) => row.label_id);
-		const participants = new Map<string, MailAddress>();
-		for (const message of messages) {
-			if (message.from_addr && !participants.has(message.from_addr)) {
-				participants.set(message.from_addr, { name: message.from_name, address: message.from_addr });
-			}
-		}
+		const messages = Map.groupBy(
+			this.all<SummaryMessageRow>(
+				`SELECT m.thread_id, m.from_name, m.from_addr, m.snippet, m.origin, m.has_attachments, m.subject FROM messages m
+				WHERE m.thread_id IN (SELECT value FROM json_each(?)) AND (${only.where}) ORDER BY m.internal_date, m.seq`,
+				ids,
+				...only.params,
+			),
+			(row) => row.thread_id,
+		);
+		const labels = Map.groupBy(
+			this.all<{ thread_id: string; label_id: string }>(
+				`SELECT DISTINCT m.thread_id, ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq
+				WHERE m.thread_id IN (SELECT value FROM json_each(?)) AND (${only.where})`,
+				ids,
+				...only.params,
+			),
+			(row) => row.thread_id,
+		);
 		return {
-			id: threadId,
-			// The subject of a thread is the subject of its first message. With a filter, that message can
-			// be outside the filter, so the subject is that of the first message that the filter finds.
-			subject: (only.where === "1" ? thread?.subject : messages[0]?.subject) ?? "",
-			snippet: messages.at(-1)?.snippet ?? "",
-			participants: [...participants.values()].slice(0, 5),
-			messageCount: messages.length,
-			labels,
-			hasAttachments: messages.some((message) => message.has_attachments === 1),
-			untrusted: messages.some((message) => message.origin === "external"),
-			lastMessageAt: lastDate,
+			threads: page.map((row) => {
+				const threadMessages = messages.get(row.thread_id) ?? [];
+				return summarize(row.thread_id, row.last_date, {
+					// The subject of a thread is the subject of its first message. With a filter, that message can
+					// be outside the filter, so the subject is that of the first message that the filter finds.
+					subject: (params.filter ? threadMessages[0]?.subject : subjects.get(row.thread_id)) ?? "",
+					messages: threadMessages,
+					labels: (labels.get(row.thread_id) ?? []).map((label) => label.label_id),
+				});
+			}),
+			nextCursor: rows.length > params.limit && last ? btoa(JSON.stringify([last.last_date, last.thread_id])) : null,
 		};
 	}
 
