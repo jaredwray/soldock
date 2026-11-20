@@ -13,17 +13,22 @@ WORKDIR /app
 
 FROM base AS build
 # Corepack installs the pnpm version that the packageManager field of package.json pins.
+# The cache is in COREPACK_HOME, so the node user reads the same pnpm and does not download it again.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ENV COREPACK_HOME=/opt/corepack
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY --chown=node:node apps/dock/package.json apps/dock/
 COPY --chown=node:node apps/web/package.json apps/web/
 COPY --chown=node:node packages/contracts/package.json packages/contracts/
-# Prepare pnpm as root. The node user can then run it.
-RUN corepack enable pnpm && corepack prepare --activate
+RUN mkdir -p /opt/corepack \
+	&& corepack enable pnpm \
+	&& corepack prepare --activate \
+	&& chmod -R a+rX /opt/corepack
 USER node
 # The same install as deploy-development.yaml: the dock Worker, the SPA and the workspace packages that
 # they use. pnpm-workspace.yaml applies its policies here too. No secret goes into this stage.
-RUN pnpm install --frozen-lockfile --filter "@asterra/dock..." --filter "@asterra/web..."
+# COREPACK_ENABLE_NETWORK=0 fails the build if this step has to download pnpm again.
+RUN COREPACK_ENABLE_NETWORK=0 pnpm install --frozen-lockfile --filter "@asterra/dock..." --filter "@asterra/web..."
 COPY --chown=node:node packages/contracts packages/contracts
 COPY --chown=node:node apps/web apps/web
 COPY --chown=node:node apps/dock apps/dock

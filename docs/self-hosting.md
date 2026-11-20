@@ -77,6 +77,9 @@ self-review prevented and no administrator bypass.
 
 The `docker` environment has no required reviewer, because each push to `main` publishes an image.
 It holds no Cloudflare credential, and it is not a deployment environment of the dock Worker.
+The publish job sets `deployment: false`, so the run does not create a deployment record. Do not add
+a custom deployment protection rule to this environment: that rule needs a deployment record, and the
+job then fails.
 
 ## Workflow rules
 
@@ -152,7 +155,9 @@ Asterra. Asterra runs only on Cloudflare.
 - Until the secrets exist, the `publish` job stops at its first step, and the error names each missing
   secret.
 - To run the workflow again, open **Actions › docker-publish › Run workflow** and select `main`. If only
-  a push failed, select **Re-run failed jobs**. The same image then goes to Docker Hub.
+  a push failed, select **Re-run failed jobs**. The run pushes the version tag only when that tag is
+  absent, or when the tag already has this image. The run moves `development` only when the commit is
+  still the head of `main`.
 - A fork does not need this workflow. Delete it, or set `IMAGE` to your own Docker Hub repository.
 
 ## Mail

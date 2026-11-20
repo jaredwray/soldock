@@ -58,9 +58,9 @@ docker run --rm -p 127.0.0.1:8787:8787 -v asterra-data:/data -e SETUP_TOKEN="$to
 Open http://localhost:8787. Enter the token, then create the owner as in
 [Run the product locally](#run-the-product-locally).
 
-- **Tags.** `development` is the image of the newest commit on `main`. Each commit also has a version
-  tag that never changes, for example `0.0.0-development.20261119231245.g61ff1b8c2d3e`. No `latest`
-  tag exists. [`tools/docker`](../tools/docker/README.md) gives the parts of the version tag.
+- **Tags.** `development` is the image of the newest commit on `main`. Each published image also has
+  a version tag that never changes, for example `0.0.0-development.20261119231245.g61ff1b8c2d3e`. No
+  `latest` tag exists. [`tools/docker`](../tools/docker/README.md) gives the parts of the version tag.
 - **Setup token.** The image holds no token. Make a token of at least 32 characters for your
   container. After you create the owner, stop the container, and start it again without
   `-e SETUP_TOKEN`. The setup page then does not show.

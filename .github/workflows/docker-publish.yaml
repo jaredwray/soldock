@@ -128,11 +128,12 @@ jobs:
     name: publish
     needs: build
     runs-on: ubuntu-latest
+    # The environment supplies the Docker Hub secrets and the branch rule. deployment: false keeps
+    # this run off the Deployments list. The image is not a deployment of Asterra.
     environment:
       name: docker
-      url: https://hub.docker.com/r/jaredwray/asterra/tags
-    permissions:
-      contents: read
+      deployment: false
+    permissions: {}
     timeout-minutes: 15
     env:
       VERSION: ${{ needs.build.outputs.version }}
@@ -167,16 +168,48 @@ jobs:
       - name: Load the image
         run: docker load --input "$RUNNER_TEMP/image/image.tar"
 
+      # No third-party action sees the token. The password goes to Docker on stdin.
       - name: Log in to Docker Hub
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: printenv DOCKER_PASSWORD | docker login --username "$DOCKER_USERNAME" --password-stdin
       # The version tag goes first. Thus `development` never names an image that has no version tag.
+      # A second run does not replace a version tag. It pushes only when the tag is absent.
       - name: Push the version tag
-        run: docker push "$IMAGE:$VERSION"
+        run: |
+          sha="${GITHUB_SHA:0:12}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-development\.[0-9]{14}\.g${sha}$ ]]; then
+            echo "::error::The version tag has the wrong form."
+            exit 1
+          fi
+          local_id=$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")
+          if docker manifest inspect "$IMAGE:$VERSION" > /dev/null 2>&1; then
+            docker tag "$IMAGE:$VERSION" "$IMAGE:local-check"
+            docker pull "$IMAGE:$VERSION"
+            remote_id=$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")
+            docker tag "$IMAGE:local-check" "$IMAGE:$VERSION"
+            if [[ "$remote_id" != "$local_id" ]]; then
+              echo "::error::$IMAGE:$VERSION exists and it is a different image."
+              exit 1
+            fi
+            echo "::notice::$IMAGE:$VERSION already has this image."
+          else
+            docker push "$IMAGE:$VERSION"
+          fi
+      # A re-run of an old commit does not move `development` backward.
       - name: Push the development tag
-        run: docker push "$IMAGE:development"
+        run: |
+          head=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+          if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub did not return the head of main."
+            exit 1
+          fi
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "::notice::main is at $head. This run does not move the development tag."
+            exit 0
+          fi
+          docker push "$IMAGE:development"
 
       - name: Write the job summary
         run: |
@@ -185,7 +218,10 @@ jobs:
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Version tag: \`$IMAGE:$VERSION\`"
-            echo "- Moving tag: \`$IMAGE:development\`"
+            echo "- Tag that moves: \`$IMAGE:development\`"
             echo
             echo "The image is for local development. It is not a deployment of Asterra."
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out of Docker Hub
+        if: always()
+        run: docker logout

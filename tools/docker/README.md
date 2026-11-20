@@ -1,6 +1,6 @@
 # `tools/docker`
 
-> Status: **started**. The image is for `linux/amd64` only. An `arm64` image comes later.
+> Status: **started**. The image is for `linux/amd64` only.
 
 The local development image of Asterra. [`docker-publish.yaml`](../../.github/workflows/docker-publish.yaml)
 publishes it to Docker Hub as [`jaredwray/asterra`](https://hub.docker.com/r/jaredwray/asterra) on each
@@ -45,8 +45,8 @@ No `latest` tag exists, because the image is not a release.
 `0.0.0-development.20261119231245.g61ff1b8c2d3e`. The tag is `<version>-development.<time>.g<commit>`:
 
 - `<version>` is the `version` of the root `package.json`, as `MAJOR.MINOR.PATCH`.
-- `<time>` is the committer date of the commit in UTC, as `YYYYMMDDHHMMSS`. Thus a later commit has a
-  higher semver precedence.
+- `<time>` is the committer date of the commit in UTC, as `YYYYMMDDHHMMSS`. When the committer date
+  is later, the tag has a higher semver precedence.
 - `<commit>` is the first 12 characters of the commit SHA. The `g` makes the identifier alphanumeric:
   semver does not permit a numeric identifier that starts with `0`.
 
@@ -57,7 +57,7 @@ so the tag has no build metadata.
 
 - The image holds no secret and no setup token. A container gets `SETUP_TOKEN` from its environment.
 - The process runs as the `node` user, not as root.
-- The base image is pinned by its index digest. To change it, use a digest that is at least 7 days old.
+- The base image has an index digest. To change it, use a digest that is at least 7 days old.
 - Data inventory: the image holds no data of an instance. A container writes the local state of
   `wrangler dev` (D1, R2, Queues and Durable Objects) to `/data`. This state is development data, and
   backups do not include it.

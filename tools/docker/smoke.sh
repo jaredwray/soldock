@@ -38,6 +38,6 @@ for _ in $(seq 60); do
 	fi
 	sleep 2
 done
-[[ "$ready" == "true" ]] || fail "The Worker did not answer in 120 seconds."
+[[ "$ready" == "true" ]] || fail "The Worker did not answer before the check ended."
 
 "$root/scripts/smoke-check.sh" "$url" || fail "The smoke check failed."

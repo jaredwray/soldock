@@ -34,7 +34,7 @@ Profile: website/app · public
 - [x] `persist-credentials: false` on checkouts that don't push — PR #16
 - [x] No `pull_request_target` on workflows that run untrusted PR code — verified 2026-10-16
 - [x] Artifact-publishing workflows disable `actions/setup-node` default caching (`package-manager-cache: false`) to prevent cache poisoning. `docker-publish.yaml` publishes the development image. It sets `package-manager-cache: false`, and it uses no Docker layer cache.
-- [ ] No npm tokens in Actions secrets. Exception: `docker-publish.yaml` uses `DOCKER_USERNAME` and `DOCKER_PASSWORD` from the `docker` environment (Docker Hub only). No `.npmrc` is tracked. Deferred: the maintainer confirms the Actions secrets list, which an agent session cannot read.
+- [ ] No npm tokens (or other registry credentials) in Actions secrets — repository side verified 2026-10-17: no `.npmrc` is tracked. Exception: `docker-publish.yaml` uses `DOCKER_USERNAME` and `DOCKER_PASSWORD` from the `docker` environment (Docker Hub only). The maintainer accepts this exception. Deferred: the maintainer confirms the Actions secrets list, which an agent session cannot read.
 
 ## 6. Security tooling
 - [x] Aikido runs on every build — verified 2026-10-16 on pull requests (`Aikido Security: check code`). Direct pushes to `main` aren't covered until § 7 requires pull requests

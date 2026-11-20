@@ -21,7 +21,11 @@ wait $!
 args=(dev --ip 0.0.0.0 --port 8787 --persist-to "$state")
 if [[ -n "${SETUP_TOKEN:-}" ]]; then
 	args+=(--var "SETUP_TOKEN:$SETUP_TOKEN")
-	echo "SETUP_TOKEN is set. Setup is on."
+	if [[ ${#SETUP_TOKEN} -ge 32 ]]; then
+		echo "SETUP_TOKEN is set. Setup is on."
+	else
+		echo "SETUP_TOKEN is set. The token has fewer than 32 characters, so setup stays off."
+	fi
 else
 	echo "SETUP_TOKEN is not set. Setup is off."
 fi
