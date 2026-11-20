@@ -3,6 +3,7 @@ import {
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
+	type ChatAddressedReason,
 	type ChatBody,
 	type ChatEventReason,
 	type ChatFile,
@@ -16,6 +17,7 @@ import {
 	type RoomRole,
 } from "@asterra/contracts";
 import {
+	type ChatAddressedState,
 	type ChatRoomState,
 	type ChatThreadState,
 	type CredentialCheck,
@@ -212,6 +214,8 @@ interface MemberRow extends Row {
 	last_read_seq: number;
 	/** 1 when the member put its star on the room, else 0. */
 	starred: number;
+	/** The newest change of the room that is for the member, as the JSON of `ChatAddressedState`, or null. */
+	addressed_json: string | null;
 }
 
 interface MessageRow extends Row {
@@ -438,6 +442,9 @@ const MIGRATIONS: string[][] = [
 			next_attempt_at INTEGER NOT NULL
 		) WITHOUT ROWID`,
 	],
+	// The newest change that is for each member (`ChatAddressedState`), for chat.list_addressed and the
+	// resource `chat.addressed`. It is part of the member row, so it goes away when the member leaves.
+	["ALTER TABLE members ADD COLUMN addressed_json TEXT"],
 ];
 
 /**
@@ -825,6 +832,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				version: room.version,
 				starred: member.starred === 1,
 				threads: this.followedThreads(principalId),
+				addressed: member.addressed_json === null ? null : (JSON.parse(member.addressed_json) as ChatAddressedState),
 			},
 		};
 	}
@@ -1295,8 +1303,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM link_jobs WHERE message_id = ?", messageId);
 			this.roomChanged(row.author_id);
 		});
-		if (changed && room)
-			await this.publish(messageEvent(this.messageRecord(room.room_id, this.message(messageId) as MessageRow)));
+		// The change comes from a post or an edit of the author, or from the author, so the author is its actor.
+		if (changed && row && room)
+			await this.publish(
+				messageEvent(this.messageRecord(room.room_id, this.message(messageId) as MessageRow)),
+				row.author_id,
+			);
 		else await this.flush();
 	}
 
@@ -1790,7 +1802,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.roomChanged(principalId);
 		});
 		const message = this.messageRecord(roomId, this.message(messageId) as MessageRow);
-		await this.publish(messageEvent(message));
+		await this.publish(messageEvent(message), principalId);
 		return { message, changed: true };
 	}
 
@@ -1982,8 +1994,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// download the files. A grant that fails here waits in the outbox, and the alarm tries it again.
 			if (posted.message.files.length > 0) await this.flush();
 			// The parent first: its version comes before the version of the reply.
-			if (posted.parent) await this.publish(messageEvent(posted.parent));
-			await this.publish(messageEvent(posted.message));
+			if (posted.parent) await this.publish(messageEvent(posted.parent), call.actor.principal_id);
+			await this.publish(messageEvent(posted.message), call.actor.principal_id);
 		}
 		return posted;
 	}
@@ -2080,7 +2092,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (!("error" in edited) && edited.changed) {
 			// A file that the edit added gets its grant before the event, as for a new message.
 			if (files !== null && files.added.length > 0) await this.flush();
-			await this.publish(messageEvent(edited.message));
+			await this.publish(messageEvent(edited.message), call.actor.principal_id);
 		}
 		return edited;
 	}
@@ -2195,8 +2207,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return { deleted: true as const, message, parent };
 		});
 		if (!("error" in deleted) && deleted.deleted) {
-			await this.publish(messageEvent(deleted.message));
-			if (deleted.parent) await this.publish(messageEvent(deleted.parent));
+			await this.publish(messageEvent(deleted.message), call.actor.principal_id);
+			if (deleted.parent) await this.publish(messageEvent(deleted.parent), call.actor.principal_id);
 		}
 		if ("error" in deleted) return deleted;
 		return { deleted: deleted.deleted };
@@ -2325,11 +2337,18 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 	}
 
-	/** Sends an event to the sockets and writes the index. The sockets do not wait for the index. */
-	private async publish(event: ChatSocketEvent): Promise<void> {
+	/**
+	 * Sends an event to the sockets and writes the index. The sockets do not wait for the index.
+	 *
+	 * `actorId` is the principal that made the change. A feed of that principal does not get the event,
+	 * so an MCP stream gets no notification for a change of its own principal. A socket that is not a
+	 * feed gets each event: a tab of a person shows the message that a different tab sent.
+	 */
+	private async publish(event: ChatSocketEvent, actorId: string | null = null): Promise<void> {
 		const text = JSON.stringify(event);
+		const quietTag = actorId === null ? null : socketTag(actorId);
 		this.announced = this.announced
-			.then(() => this.deliver(text))
+			.then(() => this.deliver(text, quietTag))
 			.catch((error: unknown) => {
 				log("error", "chat socket event failed", { error: error instanceof Error ? error.message : String(error) });
 			});
@@ -2346,8 +2365,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 *
 	 * A socket whose credential stopped closes. If the check fails, the sockets that waited for it
 	 * close, and their clients open new ones, which the Worker authenticates.
+	 *
+	 * A feed with the tag `quietTag` gets no event, but its credential check runs as for each socket.
 	 */
-	private async deliver(text: string): Promise<void> {
+	private async deliver(text: string, quietTag: string | null): Promise<void> {
 		const now = Date.now();
 		const open: { socket: WebSocket; state: SocketState; waits: boolean }[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
@@ -2356,8 +2377,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
 				continue;
 			}
-			const waits = now - state.checkedAt >= SOCKET_RECHECK_MS;
-			if (!waits) this.send(socket, text);
+			const quiet = state.feed && quietTag !== null && this.ctx.getTags(socket).includes(quietTag);
+			// A quiet socket never waits for an event: the check below only keeps or closes it.
+			const waits = !quiet && now - state.checkedAt >= SOCKET_RECHECK_MS;
+			if (!waits && !quiet) this.send(socket, text);
 			open.push({ socket, state, waits });
 		}
 		if (!open.some((entry) => entry.waits)) return;
@@ -2542,7 +2565,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Records one chat event for the members except the actor, with the reason of each member. Call this
 	 * inside the room transaction, after the change of the message. `version` is the version that the
-	 * message got from the change.
+	 * message got from the change. Each member that the change is for also keeps it in its member row
+	 * (`addressed_json`).
 	 */
 	private queueChatEvent(event: {
 		room: RoomRow;
@@ -2567,6 +2591,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 			reason: reasonOf(member.principal_id),
 		}));
 		if (recipients.length === 0) return;
+		// The change is for each recipient whose reason is not `room`. The state of the room for that member
+		// has it, so the `PrincipalDO` of the member knows the change without a webhook.
+		const addressed = new Map<ChatAddressedReason, string[]>();
+		for (const recipient of recipients) {
+			if (recipient.reason === "room") continue;
+			addressed.set(recipient.reason, [...(addressed.get(recipient.reason) ?? []), recipient.id]);
+		}
+		for (const [reason, ids] of addressed) {
+			// One statement for each reason, so a mention of a group in a large room makes one write.
+			this.sql.exec(
+				"UPDATE members SET addressed_json = ?1 WHERE principal_id IN (SELECT value FROM json_each(?2))",
+				JSON.stringify({
+					event: event.eventType,
+					reason,
+					message_id: event.messageId,
+					parent_id: event.parentId,
+					author_id: event.authorId,
+					version: event.version,
+					at: event.now,
+				} satisfies ChatAddressedState),
+				JSON.stringify(ids),
+			);
+		}
 		const job: ChatWebhookEventJob = {
 			v: 1,
 			kind: "chat_event",

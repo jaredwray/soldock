@@ -1,5 +1,6 @@
+import type { ChatMessage } from "@asterra/contracts";
 import { type CallContext, openEventsSocket } from "../identity/index.ts";
-import { OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
+import { type ChangeFacts, OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
 import { joinedRoomIds } from "./room-index.ts";
 import { openRoomSocket } from "./socket.ts";
 
@@ -20,14 +21,47 @@ import { openRoomSocket } from "./socket.ts";
 /** The refusals of a room that leave the room out of a stream. Each other failure fails the request. */
 const REFUSALS: ReadonlySet<string> = new Set(["not_found", "forbidden", "conflict"]);
 
-/** The `type` of a socket event, or null for text that is no event. */
-function eventType(data: string): string | null {
+/** A socket event with its `type`, or null for text that is no event. */
+function socketEvent(data: string): ({ type: string } & Record<string, unknown>) | null {
 	try {
-		const type = (JSON.parse(data) as { type?: unknown }).type;
-		return typeof type === "string" ? type : null;
+		const event = JSON.parse(data) as Record<string, unknown> | null;
+		return event !== null && typeof event.type === "string" ? (event as { type: string }) : null;
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The facts of a `message` or `reply` event of a room socket: the ids and the version of the message,
+ * as the `data` of a chat webhook POST has them. A feed of one room has no reason: the room sends the
+ * event to each member. The resource `chat.addressed` has the reason.
+ */
+function messageFacts(event: Record<string, unknown>): ChangeFacts | undefined {
+	const message = event.message as ChatMessage | undefined;
+	if (!message?.author) return undefined;
+	return {
+		room_id: message.room_id,
+		message_id: message.id,
+		parent_id: message.parent_id,
+		author_id: message.author.principal_id,
+		version: message.version,
+	};
+}
+
+/** The fields of a `chat.addressed` event of the events socket that are the facts of the change. No field has content. */
+const ADDRESSED_FACTS = [
+	"room_id",
+	"event",
+	"reason",
+	"message_id",
+	"parent_id",
+	"author_id",
+	"version",
+	"at",
+] as const;
+
+function addressedFacts(event: Record<string, unknown>): ChangeFacts {
+	return Object.fromEntries(ADDRESSED_FACTS.map((name) => [name, event[name] ?? null])) as ChangeFacts;
 }
 
 const roomWatcher: ResourceWatcher<CallContext> = {
@@ -62,8 +96,8 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 		socket.addEventListener("message", (event) => {
 			if (closed || typeof event.data !== "string") return;
 			// Only a change of a message or a reply is a change of this resource. `hello` and `room` are not.
-			const type = eventType(event.data);
-			if (type === "message" || type === "reply") listener.change();
+			const parsed = socketEvent(event.data);
+			if (parsed?.type === "message" || parsed?.type === "reply") listener.change(messageFacts(parsed));
 		});
 		socket.addEventListener("close", ended);
 		socket.addEventListener("error", ended);
@@ -80,62 +114,75 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 		};
 	},
 };
-
-/** The events of the events socket that change the `chat.rooms` resource. */
-const ROOM_EVENTS: ReadonlySet<string> = new Set(["chat.room", "chat.room_removed"]);
 
 /**
- * The change feed of the `chat.rooms` resource: each room of the caller. The feed is the events socket
- * of the caller, the same socket that the web app opens, so the `PrincipalDO` makes the same credential
- * checks for the two. Each `chat.room` and `chat.room_removed` event is one change.
+ * A change feed from the events socket of the caller, the same socket that the web app opens, so the
+ * `PrincipalDO` makes the same credential checks for the two. Each event whose type is in `types` is one
+ * change. `facts` gives the facts of the change from the event, for a resource that has them.
  *
- * The resource has no variables, and each caller that can call `chat.list_rooms` can watch it. A feed
- * counts for the limit of sockets of the principal. The object never closes a feed for that limit. At
- * the limit, it refuses a new feed, and the stream leaves the resource out.
+ * A resource of this feed has no variables, and each caller that can read the resource can watch it. A
+ * feed counts for the limit of sockets of the principal. The object never closes a feed for that limit.
+ * At the limit, it refuses a new feed, and the stream leaves the resource out.
  */
-const roomsWatcher: ResourceWatcher<CallContext> = {
-	async allowed(_call, resources) {
-		return resources.map(() => true);
-	},
+function eventsWatcher(
+	types: ReadonlySet<string>,
+	facts?: (event: Record<string, unknown>) => ChangeFacts,
+): ResourceWatcher<CallContext> {
+	return {
+		async allowed(_call, resources) {
+			return resources.map(() => true);
+		},
 
-	async open(call, _vars, listener) {
-		let response: Response;
-		try {
-			response = await openEventsSocket(call.env, call.caller, { feed: true });
-		} catch (error) {
-			if (error instanceof OperationError && error.code === "conflict") return null;
-			throw error;
-		}
-		const socket = response.webSocket as WebSocket;
-		socket.accept();
-		let closed = false;
-		const ended = () => {
-			if (closed) return;
-			closed = true;
-			listener.end();
-		};
-		socket.addEventListener("message", (event) => {
-			if (closed || typeof event.data !== "string") return;
-			const type = eventType(event.data);
-			if (type !== null && ROOM_EVENTS.has(type)) listener.change();
-		});
-		socket.addEventListener("close", ended);
-		socket.addEventListener("error", ended);
-		return {
-			close() {
+		async open(call, _vars, listener) {
+			let response: Response;
+			try {
+				response = await openEventsSocket(call.env, call.caller, { feed: true });
+			} catch (error) {
+				if (error instanceof OperationError && error.code === "conflict") return null;
+				throw error;
+			}
+			const socket = response.webSocket as WebSocket;
+			socket.accept();
+			let closed = false;
+			const ended = () => {
 				if (closed) return;
 				closed = true;
-				try {
-					socket.close(1000, "The subscription ended.");
-				} catch {
-					// Closed already.
-				}
-			},
-		};
-	},
-};
+				listener.end();
+			};
+			socket.addEventListener("message", (event) => {
+				if (closed || typeof event.data !== "string") return;
+				const parsed = socketEvent(event.data);
+				if (parsed !== null && types.has(parsed.type)) listener.change(facts?.(parsed));
+			});
+			socket.addEventListener("close", ended);
+			socket.addEventListener("error", ended);
+			return {
+				close() {
+					if (closed) return;
+					closed = true;
+					try {
+						socket.close(1000, "The subscription ended.");
+					} catch {
+						// Closed already.
+					}
+				},
+			};
+		},
+	};
+}
 
-export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room" | "chat.rooms"> = {
+/** The change feed of the `chat.rooms` resource: each change of each room of the caller. */
+const roomsWatcher = eventsWatcher(new Set(["chat.room", "chat.room_removed"]));
+
+/**
+ * The change feed of the `chat.addressed` resource: only a change that is for the caller. The room finds
+ * the reason of each member at the change, and the `PrincipalDO` sends `chat.addressed` for a change that
+ * is newer than the one that it has. So this feed reads no message.
+ */
+const addressedWatcher = eventsWatcher(new Set(["chat.addressed"]), addressedFacts);
+
+export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room" | "chat.rooms" | "chat.addressed"> = {
 	"chat.room": roomWatcher,
 	"chat.rooms": roomsWatcher,
+	"chat.addressed": addressedWatcher,
 };

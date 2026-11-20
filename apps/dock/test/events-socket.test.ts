@@ -109,14 +109,27 @@ describe("the events socket", () => {
 	});
 
 	// The Threads view reads the list again only when the followed threads of a room change.
-	it("sends chat.threads when the followed threads of a room change, and not for a change of the room only", async () => {
+	it("sends chat.threads and chat.addressed for a reply in a followed thread, and not for a change of the room only", async () => {
 		const room = await privateRoom(ada, "Launch", [bot.id]);
 		const parent = (await ada.call("chat.post_message", { room_id: room.id, text: "Plan" })).message;
 		const person = await connect(bearer(ada.key));
-		// A reply makes the author of the first message follow, so its threads change after the room.
-		await bot.call("chat.post_message", { room_id: room.id, parent_id: parent.id, text: "Done" });
+		// A reply makes the author of the first message follow, so its threads change after the room. The
+		// reply is for that author, so the facts of the change come last, with no text of the reply.
+		const reply = (await bot.call("chat.post_message", { room_id: room.id, parent_id: parent.id, text: "Done" }))
+			.message;
 		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 		expect(await person.next()).toEqual({ type: "chat.threads", room_id: room.id });
+		expect(await person.next()).toEqual({
+			type: "chat.addressed",
+			room_id: room.id,
+			event: "chat.message.created",
+			reason: "thread_reply",
+			message_id: reply.id,
+			parent_id: parent.id,
+			author_id: bot.id,
+			version: reply.version,
+			at: reply.created_at,
+		});
 		// A read marker of the thread changes its unread count.
 		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 		expect(await person.next()).toMatchObject({ type: "chat.room" });

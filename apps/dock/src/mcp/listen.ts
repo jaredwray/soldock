@@ -1,7 +1,7 @@
 // subscriptions/listen (protocol 2026-07-28): one long-lived SSE response with resource change notifications.
 import type { ResourceName } from "@asterra/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
-import { log, type ResourceWatcher, type Watch, type WatcherMap } from "../platform/index.ts";
+import { type ChangeFacts, log, type ResourceWatcher, type Watch, type WatcherMap } from "../platform/index.ts";
 import { isObject, type JsonRpcId, META, RPC_ERRORS, rpcError, SERVER_INFO } from "./protocol.ts";
 import { canonicalResourceUri, type ResolvedResource, resolveUri } from "./resources.ts";
 
@@ -168,21 +168,30 @@ export async function listen(input: ListenInput): Promise<Response> {
 	};
 
 	// Notifications go out one at a time, in order, and only after the acknowledgment. A burst of
-	// changes to one resource that waits behind a check becomes one notification.
+	// changes to one resource that waits behind a check becomes one notification, with the facts of the
+	// newest change of the burst.
 	let acknowledge: () => void = () => {};
 	let queue = new Promise<void>((resolve) => {
 		acknowledge = resolve;
 	});
-	const waiting = new Set<string>();
-	const changed = (uri: string) => {
-		if (waiting.has(uri)) return;
-		waiting.add(uri);
+	const waiting = new Map<string, ChangeFacts | undefined>();
+	const changed = (uri: string, facts: ChangeFacts | undefined) => {
+		const queued = waiting.has(uri);
+		waiting.set(uri, facts);
+		if (queued) return;
 		queue = queue
 			.then(async () => {
+				// The check can wait. The facts are those of the newest change at the time of the send.
+				if (!(await current())) return;
+				const newest = waiting.get(uri);
 				waiting.delete(uri);
-				if (await current()) {
-					send({ method: "notifications/resources/updated", params: { uri, _meta: { [META.subscriptionId]: id } } });
-				}
+				send({
+					method: "notifications/resources/updated",
+					params: {
+						uri,
+						_meta: { [META.subscriptionId]: id, ...(newest === undefined ? {} : { [META.change]: newest }) },
+					},
+				});
 			})
 			.catch((error: unknown) => {
 				// A broken stream must not stay open and send nothing more.
@@ -216,7 +225,7 @@ export async function listen(input: ListenInput): Promise<Response> {
 		await Promise.all(
 			allowed.map(async ({ uri, resolved, watcher }) => {
 				const watch = await watcher.open(call, resolved.vars, {
-					change: () => changed(uri),
+					change: (facts) => changed(uri, facts),
 					end: () => stop("a change feed stopped"),
 				});
 				// The resource refused the caller after `allowed` accepted it. The acknowledgment leaves it out.

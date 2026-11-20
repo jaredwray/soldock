@@ -14,7 +14,7 @@
 | **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews. Later: search, browser notifications. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it. |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/`). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Downloads** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture) and `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview). See [Files in messages](#files-in-messages) and [Link previews](#link-previews). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -40,7 +40,7 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `files.ts` | `chat.download_file`, `chat.download_link_image`, and the routes of the two under `/dl/chat/` |
 | `links.ts` | The links of a body that get a preview, the state of each preview, and the output of a preview |
 | `previews.ts` | The consumer of the queue `soldock-chat-previews`: the fetch of each preview with the guard, the cache, and the picture |
-| `watch.ts` | The change feeds of the `chat.room` and `chat.rooms` resources, for MCP `subscriptions/listen` |
+| `watch.ts` | The change feeds of the `chat.room`, `chat.rooms` and `chat.addressed` resources, for MCP `subscriptions/listen` |
 
 ## Rooms
 
@@ -500,6 +500,40 @@ Known limits:
   the order of the newest activity. A member without a socket would keep an old count.
 - An edit and a delete also go to each member, because the list has the `version` of the room.
 
+### The changes for a principal
+
+`chat.list_addressed` returns the newest change that is for the caller in each of its rooms, with the
+newest change first. An agent in many rooms finds the messages for it with one call, and reads no
+other message. The resource `chat.addressed` has the same list ([Agents](#agents)).
+
+- A change is for a member when its reason is not `room`: `author`, `mention`, `dm` or
+  `thread_reply` (`CHAT_ADDRESSED_REASONS`). The
+  [shared webhook module](../webhooks/README.md#chat-events) has the rules of the reasons. So the
+  list has the changes that a webhook subscription with the filter `addressed` sends.
+- The room finds the reason of each member in the transaction of the change (`queueChatEvent`). It
+  keeps the change in the member row of each member that the change is for (`addressed_json`):
+  the event, the reason, the message, its parent, its author, the version and the time. It keeps no
+  message text.
+- One member row has one change. A later change for the member replaces it. A change with the reason
+  `room` keeps it.
+- The state of the room for each member has that change (`addressed`). The `PrincipalDO` keeps it in
+  the table `chat_addressed` when its version is higher than the version of the kept change. Only
+  such a change sends the event `chat.addressed` to the events sockets
+  ([`identity`](../identity/README.md#the-events-socket)).
+- `chat.list_addressed` reads the `PrincipalDO` of the caller only, in the order of the index
+  `chat_addressed_recent`, and wakes no room object.
+- The list needs no first fill. A room has a change for a member only from this version, and each
+  such change sends the state of the room to the object of that member.
+- A member that leaves loses its member row, and the state without the room removes the row of the
+  `PrincipalDO`. A new join starts with no change.
+
+Known limits:
+
+- The list has one entry for each room. A client reads the room from the version that it has, to
+  get each earlier change.
+- The list is at most `MEMBER_DELAY_MS` behind a change, as the list of rooms is.
+- The web app has no view of this list yet.
+
 ### The index in D1
 
 The public view reads an index in D1 `DIRECTORY`:
@@ -619,7 +653,13 @@ A socket stays open after its request. It must not outlive the access that opene
   rooms of the caller.
 - The change feed of the resource is a room socket that the Worker opens for the stream
   (`watch.ts`). So the room makes the same member check and the same credential check for the two.
-- Only a `message` event sends `notifications/resources/updated`.
+- Only a `message` event and a `reply` event send `notifications/resources/updated`. The
+  notification has the ids and the version of the message of the event
+  ([`mcp`](../mcp/README.md#subscriptions)).
+- A feed gets no event for a change that its own principal made: a post, an edit, a delete, a
+  reaction, and a link preview of its message (`publish`). So an agent that answers after a
+  notification gets no notification for its answer. A socket that is not a feed gets each event, so
+  a tab of a person shows the message that a different tab sent.
 - A feed counts for the limit of 8 sockets of one member in one room. The room never closes a feed
   to make room for a new socket, because the end of one feed ends its stream with all of its other
   feeds. At the limit, the room refuses a new feed, and the new stream leaves the room out.
@@ -633,6 +673,15 @@ A socket stays open after its request. It must not outlive the access that opene
   a read marker, a change of the room or of its members, a join and a leave.
 - That feed counts for the limit of 20 events sockets of the principal. The object never closes a
   feed for that limit. At the limit, it refuses a new feed, and the new stream leaves the resource out.
+- The resource `chat.addressed` (`asterra://chat/addressed`) has the newest change for the caller in
+  each of its rooms ([The changes for a principal](#the-changes-for-a-principal)). Its read operation
+  and its list operation are `chat.list_addressed`. One subscription follows each room, also a room
+  that the caller joins later.
+- The change feed of `chat.addressed` is an events socket of the caller too. Only a `chat.addressed`
+  event sends `notifications/resources/updated`. So a message of a busy room that is not for the
+  caller sends nothing. A stream that watches `chat.rooms` and `chat.addressed` has two events
+  sockets. The notification has the facts of the event: the reason, the ids, the version and the
+  time.
 - The stream asks first which rooms the caller can watch. That answer comes from the index in D1:
   one query, which wakes no room. The index is a first filter only. The room object decides when the
   feed opens. When the index is behind and the room refuses the caller, the stream leaves that room
@@ -859,7 +908,7 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves |
+| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key. A reply has `parent_id` and `also_in_room`. A parent keeps the summary of its replies (`reply_count`, `last_reply_at`, `reply_authors_json`) |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
@@ -878,6 +927,7 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
+| The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql`. `chat_members.last_read_seq` has the marker at the time of the join only |
 

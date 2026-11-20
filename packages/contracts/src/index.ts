@@ -4,6 +4,7 @@ export {
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	CHAT_WEBHOOK_EVENT_TYPE,
+	ChatAddressedChange,
 	ChatBody,
 	type ChatBodyBlock,
 	type ChatBodyInline,
@@ -188,9 +189,11 @@ export {
 export { TEAM_MAILBOX_LIMITS, TeamMailbox } from "./team-mailboxes.ts";
 export {
 	authorizationConflict,
+	CHAT_ADDRESSED_REASONS,
 	CHAT_EVENT_REASONS,
 	CHAT_WEBHOOK_EVENTS,
 	CHAT_WEBHOOK_FILTERS,
+	type ChatAddressedReason,
 	type ChatEventReason,
 	type ChatWebhookEvent,
 	type ChatWebhookFilter,
