@@ -625,8 +625,11 @@ MCP clients. The app has no UI-only path.
   - While the editor has no changes of its own, it gets the doc again every 15 seconds and on
     window focus, and shows the changes of other people and agents.
   - A viewer gets the text without the toolbar, and cannot change it. A link opens in a new tab.
-  - **Download as Markdown** saves the `markdown` of `docs.get` as `<name>.md`, after the save of
-    the last changes. The file names each image by its id, and has no image files.
+  - The **Download** button of the header opens a menu that names each format. The button shows
+    only an icon, so the menu tells the format before the browser saves a file.
+    **Download as Markdown (.md)** saves the `markdown` of `docs.get` as `<name>.md`, after the save
+    of the last changes. The Blob has the type `text/markdown`. The file names each image by its
+    id, and has no image files.
   - **Images.** A doc holds its own images ([`docs`](../dock/src/docs/README.md#images)).
     - **Add.** A person drops image files on the page, pastes a picture, or uses **Insert image**:
       **Upload from this computer**, **From Drive** (a dialog with the folders and the image files
@@ -1632,6 +1635,8 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
+  Only content that the app made gets a different type: the Markdown of a doc is `text/markdown`,
+  which no browser runs.
 - **A chat message is data, never HTML.** The body of a message is a tree of nodes, and the app
   makes one React element for each node of the schema (`MessageBody.tsx`). The text of each node is
   a text node. A node that the schema does not have shows nothing. It never uses `innerHTML`.
