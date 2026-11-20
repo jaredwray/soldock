@@ -6,6 +6,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { chatPath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
@@ -43,6 +44,8 @@ const OLDER_PX = 200;
  * count of a thread stops at 100, so 4 pages of 50 replies cover the new replies with some own replies.
  */
 const UNREAD_PAGES = 4;
+/** The most older pages that the view reads to get to the reply of a link: 1,000 replies in pages of 50. */
+const LINK_PAGES = 20;
 
 /**
  * The view of one thread, beside the messages of the room: the message that starts it, its replies, and
@@ -61,6 +64,7 @@ export function ThreadPanel({
 	roomId,
 	roomTitle,
 	parentId,
+	focus = null,
 	mentions,
 	canDeleteAll,
 	watch,
@@ -70,6 +74,11 @@ export function ThreadPanel({
 	roomId: string;
 	roomTitle: string;
 	parentId: string;
+	/**
+	 * The reply that a link points to, or null. The view goes to that reply and marks it. Each visit of a
+	 * link is a new object, so the view goes to the reply again, also for the same seq.
+	 */
+	focus?: { seq: number } | null;
 	mentions: MentionContext;
 	/** True for an owner of the room, who can delete each message. */
 	canDeleteAll: boolean;
@@ -164,6 +173,12 @@ export function ThreadPanel({
 	const openMarker = useRef<number | undefined>(undefined);
 	/** The older pages that the view read by itself to get to the read marker (see `UNREAD_PAGES`). */
 	const unreadPages = useRef(0);
+	/** The reply that a link marked, or null. A new object for each visit, so the view scrolls to it each time. */
+	const [marked, setMarked] = useState<{ seq: number } | null>(null);
+	/** The visit of a link that the view went to. A view goes to each visit one time. */
+	const linkedTo = useRef<{ seq: number } | null>(null);
+	/** The older pages that the view read to get to the reply of a link (see `LINK_PAGES`). */
+	const linkPages = useRef(0);
 	/** True while a call of `chat.mark_thread_read` runs. */
 	const marking = useRef(false);
 	/** The state of the read of the older replies: "loading" while it runs, or the reason of a failure. */
@@ -293,6 +308,45 @@ export function ThreadPanel({
 				marking.current = false;
 			});
 	}, [shownThread, follow, newFrom, visible, ownId, roomId, parentId, readFollowAgain, loadOlder]);
+
+	// A link to a reply: the view reads older pages until it has the reply, at most `LINK_PAGES`. Then it
+	// goes to the reply and marks it. A seq that is not a reply of this thread marks nothing.
+	useEffect(() => {
+		if (focus === null || linkedTo.current === focus || !shownThread) return;
+		const first = shownThread.replies[0];
+		if (shownThread.hasOlder && first !== undefined && focus.seq < first.seq) {
+			if (linkPages.current < LINK_PAGES && olderAnchor.current === null) {
+				linkPages.current += 1;
+				loadOlder();
+			}
+			return;
+		}
+		linkedTo.current = focus;
+		linkPages.current = 0;
+		if (!shownThread.replies.some((reply) => reply.seq === focus.seq)) return;
+		// The list stays at the reply: a new reply does not move it to its end.
+		stick.current = false;
+		setMarked({ seq: focus.seq });
+	}, [focus, shownThread, loadOlder]);
+
+	useEffect(() => {
+		if (marked === null) return;
+		body.current?.querySelector(`[data-seq="${marked.seq}"]`)?.scrollIntoView({ block: "center" });
+	}, [marked]);
+
+	/**
+	 * Puts a link to a message of the view on the clipboard: the link of the room for the first message, and
+	 * a link to a reply (the seq of the first message, then the seq of the reply) for a reply.
+	 */
+	function copyLink(message: ChatMessage) {
+		const parentSeq = view.current?.current()?.parent.seq;
+		if (parentSeq === undefined) return;
+		const path = message.id === parentId ? chatPath(roomId, message.seq) : chatPath(roomId, parentSeq, message.seq);
+		navigator.clipboard.writeText(new URL(path, window.location.origin).href).then(
+			() => toast({ message: "The link to the message is on the clipboard.", tone: "info" }),
+			() => toast({ message: "The browser did not permit a copy to the clipboard.", tone: "error" }),
+		);
+	}
 
 	async function toggleFollow() {
 		const follows = keeper.current;
@@ -490,8 +544,8 @@ export function ThreadPanel({
 		return {
 			message,
 			rowKey: message.id,
-			marked: false,
-			onCopyLink: null,
+			marked: message.seq === marked?.seq,
+			onCopyLink: () => copyLink(message),
 			pending: null,
 			mentions,
 			head: true,

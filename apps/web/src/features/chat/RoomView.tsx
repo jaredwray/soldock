@@ -63,6 +63,8 @@ export interface RoomViewProps {
 	roomId: string;
 	/** The seq of the message that the path links to, or null. The list goes to that message and marks it. */
 	focusSeq: number | null;
+	/** The seq of a reply in the thread of that message, for a link to a reply, or null. The thread opens at it. */
+	focusReplySeq: number | null;
 	/** The room in the room list of the person, or null when the list does not have it. */
 	listed: ChatRoom | null;
 	/** True after the room list loaded. */
@@ -101,7 +103,16 @@ function useMediaQuery(query: string): boolean {
 const STICK_PX = 80;
 
 /** One room: its header, its messages and the box for a new message. */
-export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoomsChanged, directory }: RoomViewProps) {
+export function RoomView({
+	roomId,
+	focusSeq,
+	focusReplySeq,
+	listed,
+	listReady,
+	listTick,
+	onRoomsChanged,
+	directory,
+}: RoomViewProps) {
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
 	// An owner or an admin of the organization can read the earlier versions of a message.
@@ -178,6 +189,13 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [editing, setEditing] = useState<Editing | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
 	const [threadId, setThreadId] = useState<string | null>(null);
+	/**
+	 * The reply that the open thread goes to and marks, for a link to a reply, or null. Each visit of a link
+	 * gives a new object, so the thread goes to the reply again, also for the same seq.
+	 */
+	const [threadFocus, setThreadFocus] = useState<{ seq: number } | null>(null);
+	/** A link to a reply that waits for the first message of its thread in the list. */
+	const [threadLink, setThreadLink] = useState<{ seq: number; replySeq: number } | null>(null);
 	/** The element that opened the thread. It gets the focus back when the thread closes. */
 	const threadOpener = useRef<HTMLElement | null>(null);
 	/** True from the close of a thread until the focus is back, after the room shows again. */
@@ -185,9 +203,10 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	/** True on a narrow screen, where the view of a thread hides the room (see `.chat-thread` in chat.css). */
 	const narrow = useMediaQuery(THREAD_HIDES_ROOM);
 	const threadHidesRoom = threadId !== null && narrow;
-	const openThread = useCallback((id: string) => {
+	const openThread = useCallback((id: string, replySeq: number | null = null) => {
 		threadOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		setThreadId(id);
+		setThreadFocus(replySeq === null ? null : { seq: replySeq });
 	}, []);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	// A path with a message opens the list at that message, not at its end.
@@ -198,8 +217,8 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const [marked, setMarked] = useState<number | null>(null);
 	/** The seq of the message that the list must go to at the next change of the rows, or null. */
 	const scrollTarget = useRef<number | null>(null);
-	/** The seq of the link that the view went to. A view goes to a link one time. */
-	const wentTo = useRef<number | null>(null);
+	/** The link that the view went to ("<seq>" or "<seq>/<reply seq>"). A view goes to a link one time. */
+	const wentTo = useRef<string | null>(null);
 	/** The number of times that the view went to a link. The list moves to the message at each one. */
 	const [focusTick, setFocusTick] = useState(0);
 	/** What the person saw of the room, for the "New messages" line. Null until the room loads. */
@@ -544,11 +563,13 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 	const canFocus = view.status === "ready" && view.fresh && isMember;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the view goes to a link one time, when the room is ready.
 	useEffect(() => {
-		if (!canFocus || wentTo.current === focusSeq) return;
+		const link = focusSeq === null ? null : focusReplySeq === null ? `${focusSeq}` : `${focusSeq}/${focusReplySeq}`;
+		if (!canFocus || wentTo.current === link) return;
 		// The path changed to a different message, or to the room without a message. A read for the
 		// link from before must not put the list at that message.
 		cancelReads();
-		wentTo.current = focusSeq;
+		wentTo.current = link;
+		setThreadLink(null);
 		if (focusSeq === null) return;
 		const show = () => {
 			setStick(false);
@@ -556,14 +577,25 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 			setMarked(focusSeq);
 			// The list goes to the message at the next change of this number, also when the rows are the same.
 			setFocusTick((tick) => tick + 1);
+			// A link to a reply opens the thread of the message when the list has it.
+			if (focusReplySeq !== null) setThreadLink({ seq: focusSeq, replySeq: focusReplySeq });
 		};
 		if (messages.some((message) => message.seq === focusSeq)) show();
 		else {
 			toMessage(focusSeq).then((applied) => {
-				if (applied && wentTo.current === focusSeq) show();
+				if (applied && wentTo.current === link) show();
 			}, fail);
 		}
-	}, [focusSeq, canFocus]);
+	}, [focusSeq, focusReplySeq, canFocus]);
+
+	// A link to a reply: the thread of the first message opens at the reply, when the list has that message.
+	useEffect(() => {
+		if (!threadLink) return;
+		const parent = messages.find((message) => message.seq === threadLink.seq);
+		if (!parent) return;
+		setThreadLink(null);
+		openThread(parent.parent_id ?? parent.id, threadLink.replySeq);
+	}, [threadLink, messages, openThread]);
 
 	/** Puts a link to a message on the clipboard. */
 	function copyLink(seq: number) {
@@ -1034,6 +1066,7 @@ export function RoomView({ roomId, focusSeq, listed, listReady, listTick, onRoom
 					roomId={roomId}
 					roomTitle={title}
 					parentId={threadId}
+					focus={threadFocus}
 					mentions={mentions}
 					canDeleteAll={room.role === "owner"}
 					watch={view.watchMessages}

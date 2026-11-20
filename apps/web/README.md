@@ -640,8 +640,11 @@ MCP clients. The app has no UI-only path.
   - While the editor has no changes of its own, it gets the doc again every 15 seconds and on
     window focus, and shows the changes of other people and agents.
   - A viewer gets the text without the toolbar, and cannot change it. A link opens in a new tab.
-  - **Download as Markdown** saves the `markdown` of `docs.get` as `<name>.md`, after the save of
-    the last changes. The file names each image by its id, and has no image files.
+  - The **Download** button of the header opens a menu that names each format. The button shows
+    only an icon, so the menu tells the format before the browser saves a file.
+    **Download as Markdown (.md)** saves the `markdown` of `docs.get` as `<name>.md`, after the save
+    of the last changes. The Blob has the type `text/markdown`. The file names each image by its
+    id, and has no image files.
   - **Images.** A doc holds its own images ([`docs`](../dock/src/docs/README.md#images)).
     - **Add.** A person drops image files on the page, pastes a picture, or uses **Insert image**:
       **Upload from this computer**, **From Drive** (a dialog with the folders and the image files
@@ -790,7 +793,8 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
-- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/people/<principal_id>`). A sidebar with the rooms
+- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/<room_id>/<seq>`, `/chat/<room_id>/<seq>/<reply seq>`,
+  `/chat/people/<principal_id>`). A sidebar with the rooms
   and the direct messages of the person, and one room with its messages and a box for a new
   message, or one profile.
   - Chat has no search yet, so its pages show no search box.
@@ -889,8 +893,9 @@ MCP clients. The app has no UI-only path.
       - A refused change opens the edit box again with the new text and files. A refusal shows its reason under the
         first message. The edits of one message go one at a time, in order (`createCallLine`), so the
         room gets the newest edit last.
-      - A reply has no "Copy a link": no path opens a thread yet. The time of each message shows its day
-        too (`fullDates`), because the view has no line for each day.
+      - **Copy a link** of the first message gives the link of the room to that message. Of a reply, it
+        gives the link to the reply (see the links below). The time of each message shows its day too
+        (`fullDates`), because the view has no line for each day.
       - Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that
         dialog only. The list of emoji finds its space in the scroll area of the view too.
     - A reply takes files and shows files and link previews, as a message of the room does. The files
@@ -990,6 +995,15 @@ MCP clients. The app has no UI-only path.
     - A room that does not have the message shows its newest messages.
     - Each message that the room has, and that is not deleted, has the action **Copy a link**,
       which puts the link on the clipboard.
+    - **A link to a reply** (`/chat/<room_id>/<seq>/<reply seq>`): a reply is not in the room list, so
+      its link has the seq of the first message of its thread, then the seq of the reply.
+      - The room goes to the first message and marks it, as for a link to one message. Then the view of
+        the thread opens at the reply.
+      - The view reads older pages until it has the reply, at most 20 (`LINK_PAGES`: 1,000 replies).
+        Then it goes to the reply and marks it, and a new reply does not move the list to its end.
+      - A seq that is not a reply of the thread opens the thread and marks nothing.
+      - Each visit of a link goes to the reply again. So Back to the link, after the room link of the
+        sidebar, scrolls the open thread to the reply.
     - The link has no access of its own. The server gives the messages only to a member, as for
       each other read.
   - **Reactions** (`Reactions.tsx`, `emoji.ts`). The reactions of a message show under its text:
@@ -1651,6 +1665,8 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
+  Only content that the app made gets a different type: the Markdown of a doc is `text/markdown`,
+  which no browser runs.
 - **A chat message is data, never HTML.** The body of a message is a tree of nodes, and the app
   makes one React element for each node of the schema (`MessageBody.tsx`). The text of each node is
   a text node. A node that the schema does not have shows nothing. It never uses `innerHTML`.
