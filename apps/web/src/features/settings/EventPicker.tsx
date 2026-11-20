@@ -1,7 +1,22 @@
-import type { WebhookDomain } from "@asterra/contracts";
+import {
+	type ChatWebhookFilter,
+	defaultChatWebhookFilter,
+	type WebhookDomain,
+	type WebhookEvent,
+} from "@asterra/contracts";
 import { useId, useState } from "react";
 import { Select } from "../../lib/Select.tsx";
-import { choiceKey, DOMAIN_LABELS, EVENT_LABELS, eventsFor, eventsOf } from "./webhookModel.ts";
+import {
+	CHAT_FILTER_LABELS,
+	chatFilterOf,
+	choiceKey,
+	chosenFilter,
+	DOMAIN_LABELS,
+	EVENT_LABELS,
+	eventsFor,
+	eventsOf,
+	withChatFilter,
+} from "./webhookModel.ts";
 
 /** A mailbox, a person, an agent or a drive whose events a webhook can send. */
 export interface PickerTarget {
@@ -9,6 +24,8 @@ export interface PickerTarget {
 	name: string;
 	/** Muted text after the name in the menu, for example the address of a mailbox. */
 	description?: string;
+	/** True for an agent. A new chat event of an agent starts with only the messages for it, as on the server. */
+	agent?: boolean;
 }
 
 /** One product and the targets that the person can select for it. */
@@ -37,13 +54,16 @@ interface EventPickerProps {
 
 const DOMAIN_HINT: Record<WebhookDomain, string> = {
 	mail: "The POST has no mail content. The receiver reads the inbox with its own key.",
-	chat: "The POST has no message text.",
+	chat: "The POST has no message text. It has the reason, for example a mention.",
 	drive: "The POST has no file content. A star sends nothing.",
 };
 
+const FILTER_OPTIONS = (["all", "addressed"] as const).map((value) => ({ value, label: CHAT_FILTER_LABELS[value] }));
+
 /**
  * The check boxes of a webhook: one for each event of each product. A product with more than one
- * target has a menu. The check boxes show the events of the target in the menu.
+ * target has a menu. The check boxes show the events of the target in the menu. Chat has one more
+ * menu: the messages that the chat events of the target send.
  */
 export function EventPicker({ groups, autofocus, ...rest }: EventPickerProps) {
 	return (
@@ -69,7 +89,10 @@ function EventGroup({
 	const { domain, targets } = group;
 	const targetId = useId();
 	const hintId = useId();
-	const count = (id: string) => eventsOf(domain).filter((event) => selected.has(choiceKey(event, id))).length;
+	const filterId = useId();
+	// The filter that the person chose for a target, for the time when the target has no chat event set.
+	const [filterChoice, setFilterChoice] = useState<Record<string, ChatWebhookFilter>>({});
+	const count = (id: string) => eventsOf(domain).filter((event) => chosenFilter(selected, event, id) !== null).length;
 	// The menu starts at the first target that has an event, so an edit shows the current events.
 	const [shown, setShown] = useState(() => (targets.find((target) => count(target.id) > 0) ?? targets[0])?.id ?? "");
 	const target = targets.find((candidate) => candidate.id === shown) ?? targets[0];
@@ -77,27 +100,51 @@ function EventGroup({
 
 	// A target offers the events that it can send. A saved event of a different kind stays, so the person can clear it.
 	const offered = eventsFor(domain, target.id);
-	const events = eventsOf(domain).filter((event) => offered.includes(event) || saved.has(choiceKey(event, target.id)));
+	const events = eventsOf(domain).filter(
+		(event) => offered.includes(event) || chosenFilter(saved, event, target.id) !== null,
+	);
 	const all = offered.length > 1 && canAdd;
-	const locked = (key: string) => disabled || (!canAdd && !saved.has(key));
+	const locked = (event: WebhookEvent) => disabled || (!canAdd && chosenFilter(saved, event, target.id) === null);
 	// The check box for all events sets only the events that the target can send.
-	const keys = offered.map((event) => choiceKey(event, target.id));
-	const set = keys.filter((key) => selected.has(key)).length;
+	const set = offered.filter((event) => chosenFilter(selected, event, target.id) !== null).length;
+	// The set chat events of the target give the filter. A target with no set event has the choice of the
+	// person, or else the default of the server: an agent gets only the messages for it.
+	const filter =
+		domain === "chat"
+			? (chatFilterOf(selected, target.id) ??
+				filterChoice[target.id] ??
+				defaultChatWebhookFilter(target.agent ? "agent" : "human"))
+			: undefined;
 
-	function toggle(key: string) {
+	// The handlers below are functions, so they do not keep the check that `target` exists.
+	const shownId = target.id;
+
+	/** Sets or clears one event of the target. A set event of Chat gets the filter of the menu. */
+	function change(next: Set<string>, event: WebhookEvent, on: boolean) {
+		next.delete(choiceKey(event, shownId));
+		next.delete(choiceKey(event, shownId, "addressed"));
+		if (on) next.add(choiceKey(event, shownId, filter));
+	}
+
+	function toggle(event: WebhookEvent) {
 		const next = new Set(selected);
-		if (!next.delete(key)) next.add(key);
+		change(next, event, chosenFilter(selected, event, shownId) === null);
 		onChange(next);
 	}
 
 	function toggleAll() {
 		const next = new Set(selected);
-		const clear = set === keys.length;
-		for (const key of keys) {
-			if (clear) next.delete(key);
-			else next.add(key);
+		const clear = set === offered.length;
+		// A set event keeps its filter: a different filter needs a delete and a new subscription.
+		for (const event of offered) {
+			if (clear || chosenFilter(selected, event, shownId) === null) change(next, event, !clear);
 		}
 		onChange(next);
+	}
+
+	function changeFilter(value: ChatWebhookFilter) {
+		setFilterChoice({ ...filterChoice, [shownId]: value });
+		onChange(withChatFilter(selected, shownId, value));
 	}
 
 	return (
@@ -124,15 +171,30 @@ function EventGroup({
 					/>
 				</div>
 			)}
+			{filter !== undefined && (
+				<div className="field event-target event-filter">
+					<label htmlFor={filterId} className="field-label">
+						Messages
+					</label>
+					{/* A different filter deletes a subscription and adds it again, so it needs the right to add. */}
+					<Select
+						id={filterId}
+						value={filter}
+						options={FILTER_OPTIONS}
+						onChange={changeFilter}
+						disabled={disabled || !canAdd}
+					/>
+				</div>
+			)}
 			<div className="event-list">
 				{all && (
 					<label className="check-row event-all">
 						<input
 							type="checkbox"
 							className="checkbox"
-							checked={set === keys.length}
+							checked={set === offered.length}
 							ref={(input) => {
-								if (input) input.indeterminate = set > 0 && set < keys.length;
+								if (input) input.indeterminate = set > 0 && set < offered.length;
 							}}
 							onChange={toggleAll}
 							disabled={disabled}
@@ -142,20 +204,20 @@ function EventGroup({
 					</label>
 				)}
 				{events.map((event, index) => {
-					const key = choiceKey(event, target.id);
+					const checked = chosenFilter(selected, event, target.id) !== null;
 					return (
-						<label key={key} className="check-row">
+						<label key={choiceKey(event, target.id)} className="check-row">
 							<input
 								type="checkbox"
 								className="checkbox"
-								checked={selected.has(key)}
-								onChange={() => toggle(key)}
-								disabled={locked(key)}
+								checked={checked}
+								onChange={() => toggle(event)}
+								disabled={locked(event)}
 								data-autofocus={autofocus && !all && index === 0 ? true : undefined}
 							/>
 							<span>
 								{EVENT_LABELS[event]}
-								{stopped?.has(key) && selected.has(key) && (
+								{stopped && chosenFilter(stopped, event, target.id) !== null && checked && (
 									<span className="check-hint">Stopped. To start it again, clear it and save. Then set it.</span>
 								)}
 							</span>

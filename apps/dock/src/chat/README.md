@@ -167,8 +167,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     principal, without the author. A post and an edit write the rows of the message again, and a
     delete removes them. `mention_count` of a member counts its rows after its read marker (see
     [The read marker](#the-read-marker)).
-  - The room sends no notification of its own yet. A webhook for new messages
-    ([Webhooks for new messages](#webhooks-for-new-messages)) tells about each new message.
+  - The room sends no notification of its own yet. A webhook for chat messages
+    ([Webhooks for chat messages](#webhooks-for-chat-messages)) tells about each new message, or with the
+    filter `addressed` only about a message for the principal. Its POST has the reason, for example `mention`.
 - **Mentions of a group.** `@here` and `@channel` mention each member of the room, except the
   author. A mention of a group is a node: `{ type: "group_mention", attrs: { group } }`.
   - The room makes the node from `@here` and `@channel` in the text of each form, in each letter
@@ -666,18 +667,25 @@ This includes public rooms, private rooms, direct messages and rooms that the pr
 Create an endpoint first. Then call `chat.create_webhook_subscription` with `chat.webhooks`.
 The event is `chat.message.created`, `chat.message.updated` or `chat.message.deleted`.
 A sponsor can set `principal_id` to an agent. Another caller can subscribe only for themselves.
+`filter` is `all` or `addressed`. `addressed` sends only a direct message, a mention and a reply in a followed thread.
+Without `filter`, an agent gets `addressed` and a person gets `all`.
 
 `postMessage`, `editMessage` and `deleteMessage` each store a `chat_event` in `webhook_outbox`.
 The row is in the same transaction as the message change.
 The event records the message id and the members at that time, except the actor.
+It also records the reason of each member (`chatEventReasons`), the author and the version of the message.
+The reason is `mention`, `dm`, `thread_reply` or `room`. The room reads the mentions from the body of the message.
+The table `mentions` has no row for a reply outside the room list, so the reason does not use it.
+The follows of a new reply are stored before the reasons, so a reply to your message has the reason `thread_reply`.
 A read marker stores no event. A repeated idempotency key stores no second create event.
 The event id of an edit or a delete is `<message id>:<version>`. The body still uses the message id.
 Before the transaction, the room reads the last committed Chat subscription sequence from D1.
 Later subscriptions get no earlier event.
 The alarm sends due events to `WEBHOOKS` and removes each row only after the queue accepts it.
 
-The POST data has `webhook_id`, `principal_id`, `room_id`, `message_id` and `uri`.
+The POST data has `webhook_id`, `principal_id`, `room_id`, `message_id`, `reason`, `author_id`, `version` and `uri`.
 It has no message text. The URI is `asterra://chat/<room_id>/messages`.
+A receiver uses `reason` to decide if it reads the message. The [shared webhook module](../webhooks/README.md#chat-events) has the rules of the reasons and of the filter.
 The receiver reads the room with its own credential.
 Each delivery checks the membership again, so a stale index gives no access.
 A deleted message can still notify a `chat.message.deleted` subscription.

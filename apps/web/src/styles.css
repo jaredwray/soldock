@@ -3197,6 +3197,11 @@ fieldset {
 	background: var(--background);
 }
 
+/* The menu of the messages of Chat has a longer text than the name of a target. */
+.event-filter {
+	max-width: 420px;
+}
+
 .event-list {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));

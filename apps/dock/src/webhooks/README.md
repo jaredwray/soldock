@@ -40,6 +40,39 @@ Other modules import `index.ts` only.
 A star sends nothing. Meet and Slides have no product yet, so they have no event.
 Directory changes have no event. A webhook must not leak the list of the organization.
 The POST has ids and a URI. It has no mail, no message text and no file content.
+A chat POST also has the reason, the author and the version of the message ([Chat events](#chat-events)).
+
+## Chat events
+
+A member of a busy room gets many messages that are not for it. For an agent, each POST can start a
+turn of a model. So a chat subscription has a filter, and each chat POST has facts for a decision
+before a read.
+
+| Reason | When |
+| --- | --- |
+| `mention` | The message mentions the target, or a group (`@here`, `@channel`). The author of a message is never a mention of its own message |
+| `dm` | The message is in a direct message |
+| `thread_reply` | The message is a reply in a thread that the target follows |
+| `room` | The target is a member of the room, and no other reason applies |
+
+The first reason of the table that is true applies (`CHAT_EVENT_REASONS`).
+The room object finds the reason of each member in the transaction of the change (`chatEventReasons`), and stores it in the event.
+A later change of a follow does not change the reason of an event that waits.
+The reason of an edit comes from the content after the edit.
+The reason of a delete comes from the content before the delete, because a deleted message has no content.
+
+The filter of a subscription is `all` or `addressed` (`CHAT_WEBHOOK_FILTERS`, column `chat_filter`).
+`all` sends each message of a joined chat. `addressed` sends only an event whose reason is not `room`.
+The fan-out applies the filter, so a message that is not for the target makes no delivery job and no POST.
+Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
+A subscription from before the filter keeps `all`.
+No operation changes the filter of a webhook subscription. Delete the subscription and create it again.
+
+The `data` of a chat POST also has these fields. They are not content:
+
+- `reason`: the reason of the table.
+- `author_id`: the principal that wrote the message. For a delete, this is the author, not the principal that deleted the message.
+- `version`: the version that the message got from the change. It is a version of the room. A receiver whose last `chat.list_messages` result has a `version` that is not lower has a read that is not older than the event.
 
 ## Endpoints and subscriptions
 
@@ -60,7 +93,7 @@ A shared drive subscription asks the drive object for membership. The index can 
 A later change drops the old tables. A rollback after this Worker runs is a fix forward.
 
 The endpoint holds the URL, the label, the signing secret, the auth key and the custom header.
-The subscription holds the event, the target and its own credential.
+The subscription holds the event, the target, its own credential and, for Chat, the filter.
 The secrets are plain text in D1, because the POST needs them. A result never shows a stored secret.
 One creator can have 20 endpoints.
 One creator can have 10 subscriptions of one event.
@@ -87,6 +120,9 @@ The queue `soldock-webhooks` carries version 1 jobs. `webhookId` in a delivery j
 A job from the previous Worker has no `eventType`. That job is `chat.message.created`, and its event id is the message id.
 An edit or a delete uses the event id `<message id>:<version>`. The body `message_id` stays the message id.
 A reply in a thread has `parentId` in its jobs, and its body has `parent_id`: the message that it replies to.
+A chat event job has the reason of each recipient, `authorId` and `version`. A delivery job has the reason of its target.
+A chat job from the previous Worker has none of them. Its POST leaves the three fields out, and a subscription with the filter `addressed` gets nothing for it.
+The previous Worker does not read the filter. During a deploy, it can send a message that is not for the target to a subscription with the filter `addressed`.
 Mail jobs stay the same. The mail body has no `endpoint_id`.
 
 Five failed deliveries in a row disable the endpoint. One success sets the count to 0.
@@ -111,7 +147,7 @@ gives it to the MCP adapter. The events are the webhook events of the table abov
 | Event | Arguments | `data` of a POST |
 | --- | --- | --- |
 | `mail.inbox.updated` | `mailbox_id`: your mailbox (the default), a team mailbox that you belong to, or the mailbox of an agent that you sponsor | `mailbox_id`, `uri` |
-| `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of | `room_id`, `message_id`, `uri`, and `parent_id` for a reply in a thread |
+| `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of. `filter`: `all` or `addressed` ([Chat events](#chat-events)). The default is `addressed` for an agent and `all` for a person | `room_id`, `message_id`, `reason`, `author_id`, `version`, `uri`, and `parent_id` for a reply in a thread |
 | `drive.item.*` | `space_id`: your drive (the default), a shared drive that you belong to, or the drive of an agent that you sponsor | `space_id`, `item_id`, `uri` |
 | `drive.members.changed`, `drive.deleted` | `space_id`: a shared drive that you belong to | `space_id`, `uri` |
 
@@ -122,7 +158,10 @@ retries and the rules that disable an endpoint are those of each webhook. These 
 - **Identity.** The id is `sub_` and the SHA-256 of the principal, the credential, the URL, the event,
   the target and the room. The same call again refreshes the subscription. A different key or a
   different OAuth connection of the same principal gets a different id, so it cannot stop the
-  subscription. The id is the `id` of the subscription row.
+  subscription. The id is the `id` of the subscription row. The filter of Chat is not a part of the
+  id. A refresh with a different filter changes the filter, and a refresh without `filter` sets the
+  default. So one URL never gets one message from two subscriptions that differ only in the filter,
+  and `events/unsubscribe` finds the subscription with each filter.
 - **Access.** The credential needs the webhook scope of the product. The target rules are those of the
   subscription operations. The outbound policy of an agent must allow the host of the URL. The
   default policy `internal-only` allows no host, so a sponsor adds the host first.
@@ -181,7 +220,7 @@ MCP Events in the webhook form, and it does not read the end of a subscription.
 | State | Where | Notes |
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
-| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription |
+| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription |
 | Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |

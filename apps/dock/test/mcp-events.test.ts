@@ -156,7 +156,10 @@ describe("the event catalog", () => {
 			delivery: ["webhook"],
 			inputSchema: {
 				type: "object",
-				properties: { room_id: expect.objectContaining({ type: "string" }) },
+				properties: {
+					room_id: expect.objectContaining({ type: "string" }),
+					filter: expect.objectContaining({ enum: ["all", "addressed"] }),
+				},
 				additionalProperties: false,
 			},
 			payloadSchema: {
@@ -165,9 +168,12 @@ describe("the event catalog", () => {
 					room_id: expect.any(Object),
 					message_id: expect.any(Object),
 					parent_id: expect.any(Object),
+					reason: expect.objectContaining({ enum: ["mention", "dm", "thread_reply", "room"] }),
+					author_id: expect.any(Object),
+					version: expect.any(Object),
 					uri: expect.any(Object),
 				},
-				required: ["room_id", "message_id", "uri"],
+				required: ["room_id", "message_id", "reason", "author_id", "version", "uri"],
 				additionalProperties: false,
 			},
 		});
@@ -215,7 +221,10 @@ describe("events/subscribe", () => {
 			allowlist: ["receiver.example.com"],
 		});
 
-		const subscribed = resultOf(await subscribe(bot.key, "chat.message.created", { arguments: { room_id: room.id } }));
+		// An agent gets only the messages for it by default. This dot answers each message of the room.
+		const subscribed = resultOf(
+			await subscribe(bot.key, "chat.message.created", { arguments: { room_id: room.id, filter: "all" } }),
+		);
 		expect(subscribed).toEqual({
 			id: expect.stringMatching(/^sub_[0-9a-f]{64}$/),
 			refreshBefore: expect.any(String),
@@ -248,7 +257,14 @@ describe("events/subscribe", () => {
 			eventId: expect.any(String),
 			name: "chat.message.created",
 			timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/),
-			data: { room_id: room.id, message_id: message.id, uri: `asterra://chat/${room.id}/messages` },
+			data: {
+				room_id: room.id,
+				message_id: message.id,
+				reason: "room",
+				author_id: ada.id,
+				version: message.version,
+				uri: `asterra://chat/${room.id}/messages`,
+			},
 			cursor: null,
 		});
 		// The catalog and the POST must agree, because the client checks `data` against the payload schema.
@@ -504,6 +520,38 @@ describe("events/subscribe", () => {
 });
 
 describe("event delivery", () => {
+	// An agent that monitors its rooms must not start a turn for each message of each room. The filter
+	// is not a part of the id, so one callback never gets one message from two subscriptions.
+	it("sends an agent only the messages for it by default, and a refresh changes the filter", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const room = await privateRoom("Launch");
+		const { events } = receiver();
+		const queue = await roomQueue(room.id);
+		const say = async (text: string) => {
+			const { message } = await ada.call("chat.post_message", { room_id: room.id, text });
+			await queue.drain();
+			await deliver(queue.events);
+			return message;
+		};
+		const reasons = () =>
+			events().map((post) => [JSON.parse(post.body).data.message_id, JSON.parse(post.body).data.reason]);
+
+		const first = resultOf(await subscribe(bot.key, "chat.message.created"));
+		await say("Lunch is at noon");
+		const named = await say("@bot send the invoice");
+		expect(reasons()).toEqual([[named.id, "mention"]]);
+
+		const second = resultOf(await subscribe(bot.key, "chat.message.created", { arguments: { filter: "all" } }));
+		expect(second.id).toBe(first.id);
+		expect(await rows()).toHaveLength(1);
+		const plain = await say("Dinner is at seven");
+		expect(reasons().at(-1)).toEqual([plain.id, "room"]);
+
+		// The arguments of events/unsubscribe name the same subscription with each filter.
+		await unsubscribe(bot.key, "chat.message.created", { arguments: { filter: "addressed" } });
+		expect(await rows()).toEqual([]);
+	});
+
 	it("sends only the events of the room of the subscription, and each room without a room", async () => {
 		const launch = await privateRoom("Launch", bot, [ada.id]);
 		const design = await privateRoom("Design", bot, [ada.id]);

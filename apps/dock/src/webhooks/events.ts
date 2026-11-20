@@ -2,6 +2,8 @@
 // A subscription of MCP Events is one endpoint and one subscription. The consumer of the webhook queue
 // sends its events, with the checks and the retries of each webhook.
 import {
+	type ChatWebhookFilter,
+	defaultChatWebhookFilter,
 	MCP_EVENT_LIMITS,
 	type McpEventDefinition,
 	mcpEventList,
@@ -69,26 +71,42 @@ function usableEvent(call: CallContext, name: string): McpEventDefinition | null
 	return event && call.caller.scopes.has(webhookScope(event.domain)) ? event : null;
 }
 
-/** The target and the room filter that the arguments name. The default target is the caller. */
+/**
+ * The target, the room and the message filter that the arguments name. The default target is the caller.
+ * A chat subscription without `filter` gets the default of the caller. Mail and Drive have no filter.
+ */
 function parseArguments(
 	call: CallContext,
 	event: McpEventDefinition,
 	value: Record<string, unknown>,
-): { targetId: string | undefined; roomId: string | null } {
+): { targetId: string | undefined; roomId: string | null; filter: ChatWebhookFilter } {
 	const parsed = event.input.safeParse(value);
 	if (!parsed.success) {
 		const issue = parsed.error.issues[0];
 		const path = issue?.path.join(".");
 		throw new OperationError("invalid", `arguments${path ? `.${path}` : ""}: ${issue?.message ?? "not valid"}`);
 	}
-	const fields = parsed.data as { mailbox_id?: string; room_id?: string; space_id?: string };
-	if (event.domain === "chat") return { targetId: call.caller.id, roomId: fields.room_id ?? null };
-	return { targetId: event.domain === "mail" ? fields.mailbox_id : fields.space_id, roomId: null };
+	const fields = parsed.data as {
+		mailbox_id?: string;
+		room_id?: string;
+		space_id?: string;
+		filter?: ChatWebhookFilter;
+	};
+	if (event.domain === "chat") {
+		return {
+			targetId: call.caller.id,
+			roomId: fields.room_id ?? null,
+			filter: fields.filter ?? defaultChatWebhookFilter(call.caller.kind),
+		};
+	}
+	return { targetId: event.domain === "mail" ? fields.mailbox_id : fields.space_id, roomId: null, filter: "all" };
 }
 
 /**
- * The id of a subscription. The same principal, credential, URL, event and arguments give the same id,
+ * The id of a subscription. The same principal, credential, URL, event, target and room give the same id,
  * so a second events/subscribe refreshes the subscription, and a different credential cannot stop it.
+ * The message filter of Chat is not a part of the id: a refresh with a different filter changes the
+ * filter. So one URL never gets one message from two subscriptions that differ only in the filter.
  */
 async function subscriptionId(
 	call: CallContext,
@@ -284,7 +302,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 		const expiresAt = new Date(now + life).toISOString();
 
 		/**
-		 * Gives the subscription its new end and its new secret. A subscription that stopped starts again.
+		 * Gives the subscription its new end, its new secret and its message filter. A subscription that stopped starts again.
 		 * The limits count the other subscriptions, so a subscription that expired cannot start again above
 		 * a limit. The endpoint changes only when the subscription changed.
 		 */
@@ -292,7 +310,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 			const results = await db.batch<{ id: string }>([
 				db
 					.prepare(
-						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL
+						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL,
+							chat_filter = ?11
 						WHERE id = ?2 AND endpoint_id = ?3
 						AND (SELECT COUNT(*) FROM webhook_subscriptions s
 							JOIN webhook_endpoints e ON e.id = s.endpoint_id
@@ -311,6 +330,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						targetId,
 						args.roomId,
 						WEBHOOK_LIMITS.perTarget,
+						args.filter,
 					),
 				db
 					.prepare(
@@ -384,8 +404,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 					.prepare(
 						`INSERT INTO webhook_subscriptions (
 							id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at,
-							expires_at, room_id)
-						SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+							expires_at, room_id, chat_filter)
+						SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 						WHERE EXISTS (SELECT 1 FROM webhook_endpoints WHERE id = ?2)
 						ON CONFLICT (id) DO NOTHING RETURNING id`,
 					)
@@ -400,6 +420,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						nowText,
 						expiresAt,
 						args.roomId,
+						args.filter,
 					),
 			]);
 			const endpointStored = (results[1]?.results.length ?? 0) > 0;

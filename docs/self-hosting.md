@@ -287,6 +287,10 @@ Chat rooms apply their object migration on their next start. No new Cloudflare r
 Migration `0014_mcp_events.sql` adds columns to the two tables and one small table for [MCP Events](agents.md#get-events-in-chatgpt-mcp-events).
 It needs no new Cloudflare resource and no secret. A subscription of MCP Events uses the same queue.
 
+Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A subscription from before
+this migration keeps the filter `all`, so it sends each message as before. A new subscription for an agent
+without `filter` gets `addressed`: see [Get a webhook for all joined chats](agents.md#get-a-webhook-for-all-joined-chats).
+
 Migration `0015_link_previews.sql` adds the cache of the link previews of Chat, and the budget of
 fetches of each author. The previews need one new
 queue, `soldock-chat-previews` (binding `CHAT_PREVIEWS`), which the next deploy creates by name. It has no

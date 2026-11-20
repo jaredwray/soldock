@@ -1,5 +1,6 @@
 import {
 	CHAT_WEBHOOK_EVENTS,
+	type ChatWebhookFilter,
 	DRIVE_WEBHOOK_EVENTS,
 	MAIL_WEBHOOK_EVENTS,
 	type WebhookDomain,
@@ -89,6 +90,8 @@ export interface ListedSubscription {
 	targetId: string;
 	status: "active" | "disabled";
 	disabledReason: keyof typeof SUBSCRIPTION_STOP | null;
+	/** Chat only. `addressed`: the subscription sends only the messages for its target. */
+	filter?: ChatWebhookFilter;
 	endpoint: WebhookEndpoint;
 }
 
@@ -96,11 +99,57 @@ export interface ListedSubscription {
 export interface EventChoice {
 	event: WebhookEvent;
 	targetId: string;
+	/** Chat only. Without it, the event sends each message. */
+	filter?: ChatWebhookFilter;
 }
 
-/** The key of a check box. An event name and a target id have no space. */
-export function choiceKey(event: WebhookEvent, targetId: string): string {
-	return `${targetId} ${event}`;
+/** The names of the two filters of a chat event, in the menu and in the list of a webhook. */
+export const CHAT_FILTER_LABELS: Record<ChatWebhookFilter, string> = {
+	all: "Each message",
+	addressed: "Direct messages, mentions and followed threads",
+};
+
+/**
+ * The key of a check box. An event name, a target id and a filter have no space. A chat event that
+ * sends only the messages for its target has the filter in its key. So a different filter is a
+ * different choice, and a save deletes the subscription and adds it again.
+ */
+export function choiceKey(event: WebhookEvent, targetId: string, filter?: ChatWebhookFilter): string {
+	return filter === "addressed" ? `${targetId} ${event} addressed` : `${targetId} ${event}`;
+}
+
+/** The filter of an event of a target in a set of keys, or null when the set does not have the event. */
+export function chosenFilter(
+	keys: ReadonlySet<string>,
+	event: WebhookEvent,
+	targetId: string,
+): ChatWebhookFilter | null {
+	if (keys.has(choiceKey(event, targetId, "addressed"))) return "addressed";
+	return keys.has(choiceKey(event, targetId)) ? "all" : null;
+}
+
+/**
+ * The filter of the chat events of one target in a set of keys: `addressed` when each of them has it.
+ * Null when the set has no chat event of the target.
+ */
+export function chatFilterOf(keys: ReadonlySet<string>, targetId: string): ChatWebhookFilter | null {
+	const filters = CHAT_WEBHOOK_EVENTS.map((event) => chosenFilter(keys, event, targetId)).filter(
+		(filter) => filter !== null,
+	);
+	if (filters.length === 0) return null;
+	return filters.every((filter) => filter === "addressed") ? "addressed" : "all";
+}
+
+/** The set of keys with each chat event of one target at the filter. Each other key stays. */
+export function withChatFilter(keys: ReadonlySet<string>, targetId: string, filter: ChatWebhookFilter): Set<string> {
+	const next = new Set(keys);
+	for (const event of CHAT_WEBHOOK_EVENTS) {
+		if (chosenFilter(keys, event, targetId) === null) continue;
+		next.delete(choiceKey(event, targetId, "all"));
+		next.delete(choiceKey(event, targetId, "addressed"));
+		next.add(choiceKey(event, targetId, filter));
+	}
+	return next;
 }
 
 /** The subscriptions to delete and the events to add, so that an endpoint sends only the selected events. */
@@ -108,14 +157,18 @@ export function planChanges<T extends EventChoice>(
 	current: readonly T[],
 	selected: ReadonlySet<string>,
 ): { remove: T[]; add: EventChoice[] } {
-	const existing = new Set(current.map((row) => choiceKey(row.event, row.targetId)));
+	const existing = new Set(current.map((row) => choiceKey(row.event, row.targetId, row.filter)));
 	const add: EventChoice[] = [];
 	for (const key of selected) {
 		if (existing.has(key)) continue;
-		const space = key.indexOf(" ");
-		add.push({ targetId: key.slice(0, space), event: key.slice(space + 1) as WebhookEvent });
+		const [targetId = "", event = "", filter] = key.split(" ");
+		add.push({
+			targetId,
+			event: event as WebhookEvent,
+			...(filter === "addressed" ? { filter: "addressed" as const } : {}),
+		});
 	}
-	return { remove: current.filter((row) => !selected.has(choiceKey(row.event, row.targetId))), add };
+	return { remove: current.filter((row) => !selected.has(choiceKey(row.event, row.targetId, row.filter))), add };
 }
 
 /** The events that one endpoint sends for one target of one product. */
@@ -126,6 +179,8 @@ export interface TargetEvents {
 	/** The number of these events that stopped, and each reason one time. */
 	stoppedCount: number;
 	stopped: string[];
+	/** Chat only: the number of these events that send only the messages for the target. */
+	addressedCount: number;
 }
 
 /** The subscriptions of one endpoint, as one entry for each product and target. Mail is first, then Chat and Drive. */
@@ -137,10 +192,11 @@ export function groupByTarget(subscriptions: readonly ListedSubscription[]): Tar
 			if (row.domain !== domain) continue;
 			let group = byTarget.get(row.targetId);
 			if (!group) {
-				group = { domain, targetId: row.targetId, events: [], stoppedCount: 0, stopped: [] };
+				group = { domain, targetId: row.targetId, events: [], stoppedCount: 0, stopped: [], addressedCount: 0 };
 				byTarget.set(row.targetId, group);
 			}
 			group.events.push(row.event);
+			if (row.filter === "addressed") group.addressedCount += 1;
 			if (row.status === "disabled") {
 				group.stoppedCount += 1;
 				const reason = stoppedText({ status: row.status, disabled_reason: row.disabledReason }, row.endpoint);
@@ -193,4 +249,14 @@ export async function applyPlan<T extends EventChoice & { id: string }>(
 		}
 	}
 	return { subscriptions, errors };
+}
+
+/**
+ * The text after the events of a chat line that tells which messages they send, or null when each event
+ * sends each message.
+ */
+export function filterSummary(group: Pick<TargetEvents, "events" | "addressedCount">): string | null {
+	if (group.addressedCount === 0) return null;
+	if (group.addressedCount === group.events.length) return `${CHAT_FILTER_LABELS.addressed} only`;
+	return `${group.addressedCount} of ${group.events.length}: ${CHAT_FILTER_LABELS.addressed.toLowerCase()} only`;
 }

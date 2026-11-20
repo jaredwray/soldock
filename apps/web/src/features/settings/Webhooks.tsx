@@ -26,6 +26,7 @@ import {
 	choiceKey,
 	DOMAIN_LABELS,
 	eventSummary,
+	filterSummary,
 	groupByTarget,
 	type ListedSubscription,
 	stoppedText,
@@ -50,7 +51,7 @@ export function useWebhookDomains(domains: readonly WebhookDomain[] = WEBHOOK_DO
 
 /** The keys of the check boxes that these subscriptions set. */
 export function keysOf(subscriptions: readonly ListedSubscription[]): Set<string> {
-	return new Set(subscriptions.map((row) => choiceKey(row.event, row.targetId)));
+	return new Set(subscriptions.map((row) => choiceKey(row.event, row.targetId, row.filter)));
 }
 
 /** The keys of the subscriptions that stopped. */
@@ -100,24 +101,28 @@ export function EventLines({
 	if (groups.length === 0) return <div className="row-note">No events. Asterra sends nothing to this webhook.</div>;
 	return (
 		<ul className="event-lines">
-			{groups.map((group) => (
-				<li key={`${group.domain} ${group.targetId}`}>
-					<span className="event-line-name">
-						{DOMAIN_LABELS[group.domain]}
-						{targetName && ` · ${targetName(group.domain, group.targetId)}`}
-					</span>
-					<span>
-						{eventSummary(group.domain, group.targetId, group.events)}
-						{group.stoppedCount > 0 && (
-							<span className="event-line-stopped">
-								{" "}
-								{group.stoppedCount === group.events.length ? "Stopped" : `${group.stoppedCount} stopped`}:{" "}
-								{group.stopped.join(", ")}.
-							</span>
-						)}
-					</span>
-				</li>
-			))}
+			{groups.map((group) => {
+				const filter = filterSummary(group);
+				return (
+					<li key={`${group.domain} ${group.targetId}`}>
+						<span className="event-line-name">
+							{DOMAIN_LABELS[group.domain]}
+							{targetName && ` · ${targetName(group.domain, group.targetId)}`}
+						</span>
+						<span>
+							{eventSummary(group.domain, group.targetId, group.events)}
+							{filter && ` (${filter})`}
+							{group.stoppedCount > 0 && (
+								<span className="event-line-stopped">
+									{" "}
+									{group.stoppedCount === group.events.length ? "Stopped" : `${group.stoppedCount} stopped`}:{" "}
+									{group.stopped.join(", ")}.
+								</span>
+							)}
+						</span>
+					</li>
+				);
+			})}
 		</ul>
 	);
 }
@@ -233,7 +238,8 @@ export function WebhookSettings() {
 			if (domain === "drive") targets.push(...drives.map((drive) => ({ id: drive.id, name: drive.name })));
 			for (const row of rows) {
 				if (row.domain !== domain || targets.some((target) => target.id === row.targetId)) continue;
-				targets.push({ id: row.targetId, name: targetName(domain, row.targetId) });
+				const agent = principals?.find((candidate) => candidate.id === row.targetId)?.kind === "agent";
+				targets.push({ id: row.targetId, name: targetName(domain, row.targetId), ...(agent ? { agent } : {}) });
 			}
 			return { domain, targets };
 		});

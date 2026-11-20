@@ -1,7 +1,14 @@
 import { RoomId } from "./chat.ts";
 import { SpaceId } from "./drive.ts";
 import { MailboxId } from "./mail.ts";
-import { WEBHOOK_EVENTS, type WebhookDomain, type WebhookEvent, webhookDomain } from "./webhooks.ts";
+import {
+	CHAT_EVENT_REASONS,
+	CHAT_WEBHOOK_FILTERS,
+	WEBHOOK_EVENTS,
+	type WebhookDomain,
+	type WebhookEvent,
+	webhookDomain,
+} from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 // MCP Events: an MCP client subscribes to an event with events/subscribe, and gives a callback URL and
@@ -52,6 +59,12 @@ const ChatArguments = z.strictObject({
 	room_id: RoomId.optional().describe(
 		"The room to monitor: an id from chat_list_rooms. You must be a member. Without it, each room that you are a member of sends the event.",
 	),
+	filter: z
+		.enum(CHAT_WEBHOOK_FILTERS)
+		.optional()
+		.describe(
+			"addressed: only a message for you sends the event: a direct message, a mention of you or of a group, and a reply in a thread that you follow. all: each message sends the event. Set all to answer each message of a room. The default is addressed for an agent and all for a person.",
+		),
 });
 
 const DriveArguments = z.strictObject({
@@ -80,6 +93,18 @@ const ChatPayload = z.strictObject({
 		.describe(
 			"Only for a reply in a thread: the message that the reply answers. The reply is not in chat_list_messages. Read it with chat_list_replies of this message.",
 		),
+	reason: z
+		.enum(CHAT_EVENT_REASONS)
+		.describe(
+			"Why you get the event. mention: the message mentions you or a group. dm: the message is in a direct message. thread_reply: a reply in a thread that you follow. room: none of these, so the message is possibly not for you.",
+		),
+	author_id: z.string().describe("The principal that wrote the message."),
+	version: z
+		.number()
+		.int()
+		.describe(
+			"The version of the room at this change. When the version of your last chat_list_messages result is not lower, that result is not older than this event.",
+		),
 	uri: Uri,
 });
 
@@ -98,9 +123,11 @@ const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"mail.inbox.updated":
 		"New mail arrived in the inbox of the mailbox. Spam, a label and an archive send nothing. Mail in a short time gives one event. Read the inbox with mail_list_threads.",
 	"chat.message.created":
-		"A different member posted a message in a room that you are a member of, also a reply in a thread. Your own messages send nothing.",
-	"chat.message.updated": "A different member edited a message in a room that you are a member of.",
-	"chat.message.deleted": "A message was deleted in a room that you are a member of.",
+		"A different member posted a message in a room that you are a member of, also a reply in a thread. Your own messages send nothing. With filter addressed, only a message for you sends the event.",
+	"chat.message.updated":
+		"A different member edited a message in a room that you are a member of. With filter addressed, only a message that is for you after the edit sends the event.",
+	"chat.message.deleted":
+		"A message was deleted in a room that you are a member of. With filter addressed, only a message that was for you sends the event.",
 	"drive.item.created": "An item was created in the drive, also a copy and an item that arrived from another drive.",
 	"drive.item.updated": "An item of the drive changed, also the content of a doc or a sheet.",
 	"drive.item.moved": "An item moved inside the drive, or left it for another drive.",

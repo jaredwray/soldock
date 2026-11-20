@@ -21,6 +21,8 @@ interface TargetWebhooksProps {
 	domains: readonly WebhookDomain[];
 	/** True when the person can send events of this target to a webhook of their own. For an agent, only its sponsor. */
 	canCreate: boolean;
+	/** True when the target is an agent: a new chat event then starts with only the messages for the agent. */
+	agent?: boolean;
 	note?: string;
 }
 
@@ -45,7 +47,15 @@ function rowsOf(subscriptions: readonly ListedSubscription[]): TargetRow[] {
  * shared drive. **Edit events** opens the check boxes of one webhook. A person who did not create the
  * webhook can clear an event, but cannot add one. Create the webhook itself in Settings.
  */
-export function TargetWebhooks({ heading, targetId, targetName, domains, canCreate, note }: TargetWebhooksProps) {
+export function TargetWebhooks({
+	heading,
+	targetId,
+	targetName,
+	domains,
+	canCreate,
+	agent,
+	note,
+}: TargetWebhooksProps) {
 	const toast = useToast();
 	const { whoami } = useSession();
 	const me = whoami.principal.id;
@@ -189,6 +199,7 @@ export function TargetWebhooks({ heading, targetId, targetName, domains, canCrea
 					addable={addable}
 					targetId={targetId}
 					targetName={targetName}
+					agent={agent === true}
 					domains={allowed}
 					canAdd={(endpoint) => canCreate && endpoint.created_by === me && endpoint.status === "active"}
 					refresh={async (id) => (await listAll()).filter((row) => row.endpoint.id === id)}
@@ -217,6 +228,7 @@ function TargetEventsDialog({
 	addable,
 	targetId,
 	targetName,
+	agent,
 	domains,
 	canAdd,
 	refresh,
@@ -227,6 +239,7 @@ function TargetEventsDialog({
 	addable: readonly WebhookEndpoint[];
 	targetId: string;
 	targetName: string;
+	agent: boolean;
 	domains: readonly WebhookDomain[];
 	canAdd: (endpoint: WebhookEndpoint) => boolean;
 	/** Gets the subscriptions of an endpoint for this target from the server again. */
@@ -307,7 +320,7 @@ function TargetEventsDialog({
 								</p>
 							)}
 							<EventPicker
-								groups={domains.map((domain) => ({ domain, targets: [{ id: targetId, name: targetName }] }))}
+								groups={domains.map((domain) => ({ domain, targets: [{ id: targetId, name: targetName, agent }] }))}
 								selected={selected}
 								onChange={setSelected}
 								canAdd={adds}
