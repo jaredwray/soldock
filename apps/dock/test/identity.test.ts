@@ -9,6 +9,7 @@ import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
 import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
+import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -831,6 +832,7 @@ describe("directory upgrade", () => {
 		await run(lifecycleMigration.split("--> statement-breakpoint"));
 		await run(mentionAliasMigration.split("--> statement-breakpoint"));
 		await run(nameFoldedMigration.split("--> statement-breakpoint"));
+		await run(directoryOrderMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -1207,6 +1209,186 @@ describe("the directory list", () => {
 		// The server refuses a cursor that is not from the list.
 		const refused = await owner.call("directory.list_principals", { cursor: "not-a-cursor" }).catch((error) => error);
 		expect(refused).toMatchObject({ status: 400 });
+	});
+});
+
+describe("a bounded read of the directory", () => {
+	// Chat shows a mention and a profile from the ids and the handles of the messages on the page, not from
+	// the whole directory. The handle must be the handle of the list, and a mention the mention of the room.
+	it("gets principals by id and by the handle of a mention, for a person and an agent, and refuses a key without the scope", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const person = (display_name: string, address: string) =>
+			createActor(owner, { kind: "human", display_name, address, password: PASSWORD });
+		const adaOther = await person("Ada Byron", "ada@second.test");
+		const zed = await person("Zed Adams", "zed@dock.test");
+		const gone = await person("Gone Soon", "gone@dock.test");
+		await owner.call("directory.delete_principal", { principal_id: gone.id });
+		const unknown = "prn_00000000000000000000000000";
+
+		// The ids give the principals in their order, each one time, with the handle of the list. An id of no
+		// principal and a deleted principal give no entry.
+		const byId = await owner.call("directory.get_principals", {
+			ids: [zed.id, ada.id, unknown, gone.id, zed.id].join(","),
+		});
+		expect(byId.principals.map((p) => [p.id, p.handle])).toEqual([
+			[zed.id, "zed"],
+			// Two principals have "ada" before the "@", so each has its full address as its handle.
+			[ada.id, "ada@dock.test"],
+		]);
+		expect(byId.principals[0]).toMatchObject({ kind: "human", display_name: "Zed Adams", address: "zed@dock.test" });
+		expect(byId.mentions).toEqual([]);
+		const listed = (await owner.call("directory.list_principals")).principals;
+		expect(byId.principals[1]).toEqual(listed.find((p) => p.id === ada.id));
+
+		// A handle, a full address and a name alias of one principal name it, in each letter case. A shared
+		// local part, a first name of two principals, a group word and an unknown handle name nobody.
+		const byHandle = await bot.call("directory.get_principals", {
+			ids: zed.id,
+			handles: "BOT,billing, ada@second.test,ada,zedadams,here,nobody,bot",
+		});
+		expect(byHandle.mentions).toEqual([
+			{ handle: "bot", principal_id: bot.id },
+			{ handle: "billing", principal_id: bot.id },
+			{ handle: "ada@second.test", principal_id: adaOther.id },
+			{ handle: "zedadams", principal_id: zed.id },
+		]);
+		// The principals of the mentions come with the principals of the ids, each one time.
+		expect(byHandle.principals.map((p) => [p.id, p.handle])).toEqual([
+			[zed.id, "zed"],
+			[bot.id, "bot"],
+			[adaOther.id, "ada@second.test"],
+		]);
+
+		// An agent gets the same read through MCP.
+		const tool = await callTool(bot.key, "directory_get_principals", { handles: "zed" });
+		expect(tool.structuredContent).toMatchObject({
+			principals: [{ id: zed.id, handle: "zed" }],
+			mentions: [{ handle: "zed", principal_id: zed.id }],
+		});
+
+		// A call names an id or a handle, and at most 100 of each.
+		expect(await denied(owner.call("directory.get_principals", {}))).toBe("invalid");
+		expect(await denied(owner.call("directory.get_principals", { ids: "," }))).toBe("invalid");
+		expect(await denied(owner.call("directory.get_principals", { ids: Array(101).fill(ada.id).join(",") }))).toBe(
+			"invalid",
+		);
+		// The read needs directory.read, for a key of a person and for a key of an agent.
+		for (const actor of [owner, ada]) {
+			const { api_key } = await actor.call("account.create_api_key", {
+				principal_id: actor === ada ? bot.id : undefined,
+				label: "No directory",
+				scopes: ["account.read"],
+			});
+			expect(await denied(api(api_key.secret)("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
+		}
+	});
+
+	// The admin link of the web app asks "does this person sponsor an agent" on each page. It must not read
+	// the directory for the answer.
+	it("lists only the agents of one sponsor", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const second = await createActor(owner, {
+			kind: "agent",
+			display_name: "Audit Bot",
+			address: "audit@dock.test",
+			sponsor_id: ada.id,
+		});
+		const sponsored = await ada.call("directory.list_principals", { sponsor_id: ada.id });
+		expect(sponsored.principals.map((p) => p.id)).toEqual([second.id, bot.id]);
+		// The filter works with the other options of the list.
+		const page = await ada.call("directory.list_principals", { sponsor_id: ada.id, limit: 1 });
+		expect(page.principals.map((p) => p.id)).toEqual([second.id]);
+		const next = await ada.call("directory.list_principals", {
+			sponsor_id: ada.id,
+			limit: 1,
+			cursor: page.next_cursor ?? "",
+		});
+		expect(next.principals.map((p) => p.id)).toEqual([bot.id]);
+		expect(next.next_cursor).toBeNull();
+		await owner.call("directory.archive_principal", { principal_id: second.id });
+		const active = await ada.call("directory.list_principals", { sponsor_id: ada.id, active_only: "true" });
+		expect(active.principals.map((p) => p.id)).toEqual([bot.id]);
+		// A person who sponsors no agent gets an empty list, also through MCP.
+		expect((await owner.call("directory.list_principals", { sponsor_id: owner.id })).principals).toEqual([]);
+		const tool = await callTool(bot.key, "directory_list_principals", { sponsor_id: ada.id, active_only: "true" });
+		expect((tool.structuredContent as { principals: { id: string }[] }).principals.map((p) => p.id)).toEqual([bot.id]);
+	});
+
+	// In a directory of thousands, a page that reads and sorts each principal is a slow read on each call.
+	// The rows that D1 reads must follow the limit of the page, not the size of the directory.
+	it("reads the rows of one page, not the directory, for a page of the list and for the agents of a sponsor", async () => {
+		// A fresh start makes the tables of the directory again. It must make the index of the list too.
+		await setupOwner();
+		const fresh = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
+		expect(fresh.status).toBe(201);
+		const created = (await fresh.json()) as { principal: { id: string }; api_key: { secret: string } };
+		const owner = { key: created.api_key.secret, call: api(created.api_key.secret) };
+		const ada = await owner.call("directory.create_principal", {
+			kind: "human",
+			display_name: "Ada Lovelace",
+			address: "ada@dock.test",
+			password: PASSWORD,
+		});
+		await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Billing Bot",
+			address: "bot@dock.test",
+			sponsor_id: ada.principal.id,
+		});
+		const people = 40;
+		for (let index = 0; index < people; index++) {
+			await owner.call("directory.create_principal", {
+				kind: "human",
+				display_name: `Person ${String(index).padStart(2, "0")}`,
+				address: `person${index}@dock.test`,
+				password: PASSWORD,
+			});
+		}
+		/** The rows that the reads of one call read, and its answer. */
+		const rowsOf = async (path: string) => {
+			let rows = 0;
+			const counted = new Proxy(env.DIRECTORY, {
+				get(target, property) {
+					if (property === "prepare") {
+						return (sql: string) => {
+							const statement = target.prepare(sql);
+							const count = (bound: D1PreparedStatement) =>
+								new Proxy(bound, {
+									get(inner, name) {
+										if (name === "bind") return (...values: unknown[]) => count(inner.bind(...values));
+										if (name === "all") {
+											return async () => {
+												const result = await inner.all();
+												rows += result.meta.rows_read;
+												return result;
+											};
+										}
+										const value = Reflect.get(inner, name);
+										return typeof value === "function" ? value.bind(inner) : value;
+									},
+								});
+							return count(statement);
+						};
+					}
+					const value = Reflect.get(target, property);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const res = await withEnv({ DIRECTORY: counted }, path, { headers: { authorization: `Bearer ${owner.key}` } });
+			expect(res.status).toBe(200);
+			return { rows, body: (await res.json()) as { principals: { id: string }[]; next_cursor: string | null } };
+		};
+		const first = await rowsOf("/api/v1/directory/principals?limit=3");
+		expect(first.body.principals).toHaveLength(3);
+		expect(first.rows).toBeLessThan(people);
+		const second = await rowsOf(
+			`/api/v1/directory/principals?limit=3&cursor=${encodeURIComponent(first.body.next_cursor ?? "")}`,
+		);
+		expect(second.body.principals).toHaveLength(3);
+		expect(second.rows).toBeLessThan(people);
+		const sponsored = await rowsOf(`/api/v1/directory/principals?limit=1&sponsor_id=${ada.principal.id}`);
+		expect(sponsored.body.principals).toHaveLength(1);
+		expect(sponsored.rows).toBeLessThan(people);
 	});
 });
 

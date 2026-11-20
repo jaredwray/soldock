@@ -473,7 +473,9 @@ app uses.
   local part, the handle is the full address, for example `@ada@example.org`. `directory_list_principals`
   gives the `handle` of each principal: write `@` and that handle. Set `query` to a part of a name or
   an address to find a principal, for example `{ query: "ada" }`. The list has pages: pass
-  `next_cursor` as `cursor` to get the next page. A principal with `archived_at` is archived: it
+  `next_cursor` as `cursor` to get the next page. `directory_get_principals` gives the principals of
+  ids, for example of `author_id` or of `mentions`, and tells who a handle names:
+  `{ handles: "ada,bot" }`. Each list is one text with a comma between the entries. A principal with `archived_at` is archived: it
   cannot read a mention now. Write the handle when you can. The web app also shows `@` and the first
   name, or the full name without spaces, as a mention, if only one principal has that name. So a
   person can address you as `@` and your first name too: look for your handle and your name.

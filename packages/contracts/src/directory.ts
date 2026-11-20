@@ -1,4 +1,4 @@
-import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
+import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
@@ -125,6 +125,12 @@ export const DIRECTORY_LIMITS = {
 	defaultPageSize: 100,
 	/** The characters of a query. */
 	queryChars: 100,
+	/** The ids, and the handles, of one call of `directory.get_principals`, at most. */
+	lookupSize: 100,
+	/** The characters of the ids, and of the handles, of one call of `directory.get_principals`, at most. */
+	lookupChars: 4000,
+	/** The characters of one handle. An address has no more. */
+	handleChars: 254,
 } as const;
 
 /** A principal in the directory list, with the handle that a mention in Chat uses. */
@@ -146,6 +152,7 @@ export const listPrincipals = defineOperation({
 		"The agents come first, then the humans, each in the order of the names.",
 		"Set query to get only the principals whose name or address has that text, in each letter case and without accents (so garcia finds María García).",
 		'Set active_only: "true" to leave out the archived principals.',
+		"Set sponsor_id to get only the agents that this person sponsors.",
 		'With query, order: "match" puts the best matches first: an address or a word of the name that starts with the query. That order has one page: next_cursor is null, and a cursor is refused.',
 		`A page has ${DIRECTORY_LIMITS.defaultPageSize} principals, or limit, at most ${DIRECTORY_LIMITS.pageSize}. Pass next_cursor as cursor to get the next page.`,
 	].join(" "),
@@ -156,12 +163,68 @@ export const listPrincipals = defineOperation({
 	input: z.strictObject({
 		query: z.string().trim().min(1).max(DIRECTORY_LIMITS.queryChars).optional(),
 		active_only: z.enum(["true", "false"]).optional(),
+		sponsor_id: PrincipalId.optional(),
 		order: z.enum(["name", "match"]).optional(),
 		// A cursor holds a display name, which NFC can make three times as long.
 		cursor: z.string().max(2000).optional(),
 		limit: z.coerce.number().int().min(1).max(DIRECTORY_LIMITS.pageSize).optional(),
 	}),
 	output: z.object({ principals: z.array(DirectoryEntry), next_cursor: z.string().nullable() }),
+	errors: [],
+});
+
+/**
+ * A list as one text, with a comma between its entries: at least 1 entry, and at most
+ * `DIRECTORY_LIMITS.lookupSize`. The input of a GET has only scalars, and no id and no handle has a comma.
+ * `entry` is the pattern of one entry. A space can go around a comma.
+ */
+function commaList(entry: string, message: string) {
+	const more = DIRECTORY_LIMITS.lookupSize - 1;
+	return z
+		.string()
+		.max(DIRECTORY_LIMITS.lookupChars)
+		.regex(new RegExp(`^\\s*${entry}(?:\\s*,\\s*${entry}){0,${more}}\\s*$`), message);
+}
+
+/** The entries of a list with commas (the `ids` and the `handles` of `directory.get_principals`). */
+export function commaListEntries(text: string | undefined): string[] {
+	return (text ?? "").split(",").flatMap((entry) => entry.trim() || []);
+}
+
+export const getPrincipals = defineOperation({
+	name: "directory.get_principals",
+	summary: "Get people and agents by id, or by the handle of a mention in Chat",
+	description: [
+		"Returns the principal of each id in ids, with the fields of directory.list_principals.",
+		'ids and handles are each one text, with a comma between the entries, for example ids: "prn_…,prn_…" and handles: "ada,bot".',
+		'Set handles to find who a mention in Chat names. A handle is the text after the "@": the handle of a principal, a full address or a name alias (a first name, or a full name without spaces, of one principal only).',
+		"mentions has the principal of each handle that names one, with the rules of a Chat message. principals has those principals too.",
+		"An id or a handle of no principal, and a deleted principal, give no entry.",
+		`One call takes at most ${DIRECTORY_LIMITS.lookupSize} ids and ${DIRECTORY_LIMITS.lookupSize} handles.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/directory/lookup" },
+	scopes: ["directory.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z
+		.strictObject({
+			ids: commaList(
+				`prn_${ID_CHARS}`,
+				`must be at most ${DIRECTORY_LIMITS.lookupSize} ids that start with prn_, with a comma between them`,
+			).optional(),
+			// The text after the "@" of a mention: a handle, a full address or a name alias, in each letter case.
+			handles: commaList(
+				`[^,\\s]{1,${DIRECTORY_LIMITS.handleChars}}`,
+				`must be at most ${DIRECTORY_LIMITS.lookupSize} handles, with a comma between them`,
+			).optional(),
+		})
+		.refine((input) => input.ids !== undefined || input.handles !== undefined, "set ids, handles, or the two"),
+	output: z.object({
+		/** The principals of the ids and of the mentions, each one time: first in the order of ids. */
+		principals: z.array(DirectoryEntry),
+		/** The principal that each handle names, in the order of handles. A handle of no principal is not here. */
+		mentions: z.array(z.object({ handle: z.string(), principal_id: z.string() })),
+	}),
 	errors: [],
 });
 
@@ -454,6 +517,7 @@ export const directoryOperations = {
 	"account.enable_totp": enableTotp,
 	"account.disable_totp": disableTotp,
 	"directory.list_principals": listPrincipals,
+	"directory.get_principals": getPrincipals,
 	"directory.create_principal": createPrincipal,
 	"directory.update_agent_policy": updateAgentPolicy,
 	"directory.update_principal": updatePrincipal,

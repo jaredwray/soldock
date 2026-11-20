@@ -1,7 +1,10 @@
 import {
 	AGENT_SCOPES,
 	ALL_SCOPES,
+	commaListEntries,
 	DIRECTORY_LIMITS,
+	type DirectoryEntry,
+	mentionDirectory,
 	mentionHandle,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
@@ -23,16 +26,19 @@ import {
 	createApiKey,
 	createPrincipal,
 	type DirectoryPosition,
+	type DirectoryRecord,
 	deletePrincipal,
 	disableTotp,
 	domainOf,
 	enableTotp,
 	getApiKey,
+	getDirectoryRecords,
 	getPrincipal,
 	listApiKeys,
 	listPrincipalPage,
 	liveSponsorCondition,
 	mailDomains,
+	mentionCandidates,
 	type PrincipalRecord,
 	pendingTotpSecret,
 	removeMailDomain,
@@ -65,6 +71,7 @@ type IdentityOperation =
 	| "account.enable_totp"
 	| "account.disable_totp"
 	| "directory.list_principals"
+	| "directory.get_principals"
 	| "directory.create_principal"
 	| "directory.list_mail_domains"
 	| "directory.add_mail_domain"
@@ -109,6 +116,11 @@ function assertRemovable(call: CallContext, target: PrincipalRecord, action: "ar
 	if (target.org_role === "owner") throw new OperationError("forbidden", `Nobody can ${action} the owner.`);
 	if (target.id === call.caller.principal.id) throw new OperationError("forbidden", `You cannot ${action} yourself.`);
 	assertFullCredential(call.caller);
+}
+
+/** A principal of the directory list, with the handle of a mention in Chat. */
+function toDirectoryEntry(record: DirectoryRecord): DirectoryEntry {
+	return { ...toPrincipalOutput(record), handle: mentionHandle(record.address, record.sharedLocal) };
 }
 
 const DIRECTORY_CHANGED = "The directory changed during the request. Load it again and try again.";
@@ -210,17 +222,31 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			// A part of the name without accents: "garcia" finds "María García".
 			folded: input.query === undefined ? null : searchFold(input.query),
 			activeOnly: input.active_only === "true",
+			sponsorId: input.sponsor_id ?? null,
 			byMatch: input.order === "match" && input.query !== undefined,
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});
 		return {
-			principals: page.principals.map((record) => ({
-				...toPrincipalOutput(record),
-				handle: mentionHandle(record.address, record.sharedLocal),
-			})),
+			principals: page.principals.map(toDirectoryEntry),
 			next_cursor: page.next === null ? null : encodeCursor(page.next),
 		};
+	},
+
+	async "directory.get_principals"(call, input) {
+		const handles = [...new Set(commaListEntries(input.handles).map((handle) => handle.toLowerCase()))];
+		// The principals that the handles can name, with the rules of a message of Chat (`mentionDirectory`).
+		const named =
+			handles.length === 0 ? null : mentionDirectory(await mentionCandidates(call.env.DIRECTORY, handles, []));
+		const mentions = handles.flatMap((handle) => {
+			const person = named?.byHandle.get(handle);
+			return person ? [{ handle, principal_id: person.id }] : [];
+		});
+		const records = await getDirectoryRecords(call.env.DIRECTORY, [
+			...commaListEntries(input.ids),
+			...mentions.map((mention) => mention.principal_id),
+		]);
+		return { principals: records.map(toDirectoryEntry), mentions };
 	},
 
 	async "directory.create_principal"(call, input) {
