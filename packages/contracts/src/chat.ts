@@ -58,8 +58,10 @@ export const CHAT_LIMITS = {
 	searchQueryChars: 500,
 	/** The results of one page of a search. */
 	searchPageSize: 50,
-	/** The results that a search in the order of the rank returns, in all of its pages. */
+	/** The results that a search in one room in the order of the rank returns, in all of its pages. */
 	searchRankResults: 1000,
+	/** The newest messages that a search in all rooms puts in the order of the rank. */
+	searchRankCandidates: 200,
 } as const;
 
 // The body of a message: a small tree of blocks in the JSON form of ProseMirror, the same form as the
@@ -1036,12 +1038,13 @@ export const searchMessages = defineOperation({
 	description: [
 		"Finds the messages that you can read: the messages and the replies of the rooms and the direct messages that you are a member of. With room_id, the search is in that room only.",
 		"The query has words and filters. Each word must be in the text of the message. Letter case and accents do not matter.",
-		'Put a phrase in double quotes ("release plan") to find the words together. Put * after the start of a word (deploy*) to find each word with that start.',
+		'Put a phrase in double quotes ("release plan") to find the words together. Put * after the start of a word (deploy*) to find each word with that start: 3 characters or more.',
 		"Filters: from:ada (the author: a handle as in a mention, me, or a principal id), in:general (a room by its name or its id, or in:@ada for your direct message with ada), mentions:me (a mention of you, or mentions:ada), has:link, has:file, is:thread (a reply, or a message with replies), before:2026-10-31, after:2026-10-01 and on:2026-10-15.",
 		"A date is a day in UTC. before finds the messages before that day, and after finds the messages of that day and later.",
 		"Two from filters find the messages of the one author or the other, and two in filters search the two rooms. Each other filter must be true. Do not set in with room_id.",
 		"sort is rank (the best match first, the default for a query with words) or time (the newest message first, the default for a query with filters only).",
-		`The order of the rank returns the first ${CHAT_LIMITS.searchRankResults} results at most. Use the order of the time, or dates, to read more.`,
+		`With room_id, the order of the rank returns the first ${CHAT_LIMITS.searchRankResults} results at most. Without room_id, it puts the newest ${CHAT_LIMITS.searchRankCandidates} messages that match in the order of the rank, and each room ranks its own messages. Use the order of the time, or dates, to read more.`,
+		"sort in the result is the order that the search used.",
 		"Each result has the room, the message as it is now, and highlights: the parts of message.text that the words found. A deleted message is never a result.",
 		"Without room_id, a new or changed message shows about one second later. A page can have fewer results than limit, also none, with a next_cursor: pass next_cursor as cursor to get the next page.",
 	].join(" "),
@@ -1059,6 +1062,8 @@ export const searchMessages = defineOperation({
 	output: z.object({
 		results: z.array(ChatSearchResult),
 		next_cursor: z.string().nullable(),
+		/** The order that the search used: `time` for a query with filters only, also when the call asked for `rank`. */
+		sort: z.enum(["rank", "time"]),
 	}),
 	errors: ["not_found", "invalid"],
 });

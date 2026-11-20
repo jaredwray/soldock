@@ -31,7 +31,12 @@ test("the search of a room header finds a message of that room, marks the word, 
 	// The found word is marked, in the letter case of the message.
 	await expect(results.first().locator("mark")).toHaveText([needle]);
 
-	await results.first().click();
+	// A second submit of the same query searches again: the path stays, and a new message shows.
+	await post(tomasz, roomId, `A later message has the ${needle} too.`);
+	await page.getByRole("searchbox", { name: `Search in ${name}` }).press("Enter");
+	await expect(results).toHaveCount(2);
+
+	await results.filter({ hasText: "The plan has the" }).click();
 	await expect(page).toHaveURL(new RegExp(`/chat/${roomId}/${message.seq}$`));
 	await expect(page.locator(".chat-message-marked .chat-text")).toHaveText(message.text);
 });

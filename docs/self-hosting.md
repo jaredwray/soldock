@@ -300,6 +300,9 @@ resource and no secret. One object of the class holds the search index of the or
 room applies its object migration at its next start, and then sends its messages to the index. So the
 search in all rooms finds the old messages of a room after the first search of one of its members, or
 after the next message in the room. A room with many old messages needs some minutes.
+Do not deploy a Worker from before search again after this deploy. Such a Worker does not write the
+search tables of a room that has them, so the messages of that time are not in a search later. This is
+the rule of each object migration of a chat room: a room goes forward only.
 
 Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A subscription from before
 this migration keeps the filter `all`, so it sends each message as before, also a subscription of MCP Events

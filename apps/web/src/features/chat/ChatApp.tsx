@@ -73,6 +73,7 @@ export function ChatApp({
 	// a room, the search is in that room. In the Search view, the keys move the focus to the box. While a
 	// dialog is open, the keys stay with the browser.
 	const searching = search !== null;
+	const joinedRoomId = listed === null ? null : roomId;
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.defaultPrevented || event.altKey || event.shiftKey || event.isComposing) return;
@@ -80,7 +81,8 @@ export function ChatApp({
 			if (document.querySelector("dialog[open]")) return;
 			event.preventDefault();
 			if (!searching) {
-				navigate(chatSearchPath("", roomId));
+				// Only a member can search a room. From each other page, the search is in all rooms.
+				navigate(chatSearchPath("", joinedRoomId));
 				return;
 			}
 			const box = document.getElementById(SEARCH_INPUT_ID);
@@ -91,7 +93,7 @@ export function ChatApp({
 		}
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [searching, roomId]);
+	}, [searching, joinedRoomId]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {

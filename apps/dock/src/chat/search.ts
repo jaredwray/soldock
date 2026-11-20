@@ -52,6 +52,11 @@ function invalid(message: string): OperationError {
  */
 const HAS_WORD = /[\p{L}\p{N}]/u;
 
+/** The parts of a text with letters and digits only: the words that the tokenizer makes. */
+const WORD_CHARS = /[\p{L}\p{N}]+/gu;
+/** The fewest characters of the last word before a `*`. */
+const PREFIX_CHARS = 3;
+
 /** An FTS5 phrase: a quoted string, so the FTS operators in the text have no effect. */
 function ftsPhrase(text: string): string {
 	return `"${text.replaceAll('"', '""')}"`;
@@ -119,7 +124,12 @@ export function parseSearch(query: string): ParsedSearch {
 				value = value.slice(0, -1);
 			}
 			// A text without a letter or a digit has no word. It finds nothing, so it is no part of the query.
-			if (HAS_WORD.test(value)) words.push(prefix ? `${ftsPhrase(value)}*` : ftsPhrase(value));
+			if (!HAS_WORD.test(value)) continue;
+			// A short start finds a large part of all words, which costs much for each search.
+			if (prefix && (value.match(WORD_CHARS)?.pop()?.length ?? 0) < PREFIX_CHARS) {
+				throw invalid(`Write ${PREFIX_CHARS} letters or digits or more before the *, not "${value}*".`);
+			}
+			words.push(prefix ? `${ftsPhrase(value)}*` : ftsPhrase(value));
 			continue;
 		}
 		value = value.trim();

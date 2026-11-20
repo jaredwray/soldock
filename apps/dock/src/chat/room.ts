@@ -233,6 +233,11 @@ export interface SearchHitRecord {
 	message: MessageRecord;
 	/** For a reply, the seq of the first message of its thread. */
 	parentSeq: number | null;
+	/**
+	 * The rank of the message for the words of the query, from the words of this room only (`bm25`): a
+	 * lower number is a better match. 0 for a query without words.
+	 */
+	score: number;
 	highlights: { start: number; end: number }[];
 }
 
@@ -538,6 +543,12 @@ const BLOB_TARGET = "blob:";
  */
 const SEARCH_TARGET = "search:";
 const SEARCH_ROOM_TARGET = `${SEARCH_TARGET}room`;
+/**
+ * The outbox target that tells the index that the room made each stored message a target. Its batch comes
+ * after the batches of those messages: the outbox sends the targets in their order, and a letter comes after
+ * each digit.
+ */
+const SEARCH_FILLED_TARGET = `${SEARCH_TARGET}filled`;
 /** The names of the search tables of a room, for `searchSql`. */
 const ROOM_SEARCH: SearchColumns = {
 	fts: "messages_fts",
@@ -550,8 +561,14 @@ const ROOM_SEARCH: SearchColumns = {
 	isThread: "(m.parent_id IS NOT NULL OR m.reply_count > 0)",
 	mentions: "EXISTS (SELECT 1 FROM search_mentions s WHERE s.seq = m.seq AND s.principal_id = ?)",
 };
-/** The text of a result with the marks of `highlightRanges` around each found word. */
-const MARKED_TEXT = "highlight(messages_fts, 0, char(57344), char(57345))";
+/**
+ * The columns of a result of a query with words: the text with the marks of `highlightRanges` around each
+ * found word, and the rank. The rank reads the words of this room only, which each member can read. So the
+ * order of the results tells nothing about a different room.
+ */
+const SEARCH_COLUMNS = "highlight(messages_fts, 0, char(57344), char(57345)) AS marked, bm25(messages_fts) AS score";
+/** A message row of a search, with its marked text and its rank. The two are null for a query without words. */
+type SearchRow = MessageRow & { marked: string | null; score: number | null };
 /** The time after a job of link previews goes to the queue, before the room sends it again. */
 const LINK_RESEND_MS = 10 * 60_000;
 /** The sends of one job of link previews. After them, each preview that waits gets no preview. */
@@ -694,6 +711,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private readonly allowances = new Map<string, { messages: number; at: number }>();
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
+	/** The end of the line of sends to the search index of the organization. See `sendSearchRows`. */
+	private searchSent: Promise<void> = Promise.resolve();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -2375,7 +2394,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Records that the index of the organization is behind for one message. The row waits `MEMBER_DELAY_MS`,
-	 * so no call waits for the index, and the changes of that time go out as one batch.
+	 * so the changes of that time go out as one batch. Only the alarm sends these rows (`sendSearchRows`),
+	 * so no change of a message waits for the index.
 	 */
 	private touchSearch(seq: number): void {
 		this.sql.exec(
@@ -2388,7 +2408,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/** The rows of a search as results: each message, with the found parts of its text. */
-	private searchHitRecords(roomId: string, rows: readonly (MessageRow & { marked: string | null })[]) {
+	private searchHitRecords(roomId: string, rows: readonly SearchRow[]) {
 		const messages = this.messageRecords(roomId, rows);
 		const parentIds = [...new Set(rows.flatMap((row) => (row.parent_id === null ? [] : [row.parent_id])))];
 		const parentSeqs = new Map(
@@ -2401,6 +2421,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			(row, index): SearchHitRecord => ({
 				message: messages[index] as MessageRecord,
 				parentSeq: row.parent_id === null ? null : (parentSeqs.get(row.parent_id) ?? null),
+				score: row.score ?? 0,
 				highlights: row.marked === null ? [] : highlightRanges(row.marked),
 			}),
 		);
@@ -2430,8 +2451,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		params.push(input.limit + 1);
 		if (ranked) params.push(input.offset);
-		const rows = this.all<MessageRow & { marked: string | null }>(
-			`SELECT m.*, ${filter.match === null ? "NULL" : MARKED_TEXT} AS marked FROM ${from}
+		const rows = this.all<SearchRow>(
+			`SELECT m.*, ${filter.match === null ? "NULL AS marked, NULL AS score" : SEARCH_COLUMNS} FROM ${from}
 			WHERE ${where.join(" AND ")}
 			ORDER BY ${ranked ? `bm25(messages_fts), ${seq} DESC` : `${seq} DESC`}
 			LIMIT ?${ranked ? " OFFSET ?" : ""}`,
@@ -2461,8 +2482,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const { from, where, params } = searchSql(filter, ROOM_SEARCH);
 		where.push("m.deleted_at IS NULL", "m.seq IN (SELECT value FROM json_each(?))");
 		params.push(JSON.stringify(seqs));
-		const rows = this.all<MessageRow & { marked: string | null }>(
-			`SELECT m.*, ${filter.match === null ? "NULL" : MARKED_TEXT} AS marked FROM ${from}
+		const rows = this.all<SearchRow>(
+			`SELECT m.*, ${filter.match === null ? "NULL AS marked, NULL AS score" : SEARCH_COLUMNS} FROM ${from}
 			WHERE ${where.join(" AND ")}`,
 			...params,
 		);
@@ -2478,7 +2499,35 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async fillSearch(): Promise<void> {
 		if (!this.room()) return;
 		this.touch(SEARCH_ROOM_TARGET);
-		await this.flush();
+		await this.sendSearchRows();
+		await this.schedule();
+	}
+
+	/**
+	 * Sends the outbox rows for the index of the organization that are due, after each send that started
+	 * before: one send at a time, so the stamps of the batches reach the index in their order. This line is
+	 * not the line of `flush`. So a post, an edit and a delete never wait for the index, also while the
+	 * index is slow. The alarm and `fillSearch` call it.
+	 */
+	private sendSearchRows(): Promise<void> {
+		const run = this.searchSent.then(async () => {
+			for (let round = 0; round < DRAIN_ROUNDS; round++) {
+				const room = this.room();
+				if (!room) return;
+				const rows = this.all<OutboxRow>(
+					`SELECT target, gen, attempts FROM outbox
+					WHERE next_attempt_at <= ? AND substr(target, 1, ${SEARCH_TARGET.length}) = '${SEARCH_TARGET}'
+					ORDER BY target LIMIT ?`,
+					Date.now(),
+					OUTBOX_BATCH,
+				);
+				if (rows.length === 0 || (await this.sendSearch(room, rows))) return;
+			}
+		});
+		this.searchSent = run.catch((error: unknown) => {
+			log("error", "chat search index drain failed", { error: error instanceof Error ? error.message : String(error) });
+		});
+		return this.searchSent;
 	}
 
 	// --- Live sockets ---------------------------------------------------------------------------
@@ -2732,6 +2781,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		const room = this.room();
 		if (room) await this.sendLinkJobs(room.room_id);
+		await this.sendSearchRows();
 		await this.schedule();
 	}
 
@@ -2870,8 +2920,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		for (let round = 0; round < DRAIN_ROUNDS; round++) {
 			const room = this.room();
 			if (!room) return;
+			// The rows for the search index are not in this pass: the alarm sends them (`sendSearchRows`).
 			const rows = this.all<OutboxRow>(
-				"SELECT target, gen, attempts FROM outbox WHERE next_attempt_at <= ? ORDER BY target LIMIT ?",
+				`SELECT target, gen, attempts FROM outbox
+				WHERE next_attempt_at <= ? AND substr(target, 1, ${SEARCH_TARGET.length}) <> '${SEARCH_TARGET}'
+				ORDER BY target LIMIT ?`,
 				Date.now(),
 				OUTBOX_BATCH,
 			);
@@ -2879,14 +2932,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const isPrincipal = (row: OutboxRow) => row.target.startsWith(PRINCIPAL_TARGET);
 			const isGrant = (row: OutboxRow) => row.target.startsWith(GRANT_TARGET);
 			const isBlob = (row: OutboxRow) => row.target.startsWith(BLOB_TARGET);
-			const isSearch = (row: OutboxRow) => row.target.startsWith(SEARCH_TARGET);
-			const indexRows = rows.filter((row) => !isPrincipal(row) && !isGrant(row) && !isBlob(row) && !isSearch(row));
+			const indexRows = rows.filter((row) => !isPrincipal(row) && !isGrant(row) && !isBlob(row));
 			const failures = await Promise.all([
 				this.writeIndex(room, indexRows),
 				this.sendStates(room, rows.filter(isPrincipal)),
 				this.sendGrants(room, rows.filter(isGrant)),
 				this.deleteBlobs(rows.filter(isBlob)),
-				this.sendSearch(room, rows.filter(isSearch)),
 			]);
 			if (failures.some(Boolean)) break;
 		}
@@ -2960,15 +3011,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * stamp is higher than the stamp that it has for the room, so each batch applies one time, and an older
 	 * batch that arrives late changes nothing.
 	 *
-	 * The index tells when it had no row of the room before this batch: the first batch of a room, or an
-	 * index that lost its rows. Each stored message then becomes a target, so the index gets all of them.
-	 * Returns true when the send failed.
+	 * The index tells when it had no row of the room before this batch (the first batch of a room, or an
+	 * index that lost its rows), and when the room did not tell it yet that each stored message is a target.
+	 * Each stored message then becomes a target, with `SEARCH_FILLED_TARGET` after them, so the index gets
+	 * all of them. The answer of the index is the state of the index, not of one call. So a fill starts
+	 * also when the answer to the first batch got lost. Returns true when the send failed.
 	 */
 	private async sendSearch(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
 		if (rows.length === 0) return false;
 		const entries: SearchEntry[] = [];
 		for (const row of rows) {
-			if (row.target === SEARCH_ROOM_TARGET) continue;
+			if (row.target === SEARCH_ROOM_TARGET || row.target === SEARCH_FILLED_TARGET) continue;
 			const seq = Number(row.target.slice(SEARCH_TARGET.length));
 			const message = this.one<MessageRow>("SELECT * FROM messages WHERE seq = ? AND deleted_at IS NULL", seq);
 			if (!message) {
@@ -2997,9 +3050,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 				ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1 RETURNING value`,
 			)?.value,
 		);
-		let known: boolean;
+		let answer: { known: boolean; filled: boolean };
 		try {
-			({ known } = await searchIndex(this.env).apply({ roomId: room.room_id, stamp, entries }));
+			answer = await searchIndex(this.env).apply({
+				roomId: room.room_id,
+				stamp,
+				entries,
+				filled: rows.some((row) => row.target === SEARCH_FILLED_TARGET),
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			log("warn", "chat search index send failed", { rows: rows.length, error: message });
@@ -3007,7 +3065,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return true;
 		}
 		for (const row of rows) this.done(row);
-		if (!known) {
+		// A fill that runs has its last target in the outbox. It does not start again.
+		const filling = this.one("SELECT 1 AS found FROM outbox WHERE target = ?", SEARCH_FILLED_TARGET) !== null;
+		if (!answer.known || (!answer.filled && !filling)) {
+			this.touch(SEARCH_FILLED_TARGET);
 			this.sql.exec(
 				`INSERT INTO outbox (target, gen, next_attempt_at)
 					SELECT ?1 || seq, 1, ?2 FROM messages WHERE deleted_at IS NULL

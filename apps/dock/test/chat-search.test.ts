@@ -196,6 +196,10 @@ describe("search in one room", () => {
 		});
 		expect(texts(older.results)).toEqual(["plan plan plan"]);
 		expect(older.next_cursor).toBeNull();
+		// The result tells the order that the search used.
+		expect([ranked.sort, newest.sort]).toEqual(["rank", "time"]);
+		const filtersOnly = await ada.call("chat.search_messages", { room_id: room.id, query: "from:me", sort: "rank" });
+		expect(filtersOnly.sort).toBe("time");
 		// A query with filters only has no rank: the newest message comes first.
 		expect(await find(ada, "from:me", { room_id: room.id, limit: 1 })).toEqual(["plan and plan"]);
 		// A cursor of the one order is no cursor of the other.
@@ -214,10 +218,24 @@ describe("search in one room", () => {
 			"from:nobody",
 			"!!!",
 			"in:Notes x",
+			"de*",
+			'"release pl"*',
 		]) {
 			expect(await codeOf(search(query)), query).toBe("invalid");
 		}
 		await expect(search("from:nobody")).rejects.toThrow("@nobody");
+		// A key with only the read scope of Chat cannot read the directory. For it, a handle of no principal
+		// finds nothing, so the answer does not tell which addresses the organization has.
+		await post(ada, room.id, "A memo of ada");
+		const { api_key: chatOnly } = await ada.call("account.create_api_key", { label: "Reader", scopes: ["chat.read"] });
+		const reader = api(chatOnly.secret);
+		for (const input of [{ room_id: room.id }, {}]) {
+			expect((await reader("chat.search_messages", { ...input, query: "memo from:nobody" })).results).toEqual([]);
+			expect((await reader("chat.search_messages", { ...input, query: "memo mentions:nobody" })).results).toEqual([]);
+		}
+		expect((await reader("chat.search_messages", { room_id: room.id, query: "memo from:ada" })).results).toHaveLength(
+			1,
+		);
 		expect(await codeOf(ada.call("chat.search_messages", { room_id: room.id, query: "x", cursor: "?" }))).toBe(
 			"invalid",
 		);
@@ -303,14 +321,18 @@ describe("search across rooms", () => {
 	it("gives no hit from a room when the list of the caller still has the room after a removal", async () => {
 		const room = await createRoom(ada, "private", "Finance", [bot.id]);
 		await post(ada, room.id, "The budget is a secret.");
+		await post(ada, room.id, "The budget has two lines.");
 		await indexed(room.id);
-		expect(await find(bot, "budget")).toHaveLength(1);
+		expect(await find(bot, "budget")).toHaveLength(2);
 		// The room removes the member, as a removal whose state did not reach the object of the member yet.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			state.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", bot.id);
 		});
 		expect((await bot.call("chat.list_rooms")).rooms.map((listed) => listed.id)).toEqual([room.id]);
 		expect(await find(bot, "budget")).toEqual([]);
+		// The index has more hits than one page. No cursor tells that the room has them.
+		const page = await bot.call("chat.search_messages", { query: "budget", sort: "time", limit: 1 });
+		expect(page).toMatchObject({ results: [], next_cursor: null });
 	});
 
 	it("filters by the room, the author, a mention, a thread, a link, a file and the date", async () => {
@@ -394,6 +416,47 @@ describe("search across rooms", () => {
 	});
 });
 
+describe("the order of the rank across rooms", () => {
+	// The word counts of one index have the words of each room. A rank from them told a principal that
+	// is not a member which words a private room has: it wrote two messages, and their order changed
+	// when a guess of the next word was correct.
+	it("does not change with the words of a room that the caller is not in", async () => {
+		const board = await createRoom(ada, "private", "Board");
+		await post(ada, board.id, "The deploy password is hunter2, keep it quiet.");
+		await indexed(board.id);
+		const probe = await createRoom(bot, "private", "Probe");
+		/** True when the message with the phrase two times comes before the message with the marker two times. */
+		const phraseFirst = async (guess: string, marker: string) => {
+			const markers = await post(bot, probe.id, `password is ${guess} ${marker} ${marker} pad pad`);
+			const phrases = await post(bot, probe.id, `password is ${guess} password is ${guess} ${marker}`);
+			await indexed(probe.id);
+			const found = await bot.call("chat.search_messages", { query: `"password is ${guess}"* ${marker}` });
+			const ids = found.results.map((result) => result.message.id);
+			expect([...ids].sort()).toEqual([markers.id, phrases.id].sort());
+			return ids[0] === phrases.id;
+		};
+		// "hun" is the start of the word in the room of ada, and "abc" is not. The order is the same.
+		expect(await phraseFirst("hun", "zzmarkerone")).toBe(await phraseFirst("abc", "zzmarkertwo"));
+	});
+
+	it("puts the best match of each room first, from the words of that room", async () => {
+		const one = await createRoom(ada, "private", "One");
+		const two = await createRoom(ada, "private", "Two");
+		await post(ada, one.id, "A plan is in this long line with many other words that are not in the query at all");
+		await post(ada, one.id, "plan plan plan");
+		await post(ada, two.id, "No word of the query");
+		await post(ada, two.id, "A plan");
+		await indexed(one.id, two.id);
+		const found = await ada.call("chat.search_messages", { query: "plan" });
+		expect(found.sort).toBe("rank");
+		const texts = found.results.map((result) => result.message.text);
+		expect(texts).toHaveLength(3);
+		expect(texts.indexOf("plan plan plan")).toBeLessThan(
+			texts.indexOf(texts.find((text) => text.startsWith("A plan is")) ?? ""),
+		);
+	});
+});
+
 describe("the search index of the organization", () => {
 	const index = () => env.CHAT_SEARCH.get(env.CHAT_SEARCH.idFromName("org:0"));
 
@@ -416,15 +479,13 @@ describe("the search index of the organization", () => {
 						before: null,
 						after: null,
 					},
-					sort: "time",
 					after: null,
-					offset: 0,
 					limit: 10,
 				})
 			).hits.map((hit) => hit.seq);
 		expect(await hits()).toEqual([1]);
 		// A batch from before the newest batch of the room: the delete in it does not apply.
-		await index().apply({ roomId: room.id, stamp: 0, entries: [{ seq: 1, row: null }] });
+		await index().apply({ roomId: room.id, stamp: 0, entries: [{ seq: 1, row: null }], filled: false });
 		expect(await hits()).toEqual([1]);
 	});
 
@@ -489,6 +550,90 @@ describe("the search index of the organization", () => {
 		// A new message is the next batch. The index tells the room that it has no row of it.
 		await post(ada, room.id, "No word of the query.");
 		await indexed(room.id);
+		expect(await find(ada, "budget", { sort: "time" })).toEqual(["The second budget.", "The first budget."]);
+	});
+
+	// One index serves each room. A change of a message must not wait for it, also while it is slow.
+	it("does not make a post wait while the index does not answer", async () => {
+		const room = await createRoom(ada, "private", "Finance");
+		// Plain flags, not promises: a promise from the test cannot continue a call inside the object.
+		const gate = { entered: false, released: false };
+		await runInDurableObject(roomStub(room.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const real = target.env.CHAT_SEARCH;
+			const slow = {
+				idFromName: (name: string) => real.idFromName(name),
+				get: (id: DurableObjectId) => ({
+					apply: async (batch: Parameters<ReturnType<typeof real.get>["apply"]>[0]) => {
+						gate.entered = true;
+						while (!gate.released) await scheduler.wait(5);
+						return real.get(id).apply(batch);
+					},
+				}),
+			};
+			target.env = { ...target.env, CHAT_SEARCH: slow as unknown as Env["CHAT_SEARCH"] };
+		});
+		await post(ada, room.id, "The first budget.");
+		// The alarm sends the message to the index, which does not answer.
+		const alarm = vi.waitFor(
+			async () => {
+				await runDurableObjectAlarm(roomStub(room.id));
+				expect(gate.entered).toBe(true);
+			},
+			{ timeout: 5000, interval: 25 },
+		);
+		await vi.waitFor(() => expect(gate.entered).toBe(true), { timeout: 5000, interval: 10 });
+		// A post, an edit and a search in the room answer during that time.
+		const second = await post(ada, room.id, "The second budget.");
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: second.id, text: "The second forecast." });
+		expect(await find(ada, "budget", { room_id: room.id })).toEqual(["The first budget."]);
+		expect(gate.released).toBe(false);
+		gate.released = true;
+		await alarm;
+		await indexed(room.id);
+		expect(await find(ada, "forecast")).toEqual(["The second forecast."]);
+	});
+
+	// The answer of the index to the first batch can get lost. The fill must not depend on that one answer.
+	it("gets each message of a room again also when the answer to the first batch after the loss got lost", async () => {
+		const room = await createRoom(ada, "private", "Finance");
+		await post(ada, room.id, "The first budget.");
+		await post(ada, room.id, "The second budget.");
+		await indexed(room.id);
+		await runInDurableObject(index(), (_instance, state) => {
+			for (const table of ["rooms", "messages", "messages_fts", "mentions"])
+				state.storage.sql.exec(`DELETE FROM ${table}`);
+		});
+		// The index applies the next batch of the room, and the room gets an error in place of the answer.
+		const lost = { calls: 0 };
+		await runInDurableObject(roomStub(room.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const real = target.env.CHAT_SEARCH;
+			const lossy = {
+				idFromName: (name: string) => real.idFromName(name),
+				get: (id: DurableObjectId) => ({
+					apply: async (batch: Parameters<ReturnType<typeof real.get>["apply"]>[0]) => {
+						const answer = await real.get(id).apply(batch);
+						lost.calls += 1;
+						if (lost.calls === 1) throw new Error("The answer got lost.");
+						return answer;
+					},
+				}),
+			};
+			target.env = { ...target.env, CHAT_SEARCH: lossy as unknown as Env["CHAT_SEARCH"] };
+		});
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			await post(ada, room.id, "No word of the query.");
+			// The room tries the send again after one minute.
+			vi.setSystemTime(Date.now() + 1000);
+			await runDurableObjectAlarm(roomStub(room.id));
+			expect(lost.calls).toBe(1);
+			vi.setSystemTime(Date.now() + 61_000);
+			await indexed(room.id);
+		} finally {
+			vi.useRealTimers();
+		}
 		expect(await find(ada, "budget", { sort: "time" })).toEqual(["The second budget.", "The first budget."]);
 	});
 

@@ -908,7 +908,8 @@ room of the caller, and each room returns its messages.
 - Each word must be in the plain text of the message. The letter case and the accents do not matter
   (the FTS5 tokenizer `unicode61` with `remove_diacritics 2`, as Mail and Drive use).
 - A part in double quotes is a phrase. A `*` after a word, or after a quoted part, finds each word with
-  that start. Each word is a quoted FTS5 string, so `AND`, `OR`, `NOT` and `NEAR` are words.
+  that start. The start has 3 letters or digits at least: a shorter start finds a large part of all
+  words. Each word is a quoted FTS5 string, so `AND`, `OR`, `NOT` and `NEAR` are words.
 - A text without a letter or a digit has no word. The query ignores it.
 
 | Filter | Finds |
@@ -927,13 +928,25 @@ room of the caller, and each room returns its messages.
 - A room that the caller is not a member of is no room for `in:`. The answer is the same for a room that
   does not exist.
 - The handler reads the directory for the handles of `from:` and `mentions:` before the room makes its
-  check. The answer tells only if a handle has a principal, which the directory tells to each principal.
+  check. A handle of no principal gets `invalid` only for a caller with the scope `directory.read`, which
+  can read the directory. For each other caller, such a handle finds nothing. So a credential with only
+  the scopes of Chat does not learn which addresses the organization has.
 - A query has at most 500 characters and 30 words and filters.
 
 ### The order and the pages
 
 - `sort: "rank"` gives the best match first (`bm25` of FTS5). It is the default for a query with words.
-  It reads with an offset, and it returns the first 1,000 hits at most (`CHAT_LIMITS.searchRankResults`).
+  In one room, it reads with an offset, and it returns the first 1,000 hits at most
+  (`CHAT_LIMITS.searchRankResults`).
+- **The rank reads the words of one room only.** `bm25` gives a word more weight when few rows of the
+  table have it. A rank from the table of the index would thus depend on the words of each room of the
+  organization. A principal could then write two messages, and read from their order if a private room
+  that it is not in has a word. So the index gives no rank. Across rooms, the index gives the newest 200
+  hits (`CHAT_LIMITS.searchRankCandidates`), each room gives the rank of its own messages from its own
+  table, and the handler puts them in order. Each member of a room can read each message of that room,
+  so this rank tells nothing new. A word can have a different weight in two rooms, so the order across
+  rooms is not exact.
+- The answer has `sort`: the order that the search used.
 - `sort: "time"` gives the newest message first, with a keyset cursor. A query with filters only has no
   rank, so it always reads by time.
 - A page has 20 results, or `limit`, at most 50 (`CHAT_LIMITS.searchPageSize`).
@@ -968,8 +981,11 @@ later change can give a large organization more than one index.
   so a reaction writes nothing to it. A delete of a message removes its rows.
 - **How a room sends a change.** A post, an edit and a delete make the message a target of the outbox
   (`search:<seq>`), in the transaction of the change. The first reply of a message, and the delete of its
-  last reply, make the parent a target too (`is:thread`). The target waits `MEMBER_DELAY_MS` (500 ms), so no
-  call waits for the index, and the changes of that time go out as one batch (`sendSearch`).
+  last reply, make the parent a target too (`is:thread`). The target waits `MEMBER_DELAY_MS` (500 ms), so
+  the changes of that time go out as one batch (`sendSearch`).
+- **No change waits for the index.** Only the alarm of the room sends these targets (`sendSearchRows`),
+  in a line of its own. The writes that a post, an edit and a delete wait for (`flush`) do not have them.
+  So a slow index, for example during a large search, slows no room.
 - **What a batch holds.** The current search state of each message, or nothing for a deleted message. So
   the order of two changes of one message does not matter. A batch that fails stays in the outbox, and
   the alarm tries again (1 minute, doubled, at most 1 hour).
@@ -978,22 +994,27 @@ later change can give a large organization more than one index.
   higher. So a second delivery, and an older batch that arrives late, change nothing.
 - **The rooms of the caller.** The handler reads the joined rooms of the caller from its `PrincipalDO`
   (`chatRoomRefs`), and the index searches those rooms only. An `in:` filter keeps the named rooms.
-- **The room checks again.** The index returns hits: a room and a `seq`. The handler asks the room of
-  each hit for the messages (`searchHits`), 25 rooms at the same time. The room makes the member check,
+- **The room checks again.** The index returns hits: a room and a `seq`, the newest first. The handler
+  asks the room of each hit for the messages (`searchHits`), 25 rooms at the same time. The room makes the member check,
   and runs the filter again on its own tables for those seqs. So these never show:
   - a message of a room that the caller left, also while the list of its `PrincipalDO` is behind;
   - a deleted message, also before the index gets the delete;
   - a message whose text or filter values changed, while the index has the old ones.
+- When a room refuses the caller, the handler searches again without that room, at most 2 times more. So
+  no result, and no cursor, comes from a hit of a room that the caller left.
 - A room that does not answer gives no result, and the log line `chat search: rooms did not answer` has
   the count. So a page can have fewer results than `limit`, also none, with a `next_cursor`.
-- **A room that the index does not know.** The index tells a room when a batch is the first batch of
-  that room. The room then makes each stored message a target, so the index gets all of them. A new room
-  sends its first batch at its creation. This rule also fills an index that lost its rows.
+- **A room that the index does not know.** The answer of the index to a batch tells if the index had a
+  row of the room, and if the room told it that each stored message is a target (`rooms.filled`). While
+  one of the two is false, the room makes each stored message a target, with `search:filled` after
+  them. The batch with `search:filled` sets `rooms.filled`. A fill that runs does not start again. A new
+  room sends its first batch at its creation. This rule also fills an index that lost its rows, also when
+  the answer to a batch got lost.
 - **Rooms from before search.** The migration of a room fills its search tables from its stored messages,
   and makes the room a target for the index (`search:room`). A room migrates at its next start. A search
   names the rooms of the caller that the index has no row for (at most 200). The handler asks each of
-  them to send a batch (`fillSearch`), 25 at the same time, and then searches again. One call sends the
-  first messages of a room (about 1,000), and the alarm sends the rest.
+  them to send a batch (`fillSearch`), 25 at the same time, and then searches again. That call of the
+  search waits for the first messages of each such room (about 1,000), and the alarm sends the rest.
 
 Known limits:
 
@@ -1009,7 +1030,12 @@ Known limits:
 - A query has no negative filter, and no `OR` of words.
 - `mentions:` reads the mention nodes of a principal. A mention of a group (`@here`, `@channel`) is not a
   mention of `me`.
-- A read by time with words sorts each hit of the words before it returns a page.
+- A search with words reads each row of the index that has the words, in all rooms, and then keeps the
+  rows of the rooms of the caller. So its cost grows with the organization, not with the rooms of the
+  caller. The time of an answer can thus depend on the words of rooms that the caller is not in. A
+  caller that measures many searches could learn from it. The limit of a prefix makes the cost smaller,
+  and a rate limit for search is the next step.
+- A read by rank across rooms asks the rooms of the newest 200 hits for each page: 200 rooms at most.
 - The size of the index. A measure in local workerd with 50,000 messages of made-up words, 130
   characters each on average, gave 23 MB: about 460 bytes for each message. A Durable Object with SQLite
   holds 10 GB, so one index has room for about 20 million such messages. A search by rank in that index
@@ -1042,6 +1068,8 @@ Known limits:
   the sockets of its members.
 - A search is a read, so it has no audit line. No log line has the text of a query. The index of the
   organization gives no access: each result comes from its room, after the member check of that room.
+  The index gives no rank, so the order of the results has no data of a room that the caller is not in.
+  See [The order and the pages](#the-order-and-the-pages).
 
 ## Data inventory
 
@@ -1054,9 +1082,9 @@ Known limits:
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
 | Earlier versions | `ChatRoomDO` table `message_edits` | One row for each edit of a message: the text and the body before the edit, the version of the room, the time of the write and the time of the edit. The 100 newest rows of each message stay. A delete of the message removes its rows |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
-| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), the R2 objects to delete (`blob:<key>`), and the messages that the search index of the organization does not have yet (`search:<seq>`, and `search:room` for the room). A row goes away after its write |
+| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), the R2 objects to delete (`blob:<key>`), and the messages that the search index of the organization does not have yet (`search:<seq>`, `search:room` for the room, and `search:filled` at the end of a fill). A row goes away after its write |
 | Search rows of a room | `ChatRoomDO` tables `messages_fts` (FTS5) and `search_mentions`, column `messages.has_link` | The plain text of each message that stays, one row for each principal that it mentions, and 1 for a message with a link. A second copy of the text of a message, in the same object. A delete of the message removes its rows. Rebuildable from the table `messages`: the migration that adds the tables fills them |
-| The search index of the organization | `ChatSearchDO` (name `org:0`) tables `rooms`, `messages`, `messages_fts` (FTS5) and `mentions` | A copy that the rooms can build again. For each message that stays: the room, the `seq`, the author id, the time, three filter values, the mentioned principal ids, and the plain text. A third copy of the text of a message, in a different object. No body and no name. The index removes the rows of a deleted message when it gets the delete, about one second later, or after the retries of a send that failed. `rooms` has the stamp of the newest batch of each room. A restore of a room object must not make its `search_stamp` lower: the index ignores each batch with a lower stamp. To build the index again, delete its rows: each room sends each message again with its next batch, and a search asks the rooms of its caller that sent no batch |
+| The search index of the organization | `ChatSearchDO` (name `org:0`) tables `rooms`, `messages`, `messages_fts` (FTS5) and `mentions` | A copy that the rooms can build again. For each message that stays: the room, the `seq`, the author id, the time, three filter values, the mentioned principal ids, and the plain text. A third copy of the text of a message, in a different object. No body and no name. The index removes the rows of a deleted message when it gets the delete, about one second later, or after the retries of a send that failed. `rooms` has the stamp of the newest batch of each room, and `filled` after the room sent each stored message. A restore of a room object must not make its `search_stamp` lower: the index ignores each batch with a lower stamp. To build the index again, delete its rows: each room sends each message again with its next batch, and a search asks the rooms of its caller that sent no batch |
 | Files of messages | `ChatRoomDO` table `message_files` | One row for each file of a message that stays: the position, the drive, the item and the facts of the file at the time of the post. No bytes. A delete of the message, and an edit that removes the file, remove the row |
 | Link previews | `ChatRoomDO` column `messages.links_json` | The state of each link that gets a preview, with the plain text of the preview and the R2 key of its picture. A deleted message has null |
 | Jobs of link previews | `ChatRoomDO` table `link_jobs` | The message, the origin of the post, the sends and the time of the next send. A row goes away when no link waits |

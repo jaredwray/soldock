@@ -132,7 +132,7 @@ November 2026.
 | | What you pay Cloudflare |
 |---|---|
 | **The account** | $5 a month for [Workers Paid](https://developers.cloudflare.com/workers/platform/pricing/), for the full account. It includes 10 million requests and 30 million CPU milliseconds a month. Asterra needs Workers Paid to send mail to all recipients. |
-| **Mailboxes, drives, documents and rooms** | Durable Objects, in Workers Paid. A month includes 1 million requests, 50 million rows written and 5 GB stored. More storage is $0.20 for each GB-month. Each person and each agent also has one object for its list of rooms. A new, changed or deleted message makes one request to the object of each member of the room, at most two each second for each member: the changes of half a second go out together. |
+| **Mailboxes, drives, documents and rooms** | Durable Objects, in Workers Paid. A month includes 1 million requests, 50 million rows written and 5 GB stored. More storage is $0.20 for each GB-month. Each person and each agent also has one object for its list of rooms. A new, changed or deleted message makes one request to the object of each member of the room, at most two each second for each member: the changes of half a second go out together. A room also makes one request to the search index of Chat for the changed messages of half a second. |
 | **The directory** | D1, in Workers Paid. A month includes 25 billion rows read, 50 million rows written and 5 GB. |
 | **Files and raw mail** | 10 GB free in [R2](https://developers.cloudflare.com/r2/pricing/), then $0.015 for each GB-month. Downloads have no egress charge. |
 | **Inbound mail** | Free, with [Email Routing](https://developers.cloudflare.com/email-routing/). |

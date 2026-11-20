@@ -1,5 +1,6 @@
 import type { ChatRoom, ChatSearchResult } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { currentAccount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -29,7 +30,7 @@ const SORT_OPTIONS: readonly SelectOption<Sort>[] = [
 type ListState =
 	| { status: "idle" }
 	| { status: "loading" }
-	| { status: "ready"; results: ChatSearchResult[]; nextCursor: string | null }
+	| { status: "ready"; results: ChatSearchResult[]; nextCursor: string | null; sort: Sort }
 	| { status: "error"; error: string };
 
 interface SearchInput {
@@ -94,7 +95,11 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 	const [loadingMore, setLoadingMore] = useState(false);
 	/** The reason of a "Show more" that failed. The list stays. */
 	const [moreError, setMoreError] = useState<string | null>(null);
-	const [recent, setRecent] = useState(() => recentSearches(draftStorage(), ownId));
+	const [allRecent, setRecent] = useState(() => recentSearches(draftStorage(), ownId));
+	// A search in one room takes no `in:` filter, so a recent search with one does not show there.
+	const recent = roomId === null ? allRecent : allRecent.filter((text) => !/(^|\s)in:/i.test(text));
+	/** A submit of the query that shows adds 1, for a new read: the path does not change then. */
+	const [runs, setRuns] = useState(0);
 	/** The number of the newest read. An older answer does not replace a newer one. */
 	const reads = useRef(0);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +118,7 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 	}, []);
 
 	useEffect(() => {
+		void runs;
 		const read = ++reads.current;
 		setMoreError(null);
 		if (query === "") {
@@ -123,14 +129,20 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 		readResults({ query, roomId, sort }, null)
 			.then((page) => {
 				if (read !== reads.current) return;
-				setState({ status: "ready", results: page.results, nextCursor: page.next_cursor });
+				setState({ status: "ready", results: page.results, nextCursor: page.next_cursor, sort: page.sort });
+				// The browser keeps a query only for the person that is signed in now.
+				if (currentAccount() !== ownId) return;
 				rememberSearch(draftStorage(), ownId, query);
 				setRecent(recentSearches(draftStorage(), ownId));
 			})
 			.catch((error: unknown) => {
 				if (read === reads.current) setState({ status: "error", error: errorMessage(error) });
 			});
-	}, [query, roomId, sort, ownId]);
+		// An answer that comes after the view went away, for example after a sign-out, changes nothing.
+		return () => {
+			reads.current += 1;
+		};
+	}, [query, roomId, sort, ownId, runs]);
 
 	async function showMore() {
 		if (state.status !== "ready" || state.nextCursor === null || loadingMore) return;
@@ -145,7 +157,7 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 				// The pages have no snapshot: a message can come two times.
 				const seen = new Set(current.results.map(resultKey));
 				const added = page.results.filter((result) => !seen.has(resultKey(result)));
-				return { status: "ready", results: [...current.results, ...added], nextCursor: page.next_cursor };
+				return { ...current, results: [...current.results, ...added], nextCursor: page.next_cursor };
 			});
 		} catch (error) {
 			if (read === reads.current) setMoreError(errorMessage(error));
@@ -156,7 +168,10 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 
 	function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		navigate(chatSearchPath(value.trim(), roomId));
+		const next = value.trim();
+		// The same query has the same path, so the router does nothing. The view then reads again.
+		if (next === query) setRuns((count) => count + 1);
+		else navigate(chatSearchPath(next, roomId));
 	}
 
 	const label = roomId === null ? "Search your messages" : `Search in ${room ? roomTitle(room) : "this room"}`;
@@ -258,17 +273,24 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 					<>
 						<div className="chat-search-bar">
 							<p role="status">
-								{state.results.length === 0
-									? "No message matches this search."
-									: `${plural(state.results.length, "message")}${state.nextCursor === null ? "" : ", and more"}`}
+								{state.results.length > 0
+									? `${plural(state.results.length, "message")}${state.nextCursor === null ? "" : ", and more"}`
+									: state.nextCursor === null
+										? "No message matches this search."
+										: "No result yet. Select Show more to search more messages."}
 							</p>
-							<Select
-								className="label-select"
-								label="Order of the results"
-								value={sort}
-								options={SORT_OPTIONS}
-								onChange={setSort}
-							/>
+							{/* A query with filters only has no rank: the server reads it by time, so the menu has no use. */}
+							{state.sort === "time" && sort === "rank" ? (
+								<span>Newest first</span>
+							) : (
+								<Select
+									className="label-select"
+									label="Order of the results"
+									value={sort}
+									options={SORT_OPTIONS}
+									onChange={setSort}
+								/>
+							)}
 						</div>
 						<ol className="chat-search-results" aria-label="Search results">
 							{state.results.map((result) => (

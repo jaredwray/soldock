@@ -41,6 +41,8 @@ export interface SearchBatch {
 	roomId: string;
 	stamp: number;
 	entries: SearchEntry[];
+	/** True when the room made each stored message a target for the index, and this batch tells so. */
+	filled: boolean;
 }
 
 /** A hit: the room and the seq of a message, and its time in milliseconds. */
@@ -54,10 +56,8 @@ export interface SearchIndexQuery {
 	/** The rooms of the caller. The index searches these rooms only. */
 	rooms: string[];
 	filter: SearchFilter;
-	/** `rank` reads from `offset`. `time` reads the hits after the place `after`, the newest first. */
-	sort: "rank" | "time";
+	/** The place of the last hit of the page before, or null for the newest hits. */
 	after: { createdAt: number; roomId: string; seq: number } | null;
-	offset: number;
 	limit: number;
 }
 
@@ -68,8 +68,13 @@ type Row = Record<string, SqlStorageValue>;
 
 const MIGRATIONS: string[][] = [
 	[
-		// One row for each room that sent a batch, with the stamp of its newest batch.
-		"CREATE TABLE rooms (room_id TEXT PRIMARY KEY, stamp INTEGER NOT NULL) WITHOUT ROWID",
+		// One row for each room that sent a batch, with the stamp of its newest batch. `filled` is 1 after the
+		// room told that it made each stored message a target for this index.
+		`CREATE TABLE rooms (
+			room_id TEXT PRIMARY KEY,
+			stamp INTEGER NOT NULL,
+			filled INTEGER NOT NULL DEFAULT 0
+		) WITHOUT ROWID`,
 		// The filter values of each message that stays. `id` is the rowid of its words in `messages_fts`.
 		`CREATE TABLE messages (
 			id INTEGER PRIMARY KEY,
@@ -83,6 +88,8 @@ const MIGRATIONS: string[][] = [
 			UNIQUE (room_id, seq)
 		)`,
 		"CREATE INDEX messages_time ON messages (created_at DESC, room_id DESC, seq DESC)",
+		// A search with `from:` reads the messages of its authors, not each message of the index.
+		"CREATE INDEX messages_author ON messages (author_id, created_at DESC)",
 		// The plain text of each message, as the search table of a room has it.
 		"CREATE VIRTUAL TABLE messages_fts USING fts5 (text, tokenize = 'unicode61 remove_diacritics 2')",
 		// A delete removes the text and the words of a message at once, not at a later merge. So the index
@@ -139,11 +146,16 @@ export class ChatSearchDO extends DurableObject<Env> {
 	 * whose stamp is not higher than the stamp of the room changes nothing. So a second delivery, and an
 	 * older batch that arrives late, do no harm. A batch without entries makes the room known.
 	 *
-	 * `known` is false for the first batch of a room: the index had no row of the room. The room then sends
-	 * each of its messages. So an index that lost its rows gets them again.
+	 * `known` is false for the first batch of a room: the index had no row of the room. `filled` is false
+	 * until a batch of the room told that the room made each stored message a target. The room sends each
+	 * of its messages while one of the two is false. So an index that lost its rows gets them again, also
+	 * when the answer to the first batch got lost.
 	 */
-	apply(batch: SearchBatch): { known: boolean } {
-		const known = this.sql.exec("SELECT 1 AS found FROM rooms WHERE room_id = ?", batch.roomId).toArray().length > 0;
+	apply(batch: SearchBatch): { known: boolean; filled: boolean } {
+		const before = this.sql
+			.exec<{ filled: number }>("SELECT filled FROM rooms WHERE room_id = ?", batch.roomId)
+			.toArray()[0];
+		let filled = before?.filled === 1;
 		this.ctx.storage.transactionSync(() => {
 			const newer = this.sql
 				.exec(
@@ -155,6 +167,10 @@ export class ChatSearchDO extends DurableObject<Env> {
 				)
 				.toArray();
 			if (newer.length === 0) return;
+			if (batch.filled) {
+				this.sql.exec("UPDATE rooms SET filled = 1 WHERE room_id = ?", batch.roomId);
+				filled = true;
+			}
 			for (const { seq, row } of batch.entries) {
 				const kept = this.sql
 					.exec<{ id: number }>("SELECT id FROM messages WHERE room_id = ? AND seq = ?", batch.roomId, seq)
@@ -184,12 +200,14 @@ export class ChatSearchDO extends DurableObject<Env> {
 				}
 			}
 		});
-		return { known };
+		return { known: before !== undefined, filled };
 	}
 
 	/**
-	 * A page of the hits of a filter in the rooms of the list. One hit more than `limit` tells that a next
-	 * page exists. `unknown` has the rooms of the list that sent no batch yet, at most `UNKNOWN_MAX`: the
+	 * A page of the hits of a filter in the rooms of the list, the newest first. One hit more than `limit`
+	 * tells that a next page exists. The index gives no rank: `bm25` reads how many rows of the whole table
+	 * have a word, so its order would tell a caller about the words of rooms that it cannot read. Each room
+	 * ranks its own messages (`searchHits` of the room). `unknown` has the rooms of the list that sent no batch yet, at most `UNKNOWN_MAX`: the
 	 * caller asks each of them to send a batch (`fillSearch`).
 	 */
 	search(query: SearchIndexQuery): { hits: SearchHit[]; unknown: string[] } {
@@ -206,20 +224,17 @@ export class ChatSearchDO extends DurableObject<Env> {
 		const { from, where, params } = searchSql(query.filter, INDEX_SEARCH);
 		where.push("m.room_id IN (SELECT value FROM json_each(?))");
 		params.push(rooms);
-		const ranked = query.sort === "rank" && query.filter.match !== null;
-		if (!ranked && query.after !== null) {
+		if (query.after !== null) {
 			where.push("(m.created_at, m.room_id, m.seq) < (?, ?, ?)");
 			params.push(query.after.createdAt, query.after.roomId, query.after.seq);
 		}
 		params.push(query.limit + 1);
-		if (ranked) params.push(query.offset);
-		const time = "m.created_at DESC, m.room_id DESC, m.seq DESC";
 		const hits = this.sql
 			.exec<SearchHit & Row>(
 				`SELECT m.room_id, m.seq, m.created_at FROM ${from}
 				WHERE ${where.join(" AND ")}
-				ORDER BY ${ranked ? `bm25(messages_fts), ${time}` : time}
-				LIMIT ?${ranked ? " OFFSET ?" : ""}`,
+				ORDER BY m.created_at DESC, m.room_id DESC, m.seq DESC
+				LIMIT ?`,
 				...params,
 			)
 			.toArray();
