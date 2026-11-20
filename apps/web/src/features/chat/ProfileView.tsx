@@ -1,4 +1,4 @@
-import type { ChatRoom, Principal } from "@asterra/contracts";
+import type { ChatRoom, DirectoryEntry, Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
@@ -14,24 +14,53 @@ const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const
 
 export interface ProfileViewProps {
 	principalId: string;
-	/** The people and agents of the organization. Null while the list loads. */
-	principals: readonly Principal[] | null;
-	directory: MentionDirectory<Principal>;
+	/** The people that the page asked for. A profile that a message already read shows at once. */
+	directory: MentionDirectory<DirectoryEntry>;
 	/** Shows the direct message room that the button opened. */
 	onOpened: (room: ChatRoom) => Promise<void>;
+}
+
+/** The read of a profile: the principal (null when the directory does not have it) and the sponsor of an agent. */
+type ProfileRead = { person: DirectoryEntry | null; sponsor: DirectoryEntry | null } | "failed" | null;
+
+/**
+ * The principal of a profile and the sponsor of an agent, from the server by their ids
+ * (`directory.get_principals`), so a profile reads two principals at most, not the directory. Null
+ * while the read runs.
+ */
+function useProfile(principalId: string): ProfileRead {
+	const [read, setRead] = useState<ProfileRead>(null);
+	useEffect(() => {
+		let active = true;
+		const one = async (id: string) => (await api.call("directory.get_principals", { ids: id })).principals[0] ?? null;
+		(async () => {
+			const person = await one(principalId);
+			const sponsor = person?.sponsor_id ? await one(person.sponsor_id) : null;
+			if (active) setRead({ person, sponsor });
+		})().catch(() => {
+			if (active) setRead("failed");
+		});
+		return () => {
+			active = false;
+		};
+	}, [principalId]);
+	return read;
 }
 
 /**
  * The profile of a person or an agent: the name, the handle for a mention, the address, the role or
  * the sponsor, and a button for a direct message. A mention in a message links here.
  */
-export function ProfileView({ principalId, principals, directory, onOpened }: ProfileViewProps) {
+export function ProfileView({ principalId, directory, onOpened }: ProfileViewProps) {
 	const ownId = useSession().whoami.principal.id;
 	const toast = useToast();
 	const [opening, setOpening] = useState(false);
-	const person = directory.byId.get(principalId) ?? null;
-	const sponsor = person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
-	const handle = person ? directory.handleOf.get(person.id) : undefined;
+	const read = useProfile(principalId);
+	// Until the read comes, and when it fails, the profile shows what a message of the page already read.
+	const loaded = read !== null && read !== "failed" ? read : null;
+	const person = loaded ? loaded.person : (directory.byId.get(principalId) ?? null);
+	const sponsor = loaded ? loaded.sponsor : person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
+	const handle = person?.handle;
 	const name = person?.display_name ?? null;
 
 	useEffect(() => {
@@ -49,7 +78,7 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 		}
 	}
 
-	if (principals === null) {
+	if (!person && read === null) {
 		return (
 			<p className="list-state" role="status">
 				<span className="spinner" aria-hidden="true" />
@@ -58,12 +87,11 @@ export function ProfileView({ principalId, principals, directory, onOpened }: Pr
 		);
 	}
 	if (!person) {
-		// The directory always has the person who reads, so an empty list is a read that failed.
 		return (
 			<div className="list-state">
 				<p role="alert">
-					{principals.length === 0
-						? "The directory did not load. Reload the page to try again."
+					{read === "failed"
+						? "The profile did not load. Reload the page to try again."
 						: "This person or agent is not in the directory."}
 				</p>
 				<Link to={chatPath()} className="button">

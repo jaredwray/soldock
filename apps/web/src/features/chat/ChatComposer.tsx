@@ -33,6 +33,7 @@ import {
 	textMentions,
 	toggleCodeBlock,
 	typedEmoji,
+	typedHandles,
 	typedMention,
 } from "./composerCommands.ts";
 import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
@@ -42,10 +43,10 @@ import {
 	groupSuggestions,
 	type MentionContext,
 	mentionKeyAction,
-	mentionSuggestions,
 	rankMentions,
 	typedMentionCandidates,
 } from "./mentions.ts";
+import { useWantPeople } from "./usePeople.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -53,6 +54,9 @@ import {
 //   keeps only what the parse rules of the schema accept.
 // - Each link is http, https or mailto (safeHref), from the parse rules or from the link dialog.
 // - The app writes no HTML into the page. The editor makes its DOM with createElement.
+
+/** The wait after the last change of the text before the box asks for the principals of its handles, in ms. */
+const TYPED_HANDLES_MS = 300;
 
 const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
 const { marks, nodes } = chatSchema;
@@ -233,22 +237,20 @@ export function ChatComposer({
 	const typed = listOpen ? typedMention(editorState) : null;
 	const typedCode = listOpen && !typed ? typedEmoji(editorState) : null;
 	const { directory, memberIds, ownId } = mentions;
-	// A typed name asks the server (`useMentionSearch`), so the list reads a bounded page for each query.
-	// Only "@" alone uses the directory of the page, for the members of the room first.
-	const search = useMentionSearch(typed && typed.query !== "" ? typed.query : null);
-	const suggestions = !typed
-		? []
-		: typed.query === ""
-			? mentionSuggestions(directory, "", { memberIds, ownId })
-			: rankMentions(typedMentionCandidates(directory, memberIds, search.found), typed.query, { memberIds, ownId });
+	// A typed mention asks the server (`useMentionSearch`), so the list reads a bounded page for each query,
+	// also for "@" alone. The members of the room join that page, with the handles that the room asked for.
+	const search = useMentionSearch(typed ? typed.query : null);
+	const suggestions = typed
+		? rankMentions(typedMentionCandidates(directory, memberIds, search.found), typed.query, { memberIds, ownId })
+		: [];
 	// The groups come after the people, so the list keeps their place for one typed name.
 	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
 	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
-	// A typed name whose list did not come yet: a plain Enter waits for it, so it takes the best suggestion
+	// A typed mention whose list did not come yet: a plain Enter waits for it, so it takes the best suggestion
 	// of the new list, not a suggestion of an older list, and does not send the text of the half mention.
-	const waiting = typed !== null && typed.query !== "" && search.pending;
+	const waiting = typed !== null && search.pending;
 	/** The typed mention of a plain Enter that waits for its list, or null. */
 	const deferredEnter = useRef<string | null>(null);
 	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
@@ -386,8 +388,15 @@ export function ChatComposer({
 	}, [config]);
 
 	// A mention that the person typed, and did not take from the list, shows as a mention too: the room
-	// makes a mention of it (`textMentions`). The directory loads after the page, so each new directory
-	// gives the view its decorations again.
+	// makes a mention of it (`textMentions`). The box asks for the principals of the handles in its text,
+	// a moment after the last change, so a handle that the person still types is not asked for at each key.
+	const doc = editorState.doc;
+	const wantPeople = useWantPeople();
+	useEffect(() => {
+		const timer = setTimeout(() => wantPeople({ handles: typedHandles(doc) }), TYPED_HANDLES_MS);
+		return () => clearTimeout(timer);
+	}, [wantPeople, doc]);
+	// Each answer gives a new directory, and the view its decorations again.
 	useEffect(() => {
 		viewRef.current?.setProps({
 			decorations(state) {

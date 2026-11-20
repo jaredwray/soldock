@@ -308,18 +308,59 @@ export async function listPrincipals(db: D1Database): Promise<PrincipalRecord[]>
 /** The place in the directory list: the kind, the display name and the id of the last principal of a page. */
 export type DirectoryPosition = [kind: string, displayName: string, id: string];
 
-/** A page of the directory list. `sharedLocal` is true when a different principal has the same local part. */
+/**
+ * True when a different principal has the same part of its primary address before the "@" as the address
+ * `a`. The mention handle of the principal needs it. The count reads the index of the addresses: an
+ * address with that part sorts from "part@" to "partA".
+ */
+const SHARED_LOCAL = `(SELECT COUNT(*) FROM addresses b WHERE b.is_primary = 1
+	AND b.address >= substr(a.address, 1, instr(a.address, '@'))
+	AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1`;
+
+/** A principal of the directory list. `sharedLocal` is true when a different principal has the same local part. */
+export type DirectoryRecord = PrincipalRecord & { sharedLocal: boolean };
+
+type DirectoryRow = PrincipalRow & { shared_local: number };
+
+function toDirectoryRecord({ shared_local, ...row }: DirectoryRow): DirectoryRecord {
+	return { ...toPrincipal(row), sharedLocal: shared_local === 1 };
+}
+
+/**
+ * The principals of the ids in the list, each with `sharedLocal` for its mention handle, in the order of
+ * the list. An id that no principal has gives no record, as does a deleted principal.
+ */
+export async function getDirectoryRecords(db: D1Database, ids: readonly string[]): Promise<DirectoryRecord[]> {
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	const { results } = await db
+		.prepare(
+			`SELECT ${PRINCIPAL_COLUMNS}, a.address, ${SHARED_LOCAL} AS shared_local
+			FROM json_each(?) wanted CROSS JOIN principals p ON p.id = wanted.value
+			JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`,
+		)
+		.bind(JSON.stringify(unique))
+		.all<DirectoryRow>();
+	const found = new Map(results.map((row) => [row.id, toDirectoryRecord(row)]));
+	return unique.flatMap((id) => found.get(id) ?? []);
+}
+
+/** A page of the directory list. */
 export interface DirectoryPage {
-	principals: (PrincipalRecord & { sharedLocal: boolean })[];
+	principals: DirectoryRecord[];
 	/** The place after the last principal, or null for the last page. */
 	next: DirectoryPosition | null;
 }
 
 /**
  * One page of the directory, in the order of `listPrincipals`. `query` is lowercase text that the name or
- * the address has: `lower` of SQLite changes only A to Z. Each principal also gets `sharedLocal`: true
- * when a different principal has the same part of its address before the "@", for its mention handle.
- * The count reads the index of the addresses: an address with that part sorts from "part@" to "partA".
+ * the address has: `lower` of SQLite changes only A to Z. Each principal also gets `sharedLocal`, for its
+ * mention handle.
+ *
+ * The statement has only the conditions of the call, and the CROSS JOIN keeps the principals first. So a
+ * page in the order of the names reads the index `principals_directory_order` in its order and stops at
+ * its limit, and a page of one sponsor reads the index `principals_sponsor`. A condition for each option
+ * in one statement hides the two indexes from the planner, and so does an order with a CASE.
  */
 export async function listPrincipalPage(
 	db: D1Database,
@@ -327,6 +368,8 @@ export async function listPrincipalPage(
 		query: string | null;
 		folded: string | null;
 		activeOnly: boolean;
+		/** The id of a sponsor, for the agents of that sponsor only. */
+		sponsorId: string | null;
 		/** True for the order of the best match first (see `directory.list_principals`). It has one page. */
 		byMatch: boolean;
 		after: DirectoryPosition | null;
@@ -335,44 +378,48 @@ export async function listPrincipalPage(
 ): Promise<DirectoryPage> {
 	// A search reads `name_folded`, so each row must have it.
 	if (options.folded !== null) await fillUnsetNames(db);
+	const params: unknown[] = [];
+	/** The numbered parameter of a value. A statement can name it more than one time. */
+	const bind = (value: unknown) => `?${params.push(value)}`;
+	const where: string[] = [];
+	const query = options.query === null ? null : bind(options.query);
+	const folded = options.folded === null ? null : bind(options.folded);
+	if (query !== null && folded !== null) {
+		where.push(
+			`(instr(lower(p.display_name), ${query}) > 0 OR instr(a.address, ${query}) > 0
+				OR instr(p.name_folded, ${folded}) > 0 OR instr(a.address, ${folded}) > 0)`,
+		);
+	}
+	if (options.activeOnly) where.push("p.archived_at IS NULL");
+	if (options.sponsorId !== null) where.push(`p.sponsor_id = ${bind(options.sponsorId)}`);
+	if (options.after !== null) {
+		const [kind, name, id] = options.after;
+		where.push(`(p.kind, p.display_name, p.id) > (${bind(kind)}, ${bind(name)}, ${bind(id)})`);
+	}
+	const order =
+		options.byMatch && query !== null && folded !== null
+			? // The best match first: an address, or a word of the name, that starts with the query. The words
+				// of a name end at a space, a "-", a "." or an apostrophe, as in the ranking of the Chat @ list.
+				// Then the order of that ranking: the folded name, with no group of the agents.
+				`CASE WHEN substr(a.address, 1, length(${query})) = ${query} OR substr(a.address, 1, length(${folded})) = ${folded}
+					OR instr(' ' || replace(replace(replace(p.name_folded, '-', ' '), '.', ' '), char(39), ' '), ' ' || ${folded}) > 0
+				THEN 0 ELSE 1 END, p.name_folded, p.display_name, p.id`
+			: // The order of the names keeps the agents first.
+				"p.kind, p.display_name, p.id";
 	const { results } = await db
 		.prepare(
-			`SELECT ${PRINCIPAL_COLUMNS}, a.address,
-				(SELECT COUNT(*) FROM addresses b WHERE b.is_primary = 1
-					AND b.address >= substr(a.address, 1, instr(a.address, '@'))
-					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1 AS shared_local
-			FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0
-					OR instr(p.name_folded, ?6) > 0 OR instr(a.address, ?6) > 0)
-				AND (?7 = 0 OR p.archived_at IS NULL)
-				AND (?2 IS NULL OR (p.kind, p.display_name, p.id) > (?2, ?3, ?4))
-			ORDER BY
-				-- The best match first: an address, or a word of the name, that starts with the query. The words
-				-- of a name end at a space, a "-", a "." or an apostrophe, as in the ranking of the Chat @ list.
-				CASE WHEN ?8 = 1 AND (substr(a.address, 1, length(?1)) = ?1 OR substr(a.address, 1, length(?6)) = ?6
-					OR instr(' ' || replace(replace(replace(p.name_folded, '-', ' '), '.', ' '), char(39), ' '), ' ' || ?6) > 0)
-				THEN 0 ELSE 1 END,
-				-- Then the order of the ranking of the Chat @ list: the folded name, with no group of the agents.
-				-- The order of the names keeps the agents first.
-				CASE WHEN ?8 = 1 THEN p.name_folded ELSE p.kind END,
-				p.display_name, p.id
-			LIMIT ?5`,
+			`SELECT ${PRINCIPAL_COLUMNS}, a.address, ${SHARED_LOCAL} AS shared_local
+			FROM principals p CROSS JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
+			${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+			ORDER BY ${order}
+			LIMIT ${bind(options.limit + 1)}`,
 		)
-		.bind(
-			options.query,
-			options.after?.[0] ?? null,
-			options.after?.[1] ?? null,
-			options.after?.[2] ?? null,
-			options.limit + 1,
-			options.folded,
-			options.activeOnly ? 1 : 0,
-			options.byMatch ? 1 : 0,
-		)
-		.all<PrincipalRow & { shared_local: number }>();
+		.bind(...params)
+		.all<DirectoryRow>();
 	const page = results.slice(0, options.limit);
 	const last = page[page.length - 1];
 	return {
-		principals: page.map((row) => ({ ...toPrincipal(row), sharedLocal: row.shared_local === 1 })),
+		principals: page.map(toDirectoryRecord),
 		next: !options.byMatch && results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
 	};
 }

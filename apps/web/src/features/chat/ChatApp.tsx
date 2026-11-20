@@ -1,11 +1,10 @@
 import "./chat.css";
 import type { ChatRoom } from "@asterra/contracts";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
-import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { chatPath, chatThreadsPath } from "../../routes.ts";
 import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
@@ -13,11 +12,11 @@ import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
 import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
-import { mentionDirectory } from "./mentions.ts";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
 import { ThreadsView } from "./ThreadsView.tsx";
+import { PeopleProvider, usePeopleDirectory, usePeopleStore } from "./usePeople.ts";
 
 export interface ChatAppProps {
 	/** The open room, or null for the page without a room. */
@@ -43,9 +42,10 @@ export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navO
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
 	const ownId = useSession().whoami.principal.id;
-	// The directory gives the handles of the mentions, and the profiles. It loads one time for the page.
-	const principals = usePrincipals();
-	const directory = useMemo(() => mentionDirectory(principals ?? []), [principals]);
+	// The people that the views asked for: the handles of the mentions, and the names. It is not the whole
+	// directory. Each message asks for the principals that it shows.
+	const people = usePeopleStore();
+	const directory = usePeopleDirectory(people);
 
 	// The messages that waited for the server before a reload of the page go out again.
 	useEffect(() => {
@@ -65,68 +65,68 @@ export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navO
 	}
 
 	return (
-		<div className="chat-layout">
-			<ChatSidebar
-				rooms={rooms}
-				activeId={roomId}
-				threadsActive={threads}
-				unreadThreads={unreadThreads}
-				open={navOpen}
-				onClose={onCloseNav}
-				onNewRoom={() => setDialog("new-room")}
-				onBrowse={() => setDialog("browse")}
-				onNewDm={() => setDialog("new-dm")}
-			/>
-			<main id="main" className="chat-main" tabIndex={-1}>
-				{profileId !== null ? (
-					// The key gives each profile its own view, so a button of one never acts for a different one.
-					<ProfileView
-						key={profileId}
-						principalId={profileId}
-						principals={principals}
-						directory={directory}
-						onOpened={open}
-					/>
-				) : threads ? (
-					<ThreadsView tick={rooms.threadsTick} directory={directory} />
-				) : roomId === null ? (
-					<>
-						<PageHeader title="Chat" icon="chat" />
-						<div className="chat-empty chat-empty-page">
-							<span className="chat-empty-tile" aria-hidden="true">
-								<Icon name="chat" size={24} />
-							</span>
-							<h2 className="chat-empty-title">Your rooms and direct messages</h2>
-							<p>Select a room or a direct message, or start a new one.</p>
-							<p className="chat-start">
-								<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
-									New room
-								</button>
-								<button type="button" className="button" onClick={() => setDialog("browse")}>
-									Find a public room
-								</button>
-							</p>
-						</div>
-					</>
-				) : (
-					// The key gives each room its own view, so the messages of one never show in a different one.
-					<RoomView
-						key={roomId}
-						roomId={roomId}
-						focusSeq={messageSeq}
-						focusReplySeq={replySeq}
-						listed={listed}
-						listReady={rooms.status === "ready"}
-						listTick={rooms.tick}
-						onRoomsChanged={rooms.refresh}
-						directory={directory}
-					/>
+		<PeopleProvider value={people}>
+			<div className="chat-layout">
+				<ChatSidebar
+					rooms={rooms}
+					activeId={roomId}
+					threadsActive={threads}
+					unreadThreads={unreadThreads}
+					open={navOpen}
+					onClose={onCloseNav}
+					onNewRoom={() => setDialog("new-room")}
+					onBrowse={() => setDialog("browse")}
+					onNewDm={() => setDialog("new-dm")}
+				/>
+				<main id="main" className="chat-main" tabIndex={-1}>
+					{profileId !== null ? (
+						// The key gives each profile its own view, so a button of one never acts for a different one.
+						<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
+					) : threads ? (
+						<ThreadsView tick={rooms.threadsTick} directory={directory} />
+					) : roomId === null ? (
+						<>
+							<PageHeader title="Chat" icon="chat" />
+							<div className="chat-empty chat-empty-page">
+								<span className="chat-empty-tile" aria-hidden="true">
+									<Icon name="chat" size={24} />
+								</span>
+								<h2 className="chat-empty-title">Your rooms and direct messages</h2>
+								<p>Select a room or a direct message, or start a new one.</p>
+								<p className="chat-start">
+									<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
+										New room
+									</button>
+									<button type="button" className="button" onClick={() => setDialog("browse")}>
+										Find a public room
+									</button>
+								</p>
+							</div>
+						</>
+					) : (
+						// The key gives each room its own view, so the messages of one never show in a different one.
+						<RoomView
+							key={roomId}
+							roomId={roomId}
+							focusSeq={messageSeq}
+							focusReplySeq={replySeq}
+							listed={listed}
+							listReady={rooms.status === "ready"}
+							listTick={rooms.tick}
+							onRoomsChanged={rooms.refresh}
+							directory={directory}
+						/>
+					)}
+				</main>
+				{dialog === "new-room" && (
+					<NewRoomDialog onClose={() => setDialog(null)} onCreated={(room) => void open(room)} />
 				)}
-			</main>
-			{dialog === "new-room" && <NewRoomDialog onClose={() => setDialog(null)} onCreated={(room) => void open(room)} />}
-			{dialog === "browse" && <BrowseRoomsDialog onClose={() => setDialog(null)} onOpen={(room) => void open(room)} />}
-			{dialog === "new-dm" && <NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />}
-		</div>
+				{dialog === "browse" && (
+					<BrowseRoomsDialog onClose={() => setDialog(null)} onOpen={(room) => void open(room)} />
+				)}
+				{dialog === "new-dm" && <NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />}
+			</div>
+		</PeopleProvider>
 	);
 }
 

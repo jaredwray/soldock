@@ -71,7 +71,9 @@ MCP clients. The app has no UI-only path.
     Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
     Sheets are part of Drive.
   - Below a rule, the rail has **Admin** for owners, admins and the sponsors of agents. At the
-    bottom, the rail has **Settings** and the account button.
+    bottom, the rail has **Settings** and the account button. For a member, the rail asks for one
+    agent of that sponsor (`directory.list_principals` with `sponsor_id` and a limit of 1), not for
+    the directory.
   - The account button opens a panel with the name, the address and the role of the person, the
     **Appearance** choice, and **Sign out**. Escape closes the panel, and the focus goes back to
     the button.
@@ -1226,10 +1228,10 @@ MCP clients. The app has no UI-only path.
         at the start of an address or of a word of the name first, so the page has the matches that
         the ranking puts first, and no archived principal. Equal matches come in the order of their
         folded names, on the server and in the list, so the page has the best of them.
-      - The members of the room (at most 500) join that page from the directory of the page, with their
+      - The members of the room (at most 500) join that page from the people of the page, with their
         handles (`typedMentionCandidates`). So a member always comes before a principal that is not a
-        member with the same rank, also when the server has more matches than its page. When Chat no
-        longer loads the directory, the members need their handles from the server.
+        member with the same rank, also when the server has more matches than its page. The room asks
+        for its members by their ids (`directory.get_principals`), at most 100 in each call.
       - The answer of an older query never replaces a newer one, and the last answer stays while the
         next one loads, so the list does not flash. A query without accents finds a part of each word
         of a name with accents (`garcia` finds "María García").
@@ -1238,9 +1240,9 @@ MCP clients. The app has no UI-only path.
         sends the half mention, and never takes a suggestion of an older list. A change of the typed
         mention drops the waiting Enter. Ctrl+Enter still sends. A failed ask, and a wait of 3 s, end
         the wait.
-      - Only `@` alone uses the directory of the page, so the members of the room come first. The
-        mention links, the dialogs and this case still read the whole directory
-        ([jaredwray/soldock#131](https://github.com/jaredwray/soldock/issues/131)).
+      - `@` alone asks for the first page of the list, in the order of the names, with `active_only` and
+        a limit of 100. The members of the room come first, then the principals of that page. In an
+        organization with more than 100 agents, the principals after the members are agents only.
     - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
       closes the list. While the list is open, Enter does not send, and Escape does not close the
       edit box. So a send after a full handle needs a second Enter. Shift+Enter still makes a new
@@ -1260,9 +1262,21 @@ MCP clients. The app has no UI-only path.
       reader, and with no link.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
-    - The page reads the directory one time, each page of `directory.list_principals`
-      (`listAllPrincipals`). The views that ask at the same time share one read. Admin starts a
-      fresh read for each load, so the list after a save has the change. The members of the
+    - Chat reads no whole directory. Each view tells the people that it shows (`useWantPeople`), and
+      one store for the visit of Chat (`createPeople` in `people.ts`) asks the server for the ones that
+      it does not have: `directory.get_principals`, with at most 100 ids and 100 handles in each call,
+      each list as one text with commas.
+      - A message asks for its author, the principals of its mention nodes, the first 10 principals
+        of each reaction, and the handles in its text (not in code or in a link). The box asks for
+        the handles in its text, 300 ms after the last change. A room asks for its members.
+      - The asks of one render go in one call. An answer stays until the person leaves Chat, also the
+        answer "no principal". A new visit of Chat reads the people again, for example after a change
+        in Admin. After a failed call, the next view that needs a principal asks again.
+      - A mention link, a typed mention in the box and the name of a reaction show when the answer
+        comes. Until then, the mention is text and the name is "A member".
+      - The dialogs for a direct message and for the members of a room still read each page of
+        `directory.list_principals` (`listAllPrincipals`), when they open. The views that ask at the
+        same time share one read. The members of the
       room come from `chat.get_room`, again after the socket tells that the room changed, after
       each reconnect of the socket, and when the room list has a different number of members.
     - Known limit: a message from before the mention nodes has its mentions as text, and each
@@ -1274,7 +1288,9 @@ MCP clients. The app has no UI-only path.
     or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
     direct message with that principal (`chat.open_dm`). An archived principal and the own profile
     have no such button. A mention, the name of an author and the sponsor of an agent link here.
-    When the directory does not load, the profile tells so.
+    The profile reads its principal, and the sponsor of an agent, by their ids
+    (`directory.get_principals`). While the read runs, it shows what a message of the page already
+    read. When the read fails and the page has no such principal, the profile tells so.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of

@@ -1,5 +1,5 @@
 import { CHAT_LIMITS, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
@@ -12,7 +12,8 @@ import { EditFiles, LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
 import type { MentionContext } from "./mentions.ts";
 import { sameFileIds, timeLabel } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
-import { ReactionPicker, Reactions } from "./Reactions.tsx";
+import { ReactionPicker, Reactions, TITLE_NAMES } from "./Reactions.tsx";
+import { useWantPeople } from "./usePeople.ts";
 
 // One message with its actions: the rows of the room list, and the messages of the view of a thread.
 
@@ -149,6 +150,14 @@ export function MessageItem({
 		setPicking(false);
 		if (focusBack) reactButton.current?.focus();
 	}, []);
+	// The profile link of the author and the names of the reactions need their principals. The body asks
+	// for the principals of its mentions.
+	const authorId = message.author.principal_id;
+	const reactions = message.reactions;
+	const wantPeople = useWantPeople();
+	useEffect(() => {
+		wantPeople({ ids: [authorId, ...reactions.flatMap((reaction) => reaction.principal_ids.slice(0, TITLE_NAMES))] });
+	}, [wantPeople, authorId, reactions]);
 	const nameOf = (principalId: string) => mentions.directory.byId.get(principalId)?.display_name ?? "A member";
 	const author = message.author.display_name;
 	const failed = pending?.state === "failed";

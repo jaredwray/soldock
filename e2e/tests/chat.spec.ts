@@ -1279,3 +1279,62 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await editBox.press("Escape");
 	await expect(editBox).toHaveCount(0);
 });
+
+// In an organization of thousands, a read of each principal for a mention link or for the "@" list is a
+// slow read on each view (jaredwray/soldock#131). The page asks for the people that it shows.
+test("a mention links to a profile, and the @ list puts the members first, without a read of the directory", async ({
+	browser,
+}) => {
+	const tomasz = await signIn(browser, "tomasz");
+	const nadia = await signIn(browser, "nadia");
+	const name = unique("People");
+	const roomId = await createRoom(tomasz, name, [nadia]);
+	// Chidi is not a member. Each principal can see a public room, so the room makes a mention of him.
+	await postMarkdown(tomasz, roomId, "ask @chidi about the plan");
+	const page = await nadia.newPage();
+	const lists: URLSearchParams[] = [];
+	const lookups: { ids: string[]; handles: string[] }[] = [];
+	page.on("request", (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/v1/directory/principals" && request.method() === "GET") lists.push(url.searchParams);
+		if (url.pathname === "/api/v1/directory/lookup") {
+			const entries = (name: string) => url.searchParams.get(name)?.split(",") ?? [];
+			lookups.push({ ids: entries("ids"), handles: entries("handles") });
+		}
+	});
+	await openRoom(page, roomId);
+
+	// The mention is a link to the profile of its principal, which the page read by its id.
+	const mention = page.locator(".chat-message").getByRole("link", { name: "@chidi" });
+	await expect(mention).toBeVisible();
+	const chidiId = (await newest(nadia, roomId))[0]?.mentions[0] as string;
+	expect(lookups.some((lookup) => lookup.ids.includes(chidiId))).toBe(true);
+	await mention.click();
+	await expect(page).toHaveURL(new RegExp(`/chat/people/${chidiId}$`));
+	await expect(page.getByRole("heading", { name: /Chidi/ })).toBeVisible();
+	await expect(page.locator(".chat-profile-handle")).toHaveText("@chidi");
+	await expect(page.getByRole("button", { name: "Send a direct message" })).toBeVisible();
+
+	// "@" alone shows the members of the room first, then people who are not members, from one page of the list.
+	await page.goBack();
+	const box = composer(page, name);
+	await expect(box).toBeVisible();
+	await box.pressSequentially("@");
+	const options = page.getByRole("option");
+	await expect(options.first()).toContainText("Tomasz");
+	await expect(options.first()).not.toContainText("Not in this room");
+	await expect(options.filter({ hasText: "Not in this room" }).first()).toBeVisible();
+	const alone = lists.filter((list) => !list.has("query") && !list.has("sponsor_id"));
+	expect(alone.map((list) => [list.get("active_only"), list.get("limit")])).toEqual([["true", "100"]]);
+
+	// No call reads the directory: each call of the list has one page of 100 principals at most, and each
+	// lookup has the ids and the handles of the page.
+	for (const list of lists) {
+		expect(Number(list.get("limit")), list.toString()).toBeLessThanOrEqual(100);
+		expect(list.has("cursor"), list.toString()).toBe(false);
+	}
+	for (const lookup of lookups) {
+		expect(lookup.ids.length).toBeLessThanOrEqual(100);
+		expect(lookup.handles.length).toBeLessThanOrEqual(100);
+	}
+});

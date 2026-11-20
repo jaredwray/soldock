@@ -164,6 +164,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     text counts as no mention.
   - A caller with `chat.write` learns the id of a principal that a mention finds. An id is not a
     secret: `directory.list_principals` gives the ids with the names and the addresses.
+  - A client shows a mention from the ids and the handles of a message: `directory.get_principals`
+    gives the principals of the ids, and the principal that each handle in a text names, with the
+    rules of the room ([`identity`](../identity/README.md)). So no client reads the whole directory.
   - Known limits: a mention node has no marks, so `**@bot**` is a mention without bold. A label is
     the handle of the time of the write: after a delete, a new principal can get the same handle, and
     the Markdown of an old message then finds the new principal.

@@ -58,6 +58,7 @@ import {
 } from "./model.ts";
 import { createSendSettler } from "./settle.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
+import { useWantPeople } from "./usePeople.ts";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -73,7 +74,7 @@ export interface RoomViewProps {
 	listTick: number;
 	/** Gets the room list again, after a change that this view made. */
 	onRoomsChanged: () => Promise<void>;
-	/** The handles of the people and the agents, for the mentions. */
+	/** The people and the agents that the page asked for, with their handles, for the mentions. */
 	directory: MentionDirectory<Principal>;
 }
 
@@ -305,6 +306,12 @@ export function RoomView({
 	useEffect(() => {
 		if (fresh && listedCount !== undefined && listedCount !== members.length) void loadMembers();
 	}, [fresh, listedCount, members.length, loadMembers]);
+	// The `@` list puts the members first, with their handles. The members are at most 500, so this read
+	// follows the room, not the directory. A member that a message already asked for is not read again.
+	const wantPeople = useWantPeople();
+	useEffect(() => {
+		wantPeople({ ids: members.map((member) => member.principal_id) });
+	}, [wantPeople, members]);
 	const ownRole = (listed ?? view.room)?.role ?? null;
 	const mentions = useMemo<MentionContext>(
 		() => ({

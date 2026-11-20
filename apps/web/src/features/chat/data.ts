@@ -8,6 +8,7 @@ import {
 	type DirectoryEntry,
 	EVENTS_SOCKET_PATH,
 	EVENTS_SOCKET_PROTOCOL,
+	type InputOf,
 	PrincipalEvent,
 } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -51,14 +52,22 @@ const MENTION_SEARCH_LIMIT = 100;
 /** The longest wait for an answer of the `@` list, after which the list stops to wait (`pending`), in ms. */
 const MENTION_WAIT_MAX_MS = 3_000;
 
+/** The input of `directory.list_principals` for a typed mention: one page, without the archived principals. */
+function mentionSearchInput(query: string): InputOf<"directory.list_principals"> {
+	const page = { active_only: "true", limit: MENTION_SEARCH_LIMIT } as const;
+	// The order of the best match needs a query. "@" alone gets the first page in the order of the names.
+	return query === "" ? page : { ...page, query: query.slice(0, DIRECTORY_LIMITS.queryChars), order: "match" };
+}
+
 /**
  * The principals for a typed mention, from the server: `directory.list_principals` with the query,
  * `active_only` and the order of the best match first, `MENTION_SEARCH_MS` after the last change of the
- * query, so one ask reads at most `MENTION_SEARCH_LIMIT` principals and the page needs no directory. The
+ * query, so one ask reads at most `MENTION_SEARCH_LIMIT` principals and the page needs no directory. An
+ * empty query ("@" alone) asks for the first page of the list, in the order of the names. The
  * answer of an older query never replaces a newer one. The last answer stays while the next one loads:
  * the caller ranks it with the current query, so the list does not flash. `pending` is true until the
  * answer of the current query comes, its ask fails, or `MENTION_WAIT_MAX_MS` passes (the last answer then
- * stays). Null (no query) gives an empty list.
+ * stays). Null (no typed mention) gives an empty list.
  */
 export function useMentionSearch(query: string | null): { found: readonly DirectoryEntry[]; pending: boolean } {
 	const [state, setState] = useState<{ found: readonly DirectoryEntry[]; answered: string | null }>({
@@ -77,16 +86,9 @@ export function useMentionSearch(query: string | null): { found: readonly Direct
 		};
 		const giveUp = setTimeout(stopWaiting, MENTION_SEARCH_MS + MENTION_WAIT_MAX_MS);
 		const timer = setTimeout(() => {
-			api
-				.call("directory.list_principals", {
-					query: query.slice(0, DIRECTORY_LIMITS.queryChars),
-					active_only: "true",
-					order: "match",
-					limit: MENTION_SEARCH_LIMIT,
-				})
-				.then((page) => {
-					if (ask === asked.current) setState({ found: page.principals, answered: query });
-				}, stopWaiting);
+			api.call("directory.list_principals", mentionSearchInput(query)).then((page) => {
+				if (ask === asked.current) setState({ found: page.principals, answered: query });
+			}, stopWaiting);
 		}, MENTION_SEARCH_MS);
 		return () => {
 			clearTimeout(timer);

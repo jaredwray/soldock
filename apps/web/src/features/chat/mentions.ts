@@ -24,8 +24,9 @@ export {
 // part of the address before the "@", for example "@ada" for ada@example.com. When two principals have
 // the same part (on two mail domains), each of them has the full address as its handle, for example
 // "@ada@example.org". A name alias (the first name, or the full name without spaces) finds a principal
-// too, when only one principal has it and it is no handle. The room stores the text only. Each client finds the principal of a handle in
-// the directory, so a person and an agent write and read the same mention.
+// too, when only one principal has it and it is no handle. The room makes a mention node of each one.
+// A client asks the server for the principal of a handle in a text (`directory.get_principals`), so a
+// person and an agent write and read the same mention, and no client needs the whole directory.
 
 /** The text from the "@" to the caret, while the person types a mention. A name can have each letter. */
 const TYPED = new RegExp(`${MENTION_NOT_AFTER}@([\\p{L}\\p{N}._+\\-]*(?:@[\\p{L}\\p{N}.\\-]*)?)$`, "u");
@@ -35,8 +36,9 @@ const TYPED = new RegExp(`${MENTION_NOT_AFTER}@([\\p{L}\\p{N}._+\\-]*(?:@[\\p{L}
  */
 const ENDS_WORD = /^(?:[\s,;:!?)\]}'"’”]|\.(?![\p{L}\p{N}]))/u;
 
-/** What the suggestions of a mention need: the handles of the directory, the members of the room, and the writer. */
+/** What the mentions of a view need: the people of the page, the members of the room, and the writer. */
 export interface MentionContext {
+	/** The principals that the views asked for, with their handles: not the directory of the organization. */
 	directory: MentionDirectory;
 	memberIds: ReadonlySet<string>;
 	ownId: string;
@@ -122,27 +124,11 @@ export interface MentionSuggestion<P extends MentionPerson = MentionPerson> {
 const MENTION_SUGGESTIONS = 8;
 
 /**
- * The principals for a typed mention. A match at the start of a handle, an address or a word of the
- * name comes first. Then the members of the room come first, then the order of the names. The list
- * leaves out the person who writes, and each archived principal.
- */
-export function mentionSuggestions<P extends MentionPerson>(
-	directory: MentionDirectory<P>,
-	query: string,
-	options: { memberIds: ReadonlySet<string>; ownId: string },
-): MentionSuggestion<P>[] {
-	return rankMentions(
-		directory.people.map((person) => ({ person, handle: directory.handleOf.get(person.id) ?? null })),
-		query,
-		options,
-	);
-}
-
-/**
- * The principals for a typed name: the members of the room (at most 500), with their handles from the
- * directory of the page, and the page of the server (`found`, with the handle of the server). So a member
- * always comes before a principal that is not a member with the same rank, also when the server has more
- * matches than its page. A principal in both comes one time.
+ * The principals for a typed mention: the members of the room (at most 500), with their handles from the
+ * people of the page (`directory`: the room asks for its members), and the page of the server (`found`,
+ * with the handle of the server). So a member always comes before a principal that is not a member with
+ * the same rank, also when the server has more matches than its page. A principal in both comes one time.
+ * A member whose read did not come yet is not in the list until it comes.
  */
 export function typedMentionCandidates<P extends MentionPerson>(
 	directory: MentionDirectory<P>,
@@ -161,8 +147,10 @@ export function typedMentionCandidates<P extends MentionPerson>(
 }
 
 /**
- * The suggestions from principals with their handles, with the rules of `mentionSuggestions`. The handles
- * can come from the server (`directory.list_principals` gives each one), so a list needs no directory.
+ * The suggestions for a typed mention, from principals with their handles. A match at the start of a
+ * handle, an address or a word of the name comes first. Then the members of the room come first, then the
+ * order of the names. The handles come from the server (`directory.list_principals` and
+ * `directory.get_principals` give each one), so a list needs no directory of the organization.
  * A principal without a handle, the writer and each archived principal stay out.
  */
 export function rankMentions<P extends MentionPerson>(

@@ -1,7 +1,16 @@
 import type { Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
-import { listAllPrincipals } from "../../lib/usePrincipals.ts";
+import { api } from "../../lib/api.ts";
 import { isOrgAdmin } from "../auth/session.tsx";
+
+/**
+ * True when the person sponsors an agent. The list of one sponsor with a limit of 1 is one bounded read:
+ * each page of the app asks this, so it must not read the directory.
+ */
+export async function sponsorsAgent(principalId: string): Promise<boolean> {
+	const page = await api.call("directory.list_principals", { sponsor_id: principalId, limit: 1 });
+	return page.principals.length > 0;
+}
 
 /**
  * True when the person can open the admin page. Owners and admins can. A member can when the member
@@ -14,12 +23,12 @@ export function useAdminAccess(principal: Principal): boolean {
 	useEffect(() => {
 		if (elevated) return;
 		let active = true;
-		listAllPrincipals().then(
-			(principals) => {
-				if (active) setSponsor(principals.some((p) => p.kind === "agent" && p.sponsor_id === principal.id));
+		sponsorsAgent(principal.id).then(
+			(sponsors) => {
+				if (active) setSponsor(sponsors);
 			},
 			() => {
-				// Without the directory, the link stays hidden. The admin page itself shows the error.
+				// Without the answer, the link stays hidden. The admin page itself shows the error.
 			},
 		);
 		return () => {

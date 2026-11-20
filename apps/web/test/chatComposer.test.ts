@@ -14,6 +14,7 @@ import {
 	textMentions,
 	toggleCodeBlock,
 	typedEmoji,
+	typedHandles,
 	typedMention,
 } from "../src/features/chat/composerCommands.ts";
 import {
@@ -484,6 +485,18 @@ describe("a mention in the box", () => {
 				),
 			),
 		).toEqual([]);
+	});
+
+	// The box shows a typed mention from the answer of the server for its handle. A handle that the box
+	// does not ask for stays text in the box, and the room still makes a mention of it.
+	it("gives the handles of its texts for the read of their principals, each one time, and none from code or a link", () => {
+		const link = marks.link.create({ href: "https://example.com/" });
+		const box = doc(
+			p(t("@Dot and @dot, "), t("@captain@example.com", "strong"), t(" mail dot@example.com")),
+			p(t("@code", "code"), chatSchema.text("@linked", [link])),
+			nodes.code_block.create(null, chatSchema.text("@block")),
+		);
+		expect(typedHandles(box)).toEqual(["dot", "captain@example.com"]);
 	});
 
 	it("has no mention in a code block, in code, or away from an @", () => {

@@ -9,7 +9,7 @@
 | **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
+| **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads` and `chat_addressed` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -131,6 +131,13 @@ contract of the socket.
   in the order of the names, then the ids. A page has 100 principals, or `limit`, at most 200
   (`DIRECTORY_LIMITS`). `next_cursor` holds the kind, the name and the id of the last principal of
   the page (`listPrincipalPage`).
+  - The index `principals_directory_order` (migration `0019`) has this order. A page in the order of the
+    names reads the index in its order and stops at its limit, so its read follows the limit and not the
+    directory. The statement has only the conditions of the call, and its join keeps the principals
+    first. One statement with a condition for each option, or an order with a `CASE`, hides the index
+    from the planner: each page then reads and sorts the whole table.
+  - `sponsor_id` keeps the agents of one sponsor, from the index `principals_sponsor`. The web app asks
+    with a limit of 1 for the admin link of a member (`sponsorsAgent`): "does this person sponsor an agent".
   - `query` keeps the principals whose display name or address has the text. The match is in each
     letter case of A to Z only: `lower` of SQLite changes no other letter. The handler changes only A
     to Z of the query too, so an exact copy (`Élodie`) finds it.
@@ -153,10 +160,25 @@ contract of the socket.
     address when a different principal has the same part or the part is a group word (`here`,
     `channel`). The count of the same part reads the index of the addresses: an address with the
     part `ada` sorts from `ada@` to `adaA`.
-  - The web app reads each page (`listAllPrincipals`). The views that ask at the same time share one
-    read. Admin changes the directory, so it starts a fresh read for each load (`fresh`). The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
-    `@` list asks with `query` for each typed name. The mention links of a message and the dialogs still
-    use this whole directory.
+  - Admin, the share dialog of Drive, the webhook settings and the member dialogs of Chat read each
+    page (`listAllPrincipals` of the web app), when they open. The views that ask at the same time share
+    one read. Admin changes the directory, so it starts a fresh read for each load (`fresh`). The pages
+    are not one snapshot, so the web app keeps the first entry of each id.
+  - A view of Chat reads no whole directory. The `@` list asks for one page for each typed mention. A
+    message, a profile and the members of a room use `directory.get_principals`.
+- `directory.get_principals` gives principals without a list: the principal of each id in `ids`, and the
+  principal that each entry of `handles` names. One call takes at most 100 ids and 100 handles
+  (`DIRECTORY_LIMITS.lookupSize`). It is a read, so it is a `GET` (`/api/v1/directory/lookup`), and the
+  input of a `GET` has only scalars. So `ids` and `handles` are each one text with a comma between the
+  entries, of at most 4,000 characters. No id and no handle has a comma.
+  - Each principal has the fields and the `handle` of `directory.list_principals` (`getDirectoryRecords`:
+    one read by the ids, with the same count of a shared local part). An id of no principal and a
+    deleted principal give no entry.
+  - A handle is the text after the `@` of a mention in Chat: a handle, a full address or a name alias.
+    `mentions` has the principal of each handle that names one. The handler reads the candidates of the
+    handles (`mentionCandidates`) and applies `mentionDirectory`, as the room does for a message. So a
+    client shows the same mentions as the room makes, and needs no directory.
+  - The read tells nothing new: a caller with `directory.read` can list each principal.
   - The room of a Chat message reads only the principals that its mentions can name
     (`mentionCandidates`): the principals of its node ids, each address equal to a key, each principal
     with the local part of a key or of an id (the range from `ada@` to `adaA`), and each name alias

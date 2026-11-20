@@ -20,10 +20,11 @@ export const EmailAddress = z
 	);
 
 /** A prefixed, time-sortable id such as `thr_01JD…`. */
+/** The pattern of the part of an id after its prefix and the "_". */
+export const ID_CHARS = "[0-9A-HJKMNP-TV-Z]{26}";
+
 export function prefixedId(prefix: string) {
-	return z
-		.string()
-		.regex(new RegExp(`^${prefix}_[0-9A-HJKMNP-TV-Z]{26}$`), `must be an id that starts with ${prefix}_`);
+	return z.string().regex(new RegExp(`^${prefix}_${ID_CHARS}$`), `must be an id that starts with ${prefix}_`);
 }
 
 /** An ISO 8601 timestamp in UTC. */
