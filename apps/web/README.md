@@ -1262,16 +1262,17 @@ MCP clients. The app has no UI-only path.
       reader, and with no link.
     - The list is above the box for a new message. Under the edit box, the list is part of the
       message list, so the message list cannot cut it off.
-    - Chat reads no whole directory. Each view tells the people that it shows (`useWantPeople`), and
-      one store for the visit of Chat (`createPeople` in `people.ts`) asks the server for the ones that
-      it does not have: `directory.get_principals`, with at most 100 ids and 100 handles in each call,
-      each list as one text with commas.
+    - Chat reads no whole directory. Each view tells the people that it shows (`useWantPeople`).
+      One store for the visit of Chat (`createPeople` in `people.ts`) asks the server for the people
+      that it does not have (`directory.get_principals`). One call has at most 100 ids and 100
+      handles, each list as one text with commas.
       - A message asks for its author, the principals of its mention nodes, the first 10 principals
         of each reaction, and the handles in its text (not in code or in a link). The box asks for
         the handles in its text, 300 ms after the last change. A room asks for its members.
       - The asks of one render go in one call. An answer stays until the person leaves Chat, also the
         answer "no principal". A new visit of Chat reads the people again, for example after a change
-        in Admin. After a failed call, the next view that needs a principal asks again.
+        in Admin. The store sends a failed call again after 2 s, 2 times at most. After the last
+        failure, the next view that needs a principal asks again.
       - A mention link, a typed mention in the box and the name of a reaction show when the answer
         comes. Until then, the mention is text and the name is "A member".
       - The dialogs for a direct message and for the members of a room still read each page of

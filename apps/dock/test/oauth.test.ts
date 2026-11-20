@@ -350,6 +350,27 @@ describe("OAuth approval", () => {
 		]);
 	});
 
+	// A connection reads the people of the directory only with the scope that the person approved.
+	it("lets a connection get principals by id and by handle only with directory.read", async () => {
+		const owner = await setupOwner();
+		const { tokens: without } = await connectNewAgent(owner);
+		expect(await codeOf(api(without.access_token)("directory.get_principals", { ids: owner.id }))).toBe("forbidden");
+
+		const clientId = await registerClient();
+		const { requestId, verifier } = await startAuthorization(clientId);
+		const approved = await owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			new_agent: { display_name: "Reader", address: "reader@dock.test" },
+			scopes: ["account.read", "directory.read"],
+		});
+		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
+		const found = await api(tokens.access_token)("directory.get_principals", { ids: owner.id, handles: "reader" });
+		expect(found.principals.map((p) => p.id)).toEqual([owner.id, approved.principal.id]);
+		expect(found.mentions).toEqual([{ handle: "reader", principal_id: approved.principal.id }]);
+		const tool = await callTool(tokens.access_token, "directory_get_principals", { handles: "owner" });
+		expect(tool.structuredContent).toMatchObject({ mentions: [{ handle: "owner", principal_id: owner.id }] });
+	});
+
 	it("lets a person deny a request, and the client gets access_denied with its state", async () => {
 		const owner = await setupOwner();
 		const { requestId } = await startAuthorization(await registerClient());

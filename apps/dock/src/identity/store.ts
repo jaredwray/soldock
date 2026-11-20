@@ -357,10 +357,12 @@ export interface DirectoryPage {
  * the address has: `lower` of SQLite changes only A to Z. Each principal also gets `sharedLocal`, for its
  * mention handle.
  *
- * The statement has only the conditions of the call, and the CROSS JOIN keeps the principals first. So a
- * page in the order of the names reads the index `principals_directory_order` in its order and stops at
- * its limit, and a page of one sponsor reads the index `principals_sponsor`. A condition for each option
- * in one statement hides the two indexes from the planner, and so does an order with a CASE.
+ * The statement has only the conditions of the call, and the CROSS JOIN keeps the principals first.
+ * - A page in the order of the names reads the index `principals_directory_order` in its order. It stops
+ *   at its limit.
+ * - A page of one sponsor reads the index `principals_sponsor`.
+ * - A condition for each option in one statement hides the two indexes from the planner. An order with
+ *   a CASE does this too.
  */
 export async function listPrincipalPage(
 	db: D1Database,

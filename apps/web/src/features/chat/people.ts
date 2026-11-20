@@ -49,10 +49,15 @@ export interface People {
 	subscribe(listener: () => void): () => void;
 }
 
+/** The times that the store sends a failed call again. */
+const RETRIES = 2;
+/** The wait before the store sends a failed call again, in ms. */
+const RETRY_MS = 2000;
+
 /**
  * The directory of the answers. A handle from the server is the handle of one principal, and a full
  * address is always a handle, as in `mentionDirectory`. A name alias is a handle that the server found
- * (`named`). A principal that no view asked for by its handle or alias is still found by its own handle.
+ * (`named`). The own handle of a principal also finds it, when no view asked for that handle.
  */
 function directoryOf(
 	people: ReadonlyMap<string, DirectoryEntry | null>,
@@ -84,8 +89,11 @@ function directoryOf(
  * - One call has at most `DIRECTORY_LIMITS.lookupSize` ids and as many handles (`takeChunk`). More wait
  *   for the next call. A handle longer than an address names nobody, so the store does not ask for it.
  * - An answer stays for the life of the store: one visit of Chat. An id or a handle of no principal
- *   stays too, so a deleted principal is not asked for again.
- * - After a failed call, its ids and handles are open again: the next `want` of one asks again.
+ *   stays too, so the store does not ask for a deleted principal again.
+ * - The store sends a failed call again, `RETRY_MS` after each failure, `RETRIES` times at most. A view
+ *   that shows asks one time only, so without this a lost answer hides its people until the view goes.
+ *   After the last failure, the ids and handles of the call are open again: the next `want` of one asks
+ *   again.
  */
 export function createPeople(lookup: Lookup): People {
 	/** The answers: the principal of an id, or null for an id of no principal. */
@@ -99,12 +107,24 @@ export function createPeople(lookup: Lookup): People {
 	let current = directoryOf(people, named);
 	let running = false;
 
+	/** One call, and the same call again after each failure: `RETRIES` times at most, `RETRY_MS` apart. */
+	async function lookupWithRetries(input: Parameters<Lookup>[0]): ReturnType<Lookup> {
+		for (let failures = 0; ; failures++) {
+			try {
+				return await lookup(input);
+			} catch (error) {
+				if (failures === RETRIES) throw error;
+				await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+			}
+		}
+	}
+
 	async function run(): Promise<void> {
 		while (queue.ids.length > 0 || queue.handles.length > 0) {
 			const ids = queue.ids.length > 0 ? takeChunk(queue.ids) : [];
 			const handles = queue.handles.length > 0 ? takeChunk(queue.handles) : [];
 			try {
-				const answer = await lookup({
+				const answer = await lookupWithRetries({
 					...(ids.length > 0 ? { ids: ids.join(",") } : {}),
 					...(handles.length > 0 ? { handles: handles.join(",") } : {}),
 				});

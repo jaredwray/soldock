@@ -1327,6 +1327,22 @@ test("a mention links to a profile, and the @ list puts the members first, witho
 	const alone = lists.filter((list) => !list.has("query") && !list.has("sponsor_id"));
 	expect(alone.map((list) => [list.get("active_only"), list.get("limit")])).toEqual([["true", "100"]]);
 
+	// A plain Enter at once after "@" waits for the list. It takes the first member, and sends no message.
+	await box.press("Control+a");
+	await box.press("Delete");
+	const page2 = await hold(
+		page,
+		(url) => url.pathname === "/api/v1/directory/principals" && !url.searchParams.has("query"),
+		"GET",
+	);
+	await box.pressSequentially("@");
+	await box.press("Enter");
+	await expect(box).toHaveText("@");
+	page2.release();
+	await expect(box).toHaveText(/^@tomasz\s$/);
+	await expect(rowsWithText(page, "@")).toHaveCount(0);
+	expect((await newest(nadia, roomId)).map((message) => message.text)).toEqual(["ask @chidi about the plan"]);
+
 	// No call reads the directory: each call of the list has one page of 100 principals at most, and each
 	// lookup has the ids and the handles of the page.
 	for (const list of lists) {

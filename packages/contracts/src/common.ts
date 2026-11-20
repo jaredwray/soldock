@@ -19,10 +19,10 @@ export const EmailAddress = z
 		"must be one email address, such as ada@example.com",
 	);
 
-/** A prefixed, time-sortable id such as `thr_01JD…`. */
 /** The pattern of the part of an id after its prefix and the "_". */
 export const ID_CHARS = "[0-9A-HJKMNP-TV-Z]{26}";
 
+/** A prefixed, time-sortable id such as `thr_01JD…`. */
 export function prefixedId(prefix: string) {
 	return z.string().regex(new RegExp(`^${prefix}_${ID_CHARS}$`), `must be an id that starts with ${prefix}_`);
 }

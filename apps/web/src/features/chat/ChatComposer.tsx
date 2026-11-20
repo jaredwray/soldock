@@ -389,7 +389,7 @@ export function ChatComposer({
 
 	// A mention that the person typed, and did not take from the list, shows as a mention too: the room
 	// makes a mention of it (`textMentions`). The box asks for the principals of the handles in its text,
-	// a moment after the last change, so a handle that the person still types is not asked for at each key.
+	// a moment after the last change, so it does not ask at each key for a handle that the person still types.
 	const doc = editorState.doc;
 	const wantPeople = useWantPeople();
 	useEffect(() => {

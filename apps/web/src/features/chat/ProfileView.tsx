@@ -1,4 +1,4 @@
-import type { ChatRoom, DirectoryEntry, Principal } from "@asterra/contracts";
+import { ApiError, type ChatRoom, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
@@ -40,8 +40,11 @@ function useProfile(principalId: string): ProfileRead {
 			const person = await one(principalId);
 			const sponsor = person?.sponsor_id ? await one(person.sponsor_id).catch(() => "failed" as const) : null;
 			if (active) setRead({ person, sponsor });
-		})().catch(() => {
-			if (active) setRead("failed");
+		})().catch((error: unknown) => {
+			if (!active) return;
+			// The path can hold a text that is no id. The server refuses it, and no principal has it.
+			const noSuchId = error instanceof ApiError && error.code === "invalid";
+			setRead(noSuchId ? { person: null, sponsor: null } : "failed");
 		});
 		return () => {
 			active = false;

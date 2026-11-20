@@ -9,8 +9,8 @@ const PeopleContext = createContext<People | null>(null);
 export const PeopleProvider = PeopleContext.Provider;
 
 /**
- * The store of the people for one visit of Chat: one store for each view below `PeopleProvider`, so a
- * principal is read one time. A new visit of Chat makes a new store, so it reads the people again, for
+ * The store of the people for one visit of Chat: one store for each view below `PeopleProvider`, so the
+ * page reads a principal one time. A new visit of Chat makes a new store, so it reads the people again, for
  * example after a change in Admin.
  */
 export function usePeopleStore(): People {
