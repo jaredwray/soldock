@@ -11,7 +11,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | --- | --- |
 | `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, `anyOfScopes`, callers, annotations, input and output schemas, errors |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
-| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox`, `chat.room`, `chat.rooms`, `drive.item` and `drive.space` |
+| `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox`, `chat.room`, `chat.rooms`, `chat.addressed`, `drive.item` and `drive.space` |
 | `src/webhooks.ts` | The endpoint operations, the event list, `WEBHOOK_LIMITS` and `anyOfScopes` for the endpoint operations. Also the filters of a chat subscription (`CHAT_WEBHOOK_FILTERS`, `defaultChatWebhookFilter`) and the reasons of a chat event (`CHAT_EVENT_REASONS`) |
 | `src/mcp-events.ts` | The events of MCP Events: `mcpEventList` has, for each webhook event, its description, the schema of its arguments and the schema of its `data`. Also `MCP_EVENT_LIMITS`. `events/subscribe` is a method of the MCP protocol, so it is not an operation |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the mail subscription operations |

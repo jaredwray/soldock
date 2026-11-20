@@ -50,6 +50,14 @@ export type ChatWebhookFilter = (typeof CHAT_WEBHOOK_FILTERS)[number];
  */
 export const CHAT_EVENT_REASONS = ["author", "mention", "dm", "thread_reply", "room"] as const;
 export type ChatEventReason = (typeof CHAT_EVENT_REASONS)[number];
+/** The reasons of a change that is for its receiver: each reason but `room`. The filter `addressed` sends these. */
+export const CHAT_ADDRESSED_REASONS = [
+	"author",
+	"mention",
+	"dm",
+	"thread_reply",
+] as const satisfies readonly ChatEventReason[];
+export type ChatAddressedReason = (typeof CHAT_ADDRESSED_REASONS)[number];
 
 /** The filter of a new chat subscription without `filter`: an agent gets only the messages for it. */
 export function defaultChatWebhookFilter(targetKind: "human" | "agent"): ChatWebhookFilter {

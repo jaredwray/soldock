@@ -384,13 +384,17 @@ MCP clients. The app has no UI-only path.
     A line says **All events** when the target can send no more events.
     A stopped webhook and a stopped event show the reason.
   - **Add webhook** and **Edit** open the same dialog. The dialog has the URL, the label, and one group of
-    check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events.
+    check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events:
+    **All three changes** and **All drive events**.
     Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
     A star sends nothing. Chat creates no browser storage.
   - Chat has the menu **Messages**: **Each message**, or **Direct messages, mentions and followed threads**
     (the filter `addressed` of `chat.create_webhook_subscription`). The menu applies to each chat event of the
-    target. It starts with the filter of the saved events. Without a saved event, it starts with the default
-    of the server: an agent gets only the messages for it, and a person gets each message. The dialog always
+    target. The check boxes are changes to the messages of the menu, under the heading **Send a POST for**.
+    A hint under the menu tells what each check box sends for the choice. With the second choice, an edit counts
+    when the message is for the target after the edit. A delete counts when the message was for the target
+    before the delete, or when a different member deletes a message of the target. The menu starts with the
+    filter of the saved events. Without a saved event, it starts with the default of the server: an agent gets only the messages for it, and a person gets each message. The dialog always
     sends the filter of the menu. A subscription has no update operation, so a different choice deletes each
     saved chat subscription of the target and creates it again. A saved event that the person clears and
     sets again keeps its saved filter, unless the person chose a filter in the menu. A person who cannot
@@ -1244,6 +1248,10 @@ MCP clients. The app has no UI-only path.
     - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
       space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
       follows it.
+    - A full handle, name alias or group that the person types, and does not take from the list, is
+      a mention too. It stays text in the box, and the server makes a node of it. The box shows it
+      with the fill of a mention (`textMentions`), with the rules of the server: no mention in code,
+      in a link or in an address, and none that touches a letter, a digit or a mention node.
     - After the people, the list has `@here` and `@channel` for their start
       (`groupSuggestions`), with "Mention each member of this room". The box puts a group node in
       the body (`insertTypedGroupMention`). The list shows the groups only when the room takes them

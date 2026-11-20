@@ -4,7 +4,7 @@ import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
-import { listFollowedThreads, listJoinedRooms, withOwnState } from "./principal-rooms.ts";
+import { listAddressedChanges, listFollowedThreads, listJoinedRooms, withOwnState } from "./principal-rooms.ts";
 import {
 	type ActorRecord,
 	messageOutput,
@@ -174,6 +174,23 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			})),
 			next_cursor: page.nextCursor,
 			unread_threads: page.unreadThreads,
+		};
+	},
+
+	async "chat.list_addressed"(call, input) {
+		const page = await listAddressedChanges(call.env, call.caller.id, {
+			cursor: input.cursor ?? null,
+			limit: input.limit ?? DEFAULT_PAGE,
+		});
+		if (page === null) {
+			throw new OperationError(
+				"invalid",
+				"The cursor is not valid. Use next_cursor from the last page of the same list.",
+			);
+		}
+		return {
+			changes: page.changes.map(({ room, change }) => ({ ...change, room: toRoom(room), at: iso(change.at) })),
+			next_cursor: page.nextCursor,
 		};
 	},
 

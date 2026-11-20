@@ -19,6 +19,9 @@ export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
 export {
+	type ChatAddressedEntry,
+	type ChatAddressedQuery,
+	type ChatAddressedState,
 	type ChatRoomEntry,
 	type ChatRoomQuery,
 	type ChatRoomState,

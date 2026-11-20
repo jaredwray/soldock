@@ -784,11 +784,13 @@ describe("the scopes of a key", () => {
 		);
 		expect(await codeOf(read("chat.follow_thread", { ...thread, following: true }))).toBe("forbidden");
 		expect((await read("chat.list_threads")).threads).toEqual([]);
+		expect((await read("chat.list_addressed")).changes).toEqual([]);
 		expect(await codeOf(read("chat.mark_thread_read", thread))).toBe("forbidden");
 
 		const { api_key: mailOnly } = await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] });
 		expect(await codeOf(api(mailOnly.secret)("chat.list_rooms"))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_threads"))).toBe("forbidden");
+		expect(await codeOf(api(mailOnly.secret)("chat.list_addressed"))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_replies", thread))).toBe("forbidden");
 
@@ -1578,7 +1580,8 @@ describe("the mention count", () => {
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		// The room goes back to the schema before the table: the migrations after it are undone too, the
-		// table of earlier versions, the columns of threads, the table of follows, and the files and links.
+		// table of earlier versions, the columns of threads, the table of follows, the files and links, and
+		// the change for each member.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE mentions");
@@ -1598,7 +1601,8 @@ describe("the mention count", () => {
 			]) {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 6 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("ALTER TABLE members DROP COLUMN addressed_json");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 7 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -2199,7 +2203,8 @@ describe("threads", () => {
 			sql.exec("DROP TABLE message_files");
 			sql.exec("DROP TABLE link_jobs");
 			sql.exec("ALTER TABLE messages DROP COLUMN links_json");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 3 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("ALTER TABLE members DROP COLUMN addressed_json");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 4 AS TEXT) WHERE key = 'schema_version'");
 		});
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message
@@ -2235,6 +2240,73 @@ describe("threads", () => {
 			["message", parent.id, socket.version + 4],
 		]);
 		socket.socket.close();
+	});
+});
+
+describe("the changes for a principal", () => {
+	// An agent in many busy rooms must find the messages for it with one call, and read no other message.
+	it("lists the newest change for a principal in each room, with the reason, and no other change", async () => {
+		const launch = await createRoom(ada, "public", "Launch", [bot.id, owner.id]);
+		const ops = await createRoom(bot, "private", "Ops", [ada.id]);
+		const addressed = async (actor: Actor, input: { cursor?: string; limit?: number } = {}) =>
+			await actor.call("chat.list_addressed", input);
+		const shown = (page: Awaited<ReturnType<typeof addressed>>) =>
+			page.changes.map((change) => [change.room.name, change.event, change.reason, change.message_id]);
+
+		// A message of a room that names nobody is for nobody. A change of the agent is not for the agent.
+		await post(ada, launch.id, "We ship on Friday.");
+		const alert = await post(bot, ops.id, "Disk is full");
+		const named = await post(ada, launch.id, "@bot can you check the invoices?");
+		await soon(async () =>
+			expect(shown(await addressed(bot))).toEqual([["Launch", "chat.message.created", "mention", named.id]]),
+		);
+		const [entry] = (await addressed(bot)).changes;
+		expect(entry).toMatchObject({ parent_id: null, author_id: ada.id, version: named.version });
+		expect(entry?.room).toMatchObject({ id: launch.id, kind: "public", role: "member", mention_count: 1 });
+		// The entry has no text of the message.
+		expect(JSON.stringify(entry)).not.toContain("invoices");
+
+		// A reply in a followed thread, and a direct message. The newest change is first.
+		const answer = (await ada.call("chat.post_message", { room_id: ops.id, parent_id: alert.id, text: "On it" }))
+			.message;
+		const { room: dm } = await owner.call("chat.open_dm", { principal_id: bot.id });
+		const hello = await post(owner, dm.id, "Hello");
+		await soon(async () =>
+			expect(shown(await addressed(bot))).toEqual([
+				[null, "chat.message.created", "dm", hello.id],
+				["Ops", "chat.message.created", "thread_reply", answer.id],
+				["Launch", "chat.message.created", "mention", named.id],
+			]),
+		);
+		expect((await addressed(bot)).changes[1]).toMatchObject({ parent_id: alert.id, author_id: ada.id });
+		// The changes of the agent are for Ada only when they have a reason: no reply, no mention, no entry.
+		expect(shown(await addressed(ada))).toEqual([]);
+
+		// Pages, with the cursor of the last entry.
+		const first = await addressed(bot, { limit: 2 });
+		expect([shown(first).map((row) => row[3]), first.next_cursor === null]).toEqual([[hello.id, answer.id], false]);
+		const rest = await addressed(bot, { limit: 2, cursor: first.next_cursor ?? "" });
+		expect([shown(rest).map((row) => row[3]), rest.next_cursor]).toEqual([[named.id], null]);
+		expect(await codeOf(addressed(bot, { cursor: "not-a-cursor" }))).toBe("invalid");
+
+		// One room has one entry: a later change for the agent replaces it, and its room moves to the top.
+		// The owner of a room deletes a message of the agent: the reason is `author`.
+		const note = await post(bot, launch.id, "The invoices are correct.");
+		await ada.call("chat.delete_message", { room_id: launch.id, message_id: note.id });
+		await soon(async () =>
+			expect(shown(await addressed(bot))[0]).toEqual(["Launch", "chat.message.deleted", "author", note.id]),
+		);
+		expect((await addressed(bot)).changes).toHaveLength(3);
+		// A later message that is not for the agent keeps the entry.
+		const later = await post(ada, launch.id, "Thank you all.");
+		await soon(async () => expect((await joined(bot))[0]).toMatchObject({ id: launch.id, last_seq: later.seq }));
+		expect(shown(await addressed(bot))[0]).toEqual(["Launch", "chat.message.deleted", "author", note.id]);
+
+		// A room that the agent leaves goes out of the list. A new join starts with no entry.
+		await bot.call("chat.remove_member", { room_id: launch.id, principal_id: bot.id });
+		expect(shown(await addressed(bot)).map((row) => row[0])).toEqual([null, "Ops"]);
+		await bot.call("chat.join_room", { room_id: launch.id });
+		expect(shown(await addressed(bot)).map((row) => row[0])).toEqual([null, "Ops"]);
 	});
 });
 
