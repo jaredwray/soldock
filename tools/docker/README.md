@@ -55,7 +55,7 @@ so the tag has no build metadata.
 
 ## What the image holds
 
-- The image holds no secret and no setup token. A container gets `SETUP_TOKEN` from its environment.
+- The image holds no secret and no setup token. A container gets `SETUP_TOKEN` from its environment. The entrypoint writes the token to `.dev.vars`, then removes the variable. Wrangler reads the file. The process list does not show the token.
 - The process runs as the `node` user, not as root.
 - The Dockerfile pins the base image by its index digest. To change it, use a digest that is at least 7 days old.
 - Data inventory: the image holds no data of an instance. A container writes the local state of
