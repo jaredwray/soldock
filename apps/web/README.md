@@ -810,14 +810,15 @@ MCP clients. The app has no UI-only path.
       room only, and a link goes to the search in all rooms.
     - The header of a room has a search box for a member. A submit opens the view for that room. Below
       1100px, the box is a button that opens the view.
-    - Ctrl+F and ⌘F open the view from each page of Chat: from a room that the person is a member of, for
-      that room. In the view, the
+    - Ctrl+F and ⌘F open the view from each page of Chat (`useSearchKeys`): from a room that the person
+      is a member of, for that room. The room view handles the keys while a room shows, because it knows
+      the role of the person also for a room that is not in the sidebar list. In the view, the
       keys move the focus to the box. A search of the browser finds only the messages that show, so Chat
       takes these keys. While a dialog is open, the keys stay with the browser.
     - The results come from `chat.search_messages`, 20 for each page, with **Show more**. A page of the
       server can have no result and a next page: the view then asks for the next page, at most 5 times.
-      The menu **Best match** or **Newest** sets `sort`. The answer has the order that the server used: for
-      a query with filters only that is the time, and the view then shows "Newest first" and no menu.
+      The menu **Best match** or **Newest** sets `sort`, and shows the order that the server used. For a
+      query with filters only that is the time: a note then tells that such a search has no best match.
     - Each result has the room (for a search in all rooms), the author, the time and the text. The words
       that the server found (`highlights`) are in `<mark>` elements (`resultParts`). A long text shows
       280 characters around its first found word. A click opens the message in its room, or the reply

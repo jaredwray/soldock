@@ -207,6 +207,32 @@ describe("search in one room", () => {
 		expect(await codeOf(ada.call("chat.search_messages", mixed))).toBe("invalid");
 	});
 
+	// A cursor near the end of a read by rank can come with a larger page. The read still ends at the limit.
+	it("ends a read by rank at 1,000 results, also for a larger page after a cursor near the end", async () => {
+		const room = await createRoom(ada, "private", "Notes");
+		const first = await post(ada, room.id, "plan");
+		// The rate limit permits no 1,000 posts in a test, so the room gets the rows of 1,010 more messages.
+		await runInDurableObject(roomStub(room.id), (_instance, state) => {
+			const sql = state.storage.sql;
+			const author = sql.exec<{ author_json: string }>("SELECT author_json FROM messages WHERE seq = 1").one();
+			for (let n = 2; n <= 1011; n++) {
+				sql.exec(
+					"INSERT INTO messages (seq, id, author_id, author_json, text, created_at, version) VALUES (?, ?, ?, ?, 'plan', ?, ?)",
+					n,
+					`cmsg_01JD${String(n).padStart(22, "0")}`,
+					ada.id,
+					author.author_json,
+					Date.parse(first.created_at) + n,
+					n,
+				);
+				sql.exec("INSERT INTO messages_fts (rowid, text) VALUES (?, 'plan')", n);
+			}
+		});
+		const cursor = btoa(JSON.stringify(["r", 990]));
+		const last = await ada.call("chat.search_messages", { room_id: room.id, query: "plan", limit: 50, cursor });
+		expect([last.results.length, last.next_cursor]).toEqual([10, null]);
+	});
+
 	it("refuses a query that it cannot read, and tells why", async () => {
 		const room = await createRoom(ada, "private", "Notes");
 		const search = (query: string) => ada.call("chat.search_messages", { room_id: room.id, query });

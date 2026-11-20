@@ -20,6 +20,11 @@ test("the search of a room header finds a message of that room, marks the word, 
 	const page = await tomasz.newPage();
 	await openRoom(page, roomId);
 
+	// Ctrl+F in a room of the person opens the search of that room.
+	await page.keyboard.press("Control+f");
+	await expect(page).toHaveURL(new RegExp(`/chat/search\\?room=${roomId}$`));
+	await page.goBack();
+
 	const box = page.getByRole("searchbox", { name: `Search in ${name}` });
 	await box.fill(needle.toUpperCase());
 	await box.press("Enter");

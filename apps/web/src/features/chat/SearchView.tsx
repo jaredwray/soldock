@@ -279,18 +279,18 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 										? "No message matches this search."
 										: "No result yet. Select Show more to search more messages."}
 							</p>
-							{/* A query with filters only has no rank: the server reads it by time, so the menu has no use. */}
-							{state.sort === "time" && sort === "rank" ? (
-								<span>Newest first</span>
-							) : (
+							<span className="chat-search-order">
+								{/* A query with filters only has no rank: the server reads it by time, and the view tells so. */}
+								{state.sort === "time" && sort === "rank" && <span>A search with filters only has no best match.</span>}
+								{/* The menu shows the order that the server used. */}
 								<Select
 									className="label-select"
 									label="Order of the results"
-									value={sort}
+									value={state.sort}
 									options={SORT_OPTIONS}
 									onChange={setSort}
 								/>
-							)}
+							</span>
 						</div>
 						<ol className="chat-search-results" aria-label="Search results">
 							{state.results.map((result) => (

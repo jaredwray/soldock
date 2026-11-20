@@ -2510,6 +2510,13 @@ describe("a room object", () => {
 	it("has an alarm from the change until the write to the index ends", async () => {
 		const room = await createRoom(ada, "public", "Launch");
 		const stub = roomStub(room.id);
+		const alarm = () => runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+		// A new room tells the search index about itself, with its alarm. The test starts after that send,
+		// so no alarm of the creation runs during the write of the post.
+		await soon(async () => {
+			await runDurableObjectAlarm(stub);
+			expect(await alarm()).toBeNull();
+		});
 		// Plain flags, not promises: a promise from the test cannot continue a call inside the object.
 		const gate = { entered: false, released: false };
 		await runInDurableObject(stub, (instance) => {
@@ -2530,7 +2537,7 @@ describe("a room object", () => {
 		});
 		const posting = post(ada, room.id, "Hello");
 		await vi.waitFor(() => expect(gate.entered).toBe(true), { timeout: 5000, interval: 10 });
-		expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).not.toBeNull();
+		expect(await alarm()).not.toBeNull();
 		gate.released = true;
 		await posting;
 		// The write is done. Only the message waits a short time for the search index. Then no row waits, so
@@ -2538,7 +2545,7 @@ describe("a room object", () => {
 		expect((await joined(ada))[0]).toMatchObject({ last_seq: 1 });
 		await soon(async () => {
 			await runDurableObjectAlarm(stub);
-			expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).toBeNull();
+			expect(await alarm()).toBeNull();
 		});
 	});
 

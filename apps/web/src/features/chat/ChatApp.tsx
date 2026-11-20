@@ -16,6 +16,7 @@ import { roomTitle, sidebarRooms } from "./model.ts";
 import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
 import { SearchView } from "./SearchView.tsx";
+import { useSearchKeys } from "./searchKeys.ts";
 import { ThreadsView } from "./ThreadsView.tsx";
 import { PeopleProvider, usePeopleDirectory, usePeopleStore } from "./usePeople.ts";
 
@@ -69,31 +70,25 @@ export function ChatApp({
 		if (roomId === null && profileId === null && !threads && search === null) document.title = "Chat – Asterra";
 	}, [roomId, profileId, threads, search]);
 
-	// Ctrl+F and ⌘F open the Search view of Chat: a search of the page finds only the messages that show. From
-	// a room, the search is in that room. In the Search view, the keys move the focus to the box. While a
-	// dialog is open, the keys stay with the browser.
+	// Ctrl+F and ⌘F open the Search view of Chat, for all rooms. In the Search view, the keys move the focus
+	// to the box. While a room shows, the room view handles the keys: it knows if the person is a member.
 	const searching = search !== null;
-	const joinedRoomId = listed === null ? null : roomId;
-	useEffect(() => {
-		function onKeyDown(event: KeyboardEvent) {
-			if (event.defaultPrevented || event.altKey || event.shiftKey || event.isComposing) return;
-			if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
-			if (document.querySelector("dialog[open]")) return;
-			event.preventDefault();
-			if (!searching) {
-				// Only a member can search a room. From each other page, the search is in all rooms.
-				navigate(chatSearchPath("", joinedRoomId));
-				return;
-			}
-			const box = document.getElementById(SEARCH_INPUT_ID);
-			if (box instanceof HTMLInputElement) {
-				box.focus();
-				box.select();
-			}
-		}
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [searching, joinedRoomId]);
+	const roomShown = roomId !== null && profileId === null && !threads && !searching;
+	useSearchKeys(
+		roomShown
+			? null
+			: () => {
+					if (!searching) {
+						navigate(chatSearchPath());
+						return;
+					}
+					const box = document.getElementById(SEARCH_INPUT_ID);
+					if (box instanceof HTMLInputElement) {
+						box.focus();
+						box.select();
+					}
+				},
+	);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {

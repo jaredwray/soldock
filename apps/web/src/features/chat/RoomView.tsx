@@ -57,6 +57,7 @@ import {
 	startsNew,
 	unseenSendsNote,
 } from "./model.ts";
+import { useSearchKeys } from "./searchKeys.ts";
 import { createSendSettler } from "./settle.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
 import { useWantPeople } from "./usePeople.ts";
@@ -435,6 +436,9 @@ export function RoomView({
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
 	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	// Ctrl+F and ⌘F search this room. Only a member can search a room: for each other person, and while the
+	// room loads, the search is in all rooms.
+	useSearchKeys(() => navigate(chatSearchPath("", isMember ? roomId : null)));
 	// After a close, the focus goes back to the button that opened the thread, or to the box of the room. It
 	// waits for the commit: on a narrow screen the room is hidden while the view of the thread shows.
 	useEffect(() => {

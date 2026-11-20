@@ -284,7 +284,6 @@ async function searchRoom(
 			"The search is in the room of room_id. Remove the in: filter, or remove room_id.",
 		);
 	}
-	const limit = input.limit ?? SEARCH_PAGE;
 	const ranked = (input.sort ?? "rank") === "rank" && parsed.match !== null;
 	// A cursor is the offset of a read by rank, or the seq of the last message of a read by time.
 	const cursor = input.cursor === undefined ? null : decodeCursor<[string, number]>(input.cursor, ["string", "number"]);
@@ -294,6 +293,8 @@ async function searchRoom(
 	}
 	if (input.cursor !== undefined && cursor === null) throw new OperationError("invalid", BAD_SEARCH_CURSOR);
 	const offset = ranked ? (cursor?.[1] ?? 0) : 0;
+	// A read by rank ends at `most` results, also when a cursor near the end comes with a larger page.
+	const limit = Math.min(input.limit ?? SEARCH_PAGE, ranked ? most - offset : CHAT_LIMITS.searchPageSize);
 	const { filter } = await searchFilter(call, parsed);
 	const opened = openRoom(call, input.room_id);
 	const page = accept(
