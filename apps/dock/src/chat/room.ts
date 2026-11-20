@@ -2511,8 +2511,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Why a chat event goes to a member: the first reason of `CHAT_EVENT_REASONS` that is true. `body` is
 	 * the body of the message of the event. The room reads the body, not the table `mentions`, because that
-	 * table has no row for a reply outside the room list. The author of a message is never a mention of
-	 * its own message. Call this after the follows of a new reply are stored.
+	 * table has no row for a reply outside the room list. The author of a message is a recipient only when
+	 * a different member deleted the message: its reason is `author`, and never a mention of its own
+	 * message. Call this after the follows of a new reply are stored.
 	 */
 	private chatEventReasons(
 		kind: RoomKind,
@@ -2531,7 +2532,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					).map((row) => row.principal_id),
 		);
 		return (principalId) => {
-			if (principalId !== authorId && (group || mentioned.has(principalId))) return "mention";
+			if (principalId === authorId) return "author";
+			if (group || mentioned.has(principalId)) return "mention";
 			if (kind === "dm") return "dm";
 			return followers.has(principalId) ? "thread_reply" : "room";
 		};

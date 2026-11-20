@@ -109,7 +109,7 @@ export function TargetWebhooks({
 						{heading}
 					</h2>
 					<p className="panel-note">
-						Asterra sends a signed POST to each webhook when one of its events occurs. The POST has ids only.
+						Asterra sends a signed POST to each webhook when one of its events occurs. The POST has no content.
 						{note && ` ${note}`}
 					</p>
 				</header>

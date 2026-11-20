@@ -168,12 +168,13 @@ describe("the event catalog", () => {
 					room_id: expect.any(Object),
 					message_id: expect.any(Object),
 					parent_id: expect.any(Object),
-					reason: expect.objectContaining({ enum: ["mention", "dm", "thread_reply", "room"] }),
+					reason: expect.objectContaining({ enum: ["author", "mention", "dm", "thread_reply", "room"] }),
 					author_id: expect.any(Object),
 					version: expect.any(Object),
 					uri: expect.any(Object),
 				},
-				required: ["room_id", "message_id", "reason", "author_id", "version", "uri"],
+				// An event from before a deploy has no reason, no author and no version.
+				required: ["room_id", "message_id", "uri"],
 				additionalProperties: false,
 			},
 		});
@@ -521,8 +522,9 @@ describe("events/subscribe", () => {
 
 describe("event delivery", () => {
 	// An agent that monitors its rooms must not start a turn for each message of each room. The filter
-	// is not a part of the id, so one callback never gets one message from two subscriptions.
-	it("sends an agent only the messages for it by default, and a refresh changes the filter", async () => {
+	// is not a part of the id, so one callback never gets one message from two subscriptions. A refresh
+	// without a filter keeps the filter: a subscription from before the filter must not go quiet.
+	it("sends an agent only the messages for it by default, and only a refresh with a filter changes it", async () => {
 		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 		const room = await privateRoom("Launch");
 		const { events } = receiver();
@@ -546,6 +548,11 @@ describe("event delivery", () => {
 		expect(await rows()).toHaveLength(1);
 		const plain = await say("Dinner is at seven");
 		expect(reasons().at(-1)).toEqual([plain.id, "room"]);
+
+		const third = resultOf(await subscribe(bot.key, "chat.message.created"));
+		expect(third.id).toBe(first.id);
+		const later = await say("Tea is at four");
+		expect(reasons().at(-1)).toEqual([later.id, "room"]);
 
 		// The arguments of events/unsubscribe name the same subscription with each filter.
 		await unsubscribe(bot.key, "chat.message.created", { arguments: { filter: "addressed" } });

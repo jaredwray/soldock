@@ -73,13 +73,13 @@ function usableEvent(call: CallContext, name: string): McpEventDefinition | null
 
 /**
  * The target, the room and the message filter that the arguments name. The default target is the caller.
- * A chat subscription without `filter` gets the default of the caller. Mail and Drive have no filter.
+ * `filter` is null when the arguments do not have it, and for Mail and Drive, which have no filter.
  */
 function parseArguments(
 	call: CallContext,
 	event: McpEventDefinition,
 	value: Record<string, unknown>,
-): { targetId: string | undefined; roomId: string | null; filter: ChatWebhookFilter } {
+): { targetId: string | undefined; roomId: string | null; filter: ChatWebhookFilter | null } {
 	const parsed = event.input.safeParse(value);
 	if (!parsed.success) {
 		const issue = parsed.error.issues[0];
@@ -93,20 +93,17 @@ function parseArguments(
 		filter?: ChatWebhookFilter;
 	};
 	if (event.domain === "chat") {
-		return {
-			targetId: call.caller.id,
-			roomId: fields.room_id ?? null,
-			filter: fields.filter ?? defaultChatWebhookFilter(call.caller.kind),
-		};
+		return { targetId: call.caller.id, roomId: fields.room_id ?? null, filter: fields.filter ?? null };
 	}
-	return { targetId: event.domain === "mail" ? fields.mailbox_id : fields.space_id, roomId: null, filter: "all" };
+	return { targetId: event.domain === "mail" ? fields.mailbox_id : fields.space_id, roomId: null, filter: null };
 }
 
 /**
  * The id of a subscription. The same principal, credential, URL, event, target and room give the same id,
  * so a second events/subscribe refreshes the subscription, and a different credential cannot stop it.
  * The message filter of Chat is not a part of the id: a refresh with a different filter changes the
- * filter. So one URL never gets one message from two subscriptions that differ only in the filter.
+ * filter, and a refresh without a filter keeps it. So one URL never gets one message from two
+ * subscriptions that differ only in the filter.
  */
 async function subscriptionId(
 	call: CallContext,
@@ -302,7 +299,9 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 		const expiresAt = new Date(now + life).toISOString();
 
 		/**
-		 * Gives the subscription its new end, its new secret and its message filter. A subscription that stopped starts again.
+		 * Gives the subscription its new end and its new secret. A subscription that stopped starts again.
+		 * A filter in the arguments replaces the filter. Without one, the subscription keeps its filter: a
+		 * subscription from before the filter keeps `all`, and a client that sends the same call gets the same events.
 		 * The limits count the other subscriptions, so a subscription that expired cannot start again above
 		 * a limit. The endpoint changes only when the subscription changed.
 		 */
@@ -311,7 +310,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				db
 					.prepare(
 						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL,
-							chat_filter = ?11
+							chat_filter = COALESCE(?11, chat_filter)
 						WHERE id = ?2 AND endpoint_id = ?3
 						AND (SELECT COUNT(*) FROM webhook_subscriptions s
 							JOIN webhook_endpoints e ON e.id = s.endpoint_id
@@ -420,7 +419,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						nowText,
 						expiresAt,
 						args.roomId,
-						args.filter,
+						// Only a new subscription gets the default: an agent gets only the messages for it.
+						event.domain === "chat" ? (args.filter ?? defaultChatWebhookFilter(call.caller.kind)) : "all",
 					),
 			]);
 			const endpointStored = (results[1]?.results.length ?? 0) > 0;

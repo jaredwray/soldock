@@ -255,7 +255,7 @@ export function WebhookSettings() {
 						Webhooks
 					</h2>
 					<p className="panel-note">
-						A webhook sends a signed POST to a URL outside Asterra when an event occurs. The POST has ids only.
+						A webhook sends a signed POST to a URL outside Asterra when an event occurs. The POST has no content.
 					</p>
 				</header>
 				<button

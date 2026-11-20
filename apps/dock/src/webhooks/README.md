@@ -50,7 +50,8 @@ before a read.
 
 | Reason | When |
 | --- | --- |
-| `mention` | The message mentions the target, or a group (`@here`, `@channel`). The author of a message is never a mention of its own message |
+| `author` | The target wrote the message. Only a delete by a different member has this reason, because the changes of the target send nothing to it |
+| `mention` | The message mentions the target, or a group (`@here`, `@channel`), also in a reply outside the room list |
 | `dm` | The message is in a direct message |
 | `thread_reply` | The message is a reply in a thread that the target follows |
 | `room` | The target is a member of the room, and no other reason applies |
@@ -63,6 +64,7 @@ The reason of a delete comes from the content before the delete, because a delet
 
 The filter of a subscription is `all` or `addressed` (`CHAT_WEBHOOK_FILTERS`, column `chat_filter`).
 `all` sends each message of a joined chat. `addressed` sends only an event whose reason is not `room`.
+So the owner of a room that deletes a message of the target sends a POST with each filter.
 The fan-out applies the filter, so a message that is not for the target makes no delivery job and no POST.
 Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
 A subscription from before the filter keeps `all`.
@@ -122,6 +124,8 @@ An edit or a delete uses the event id `<message id>:<version>`. The body `messag
 A reply in a thread has `parentId` in its jobs, and its body has `parent_id`: the message that it replies to.
 A chat event job has the reason of each recipient, `authorId` and `version`. A delivery job has the reason of its target.
 A chat job from the previous Worker has none of them. Its POST leaves the three fields out, and a subscription with the filter `addressed` gets nothing for it.
+So the payload schema of MCP Events has the three fields as optional. A later change can make them required.
+A job with a reason that this Worker does not know is valid, and sends as a job with no reason (`knownReason`). So a rollback after a new reason sends no job to the dead letters.
 The previous Worker does not read the filter. During a deploy, it can send a message that is not for the target to a subscription with the filter `addressed`.
 Mail jobs stay the same. The mail body has no `endpoint_id`.
 
@@ -159,9 +163,10 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   the target and the room. The same call again refreshes the subscription. A different key or a
   different OAuth connection of the same principal gets a different id, so it cannot stop the
   subscription. The id is the `id` of the subscription row. The filter of Chat is not a part of the
-  id. A refresh with a different filter changes the filter, and a refresh without `filter` sets the
-  default. So one URL never gets one message from two subscriptions that differ only in the filter,
-  and `events/unsubscribe` finds the subscription with each filter.
+  id. A refresh with a different filter changes the filter, and a refresh without `filter` keeps it.
+  Only a new subscription gets the default. So a subscription of an agent from before the filter keeps
+  `all`, one URL never gets one message from two subscriptions that differ only in the filter, and
+  `events/unsubscribe` finds the subscription with each filter.
 - **Access.** The credential needs the webhook scope of the product. The target rules are those of the
   subscription operations. The outbound policy of an agent must allow the host of the URL. The
   default policy `internal-only` allows no host, so a sponsor adds the host first.
@@ -170,7 +175,7 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   public host name, no IP address, no user name and not the host of the deployment. Each POST refuses
   a redirect. The MCP Events text of OpenAI asks a server to resolve the host and to connect to the
   address that it examined. A Worker cannot select the address of a `fetch`, so Asterra does not do
-  this. A Worker also cannot reach a private network of the operator, and the POST has ids only.
+  this. A Worker also cannot reach a private network of the operator, and the POST has no content.
 - **Verification.** Before Asterra stores a subscription, it sends a signed POST with
   `{"type":"verification","challenge":"…"}` and a `webhook-id` that starts with `msg_verification_`.
   The receiver must answer 2xx in 10 seconds, with at most 4 KiB of JSON that has the same

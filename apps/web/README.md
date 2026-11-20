@@ -392,7 +392,9 @@ MCP clients. The app has no UI-only path.
     target. It starts with the filter of the saved events. Without a saved event, it starts with the default
     of the server: an agent gets only the messages for it, and a person gets each message. The dialog always
     sends the filter of the menu. A subscription has no update operation, so a different choice deletes each
-    saved chat subscription of the target and creates it again. The list shows the second choice after the
+    saved chat subscription of the target and creates it again. A saved event that the person clears and
+    sets again keeps its saved filter, unless the person chose a filter in the menu. A person who cannot
+    add an event always keeps it. So a clear and a set send no call. The list shows the second choice after the
     events of the line. A webhook with the two filters on one target, which only the API makes, shows
     **Each message** in the menu, and the list gives the number of events with the second choice.
   - A product with more than one target has a menu above its check boxes. Mail offers your mailbox and each

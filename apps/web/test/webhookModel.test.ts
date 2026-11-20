@@ -7,6 +7,7 @@ import {
 	eventSummary,
 	eventsFor,
 	eventsOf,
+	filterForChoice,
 	filterSummary,
 	groupByTarget,
 	type ListedSubscription,
@@ -176,6 +177,35 @@ describe("webhook event check boxes", () => {
 		);
 		expect(chatFilterOf(next, "prn_bot")).toBe("addressed");
 		expect(chatFilterOf(next, "prn_me")).toBe("all");
+	});
+
+	// An agent has the default `addressed`. Without the saved filter, a clear and a set of a saved event
+	// of an agent would replace an `all` subscription. An admin can delete it, but cannot create the new one.
+	it("keeps the saved filter of a chat event that a person clears and sets again", () => {
+		const created = choiceKey("chat.message.created", "prn_bot");
+		const cleared = { selected: new Set<string>(), saved: new Set([created]), canAdd: true };
+		const filterOf = (
+			state: typeof cleared,
+			event: "chat.message.created" | "chat.message.deleted" | null,
+			choice?: "all" | "addressed",
+		) => filterForChoice(state, event, "prn_bot", choice, "addressed");
+		expect(filterOf(cleared, "chat.message.created")).toBe("all");
+		// The menu shows the saved filter too, so a new event of the target gets it.
+		expect(filterOf(cleared, null)).toBe("all");
+		// After a choice in the menu, the person replaces the subscription on purpose.
+		expect(filterOf(cleared, "chat.message.created", "addressed")).toBe("addressed");
+		// A person who cannot add cannot replace a subscription, with or without a choice.
+		expect(filterOf({ ...cleared, canAdd: false }, "chat.message.created", "addressed")).toBe("all");
+
+		// A webhook with the two filters on one target, which only the API makes: each event keeps its own.
+		const mixed = {
+			selected: new Set([created]),
+			saved: new Set([created, choiceKey("chat.message.deleted", "prn_bot", "addressed")]),
+			canAdd: true,
+		};
+		expect(filterOf(mixed, "chat.message.deleted")).toBe("addressed");
+		// A target with no saved chat event has the default of its kind.
+		expect(filterForChoice(cleared, null, "prn_new", undefined, "addressed")).toBe("addressed");
 	});
 
 	// The names of the events are the same for the two filters, so the list must tell them apart.

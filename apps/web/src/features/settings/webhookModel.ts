@@ -140,6 +140,27 @@ export function chatFilterOf(keys: ReadonlySet<string>, targetId: string): ChatW
 	return filters.every((filter) => filter === "addressed") ? "addressed" : "all";
 }
 
+/**
+ * The filter of the menu of one target (`event` is null), or the filter that a chat event gets when a
+ * person sets its check box.
+ * - A saved event that the person sets again keeps its saved filter, so the save sends no call for it.
+ *   This is not so after the person chose a filter in the menu (`choice`), if the person can add an event.
+ *   A person who cannot add an event cannot replace a subscription, so the saved filter always stays.
+ * - Else the filter is the one of the set chat events, then the choice of the person in the menu, then
+ *   the filter of the saved chat events, then `fallback`.
+ */
+export function filterForChoice(
+	state: { selected: ReadonlySet<string>; saved: ReadonlySet<string>; canAdd: boolean },
+	event: WebhookEvent | null,
+	targetId: string,
+	choice: ChatWebhookFilter | undefined,
+	fallback: ChatWebhookFilter,
+): ChatWebhookFilter {
+	const restores = event !== null && (!state.canAdd || choice === undefined);
+	const kept = restores ? chosenFilter(state.saved, event, targetId) : null;
+	return kept ?? chatFilterOf(state.selected, targetId) ?? choice ?? chatFilterOf(state.saved, targetId) ?? fallback;
+}
+
 /** The set of keys with each chat event of one target at the filter. Each other key stays. */
 export function withChatFilter(keys: ReadonlySet<string>, targetId: string, filter: ChatWebhookFilter): Set<string> {
 	const next = new Set(keys);

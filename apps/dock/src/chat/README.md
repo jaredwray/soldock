@@ -667,14 +667,15 @@ This includes public rooms, private rooms, direct messages and rooms that the pr
 Create an endpoint first. Then call `chat.create_webhook_subscription` with `chat.webhooks`.
 The event is `chat.message.created`, `chat.message.updated` or `chat.message.deleted`.
 A sponsor can set `principal_id` to an agent. Another caller can subscribe only for themselves.
-`filter` is `all` or `addressed`. `addressed` sends only a direct message, a mention and a reply in a followed thread.
+`filter` is `all` or `addressed`. `addressed` sends only a direct message, a mention, a reply in a followed thread, and a delete of a message of the principal by a different member.
 Without `filter`, an agent gets `addressed` and a person gets `all`.
 
 `postMessage`, `editMessage` and `deleteMessage` each store a `chat_event` in `webhook_outbox`.
 The row is in the same transaction as the message change.
 The event records the message id and the members at that time, except the actor.
 It also records the reason of each member (`chatEventReasons`), the author and the version of the message.
-The reason is `mention`, `dm`, `thread_reply` or `room`. The room reads the mentions from the body of the message.
+The reason is `author`, `mention`, `dm`, `thread_reply` or `room`. The room reads the mentions from the body of the message.
+`author` is for the author of a message that a different member deleted.
 The table `mentions` has no row for a reply outside the room list, so the reason does not use it.
 The follows of a new reply are stored before the reasons, so a reply to your message has the reason `thread_reply`.
 A read marker stores no event. A repeated idempotency key stores no second create event.

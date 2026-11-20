@@ -87,9 +87,10 @@ export interface ChatWebhookEventJob extends ChatEventFacts {
 	subscriptionSequence: number;
 	/**
 	 * `reason`: why the event goes to this member, at the time of the change. A job from the previous
-	 * Worker has no reason. Then a subscription with the filter `addressed` gets nothing.
+	 * Worker has no reason, and a job from a later Worker can have a reason that this Worker does not
+	 * know (`knownReason`). Then a subscription with the filter `addressed` gets nothing.
 	 */
-	recipients: { id: string; membershipId: string; reason?: ChatEventReason }[];
+	recipients: { id: string; membershipId: string; reason?: string }[];
 	/**
 	 * Absent on a job from the previous Worker. Then the event is `chat.message.created` and `eventId`
 	 * is the message id.
@@ -104,8 +105,8 @@ interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind">, ChatE
 	kind: "chat_delivery";
 	roomId: string;
 	membershipId: string;
-	/** Why the event goes to the target of the subscription. */
-	reason?: ChatEventReason;
+	/** Why the event goes to the target of the subscription. See `knownReason`. */
+	reason?: string;
 	eventType?: ChatWebhookEvent;
 	messageId?: string;
 	parentId?: string;
@@ -159,6 +160,14 @@ const RETRY_GRACE_MS = 2 * WEBHOOK_LIMITS.timeoutMs + 60_000;
 const SECRET_PREFIX = "whsec_";
 const CHAT_EVENTS = new Set<string>(CHAT_WEBHOOK_EVENTS);
 const CHAT_REASONS = new Set<unknown>(CHAT_EVENT_REASONS);
+
+/**
+ * The reason of a job, or undefined for no reason and for a reason that this Worker does not know. So a
+ * job from a later Worker, after a rollback, is not a job that is not valid: it sends as a job with no reason.
+ */
+function knownReason(reason: string | undefined): ChatEventReason | undefined {
+	return CHAT_REASONS.has(reason) ? (reason as ChatEventReason) : undefined;
+}
 const DRIVE_EVENTS = new Set<string>(DRIVE_WEBHOOK_EVENTS);
 
 /** True when the facts of a chat job are absent or have the right form. */
@@ -227,7 +236,7 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 					"membershipId" in recipient &&
 					typeof recipient.membershipId === "string" &&
 					recipient.membershipId.length > 0 &&
-					(!("reason" in recipient) || CHAT_REASONS.has(recipient.reason)),
+					(!("reason" in recipient) || typeof recipient.reason === "string"),
 			)
 		);
 	}
@@ -246,7 +255,7 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 				job.membershipId.length > 0 &&
 				(job.eventType === undefined || (typeof job.eventType === "string" && CHAT_EVENTS.has(job.eventType))) &&
 				(job.messageId === undefined || typeof job.messageId === "string") &&
-				(job.reason === undefined || CHAT_REASONS.has(job.reason)) &&
+				(job.reason === undefined || typeof job.reason === "string") &&
 				validChatFacts(job)))
 	);
 }
@@ -331,7 +340,8 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 		const jobs = results.flatMap((row): ChatWebhookDeliveryJob[] => {
 			const member = members.get(row.target_id);
 			if (!member) return [];
-			if (row.chat_filter === "addressed" && (member.reason === undefined || member.reason === "room")) return [];
+			const reason = knownReason(member.reason);
+			if (row.chat_filter === "addressed" && (reason === undefined || reason === "room")) return [];
 			return [
 				{
 					v: 1,
@@ -345,7 +355,7 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 					eventType,
 					messageId: job.messageId ?? job.eventId,
 					...(job.parentId === undefined ? {} : { parentId: job.parentId }),
-					...(member.reason === undefined ? {} : { reason: member.reason }),
+					...(reason === undefined ? {} : { reason }),
 					...(job.authorId === undefined ? {} : { authorId: job.authorId }),
 					...(job.version === undefined ? {} : { version: job.version }),
 				},
@@ -518,12 +528,13 @@ export function webhookBody(row: { id: string; mailbox_id: string }, occurredAt:
  * They are no content. A receiver uses them to decide if it reads the message.
  */
 function chatData(job: ChatWebhookDeliveryJob): Record<string, string | number> {
+	const reason = knownReason(job.reason);
 	return {
 		room_id: job.roomId,
 		message_id: job.messageId ?? job.eventId,
 		// A reply in a thread: read it with chat.list_replies of the parent.
 		...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
-		...(job.reason === undefined ? {} : { reason: job.reason }),
+		...(reason === undefined ? {} : { reason }),
 		...(job.authorId === undefined ? {} : { author_id: job.authorId }),
 		...(job.version === undefined ? {} : { version: job.version }),
 		uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),

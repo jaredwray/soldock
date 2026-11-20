@@ -8,13 +8,13 @@ import { useId, useState } from "react";
 import { Select } from "../../lib/Select.tsx";
 import {
 	CHAT_FILTER_LABELS,
-	chatFilterOf,
 	choiceKey,
 	chosenFilter,
 	DOMAIN_LABELS,
 	EVENT_LABELS,
 	eventsFor,
 	eventsOf,
+	filterForChoice,
 	withChatFilter,
 } from "./webhookModel.ts";
 
@@ -107,14 +107,17 @@ function EventGroup({
 	const locked = (event: WebhookEvent) => disabled || (!canAdd && chosenFilter(saved, event, target.id) === null);
 	// The check box for all events sets only the events that the target can send.
 	const set = offered.filter((event) => chosenFilter(selected, event, target.id) !== null).length;
-	// The set chat events of the target give the filter. A target with no set event has the choice of the
-	// person, or else the default of the server: an agent gets only the messages for it.
-	const filter =
-		domain === "chat"
-			? (chatFilterOf(selected, target.id) ??
-				filterChoice[target.id] ??
-				defaultChatWebhookFilter(target.agent ? "agent" : "human"))
-			: undefined;
+	// The filter of the menu, and of a new chat event. See `filterForChoice`. The last choice is the default
+	// of the server: an agent gets only the messages for it.
+	const filterOf = (event: WebhookEvent | null, id: string) =>
+		filterForChoice(
+			{ selected, saved, canAdd },
+			event,
+			id,
+			filterChoice[id],
+			defaultChatWebhookFilter(target.agent ? "agent" : "human"),
+		);
+	const filter = domain === "chat" ? filterOf(null, target.id) : undefined;
 
 	// The handlers below are functions, so they do not keep the check that `target` exists.
 	const shownId = target.id;
@@ -123,7 +126,7 @@ function EventGroup({
 	function change(next: Set<string>, event: WebhookEvent, on: boolean) {
 		next.delete(choiceKey(event, shownId));
 		next.delete(choiceKey(event, shownId, "addressed"));
-		if (on) next.add(choiceKey(event, shownId, filter));
+		if (on) next.add(choiceKey(event, shownId, domain === "chat" ? filterOf(event, shownId) : undefined));
 	}
 
 	function toggle(event: WebhookEvent) {

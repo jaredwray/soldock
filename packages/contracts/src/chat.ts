@@ -1084,7 +1084,7 @@ const createChatWebhookSubscription = defineOperation({
 	description: [
 		"Adds a subscription for your chats, or the chats of an agent that you sponsor.",
 		"Choose a new message, a changed message, or a deleted message.",
-		"With filter: addressed, only a message for the principal sends a POST: a direct message, a mention of the principal or of a group, and a reply in a thread that the principal follows.",
+		"With filter: addressed, only a message for the principal sends a POST: a direct message, a mention of the principal or of a group, a reply in a thread that the principal follows, and a delete of a message of the principal by a different member.",
 		"With filter: all, each message of a joined chat sends a POST. Without filter, an agent gets addressed and a person gets all.",
 		"The POST has no message text. It has reason, author_id and version, so the receiver can decide before a read. Read the room with your own credential.",
 		"A message that arrived before this subscription sends no POST.",

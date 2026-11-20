@@ -495,8 +495,9 @@ it("keeps two edits of one message, and a second delete finds the first", async 
 	expect(deletes.filter((result) => result.deleted)).toHaveLength(1);
 });
 
+// A delete of your own message is for you, so the filter `addressed` sends it, with the reason `author`.
 it("tells the author when another member deletes the message", async () => {
-	await watchBot("chat.message.deleted");
+	await createChat(ada, { principal_id: bot.id, url: HOOK, event: "chat.message.deleted", filter: "addressed" });
 	const current = await room();
 	const queue = await capture(current.id);
 	const { message } = await bot.call("chat.post_message", { room_id: current.id, text: "Mine" });
@@ -506,7 +507,10 @@ it("tells the author when another member deletes the message", async () => {
 	await queue.drain();
 	const posts = receiveWebhooks();
 	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
-	expect(posts.map((post) => JSON.parse(post.body).type)).toEqual(["chat.message.deleted"]);
+	expect(posts.map((post) => [JSON.parse(post.body).type, JSON.parse(post.body).data.reason])).toEqual([
+		["chat.message.deleted", "author"],
+	]);
+	expect(JSON.parse(posts[0]?.body ?? "{}").data.author_id).toBe(bot.id);
 });
 
 it("stops only the subscription when its key is revoked", async () => {
@@ -609,10 +613,12 @@ it("sends an agent only the messages for it, and gives each POST the reason, the
 	const plain = await say("Lunch is at noon");
 	const named = await say("@bot send the invoice");
 	const group = await say("@channel the room moves");
-	// The reply of the agent starts its follow of that thread. It follows no other thread.
-	await bot.call("chat.post_message", { room_id: current.id, parent_id: plain.id, text: "Noted" });
-	const followed = await say("One more detail", plain.id);
+	// A reply to a message of the agent starts the follow of the agent in the same transaction as the event.
+	const { message: status } = await bot.call("chat.post_message", { room_id: current.id, text: "Status: done" });
+	const followed = await say("One more detail", status.id);
 	const other = await say("A detail for a different thread", group.id);
+	// A reply outside the room list has no row in the table of mentions. Its reason comes from its body.
+	const hidden = await say("@bot examine this thread", group.id);
 	const direct = (await ada.call("chat.post_message", { room_id: dm.id, text: "Only for you" })).message;
 	await queue.drain();
 	await dmQueue.drain();
@@ -627,15 +633,16 @@ it("sends an agent only the messages for it, and gives each POST the reason, the
 			[group.id, "mention"],
 			[followed.id, "thread_reply"],
 			[other.id, "room"],
+			[hidden.id, "mention"],
 			[direct.id, "dm"],
 		]),
 	);
 	const addressed = dataByMessage(posts, ADDRESSED_HOOK);
-	expect([...addressed.keys()].sort()).toEqual([named.id, group.id, followed.id, direct.id].sort());
-	expect(addressed.get(followed.id)).toMatchObject({ reason: "thread_reply", parent_id: plain.id });
+	expect([...addressed.keys()].sort()).toEqual([named.id, group.id, followed.id, hidden.id, direct.id].sort());
+	expect(addressed.get(followed.id)).toMatchObject({ reason: "thread_reply", parent_id: status.id });
 	// The version is the version of the message, so a receiver can compare it with the room that it read.
 	expect(every.get(named.id)).toMatchObject({ author_id: ada.id, version: named.version });
-	expect(posts.filter((post) => post.url === HOOK || post.url === ADDRESSED_HOOK)).toHaveLength(10);
+	expect(posts.filter((post) => post.url === HOOK || post.url === ADDRESSED_HOOK)).toHaveLength(12);
 });
 
 // The reason of an edit comes from the new text. A deleted message has no text, so the reason of a
@@ -667,8 +674,9 @@ it("sends an edit that makes a message for the agent, and the delete of that mes
 	expect(posts).toHaveLength(2);
 });
 
-// During a deploy, a room object of the previous Worker can store an event without the reasons.
-it("sends an event without reasons only to a subscription for each message, and leaves the facts out", async () => {
+// During a deploy, a room object of the previous Worker can store an event without the reasons. After
+// a rollback, an event of a later Worker can have a reason that this Worker does not know.
+it("sends an event without a known reason only to a subscription for each message, and leaves the facts out", async () => {
 	await createChat(ada, { principal_id: bot.id, url: ADDRESSED_HOOK, filter: "addressed" });
 	await watchBot();
 	const current = await room();
@@ -684,10 +692,15 @@ it("sends an event without reasons only to a subscription for each message, and 
 		version: number;
 		recipients: { id: string; membershipId: string; reason: string }[];
 	};
-	const old = { ...job, recipients: job.recipients.map(({ id, membershipId }) => ({ id, membershipId })) };
+	const members = job.recipients.map(({ id, membershipId }) => ({ id, membershipId }));
 	const posts = receiveWebhooks();
-	await consumeWebhooks((await consumeWebhooks([old])).sent);
-	expect(posts.map((post) => post.url)).toEqual([HOOK]);
-	const data = JSON.parse(posts[0]?.body ?? "{}").data as Record<string, unknown>;
-	expect(Object.keys(data).sort()).toEqual(["message_id", "principal_id", "room_id", "uri", "webhook_id"]);
+	for (const recipients of [members, members.map((member) => ({ ...member, reason: "of_a_later_worker" }))]) {
+		// A job that is not valid goes to the dead letters and sends nothing. This job sends one POST.
+		await consumeWebhooks((await consumeWebhooks([{ ...job, recipients }])).sent);
+	}
+	expect(posts.map((post) => post.url)).toEqual([HOOK, HOOK]);
+	for (const post of posts) {
+		const data = JSON.parse(post.body).data as Record<string, unknown>;
+		expect(Object.keys(data).sort()).toEqual(["message_id", "principal_id", "room_id", "uri", "webhook_id"]);
+	}
 });

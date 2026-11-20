@@ -63,7 +63,7 @@ const ChatArguments = z.strictObject({
 		.enum(CHAT_WEBHOOK_FILTERS)
 		.optional()
 		.describe(
-			"addressed: only a message for you sends the event: a direct message, a mention of you or of a group, and a reply in a thread that you follow. all: each message sends the event. Set all to answer each message of a room. The default is addressed for an agent and all for a person.",
+			"addressed: only a message for you sends the event: a direct message, a mention of you or of a group, a reply in a thread that you follow, and a delete of your message by a different member. all: each message sends the event. Set all to answer each message of a room. The default of a new subscription is addressed for an agent and all for a person. A refresh without filter keeps the filter of the subscription.",
 		),
 });
 
@@ -93,17 +93,24 @@ const ChatPayload = z.strictObject({
 		.describe(
 			"Only for a reply in a thread: the message that the reply answers. The reply is not in chat_list_messages. Read it with chat_list_replies of this message.",
 		),
+	// The three fields below are optional only for an event that the previous Worker stored: during a
+	// deploy, such an event has none of them. Each event of this Worker has them.
 	reason: z
 		.enum(CHAT_EVENT_REASONS)
+		.optional()
 		.describe(
-			"Why you get the event. mention: the message mentions you or a group. dm: the message is in a direct message. thread_reply: a reply in a thread that you follow. room: none of these, so the message is possibly not for you.",
+			"Why you get the event. author: a different member deleted a message that you wrote. mention: the message mentions you or a group. dm: the message is in a direct message. thread_reply: a reply in a thread that you follow. room: none of these, so the message is possibly not for you. Absent only in an event from before an update of the server.",
 		),
-	author_id: z.string().describe("The principal that wrote the message."),
+	author_id: z
+		.string()
+		.optional()
+		.describe("The principal that wrote the message. Absent only in an event from before an update of the server."),
 	version: z
 		.number()
 		.int()
+		.optional()
 		.describe(
-			"The version of the room at this change. When the version of your last chat_list_messages result is not lower, that result is not older than this event.",
+			"The version that the message got from this change. It is a version of the room. When the version of your last chat_list_messages result is not lower, that result is not older than this event. Absent only in an event from before an update of the server.",
 		),
 	uri: Uri,
 });
@@ -127,7 +134,7 @@ const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"chat.message.updated":
 		"A different member edited a message in a room that you are a member of. With filter addressed, only a message that is for you after the edit sends the event.",
 	"chat.message.deleted":
-		"A message was deleted in a room that you are a member of. With filter addressed, only a message that was for you sends the event.",
+		"A message was deleted in a room that you are a member of. With filter addressed, only a message that was for you, or that you wrote, sends the event.",
 	"drive.item.created": "An item was created in the drive, also a copy and an item that arrived from another drive.",
 	"drive.item.updated": "An item of the drive changed, also the content of a doc or a sheet.",
 	"drive.item.moved": "An item moved inside the drive, or left it for another drive.",
