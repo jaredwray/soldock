@@ -37,8 +37,8 @@ a list of drives, folders and documents. The key then works only on those.
   item that leaves the folder leaves it.
 - Docs and Sheets check the item in the drive first, so the limit applies to them.
 - A file for a message of Chat (`fileForRoom`) must be in the limit. A download of a file of a
-  message (`fileInDriveLimit`) needs the file in the limit too: a whole drive of the limit, or an
-  item of the limit that the caller can read in Drive. So such a key does not read a file in the
+  message (`roomFile`) needs the file in the limit too: a whole drive of the limit, or an item of
+  the limit that the caller can read in Drive. The object makes this check in the step of the read. So such a key does not read a file in the
   drive of a different member through a room. The folder of a room
   (`chatFolder`) is at the root of the drive, so a key with a limit in that drive gets `forbidden`.
 - An upload in parts that a different credential of the principal started outside the limit is

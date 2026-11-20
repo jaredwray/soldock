@@ -2338,15 +2338,22 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/**
 	 * The bytes of a file for a member of a room of Chat. The room checked the member and the message. This
 	 * drive checks its own rules: a grant for the room on the file, and a file outside the trash.
+	 *
+	 * `limited` is the caller when its credential has a Drive limit in this drive. A room gives its members
+	 * each file of its messages, without a grant for each member. A credential with a limit reads the file
+	 * only as Drive lets it: the limit allows the item, and the caller has a role for it. The check is in the
+	 * same step as the read, so a move of the file cannot come between them.
 	 */
 	roomFile(input: {
 		spaceId: string;
 		itemId: string;
 		roomId: string;
+		limited?: SpaceCall;
 	}): { name: string; version: VersionRecord; blobKey: string } | Refusal {
 		if (this.meta("space_id") !== input.spaceId) return refuse("not_found", NOT_FOUND);
 		const item = this.row(input.itemId);
 		if (item?.kind !== "file" || item.trash_root !== null) return refuse("not_found", NOT_FOUND);
+		if (input.limited?.limit && !this.access(input.limited, item)) return refuse("not_found", NOT_FOUND);
 		const granted = this.one(
 			"SELECT 1 AS found FROM room_grants WHERE item_id = ? AND room_id = ?",
 			input.itemId,

@@ -12,7 +12,7 @@ export {
 	writeDocument,
 } from "./access.ts";
 export { contentOf, driveHandlers } from "./handlers.ts";
-export { fileInDriveLimit, filesForMessage, roomFile } from "./rooms.ts";
+export { filesForMessage, roomFile } from "./rooms.ts";
 export { DriveSpaceDO, type FileSnapshot, type ItemRecord } from "./space.ts";
 export { mountDriveTransfer, versionResponse } from "./transfer.ts";
 export { driveWatchers } from "./watch.ts";
