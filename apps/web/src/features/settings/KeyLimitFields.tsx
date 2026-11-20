@@ -274,7 +274,7 @@ export function KeyLimitFields({
 				onToggle={() => onChange({ ...draft, chat: { ...draft.chat, on: !draft.chat.on } })}
 				disabled={disabled}
 			>
-				{own ? (
+				{own && (
 					<ChoiceList
 						state={roomChoices}
 						selected={draft.chat.roomIds}
@@ -284,25 +284,25 @@ export function KeyLimitFields({
 						disabled={disabled}
 						empty="You are in no room."
 					/>
-				) : (
-					<div className="field">
-						<label htmlFor={ids.chatOther} className="field-label">
-							Rooms
-						</label>
-						<textarea
-							id={ids.chatOther}
-							className="input textarea"
-							rows={2}
-							value={draft.chat.otherText}
-							onChange={(event) => onChange({ ...draft, chat: { ...draft.chat, otherText: event.target.value } })}
-							disabled={disabled}
-							placeholder="The link of a room, or its id"
-						/>
-						<p className="field-hint">
-							One on each line: the link of a room from the address bar, or its id. At most {KEY_LIMITS.rooms} rooms.
-						</p>
-					</div>
 				)}
+				{/* The list has the first page of the rooms only, so each key also takes links and ids. */}
+				<div className="field">
+					<label htmlFor={ids.chatOther} className="field-label">
+						{own ? "Other rooms" : "Rooms"}
+					</label>
+					<textarea
+						id={ids.chatOther}
+						className="input textarea"
+						rows={2}
+						value={draft.chat.otherText}
+						onChange={(event) => onChange({ ...draft, chat: { ...draft.chat, otherText: event.target.value } })}
+						disabled={disabled}
+						placeholder="The link of a room, or its id"
+					/>
+					<p className="field-hint">
+						One on each line: the link of a room from the address bar, or its id. At most {KEY_LIMITS.rooms} rooms.
+					</p>
+				</div>
 			</Product>
 		</fieldset>
 	);

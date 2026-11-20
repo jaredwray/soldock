@@ -378,8 +378,8 @@ MCP clients. The app has no UI-only path.
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
   of the session. A new key can have resource limits (`KeyLimitFields`, `keyLimits.ts`): the
   person selects Drive, Mail or Chat, and then the drives, folders and documents, the mailboxes, a
-  search and the recipients, or the rooms. The lists are those of the session, so a key for an
-  agent takes links and ids. A key with a limit cannot hold `account.keys` or `directory.write`:
+  search and the recipients, or the rooms. The lists are those of the session, and they have the first
+  page only. So each key also takes links and ids, and a key for an agent takes only those. A key with a limit cannot hold `account.keys` or `directory.write`:
   the form turns those scopes off. The list of the keys shows one line for each limit. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them.
   - **Webhooks** is one list. A row is one webhook: an endpoint (`webhooks.list_endpoints`) and the events that

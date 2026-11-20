@@ -1,7 +1,7 @@
 import { DRIVE_LIMITS, isErrorCode } from "@asterra/contracts";
-import { type CallContext, roomAllowed } from "../identity/index.ts";
+import { type CallContext, driveLimitOf, roomAllowed } from "../identity/index.ts";
 import { OperationError } from "../platform/index.ts";
-import { accept, actorOf, openSpace, spaceStub, unknownSpaceIds } from "./access.ts";
+import { accept, actorOf, openSpace, spaceOf, spaceStub, unknownSpaceIds } from "./access.ts";
 import type { FileSnapshot, VersionRecord } from "./space.ts";
 
 // What Chat asks of Drive for the files of a message. A message holds files of the own drive of its
@@ -37,6 +37,20 @@ export async function roomFile(
 		throw new OperationError("not_found", NOT_FOUND);
 	}
 	return accept(await spaceStub(env, input.spaceId).roomFile(input));
+}
+
+/**
+ * True when the Drive limit of the caller allows the file of a message. A room gives its members each
+ * file of its messages, without a grant for each member. A key with a Drive limit reads the bytes of a
+ * file only where its limit allows that file: in a whole drive of the limit, or an item of the limit
+ * that the caller can also read in Drive. Each other credential has no Drive limit, and gets true.
+ */
+export async function fileInDriveLimit(call: CallContext, ref: { spaceId: string; itemId: string }): Promise<boolean> {
+	const allowed = driveLimitOf(call.caller, ref.spaceId);
+	if (allowed === "all") return true;
+	if (allowed.length === 0) return false;
+	const opened = spaceOf(call, ref.spaceId);
+	return (await opened.space.getItems(opened.ctx, [ref.itemId], { includeTrashed: false })).length === 1;
 }
 
 /**

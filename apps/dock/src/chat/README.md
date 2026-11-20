@@ -109,6 +109,8 @@ a list of rooms and direct messages. The key then reads and posts only in those 
   (`listRoomsOf`): the list comes from the ids of the limit, so it never names a different room.
   `query` keeps the rooms whose name has the text. The public view is `forbidden`.
 - The limit does not make the principal a member. The room still checks the member.
+- A key with a Drive limit downloads a file of a message only where its Drive limit allows that
+  file ([`drive`](../drive/README.md#the-limit-of-an-api-key)). Each other file is `not_found`.
 - These operations are refused for each key with a Chat limit: `chat.create_room`, `chat.open_dm`,
   `chat.join_room`, `chat.update_room`, `chat.add_members`, `chat.remove_member`,
   `chat.list_threads`, `chat.list_message_edits` and the webhook subscriptions. They make a room,

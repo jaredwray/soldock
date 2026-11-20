@@ -245,6 +245,33 @@ describe("a Drive limit to a folder", () => {
 		expect(await codeOf(key.call("chat.post_message", { room_id: room.id, file_ids: [diary.id] }))).toBe("not_found");
 		const posted = await key.call("chat.post_message", { room_id: room.id, file_ids: [fine.id] });
 		expect(posted.message.files.map((file) => file.name)).toEqual(["fine.txt"]);
+		// A file that a message holds is a file of Drive. The key reads its bytes only inside its limit: not a
+		// file of its own drive outside the limit, and not a file in the drive of a different member.
+		const own = (await ada.call("chat.post_message", { room_id: room.id, file_ids: [diary.id] })).message;
+		const theirs = await upload(bot, "bot.txt", "from the bot");
+		await bot.call("chat.post_message", { room_id: room.id, file_ids: [theirs.id] });
+		const fromBot = (await ada.call("chat.list_messages", { room_id: room.id })).messages.find(
+			(message) => message.files[0]?.name === "bot.txt",
+		);
+		const download = (message_id: string, item_id: string) =>
+			key.call("chat.download_file", { room_id: room.id, message_id, item_id });
+		expect(fromBase64((await download(posted.message.id, fine.id)).content_base64)).toBe("ok");
+		expect(await codeOf(download(own.id, diary.id))).toBe("not_found");
+		expect(await codeOf(download(fromBot?.id as string, theirs.id))).toBe("not_found");
+		expect(
+			(
+				await request(`/dl/chat/${room.id}/${own.id}/${diary.id}`, {
+					headers: { authorization: `Bearer ${key.secret}` },
+				})
+			).status,
+		).toBe(404);
+		// A key without a Drive limit reads each file of the room.
+		expect(
+			fromBase64(
+				(await ada.call("chat.download_file", { room_id: room.id, message_id: own.id, item_id: diary.id }))
+					.content_base64,
+			),
+		).toBe("private");
 		// The folder of the files of a room is at the root of the drive, outside the limit.
 		expect(
 			await codeOf(key.call("drive.upload_file", { name: "x.txt", content_base64: base64("x"), room_id: room.id })),

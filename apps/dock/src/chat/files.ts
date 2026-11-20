@@ -2,7 +2,7 @@ import { DRIVE_LIMITS, operations, RoomId } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { z } from "zod";
 import { type ApiEnv, callOf, unauthenticatedResponse } from "../api/index.ts";
-import { contentOf, roomFile, versionResponse } from "../drive/index.ts";
+import { contentOf, fileInDriveLimit, roomFile, versionResponse } from "../drive/index.ts";
 import { type CallContext, roomAllowed } from "../identity/index.ts";
 import { bytesToBase64, downloadResponse, invokeOperation, log, OperationError } from "../platform/index.ts";
 import type { Refusal, RoomCall } from "./room.ts";
@@ -43,6 +43,10 @@ async function messageFile(call: CallContext, roomId: string, messageId: string,
 		| { spaceId: string; itemId: string }
 		| Refusal;
 	if ("error" in ref) throw new OperationError(ref.error.code, ref.error.message);
+	// The bytes are a file of Drive. A key with a Drive limit reads them only inside its limit.
+	if (!(await fileInDriveLimit(call, ref))) {
+		throw new OperationError("not_found", "The file is outside the drive limit of this key.");
+	}
 	return roomFile(call.env, { spaceId: ref.spaceId, itemId: ref.itemId, roomId });
 }
 
