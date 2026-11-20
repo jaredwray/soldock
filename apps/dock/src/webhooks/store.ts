@@ -1,4 +1,10 @@
-import { WEBHOOK_LIMITS, type WebhookDomain, type WebhookEndpoint, type WebhookEvent } from "@asterra/contracts";
+import {
+	type ChatWebhookFilter,
+	WEBHOOK_LIMITS,
+	type WebhookDomain,
+	type WebhookEndpoint,
+	type WebhookEvent,
+} from "@asterra/contracts";
 import type { CredentialBinding } from "../identity/index.ts";
 import { audit, bytesToBase64, log } from "../platform/index.ts";
 import { adoptChatBoundary } from "./legacy.ts";
@@ -54,6 +60,8 @@ export interface SubscriptionRow {
 	expires_at: string | null;
 	/** Chat only. Null: each room of the target. Else only this room. */
 	room_id: string | null;
+	/** Chat only. `addressed`: only a message for the target. Mail and Drive keep `all` and do not read it. */
+	chat_filter: ChatWebhookFilter;
 }
 
 export const ENDPOINT_COLUMNS = `id, created_by, credential_kind, credential_id, url, label, secret, status,
@@ -61,7 +69,7 @@ export const ENDPOINT_COLUMNS = `id, created_by, credential_kind, credential_id,
 	auth_key, header_name, header_value, created_at, protocol, previous_secret, previous_secret_until, verified_at`;
 
 export const SUBSCRIPTION_COLUMNS = `sequence, id, endpoint_id, domain, event_type, target_id, credential_kind,
-	credential_id, status, disabled_reason, retry_until, retry_event_id, created_at, expires_at, room_id`;
+	credential_id, status, disabled_reason, retry_until, retry_event_id, created_at, expires_at, room_id, chat_filter`;
 
 /** The subscription columns with a table alias, for a query that joins the endpoint. */
 export function subscriptionColumns(alias: string): string {

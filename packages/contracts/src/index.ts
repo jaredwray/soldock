@@ -107,6 +107,7 @@ export {
 	ThreadSummary,
 	WEBHOOK_EVENT_TYPE,
 } from "./mail.ts";
+export { docToMarkdown, markdownToDoc } from "./markdown.ts";
 export { MCP_EVENT_LIMITS, type McpEventDefinition, mcpEventList, mcpEvents } from "./mcp-events.ts";
 export {
 	GROUP_MENTIONS,
@@ -187,13 +188,18 @@ export {
 export { TEAM_MAILBOX_LIMITS, TeamMailbox } from "./team-mailboxes.ts";
 export {
 	authorizationConflict,
+	CHAT_EVENT_REASONS,
 	CHAT_WEBHOOK_EVENTS,
+	CHAT_WEBHOOK_FILTERS,
+	type ChatEventReason,
 	type ChatWebhookEvent,
+	type ChatWebhookFilter,
 	type ChatWebhookSubscription,
 	CreatedWebhookEndpoint,
 	DRIVE_WEBHOOK_EVENTS,
 	type DriveWebhookEvent,
 	type DriveWebhookSubscription,
+	defaultChatWebhookFilter,
 	MAIL_WEBHOOK_EVENTS,
 	type MailWebhookSubscription,
 	WEBHOOK_EVENTS,

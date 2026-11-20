@@ -1,7 +1,6 @@
-import { DOC_LIMITS, DocContent } from "@asterra/contracts";
+import { DOC_LIMITS, DocContent, docToMarkdown, markdownToDoc } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { checkDoc, docText } from "../src/docs/content.ts";
-import { docToMarkdown, markdownToDoc } from "../src/docs/markdown.ts";
 
 type Inline = NonNullable<Extract<DocContent["content"][number], { type: "paragraph" }>["content"]>;
 

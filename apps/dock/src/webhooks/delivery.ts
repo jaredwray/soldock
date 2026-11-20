@@ -1,7 +1,10 @@
 import {
+	CHAT_EVENT_REASONS,
 	CHAT_LIMITS,
 	CHAT_WEBHOOK_EVENTS,
+	type ChatEventReason,
 	type ChatWebhookEvent,
+	type ChatWebhookFilter,
 	DRIVE_WEBHOOK_EVENTS,
 	type DriveWebhookEvent,
 	expandTemplate,
@@ -63,15 +66,31 @@ export interface WebhookDeliveryJob {
 	attempt?: number;
 }
 
+/**
+ * The facts of a chat message that a POST gives, so a receiver can decide before a read. A job from the
+ * previous Worker has none of them, and its POST leaves them out.
+ */
+interface ChatEventFacts {
+	/** The principal that wrote the message. */
+	authorId?: string;
+	/** The version that the message got from this change: a version of the room. */
+	version?: number;
+}
+
 /** A committed chat change and the members at that time, except the actor. */
-export interface ChatWebhookEventJob {
+export interface ChatWebhookEventJob extends ChatEventFacts {
 	v: 1;
 	kind: "chat_event";
 	roomId: string;
 	eventId: string;
 	occurredAt: number;
 	subscriptionSequence: number;
-	recipients: { id: string; membershipId: string }[];
+	/**
+	 * `reason`: why the event goes to this member, at the time of the change. A job from the previous
+	 * Worker has no reason, and a job from a later Worker can have a reason that this Worker does not
+	 * know (`knownReason`). Then a subscription with the filter `addressed` gets nothing.
+	 */
+	recipients: { id: string; membershipId: string; reason?: string }[];
 	/**
 	 * Absent on a job from the previous Worker. Then the event is `chat.message.created` and `eventId`
 	 * is the message id.
@@ -82,10 +101,12 @@ export interface ChatWebhookEventJob {
 	parentId?: string;
 }
 
-interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind"> {
+interface ChatWebhookDeliveryJob extends Omit<WebhookDeliveryJob, "kind">, ChatEventFacts {
 	kind: "chat_delivery";
 	roomId: string;
 	membershipId: string;
+	/** Why the event goes to the target of the subscription. See `knownReason`. */
+	reason?: string;
 	eventType?: ChatWebhookEvent;
 	messageId?: string;
 	parentId?: string;
@@ -138,7 +159,24 @@ const INTERNAL_RETRY_S = 30;
 const RETRY_GRACE_MS = 2 * WEBHOOK_LIMITS.timeoutMs + 60_000;
 const SECRET_PREFIX = "whsec_";
 const CHAT_EVENTS = new Set<string>(CHAT_WEBHOOK_EVENTS);
+const CHAT_REASONS = new Set<unknown>(CHAT_EVENT_REASONS);
+
+/**
+ * The reason of a job, or undefined for no reason and for a reason that this Worker does not know. So a
+ * job from a later Worker, after a rollback, is not a job that is not valid: it sends as a job with no reason.
+ */
+function knownReason(reason: string | undefined): ChatEventReason | undefined {
+	return CHAT_REASONS.has(reason) ? (reason as ChatEventReason) : undefined;
+}
 const DRIVE_EVENTS = new Set<string>(DRIVE_WEBHOOK_EVENTS);
+
+/** True when the facts of a chat job are absent or have the right form. */
+function validChatFacts(job: Record<string, unknown>): boolean {
+	return (
+		(job.authorId === undefined || typeof job.authorId === "string") &&
+		(job.version === undefined || (typeof job.version === "number" && Number.isSafeInteger(job.version)))
+	);
+}
 
 type DeliveryCheck =
 	| { action: "deliver"; creator: PrincipalRecord }
@@ -186,6 +224,7 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 			job.subscriptionSequence >= 0 &&
 			(job.eventType === undefined || (typeof job.eventType === "string" && CHAT_EVENTS.has(job.eventType))) &&
 			(job.messageId === undefined || typeof job.messageId === "string") &&
+			validChatFacts(job) &&
 			Array.isArray(job.recipients) &&
 			job.recipients.length <= CHAT_LIMITS.membersPerRoom &&
 			job.recipients.every(
@@ -196,7 +235,8 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 					typeof recipient.id === "string" &&
 					"membershipId" in recipient &&
 					typeof recipient.membershipId === "string" &&
-					recipient.membershipId.length > 0,
+					recipient.membershipId.length > 0 &&
+					(!("reason" in recipient) || typeof recipient.reason === "string"),
 			)
 		);
 	}
@@ -214,7 +254,9 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 				typeof job.membershipId === "string" &&
 				job.membershipId.length > 0 &&
 				(job.eventType === undefined || (typeof job.eventType === "string" && CHAT_EVENTS.has(job.eventType))) &&
-				(job.messageId === undefined || typeof job.messageId === "string")))
+				(job.messageId === undefined || typeof job.messageId === "string") &&
+				(job.reason === undefined || typeof job.reason === "string") &&
+				validChatFacts(job)))
 	);
 }
 
@@ -275,7 +317,9 @@ async function fanOut(env: Env, job: WebhookEventJob): Promise<void> {
 
 /**
  * One page stays within the D1 bind limit and the queue batch limit. A subscription with a room gets
- * only the events of that room. An expired subscription gets nothing.
+ * only the events of that room. An expired subscription gets nothing. A subscription with the filter
+ * `addressed` gets only an event whose reason for its target is not `room`, so a message that is not for
+ * the target makes no delivery job and no POST.
  */
 async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 	const eventType = job.eventType ?? "chat.message.created";
@@ -283,34 +327,42 @@ async function fanOutChat(env: Env, job: ChatWebhookEventJob): Promise<void> {
 	const now = new Date().toISOString();
 	for (let start = 0; start < job.recipients.length; start += 88) {
 		const recipients = job.recipients.slice(start, start + 88);
-		const memberships = new Map(recipients.map((member) => [member.id, member.membershipId]));
+		const members = new Map(recipients.map((member) => [member.id, member]));
 		const { results } = await env.DIRECTORY.prepare(
-			`SELECT s.id, s.target_id FROM webhook_subscriptions s
+			`SELECT s.id, s.target_id, s.chat_filter FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
 			WHERE s.status = 'active' AND e.status = 'active' AND s.domain = 'chat' AND s.event_type = '${eventType}'
 			AND s.sequence <= ? AND (s.expires_at IS NULL OR s.expires_at > ?) AND (s.room_id IS NULL OR s.room_id = ?)
 			AND s.target_id IN (${recipients.map(() => "?").join(",")})`,
 		)
 			.bind(job.subscriptionSequence, now, job.roomId, ...recipients.map((member) => member.id))
-			.all<{ id: string; target_id: string }>();
-		for (let offset = 0; offset < results.length; offset += 100) {
-			await env.WEBHOOKS.sendBatch(
-				results.slice(offset, offset + 100).map((row) => ({
-					body: {
-						v: 1,
-						kind: "chat_delivery",
-						webhookId: row.id,
-						mailboxId: row.target_id,
-						eventId: job.eventId,
-						occurredAt: job.occurredAt,
-						roomId: job.roomId,
-						membershipId: memberships.get(row.target_id) as string,
-						eventType,
-						messageId: job.messageId ?? job.eventId,
-						...(job.parentId === undefined ? {} : { parentId: job.parentId }),
-					} satisfies ChatWebhookDeliveryJob,
-				})),
-			);
+			.all<{ id: string; target_id: string; chat_filter: ChatWebhookFilter }>();
+		const jobs = results.flatMap((row): ChatWebhookDeliveryJob[] => {
+			const member = members.get(row.target_id);
+			if (!member) return [];
+			const reason = knownReason(member.reason);
+			if (row.chat_filter === "addressed" && (reason === undefined || reason === "room")) return [];
+			return [
+				{
+					v: 1,
+					kind: "chat_delivery",
+					webhookId: row.id,
+					mailboxId: row.target_id,
+					eventId: job.eventId,
+					occurredAt: job.occurredAt,
+					roomId: job.roomId,
+					membershipId: member.membershipId,
+					eventType,
+					messageId: job.messageId ?? job.eventId,
+					...(job.parentId === undefined ? {} : { parentId: job.parentId }),
+					...(reason === undefined ? {} : { reason }),
+					...(job.authorId === undefined ? {} : { authorId: job.authorId }),
+					...(job.version === undefined ? {} : { version: job.version }),
+				},
+			];
+		});
+		for (let offset = 0; offset < jobs.length; offset += 100) {
+			await env.WEBHOOKS.sendBatch(jobs.slice(offset, offset + 100).map((body) => ({ body })));
 		}
 	}
 }
@@ -471,19 +523,29 @@ export function webhookBody(row: { id: string; mailbox_id: string }, occurredAt:
 	});
 }
 
+/**
+ * The fields of a chat event that a POST of each form has: ids, the reason, the author and the version.
+ * They are no content. A receiver uses them to decide if it reads the message.
+ */
+function chatData(job: ChatWebhookDeliveryJob): Record<string, string | number> {
+	const reason = knownReason(job.reason);
+	return {
+		room_id: job.roomId,
+		message_id: job.messageId ?? job.eventId,
+		// A reply in a thread: read it with chat.list_replies of the parent.
+		...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
+		...(reason === undefined ? {} : { reason }),
+		...(job.authorId === undefined ? {} : { author_id: job.authorId }),
+		...(job.version === undefined ? {} : { version: job.version }),
+		uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
+	};
+}
+
 function chatBody(subscription: SubscriptionRow, job: ChatWebhookDeliveryJob): string {
 	return JSON.stringify({
 		type: job.eventType ?? "chat.message.created",
 		timestamp: new Date(job.occurredAt).toISOString(),
-		data: {
-			webhook_id: subscription.id,
-			principal_id: subscription.target_id,
-			room_id: job.roomId,
-			message_id: job.messageId ?? job.eventId,
-			// A reply in a thread: read it with chat.list_replies of the parent.
-			...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
-			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
-		},
+		data: { webhook_id: subscription.id, principal_id: subscription.target_id, ...chatData(job) },
 	});
 }
 
@@ -505,24 +567,18 @@ function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob):
 }
 
 /**
- * The body of a POST of MCP Events. `data` has the fields of the payload schema of the event. It has ids
- * and a URI only: no mail, no message text and no file content.
+ * The body of a POST of MCP Events. `data` has the fields of the payload schema of the event. It has
+ * ids, a URI and, for Chat, the facts of `chatData`: no mail, no message text and no file content.
  */
 function eventBody(subscription: SubscriptionRow, job: DeliveryJob, id: string): string {
-	let data: Record<string, string>;
+	let data: Record<string, string | number>;
 	if (job.kind === "delivery") {
 		data = {
 			mailbox_id: job.mailboxId,
 			uri: expandTemplate(resources["mail.inbox"].uriTemplate, { mailbox_id: job.mailboxId }),
 		};
 	} else if (job.kind === "chat_delivery") {
-		data = {
-			room_id: job.roomId,
-			message_id: job.messageId ?? job.eventId,
-			// A reply in a thread: read it with chat.list_replies of the parent.
-			...(job.parentId === undefined ? {} : { parent_id: job.parentId }),
-			uri: expandTemplate(resources["chat.room"].uriTemplate, { room_id: job.roomId }),
-		};
+		data = chatData(job);
 	} else if (job.eventType.startsWith("drive.item.")) {
 		data = {
 			space_id: job.spaceId,

@@ -11,7 +11,7 @@ export async function enableDriveEvents(call: CallContext, spaceId: string): Pro
 const shared = createSubscriptionHandlers("drive");
 
 function forDrive(view: SubscriptionView): DriveWebhookSubscription {
-	const { target_id, event, ...rest } = view;
+	const { target_id, event, chat_filter: _chatOnly, ...rest } = view;
 	return {
 		...rest,
 		space_id: target_id,

@@ -6,6 +6,8 @@ import { BASE_URL } from "../support/server.ts";
 interface Subscription {
 	event: string;
 	endpoint_id: string;
+	/** The messages that a chat subscription sends. */
+	filter?: string;
 	/** The drive of a drive subscription. */
 	space_id?: string;
 }
@@ -20,6 +22,17 @@ async function eventsOf(context: BrowserContext, product: "mail" | "chat" | "dri
 		.map((subscription) =>
 			subscription.space_id?.startsWith("drv_") ? `shared ${subscription.event}` : subscription.event,
 		)
+		.sort();
+}
+
+/** The filter of each chat subscription of one endpoint, from the REST API. */
+async function chatFiltersOf(context: BrowserContext, endpointId: string) {
+	const response = await context.request.get("/api/v1/chat/webhook-subscriptions");
+	expect(response.ok(), "list of chat subscriptions").toBe(true);
+	const { subscriptions } = (await response.json()) as { subscriptions: Subscription[] };
+	return subscriptions
+		.filter((subscription) => subscription.endpoint_id === endpointId)
+		.map((subscription) => `${subscription.event} ${subscription.filter}`)
 		.sort();
 }
 
@@ -128,12 +141,28 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 
 	await page.getByRole("button", { name: "Add webhook" }).click();
 	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
+	// An agent starts with only the messages for it, so a busy room does not send a POST for each message.
+	const addressed = "Direct messages, mentions and followed threads";
+	await expect(add.getByRole("combobox", { name: "Messages" })).toContainText(addressed);
 	await add.getByLabel("An edited message").check();
 	await add.getByLabel("A new item").check();
 	await add.getByRole("button", { name: "Save" }).click();
 	const row = page.getByRole("row").filter({ hasText: label });
-	await expect(row).toContainText("An edited message");
+	await expect(row).toContainText(`An edited message (${addressed} only)`);
 	await expect(row).toContainText("A new item");
+	const id = await endpointId(sponsor, label);
+	expect(await chatFiltersOf(sponsor, id)).toEqual(["chat.message.updated addressed"]);
+
+	// A different filter replaces the saved subscription, and a new event gets the filter of the menu.
+	await row.getByRole("button", { name: `Edit events of ${label}` }).click();
+	const edit = page.getByRole("dialog", { name: `Events of ${label}` });
+	await edit.getByRole("combobox", { name: "Messages" }).click();
+	await page.getByRole("option", { name: "Each message" }).click();
+	await edit.getByLabel("A new message").check();
+	await edit.getByRole("button", { name: "Save" }).click();
+	await expect(row).toContainText("A new message, An edited message");
+	await expect(row).not.toContainText(addressed);
+	expect(await chatFiltersOf(sponsor, id)).toEqual(["chat.message.created all", "chat.message.updated all"]);
 
 	// An admin who is not the sponsor sees the same webhook. The admin can clear an event, but cannot set one.
 	const admin = await signIn(browser, "tomasz");
@@ -145,12 +174,13 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	const events = adminPage.getByRole("dialog", { name: `Events of ${label}` });
 	await expect(events.getByLabel("A new item")).toBeChecked();
 	await expect(events.getByLabel("A moved item")).toBeDisabled();
+	// A different filter adds a subscription, and the admin cannot add one.
+	await expect(events.getByRole("combobox", { name: "Messages" })).toBeDisabled();
 	await events.getByLabel("A new item").uncheck();
 	await events.getByRole("button", { name: "Save" }).click();
 	await expect(adminRow).toContainText("An edited message");
 	await expect(adminRow).not.toContainText("A new item");
 
-	const id = await endpointId(sponsor, label);
 	await sponsor.request.delete(`/api/v1/webhooks/endpoints/${id}`, { headers: { origin: BASE_URL } });
 	await sponsor.close();
 	await admin.close();

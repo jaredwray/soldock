@@ -192,6 +192,9 @@ webhook delivery of that integration. It has no polling, no stream and no replay
   because the events have no replay.
 - `events/unsubscribe` takes `name`, `arguments` and `delivery` (`mode`, `url`). The result is `{}`,
   also when no such subscription exists.
+- A chat event takes the argument `filter`. With `addressed`, the default of a new subscription of an
+  agent, only a message for the caller sends the event. Each chat POST has `reason`, `author_id` and `version` in `data`. See
+  [Chat events](../webhooks/README.md#chat-events).
 - Errors: params that are not valid, an unknown event and an event without its scope get `-32602`.
   A callback URL that is not accepted gets `-32015` with `data.reason`: `invalid_url`,
   `challenge_failed`, `timeout` or `unreachable`. Each other refusal gets `-32603` with the error

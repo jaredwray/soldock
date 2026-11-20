@@ -37,6 +37,7 @@ export async function listSubscriptions(domain: WebhookDomain, targetId?: string
 			targetId: row.principal_id,
 			status: row.status,
 			disabledReason: row.disabled_reason,
+			filter: row.filter,
 			endpoint: row.endpoint,
 		}));
 	}
@@ -55,6 +56,23 @@ export async function listSubscriptions(domain: WebhookDomain, targetId?: string
 async function createSubscription(endpoint: WebhookEndpoint, choice: EventChoice): Promise<ListedSubscription> {
 	const domain = webhookDomain(choice.event);
 	const input = { endpoint_id: endpoint.id };
+	const listed = (row: Pick<ListedSubscription, "id" | "event" | "status" | "disabledReason">) => ({
+		...row,
+		domain,
+		targetId: choice.targetId,
+		endpoint,
+	});
+	if (domain === "chat") {
+		// The dialog always sends the filter that its menu shows, so the default of the server does not apply.
+		const { subscription } = await api.call("chat.create_webhook_subscription", {
+			...input,
+			event: choice.event as ChatWebhookEvent,
+			principal_id: choice.targetId,
+			filter: choice.filter ?? "all",
+		});
+		const { id, event, status, disabled_reason, filter } = subscription;
+		return { ...listed({ id, event, status, disabledReason: disabled_reason }), filter };
+	}
 	const created =
 		domain === "mail"
 			? await api.call("mail.create_webhook_subscription", {
@@ -62,19 +80,13 @@ async function createSubscription(endpoint: WebhookEndpoint, choice: EventChoice
 					event: choice.event as MailWebhookEvent,
 					mailbox_id: choice.targetId,
 				})
-			: domain === "chat"
-				? await api.call("chat.create_webhook_subscription", {
-						...input,
-						event: choice.event as ChatWebhookEvent,
-						principal_id: choice.targetId,
-					})
-				: await api.call("drive.create_webhook_subscription", {
-						...input,
-						event: choice.event as DriveWebhookEvent,
-						space_id: choice.targetId,
-					});
+			: await api.call("drive.create_webhook_subscription", {
+					...input,
+					event: choice.event as DriveWebhookEvent,
+					space_id: choice.targetId,
+				});
 	const { id, event, status, disabled_reason } = created.subscription;
-	return { id, domain, event, targetId: choice.targetId, status, disabledReason: disabled_reason, endpoint };
+	return listed({ id, event, status, disabledReason: disabled_reason });
 }
 
 async function deleteSubscription(subscription: ListedSubscription): Promise<void> {

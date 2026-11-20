@@ -12,7 +12,7 @@ export async function enableMailEvents(call: CallContext, mailboxId: string): Pr
 const shared = createSubscriptionHandlers("mail", enableMailEvents);
 
 function forMail(view: SubscriptionView): MailWebhookSubscription {
-	const { target_id, ...rest } = view;
+	const { target_id, chat_filter: _chatOnly, ...rest } = view;
 	return { ...rest, mailbox_id: target_id, event: "mail.inbox.updated" };
 }
 

@@ -51,7 +51,8 @@ import { removeImage, selectedImage, setImageAttrs } from "./imageCommands.ts";
 import { widthAfterCrop } from "./imageModel.ts";
 import { fileSources, imagePlugins, insertSources } from "./imagePlugin.ts";
 import { DOC_IMAGE_ACCEPT, type DocImages, fileProblem, type ImageSource } from "./images.ts";
-import { docHref, type ImageAttrs, plainTextSlice, schema } from "./schema.ts";
+import { markdownPaste } from "./markdownPaste.ts";
+import { docHref, type ImageAttrs, schema } from "./schema.ts";
 
 // Security rules for the editor:
 // - The editor DOM holds only the nodes and marks of the schema in schema.ts. ProseMirror parses
@@ -59,6 +60,7 @@ import { docHref, type ImageAttrs, plainTextSlice, schema } from "./schema.ts";
 //   only what the parse rules of the schema accept.
 // - Each link is http, https or mailto (docHref), from the parse rules or from the link dialog.
 // - The app writes no HTML into the page. The editor makes its DOM with createElement.
+// - Pasted Markdown becomes nodes and marks of the schema (markdownPaste.ts). HTML in it stays text.
 // - An image shows from a `blob:` address of a raster type, which the image store makes from the bytes
 //   of `docs.get_image`. A pasted `<img>` never loads: imagePlugin.ts brings its bytes into the doc.
 
@@ -237,6 +239,8 @@ export function DocEditor({ doc, version, editable, label, images, onChange }: D
 		keymap(baseKeymap),
 		depthLimit(),
 		placeholderPlugin(PLACEHOLDER),
+		// Before the image plugin: pasted text with a picture of the text is text.
+		markdownPaste(),
 		...imagePlugins({ images, notify: (message) => toastRef.current({ message, tone: "error" }) }),
 	]);
 	const [initialState] = useState(() => EditorState.create({ doc, plugins }));
@@ -265,8 +269,6 @@ export function DocEditor({ doc, version, editable, label, images, onChange }: D
 				spellcheck: "true",
 			}),
 			editable: () => editableRef.current,
-			clipboardTextParser: (text, $context) =>
-				plainTextSlice(text, $context.parent.type.spec.code === true, $context.marks()),
 			dispatchTransaction(tr) {
 				const next = view.state.apply(tr);
 				view.updateState(next);

@@ -34,6 +34,28 @@ export const MAIL_WEBHOOK_EVENTS = ["mail.inbox.updated"] as const;
 /** A message in a joined chat. The POST has no message text. A read marker sends nothing. */
 export const CHAT_WEBHOOK_EVENTS = ["chat.message.created", "chat.message.updated", "chat.message.deleted"] as const;
 /**
+ * The messages that a chat subscription sends. `all`: each message of a joined chat. `addressed`: only a
+ * message for the target, with a reason other than `room` (`CHAT_EVENT_REASONS`).
+ */
+export const CHAT_WEBHOOK_FILTERS = ["all", "addressed"] as const;
+export type ChatWebhookFilter = (typeof CHAT_WEBHOOK_FILTERS)[number];
+/**
+ * Why a chat event goes to its receiver. The first reason that is true applies.
+ * - `author`: the receiver wrote the message. Only a delete by a different member has this reason,
+ *   because the changes of the receiver send nothing to it.
+ * - `mention`: the message mentions the receiver, or a group (`@here`, `@channel`).
+ * - `dm`: the message is in a direct message.
+ * - `thread_reply`: the message is a reply in a thread that the receiver follows.
+ * - `room`: the receiver is a member of the room, and no other reason applies.
+ */
+export const CHAT_EVENT_REASONS = ["author", "mention", "dm", "thread_reply", "room"] as const;
+export type ChatEventReason = (typeof CHAT_EVENT_REASONS)[number];
+
+/** The filter of a new chat subscription without `filter`: an agent gets only the messages for it. */
+export function defaultChatWebhookFilter(targetKind: "human" | "agent"): ChatWebhookFilter {
+	return targetKind === "agent" ? "addressed" : "all";
+}
+/**
  * A change to an item in a drive, or to the members of a shared drive. The POST has no file content.
  * A star sends nothing. Docs and sheets use `drive.item.updated`.
  */
@@ -186,7 +208,7 @@ const SubscriptionDisabledReason = z.enum(["access_lost", "credential_revoked"])
 
 /**
  * A webhook endpoint: a URL outside Asterra. A subscription chooses which events Asterra POSTs to it.
- * The POST holds ids only. The receiver reads the resource with its own credential.
+ * The POST holds no content. The receiver reads the resource with its own credential.
  */
 export const WebhookEndpoint = z.object({
 	id: z.string(),
@@ -249,6 +271,8 @@ export type MailWebhookSubscription = z.infer<typeof MailWebhookSubscription>;
 export const ChatWebhookSubscription = SubscriptionBase.extend({
 	event: z.enum(CHAT_WEBHOOK_EVENTS),
 	principal_id: prefixedId("prn"),
+	/** `all`: each message of a joined chat. `addressed`: only a message for the principal. */
+	filter: z.enum(CHAT_WEBHOOK_FILTERS),
 }).and(EndpointRef);
 export type ChatWebhookSubscription = z.infer<typeof ChatWebhookSubscription>;
 
