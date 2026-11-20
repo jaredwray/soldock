@@ -1,9 +1,18 @@
 import type { ResourceName } from "@asterra/contracts";
 
+/**
+ * The facts of one change of a resource: ids, a reason, a version. They let a client decide before a
+ * read. They never have content: no mail, no message text and no file content.
+ */
+export type ChangeFacts = Readonly<Record<string, string | number | null>>;
+
 /** What a change feed tells its listener. */
 export interface WatchListener {
-	/** The resource changed, as the `updates` text of its definition says. */
-	change(): void;
+	/**
+	 * The resource changed, as the `updates` text of its definition says. A feed that knows the facts of
+	 * the change gives them. A feed of a resource whose read has all that a client needs gives none.
+	 */
+	change(facts?: ChangeFacts): void;
 	/** The feed stopped by itself, for example because its object restarted. */
 	end(): void;
 }

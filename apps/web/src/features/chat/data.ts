@@ -151,6 +151,8 @@ export function useRooms() {
 					setThreadsTick((current) => current + 1);
 					return;
 				}
+				// A change for the principal: the list of rooms has it with its `chat.room` event.
+				if (event.type === "chat.addressed") return;
 				const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
 				const room = event.type === "chat.room" ? event.room : null;
 				const at = ++events.current;

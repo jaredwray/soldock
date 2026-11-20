@@ -144,7 +144,11 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	// An agent starts with only the messages for it, so a busy room does not send a POST for each message.
 	const addressed = "Direct messages, mentions and followed threads";
 	await expect(add.getByRole("combobox", { name: "Messages" })).toContainText(addressed);
-	await add.getByLabel("An edited message").check();
+	// The hint under the menu tells what each check box sends for the choice. An edit and a delete have their own rule.
+	await expect(add.getByRole("combobox", { name: "Messages" })).toHaveAccessibleDescription(
+		"Only these messages send a POST. An edit counts when the message is one of these after the edit. A delete counts when the message was one of these before the delete, or when a different member deletes a message of the agent.",
+	);
+	await add.getByRole("group", { name: "Send a POST for" }).getByLabel("An edited message").check();
 	await add.getByLabel("A new item").check();
 	await add.getByRole("button", { name: "Save" }).click();
 	const row = page.getByRole("row").filter({ hasText: label });
@@ -158,6 +162,9 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	const edit = page.getByRole("dialog", { name: `Events of ${label}` });
 	await edit.getByRole("combobox", { name: "Messages" }).click();
 	await page.getByRole("option", { name: "Each message" }).click();
+	await expect(edit.getByRole("combobox", { name: "Messages" })).toHaveAccessibleDescription(
+		"Each message in the rooms and direct messages of the agent sends a POST.",
+	);
 	await edit.getByLabel("A new message").check();
 	await edit.getByRole("button", { name: "Save" }).click();
 	await expect(row).toContainText("A new message, An edited message");

@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms` and `chat_threads` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads` and `chat_addressed` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -38,6 +38,13 @@ to it, so a list of that state reads one object and not the directory.
 - `chat_rooms.threads_known` is 1 for a room that sent its threads. The first fill of the threads
   (`threadFill`, `fillChatThreads`) asks the other joined rooms one time, then records `chat_threads_filled`
   in `meta`.
+- The table `chat_addressed` has the newest change of each joined room that is for the principal: a
+  message in a direct message, a mention, a reply in a followed thread, or a delete of its message by
+  a different member. Each state of a room has that change (`addressed`), or null. The object keeps a
+  change only when its version is higher than the version of the kept change. A state with null, and
+  a state without the room, remove the row. A state without `addressed` (from a room on an older
+  version) keeps the row. `listChatAddressed` reads the rows for `chat.list_addressed`, with the
+  newest change first, in the order of the index `chat_addressed_recent`.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.
 - The object has no operation of its own. Its methods check no access: only the Worker and other
@@ -60,6 +67,7 @@ contract of the socket.
 | `chat.room` | The object kept a new state of a joined room | `room`: the room as `chat.list_rooms` returns it |
 | `chat.room_removed` | The principal is not a member of the room now | `room_id` |
 | `chat.threads` | The object kept a state that changed the followed threads of a room: a new reply, a read marker, a follow or a stop | `room_id`. The client calls `chat.list_threads` again |
+| `chat.addressed` | The object kept a newer change of a room that is for the principal | `room_id`, and the fields of an entry of `chat.list_addressed` without the room: `event`, `reason`, `message_id`, `parent_id`, `author_id`, `version` and `at`. No message text |
 
 - The socket carries events only. Each change is an operation, with REST and MCP. A message from a
   client closes the socket with code `1008`. The text `ping` is the exception: the runtime answers
@@ -73,8 +81,11 @@ contract of the socket.
   session needs the `Origin` of this host. The credential must be able to call `chat.list_rooms`
   (the scope `chat.read`), because each event now is Chat. A later event type adds its own check.
 - The socket ends in the object of the principal of the credential, and nowhere else.
+- Each state of a room has its newest change for the principal again. Only a change with a higher
+  version sends `chat.addressed`. So a message that is not for the principal sends `chat.room`
+  only. The changes of one room in one state send one `chat.addressed`, with the newest change.
 - One principal has at most 20 sockets (`EVENTS_LIMITS.socketsPerPrincipal`), with the feeds of its
-  MCP streams (the resource `chat.rooms`). At the limit, a new socket closes the oldest socket that
+  MCP streams (the resources `chat.rooms` and `chat.addressed`). At the limit, a new socket closes the oldest socket that
   is not a feed with `4002` (`replaced`). The object never closes a feed for this, because the end
   of one feed ends its stream. At the limit, a new feed is refused, and so is a socket when each
   socket is a feed.

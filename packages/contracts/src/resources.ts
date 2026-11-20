@@ -80,7 +80,7 @@ export const chatRoom = defineResource({
 			})),
 	},
 	updates:
-		"A new, changed or deleted message sends notifications/resources/updated, also a reply in a thread. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
+		"A new, changed or deleted message sends notifications/resources/updated, also a reply in a thread. A change that you made sends no notification. A read marker sends no notification. A change of the name, the topic or the members sends no notification.",
 });
 
 /**
@@ -102,6 +102,27 @@ export const chatRooms = defineResource({
 	},
 	updates:
 		"A change of one of your rooms sends notifications/resources/updated: a new, changed or deleted message, a read marker, a new name or topic, a change of the members, a room that you join, and a room that you leave.",
+});
+
+/**
+ * The newest change for the caller in each of its rooms. One subscription tells an agent about each
+ * message that is for it, and about no other message.
+ */
+export const chatAddressed = defineResource({
+	name: "chat.addressed",
+	title: "Messages for you",
+	description:
+		"The newest change that is for you in each of your rooms and direct messages, as chat.list_addressed returns them: a message in a direct message, a mention of you or of a group, a reply in a thread that you follow, and a delete of your message by a different member. Subscribe to it with subscriptions/listen to get a notification only for a message that is for you, also in a room that you join later. Then call chat.list_addressed, and read each room that has a new entry.",
+	uriTemplate: "asterra://chat/addressed",
+	mimeType: "application/json",
+	read: { operation: "chat.list_addressed", input: () => ({}) },
+	list: {
+		operation: "chat.list_addressed",
+		input: { limit: 1 },
+		items: () => [{ vars: {}, title: "Messages for you" }],
+	},
+	updates:
+		"A new, changed or deleted message that is for you sends notifications/resources/updated. Each other message of your rooms sends no notification. A change that you made sends no notification. Changes of one room in a short time send one notification.",
 });
 
 /** One item in a drive. The POST of a drive item event uses this URI. */
@@ -157,6 +178,7 @@ export const resources = {
 	"mail.inbox": mailInbox,
 	"chat.room": chatRoom,
 	"chat.rooms": chatRooms,
+	"chat.addressed": chatAddressed,
 	"drive.item": driveItem,
 	"drive.space": driveSpace,
 } as const;

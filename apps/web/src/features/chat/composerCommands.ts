@@ -1,4 +1,4 @@
-import type { GroupMention } from "@asterra/contracts";
+import { type GroupMention, mentionFits } from "@asterra/contracts";
 import { chainCommands, liftEmptyBlock, newlineInCode, splitBlock, toggleMark } from "prosemirror-commands";
 import { redo, undo } from "prosemirror-history";
 import { InputRule, textblockTypeInputRule, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";
@@ -8,7 +8,7 @@ import { type Command, type EditorState, TextSelection, type Transaction } from 
 import { createRichTextCommands, keepKey, type RichTextSchema } from "../mail/richTextCommands.ts";
 import { chatSchema } from "./composerSchema.ts";
 import { emojiOfCode, emojiQueryAt, FULL_CODE } from "./emoji.ts";
-import { insertMention, mentionAt } from "./mentions.ts";
+import { insertMention, type MentionDirectory, mentionAt, textParts } from "./mentions.ts";
 
 // The commands, the keys and the Markdown shortcuts of the chat box. Each one works on an EditorState
 // only, so the Node tests can run them without a DOM.
@@ -252,6 +252,71 @@ function replaceTypedMention(state: EditorState, label: string, node: Node): Tra
 	const afterMention = next.caret - start - `@${label}`.length;
 	const tr = state.tr.replaceWith(mention.from, mention.to, space ? [node, chatSchema.text(" ")] : [node]);
 	return tr.setSelection(TextSelection.create(tr.doc, mention.from + 1 + afterMention)).scrollIntoView();
+}
+
+/** A mention that is text in the box, with no node: from its "@" (`from`) to its end (`to`), in positions of the document. */
+export interface TextMention {
+	from: number;
+	to: number;
+}
+
+/** One part of a line of the box, as the room reads it. */
+interface LinePart {
+	from: number;
+	text: string;
+	/** "typed": a mention in text. "marked": a text with marks. "break": a line break. "plain": each other part. */
+	kind: "typed" | "marked" | "break" | "plain";
+}
+
+/**
+ * The mentions that the person typed and did not take from the list: "@" and a handle or a name alias of
+ * the directory, or a group. The room makes a mention node of each one when it stores the message
+ * (`linkMentions` in apps/dock/src/chat/mentions.ts), so the box shows them as mentions. The rules are
+ * the rules of the room: code and a link have no mention, and a mention that touches a letter, a digit
+ * or a mark of an address is text.
+ */
+export function textMentions(doc: Node, directory: MentionDirectory): TextMention[] {
+	const found: TextMention[] = [];
+	doc.descendants((block, pos) => {
+		if (!block.isTextblock) return true;
+		if (block.type.spec.code) return false;
+		const parts: LinePart[] = [];
+		block.forEach((child, offset) => {
+			const from = pos + 1 + offset;
+			if (!child.isText) {
+				// A mention node is "@" and its label. A line break is a new line.
+				const text = child.type.spec.leafText?.(child) ?? "";
+				parts.push({ from, text, kind: child.type === nodes.hard_break ? "break" : "plain" });
+				return;
+			}
+			const text = child.text ?? "";
+			const rest = child.marks.length > 0 ? "marked" : "plain";
+			const holds =
+				text.includes("@") && !child.marks.some((mark) => mark.type === marks.code || mark.type === marks.link);
+			if (!holds) {
+				parts.push({ from, text, kind: rest });
+				return;
+			}
+			let at = from;
+			for (const part of textParts(text, directory)) {
+				parts.push({ from: at, text: part.text, kind: part.person || part.group ? "typed" : rest });
+				at += part.text.length;
+			}
+		});
+		// The text before a part, back to the start of the line. A text with marks ends a word, as its
+		// Markdown marks do.
+		let before = "";
+		parts.forEach((part, index) => {
+			const next = parts[index + 1];
+			const after = !next || next.kind === "marked" ? "" : next.text;
+			if (part.kind === "typed" && mentionFits(before, after)) {
+				found.push({ from: part.from, to: part.from + part.text.length });
+			}
+			before = part.kind === "break" || part.kind === "marked" ? "" : before + part.text;
+		});
+		return false;
+	});
+	return found;
 }
 
 /** The code of an emoji that the person types: from its ":" (`from`) to the caret (`to`). */
