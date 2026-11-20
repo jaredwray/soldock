@@ -3,14 +3,14 @@ import {
 	type ChatBodyBlock,
 	type ChatBodyInline,
 	type GroupMention,
-	hasMentionSyntax,
 	type MentionDirectory,
 	mentionDirectory,
 	mentionFits,
+	mentionKeys,
 	textParts,
 } from "@asterra/contracts";
-import { listPrincipals, type PrincipalRecord } from "../identity/index.ts";
-import { bodyText, checkedContent, groupMentions, type MessageContent, mentionsOf } from "./body.ts";
+import { mentionCandidates, type PrincipalRecord } from "../identity/index.ts";
+import { bodyText, checkedContent, groupMentions, type MessageContent } from "./body.ts";
 
 // The mentions of a message. A mention is a node with the id of a principal. The server makes the nodes
 // from the text: "@" and a handle or a name alias, with the rules of `mentionDirectory` in the contracts,
@@ -26,19 +26,23 @@ function canHoldMention(node: Text): boolean {
 }
 
 /**
- * True when the body has a mention node (also of a group), or a text with the syntax of a mention ("@"
- * and a handle, not an address). Only then the directory loads, and the nodes get their checks.
+ * What the mentions of a body can name: the keys (handles and name aliases, in lowercase) of the mentions
+ * in its texts that can hold one and of the labels of its mention nodes, and the principals of its mention
+ * nodes. The room reads only these principals (`mentionCandidates`).
  */
-function needsDirectory(body: ChatBody): boolean {
-	if (mentionsOf(body).length > 0 || groupMentions(body).length > 0) return true;
-	let found = false;
+function mentionLookup(body: ChatBody): { keys: string[]; ids: string[] } {
+	const keys = new Set<string>();
+	const ids = new Set<string>();
 	const walk = (list: readonly ChatBodyBlock[]) => {
 		for (const block of list) {
-			if (found) return;
 			if (block.type === "paragraph") {
-				found = (block.content ?? []).some(
-					(node) => node.type === "text" && canHoldMention(node) && hasMentionSyntax(node.text),
-				);
+				for (const node of block.content ?? []) {
+					if (node.type === "text" && canHoldMention(node)) for (const key of mentionKeys(node.text)) keys.add(key);
+					if (node.type === "mention") {
+						ids.add(node.attrs.id);
+						keys.add(node.attrs.label.toLowerCase());
+					}
+				}
 			} else if (block.type === "blockquote") walk(block.content);
 			else if (block.type === "bullet_list" || block.type === "ordered_list") {
 				for (const item of block.content) walk(item.content);
@@ -46,7 +50,7 @@ function needsDirectory(body: ChatBody): boolean {
 		}
 	};
 	walk(body.content);
-	return found;
+	return { keys: [...keys], ids: [...ids] };
 }
 
 /** True when a principal can see the room of the message. A mention of any other principal is text. */
@@ -161,13 +165,16 @@ export function storedGroups(body: ChatBody): GroupMention[] {
 }
 
 /**
- * The content with its mentions as nodes, for the principals that can see the room. The directory loads
- * only for a body with the syntax of a mention, or with a mention node. A plain text keeps its text as it
- * came. The limits, also the limit of mentions, apply to the result.
+ * The content with its mentions as nodes, for the principals that can see the room. The room reads only
+ * the principals that the body can name (`mentionLookup`, `mentionCandidates`), and nothing for a body
+ * without the syntax of a mention, a mention node or a group node. A plain text keeps its text as it came.
+ * The limits, also the limit of mentions, apply to the result.
  */
 export async function withMentions(db: D1Database, content: MessageContent, canSee: CanSee): Promise<MessageContent> {
-	if (!needsDirectory(content.body)) return content;
-	const directory = mentionDirectory(await listPrincipals(db));
+	const { keys, ids } = mentionLookup(content.body);
+	if (keys.length === 0 && ids.length === 0 && groupMentions(content.body).length === 0) return content;
+	const people = keys.length > 0 || ids.length > 0 ? await mentionCandidates(db, keys, ids) : [];
+	const directory = mentionDirectory(people);
 	const body = linkMentions(content.body, directory, canSee);
 	// A plain text keeps its spaces at the start. A mention is "@" and its label, so the text of a text
 	// with mentions is the same text. A body form gets the text of its new labels.

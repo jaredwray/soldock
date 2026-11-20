@@ -4,7 +4,7 @@ import { CHAT_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { messageContent } from "../src/chat/body.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
-import type { ChatRoomState } from "../src/identity/index.ts";
+import { type ChatRoomState, mentionCandidates } from "../src/identity/index.ts";
 import {
 	type Actor,
 	api,
@@ -1154,6 +1154,68 @@ describe("rich text", () => {
 
 describe("mentions", () => {
 	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
+
+	// The room reads only the principals that a message can name (jaredwray/soldock#127). A name alias
+	// comes from an index, so it must follow a rename, keep the rule for accents, and work for a row from
+	// before the alias columns.
+	it("finds a name alias with accents, after a rename, and for a row from before the alias columns", async () => {
+		const room = await createRoom(ada, "public", "Launch");
+		const jose = await createActor(owner, {
+			kind: "human",
+			display_name: "José Núñez",
+			address: "jnunez@dock.test",
+			password: PASSWORD,
+		});
+		expect((await post(ada, room.id, "@jose and @josenunez")).mentions).toEqual([jose.id]);
+		// A rename writes the aliases of the new name, so the old alias is text.
+		await owner.call("directory.update_principal", { principal_id: jose.id, display_name: "Joaquín Núñez" });
+		expect((await post(ada, room.id, "@jose")).mentions).toEqual([]);
+		expect((await post(ada, room.id, "@joaquin")).mentions).toEqual([jose.id]);
+		// The previous Worker renames without the alias columns during a deploy. The trigger marks the row,
+		// so the read writes the aliases of the new name.
+		await env.DIRECTORY.prepare("UPDATE principals SET display_name = 'Javier Núñez' WHERE id = ?").bind(jose.id).run();
+		expect((await post(ada, room.id, "@joaquin")).mentions).toEqual([]);
+		expect((await post(ada, room.id, "@javier")).mentions).toEqual([jose.id]);
+		// A row from before the alias columns: the read finds it, and writes its aliases.
+		await env.DIRECTORY.prepare(
+			"UPDATE principals SET alias_first = NULL, alias_full = NULL, aliases_set = 0 WHERE id = ?",
+		)
+			.bind(jose.id)
+			.run();
+		expect((await post(ada, room.id, "@javiernunez")).mentions).toEqual([jose.id]);
+		expect(
+			await env.DIRECTORY.prepare("SELECT alias_first, alias_full, aliases_set FROM principals WHERE id = ?")
+				.bind(jose.id)
+				.first(),
+		).toEqual({ alias_first: "javier", alias_full: "javiernunez", aliases_set: 1 });
+	});
+
+	// A message with a mention must not read the whole directory: in a large organization that is a slow read
+	// on the path of each post. The principals of a shared local part come too, so a handle keeps its rule.
+	it("reads only the principals of the keys and ids of a message", async () => {
+		for (let index = 0; index < 5; index++) {
+			await createActor(owner, {
+				kind: "human",
+				display_name: `Person ${index}`,
+				address: `person${index}@dock.test`,
+				password: PASSWORD,
+			});
+		}
+		const namesake = await createActor(owner, {
+			kind: "human",
+			// The name has no alias "ada", so only the local part of the address finds this principal.
+			display_name: "Augusta King",
+			address: "ada@second.test",
+			password: PASSWORD,
+		});
+		const ids = async (keys: string[], principalIds: string[] = []) =>
+			(await mentionCandidates(env.DIRECTORY, keys, principalIds)).map((person) => person.id).sort();
+		expect(await ids(["bot"])).toEqual([bot.id]);
+		expect(await ids(["ada"])).toEqual([ada.id, namesake.id].sort());
+		expect(await ids(["billing", "ada@second.test"])).toEqual([bot.id, namesake.id].sort());
+		expect(await ids([], [ada.id])).toEqual([ada.id, namesake.id].sort());
+		expect(await ids(["nobody"])).toEqual([]);
+	});
 
 	// An agent writes "@bot" in Markdown or text. The web app sends a node. Both must be the same mention.
 	it("makes a node of each handle or name alias in text and Markdown, and keeps code, links, addresses and unknown handles as text", async () => {

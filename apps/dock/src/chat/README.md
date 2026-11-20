@@ -144,9 +144,16 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     and its label. So a message with such a mention can still change, and its retry returns it.
   - A node that touches a letter, a digit or a mark of an address is text, as a mention in text is:
     its Markdown would read back as a different mention (`@bot` and `x` is `@botx`).
-  - The directory (`listPrincipals`) loads only for a body with the syntax of a mention (`@` and a
-    handle, not an address) in a text that can hold one, or with a mention node. It is the whole
-    directory: a later change reads only the handles and ids of the body.
+  - The room reads only the principals that the body can name (`mentionCandidates` of the identity
+    module), and nothing for a body without the syntax of a mention (`@` and a handle, not an address)
+    in a text that can hold one, a mention node or a group node. The keys are the handles and name
+    aliases of the texts and of the labels (`mentionKeys`), and the ids are the mention nodes.
+    - The read has the principals of the ids, the addresses equal to a full key, each principal with
+      the local part of a key or of an id (so the count of a shared local part is right), and each name
+      alias equal to a key. Each part reads an index, so the rows read follow the message, not the
+      directory. `mentionDirectory` then applies the same rules as with the whole directory.
+    - A row from before the alias columns (`aliases_set = 0`) is always read, and the read writes its
+      aliases, 200 at a time. So after some posts with a mention, these rows are gone.
   - The room keeps a mention of a principal that cannot see the room as text: `@` and the label that
     the caller sent, with no change, so the room tells no handle of a principal outside it. Each
     principal can see a public room. A private room and a direct message are for their members. So a
