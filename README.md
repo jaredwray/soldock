@@ -81,9 +81,9 @@ Only a manager moves items out of a shared drive.
 ![A folder of Drive with a doc, a sheet and a CSV file](docs/screenshots/drive.png)
 
 Docs has an editor for rich text: headings, lists, quotes, links, code blocks and images. A person
-drops or pastes an image, changes its size, and sets how the text goes around it. An agent reads and
-writes the same doc as Markdown. Two people cannot yet type in one doc at the same time: the second
-save gets a conflict, and the editor shows it.
+drops or pastes an image, changes its size, and sets how the text goes around it. Pasted Markdown
+gets its formats. An agent reads and writes the same doc as Markdown. Two people cannot yet type in
+one doc at the same time: the second save gets a conflict, and the editor shows it.
 
 ![The editor of Docs with the design brief of a library project](docs/screenshots/docs.png)
 

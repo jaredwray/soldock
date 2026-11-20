@@ -1,19 +1,27 @@
-import {
-	DOC_LIMITS,
-	type DocBlock,
-	type DocContent,
-	type DocImageNode,
-	type DocInline,
-	type DocMark,
-} from "@asterra/contracts";
+import { DOC_LIMITS, type DocBlock, type DocContent, type DocImageNode, type DocInline, type DocMark } from "./docs.ts";
 
-// Markdown for agents and for downloads. The two functions are a pair: `markdownToDoc` reads all that
-// `docToMarkdown` writes. Markdown has no underline and no empty paragraph, so a doc loses those in
-// Markdown. Each other format comes back the same.
+// Markdown for agents, for downloads and for a paste into the editor of the web app. It has no DOM and
+// no network, so the server and the clients read Markdown in the same way. The two functions are a
+// pair: `markdownToDoc` reads all that `docToMarkdown` writes. Markdown has no underline and no empty
+// paragraph, so a doc loses those in Markdown. Each other format comes back the same.
 //
 // An image of a doc is `![alt](image:img_… "caption")`. Its options are a query after the id:
 // `?width=320&layout=wrap_left&crop=0.1,0.1,0.8,0.8`. The target is the id of an image that the doc
 // holds, never an address.
+
+// A Worker, a browser and Node have the classes of the URL standard. This package has the types of no
+// runtime, so the parts that this module uses are declared here.
+declare class URL {
+	constructor(url: string);
+	readonly href: string;
+	readonly protocol: string;
+	readonly hostname: string;
+}
+declare class URLSearchParams {
+	constructor(init: string);
+	keys(): IterableIterator<string>;
+	get(name: string): string | null;
+}
 
 type ListBlock = Extract<DocBlock, { type: "bullet_list" | "ordered_list" }>;
 type ListItem = ListBlock["content"][number];
