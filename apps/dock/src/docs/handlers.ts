@@ -1,4 +1,11 @@
-import { DOC_LIMITS, DocContent, type DocImage, type OperationName } from "@asterra/contracts";
+import {
+	DOC_LIMITS,
+	DocContent,
+	type DocImage,
+	docToMarkdown,
+	markdownToDoc,
+	type OperationName,
+} from "@asterra/contracts";
 import { z } from "zod";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import {
@@ -16,7 +23,6 @@ import { base64ToBytes, bytesToBase64, type HandlerMap, newId, OperationError } 
 import { outboundHostAllowed, publicUrlProblem } from "../webhooks/index.ts";
 import { checkDoc, completeImages, docText, EMPTY_DOC, imageNodes } from "./content.ts";
 import { type ImageInfo, imageProblem, readImageInfo } from "./image.ts";
-import { docToMarkdown, markdownToDoc } from "./markdown.ts";
 
 type DocsOperation = Extract<OperationName, `docs.${string}`>;
 

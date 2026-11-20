@@ -17,6 +17,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the mail subscription operations |
 | `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
+| `src/markdown.ts` | `markdownToDoc` and `docToMarkdown`: the Markdown form of `DocContent`. The server reads and writes Markdown with it for Docs and Chat, and the web app reads pasted Markdown with it. [`docs`](../../apps/dock/src/docs/README.md#markdown) describes the Markdown, and has the tests |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
 | `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the chat subscription operations, and the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |

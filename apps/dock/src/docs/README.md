@@ -20,7 +20,6 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `handlers.ts` | The operation handlers. They ask the drive for the item and the role, then read or write the `DocumentDO` |
 | `content.ts` | The empty doc, the limit of blocks in blocks, the images of a doc, and the text of a doc for the search index |
-| `markdown.ts` | Markdown to content, and content to Markdown |
 | `image.ts` | The type and the size in pixels of an image file, from its bytes |
 
 ## A doc
@@ -135,7 +134,10 @@ reader of the doc sends no request to that server.
 
 ## Markdown
 
-Markdown is the form for agents and for the download in the web app.
+Markdown is the form for agents and for the download in the web app. The reader and the writer are
+in [`packages/contracts/src/markdown.ts`](../../../../packages/contracts/src/markdown.ts), because
+the web app reads pasted Markdown with the same code. [`test/markdown.test.ts`](../../test/markdown.test.ts)
+has their tests.
 
 - `markdownToDoc` reads: headings (`#` to `######`, levels over 3 become level 3), paragraphs,
   `**strong**`, `*em*`, `~~strike~~`, `` `code` ``, `[text](url)`, `<url>`, bulleted and numbered
@@ -149,7 +151,8 @@ Markdown is the form for agents and for the download in the web app.
   with `invalid`. An option that is not `width`, `layout` or `crop`, an option that is there two
   times, and a crop without 4 numbers are refused too, with the name of the option in the message.
 - Only the handlers of this module read an image (the option `images`). The `chat` module reads
-  Markdown without it, and a chat message has no image.
+  Markdown without it, and a chat message has no image. A paste in the web app reads Markdown
+  without it too: a pasted id can be the image of a different doc.
 - Text that is not Markdown of this subset stays text: HTML, tables, and an image with a web
   address or a `data:` address are not read.
 - The handler checks the result against `DocContent` before it stores it. Markdown that makes
