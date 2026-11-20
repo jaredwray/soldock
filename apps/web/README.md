@@ -1290,7 +1290,8 @@ MCP clients. The app has no UI-only path.
     have no such button. A mention, the name of an author and the sponsor of an agent link here.
     The profile reads its principal, and the sponsor of an agent, by their ids
     (`directory.get_principals`). While the read runs, it shows what a message of the page already
-    read. When the read fails and the page has no such principal, the profile tells so.
+    read. When the read fails and the page has no such principal, the profile tells so. When only the
+    read of the sponsor fails, the profile shows the agent, and tells that the sponsor did not load.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of

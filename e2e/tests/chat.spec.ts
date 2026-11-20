@@ -1338,3 +1338,23 @@ test("a mention links to a profile, and the @ list puts the members first, witho
 		expect(lookup.handles.length).toBeLessThanOrEqual(100);
 	}
 });
+
+// The sponsor of an agent is a second read. A profile that shows nothing when only that read fails hides
+// an agent that the page has.
+test("the profile of an agent shows when the read of its sponsor fails", async ({ browser }) => {
+	const nadia = await signIn(browser, "nadia");
+	const found = await nadia.request.get("/api/v1/directory/principals?query=triage%40example.com");
+	const { principals } = (await found.json()) as {
+		principals: { id: string; display_name: string; sponsor_id: string | null }[];
+	};
+	const agent = principals[0];
+	if (!agent?.sponsor_id) throw new Error("The seed data has no agent with a sponsor.");
+	const page = await nadia.newPage();
+	await page.route(
+		(url) => url.pathname === "/api/v1/directory/lookup" && url.searchParams.get("ids") === agent.sponsor_id,
+		(route) => route.abort(),
+	);
+	await page.goto(`/chat/people/${agent.id}`);
+	await expect(page.getByRole("heading", { name: agent.display_name })).toBeVisible();
+	await expect(page.getByText("The sponsor did not load.")).toBeVisible();
+});
