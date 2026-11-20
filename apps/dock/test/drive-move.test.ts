@@ -897,7 +897,11 @@ describe("a move that does not complete in the call", () => {
 	});
 
 	// One call uses at most 400 calls to R2 and to the target. A move of many versions needs more.
-	it("answers moving when the calls of one call are spent, and the alarm completes the move", async () => {
+	// The test makes 220 writes to R2, and the move makes more than 400 calls. That is approximately 2 s
+	// on a usual runner, and more than the default limit of 5 s on a slow one.
+	it("answers moving when the calls of one call are spent, and the alarm completes the move", {
+		timeout: 30_000,
+	}, async () => {
 		const file = await upload(ada, "big.txt", "v0");
 		// 220 uploads are too slow for a test. The rows of the versions go into the storage of the drive.
 		const extra = Array.from({ length: 220 }, (_, index) => `ver_fill${String(index).padStart(6, "0")}`);
