@@ -1220,8 +1220,11 @@ MCP clients. The app has no UI-only path.
         that page with the rules above (`rankMentions`), with the handle from the server. So one ask
         reads a bounded page, also in a directory of thousands of principals. The server puts a match
         at the start of an address or of a word of the name first, so the page has the matches that
-        the ranking puts first, and no archived principal. Known limit: the members of the room come
-        first only in that page.
+        the ranking puts first, and no archived principal.
+      - The members of the room (at most 500) join that page from the directory of the page, with their
+        handles (`typedMentionCandidates`). So a member always comes before a principal that is not a
+        member with the same rank, also when the server has more matches than its page. When Chat no
+        longer loads the directory, the members need their handles from the server.
       - The answer of an older query never replaces a newer one, and the last answer stays while the
         next one loads, so the list does not flash. A query without accents finds a part of each word
         of a name with accents (`garcia` finds "María García").

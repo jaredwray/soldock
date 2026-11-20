@@ -43,6 +43,7 @@ import {
 	mentionKeyAction,
 	mentionSuggestions,
 	rankMentions,
+	typedMentionCandidates,
 } from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
@@ -238,11 +239,7 @@ export function ChatComposer({
 		? []
 		: typed.query === ""
 			? mentionSuggestions(directory, "", { memberIds, ownId })
-			: rankMentions(
-					search.found.map((person) => ({ person, handle: person.handle })),
-					typed.query,
-					{ memberIds, ownId },
-				);
+			: rankMentions(typedMentionCandidates(directory, memberIds, search.found), typed.query, { memberIds, ownId });
 	// The groups come after the people, so the list keeps their place for one typed name.
 	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];

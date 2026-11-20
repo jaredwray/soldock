@@ -1185,9 +1185,15 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 		(url) => url.pathname === "/api/v1/directory/principals" && url.searchParams.has("query"),
 		"GET",
 	);
-	await box.pressSequentially("thanks @tom");
+	// A name that matches no member of the room shows that the list loads.
+	await box.pressSequentially("@chi");
 	await expect.poll(() => searches.length).toBeGreaterThan(0);
 	await expect(page.getByText("Looking for people…")).toBeVisible();
+	await box.press("Control+a");
+	await box.press("Delete");
+	// A member shows at once, from the members of the room. The Enter still waits for the answer of the server.
+	await box.pressSequentially("thanks @tom");
+	await expect(page.getByRole("option", { name: /Tomasz/ })).toBeVisible();
 	await box.press("Enter");
 	await expect(box).toHaveText("thanks @tom");
 	search.release();

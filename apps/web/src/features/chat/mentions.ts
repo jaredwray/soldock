@@ -134,6 +134,28 @@ export function mentionSuggestions<P extends MentionPerson>(
 }
 
 /**
+ * The principals for a typed name: the members of the room (at most 500), with their handles from the
+ * directory of the page, and the page of the server (`found`, with the handle of the server). So a member
+ * always comes before a principal that is not a member with the same rank, also when the server has more
+ * matches than its page. A principal in both comes one time.
+ */
+export function typedMentionCandidates<P extends MentionPerson>(
+	directory: MentionDirectory<P>,
+	memberIds: ReadonlySet<string>,
+	found: readonly (MentionPerson & { handle: string | null })[],
+): { person: MentionPerson; handle: string | null }[] {
+	const candidates = new Map<string, { person: MentionPerson; handle: string | null }>();
+	for (const id of memberIds) {
+		const person = directory.byId.get(id);
+		if (person) candidates.set(id, { person, handle: directory.handleOf.get(id) ?? null });
+	}
+	for (const person of found) {
+		if (!candidates.has(person.id)) candidates.set(person.id, { person, handle: person.handle });
+	}
+	return [...candidates.values()];
+}
+
+/**
  * The suggestions from principals with their handles, with the rules of `mentionSuggestions`. The handles
  * can come from the server (`directory.list_principals` gives each one), so a list needs no directory.
  * A principal without a handle, the writer and each archived principal stay out.
