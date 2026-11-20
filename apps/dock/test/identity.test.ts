@@ -1122,6 +1122,14 @@ describe("the directory list", () => {
 		const elodie = await person("Élodie Durand", "elodie@dock.test");
 		const exact = await owner.call("directory.list_principals", { query: "Élodie" });
 		expect(exact.principals.map((p) => p.id)).toEqual([elodie.id]);
+		// A query without the accents finds the start of the first name or of the full name without spaces.
+		for (const query of ["elo", "ELODIE", "elodie dur"]) {
+			const unaccented = await owner.call("directory.list_principals", { query });
+			expect(
+				unaccented.principals.map((p) => p.id),
+				query,
+			).toEqual([elodie.id]);
+		}
 		expect(found.next_cursor).toBeNull();
 		// A group word of Chat is never a handle. An agent finds the same through MCP.
 		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });

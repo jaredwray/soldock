@@ -121,8 +121,12 @@ contract of the socket.
   (`DIRECTORY_LIMITS`). `next_cursor` holds the kind, the name and the id of the last principal of
   the page (`listPrincipalPage`).
   - `query` keeps the principals whose display name or address has the text. The match is in each
-    letter case of A to Z only: `lower` of SQLite changes no other letter, so `elodie` does not find
-    "Élodie". The handler changes only A to Z of the query too, so an exact copy (`Élodie`) finds it.
+    letter case of A to Z only: `lower` of SQLite changes no other letter. The handler changes only A
+    to Z of the query too, so an exact copy (`Élodie`) finds it.
+    - `query` also keeps the principals whose stored name alias (`alias_first`, `alias_full`) starts
+      with the query in the same form: lowercase, without accents and without spaces (`aliasPrefix`
+      in the contracts). So `elo` and `elodie dur` find "Élodie Durand". A row from before migration
+      `0017` gets its aliases at the next mention read.
   - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
     `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full
     address when a different principal has the same part or the part is a group word (`here`,
@@ -130,8 +134,8 @@ contract of the socket.
     part `ada` sorts from `ada@` to `adaA`.
   - The web app reads each page (`listAllPrincipals`). The views that ask at the same time share one
     read. Admin changes the directory, so it starts a fresh read for each load (`fresh`). The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
-    `@` list filters this whole directory, because a message also needs it for its mention links and
-    name aliases.
+    `@` list asks with `query` for each typed name. The mention links of a message and the dialogs still
+    use this whole directory.
   - The room of a Chat message reads only the principals that its mentions can name
     (`mentionCandidates`): the principals of its node ids, each address equal to a key, each principal
     with the local part of a key or of an id (the range from `ada@` to `adaA`), and each name alias

@@ -1,6 +1,7 @@
 import {
 	AGENT_SCOPES,
 	ALL_SCOPES,
+	aliasPrefix,
 	DIRECTORY_LIMITS,
 	mentionHandle,
 	SIGN_IN_LOCK_MINUTES,
@@ -203,6 +204,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const page = await listPrincipalPage(call.env.DIRECTORY, {
 			// The same fold as `lower` of SQLite: A to Z only. So an exact copy of "Élodie" finds Élodie.
 			query: input.query?.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) ?? null,
+			// The start of a name alias, without accents: "elo" finds "Élodie Martin".
+			aliasPrefix: input.query === undefined ? null : aliasPrefix(input.query),
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});

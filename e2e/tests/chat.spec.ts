@@ -1169,11 +1169,19 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	expect(await page.evaluate(() => (window as { pasted?: number }).pasted)).toBeUndefined();
 
 	// "@" opens the list of people. Enter takes a suggestion, and does not send.
+	// A typed name asks the server for one bounded page (jaredwray/soldock#131), not the whole directory.
+	const searches: URLSearchParams[] = [];
+	page.on("request", (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/v1/directory/principals" && url.searchParams.has("query"))
+			searches.push(url.searchParams);
+	});
 	await box.press("Control+a");
 	await box.press("Delete");
 	await box.pressSequentially("thanks @tom");
 	const suggestion = page.getByRole("option", { name: /Tomasz/ });
 	await expect(suggestion).toBeVisible();
+	expect(searches.some((search) => search.get("query")?.startsWith("t") && search.get("limit") === "20")).toBe(true);
 	await box.press("Enter");
 	await expect(page.getByRole("listbox", { name: "People and agents to mention" })).toHaveCount(0);
 	await expect(box).toHaveText(/^thanks @tomasz\s$/);

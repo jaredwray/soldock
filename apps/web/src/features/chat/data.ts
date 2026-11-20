@@ -4,6 +4,8 @@ import {
 	type ChatMessage,
 	type ChatRoom,
 	chatSocketPath,
+	DIRECTORY_LIMITS,
+	type DirectoryEntry,
 	EVENTS_SOCKET_PATH,
 	EVENTS_SOCKET_PROTOCOL,
 	PrincipalEvent,
@@ -37,6 +39,45 @@ const LIVE_POLL_MS = 60_000;
 function subscribeVisibility(callback: () => void): () => void {
 	document.addEventListener("visibilitychange", callback);
 	return () => document.removeEventListener("visibilitychange", callback);
+}
+
+/** The wait after the last key before the `@` list asks the server, in ms. */
+export const MENTION_SEARCH_MS = 150;
+/** The principals that one ask of the `@` list reads at most. The list shows the best 8 of them. */
+const MENTION_SEARCH_LIMIT = 20;
+
+/**
+ * The principals for a typed mention, from the server: `directory.list_principals` with the query,
+ * `MENTION_SEARCH_MS` after the last change of the query, so one ask reads at most `MENTION_SEARCH_LIMIT`
+ * principals and the page needs no directory. The answer of an older query never replaces a newer one. The
+ * last answer stays while the next one loads: the caller ranks it with the current query, so the list
+ * does not flash. A failed ask keeps the last answer. Null (no query) gives an empty list.
+ */
+export function useMentionSearch(query: string | null): readonly DirectoryEntry[] {
+	const [found, setFound] = useState<readonly DirectoryEntry[]>([]);
+	const asked = useRef(0);
+	useEffect(() => {
+		const ask = ++asked.current;
+		if (query === null) {
+			setFound([]);
+			return;
+		}
+		const timer = setTimeout(() => {
+			api
+				.call("directory.list_principals", {
+					query: query.slice(0, DIRECTORY_LIMITS.queryChars),
+					limit: MENTION_SEARCH_LIMIT,
+				})
+				.then(
+					(page) => {
+						if (ask === asked.current) setFound(page.principals);
+					},
+					() => {},
+				);
+		}, MENTION_SEARCH_MS);
+		return () => clearTimeout(timer);
+	}, [query]);
+	return found;
 }
 
 /** True while the tab shows. A room in a hidden tab is not read. */

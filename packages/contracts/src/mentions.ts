@@ -138,6 +138,16 @@ export function nameAliasParts(displayName: string): { first: string | null; ful
 	return { first: alias(words[0] ?? ""), full: alias(words.join("")) };
 }
 
+/**
+ * The start of a name alias that a typed query can be, in the form of the stored aliases
+ * (`nameAliasParts`): lowercase, without accents and without spaces. So "Élo" and "ada lo" find
+ * "Élodie Martin" and "Ada Lovelace". Null when the query has a character that no alias has.
+ */
+export function aliasPrefix(query: string): string | null {
+	const folded = query.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, "");
+	return /^[a-z0-9._+-]+$/.test(folded) ? folded : null;
+}
+
 /** The name aliases of a display name (`nameAliasParts`), each one time. */
 function nameAliases(displayName: string): string[] {
 	const { first, full } = nameAliasParts(displayName);

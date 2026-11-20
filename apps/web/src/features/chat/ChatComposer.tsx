@@ -35,8 +35,15 @@ import {
 	typedMention,
 } from "./composerCommands.ts";
 import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
+import { useMentionSearch } from "./data.ts";
 import { emojiCode, emojiSuggestions } from "./emoji.ts";
-import { groupSuggestions, type MentionContext, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
+import {
+	groupSuggestions,
+	type MentionContext,
+	mentionKeyAction,
+	mentionSuggestions,
+	rankMentions,
+} from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -224,7 +231,18 @@ export function ChatComposer({
 	const typed = listOpen ? typedMention(editorState) : null;
 	const typedCode = listOpen && !typed ? typedEmoji(editorState) : null;
 	const { directory, memberIds, ownId } = mentions;
-	const suggestions = typed ? mentionSuggestions(directory, typed.query, { memberIds, ownId }) : [];
+	// A typed name asks the server (`useMentionSearch`), so the list reads a bounded page for each query.
+	// Only "@" alone uses the directory of the page, for the members of the room first.
+	const searched = useMentionSearch(typed && typed.query !== "" ? typed.query : null);
+	const suggestions = !typed
+		? []
+		: typed.query === ""
+			? mentionSuggestions(directory, "", { memberIds, ownId })
+			: rankMentions(
+					searched.map((person) => ({ person, handle: person.handle })),
+					typed.query,
+					{ memberIds, ownId },
+				);
 	// The groups come after the people, so the list keeps their place for one typed name.
 	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];

@@ -1215,6 +1215,15 @@ MCP clients. The app has no UI-only path.
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
+      - A typed name asks the server (`useMentionSearch`): `directory.list_principals` with the query
+        and a limit of 20, 150 ms after the last key. The list ranks that page with the rules above
+        (`rankMentions`), with the handle from the server. So one ask reads a bounded page, also in a
+        directory of thousands of principals. The answer of an older query never replaces a newer one,
+        and the last answer stays while the next one loads, so the list does not flash. A query
+        without accents finds a name with accents (`elo` finds "Élodie").
+      - Only `@` alone uses the directory of the page, so the members of the room come first. The
+        mention links, the dialogs and this case still read the whole directory
+        ([jaredwray/soldock#131](https://github.com/jaredwray/soldock/issues/131)).
     - The arrow keys move in the list, Enter and Tab take the selected suggestion, and Escape
       closes the list. While the list is open, Enter does not send, and Escape does not close the
       edit box. So a send after a full handle needs a second Enter. Shift+Enter still makes a new

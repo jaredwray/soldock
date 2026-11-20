@@ -127,10 +127,26 @@ export function mentionSuggestions<P extends MentionPerson>(
 	query: string,
 	options: { memberIds: ReadonlySet<string>; ownId: string },
 ): MentionSuggestion<P>[] {
+	return rankMentions(
+		directory.people.map((person) => ({ person, handle: directory.handleOf.get(person.id) ?? null })),
+		query,
+		options,
+	);
+}
+
+/**
+ * The suggestions from principals with their handles, with the rules of `mentionSuggestions`. The handles
+ * can come from the server (`directory.list_principals` gives each one), so a list needs no directory.
+ * A principal without a handle, the writer and each archived principal stay out.
+ */
+export function rankMentions<P extends MentionPerson>(
+	candidates: readonly { person: P; handle: string | null }[],
+	query: string,
+	options: { memberIds: ReadonlySet<string>; ownId: string },
+): MentionSuggestion<P>[] {
 	const typed = fold(query);
 	const found: (MentionSuggestion<P> & { rank: number })[] = [];
-	for (const person of directory.people) {
-		const handle = directory.handleOf.get(person.id);
+	for (const { person, handle } of candidates) {
 		if (!handle || person.id === options.ownId || person.archived_at !== null) continue;
 		const rank = matchRank(typed, handle, person);
 		if (rank !== null) found.push({ person, handle, member: options.memberIds.has(person.id), rank });

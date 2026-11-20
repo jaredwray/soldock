@@ -297,7 +297,7 @@ export interface DirectoryPage {
  */
 export async function listPrincipalPage(
 	db: D1Database,
-	options: { query: string | null; after: DirectoryPosition | null; limit: number },
+	options: { query: string | null; aliasPrefix: string | null; after: DirectoryPosition | null; limit: number },
 ): Promise<DirectoryPage> {
 	const { results } = await db
 		.prepare(
@@ -306,7 +306,8 @@ export async function listPrincipalPage(
 					AND b.address >= substr(a.address, 1, instr(a.address, '@'))
 					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1 AS shared_local
 			FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0)
+			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0
+					OR substr(p.alias_first, 1, length(?6)) = ?6 OR substr(p.alias_full, 1, length(?6)) = ?6)
 				AND (?2 IS NULL OR (p.kind, p.display_name, p.id) > (?2, ?3, ?4))
 			ORDER BY p.kind, p.display_name, p.id LIMIT ?5`,
 		)
@@ -316,6 +317,7 @@ export async function listPrincipalPage(
 			options.after?.[1] ?? null,
 			options.after?.[2] ?? null,
 			options.limit + 1,
+			options.aliasPrefix,
 		)
 		.all<PrincipalRow & { shared_local: number }>();
 	const page = results.slice(0, options.limit);
