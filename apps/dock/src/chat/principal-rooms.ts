@@ -1,4 +1,4 @@
-import type { ChatRoomEntry, ChatRoomState } from "../identity/index.ts";
+import type { ChatAddressedState, ChatRoomEntry, ChatRoomState } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, log } from "../platform/index.ts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
 import type { ListInput, RoomPage } from "./room-index.ts";
@@ -274,6 +274,38 @@ export async function listFollowedThreads(
 				? encodeCursor([last.last_reply_at, last.room.room_id, last.parent_id])
 				: null,
 		unreadThreads: listed.unreadThreads,
+	};
+}
+
+/** A change for a principal of a page, with the room as a record. */
+export interface AddressedChange {
+	room: RoomRecord;
+	change: ChatAddressedState;
+}
+
+/**
+ * A page of the newest change for a principal in each of its rooms, from its `PrincipalDO`, with the
+ * newest change first. Returns null for a cursor that is not from this list.
+ *
+ * The list needs no first fill. A room keeps a change for a member only since this list exists, and it
+ * sends its state to the object of that member after each such change.
+ */
+export async function listAddressedChanges(
+	env: Env,
+	principalId: string,
+	input: { cursor: string | null; limit: number },
+): Promise<{ changes: AddressedChange[]; nextCursor: string | null } | null> {
+	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
+	if (input.cursor !== null && cursor === null) return null;
+	const listed = await principalStub(env, principalId).listChatAddressed({
+		after: cursor === null ? null : { at: cursor[0], roomId: cursor[1] },
+		limit: input.limit,
+	});
+	const shown = listed.changes.slice(0, input.limit);
+	const last = shown[shown.length - 1];
+	return {
+		changes: shown.map((entry) => ({ room: toRecord(entry.room), change: entry.change })),
+		nextCursor: listed.changes.length > input.limit && last ? encodeCursor([last.change.at, last.room.room_id]) : null,
 	};
 }
 

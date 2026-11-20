@@ -646,6 +646,7 @@ describe("a Chat limit", () => {
 		// The lists of all rooms are not for the key.
 		expect(await codeOf(key.call("chat.list_rooms", { view: "public" }))).toBe("forbidden");
 		expect(await codeOf(key.call("chat.list_threads", {}))).toBe("forbidden");
+		expect(await codeOf(key.call("chat.list_addressed", {}))).toBe("forbidden");
 	});
 
 	// The list keeps the page size and the name match of chat.list_rooms: a client asks for small pages,

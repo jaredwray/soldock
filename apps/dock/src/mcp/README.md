@@ -23,7 +23,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `protocol.ts` | The protocol versions, the era of a request, the header checks, and the JSON-RPC results and errors |
 | `tools.ts` | One tool for each operation, and the tool call |
 | `resources.ts` | The resource templates, the resource list and the resource read, from the resource registry |
-| `listen.ts` | The `subscriptions/listen` stream |
+| `listen.ts` | The `subscriptions/listen` stream, with the facts of a change in each notification that has them |
 | `events.ts` | `events/list`, `events/subscribe` and `events/unsubscribe` of MCP Events |
 
 ## Transport
@@ -113,6 +113,7 @@ If both schemes identify one subscription, the server uses the first URI in the 
 | `mail.inbox` | `asterra://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
 | `chat.room` | `asterra://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
 | `chat.rooms` | `asterra://chat/rooms` | `chat.list_rooms`, the first 100 rooms of the caller | One resource for each caller that can call `chat.list_rooms` |
+| `chat.addressed` | `asterra://chat/addressed` | `chat.list_addressed`, the newest change for the caller in each room | One resource for each caller that can call `chat.list_addressed` |
 | `drive.item` | `asterra://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
 | `drive.space` | `asterra://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
 
@@ -144,10 +145,33 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 2. Each change sends `notifications/resources/updated` with the URI. For `mail.inbox`, only a new
    message in the inbox is a change. A read, a label or an archive sends nothing. For `chat.room`, a
    new, changed or deleted message is a change. A read marker, a new name and a new member send nothing.
+   A change that the caller made sends nothing, so a client that answers a message gets no
+   notification for its answer.
    For `chat.rooms`, each change of a room of the caller is a change, also a read marker, a star, a
    join and a leave.
+   For `chat.addressed`, only a new, changed or deleted message that is for the caller is a change: a
+   message in a direct message, a mention, a reply in a followed thread, and a delete of a message of
+   the caller by a different member. So an agent in a busy room gets no notification for a message
+   that is not for it. The changes of one room in about 500 ms send one notification.
    A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
+4. A notification of a chat resource also has `_meta["asterra/change"]`: the facts of the change. A
+   client uses them to decide before a read. A client that does not know the key ignores it.
+
+| Resource kind | `_meta["asterra/change"]` |
+| --- | --- |
+| `chat.room` | `room_id`, `message_id`, `parent_id` (the first message of the thread of a reply, or null), `author_id` and `version` |
+| `chat.addressed` | `room_id`, `event`, `reason`, `message_id`, `parent_id`, `author_id`, `version` and `at`: an entry of `chat.list_addressed` without the room |
+| `mail.inbox`, `chat.rooms` | None. The read of the resource has all that a client needs |
+
+- The facts have ids, a reason, a version and a time. They have no message text, as a webhook POST
+  has none.
+- `version` is a version of the room. A client whose last `chat.list_messages` result has a `version`
+  that is not lower has the change already.
+- `author_id` is the principal that wrote the message, also when a different member changed it.
+- A burst of changes to one resource can send one notification. It has the facts of the newest change
+  of the burst. So the facts are a help, not a list of changes: read the resource to get each change.
+- `asterra/change` is not a key of MCP. The key has no reserved prefix.
 
 - With nothing to watch, the stream sends the acknowledgment and the result of the request, and ends.
 - A keep-alive comment (`: keep-alive`) goes out each 30 seconds.
@@ -217,7 +241,9 @@ leaves that resource out. The [`mail`](../mail/README.md#notifications-of-new-ma
 `mail.inbox`. The [`chat`](../chat/README.md#agents) module gives the feed of `chat.room`: a room
 socket. The room closes that socket when it removes the member, so the stream ends at once. It also
 gives the feed of `chat.rooms`: the events socket of the caller. A sign-out or a revoke closes that
-socket at once, so the stream ends.
+socket at once, so the stream ends. The feed of `chat.addressed` is an events socket of the caller
+too. It sends only the event `chat.addressed`
+([The changes for a principal](../chat/README.md#the-changes-for-a-principal)).
 
 Known limits:
 
@@ -227,6 +253,7 @@ Known limits:
 - A chat room has a limit: one principal has at most 8 sockets to one room, with the feeds of its
   streams. A stream that asks for a room at that limit gets an acknowledgment without the room.
 - The events socket has a limit too: one principal has at most 20, with the feeds of its streams.
-  A stream that asks for `chat.rooms` at that limit gets an acknowledgment without it.
+  A stream that asks for `chat.rooms` or `chat.addressed` at that limit gets an acknowledgment
+  without it. Each of the two resources uses one socket of a stream.
 - Mail that arrives before the acknowledgment can send no notification. Read the inbox after the
   acknowledgment.

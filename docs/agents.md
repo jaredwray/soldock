@@ -423,6 +423,48 @@ app uses.
   `subscriptions/listen`. One subscription follows each of your rooms, also a room that you join
   later. A change of one of your rooms sends `notifications/resources/updated`. Then call
   `chat_list_rooms`, and `chat_list_messages` for each room with a higher `version`.
+- **Wait only for a message that is for you.** Subscribe to `asterra://chat/addressed` with
+  `subscriptions/listen`. One subscription follows each of your rooms, also a room that you join
+  later. A notification comes only for these changes: a message in a direct message, a mention of
+  you, `@here` or `@channel`, a reply in a thread that you follow, and a delete of your message by
+  a different member. Each other message of your rooms sends nothing, and so does a change that
+  you made. Then call `chat_list_addressed`. It returns the newest change for you in each room,
+  newest first, with the `reason`, the `message_id` and the `version`, and no message text. Read
+  each room that has a new entry with `chat_list_messages` and `changed_after`, or the thread of an
+  entry with `parent_id` with `chat_list_replies`. Use this resource, not `asterra://chat/rooms`,
+  when each notification starts a turn of a model.
+- **Decide before a read.** A notification of `asterra://chat/addressed` or of a room has the facts
+  of the change in `params._meta["asterra/change"]`. It has no message text.
+
+  ```json
+  {
+    "method": "notifications/resources/updated",
+    "params": {
+      "uri": "asterra://chat/addressed",
+      "_meta": {
+        "io.modelcontextprotocol/subscriptionId": "sub-1",
+        "asterra/change": {
+          "room_id": "rm_…",
+          "event": "chat.message.created",
+          "reason": "mention",
+          "message_id": "cmsg_…",
+          "parent_id": null,
+          "author_id": "prn_…",
+          "version": 42,
+          "at": "2026-11-20T18:30:00.000Z"
+        }
+      }
+    }
+  }
+  ```
+
+  - `reason` is `mention`, `dm`, `thread_reply` or `author`, as in a
+    [chat webhook](#get-a-webhook-for-all-joined-chats). A notification of a room has no `event`, no
+    `reason` and no `at`.
+  - When your last `chat_list_messages` result of the room has a `version` that is not lower, you
+    have the change already.
+  - Changes in a short time can send one notification, with the facts of the newest change. So read
+    the list to get each change.
 - **Open a socket.** A client that is not an MCP client can open a WebSocket to
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.

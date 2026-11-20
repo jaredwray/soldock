@@ -23,6 +23,8 @@ export const META = {
 	clientCapabilities: "io.modelcontextprotocol/clientCapabilities",
 	serverInfo: "io.modelcontextprotocol/serverInfo",
 	subscriptionId: "io.modelcontextprotocol/subscriptionId",
+	/** Not a key of MCP: the facts of the change of a `notifications/resources/updated`, when its feed gives them. */
+	change: "asterra/change",
 } as const;
 
 /** JSON-RPC error codes, with the codes that the MCP specification adds. */

@@ -3,7 +3,12 @@ import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
 import { GROUP_MENTIONS } from "./mentions.ts";
 import { defineOperation } from "./operation.ts";
-import { CHAT_WEBHOOK_EVENTS, CHAT_WEBHOOK_FILTERS, ChatWebhookSubscription } from "./webhooks.ts";
+import {
+	CHAT_ADDRESSED_REASONS,
+	CHAT_WEBHOOK_EVENTS,
+	CHAT_WEBHOOK_FILTERS,
+	ChatWebhookSubscription,
+} from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 export const CHAT_LIMITS = {
@@ -922,6 +927,57 @@ export const listThreads = defineOperation({
 	errors: ["invalid"],
 });
 
+/**
+ * The newest change of a room that is for the caller. It has the facts of the `data` of a chat webhook
+ * POST, and no message text.
+ */
+export const ChatAddressedChange = z.object({
+	room: ChatRoom,
+	/** What changed: a new message, an edit or a delete. */
+	event: z.enum(CHAT_WEBHOOK_EVENTS),
+	/** Why the change is for you. The first reason of the list that is true applies. */
+	reason: z.enum(CHAT_ADDRESSED_REASONS),
+	message_id: MessageId,
+	/** For a reply in a thread, the first message of the thread. Read the thread with chat.list_replies. */
+	parent_id: MessageId.nullable(),
+	/** The principal that wrote the message. For a delete, this is the author, not the principal that deleted it. */
+	author_id: z.string(),
+	/** The version that the message got from the change. It is a version of the room. */
+	version: z.number().int(),
+	/** The time of the change. */
+	at: Timestamp,
+});
+export type ChatAddressedChange = z.infer<typeof ChatAddressedChange>;
+
+export const listAddressed = defineOperation({
+	name: "chat.list_addressed",
+	summary: "List the newest change for you in each room",
+	description: [
+		"Returns the newest change that is for you in each of your rooms and direct messages, with the newest change first.",
+		"A change is for you when it is one of these: a message in a direct message, a mention of you or of a group, a reply in a thread that you follow, or a delete of your message by a different member.",
+		"Each entry has the room, the event (a new message, an edit or a delete), the reason, the ids of the message and of its author, parent_id for a reply, the version of the room after the change, and the time.",
+		"An entry has no message text. To read the messages, call chat.list_messages with changed_after and the version that you have. For an entry with parent_id, call chat.list_replies.",
+		"One room has one entry. An earlier change for you in the same room is not in the list, so read the room from the version that you have.",
+		"Your own changes are not in the list. A room that you leave goes out of the list. A change from before this operation existed is not in the list.",
+		"Keep the at of the newest entry that you read. At the next call, stop at the first entry that is not newer.",
+		"Each room sends its changes to the list after the change. A list can be a moment behind a change.",
+		"Pass next_cursor as cursor to get the next page.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/addressed" },
+	scopes: ["chat.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({
+		cursor: z.string().max(500).optional(),
+		limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
+	}),
+	output: z.object({
+		changes: z.array(ChatAddressedChange),
+		next_cursor: z.string().nullable(),
+	}),
+	errors: ["invalid"],
+});
+
 export const markThreadRead = defineOperation({
 	name: "chat.mark_thread_read",
 	summary: "Set what you read in a thread",
@@ -1155,6 +1211,7 @@ export const chatOperations = {
 	"chat.follow_thread": followThread,
 	"chat.mark_thread_read": markThreadRead,
 	"chat.list_threads": listThreads,
+	"chat.list_addressed": listAddressed,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
 	"chat.download_file": downloadChatFile,

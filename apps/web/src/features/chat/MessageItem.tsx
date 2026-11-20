@@ -63,8 +63,8 @@ export interface MessageItemProps {
 	rowKey: string;
 	/** True for the message that a link marked. */
 	marked: boolean;
-	/** Puts a link to the message on the clipboard, or null for a message with no link (a reply in a thread). */
-	onCopyLink: (() => void) | null;
+	/** Puts a link to the message on the clipboard: a link to a reply, for a reply in a thread. */
+	onCopyLink: () => void;
 	/** The state of the send, for a message that the server does not have yet. */
 	pending: PendingMessage | null;
 	/** The handles for the mentions in the text, and the suggestions of the edit box. */
@@ -361,17 +361,15 @@ export function MessageItem({
 					>
 						<Icon name="emoji" size={16} />
 					</button>
-					{onCopyLink && (
-						<button
-							type="button"
-							className="icon-button icon-button-small"
-							aria-label={`Copy a link to the message of ${author} from ${shortDate(message.created_at)}`}
-							title="Copy a link"
-							onClick={onCopyLink}
-						>
-							<Icon name="link" size={16} />
-						</button>
-					)}
+					<button
+						type="button"
+						className="icon-button icon-button-small"
+						aria-label={`Copy a link to the message of ${author} from ${shortDate(message.created_at)}`}
+						title="Copy a link"
+						onClick={onCopyLink}
+					>
+						<Icon name="link" size={16} />
+					</button>
 					{onOpenThread && message.parent_id === null && (
 						<button
 							type="button"

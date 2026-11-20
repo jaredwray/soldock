@@ -618,6 +618,21 @@ MCP clients. The app has no UI-only path.
     A click on a button does not take the focus from the text.
   - The link dialog accepts only `http`, `https` and `mailto` links. Pasted HTML keeps only what
     the schema has. Pasted plain text keeps its lines.
+  - **Pasted Markdown** gets its formats (`markdownPaste.ts`): headings, bold, italic,
+    strikethrough, code, links, lists, quotes, code blocks and rules. `markdownToDoc` of the
+    contracts reads the text, so a paste reads Markdown as `docs.update` does.
+    - The text is Markdown when it has one format or more. Text without a format is plain text,
+      and keeps each line and each empty line.
+    - The paste is two steps of Undo. The first Undo gives the text back as the clipboard had it,
+      for text that only looks like Markdown. The second Undo removes the paste.
+    - A paste with `Shift` (`Ctrl+Shift+V`, `⌘⇧V` on a Mac) keeps the text. A paste into a code
+      block keeps the text too.
+    - A clipboard with HTML uses the HTML, not Markdown. A copy from VS Code is the exception: it
+      has HTML with only the colors of the editor. When VS Code says that the text is Markdown
+      (`vscode-editor-data`), the text is read as Markdown.
+    - The lines of one paragraph join, as in Markdown. An image stays text: the id of an image
+      can be the image of a different doc, and an image with a web address is not imported yet.
+      HTML in the Markdown stays text.
   - The page saves 1.5 seconds after the last change, with one request at a time. Each save sends
     `base_revision`. The header shows the state of the save. The page also saves when the tab
     hides and when the page closes, and the browser asks before it closes a tab with changes
@@ -629,8 +644,11 @@ MCP clients. The app has no UI-only path.
   - While the editor has no changes of its own, it gets the doc again every 15 seconds and on
     window focus, and shows the changes of other people and agents.
   - A viewer gets the text without the toolbar, and cannot change it. A link opens in a new tab.
-  - **Download as Markdown** saves the `markdown` of `docs.get` as `<name>.md`, after the save of
-    the last changes. The file names each image by its id, and has no image files.
+  - The **Download** button of the header opens a menu that names each format. The button shows
+    only an icon, so the menu tells the format before the browser saves a file.
+    **Download as Markdown (.md)** saves the `markdown` of `docs.get` as `<name>.md`, after the save
+    of the last changes. The Blob has the type `text/markdown`. The file names each image by its
+    id, and has no image files.
   - **Images.** A doc holds its own images ([`docs`](../dock/src/docs/README.md#images)).
     - **Add.** A person drops image files on the page, pastes a picture, or uses **Insert image**:
       **Upload from this computer**, **From Drive** (a dialog with the folders and the image files
@@ -779,7 +797,8 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
-- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/people/<principal_id>`). A sidebar with the rooms
+- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/<room_id>/<seq>`, `/chat/<room_id>/<seq>/<reply seq>`,
+  `/chat/people/<principal_id>`). A sidebar with the rooms
   and the direct messages of the person, and one room with its messages and a box for a new
   message, or one profile.
   - Chat has no search yet, so its pages show no search box.
@@ -878,8 +897,9 @@ MCP clients. The app has no UI-only path.
       - A refused change opens the edit box again with the new text and files. A refusal shows its reason under the
         first message. The edits of one message go one at a time, in order (`createCallLine`), so the
         room gets the newest edit last.
-      - A reply has no "Copy a link": no path opens a thread yet. The time of each message shows its day
-        too (`fullDates`), because the view has no line for each day.
+      - **Copy a link** of the first message gives the link of the room to that message. Of a reply, it
+        gives the link to the reply (see the links below). The time of each message shows its day too
+        (`fullDates`), because the view has no line for each day.
       - Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that
         dialog only. The list of emoji finds its space in the scroll area of the view too.
     - A reply takes files and shows files and link previews, as a message of the room does. The files
@@ -979,6 +999,15 @@ MCP clients. The app has no UI-only path.
     - A room that does not have the message shows its newest messages.
     - Each message that the room has, and that is not deleted, has the action **Copy a link**,
       which puts the link on the clipboard.
+    - **A link to a reply** (`/chat/<room_id>/<seq>/<reply seq>`): a reply is not in the room list, so
+      its link has the seq of the first message of its thread, then the seq of the reply.
+      - The room goes to the first message and marks it, as for a link to one message. Then the view of
+        the thread opens at the reply.
+      - The view reads older pages until it has the reply, at most 20 (`LINK_PAGES`: 1,000 replies).
+        Then it goes to the reply and marks it, and a new reply does not move the list to its end.
+      - A seq that is not a reply of the thread opens the thread and marks nothing.
+      - Each visit of a link goes to the reply again. So Back to the link, after the room link of the
+        sidebar, scrolls the open thread to the reply.
     - The link has no access of its own. The server gives the messages only to a member, as for
       each other read.
   - **Reactions** (`Reactions.tsx`, `emoji.ts`). The reactions of a message show under its text:
@@ -1197,6 +1226,10 @@ MCP clients. The app has no UI-only path.
     - The mention replaces the text from the `@` to the caret. The text after the caret stays. A
       space goes after the mention, unless a space or a mark that ends a word (`.`, `,`, `)`)
       follows it.
+    - A full handle, name alias or group that the person types, and does not take from the list, is
+      a mention too. It stays text in the box, and the server makes a node of it. The box shows it
+      with the fill of a mention (`textMentions`), with the rules of the server: no mention in code,
+      in a link or in an address, and none that touches a letter, a digit or a mention node.
     - After the people, the list has `@here` and `@channel` for their start
       (`groupSuggestions`), with "Mention each member of this room". The box puts a group node in
       the body (`insertTypedGroupMention`). The list shows the groups only when the room takes them
@@ -1582,7 +1615,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
-| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
+| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
@@ -1636,6 +1669,8 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 - **Attachments download as `application/octet-stream`.** The app gets the content with
   `mail.get_attachment`, makes a Blob of type `application/octet-stream` and clicks a temporary
   `<a download>`. It never uses the type that the sender gave, and it never opens a file in the page.
+  Only content that the app made gets a different type: the Markdown of a doc is `text/markdown`,
+  which no browser runs.
 - **A chat message is data, never HTML.** The body of a message is a tree of nodes, and the app
   makes one React element for each node of the schema (`MessageBody.tsx`). The text of each node is
   a text node. A node that the schema does not have shows nothing. It never uses `innerHTML`.

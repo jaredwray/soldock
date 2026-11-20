@@ -9,6 +9,7 @@ import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { DRIVE_PATH } from "../../routes.ts";
 import { DocumentHeader, type SaveState } from "../drive/DocumentHeader.tsx";
+import { Menu } from "../drive/Menu.tsx";
 import { Autosaver, isStalePoll } from "./autosave.ts";
 import { DocEditor } from "./DocEditor.tsx";
 import { DocImages } from "./images.ts";
@@ -225,7 +226,11 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 		try {
 			await saverRef.current?.flush();
 			const result = await api.call("docs.get", { space_id: spaceId, item_id: itemId });
-			saveBytes(new TextEncoder().encode(result.markdown), markdownName(result.item.name));
+			saveBytes(
+				new TextEncoder().encode(result.markdown),
+				markdownName(result.item.name),
+				"text/markdown;charset=utf-8",
+			);
 			if (saverRef.current?.dirty) {
 				toast({ message: "The download does not have your last changes, because they are not saved." });
 			}
@@ -281,16 +286,23 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 				saveState={editable ? (uploading && saveState === "saved" ? "unsaved" : saveState) : null}
 				onItemChange={onItemChange}
 				actions={
-					<button
-						type="button"
+					// The button shows only an icon, and a touch screen shows no tooltip. The menu tells the
+					// format before the browser saves the file.
+					<Menu
+						label="Download"
 						className="icon-button"
-						aria-label="Download as Markdown"
-						title="Download as Markdown"
-						onClick={() => void download()}
+						items={[
+							{
+								key: "markdown",
+								label: "Download as Markdown (.md)",
+								icon: "download",
+								onSelect: () => void download(),
+							},
+						]}
 						disabled={downloading}
 					>
 						<Icon name="download" />
-					</button>
+					</Menu>
 				}
 			/>
 			{editable && saveState === "conflict" && (

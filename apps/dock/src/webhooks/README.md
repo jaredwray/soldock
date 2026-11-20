@@ -69,6 +69,7 @@ The fan-out applies the filter, so a message that is not for the target makes no
 Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
 A subscription from before the filter keeps `all`.
 No operation changes the filter of a webhook subscription. Delete the subscription and create it again.
+`chat.list_addressed` and the MCP resource `chat.addressed` use the same reasons: they have each change whose reason is not `room` ([Chat](../chat/README.md#the-changes-for-a-principal)).
 
 The `data` of a chat POST also has these fields. They are not content:
 

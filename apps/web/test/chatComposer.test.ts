@@ -11,6 +11,7 @@ import {
 	insertTypedMention,
 	markdownRules,
 	newLine,
+	textMentions,
 	toggleCodeBlock,
 	typedEmoji,
 	typedMention,
@@ -23,6 +24,7 @@ import {
 	sameInBox,
 	textToBody,
 } from "../src/features/chat/composerSchema.ts";
+import { mentionDirectory } from "../src/features/chat/mentions.ts";
 
 const { nodes, marks } = chatSchema;
 const p = (...content: Node[]) => nodes.paragraph.create(null, content);
@@ -450,6 +452,38 @@ describe("a mention in the box", () => {
 			],
 		};
 		expect(docToBody(bodyToDoc(body))).toEqual(body);
+	});
+
+	// The room makes a mention of "@" and a handle in the text of a body. The box must show the same
+	// mentions, so the person sees who gets the mention before the send.
+	it("finds the mentions that the person typed as text, with the rules of the room", () => {
+		const principal = (name: string) => ({
+			id: `prn_${name}`,
+			kind: "agent" as const,
+			display_name: name,
+			address: `${name}@example.com`,
+			archived_at: null,
+		});
+		const directory = mentionDirectory([principal("dot"), principal("captain")]);
+		const captain = nodes.mention.create({ id: "prn_captain", label: "captain" });
+		const link = marks.link.create({ href: "https://example.com/" });
+		const typed = (box: Node) => textMentions(box, directory).map(({ from, to }) => box.textBetween(from, to));
+
+		// A typed handle and a typed group are mentions. A node from the list is a mention already.
+		const box = doc(p(t("@dot and "), captain, t(" - say hi")), p(t("bold", "strong"), t("@dot, @Here.")));
+		expect(textMentions(box, directory)[0]).toEqual({ from: 1, to: 5 });
+		expect(typed(box)).toEqual(["@dot", "@dot", "@Here"]);
+
+		// The room keeps these as text: code, a link, an address, a handle that the directory does not have,
+		// and a mention that touches a mention node.
+		expect(
+			typed(
+				doc(
+					p(t("@dot", "code"), chatSchema.text("@dot", [link]), t(" dot@example.com @nobody @dot"), captain),
+					nodes.code_block.create(null, chatSchema.text("@dot")),
+				),
+			),
+		).toEqual([]);
 	});
 
 	it("has no mention in a code block, in code, or away from an @", () => {

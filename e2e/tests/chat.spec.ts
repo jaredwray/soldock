@@ -97,7 +97,8 @@ test("a long thread shows its newest replies after one read, and the older repli
 	);
 	const [tomasz] = people;
 	if (!tomasz) throw new Error("no context");
-	const roomId = await createRoom(tomasz, unique("Long thread"), people.slice(1));
+	const name = unique("Long thread");
+	const roomId = await createRoom(tomasz, name, people.slice(1));
 	const parent = await post(tomasz, roomId, unique("long thread start"));
 	// More replies than one page (50), from the people in turn, inside the rate limit of each.
 	const replies = [];
@@ -146,6 +147,36 @@ test("a long thread shows its newest replies after one read, and the older repli
 	expect(await offsetOf11()).toBe(before);
 	expect(pageReads).toHaveLength(2);
 	expect(new URL(`http://x${pageReads[1]}`).searchParams.get("before")).toBe(String(replies[10]?.seq));
+
+	// "Copy a link" of a reply gives the link to the reply: the seq of the first message, then the seq of the reply.
+	await tomasz.grantPermissions(["clipboard-read", "clipboard-write"]);
+	const newestRow = panel
+		.locator(".chat-thread-reply")
+		.filter({ has: page.locator(".chat-text", { hasText: /^r60$/ }) });
+	await newestRow.hover();
+	await newestRow.getByRole("button", { name: /Copy a link/ }).click();
+	await expect(page.getByText("The link to the message is on the clipboard.")).toBeVisible();
+	const copied = await page.evaluate(() => navigator.clipboard.readText());
+	expect(new URL(copied).pathname).toBe(`/chat/${roomId}/${parent.seq}/${replies[59]?.seq}`);
+
+	// A link to an older reply opens the room at the first message, and the thread at the reply, which it marks.
+	const linked = await tomasz.newPage();
+	await linked.goto(`/chat/${roomId}/${parent.seq}/${replies[4]?.seq}`);
+	const linkedPanel = linked.getByRole("complementary", { name: "Thread" });
+	const marked = linkedPanel.locator(".chat-message-marked");
+	await expect(marked).toHaveCount(1);
+	await expect(marked.locator(".chat-text")).toHaveText("r5");
+	await expect(marked).toBeInViewport();
+	await expect(linked.locator(".chat-messages .chat-message-marked")).toContainText(parent.text);
+	// The room link of the sidebar keeps the thread open. Back to the link goes to the reply again.
+	await linked.getByRole("navigation", { name: "Rooms" }).getByRole("link", { name }).first().click();
+	await expect(linked).toHaveURL(new RegExp(`/chat/${roomId}$`));
+	await linkedPanel.locator(".chat-thread-body").evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	await expect(marked).not.toBeInViewport();
+	await linked.goBack();
+	await expect(marked).toBeInViewport();
 });
 
 test("a long thread with many new replies reads back to the read marker, and the New line marks the first new reply", async ({
@@ -1163,6 +1194,15 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 		(await newest(nadia, roomId)).find((one) => one.text === "thanks @tomasz for the review");
 	await expect.poll(async () => (await storedThanks())?.mentions.length).toBe(1);
 	const stored = await storedThanks();
+
+	// A full handle that the person typed, and did not take from the list, is a mention too. The box shows
+	// it as a mention, and the room makes a mention node of it.
+	await box.pressSequentially("typed @tomasz and done");
+	await expect(box.locator(".chat-mention")).toHaveText("@tomasz");
+	await box.press("Enter");
+	await expect
+		.poll(async () => (await newest(nadia, roomId)).find((one) => one.text === "typed @tomasz and done")?.mentions)
+		.toEqual(stored?.mentions);
 
 	// "@he" offers the group @here after the people. The box sends a group node, which mentions each member.
 	await box.pressSequentially("standup @he");
