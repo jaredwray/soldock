@@ -6,6 +6,7 @@ import {
 	type MentionDirectory,
 	type MentionPerson,
 	type RoomRole,
+	searchFold,
 } from "@asterra/contracts";
 import { recipientKeyAction } from "../mail/compose.ts";
 
@@ -86,10 +87,8 @@ export function liveMention(text: string, token: MentionToken | null): MentionTo
 	return token && text.charAt(token.start) === "@" && token.end <= text.length ? token : null;
 }
 
-/** Lowercase, without accents, so "e" finds "É". */
-function fold(text: string): string {
-	return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-}
+/** Lowercase, without accents, so "e" finds "É". The server folds the stored names with the same rule. */
+const fold = searchFold;
 
 /** 0 when a handle, the address or a word of the name starts with the query. 1 when one has it. Null without a match. */
 function matchRank(query: string, handle: string, person: MentionPerson): number | null {
@@ -105,6 +104,11 @@ function matchRank(query: string, handle: string, person: MentionPerson): number
 		return 0;
 	}
 	return name.includes(query) || address.includes(query) ? 1 : null;
+}
+
+/** The order of two texts by their characters (code units), the order of SQLite for text. */
+function compareText(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** One suggestion of the list: a principal, its handle, and true when it is a member of the room. */
@@ -127,10 +131,48 @@ export function mentionSuggestions<P extends MentionPerson>(
 	query: string,
 	options: { memberIds: ReadonlySet<string>; ownId: string },
 ): MentionSuggestion<P>[] {
+	return rankMentions(
+		directory.people.map((person) => ({ person, handle: directory.handleOf.get(person.id) ?? null })),
+		query,
+		options,
+	);
+}
+
+/**
+ * The principals for a typed name: the members of the room (at most 500), with their handles from the
+ * directory of the page, and the page of the server (`found`, with the handle of the server). So a member
+ * always comes before a principal that is not a member with the same rank, also when the server has more
+ * matches than its page. A principal in both comes one time.
+ */
+export function typedMentionCandidates<P extends MentionPerson>(
+	directory: MentionDirectory<P>,
+	memberIds: ReadonlySet<string>,
+	found: readonly (MentionPerson & { handle: string | null })[],
+): { person: MentionPerson; handle: string | null }[] {
+	const candidates = new Map<string, { person: MentionPerson; handle: string | null }>();
+	for (const id of memberIds) {
+		const person = directory.byId.get(id);
+		if (person) candidates.set(id, { person, handle: directory.handleOf.get(id) ?? null });
+	}
+	for (const person of found) {
+		if (!candidates.has(person.id)) candidates.set(person.id, { person, handle: person.handle });
+	}
+	return [...candidates.values()];
+}
+
+/**
+ * The suggestions from principals with their handles, with the rules of `mentionSuggestions`. The handles
+ * can come from the server (`directory.list_principals` gives each one), so a list needs no directory.
+ * A principal without a handle, the writer and each archived principal stay out.
+ */
+export function rankMentions<P extends MentionPerson>(
+	candidates: readonly { person: P; handle: string | null }[],
+	query: string,
+	options: { memberIds: ReadonlySet<string>; ownId: string },
+): MentionSuggestion<P>[] {
 	const typed = fold(query);
 	const found: (MentionSuggestion<P> & { rank: number })[] = [];
-	for (const person of directory.people) {
-		const handle = directory.handleOf.get(person.id);
+	for (const { person, handle } of candidates) {
 		if (!handle || person.id === options.ownId || person.archived_at !== null) continue;
 		const rank = matchRank(typed, handle, person);
 		if (rank !== null) found.push({ person, handle, member: options.memberIds.has(person.id), rank });
@@ -139,7 +181,9 @@ export function mentionSuggestions<P extends MentionPerson>(
 		(a, b) =>
 			a.rank - b.rank ||
 			Number(b.member) - Number(a.member) ||
-			a.person.display_name.localeCompare(b.person.display_name),
+			// The folded name in the order of its characters, as the server orders a page for the list.
+			compareText(fold(a.person.display_name), fold(b.person.display_name)) ||
+			compareText(a.person.display_name, b.person.display_name),
 	);
 	return found.slice(0, MENTION_SUGGESTIONS).map(({ person, handle, member }) => ({
 		person,

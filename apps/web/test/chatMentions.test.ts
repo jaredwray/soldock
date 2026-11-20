@@ -10,7 +10,9 @@ import {
 	mentionDirectory,
 	mentionKeyAction,
 	mentionSuggestions,
+	rankMentions,
 	textParts,
+	typedMentionCandidates,
 } from "../src/features/chat/mentions.ts";
 
 function person(id: string, display_name: string, address: string, change: Partial<MentionPerson> = {}): MentionPerson {
@@ -153,6 +155,21 @@ describe("the suggestions for a mention", () => {
 			ELLE.id,
 			ADA.id,
 		]);
+	});
+
+	// The server sends one page of matches for a typed name. A member of the room after that page must still
+	// come first (jaredwray/soldock#131), and a principal on the page and in the room must come one time.
+	it("ranks the members of the room from the directory with the page of the server, each one time", () => {
+		const page = [
+			{ ...CAPTAIN, handle: "captain" },
+			{ ...ADA, handle: "ada@example.com" },
+		];
+		const members = new Set([ELLE.id, ADA.id]);
+		const candidates = typedMentionCandidates(DIRECTORY, members, page);
+		expect(candidates.map((entry) => entry.person.id).sort()).toEqual([CAPTAIN.id, ADA.id, ELLE.id].sort());
+		// "Élodie" is not on the page of the server for "e", but she is a member, so she comes first.
+		const ranked = rankMentions(candidates, "e", { memberIds: members, ownId: ADA_ORG.id });
+		expect(ranked[0]).toMatchObject({ person: { id: ELLE.id }, handle: "elodie.martin", member: true });
 	});
 
 	// A person mentions the members of the room most of the time.

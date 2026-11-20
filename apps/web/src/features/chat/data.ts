@@ -4,6 +4,8 @@ import {
 	type ChatMessage,
 	type ChatRoom,
 	chatSocketPath,
+	DIRECTORY_LIMITS,
+	type DirectoryEntry,
 	EVENTS_SOCKET_PATH,
 	EVENTS_SOCKET_PROTOCOL,
 	PrincipalEvent,
@@ -37,6 +39,61 @@ const LIVE_POLL_MS = 60_000;
 function subscribeVisibility(callback: () => void): () => void {
 	document.addEventListener("visibilitychange", callback);
 	return () => document.removeEventListener("visibilitychange", callback);
+}
+
+/** The wait after the last key before the `@` list asks the server, in ms. */
+export const MENTION_SEARCH_MS = 150;
+/**
+ * The principals that one ask of the `@` list reads at most. The server sorts by kind and name, so the
+ * page must be large enough that the ranking of the list (a match at the start first) finds its best 8.
+ */
+const MENTION_SEARCH_LIMIT = 100;
+/** The longest wait for an answer of the `@` list, after which the list stops to wait (`pending`), in ms. */
+const MENTION_WAIT_MAX_MS = 3_000;
+
+/**
+ * The principals for a typed mention, from the server: `directory.list_principals` with the query,
+ * `active_only` and the order of the best match first, `MENTION_SEARCH_MS` after the last change of the
+ * query, so one ask reads at most `MENTION_SEARCH_LIMIT` principals and the page needs no directory. The
+ * answer of an older query never replaces a newer one. The last answer stays while the next one loads:
+ * the caller ranks it with the current query, so the list does not flash. `pending` is true until the
+ * answer of the current query comes, its ask fails, or `MENTION_WAIT_MAX_MS` passes (the last answer then
+ * stays). Null (no query) gives an empty list.
+ */
+export function useMentionSearch(query: string | null): { found: readonly DirectoryEntry[]; pending: boolean } {
+	const [state, setState] = useState<{ found: readonly DirectoryEntry[]; answered: string | null }>({
+		found: [],
+		answered: null,
+	});
+	const asked = useRef(0);
+	useEffect(() => {
+		const ask = ++asked.current;
+		if (query === null) {
+			setState({ found: [], answered: null });
+			return;
+		}
+		const stopWaiting = () => {
+			if (ask === asked.current) setState((current) => ({ ...current, answered: query }));
+		};
+		const giveUp = setTimeout(stopWaiting, MENTION_SEARCH_MS + MENTION_WAIT_MAX_MS);
+		const timer = setTimeout(() => {
+			api
+				.call("directory.list_principals", {
+					query: query.slice(0, DIRECTORY_LIMITS.queryChars),
+					active_only: "true",
+					order: "match",
+					limit: MENTION_SEARCH_LIMIT,
+				})
+				.then((page) => {
+					if (ask === asked.current) setState({ found: page.principals, answered: query });
+				}, stopWaiting);
+		}, MENTION_SEARCH_MS);
+		return () => {
+			clearTimeout(timer);
+			clearTimeout(giveUp);
+		};
+	}, [query]);
+	return { found: state.found, pending: query !== null && state.answered !== query };
 }
 
 /** True while the tab shows. A room in a hidden tab is not read. */

@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope } from "@asterra/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, searchFold } from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 export type PrincipalKind = "human" | "agent";
@@ -232,9 +232,9 @@ export async function mentionCandidates(
 			)
 			.bind(JSON.stringify(hits)),
 		db.prepare(
-			`${PRINCIPAL_SELECT_FROM} principals p INDEXED BY principals_aliases_unset
+			`${PRINCIPAL_SELECT_FROM} principals p INDEXED BY principals_names_unset
 			JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE p.aliases_set = 0 AND p.deleted_at IS NULL`,
+			WHERE ${NAMES_UNSET}`,
 		),
 	]);
 	const unset = unsetRows?.results ?? [];
@@ -249,6 +249,28 @@ export async function mentionCandidates(
 }
 
 /**
+ * The live rows whose name columns (`alias_first`, `alias_full`, `name_folded`) a create or a rename did
+ * not write: the rows from before migrations 0017 and 0018, and the rows of an earlier Worker. The partial
+ * index `principals_names_unset` has these rows only.
+ */
+const NAMES_UNSET = "(p.aliases_set = 0 OR p.name_folded IS NULL) AND p.deleted_at IS NULL";
+
+/**
+ * Writes the name columns of each live row that does not have them (`NAMES_UNSET`). The search of the
+ * directory needs `name_folded` of each row, so it calls this before it reads. After the first call, the
+ * read of the index finds no row.
+ */
+export async function fillUnsetNames(db: D1Database): Promise<void> {
+	const { results } = await db
+		.prepare(`SELECT p.id, p.display_name FROM principals p INDEXED BY principals_names_unset WHERE ${NAMES_UNSET}`)
+		.all<{ id: string; display_name: string }>();
+	if (results.length === 0) return;
+	await fillAliases(db, results).catch((error: unknown) =>
+		log("warn", "name fill failed", { rows: results.length, error: String(error) }),
+	);
+}
+
+/**
  * Writes the name aliases of rows from before the alias columns, in one batch with `ALIAS_FILL_CHUNK` rows
  * in each statement. A row whose name changed since the read keeps its values: the rename wrote the
  * aliases of the new name.
@@ -256,14 +278,18 @@ export async function mentionCandidates(
 async function fillAliases(db: D1Database, rows: readonly { id: string; display_name: string }[]): Promise<void> {
 	const statements: D1PreparedStatement[] = [];
 	for (let start = 0; start < rows.length; start += ALIAS_FILL_CHUNK) {
-		const values = rows
-			.slice(start, start + ALIAS_FILL_CHUNK)
-			.map((row) => ({ id: row.id, name: row.display_name, ...nameAliasParts(row.display_name) }));
+		const values = rows.slice(start, start + ALIAS_FILL_CHUNK).map((row) => ({
+			id: row.id,
+			name: row.display_name,
+			folded: searchFold(row.display_name),
+			...nameAliasParts(row.display_name),
+		}));
 		statements.push(
 			db
 				.prepare(
 					`UPDATE principals SET alias_first = json_extract(j.value, '$.first'),
-						alias_full = json_extract(j.value, '$.full'), aliases_set = 1
+						alias_full = json_extract(j.value, '$.full'), name_folded = json_extract(j.value, '$.folded'),
+						aliases_set = 1
 					FROM json_each(?) j
 					WHERE principals.id = json_extract(j.value, '$.id')
 						AND principals.display_name = json_extract(j.value, '$.name')`,
@@ -297,8 +323,18 @@ export interface DirectoryPage {
  */
 export async function listPrincipalPage(
 	db: D1Database,
-	options: { query: string | null; after: DirectoryPosition | null; limit: number },
+	options: {
+		query: string | null;
+		folded: string | null;
+		activeOnly: boolean;
+		/** True for the order of the best match first (see `directory.list_principals`). It has one page. */
+		byMatch: boolean;
+		after: DirectoryPosition | null;
+		limit: number;
+	},
 ): Promise<DirectoryPage> {
+	// A search reads `name_folded`, so each row must have it.
+	if (options.folded !== null) await fillUnsetNames(db);
 	const { results } = await db
 		.prepare(
 			`SELECT ${PRINCIPAL_COLUMNS}, a.address,
@@ -306,9 +342,21 @@ export async function listPrincipalPage(
 					AND b.address >= substr(a.address, 1, instr(a.address, '@'))
 					AND b.address < substr(a.address, 1, instr(a.address, '@') - 1) || 'A') > 1 AS shared_local
 			FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0)
+			WHERE (?1 IS NULL OR instr(lower(p.display_name), ?1) > 0 OR instr(a.address, ?1) > 0
+					OR instr(p.name_folded, ?6) > 0 OR instr(a.address, ?6) > 0)
+				AND (?7 = 0 OR p.archived_at IS NULL)
 				AND (?2 IS NULL OR (p.kind, p.display_name, p.id) > (?2, ?3, ?4))
-			ORDER BY p.kind, p.display_name, p.id LIMIT ?5`,
+			ORDER BY
+				-- The best match first: an address, or a word of the name, that starts with the query. The words
+				-- of a name end at a space, a "-", a "." or an apostrophe, as in the ranking of the Chat @ list.
+				CASE WHEN ?8 = 1 AND (substr(a.address, 1, length(?1)) = ?1 OR substr(a.address, 1, length(?6)) = ?6
+					OR instr(' ' || replace(replace(replace(p.name_folded, '-', ' '), '.', ' '), char(39), ' '), ' ' || ?6) > 0)
+				THEN 0 ELSE 1 END,
+				-- Then the order of the ranking of the Chat @ list: the folded name, with no group of the agents.
+				-- The order of the names keeps the agents first.
+				CASE WHEN ?8 = 1 THEN p.name_folded ELSE p.kind END,
+				p.display_name, p.id
+			LIMIT ?5`,
 		)
 		.bind(
 			options.query,
@@ -316,13 +364,16 @@ export async function listPrincipalPage(
 			options.after?.[1] ?? null,
 			options.after?.[2] ?? null,
 			options.limit + 1,
+			options.folded,
+			options.activeOnly ? 1 : 0,
+			options.byMatch ? 1 : 0,
 		)
 		.all<PrincipalRow & { shared_local: number }>();
 	const page = results.slice(0, options.limit);
 	const last = page[page.length - 1];
 	return {
 		principals: page.map((row) => ({ ...toPrincipal(row), sharedLocal: row.shared_local === 1 })),
-		next: results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
+		next: !options.byMatch && results.length > options.limit && last ? [last.kind, last.display_name, last.id] : null,
 	};
 }
 
@@ -468,8 +519,8 @@ export async function createPrincipal(
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.
 			db
-				.prepare("UPDATE principals SET alias_first = ?, alias_full = ?, aliases_set = 1 WHERE id = ?")
-				.bind(aliases.first, aliases.full, id),
+				.prepare("UPDATE principals SET alias_first = ?, alias_full = ?, name_folded = ?, aliases_set = 1 WHERE id = ?")
+				.bind(aliases.first, aliases.full, searchFold(principal.display_name), id),
 			db
 				.prepare(
 					"INSERT INTO addresses (address, principal_id, is_primary, created_at) SELECT ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)",
@@ -561,6 +612,7 @@ export async function updatePrincipal(db: D1Database, id: string, changes: Princ
 			`UPDATE principals SET display_name = COALESCE(?1, display_name),
 				alias_first = CASE WHEN ?1 IS NULL THEN alias_first ELSE ?5 END,
 				alias_full = CASE WHEN ?1 IS NULL THEN alias_full ELSE ?6 END,
+				name_folded = CASE WHEN ?1 IS NULL THEN name_folded ELSE ?7 END,
 				aliases_set = CASE WHEN ?1 IS NULL THEN aliases_set ELSE 1 END,
 				org_role = CASE WHEN kind = 'human' THEN COALESCE(?2, org_role) ELSE org_role END,
 				sponsor_id = CASE WHEN kind = 'agent' THEN COALESCE(?3, sponsor_id) ELSE sponsor_id END
@@ -576,6 +628,7 @@ export async function updatePrincipal(db: D1Database, id: string, changes: Princ
 			id,
 			aliases?.first ?? null,
 			aliases?.full ?? null,
+			changes.display_name === undefined ? null : searchFold(changes.display_name),
 		)
 		.all();
 	// The rows of the update itself: D1 also counts the write of the trigger `principals_aliases_stale` in
@@ -661,7 +714,7 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 			.prepare(
 				`UPDATE principals SET deleted_at = ?1, archived_at = COALESCE(archived_at, ?1), password_hash = NULL,
 					totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL,
-					alias_first = NULL, alias_full = NULL, aliases_set = 1
+					alias_first = NULL, alias_full = NULL, name_folded = NULL, aliases_set = 1
 				WHERE id = ?2 AND deleted_at IS NULL AND org_role IS NOT 'owner'
 				AND NOT EXISTS (SELECT 1 FROM principals agent WHERE agent.sponsor_id = ?2 AND agent.deleted_at IS NULL)`,
 			)

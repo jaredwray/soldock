@@ -8,6 +8,7 @@ import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
+import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -829,6 +830,7 @@ describe("directory upgrade", () => {
 		await run(teamMailboxMigration.split("--> statement-breakpoint"));
 		await run(lifecycleMigration.split("--> statement-breakpoint"));
 		await run(mentionAliasMigration.split("--> statement-breakpoint"));
+		await run(nameFoldedMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -1122,6 +1124,79 @@ describe("the directory list", () => {
 		const elodie = await person("Élodie Durand", "elodie@dock.test");
 		const exact = await owner.call("directory.list_principals", { query: "Élodie" });
 		expect(exact.principals.map((p) => p.id)).toEqual([elodie.id]);
+		// A query without the accents finds a part of each word of the name, as the @ list of Chat does.
+		const maria = await person("María García", "mg@dock.test");
+		for (const [query, id] of [
+			["elo", elodie.id],
+			["ELODIE", elodie.id],
+			["elodie dur", elodie.id],
+			["garcia", maria.id],
+			["ria gar", maria.id],
+		] as const) {
+			const unaccented = await owner.call("directory.list_principals", { query });
+			expect(
+				unaccented.principals.map((p) => p.id),
+				query,
+			).toEqual([id]);
+		}
+		// active_only leaves out an archived principal.
+		await owner.call("directory.archive_principal", { principal_id: maria.id });
+		expect((await owner.call("directory.list_principals", { query: "garcia" })).principals).toHaveLength(1);
+		expect(
+			(await owner.call("directory.list_principals", { query: "garcia", active_only: "true" })).principals,
+		).toEqual([]);
+		// The order "match" puts the best match first, in one page: "Carol Zed" has an address that starts
+		// with "carol", and "Abe Macaroli", first by name, has it only inside a word.
+		const abe = await person("Abe Macaroli", "abe@dock.test");
+		const carol = await person("Carol Zed", "carol.zed@dock.test");
+		const firstOf = async (input: { order?: "name" | "match" }) =>
+			(await owner.call("directory.list_principals", { query: "carol", limit: 1, ...input })).principals[0]?.id;
+		expect(await firstOf({})).toBe(abe.id);
+		expect(await firstOf({ order: "match" })).toBe(carol.id);
+		const oneMatchPage = await owner.call("directory.list_principals", { query: "carol", limit: 1, order: "match" });
+		expect(oneMatchPage.next_cursor).toBeNull();
+		expect(
+			await owner
+				.call("directory.list_principals", { query: "carol", order: "match", cursor: "x" })
+				.catch((error) => error),
+		).toMatchObject({ status: 400 });
+		// Among equal matches, the order "match" sorts by the folded name, as the ranking of the @ list does: no
+		// group of the agents first, as in the order of the names.
+		const zzBot = await createActor(owner, {
+			kind: "agent",
+			display_name: "Zz Bot",
+			address: "zzbot@dock.test",
+			sponsor_id: ada.id,
+		});
+		const zzAnn = await person("Zz Ann", "zzann@dock.test");
+		const firstZz = async (order: "name" | "match") =>
+			(await owner.call("directory.list_principals", { query: "zz", limit: 1, order })).principals[0]?.id;
+		expect(await firstZz("name")).toBe(zzBot.id);
+		expect(await firstZz("match")).toBe(zzAnn.id);
+		// An agent gets the same search through MCP.
+		const viaTool = await callTool(bot.key, "directory_list_principals", { query: "elo", active_only: "true" });
+		expect((viaTool.structuredContent as { principals: { id: string }[] }).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		// The Worker of migration 0017 fills the aliases without name_folded, and renames without it. The search
+		// fills each such row before it reads, so it finds the name.
+		await env.DIRECTORY.prepare("UPDATE principals SET name_folded = NULL, aliases_set = 1 WHERE id = ?")
+			.bind(elodie.id)
+			.run();
+		expect((await owner.call("directory.list_principals", { query: "durand" })).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		await env.DIRECTORY.prepare("UPDATE principals SET display_name = 'Élodie Fontaine' WHERE id = ?")
+			.bind(elodie.id)
+			.run();
+		expect((await owner.call("directory.list_principals", { query: "fontaine" })).principals.map((p) => p.id)).toEqual([
+			elodie.id,
+		]);
+		expect(
+			await env.DIRECTORY.prepare("SELECT name_folded FROM principals WHERE id = ?").bind(elodie.id).first(),
+		).toEqual({
+			name_folded: "elodie fontaine",
+		});
 		expect(found.next_cursor).toBeNull();
 		// A group word of Chat is never a handle. An agent finds the same through MCP.
 		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });

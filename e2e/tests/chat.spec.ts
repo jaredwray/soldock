@@ -1169,14 +1169,45 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	expect(await page.evaluate(() => (window as { pasted?: number }).pasted)).toBeUndefined();
 
 	// "@" opens the list of people. Enter takes a suggestion, and does not send.
+	// A typed name asks the server for one bounded page (jaredwray/soldock#131), not the whole directory.
+	const searches: URLSearchParams[] = [];
+	page.on("request", (request) => {
+		const url = new URL(request.url());
+		if (url.pathname === "/api/v1/directory/principals" && url.searchParams.has("query"))
+			searches.push(url.searchParams);
+	});
 	await box.press("Control+a");
 	await box.press("Delete");
+	// While the list of a typed name loads, Enter waits: it does not send the half mention, and it takes the
+	// best suggestion when the list comes.
+	const search = await hold(
+		page,
+		(url) => url.pathname === "/api/v1/directory/principals" && url.searchParams.has("query"),
+		"GET",
+	);
+	// A name that matches no member of the room shows that the list loads.
+	await box.pressSequentially("@chi");
+	await expect.poll(() => searches.length).toBeGreaterThan(0);
+	await expect(page.getByText("Looking for people…")).toBeVisible();
+	await box.press("Control+a");
+	await box.press("Delete");
+	// A member shows at once, from the members of the room. The Enter still waits for the answer of the server.
 	await box.pressSequentially("thanks @tom");
-	const suggestion = page.getByRole("option", { name: /Tomasz/ });
-	await expect(suggestion).toBeVisible();
+	await expect(page.getByRole("option", { name: /Tomasz/ })).toBeVisible();
 	await box.press("Enter");
+	await expect(box).toHaveText("thanks @tom");
+	search.release();
 	await expect(page.getByRole("listbox", { name: "People and agents to mention" })).toHaveCount(0);
 	await expect(box).toHaveText(/^thanks @tomasz\s$/);
+	expect(
+		searches.some(
+			(one) =>
+				one.get("query")?.startsWith("t") &&
+				one.get("active_only") === "true" &&
+				one.get("order") === "match" &&
+				one.get("limit") === "100",
+		),
+	).toBe(true);
 	await box.pressSequentially("for the review");
 	await box.press("Enter");
 

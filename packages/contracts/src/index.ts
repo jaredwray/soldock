@@ -122,6 +122,7 @@ export {
 	mentionHandle,
 	mentionKeys,
 	nameAliasParts,
+	searchFold,
 	type TextPart,
 	textParts,
 } from "./mentions.ts";

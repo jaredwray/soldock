@@ -36,8 +36,16 @@ import {
 	typedMention,
 } from "./composerCommands.ts";
 import { bodyToDoc, chatSchema, docToBody, plainTextSlice } from "./composerSchema.ts";
+import { useMentionSearch } from "./data.ts";
 import { emojiCode, emojiSuggestions } from "./emoji.ts";
-import { groupSuggestions, type MentionContext, mentionKeyAction, mentionSuggestions } from "./mentions.ts";
+import {
+	groupSuggestions,
+	type MentionContext,
+	mentionKeyAction,
+	mentionSuggestions,
+	rankMentions,
+	typedMentionCandidates,
+} from "./mentions.ts";
 
 // Security rules for the box, as for the mail editor:
 // - The editor DOM holds only the nodes and marks of the schema in composerSchema.ts. ProseMirror
@@ -225,12 +233,24 @@ export function ChatComposer({
 	const typed = listOpen ? typedMention(editorState) : null;
 	const typedCode = listOpen && !typed ? typedEmoji(editorState) : null;
 	const { directory, memberIds, ownId } = mentions;
-	const suggestions = typed ? mentionSuggestions(directory, typed.query, { memberIds, ownId }) : [];
+	// A typed name asks the server (`useMentionSearch`), so the list reads a bounded page for each query.
+	// Only "@" alone uses the directory of the page, for the members of the room first.
+	const search = useMentionSearch(typed && typed.query !== "" ? typed.query : null);
+	const suggestions = !typed
+		? []
+		: typed.query === ""
+			? mentionSuggestions(directory, "", { memberIds, ownId })
+			: rankMentions(typedMentionCandidates(directory, memberIds, search.found), typed.query, { memberIds, ownId });
 	// The groups come after the people, so the list keeps their place for one typed name.
 	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
 	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
+	// A typed name whose list did not come yet: a plain Enter waits for it, so it takes the best suggestion
+	// of the new list, not a suggestion of an older list, and does not send the text of the half mention.
+	const waiting = typed !== null && typed.query !== "" && search.pending;
+	/** The typed mention of a plain Enter that waits for its list, or null. */
+	const deferredEnter = useRef<string | null>(null);
 	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
 	const query = typed ? `@${typed.query}` : typedCode ? `:${typedCode.query}` : "";
 	const active = selected && selected.query === query ? Math.min(selected.index, count - 1) : 0;
@@ -254,8 +274,22 @@ export function ChatComposer({
 	}
 
 	// The keys of the list, for the handler of the view, which the first render makes.
-	const list = useRef({ open, active, count, query, choose: (_index: number) => {} });
-	list.current = { open, active, count, query, choose };
+	const list = useRef({ open, active, count, query, waiting, choose: (_index: number) => {} });
+	list.current = { open, active, count, query, waiting, choose };
+
+	// A plain Enter that waited for the list of its mention runs when the list comes: it takes the best
+	// suggestion of the new list, or sends when the list has none, as Enter does without a list. A change of
+	// the typed mention during the wait drops it.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the effect runs at the end of each wait only.
+	useEffect(() => {
+		const deferred = deferredEnter.current;
+		if (deferred === null || waiting) return;
+		deferredEnter.current = null;
+		const current = list.current;
+		if (current.query !== deferred) return;
+		if (current.open) current.choose(current.active);
+		else callbacks.current.onSubmit();
+	}, [waiting]);
 
 	// A layout effect makes the view before a dialog or a page looks for its focus.
 	useLayoutEffect(() => {
@@ -304,6 +338,10 @@ export function ChatComposer({
 				const current = list.current;
 				// Ctrl+Enter (⌘Enter) always sends, also while the list is open.
 				const sends = event.key === "Enter" && (event.ctrlKey || event.metaKey);
+				if (!sends && !composing && event.key === "Enter" && !event.shiftKey && current.waiting) {
+					deferredEnter.current = current.query;
+					return true;
+				}
 				const action = sends
 					? ({ kind: "none" } as const)
 					: mentionKeyAction(event.key, event.shiftKey, composing, current);
@@ -441,6 +479,11 @@ export function ChatComposer({
 					? `${typedCode ? plural(count, "emoji", "emoji") : plural(count, "suggestion")}. Use the arrow keys, Enter to take one, and Escape to close the list.`
 					: ""}
 			</span>
+			{waiting && !open && (
+				<div className={`mention-list mention-list-${placement}`} role="status">
+					<div className="mention-option mention-wait">Looking for people…</div>
+				</div>
+			)}
 			{open && (
 				<div
 					id={listId}

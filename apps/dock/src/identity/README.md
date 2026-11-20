@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads` and `chat_addressed` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads` and `chat_addressed` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -132,8 +132,22 @@ contract of the socket.
   (`DIRECTORY_LIMITS`). `next_cursor` holds the kind, the name and the id of the last principal of
   the page (`listPrincipalPage`).
   - `query` keeps the principals whose display name or address has the text. The match is in each
-    letter case of A to Z only: `lower` of SQLite changes no other letter, so `elodie` does not find
-    "Élodie". The handler changes only A to Z of the query too, so an exact copy (`Élodie`) finds it.
+    letter case of A to Z only: `lower` of SQLite changes no other letter. The handler changes only A
+    to Z of the query too, so an exact copy (`Élodie`) finds it.
+    - `query` also keeps the principals whose stored name in the form of a search (`name_folded`:
+      lowercase, without accents, `searchFold` in the contracts) has the query in the same form. So
+      `garcia` finds "María García", as the Chat `@` list folds a name. The folded query also matches
+      the address.
+    - A search first fills each live row without its name columns (`fillUnsetNames`): a row from
+      before migration `0017` or `0018`, or a row that an earlier Worker created or filled. The
+      partial index `principals_names_unset` has these rows (`aliases_set = 0` or `name_folded IS NULL`),
+      so after the first fill this check reads no row. `name_folded` has its own mark (NULL), because the
+      Worker of `0017` sets `aliases_set = 1` without this column.
+    - `active_only: "true"` leaves out the archived principals.
+    - `order: "match"` with a query puts first each principal whose address, or a word of the name,
+      starts with the query, then the folded name (with no group of the agents), as the ranking of the
+      Chat `@` list orders equal matches. It has one page: a cursor is refused. The
+      Chat `@` list uses it, so its page of 100 has the best matches.
   - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
     `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full
     address when a different principal has the same part or the part is a group word (`here`,
@@ -141,8 +155,8 @@ contract of the socket.
     part `ada` sorts from `ada@` to `adaA`.
   - The web app reads each page (`listAllPrincipals`). The views that ask at the same time share one
     read. Admin changes the directory, so it starts a fresh read for each load (`fresh`). The pages are not one snapshot, so the web app keeps the first entry of each id. The Chat
-    `@` list filters this whole directory, because a message also needs it for its mention links and
-    name aliases.
+    `@` list asks with `query` for each typed name. The mention links of a message and the dialogs still
+    use this whole directory.
   - The room of a Chat message reads only the principals that its mentions can name
     (`mentionCandidates`): the principals of its node ids, each address equal to a key, each principal
     with the local part of a key or of an id (the range from `ada@` to `adaA`), and each name alias
