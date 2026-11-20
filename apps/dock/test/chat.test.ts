@@ -1,10 +1,10 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_LIMITS } from "@asterra/contracts";
+import { CHAT_LIMITS, mentionDirectory } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { messageContent } from "../src/chat/body.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
-import { type ChatRoomState, mentionCandidates } from "../src/identity/index.ts";
+import { type ChatRoomState, listPrincipals, mentionCandidates } from "../src/identity/index.ts";
 import {
 	type Actor,
 	api,
@@ -1156,9 +1156,8 @@ describe("mentions", () => {
 	const mention = (id: string, label: string) => ({ type: "mention", attrs: { id, label } });
 
 	// The room reads only the principals that a message can name (jaredwray/soldock#127). A name alias
-	// comes from an index, so it must follow a rename, keep the rule for accents, and work for a row from
-	// before the alias columns.
-	it("finds a name alias with accents, after a rename, and for a row from before the alias columns", async () => {
+	// comes from an index, so it must follow each rename and keep the rule for accents.
+	it("finds a name alias with accents from its index, after a rename, and after a rename that keeps the aliases", async () => {
 		const room = await createRoom(ada, "public", "Launch");
 		const jose = await createActor(owner, {
 			kind: "human",
@@ -1171,23 +1170,94 @@ describe("mentions", () => {
 		await owner.call("directory.update_principal", { principal_id: jose.id, display_name: "Joaquín Núñez" });
 		expect((await post(ada, room.id, "@jose")).mentions).toEqual([]);
 		expect((await post(ada, room.id, "@joaquin")).mentions).toEqual([jose.id]);
-		// The previous Worker renames without the alias columns during a deploy. The trigger marks the row,
-		// so the read writes the aliases of the new name.
+		// A rename that keeps both aliases fires the trigger of the old Worker too. The rename still succeeds.
+		const renamed = await owner.call("directory.update_principal", {
+			principal_id: jose.id,
+			display_name: "JOAQUIN NUNEZ",
+		});
+		expect(renamed.principal.display_name).toBe("JOAQUIN NUNEZ");
+		expect((await post(ada, room.id, "@joaquin")).mentions).toEqual([jose.id]);
+	});
+
+	// During a deploy, the previous Worker writes principals without the alias columns, and the rows from
+	// before the migration have none. The room must still find them, and fill them in one read.
+	it("finds the principals that the previous Worker renamed and the rows from before the alias columns, and fills them", async () => {
+		const room = await createRoom(ada, "public", "Launch");
+		const jose = await createActor(owner, {
+			kind: "human",
+			display_name: "José Núñez",
+			address: "jnunez@dock.test",
+			password: PASSWORD,
+		});
+		const gone = await createActor(owner, {
+			kind: "human",
+			display_name: "Gone Person",
+			address: "gone@dock.test",
+			password: PASSWORD,
+		});
+		await owner.call("directory.delete_principal", { principal_id: gone.id });
+		const row = (id: string) =>
+			env.DIRECTORY.prepare("SELECT alias_first, alias_full, aliases_set FROM principals WHERE id = ?")
+				.bind(id)
+				.first();
+		// A delete clears the aliases, so a deleted principal is in no alias index.
+		expect(await row(gone.id)).toEqual({ alias_first: null, alias_full: null, aliases_set: 1 });
+		// The previous Worker renames without the alias columns. The trigger marks the row.
 		await env.DIRECTORY.prepare("UPDATE principals SET display_name = 'Javier Núñez' WHERE id = ?").bind(jose.id).run();
-		expect((await post(ada, room.id, "@joaquin")).mentions).toEqual([]);
+		expect((await post(ada, room.id, "@jose")).mentions).toEqual([]);
 		expect((await post(ada, room.id, "@javier")).mentions).toEqual([jose.id]);
-		// A row from before the alias columns: the read finds it, and writes its aliases.
+		// Each row from before the alias columns: one read finds them and fills all of them. A deleted row has no
+		// address, so the read leaves it out.
+		await env.DIRECTORY.prepare("UPDATE principals SET alias_first = NULL, alias_full = NULL, aliases_set = 0").run();
+		expect((await post(ada, room.id, "@javiernunez @billing")).mentions).toEqual([jose.id, bot.id]);
+		expect(await row(jose.id)).toEqual({ alias_first: "javier", alias_full: "javiernunez", aliases_set: 1 });
+		const unset = await env.DIRECTORY.prepare(
+			"SELECT id FROM principals WHERE aliases_set = 0 AND deleted_at IS NULL",
+		).all();
+		expect(unset.results).toEqual([]);
+	});
+
+	// The candidates must give the answers of the whole directory for each key and id of a message, also in
+	// the cases where the rules of handles and aliases meet.
+	it("gives the answers of the whole directory for each key and id, with the candidates only", async () => {
+		const make = (display_name: string, address: string) =>
+			createActor(owner, { kind: "human", display_name, address, password: PASSWORD });
+		// A local part that two principals share: each has the full address as its handle.
+		const shared1 = await make("Zed Smith", "x@dock.test");
+		const shared2 = await make("Quinn Hale", "x@second.test");
+		// An alias that a different principal has as its local part ("bot") is no alias.
+		const builder = await make("Bot Builder", "builder@dock.test");
+		// An alias that two principals have ("sam") is no alias.
+		const sam1 = await make("Sam One", "sam1@dock.test");
+		const sam2 = await make("Sam Two", "sam2@dock.test");
+		// An archived principal can still be mentioned.
+		const old = await make("Olga Archive", "olga@dock.test");
+		await owner.call("directory.archive_principal", { principal_id: old.id });
+		// A row from before the alias columns.
 		await env.DIRECTORY.prepare(
-			"UPDATE principals SET alias_first = NULL, alias_full = NULL, aliases_set = 0 WHERE id = ?",
+			"UPDATE principals SET aliases_set = 0, alias_first = NULL, alias_full = NULL WHERE id = ?",
 		)
-			.bind(jose.id)
+			.bind(sam2.id)
 			.run();
-		expect((await post(ada, room.id, "@javiernunez")).mentions).toEqual([jose.id]);
-		expect(
-			await env.DIRECTORY.prepare("SELECT alias_first, alias_full, aliases_set FROM principals WHERE id = ?")
-				.bind(jose.id)
-				.first(),
-		).toEqual({ alias_first: "javier", alias_full: "javiernunez", aliases_set: 1 });
+		const ids = [ada.id, bot.id, shared1.id, shared2.id, builder.id, sam1.id, sam2.id, old.id];
+		const keys = [
+			...["ada", "bot", "billing", "x", "x@dock.test", "x@second.test", "zed", "zedsmith", "quinn"],
+			...["builder", "botbuilder", "sam", "samone", "samtwo", "olga", "olgaarchive", "nobody", "here"],
+		];
+		const whole = mentionDirectory(await listPrincipals(env.DIRECTORY));
+		const part = mentionDirectory(await mentionCandidates(env.DIRECTORY, keys, ids));
+		for (const key of keys) expect(part.byHandle.get(key)?.id, key).toBe(whole.byHandle.get(key)?.id);
+		for (const id of ids) {
+			expect(part.handleOf.get(id), id).toBe(whole.handleOf.get(id));
+			expect(part.byId.has(id), id).toBe(whole.byId.has(id));
+		}
+		// The cases above give the answers that the rules ask for.
+		expect(part.byHandle.get("x")).toBeUndefined();
+		expect(part.byHandle.get("zed")?.id).toBe(shared1.id);
+		expect(part.byHandle.get("bot")?.id).toBe(bot.id);
+		expect(part.byHandle.get("sam")).toBeUndefined();
+		expect(part.byHandle.get("samtwo")?.id).toBe(sam2.id);
+		expect(part.byHandle.get("olga")?.id).toBe(old.id);
 	});
 
 	// A message with a mention must not read the whole directory: in a large organization that is a slow read

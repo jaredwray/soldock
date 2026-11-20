@@ -124,7 +124,8 @@ const GROUP_WORDS: ReadonlySet<string> = new Set(["all", "channel", "everyone", 
  * lowercase and without accents. "Ada Lovelace" has "ada" and "adalovelace". An alias must have the form
  * of a handle, so a name in a different script has no alias: that part is null. A word for a group, such
  * as "here" for "Here Maps", is not an alias. The directory stores the two parts, so the server finds the
- * principal of an alias with an index.
+ * principal of an alias with an index. A change of these rules (or of `LOCAL` and `GROUP_WORDS`) needs a
+ * migration that sets `aliases_set = 0` on each principal, so the server writes the stored parts again.
  */
 export function nameAliasParts(displayName: string): { first: string | null; full: string | null } {
 	const words = displayName

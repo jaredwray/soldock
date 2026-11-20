@@ -135,16 +135,23 @@ contract of the socket.
   - The room of a Chat message reads only the principals that its mentions can name
     (`mentionCandidates`): the principals of its node ids, each address equal to a key, each principal
     with the local part of a key or of an id (the range from `ada@` to `adaA`), and each name alias
-    equal to a key. One batch has these reads, each on an index, then one read gets the principals.
+    equal to a key. One batch has these reads, each on an index, then one batch gets the principals.
+    The range also finds a principal whose secondary address has that local part. This is more than
+    the rules need, and it changes no answer.
   - The name aliases of a principal (`nameAliasParts` in the contracts: the first word, and the full
     name without spaces, in lowercase and without accents) are in `alias_first` and `alias_full`, with
     an index each. A create and a rename write them in the same statement as the name. A row from
     before migration `0017` has `aliases_set = 0`: SQL cannot remove accents the way the contracts do.
-    `mentionCandidates` always reads these rows, and writes their aliases, 200 at a time. The write
-    keeps a row whose name changed since the read: the rename wrote its aliases. A principal that the
+    `mentionCandidates` reads these rows from their partial index (not from a list of ids), and writes
+    the aliases of all of them, 500 in each statement. So the first read after the migration costs about
+    as much as the old read of the whole directory, one time. The write keeps a row whose name changed
+    since the read: the rename wrote its aliases. A deleted principal has no address, so the read never
+    finds it: the index of unset rows leaves out deleted rows, and a delete clears the aliases. A principal that the
     previous Worker creates during a deploy gets `aliases_set = 0` too. A rename of the previous Worker
     leaves both aliases as they were, so the trigger `principals_aliases_stale` sets `aliases_set = 0`.
-    The rule then covers it too.
+    The rule then covers it too. A rename of this Worker that keeps both aliases fires the trigger too.
+    D1 counts the write of the trigger in `meta.changes`, so `updatePrincipal` counts the rows of
+    `RETURNING id`.
 - Each principal has one primary address on a saved mail domain. Addresses are stored
   lowercase. Mail to `user+tag@` reaches `user@`, so a primary address cannot contain `+`. The
   [`mail`](../mail/README.md#tags) module uses the tag to apply a label.

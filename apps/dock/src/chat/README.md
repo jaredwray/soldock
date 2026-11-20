@@ -152,8 +152,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       the local part of a key or of an id (so the count of a shared local part is right), and each name
       alias equal to a key. Each part reads an index, so the rows read follow the message, not the
       directory. `mentionDirectory` then applies the same rules as with the whole directory.
-    - A row from before the alias columns (`aliases_set = 0`) is always read, and the read writes its
-      aliases, 200 at a time. So after some posts with a mention, these rows are gone.
+    - A row from before the alias columns (`aliases_set = 0`) is always read, and the read writes the
+      aliases of all of them. So only the first post with a mention after the migration reads these rows.
   - The room keeps a mention of a principal that cannot see the room as text: `@` and the label that
     the caller sent, with no change, so the room tells no handle of a principal outside it. Each
     principal can see a public room. A private room and a direct message are for their members. So a
