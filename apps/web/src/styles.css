@@ -3202,6 +3202,17 @@ fieldset {
 	max-width: 420px;
 }
 
+/* The text under the menu of the messages of Chat. It is wider than the menu, so it has fewer lines. */
+.event-group .event-filter-hint {
+	max-width: 560px;
+	margin-bottom: 12px;
+}
+
+/* The heading of the chat check boxes. It tells that they are changes to the messages of the menu. */
+.event-list-title {
+	margin: 0 0 2px;
+}
+
 .event-list {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));

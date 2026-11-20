@@ -4,10 +4,12 @@ import {
 	type WebhookDomain,
 	type WebhookEvent,
 } from "@asterra/contracts";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { Select } from "../../lib/Select.tsx";
 import {
+	ALL_EVENTS_LABELS,
 	CHAT_FILTER_LABELS,
+	chatFilterHint,
 	choiceKey,
 	chosenFilter,
 	DOMAIN_LABELS,
@@ -90,6 +92,7 @@ function EventGroup({
 	const targetId = useId();
 	const hintId = useId();
 	const filterId = useId();
+	const filterHintId = useId();
 	// The filter that the person chose for a target, for the time when the target has no chat event set.
 	const [filterChoice, setFilterChoice] = useState<Record<string, ChatWebhookFilter>>({});
 	const count = (id: string) => eventsOf(domain).filter((event) => chosenFilter(selected, event, id) !== null).length;
@@ -150,6 +153,17 @@ function EventGroup({
 		onChange(withChatFilter(selected, shownId, value));
 	}
 
+	/** The chat check boxes are changes to the messages of the menu, so they have a heading of their own. */
+	function titled(list: ReactNode) {
+		if (filter === undefined) return list;
+		return (
+			<fieldset>
+				<legend className="field-label event-list-title">Send a POST for</legend>
+				{list}
+			</fieldset>
+		);
+	}
+
 	return (
 		<fieldset className="event-group" aria-describedby={describedBy ? `${hintId} ${describedBy}` : hintId}>
 			<legend className="event-group-title">{DOMAIN_LABELS[domain]}</legend>
@@ -175,59 +189,68 @@ function EventGroup({
 				</div>
 			)}
 			{filter !== undefined && (
-				<div className="field event-target event-filter">
-					<label htmlFor={filterId} className="field-label">
-						Messages
-					</label>
-					{/* A different filter deletes a subscription and adds it again, so it needs the right to add. */}
-					<Select
-						id={filterId}
-						value={filter}
-						options={FILTER_OPTIONS}
-						onChange={changeFilter}
-						disabled={disabled || !canAdd}
-					/>
-				</div>
-			)}
-			<div className="event-list">
-				{all && (
-					<label className="check-row event-all">
-						<input
-							type="checkbox"
-							className="checkbox"
-							checked={set === offered.length}
-							ref={(input) => {
-								if (input) input.indeterminate = set > 0 && set < offered.length;
-							}}
-							onChange={toggleAll}
-							disabled={disabled}
-							data-autofocus={autofocus ? true : undefined}
+				<>
+					<div className="field event-target event-filter">
+						<label htmlFor={filterId} className="field-label">
+							Messages
+						</label>
+						{/* A different filter deletes a subscription and adds it again, so it needs the right to add. */}
+						<Select
+							id={filterId}
+							value={filter}
+							options={FILTER_OPTIONS}
+							onChange={changeFilter}
+							disabled={disabled || !canAdd}
+							aria-describedby={filterHintId}
 						/>
-						<span>All {DOMAIN_LABELS[domain].toLowerCase()} events</span>
-					</label>
-				)}
-				{events.map((event, index) => {
-					const checked = chosenFilter(selected, event, target.id) !== null;
-					return (
-						<label key={choiceKey(event, target.id)} className="check-row">
+					</div>
+					{/* The check boxes below are changes to the messages of the menu. The hint tells what each one sends. */}
+					<p id={filterHintId} className="field-hint event-filter-hint">
+						{chatFilterHint(filter, target.agent === true)}
+					</p>
+				</>
+			)}
+			{titled(
+				<div className="event-list">
+					{all && (
+						<label className="check-row event-all">
 							<input
 								type="checkbox"
 								className="checkbox"
-								checked={checked}
-								onChange={() => toggle(event)}
-								disabled={locked(event)}
-								data-autofocus={autofocus && !all && index === 0 ? true : undefined}
+								checked={set === offered.length}
+								ref={(input) => {
+									if (input) input.indeterminate = set > 0 && set < offered.length;
+								}}
+								onChange={toggleAll}
+								disabled={disabled}
+								data-autofocus={autofocus ? true : undefined}
 							/>
-							<span>
-								{EVENT_LABELS[event]}
-								{stopped && chosenFilter(stopped, event, target.id) !== null && checked && (
-									<span className="check-hint">Stopped. To start it again, clear it and save. Then set it.</span>
-								)}
-							</span>
+							<span>{ALL_EVENTS_LABELS[domain]}</span>
 						</label>
-					);
-				})}
-			</div>
+					)}
+					{events.map((event, index) => {
+						const checked = chosenFilter(selected, event, target.id) !== null;
+						return (
+							<label key={choiceKey(event, target.id)} className="check-row">
+								<input
+									type="checkbox"
+									className="checkbox"
+									checked={checked}
+									onChange={() => toggle(event)}
+									disabled={locked(event)}
+									data-autofocus={autofocus && !all && index === 0 ? true : undefined}
+								/>
+								<span>
+									{EVENT_LABELS[event]}
+									{stopped && chosenFilter(stopped, event, target.id) !== null && checked && (
+										<span className="check-hint">Stopped. To start it again, clear it and save. Then set it.</span>
+									)}
+								</span>
+							</label>
+						);
+					})}
+				</div>,
+			)}
 		</fieldset>
 	);
 }
