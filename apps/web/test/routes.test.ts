@@ -157,6 +157,9 @@ describe("routes", () => {
 			// A link to one message has the seq of the message.
 			expect(chatPath(roomId, 42)).toBe(`${chatPath(roomId)}/42`);
 			expect(parseRoute(chatPath(roomId, 42))).toEqual({ page: "chat", roomId, seq: 42 });
+			// A link to a reply has the seq of the first message of the thread, then the seq of the reply.
+			expect(chatPath(roomId, 42, 57)).toBe(`${chatPath(roomId)}/42/57`);
+			expect(parseRoute(chatPath(roomId, 42, 57))).toEqual({ page: "chat", roomId, seq: 42, replySeq: 57 });
 		}
 		for (const path of ["/chat/itm_01JD0000000000000000000000", "/chat/rm_1/extra"]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
@@ -166,7 +169,19 @@ describe("routes", () => {
 	// The seq goes into a call to the server. A path with a different value is not a link to a message.
 	it("takes only a whole number from 1 as the message of a link", () => {
 		const room = chatPath("rm_01JD0000000000000000000000");
-		for (const seq of ["0", "-1", "1.5", "1e3", "abc", "12345678901234567890", "7/extra"]) {
+		for (const seq of [
+			"0",
+			"-1",
+			"1.5",
+			"1e3",
+			"abc",
+			"12345678901234567890",
+			"7/extra",
+			"7/0",
+			"7/7",
+			"7/3",
+			"7/8/9",
+		]) {
 			expect(parseRoute(`${room}/${seq}`), seq).toEqual({ page: "not-found" });
 		}
 	});

@@ -137,6 +137,7 @@ export function Shell() {
 					<ChatApp
 						roomId={route.roomId}
 						messageSeq={route.seq}
+						replySeq={route.replySeq ?? null}
 						profileId={route.profileId ?? null}
 						threads={route.threads === true}
 						navOpen={navOpen}
