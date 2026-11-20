@@ -218,8 +218,10 @@ person revokes the key or the OAuth connection. `directory.delete_principal` del
 
 `events/subscribe` and `events/unsubscribe` write an audit line (`mcp.events_subscribe`,
 `mcp.events_unsubscribe`). An `events/subscribe` that gets `forbidden` or `policy_denied` writes a
-line with `result: "denied"`, as a refused operation does. During a deploy, the previous Worker can run a queue job. It sends a row of
-MCP Events in the webhook form, and it does not read the end of a subscription.
+line with `result: "denied"`, as a refused operation does. Each refusal also writes a log line in the
+[MCP adapter](../mcp/README.md#events), with the error code and the error message. During a deploy,
+the previous Worker can run a queue job. It sends a row of MCP Events in the webhook form, and it does
+not read the end of a subscription.
 
 ## Data inventory
 

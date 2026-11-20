@@ -694,6 +694,9 @@ For client developers:
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
   drive to find what you did not get.
 
+If ChatGPT cannot start or change a subscription and shows no reason, find the log line
+`mcp events/subscribe refused` in the logs of the Worker. Its `code` and `detail` give the reason.
+
 A POST has this form:
 
 ```json
