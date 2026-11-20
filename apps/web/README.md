@@ -871,7 +871,12 @@ MCP clients. The app has no UI-only path.
       view closes, an upload that runs stops, and a file that is in the drive goes to the trash, except
       a file of a send (see the X of a chip below). Escape does not close a view that has files in its
       box.
-    - Known limits, for the next parts: the view keeps no draft after a reload. The view keeps each
+    - **Draft.** The reply in the box stays after a close of the view and after a reload. It is in the
+      store of the drafts of the rooms (`drafts.ts`), with the key `<room id>/<first message id>`
+      (`threadDraftKey`), so a sign-out removes it too. A send removes it. Text that the person typed
+      during the send stays. The store loses the draft only while it has the sent reply, so a send that
+      ends after a close of its view keeps the newer draft of a view that opened later. The files and "Also send to <room>" do not stay.
+    - Known limits, for the next parts: the view keeps each
       reply that it read, so a thread that the person reads far back keeps many rows
       ([jaredwray/soldock#138](https://github.com/jaredwray/soldock/issues/138)).
   - A socket that fails opens again after a wait. The wait starts at half a second, doubles after
@@ -1647,7 +1652,7 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 | --- | --- | --- |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the body and its text, the files (the ids, the names, the types and the sizes of files in the drive of the person), the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
-| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room, the body in the box and the time of its last change. 100 rooms at most. A draft goes away when the person sends it, and when the box is empty |
+| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room and each thread (key `<room id>/<first message id>`), the body in the box and the time of its last change. 100 drafts at most. A draft goes away when the person sends it, and when the box is empty |
 | `localStorage` | `soldock:chat-emoji:` and the id of the person | The counts of the reactions of the signed-in person: for each emoji, the number of uses and the time of the last use. 50 emoji at most. It gives the quick reactions of a message |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a

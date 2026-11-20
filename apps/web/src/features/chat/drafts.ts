@@ -1,8 +1,9 @@
 import { ChatBody } from "@asterra/contracts";
 import { textToBody } from "./composerSchema.ts";
 
-// The message that a person wrote in the box of a room and did not send. It stays when the person
-// opens a different room, and after a reload of the page. It has no DOM, so apps/web/test checks it.
+// The message that a person wrote in the box of a room, or in the box of a thread, and did not send. It
+// stays when the person opens a different room or thread, and after a reload of the page. It has no DOM,
+// so apps/web/test checks it.
 
 /** The part of `localStorage` that the drafts use. */
 export type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
@@ -143,6 +144,14 @@ export function forgetOtherDrafts(storage: DraftStorage | null, owner: string | 
 	} catch {
 		// The browser refused the storage. It has no drafts then.
 	}
+}
+
+/**
+ * The key of the draft of a reply in a thread, in the store of the drafts of the rooms. A room id has no
+ * "/", so the key of a thread never is the key of a room.
+ */
+export function threadDraftKey(roomId: string, parentId: string): string {
+	return `${roomId}/${parentId}`;
 }
 
 /** `localStorage`, or null when the browser refuses it. */
