@@ -3,7 +3,7 @@ import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
 import { GROUP_MENTIONS } from "./mentions.ts";
 import { defineOperation } from "./operation.ts";
-import { CHAT_WEBHOOK_EVENTS, ChatWebhookSubscription } from "./webhooks.ts";
+import { CHAT_WEBHOOK_EVENTS, CHAT_WEBHOOK_FILTERS, ChatWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 export const CHAT_LIMITS = {
@@ -1084,7 +1084,9 @@ const createChatWebhookSubscription = defineOperation({
 	description: [
 		"Adds a subscription for your chats, or the chats of an agent that you sponsor.",
 		"Choose a new message, a changed message, or a deleted message.",
-		"The POST has no message text. Read the room with your own credential.",
+		"With filter: addressed, only a message for the principal sends a POST: a direct message, a mention of the principal or of a group, a reply in a thread that the principal follows, and a delete of a message of the principal by a different member.",
+		"With filter: all, each message of a joined chat sends a POST. Without filter, an agent gets addressed and a person gets all.",
+		"The POST has no message text. It has reason, author_id and version, so the receiver can decide before a read. Read the room with your own credential.",
 		"A message that arrived before this subscription sends no POST.",
 		"The endpoint must be yours and active.",
 	].join(" "),
@@ -1096,6 +1098,12 @@ const createChatWebhookSubscription = defineOperation({
 		endpoint_id: prefixedId("whe"),
 		event: z.enum(CHAT_WEBHOOK_EVENTS),
 		principal_id: prefixedId("prn").optional(),
+		filter: z
+			.enum(CHAT_WEBHOOK_FILTERS)
+			.optional()
+			.describe(
+				"all: each message of a joined chat. addressed: only a direct message, a mention, and a reply in a followed thread. The default is addressed for an agent and all for a person.",
+			),
 	}),
 	output: z.object({ subscription: ChatWebhookSubscription }),
 	errors: ["not_found", "policy_denied", "conflict", "forbidden"],

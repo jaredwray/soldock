@@ -1,4 +1,6 @@
 import {
+	type ChatWebhookFilter,
+	defaultChatWebhookFilter,
 	WEBHOOK_LIMITS,
 	type WebhookDomain,
 	type WebhookEndpoint,
@@ -36,6 +38,8 @@ export interface SubscriptionView {
 	status: SubscriptionRow["status"];
 	disabled_reason: SubscriptionRow["disabled_reason"];
 	created_at: string;
+	/** Chat only. Mail and Drive leave it out of their results. */
+	chat_filter: ChatWebhookFilter;
 	endpoint: WebhookEndpoint;
 }
 
@@ -48,6 +52,7 @@ function toView(row: SubscriptionRow, endpoint: WebhookEndpoint): SubscriptionVi
 		status: row.status,
 		disabled_reason: row.disabled_reason,
 		created_at: row.created_at,
+		chat_filter: row.chat_filter,
 		endpoint,
 	};
 }
@@ -203,7 +208,7 @@ export function createSubscriptionHandlers(
 	return {
 		async create(
 			call: CallContext,
-			input: { endpoint_id: string; event: WebhookEvent; mailbox_id?: string },
+			input: { endpoint_id: string; event: WebhookEvent; mailbox_id?: string; filter?: ChatWebhookFilter | undefined },
 		): Promise<{ subscription: SubscriptionView }> {
 			await adoptLegacyWebhooks(call.env.DIRECTORY);
 			if (webhookDomain(input.event) !== domain) {
@@ -224,13 +229,18 @@ export function createSubscriptionHandlers(
 				);
 			}
 			await beforeCreate?.(call, targetId);
+			// A chat target is the caller, or an agent that the caller sponsors. Mail and Drive have no filter.
+			const filter =
+				domain === "chat"
+					? (input.filter ?? defaultChatWebhookFilter(targetId === call.caller.id ? call.caller.kind : "agent"))
+					: "all";
 			const binding = credentialBinding(call.caller);
 			const id = newId("whk");
 			const createdAt = new Date().toISOString();
 			const inserted = await call.env.DIRECTORY.prepare(
 				`INSERT INTO webhook_subscriptions (
-					id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at)
-				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+					id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at, chat_filter)
+				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?12
 				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 					JOIN webhook_endpoints e ON e.id = s.endpoint_id
 					WHERE e.created_by = ?9 AND e.protocol = 'webhook' AND s.domain = ?3 AND s.event_type = ?4) < ?10
@@ -250,6 +260,7 @@ export function createSubscriptionHandlers(
 					call.caller.id,
 					WEBHOOK_LIMITS.subscriptionsPerCreator,
 					WEBHOOK_LIMITS.perTarget,
+					filter,
 				)
 				.first<{ id: string }>();
 			if (!inserted) {

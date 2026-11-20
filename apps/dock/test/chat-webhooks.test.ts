@@ -11,6 +11,7 @@ import {
 	receiveWebhooks,
 	request,
 	seedOrg,
+	type WebhookPost,
 } from "./helpers.ts";
 
 let owner: Actor;
@@ -45,17 +46,28 @@ it("lets a sponsor create a chat webhook for an agent through REST", async () =>
 		}),
 	});
 	expect(response.status).toBe(200);
-	expect(await response.json()).toMatchObject({ subscription: { principal_id: bot.id } });
+	// Without a filter, an agent gets only the messages for it.
+	expect(await response.json()).toMatchObject({ subscription: { principal_id: bot.id, filter: "addressed" } });
+	// A person keeps each message, as before the filter.
+	const own = await request("/api/v1/chat/webhook-subscriptions", {
+		method: "POST",
+		headers: { ...bearer(ada.key), "content-type": "application/json" },
+		body: JSON.stringify({ endpoint_id: created.endpoint.id, event: "chat.message.created" }),
+	});
+	expect(await own.json()).toMatchObject({ subscription: { principal_id: ada.id, filter: "all" } });
 });
 
 const HOOK = "https://hooks.example.com/chat";
+const ADDRESSED_HOOK = "https://hooks.example.com/addressed";
 
+/** A chat webhook that sends each message, unless the test sets a filter: most tests are about the delivery. */
 async function createChat(
 	caller: Actor,
 	input: {
 		url: string;
 		principal_id?: string;
 		event?: "chat.message.created" | "chat.message.updated" | "chat.message.deleted";
+		filter?: "all" | "addressed";
 		auth_key?: string;
 		header?: { name: string; value: string };
 	},
@@ -68,6 +80,7 @@ async function createChat(
 	const { subscription } = await caller.call("chat.create_webhook_subscription", {
 		endpoint_id: endpoint.id,
 		event: input.event ?? "chat.message.created",
+		filter: input.filter ?? "all",
 		...(input.principal_id !== undefined ? { principal_id: input.principal_id } : {}),
 	});
 	return {
@@ -362,7 +375,9 @@ it("enforces the chat scope and policy through REST and MCP, with private manage
 		event: "chat.message.created",
 	});
 	expect(subscribed.isError).toBeFalsy();
-	const agentHook = (subscribed.structuredContent as { subscription: { id: string } }).subscription;
+	const agentHook = (subscribed.structuredContent as { subscription: { id: string; filter: string } }).subscription;
+	// The MCP tool gives an agent the same default as REST.
+	expect(agentHook.filter).toBe("addressed");
 	const list = (await bot.call("chat.list_webhook_subscriptions")).subscriptions;
 	expect(list.map((row) => row.id)).toEqual([agentHook.id]);
 	expect(JSON.stringify(list)).not.toMatch(/private-token|private-header|whsec_/);
@@ -480,8 +495,9 @@ it("keeps two edits of one message, and a second delete finds the first", async 
 	expect(deletes.filter((result) => result.deleted)).toHaveLength(1);
 });
 
+// A delete of your own message is for you, so the filter `addressed` sends it, with the reason `author`.
 it("tells the author when another member deletes the message", async () => {
-	await watchBot("chat.message.deleted");
+	await createChat(ada, { principal_id: bot.id, url: HOOK, event: "chat.message.deleted", filter: "addressed" });
 	const current = await room();
 	const queue = await capture(current.id);
 	const { message } = await bot.call("chat.post_message", { room_id: current.id, text: "Mine" });
@@ -491,7 +507,10 @@ it("tells the author when another member deletes the message", async () => {
 	await queue.drain();
 	const posts = receiveWebhooks();
 	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
-	expect(posts.map((post) => JSON.parse(post.body).type)).toEqual(["chat.message.deleted"]);
+	expect(posts.map((post) => [JSON.parse(post.body).type, JSON.parse(post.body).data.reason])).toEqual([
+		["chat.message.deleted", "author"],
+	]);
+	expect(JSON.parse(posts[0]?.body ?? "{}").data.author_id).toBe(bot.id);
 });
 
 it("stops only the subscription when its key is revoked", async () => {
@@ -564,4 +583,124 @@ it("copies a legacy chat row", async () => {
 	expect(listed.subscriptions).toEqual([
 		expect.objectContaining({ id, principal_id: ada.id, event: "chat.message.created" }),
 	]);
+});
+
+/** The `data` of each POST to one URL, by the id of its message. */
+function dataByMessage(posts: WebhookPost[], url: string) {
+	const data = posts
+		.filter((post) => post.url === url)
+		.map((post) => JSON.parse(post.body).data as { message_id: string; reason?: string });
+	return new Map(data.map((entry) => [entry.message_id, entry]));
+}
+
+// An agent in a busy room must not get a POST for each message. A receiver that gets each message
+// reads the reason, and does not have to read the room to find out that a message is not for it.
+it("sends an agent only the messages for it, and gives each POST the reason, the author and the version", async () => {
+	await createChat(ada, { principal_id: bot.id, url: ADDRESSED_HOOK, filter: "addressed" });
+	await watchBot();
+	const current = await room("private", [bot.id, owner.id]);
+	const dm = (await ada.call("chat.open_dm", { principal_id: bot.id })).room;
+	const queue = await capture(current.id);
+	const dmQueue = await capture(dm.id);
+	const say = async (text: string, parent?: string) =>
+		(
+			await ada.call("chat.post_message", {
+				room_id: current.id,
+				text,
+				...(parent !== undefined ? { parent_id: parent } : {}),
+			})
+		).message;
+	const plain = await say("Lunch is at noon");
+	const named = await say("@bot send the invoice");
+	const group = await say("@channel the room moves");
+	// A reply to a message of the agent starts the follow of the agent in the same transaction as the event.
+	const { message: status } = await bot.call("chat.post_message", { room_id: current.id, text: "Status: done" });
+	const followed = await say("One more detail", status.id);
+	const other = await say("A detail for a different thread", group.id);
+	// A reply outside the room list has no row in the table of mentions. Its reason comes from its body.
+	const hidden = await say("@bot examine this thread", group.id);
+	const direct = (await ada.call("chat.post_message", { room_id: dm.id, text: "Only for you" })).message;
+	await queue.drain();
+	await dmQueue.drain();
+	const posts = receiveWebhooks();
+	for (const events of [queue.events, dmQueue.events]) await consumeWebhooks((await consumeWebhooks(events)).sent);
+
+	const every = dataByMessage(posts, HOOK);
+	expect(new Map([...every].map(([id, data]) => [id, data.reason]))).toEqual(
+		new Map([
+			[plain.id, "room"],
+			[named.id, "mention"],
+			[group.id, "mention"],
+			[followed.id, "thread_reply"],
+			[other.id, "room"],
+			[hidden.id, "mention"],
+			[direct.id, "dm"],
+		]),
+	);
+	const addressed = dataByMessage(posts, ADDRESSED_HOOK);
+	expect([...addressed.keys()].sort()).toEqual([named.id, group.id, followed.id, hidden.id, direct.id].sort());
+	expect(addressed.get(followed.id)).toMatchObject({ reason: "thread_reply", parent_id: status.id });
+	// The version is the version of the message, so a receiver can compare it with the room that it read.
+	expect(every.get(named.id)).toMatchObject({ author_id: ada.id, version: named.version });
+	expect(posts.filter((post) => post.url === HOOK || post.url === ADDRESSED_HOOK)).toHaveLength(12);
+});
+
+// The reason of an edit comes from the new text. A deleted message has no text, so the reason of a
+// delete comes from the text before the delete.
+it("sends an edit that makes a message for the agent, and the delete of that message", async () => {
+	for (const event of ["chat.message.updated", "chat.message.deleted"] as const) {
+		await createChat(ada, { principal_id: bot.id, url: ADDRESSED_HOOK, event, filter: "addressed" });
+	}
+	const current = await room("private", [bot.id, owner.id]);
+	const queue = await capture(current.id);
+	const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "Draft" });
+	const edit = (text: string) => ada.call("chat.edit_message", { room_id: current.id, message_id: message.id, text });
+	await edit("Draft, second version");
+	const { message: edited } = await edit("@bot examine the draft");
+	await queue.drain();
+	const posts = receiveWebhooks();
+	const facts = () =>
+		posts.map((post) => {
+			const body = JSON.parse(post.body) as { type: string; data: { reason: string; version: number } };
+			return [body.type, body.data.reason, body.data.version];
+		});
+	await consumeWebhooks((await consumeWebhooks(queue.events.splice(0))).sent);
+	// The first edit did not mention the agent, so it sent nothing.
+	expect(facts()).toEqual([["chat.message.updated", "mention", edited.version]]);
+	await ada.call("chat.delete_message", { room_id: current.id, message_id: message.id });
+	await queue.drain();
+	await consumeWebhooks((await consumeWebhooks(queue.events)).sent);
+	expect(facts().at(-1)).toEqual(["chat.message.deleted", "mention", edited.version + 1]);
+	expect(posts).toHaveLength(2);
+});
+
+// During a deploy, a room object of the previous Worker can store an event without the reasons. After
+// a rollback, an event of a later Worker can have a reason that this Worker does not know.
+it("sends an event without a known reason only to a subscription for each message, and leaves the facts out", async () => {
+	await createChat(ada, { principal_id: bot.id, url: ADDRESSED_HOOK, filter: "addressed" });
+	await watchBot();
+	const current = await room();
+	const queue = await capture(current.id);
+	await ada.call("chat.post_message", { room_id: current.id, text: "@bot now" });
+	await queue.drain();
+	const {
+		authorId: _author,
+		version: _version,
+		...job
+	} = queue.events[0] as {
+		authorId: string;
+		version: number;
+		recipients: { id: string; membershipId: string; reason: string }[];
+	};
+	const members = job.recipients.map(({ id, membershipId }) => ({ id, membershipId }));
+	const posts = receiveWebhooks();
+	for (const recipients of [members, members.map((member) => ({ ...member, reason: "of_a_later_worker" }))]) {
+		// A job that is not valid goes to the dead letters and sends nothing. This job sends one POST.
+		await consumeWebhooks((await consumeWebhooks([{ ...job, recipients }])).sent);
+	}
+	expect(posts.map((post) => post.url)).toEqual([HOOK, HOOK]);
+	for (const post of posts) {
+		const data = JSON.parse(post.body).data as Record<string, unknown>;
+		expect(Object.keys(data).sort()).toEqual(["message_id", "principal_id", "room_id", "uri", "webhook_id"]);
+	}
 });

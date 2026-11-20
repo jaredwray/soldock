@@ -312,6 +312,8 @@ MCP clients. The app has no UI-only path.
       The rows come from `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
       **Edit events** opens a dialog with a check box for each mail, chat and drive event.
       A save calls the create operation for each new check mark and the delete operation for each removed one.
+      The **Messages** menu of Chat starts with **Direct messages, mentions and followed threads** for an agent.
+      An owner or an admin who is not the sponsor cannot change it, because a different filter adds a subscription.
       Only the sponsor sees **Add webhook**, which sends events of the agent to a webhook that the sponsor created in Settings.
       An owner or an admin can clear an event, but cannot add one.
       The Last delivery column shows a dash for the webhook of a different person, because only its creator sees its deliveries.
@@ -385,6 +387,16 @@ MCP clients. The app has no UI-only path.
     check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events.
     Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
     A star sends nothing. Chat creates no browser storage.
+  - Chat has the menu **Messages**: **Each message**, or **Direct messages, mentions and followed threads**
+    (the filter `addressed` of `chat.create_webhook_subscription`). The menu applies to each chat event of the
+    target. It starts with the filter of the saved events. Without a saved event, it starts with the default
+    of the server: an agent gets only the messages for it, and a person gets each message. The dialog always
+    sends the filter of the menu. A subscription has no update operation, so a different choice deletes each
+    saved chat subscription of the target and creates it again. A saved event that the person clears and
+    sets again keeps its saved filter, unless the person chose a filter in the menu. A person who cannot
+    add an event always keeps it. So a clear and a set send no call. The list shows the second choice after the
+    events of the line. A webhook with the two filters on one target, which only the API makes, shows
+    **Each message** in the menu, and the list gives the number of events with the second choice.
   - A product with more than one target has a menu above its check boxes. Mail offers your mailbox and each
     team mailbox of yours. Drive offers your drive and each shared drive of yours. The menu shows the
     number of events of each target. Only a shared drive offers the member change and the drive deletion,

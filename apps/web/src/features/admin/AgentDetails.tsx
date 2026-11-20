@@ -62,6 +62,7 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 				targetName={agent.display_name}
 				domains={WEBHOOK_DOMAINS}
 				canCreate={agent.sponsor_id === whoami.principal.id}
+				agent
 				note="Only the sponsor can add a webhook or an event."
 			/>
 			<ApiKeyManager

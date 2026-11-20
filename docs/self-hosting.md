@@ -293,3 +293,8 @@ queue, `soldock-chat-previews` (binding `CHAT_PREVIEWS`), which the next deploy 
 dead letter queue: a room sends a job again when no result came, and after 3 sends the links get no
 preview. The fetch of a preview asks DNS over HTTPS at `cloudflare-dns.com`, a service of Cloudflare, to
 check that each address of a host is public. It needs no secret.
+
+Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A subscription from before
+this migration keeps the filter `all`, so it sends each message as before, also a subscription of MCP Events
+after a refresh. Only a new subscription for an agent without `filter` gets `addressed`: see
+[Get a webhook for all joined chats](agents.md#get-a-webhook-for-all-joined-chats).

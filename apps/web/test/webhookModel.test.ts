@@ -2,14 +2,18 @@ import type { WebhookEndpoint } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	applyPlan,
+	chatFilterOf,
 	choiceKey,
 	eventSummary,
 	eventsFor,
 	eventsOf,
+	filterForChoice,
+	filterSummary,
 	groupByTarget,
 	type ListedSubscription,
 	planChanges,
 	stoppedText,
+	withChatFilter,
 } from "../src/features/settings/webhookModel.ts";
 
 const endpoint = (status: WebhookEndpoint["status"], reason: WebhookEndpoint["disabled_reason"]): WebhookEndpoint =>
@@ -134,5 +138,95 @@ describe("webhook event check boxes", () => {
 			["drive", "prn_me", 1, 0],
 		]);
 		expect(groups[1]?.stopped).toEqual(["its creator lost access to the target"]);
+	});
+
+	// A subscription has no update operation. Without the filter in the key, a save after a change of the
+	// menu only would send no call, and the webhook would keep its old filter.
+	it("replaces a chat subscription when only its filter changed", () => {
+		const saved = [
+			{ ...subscription("whk_1", "chat.message.created", "prn_bot"), filter: "all" as const },
+			{ ...subscription("whk_2", "chat.message.deleted", "prn_bot"), filter: "addressed" as const },
+		];
+		const selected = new Set([
+			choiceKey("chat.message.created", "prn_bot", "addressed"),
+			choiceKey("chat.message.deleted", "prn_bot", "addressed"),
+		]);
+		const plan = planChanges(saved, selected);
+		expect(plan.remove.map((row) => row.id)).toEqual(["whk_1"]);
+		expect(plan.add).toEqual([{ event: "chat.message.created", targetId: "prn_bot", filter: "addressed" }]);
+	});
+
+	it("changes the filter of the set chat events of one target only", () => {
+		const selected = new Set([
+			choiceKey("chat.message.created", "prn_bot"),
+			choiceKey("chat.message.updated", "prn_bot"),
+			choiceKey("chat.message.created", "prn_me"),
+			choiceKey("mail.inbox.updated", "prn_bot"),
+		]);
+		expect(chatFilterOf(selected, "prn_bot")).toBe("all");
+		// A target with no set chat event has no filter yet: the menu then shows the default.
+		expect(chatFilterOf(selected, "prn_other")).toBeNull();
+		const next = withChatFilter(selected, "prn_bot", "addressed");
+		expect([...next].sort()).toEqual(
+			[
+				choiceKey("chat.message.created", "prn_bot", "addressed"),
+				choiceKey("chat.message.updated", "prn_bot", "addressed"),
+				choiceKey("chat.message.created", "prn_me"),
+				choiceKey("mail.inbox.updated", "prn_bot"),
+			].sort(),
+		);
+		expect(chatFilterOf(next, "prn_bot")).toBe("addressed");
+		expect(chatFilterOf(next, "prn_me")).toBe("all");
+	});
+
+	// An agent has the default `addressed`. Without the saved filter, a clear and a set of a saved event
+	// of an agent would replace an `all` subscription. An admin can delete it, but cannot create the new one.
+	it("keeps the saved filter of a chat event that a person clears and sets again", () => {
+		const created = choiceKey("chat.message.created", "prn_bot");
+		const cleared = { selected: new Set<string>(), saved: new Set([created]), canAdd: true };
+		const filterOf = (
+			state: typeof cleared,
+			event: "chat.message.created" | "chat.message.deleted" | null,
+			choice?: "all" | "addressed",
+		) => filterForChoice(state, event, "prn_bot", choice, "addressed");
+		expect(filterOf(cleared, "chat.message.created")).toBe("all");
+		// The menu shows the saved filter too, so a new event of the target gets it.
+		expect(filterOf(cleared, null)).toBe("all");
+		// After a choice in the menu, the person replaces the subscription on purpose.
+		expect(filterOf(cleared, "chat.message.created", "addressed")).toBe("addressed");
+		// A person who cannot add cannot replace a subscription, with or without a choice.
+		expect(filterOf({ ...cleared, canAdd: false }, "chat.message.created", "addressed")).toBe("all");
+
+		// A webhook with the two filters on one target, which only the API makes: each event keeps its own.
+		const mixed = {
+			selected: new Set([created]),
+			saved: new Set([created, choiceKey("chat.message.deleted", "prn_bot", "addressed")]),
+			canAdd: true,
+		};
+		expect(filterOf(mixed, "chat.message.deleted")).toBe("addressed");
+		// A target with no saved chat event has the default of its kind.
+		expect(filterForChoice(cleared, null, "prn_new", undefined, "addressed")).toBe("addressed");
+	});
+
+	// The names of the events are the same for the two filters, so the list must tell them apart.
+	it("tells in the list which chat events send only the messages for the target", () => {
+		const row = (id: string, event: ListedSubscription["event"], filter: "all" | "addressed") => ({
+			...subscription(id, event, "prn_bot"),
+			filter,
+		});
+		const [every] = groupByTarget([row("whk_1", "chat.message.created", "all")]);
+		const [addressed] = groupByTarget([
+			row("whk_1", "chat.message.created", "addressed"),
+			row("whk_2", "chat.message.updated", "addressed"),
+		]);
+		const [mixed] = groupByTarget([
+			row("whk_1", "chat.message.created", "addressed"),
+			row("whk_2", "chat.message.updated", "all"),
+		]);
+		expect([every, addressed, mixed].map((group) => group && filterSummary(group))).toEqual([
+			null,
+			"Direct messages, mentions and followed threads only",
+			"1 of 2: direct messages, mentions and followed threads only",
+		]);
 	});
 });

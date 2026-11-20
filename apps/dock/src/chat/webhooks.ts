@@ -6,11 +6,12 @@ import { createSubscriptionHandlers, type SubscriptionView } from "../webhooks/i
 const shared = createSubscriptionHandlers("chat");
 
 function forChat(view: SubscriptionView): ChatWebhookSubscription {
-	const { target_id, event, ...rest } = view;
+	const { target_id, event, chat_filter, ...rest } = view;
 	return {
 		...rest,
 		principal_id: target_id,
 		event: event as ChatWebhookSubscription["event"],
+		filter: chat_filter,
 	};
 }
 

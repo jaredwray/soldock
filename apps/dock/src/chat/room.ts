@@ -4,6 +4,7 @@ import {
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	type ChatBody,
+	type ChatEventReason,
 	type ChatFile,
 	type ChatLinkPreview,
 	type ChatMessage,
@@ -1955,16 +1956,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 						now,
 					);
 				}
-				this.queueChatEvent(
-					opened.room.room_id,
-					"chat.message.created",
-					input.id,
-					input.id,
-					call.actor.principal_id,
+				this.queueChatEvent({
+					room: opened.room,
+					eventType: "chat.message.created",
+					messageId: input.id,
+					eventId: input.id,
+					actorId: call.actor.principal_id,
+					authorId: call.actor.principal_id,
+					body: content.body,
+					version,
 					now,
 					subscriptionSequence,
-					parent?.id ?? null,
-				);
+					parentId: parent?.id ?? null,
+				});
 				this.roomChanged(call.actor.principal_id);
 			});
 			const message = this.messageRecord(opened.room.room_id, this.message(input.id) as MessageRow);
@@ -2056,16 +2060,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.setLinks(messageId, parseLinks(row.links_json), extractLinks(content.body), linkOrigin);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				this.roomChanged(call.actor.principal_id);
-				this.queueChatEvent(
-					room.room_id,
-					"chat.message.updated",
+				this.queueChatEvent({
+					room,
+					eventType: "chat.message.updated",
 					messageId,
-					`${messageId}:${version}`,
-					call.actor.principal_id,
+					eventId: `${messageId}:${version}`,
+					actorId: call.actor.principal_id,
+					authorId: row.author_id,
+					body: content.body,
+					version,
 					now,
 					subscriptionSequence,
-					row.parent_id,
-				);
+					parentId: row.parent_id,
+				});
 			});
 			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
 			return { message, changed: true as const };
@@ -2167,16 +2174,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", row.parent_id === null ? version : version + 1);
 				this.roomChanged(call.actor.principal_id);
-				this.queueChatEvent(
-					room.room_id,
-					"chat.message.deleted",
+				this.queueChatEvent({
+					room,
+					eventType: "chat.message.deleted",
 					messageId,
-					`${messageId}:${version}`,
-					call.actor.principal_id,
+					eventId: `${messageId}:${version}`,
+					actorId: call.actor.principal_id,
+					authorId: row.author_id,
+					// The body from before the delete: the reasons tell who the deleted message was for.
+					body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
+					version,
 					now,
 					subscriptionSequence,
-					row.parent_id,
-				);
+					parentId: row.parent_id,
+				});
 			});
 			const message = this.messageRecord(room.room_id, this.message(messageId) as MessageRow);
 			const parentRow = row.parent_id === null ? null : this.message(row.parent_id);
@@ -2497,39 +2508,84 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return message.deleted_at === null;
 	}
 
-	/** Records one chat event for the members except the actor. Call this inside the room transaction. */
-	private queueChatEvent(
-		roomId: string,
-		eventType: ChatWebhookEvent,
-		messageId: string,
-		eventId: string,
-		actorId: string,
-		now: number,
-		subscriptionSequence: number,
-		parentId: string | null = null,
-	): void {
+	/**
+	 * Why a chat event goes to a member: the first reason of `CHAT_EVENT_REASONS` that is true. `body` is
+	 * the body of the message of the event. The room reads the body, not the table `mentions`, because that
+	 * table has no row for a reply outside the room list. The author of a message is a recipient only when
+	 * a different member deleted the message: its reason is `author`, and never a mention of its own
+	 * message. Call this after the follows of a new reply are stored.
+	 */
+	private chatEventReasons(
+		kind: RoomKind,
+		body: ChatBody,
+		authorId: string,
+		parentId: string | null,
+	): (principalId: string) => ChatEventReason {
+		const mentioned = new Set(mentionIds(body));
+		const group = groupMentions(body).length > 0;
+		const followers = new Set(
+			parentId === null
+				? []
+				: this.all<{ principal_id: string }>(
+						"SELECT principal_id FROM thread_follows WHERE parent_id = ? AND following = 1",
+						parentId,
+					).map((row) => row.principal_id),
+		);
+		return (principalId) => {
+			if (principalId === authorId) return "author";
+			if (group || mentioned.has(principalId)) return "mention";
+			if (kind === "dm") return "dm";
+			return followers.has(principalId) ? "thread_reply" : "room";
+		};
+	}
+
+	/**
+	 * Records one chat event for the members except the actor, with the reason of each member. Call this
+	 * inside the room transaction, after the change of the message. `version` is the version that the
+	 * message got from the change.
+	 */
+	private queueChatEvent(event: {
+		room: RoomRow;
+		eventType: ChatWebhookEvent;
+		messageId: string;
+		eventId: string;
+		actorId: string;
+		authorId: string;
+		body: ChatBody;
+		version: number;
+		now: number;
+		subscriptionSequence: number;
+		parentId: string | null;
+	}): void {
+		const reasonOf = this.chatEventReasons(event.room.kind, event.body, event.authorId, event.parentId);
 		const recipients = this.all<{ principal_id: string; membership_id: string }>(
 			"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
-			actorId,
-		).map((member) => ({ id: member.principal_id, membershipId: member.membership_id }));
+			event.actorId,
+		).map((member) => ({
+			id: member.principal_id,
+			membershipId: member.membership_id,
+			reason: reasonOf(member.principal_id),
+		}));
 		if (recipients.length === 0) return;
 		const job: ChatWebhookEventJob = {
 			v: 1,
 			kind: "chat_event",
-			roomId,
-			eventId,
-			occurredAt: now,
-			subscriptionSequence,
+			roomId: event.room.room_id,
+			eventId: event.eventId,
+			occurredAt: event.now,
+			subscriptionSequence: event.subscriptionSequence,
 			recipients,
-			eventType,
-			messageId,
-			...(parentId === null ? {} : { parentId }),
+			eventType: event.eventType,
+			messageId: event.messageId,
+			authorId: event.authorId,
+			version: event.version,
+			...(event.parentId === null ? {} : { parentId: event.parentId }),
 		};
 		this.sql.exec(
 			"INSERT INTO webhook_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
-			eventId,
+			event.eventId,
 			JSON.stringify(job),
-			now,
+			event.now,
 		);
 	}
 
