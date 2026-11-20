@@ -57,7 +57,7 @@ so the tag has no build metadata.
 
 - The image holds no secret and no setup token. A container gets `SETUP_TOKEN` from its environment.
 - The process runs as the `node` user, not as root.
-- The base image has an index digest. To change it, use a digest that is at least 7 days old.
+- The Dockerfile pins the base image by its index digest. To change it, use a digest that is at least 7 days old.
 - Data inventory: the image holds no data of an instance. A container writes the local state of
   `wrangler dev` (D1, R2, Queues and Durable Objects) to `/data`. This state is development data, and
   backups do not include it.
