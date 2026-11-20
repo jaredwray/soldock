@@ -87,6 +87,16 @@ const eventsOf = (answer: { body: Record<string, unknown> | null }) =>
 const errorOf = (answer: { body: Record<string, unknown> | null }) =>
 	answer.body?.error as { code: number; message: string; data?: { reason?: string; code?: string } };
 
+/** Spies on the warnings, and gives the log lines of the refused calls of MCP Events. */
+function refusalLog() {
+	const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+	return () =>
+		warned.mock.calls.flatMap(([line]) => {
+			const fields = JSON.parse(String(line)) as Record<string, unknown>;
+			return String(fields.msg).startsWith("mcp events/") ? [fields] : [];
+		});
+}
+
 /** The Standard Webhooks signature of a POST, from the headers and the body that the receiver got. */
 async function signatureOf(secret: string, post: WebhookPost): Promise<string> {
 	const bytes = Uint8Array.from(atob(secret.slice(6)), (char) => char.charCodeAt(0));
@@ -202,6 +212,7 @@ describe("events/subscribe", () => {
 		const room = await privateRoom("Launch");
 		const { posts, verifications, events } = receiver();
 		const logged = vi.spyOn(console, "log");
+		const refused = refusalLog();
 		const answer = await subscribe(bot.key, "chat.message.created", { arguments: { room_id: room.id } });
 		// The default policy of an agent allows no host outside the organization.
 		expect(errorOf(answer)).toMatchObject({ code: -32603, data: { code: "policy_denied" } });
@@ -216,6 +227,23 @@ describe("events/subscribe", () => {
 				code: "policy_denied",
 			}),
 		);
+		// ChatGPT can hide the error from its user. The log line tells the operator why no subscription started.
+		// It has the host of the callback, and never the path or the secret.
+		expect(refused()).toEqual([
+			{
+				level: "warn",
+				msg: "mcp events/subscribe refused",
+				principalId: bot.id,
+				credential: "api_key",
+				event: "chat.message.created",
+				host: "receiver.example.com",
+				rpcCode: -32603,
+				code: "policy_denied",
+				detail: expect.stringContaining("receiver.example.com"),
+				requestId: expect.any(String),
+			},
+		]);
+		expect(JSON.stringify(refused())).not.toMatch(/callback_1|whsec_/);
 		await ada.call("directory.update_agent_policy", {
 			principal_id: bot.id,
 			mode: "allowlist",
@@ -296,8 +324,12 @@ describe("events/subscribe", () => {
 				redirects.push(new Request(input, init).redirect);
 				return respond();
 			});
+			const refused = refusalLog();
 			const answer = await subscribe(ada.key, "chat.message.created");
 			expect(errorOf(answer), reason).toMatchObject({ code: -32015, data: { reason } });
+			expect(refused(), reason).toEqual([
+				expect.objectContaining({ msg: "mcp events/subscribe refused", rpcCode: -32015, code: reason }),
+			]);
 			vi.restoreAllMocks();
 		}
 		// The runtime must not follow a redirect to a host that the URL rules did not examine.
@@ -339,12 +371,22 @@ describe("events/subscribe", () => {
 			{ extra: { ttlMs: 1.5 } },
 			{ extra: { delivery: { mode: "poll" } } },
 		];
+		const refused = refusalLog();
 		for (const options of cases) {
 			const answer = await subscribe(ada.key, "chat.message.created", options);
 			expect(errorOf(answer)?.code, JSON.stringify(options)).toBe(-32602);
 		}
 		expect(errorOf(await subscribe(ada.key, "chat.message.archived")).code).toBe(-32602);
 		expect(posts).toEqual([]);
+		// Each refusal has one log line, with the message that the client got.
+		expect(refused().map((line) => [line.rpcCode, line.code])).toEqual(
+			[...cases, "an unknown event"].map(() => [-32602, "invalid"]),
+		);
+		expect(refused()[4]).toMatchObject({
+			principalId: ada.id,
+			event: "chat.message.created",
+			detail: 'arguments: Unrecognized key: "unknown"',
+		});
 	});
 
 	// ChatGPT refreshes a subscription before refreshBefore, and can give a new secret then.

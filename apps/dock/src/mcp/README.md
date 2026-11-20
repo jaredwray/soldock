@@ -224,6 +224,12 @@ webhook delivery of that integration. It has no polling, no stream and no replay
   `challenge_failed`, `timeout` or `unreachable`. Each other refusal gets `-32603` with the error
   code in `data.code`: `policy_denied`, `forbidden`, `not_found` or `conflict`.
 - The adapter ignores each other field of `params`, so a client can send fields of a later draft.
+- Each refused `events/subscribe` and `events/unsubscribe` writes one log line: `mcp events/subscribe refused`
+  or `mcp events/unsubscribe refused`. The line has `principalId`, `credential`, `event`, the `host` of
+  the callback URL, `rpcCode` (the JSON-RPC error code), `code` (the error code, or the `data.reason` of
+  `-32015`), `detail` (the error message) and `requestId`. It never has the secret or the path of the
+  URL. A client can hide the error from its user, so this line tells an operator why a subscription
+  did not start or did not change.
 
 The adapter checks only the form of the params. The [`webhooks`](../webhooks/README.md#mcp-events)
 module has the events, the rules of a subscription, the verification of the callback and the POST
