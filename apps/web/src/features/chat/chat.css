@@ -444,6 +444,12 @@ a.chat-author:hover {
 	text-decoration: none;
 }
 
+/* A mention that the person typed is text: the caret goes in it. It keeps the white space of the box. With
+   "nowrap", the browser makes a no-break space of a space that the person types after it. */
+.chat-composer-text .chat-mention-typed {
+	white-space: inherit;
+}
+
 .chat-mention-own {
 	background: var(--warning-soft);
 	box-shadow: inset 0 0 0 1px var(--warning-border);

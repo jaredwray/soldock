@@ -1164,6 +1164,15 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	await expect.poll(async () => (await storedThanks())?.mentions.length).toBe(1);
 	const stored = await storedThanks();
 
+	// A full handle that the person typed, and did not take from the list, is a mention too. The box shows
+	// it as a mention, and the room makes a mention node of it.
+	await box.pressSequentially("typed @tomasz and done");
+	await expect(box.locator(".chat-mention")).toHaveText("@tomasz");
+	await box.press("Enter");
+	await expect
+		.poll(async () => (await newest(nadia, roomId)).find((one) => one.text === "typed @tomasz and done")?.mentions)
+		.toEqual(stored?.mentions);
+
 	// "@he" offers the group @here after the people. The box sends a group node, which mentions each member.
 	await box.pressSequentially("standup @he");
 	await page.getByRole("option", { name: /^@here/ }).click();
