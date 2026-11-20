@@ -1,10 +1,10 @@
 import {
 	AGENT_SCOPES,
 	ALL_SCOPES,
-	aliasPrefix,
 	DIRECTORY_LIMITS,
 	mentionHandle,
 	SIGN_IN_LOCK_MINUTES,
+	searchFold,
 	TEAM_MAILBOX_LIMITS,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
@@ -204,8 +204,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const page = await listPrincipalPage(call.env.DIRECTORY, {
 			// The same fold as `lower` of SQLite: A to Z only. So an exact copy of "Élodie" finds Élodie.
 			query: input.query?.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) ?? null,
-			// The start of a name alias, without accents: "elo" finds "Élodie Martin".
-			aliasPrefix: input.query === undefined ? null : aliasPrefix(input.query),
+			// A part of the name without accents: "garcia" finds "María García".
+			folded: input.query === undefined ? null : searchFold(input.query),
+			activeOnly: input.active_only === "true",
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});

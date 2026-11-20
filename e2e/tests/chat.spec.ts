@@ -1178,10 +1178,20 @@ test("the box makes lists, quotes and code blocks with Markdown shortcuts, and t
 	});
 	await box.press("Control+a");
 	await box.press("Delete");
+	// While the list of a typed name loads, Enter waits: it does not send the half mention.
+	const search = await hold(
+		page,
+		(url) => url.pathname === "/api/v1/directory/principals" && url.searchParams.has("query"),
+		"GET",
+	);
 	await box.pressSequentially("thanks @tom");
+	await expect.poll(() => searches.length).toBeGreaterThan(0);
+	await box.press("Enter");
+	await expect(box).toHaveText("thanks @tom");
+	search.release();
 	const suggestion = page.getByRole("option", { name: /Tomasz/ });
 	await expect(suggestion).toBeVisible();
-	expect(searches.some((search) => search.get("query")?.startsWith("t") && search.get("limit") === "20")).toBe(true);
+	expect(searches.some((one) => one.get("query")?.startsWith("t") && one.get("active_only") === "true")).toBe(true);
 	await box.press("Enter");
 	await expect(page.getByRole("listbox", { name: "People and agents to mention" })).toHaveCount(0);
 	await expect(box).toHaveText(/^thanks @tomasz\s$/);

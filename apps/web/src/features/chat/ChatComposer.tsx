@@ -233,13 +233,13 @@ export function ChatComposer({
 	const { directory, memberIds, ownId } = mentions;
 	// A typed name asks the server (`useMentionSearch`), so the list reads a bounded page for each query.
 	// Only "@" alone uses the directory of the page, for the members of the room first.
-	const searched = useMentionSearch(typed && typed.query !== "" ? typed.query : null);
+	const search = useMentionSearch(typed && typed.query !== "" ? typed.query : null);
 	const suggestions = !typed
 		? []
 		: typed.query === ""
 			? mentionSuggestions(directory, "", { memberIds, ownId })
 			: rankMentions(
-					searched.map((person) => ({ person, handle: person.handle })),
+					search.found.map((person) => ({ person, handle: person.handle })),
 					typed.query,
 					{ memberIds, ownId },
 				);
@@ -248,6 +248,9 @@ export function ChatComposer({
 	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
 	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
+	// A typed name whose list did not come yet: a plain Enter waits for it, so it takes a suggestion and
+	// does not send the text of the half mention.
+	const waiting = typed !== null && search.pending && count === 0;
 	// The selected item, for one typed text. "@" or ":" comes first, so a mention and a code differ.
 	const query = typed ? `@${typed.query}` : typedCode ? `:${typedCode.query}` : "";
 	const active = selected && selected.query === query ? Math.min(selected.index, count - 1) : 0;
@@ -271,8 +274,8 @@ export function ChatComposer({
 	}
 
 	// The keys of the list, for the handler of the view, which the first render makes.
-	const list = useRef({ open, active, count, query, choose: (_index: number) => {} });
-	list.current = { open, active, count, query, choose };
+	const list = useRef({ open, active, count, query, waiting, choose: (_index: number) => {} });
+	list.current = { open, active, count, query, waiting, choose };
 
 	// A layout effect makes the view before a dialog or a page looks for its focus.
 	useLayoutEffect(() => {
@@ -321,6 +324,7 @@ export function ChatComposer({
 				const current = list.current;
 				// Ctrl+Enter (⌘Enter) always sends, also while the list is open.
 				const sends = event.key === "Enter" && (event.ctrlKey || event.metaKey);
+				if (!sends && !composing && event.key === "Enter" && !event.shiftKey && current.waiting) return true;
 				const action = sends
 					? ({ kind: "none" } as const)
 					: mentionKeyAction(event.key, event.shiftKey, composing, current);

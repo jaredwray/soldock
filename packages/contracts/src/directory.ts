@@ -144,7 +144,8 @@ export const listPrincipals = defineOperation({
 	description: [
 		"Returns the humans and agents with their address, role, sponsor, the handle for a mention in Chat and, for an agent, its outbound mail policy.",
 		"The agents come first, then the humans, each in the order of the names.",
-		"Set query to get only the principals whose name or address has that text, in each letter case of A to Z, or whose first name or full name without spaces starts with it, without accents (so elo finds Élodie).",
+		"Set query to get only the principals whose name or address has that text, in each letter case and without accents (so garcia finds María García).",
+		'Set active_only: "true" to leave out the archived principals.',
 		`A page has ${DIRECTORY_LIMITS.defaultPageSize} principals, or limit, at most ${DIRECTORY_LIMITS.pageSize}. Pass next_cursor as cursor to get the next page.`,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/principals" },
@@ -153,6 +154,7 @@ export const listPrincipals = defineOperation({
 	annotations: READ,
 	input: z.strictObject({
 		query: z.string().trim().min(1).max(DIRECTORY_LIMITS.queryChars).optional(),
+		active_only: z.enum(["true", "false"]).optional(),
 		// A cursor holds a display name, which NFC can make three times as long.
 		cursor: z.string().max(2000).optional(),
 		limit: z.coerce.number().int().min(1).max(DIRECTORY_LIMITS.pageSize).optional(),

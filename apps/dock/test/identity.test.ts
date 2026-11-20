@@ -8,6 +8,7 @@ import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
+import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -829,6 +830,7 @@ describe("directory upgrade", () => {
 		await run(teamMailboxMigration.split("--> statement-breakpoint"));
 		await run(lifecycleMigration.split("--> statement-breakpoint"));
 		await run(mentionAliasMigration.split("--> statement-breakpoint"));
+		await run(nameFoldedMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -1122,14 +1124,27 @@ describe("the directory list", () => {
 		const elodie = await person("Élodie Durand", "elodie@dock.test");
 		const exact = await owner.call("directory.list_principals", { query: "Élodie" });
 		expect(exact.principals.map((p) => p.id)).toEqual([elodie.id]);
-		// A query without the accents finds the start of the first name or of the full name without spaces.
-		for (const query of ["elo", "ELODIE", "elodie dur"]) {
+		// A query without the accents finds a part of each word of the name, as the @ list of Chat does.
+		const maria = await person("María García", "mg@dock.test");
+		for (const [query, id] of [
+			["elo", elodie.id],
+			["ELODIE", elodie.id],
+			["elodie dur", elodie.id],
+			["garcia", maria.id],
+			["ria gar", maria.id],
+		] as const) {
 			const unaccented = await owner.call("directory.list_principals", { query });
 			expect(
 				unaccented.principals.map((p) => p.id),
 				query,
-			).toEqual([elodie.id]);
+			).toEqual([id]);
 		}
+		// active_only leaves out an archived principal.
+		await owner.call("directory.archive_principal", { principal_id: maria.id });
+		expect((await owner.call("directory.list_principals", { query: "garcia" })).principals).toHaveLength(1);
+		expect(
+			(await owner.call("directory.list_principals", { query: "garcia", active_only: "true" })).principals,
+		).toEqual([]);
 		expect(found.next_cursor).toBeNull();
 		// A group word of Chat is never a handle. An agent finds the same through MCP.
 		const tool = await callTool(bot.key, "directory_list_principals", { query: "here@" });

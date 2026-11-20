@@ -110,7 +110,6 @@ export {
 export { docToMarkdown, markdownToDoc } from "./markdown.ts";
 export { MCP_EVENT_LIMITS, type McpEventDefinition, mcpEventList, mcpEvents } from "./mcp-events.ts";
 export {
-	aliasPrefix,
 	GROUP_MENTIONS,
 	type GroupMention,
 	groupMentionOf,
@@ -122,6 +121,7 @@ export {
 	mentionHandle,
 	mentionKeys,
 	nameAliasParts,
+	searchFold,
 	type TextPart,
 	textParts,
 } from "./mentions.ts";

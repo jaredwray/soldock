@@ -1215,12 +1215,16 @@ MCP clients. The app has no UI-only path.
       person types `@` and a part of a name, a handle or an address. The members of the room come
       first. A principal that is not a member shows "Not in this room". The list leaves out the
       person who writes and each archived principal.
-      - A typed name asks the server (`useMentionSearch`): `directory.list_principals` with the query
-        and a limit of 20, 150 ms after the last key. The list ranks that page with the rules above
-        (`rankMentions`), with the handle from the server. So one ask reads a bounded page, also in a
-        directory of thousands of principals. The answer of an older query never replaces a newer one,
-        and the last answer stays while the next one loads, so the list does not flash. A query
-        without accents finds a name with accents (`elo` finds "Élodie").
+      - A typed name asks the server (`useMentionSearch`): `directory.list_principals` with the query,
+        `active_only` and a limit of 100, 150 ms after the last key. The list ranks that page with the
+        rules above (`rankMentions`), with the handle from the server. So one ask reads a bounded page,
+        also in a directory of thousands of principals. The server sorts by name, so the page is large
+        enough for the ranking to find its best 8, and has no archived principal.
+      - The answer of an older query never replaces a newer one, and the last answer stays while the
+        next one loads, so the list does not flash. A query without accents finds a part of each word
+        of a name with accents (`garcia` finds "María García").
+      - While the list of a typed name loads, a plain Enter waits, so it does not send the half mention.
+        Ctrl+Enter still sends. A failed ask ends the wait.
       - Only `@` alone uses the directory of the page, so the members of the room come first. The
         mention links, the dialogs and this case still read the whole directory
         ([jaredwray/soldock#131](https://github.com/jaredwray/soldock/issues/131)).

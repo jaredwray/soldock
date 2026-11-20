@@ -139,13 +139,12 @@ export function nameAliasParts(displayName: string): { first: string | null; ful
 }
 
 /**
- * The start of a name alias that a typed query can be, in the form of the stored aliases
- * (`nameAliasParts`): lowercase, without accents and without spaces. So "Élo" and "ada lo" find
- * "Élodie Martin" and "Ada Lovelace". Null when the query has a character that no alias has.
+ * A text in the form of a search: lowercase and without accents, with its spaces. The directory stores
+ * the display name in this form (`name_folded`), so "garcia" finds "María García", as the `@` list of the
+ * web app folds a name. A change of this rule needs a migration that sets `aliases_set = 0`.
  */
-export function aliasPrefix(query: string): string | null {
-	const folded = query.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, "");
-	return /^[a-z0-9._+-]+$/.test(folded) ? folded : null;
+export function searchFold(text: string): string {
+	return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
 /** The name aliases of a display name (`nameAliasParts`), each one time. */
