@@ -921,19 +921,24 @@ export class MailboxDO extends DurableObject<Env> {
 				...only.params,
 			).map((row) => [row.id, row]),
 		);
-		return this.all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM labels")
-			.map((row) => ({
-				id: row.id,
-				name: row.name,
-				type: row.type as "system" | "user",
-				threads_total: counts.get(row.id)?.total ?? 0,
-				threads_unread: counts.get(row.id)?.unread ?? 0,
-			}))
-			.sort((a, b) => {
-				if (a.type !== b.type) return a.type === "system" ? -1 : 1;
-				if (a.type === "system") return SYSTEM_LABEL_ORDER.indexOf(a.id) - SYSTEM_LABEL_ORDER.indexOf(b.id);
-				return a.name.localeCompare(b.name);
-			});
+		return (
+			this.all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM labels")
+				// The name of a label can tell what the mailbox holds. With a filter, the list has the system
+				// labels and the labels of the messages that the filter finds.
+				.filter((row) => !filter || row.type === "system" || counts.has(row.id))
+				.map((row) => ({
+					id: row.id,
+					name: row.name,
+					type: row.type as "system" | "user",
+					threads_total: counts.get(row.id)?.total ?? 0,
+					threads_unread: counts.get(row.id)?.unread ?? 0,
+				}))
+				.sort((a, b) => {
+					if (a.type !== b.type) return a.type === "system" ? -1 : 1;
+					if (a.type === "system") return SYSTEM_LABEL_ORDER.indexOf(a.id) - SYSTEM_LABEL_ORDER.indexOf(b.id);
+					return a.name.localeCompare(b.name);
+				})
+		);
 	}
 
 	listThreads(params: {
@@ -1000,8 +1005,9 @@ export class MailboxDO extends DurableObject<Env> {
 			snippet: string;
 			origin: string;
 			has_attachments: number;
+			subject: string;
 		}>(
-			`SELECT m.from_name, m.from_addr, m.snippet, m.origin, m.has_attachments FROM messages m
+			`SELECT m.from_name, m.from_addr, m.snippet, m.origin, m.has_attachments, m.subject FROM messages m
 			WHERE m.thread_id = ? AND (${only.where}) ORDER BY m.internal_date, m.seq`,
 			threadId,
 			...only.params,
@@ -1020,7 +1026,9 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 		return {
 			id: threadId,
-			subject: thread?.subject ?? "",
+			// The subject of a thread is the subject of its first message. With a filter, that message can
+			// be outside the filter, so the subject is that of the first message that the filter finds.
+			subject: (only.where === "1" ? thread?.subject : messages[0]?.subject) ?? "",
 			snippet: messages.at(-1)?.snippet ?? "",
 			participants: [...participants.values()].slice(0, 5),
 			messageCount: messages.length,
@@ -1063,7 +1071,7 @@ export class MailboxDO extends DurableObject<Env> {
 		const delivery = this.deliveryOf("m.thread_id = ?", threadId);
 		return {
 			id: thread.id,
-			subject: thread.subject,
+			subject: filter ? (rows[0]?.subject ?? "") : thread.subject,
 			messages: rows.map((row) => {
 				const body = withBody.has(row.seq)
 					? this.one<{ text_body: string | null; html_body: string | null }>(

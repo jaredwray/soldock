@@ -6,7 +6,7 @@ import {
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
-import { type CallContext, driveLimitNames, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import { type CallContext, driveLimitSpaces, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import {
 	base64ToBytes,
 	bytesToBase64,
@@ -86,8 +86,6 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
-	// A pointer into a drive that the Drive limit of the key does not name gives no item.
-	for (const spaceId of [...bySpace.keys()]) if (!driveLimitNames(call.caller, spaceId)) bySpace.delete(spaceId);
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
@@ -280,6 +278,14 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			return { items: await toItems(call, page.items), next_cursor: page.nextCursor };
 		}
 		if (input.view === "starred" || input.view === "shared") {
+			// These lists are pointers into each drive. A page and its cursor would name pointers outside a
+			// Drive limit, so a key with a Drive limit gets neither list.
+			if (driveLimitSpaces(call.caller) !== null) {
+				throw new OperationError(
+					"forbidden",
+					`This key has a drive limit. The ${input.view} view lists items of each drive. List a folder of the limit.`,
+				);
+			}
 			const own = await ownSpace(call);
 			const page = accept(await own.space.listRefs(own.ctx, { list: input.view, cursor, limit }));
 			const records = (await hydrate(call, page.items)).filter((record) => kind === null || record.kind === kind);
@@ -569,8 +575,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	async "drive.star_items"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		const itemIds = [...new Set(input.item_ids)];
-		// A new star needs an item that the caller can read. A star can always go away, also after the access ended.
-		if (input.starred) {
+		// A new star needs an item that the caller can read. A star can always go away, also after the access
+		// ended. A key with a Drive limit sets and removes only the stars of the items of its limit.
+		if (input.starred || driveLimitSpaces(call.caller) !== null) {
 			const found = await opened.space.getItems(opened.ctx, itemIds, { includeTrashed: opened.own });
 			if (found.length !== itemIds.length) {
 				throw new OperationError("not_found", "No item has one of these ids, or you have no access to it.");
@@ -692,21 +699,19 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			all,
 			after: input.cursor === undefined ? null : decodeDriveCursor(input.cursor),
 			limit: limit + 1,
+			// A key with a Drive limit lists only the shared drives that the limit names.
+			only: driveLimitSpaces(call.caller),
 		});
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
 		return {
-			// A key with a Drive limit sees only the shared drives that the limit names. So a page can have
-			// fewer drives than its limit, and the cursor still gives the next page.
-			shared_drives: page
-				.filter((row) => driveLimitNames(call.caller, row.id))
-				.map((row) => ({
-					id: row.id,
-					name: row.name,
-					role: row.role,
-					member_count: row.member_count,
-					created_at: new Date(row.created_at).toISOString(),
-				})),
+			shared_drives: page.map((row) => ({
+				id: row.id,
+				name: row.name,
+				role: row.role,
+				member_count: row.member_count,
+				created_at: new Date(row.created_at).toISOString(),
+			})),
 			next_cursor: rows.length > limit && last ? encodeDriveCursor(last.name_key, last.id) : null,
 		};
 	},

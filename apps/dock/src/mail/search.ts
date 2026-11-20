@@ -286,7 +286,8 @@ export const MAX_LIMIT_QUERY_PARAMS = 40;
  */
 export function limitQueryProblem(query: string): string | null {
 	try {
-		const compiled = compileQuery(parseQuery(query), { self: [], now: Date.now() });
+		// A mailbox has one address. "me" in a query binds values for it, so the count here is the count of a call.
+		const compiled = compileQuery(parseQuery(query), { self: ["mailbox@example.com"], now: Date.now() });
 		if (compiled.params.length > MAX_LIMIT_QUERY_PARAMS)
 			return "The query of a mail limit has too many terms. Use fewer terms.";
 		if (parseQuery(query).length === 0) return "The query of a mail limit has no term.";

@@ -126,10 +126,10 @@ function refuseFiltered(filter: MailFilter | null, operation: string): void {
  * Refuses a send to an address that the Mail limit of the key does not name, before anything is
  * stored. The limit applies to each recipient, also to a mailbox of this deployment.
  */
-function checkRecipientLimit(call: CallContext, recipients: Recipient[]): void {
+function checkRecipientLimit(call: CallContext, addresses: readonly string[]): void {
 	const denied = deniedRecipients(
 		call.caller,
-		recipients.map((recipient) => recipient.address),
+		addresses.map((address) => address.trim()),
 	);
 	if (denied.length > 0) {
 		throw new OperationError(
@@ -437,18 +437,24 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				: record.kind === "team"
 					? `${call.caller.id}:${input.idempotency_key}`
 					: input.idempotency_key;
+		// The limits of the key come before the answer of an earlier send with the same key. So a key
+		// learns nothing of a send that its limits do not allow.
+		checkRecipientLimit(call, [...input.to, ...input.cc, ...input.bcc]);
+		let reply: Awaited<ReturnType<typeof box.getReplyContext>> = null;
+		if (input.reply_to_message_id && filter !== null) {
+			// A key with a query in its Mail limit answers only a message that the query finds.
+			reply = await box.getReplyContext(input.reply_to_message_id, filter);
+			if (!reply) throw new OperationError("not_found", "No message has the id in reply_to_message_id.");
+		}
 		if (idempotencyKey) {
 			const earlier = await box.idempotentResult(idempotencyKey, requestHash);
 			if (earlier) return accept(earlier);
 		}
 		const recipients = await resolveRecipients(call, record, [...input.to, ...input.cc, ...input.bcc]);
 		checkOutboundPolicy(call, recipients);
-		checkRecipientLimit(call, recipients);
 
-		let reply: Awaited<ReturnType<typeof box.getReplyContext>> = null;
-		if (input.reply_to_message_id) {
-			// A key with a query in its Mail limit answers only a message that the query finds.
-			reply = await box.getReplyContext(input.reply_to_message_id, filter);
+		if (input.reply_to_message_id && filter === null) {
+			reply = await box.getReplyContext(input.reply_to_message_id);
 			if (!reply) throw new OperationError("not_found", "No message has the id in reply_to_message_id.");
 		}
 		const limit = recipients.some((r) => r.kind === "external")

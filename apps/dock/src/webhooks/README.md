@@ -106,6 +106,8 @@ A disabled endpoint does not fill that count.
 Only the creator can change or delete an endpoint.
 A credential that cannot use any subscription of an endpoint does not see that endpoint.
 A credential that lacks the scope of one subscription cannot change the endpoint. The error is `forbidden`.
+An API key with a resource limit for a product counts as a credential without the webhook scope of that product
+([`identity`](../identity/README.md#resource-limits-of-an-api-key)). An event has data that a limit does not apply to.
 A disabled endpoint does not start again, and it accepts no new subscription. Delete it and create a new one.
 
 Mail subscriptions use `mail.webhooks`. The target is your mailbox, a team mailbox, or an agent that you sponsor.

@@ -20,6 +20,7 @@ export {
 	deniedRecipients,
 	driveLimitNames,
 	driveLimitOf,
+	driveLimitSpaces,
 	mailboxAllowed,
 	mailQueryLimit,
 	refuseLimited,

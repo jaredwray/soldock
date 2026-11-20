@@ -532,6 +532,14 @@ A limit only makes a key smaller: the scopes, the roles and the agent policy sti
 
 - Each product has its own limit. A product without a limit follows the scopes only. So a key with
   a Drive limit and `mail.read` reads all mail of its principal.
+- Known limit: the products share some data, and a limit for one product does not apply in a
+  different product. Give a key a limit for each product that it has a scope for.
+  - A key with a Chat limit and a Drive scope without a Drive limit reads the `Chat/<room name>`
+    folders of the drive of its principal. They hold the files that the principal put in each room.
+    `drive.list_permissions` shows the ids of the rooms that can read an item.
+  - A key with a Drive limit and a Chat scope without a Chat limit reads each file that a message of
+    its rooms holds (`chat.download_file`), also a file outside its Drive limit. It puts only a file
+    of its limit in a message.
 - Only an API key has limits. A session and an OAuth access token have `limits: null`
   (`AuthContext.limits`). `account.whoami` and `account.list_api_keys` show the limits.
 - The checks are in two layers:
@@ -546,6 +554,11 @@ A limit only makes a key smaller: the scopes, the roles and the agent policy sti
 - A path that is not an operation applies the limit of its product or refuses the key
   (`refuseLimited`): the room socket takes only a room of the limit, and the events socket takes no
   key with a Chat limit. MCP Events and the webhook subscriptions give no event of a limited product.
+- The `webhooks.*` endpoint operations have no product. For them, a key with a limit for a product
+  counts as a key without the webhook scope of that product (`heldDomains`). So it does not see,
+  change or delete an endpoint that has a subscription of that product.
+- A list never gives a page or a cursor that names a resource outside a limit. A list of a limit
+  comes from the ids of the limit, or it is refused.
 - A key with limits cannot hold `account.keys` or `directory.write` (`UNLIMITED_KEY_SCOPES`). These
   scopes can make a credential without limits. `account.create_api_key` refuses them with
   `invalid`, and `authenticate` removes them from a stored key. So a key with limits can never
@@ -562,6 +575,9 @@ A limit only makes a key smaller: the scopes, the roles and the agent policy sti
   `mail.query` compiles, because only the mail module knows the search syntax.
 - The audit line of `account.create_api_key` names the products that the key has a limit for. The
   entries stay out of the log.
+
+- Known limit: `account.list_api_keys` shows `limits: null` for a key whose stored limits this
+  version cannot read. That key authenticates nobody.
 
 Not built yet: limits for an OAuth connection, a change of the limits of a live key, and limits
 for the webhooks and the live feeds of a limited product.

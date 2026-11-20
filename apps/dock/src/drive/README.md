@@ -39,11 +39,15 @@ a list of drives, folders and documents. The key then works only on those.
 - A file for a message of Chat (`fileForRoom`) must be in the limit. The folder of a room
   (`chatFolder`) is at the root of the drive, so a key with a limit in that drive gets `forbidden`.
 - An upload in parts that a different credential of the principal started outside the limit is
-  `not_found`.
-- The stars and the Shared with me list are pointers in the own drive of the principal. A key with
-  a limit reads them, and each pointer gives an item only when the limit allows that item.
-- `drive.list_shared_drives` lists only the shared drives that the limit names. A page can have
-  fewer drives than its limit.
+  `not_found`, and `drive.abort_upload` does not stop it.
+- The stars and the Shared with me list are pointers in the own drive of the principal, into each
+  drive. A page of them, and its cursor, would name a pointer outside the limit. So the `starred`
+  and the `shared` view are `forbidden` for each key with a Drive limit. `drive.star_items` sets and
+  removes only the star of an item that the limit allows.
+- `drive.list_shared_drives` lists only the shared drives that the limit names. The index query
+  takes the ids of the limit, so a page and its cursor never hold a different drive.
+- A drive that the limit does not name is `not_found`, as an id that is no drive. In a drive of the
+  limit, the roles answer first, and the limit after them.
 - These operations are refused for each key with a Drive limit: `drive.create_shared_drive`,
   `drive.update_shared_drive`, the member operations, `drive.delete_shared_drive`,
   `drive.move_to_drive` and the webhook subscriptions. An event of a drive has items that the limit

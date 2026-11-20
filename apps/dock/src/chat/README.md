@@ -105,8 +105,9 @@ a list of rooms and direct messages. The key then reads and posts only in those 
 - `openRoom` (`handlers.ts`) refuses each other room with `not_found`, before a room object wakes.
   The downloads of files and link pictures, the room socket and the folder of a room in Drive make
   the same check.
-- `chat.list_rooms` lists only the rooms of the limit. A page can have fewer rooms than its limit,
-  and the cursor still gives the next page. The public view is `forbidden`.
+- `chat.list_rooms` lists the joined rooms of the limit in one page, without a cursor
+  (`listRoomsOf`): the list comes from the ids of the limit, so it never names a different room.
+  `query` keeps the rooms whose name has the text. The public view is `forbidden`.
 - The limit does not make the principal a member. The room still checks the member.
 - These operations are refused for each key with a Chat limit: `chat.create_room`, `chat.open_dm`,
   `chat.join_room`, `chat.update_room`, `chat.add_members`, `chat.remove_member`,

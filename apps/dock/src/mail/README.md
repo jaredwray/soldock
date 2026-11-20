@@ -467,18 +467,24 @@ It has one, two or three parts.
     the filter finds, and a thread without such a message is `not_found`. `mail.modify_threads`
     changes only those messages.
   - The filter excludes spam and trash unless it names them, as each search does.
-  - `mail.list_labels` gives each label name, with the counts of the messages that the filter finds.
+  - `mail.list_labels` gives the system labels and the labels of the messages that the filter
+    finds, with the counts of those messages. A label name can tell what the mailbox holds, so each
+    other label stays out. `mail.create_label` returns the id of a new label.
+  - The subject of a thread is the subject of its first message that the filter finds.
   - `"me"` in the filter is the address of the mailbox. `newer_than:` and `older_than:` count from
     the time of each call.
   - `account.create_api_key` refuses a query that does not compile, and a query with more than 40
     bound values (`MAX_LIMIT_QUERY_PARAMS`): the filter and the query of a call share one statement.
+    The count includes the values that `"me"` binds for the address of a mailbox.
     A stored filter that does not compile finds no message.
   - These operations give facts of the whole mailbox, so a key with a query gets `forbidden`:
     `mail.get_profile` and `mail.suggest_recipients`. The `mail.inbox` resource gives such a key no
     change feed: a signal tells when a message arrives, also a message outside the filter.
 - **`recipients`**: addresses and domains. `mail.send` refuses each other recipient in `to`, `cc`
   and `bcc` with `forbidden`, before anything is stored. The limit applies also to a mailbox of
-  this deployment. The outbound policy of an agent still applies.
+  this deployment. The outbound policy of an agent still applies. The check of the recipients, and
+  the check of a reply against the query, come before the answer of an earlier send with the same
+  idempotency key.
 - These operations are refused for each key with a Mail limit: `mail.delete_label` (it changes
   messages outside a filter), `mail.get_settings`, `mail.update_settings` and the webhook
   subscriptions. MCP Events gives such a key no mail event.

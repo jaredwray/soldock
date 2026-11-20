@@ -42,6 +42,12 @@ export function driveLimitNames(caller: Limited, spaceId: string): boolean {
 	return allowed === "all" || allowed.length > 0;
 }
 
+/** The ids of the drives that the Drive limit of the credential names, or null when it has no Drive limit. */
+export function driveLimitSpaces(caller: Limited): string[] | null {
+	const limit = caller.limits?.drive;
+	return limit === undefined ? null : [...new Set(limit.items.map((entry) => entry.space_id))];
+}
+
 /** True when the credential can use the mailbox: it has no Mail limit, no list of mailboxes, or the list has the id. */
 export function mailboxAllowed(caller: Limited, mailboxId: string): boolean {
 	const ids = caller.limits?.mail?.mailbox_ids;

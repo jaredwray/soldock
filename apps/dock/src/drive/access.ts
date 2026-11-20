@@ -1,6 +1,6 @@
 import type { DriveItem } from "@asterra/contracts";
 import { documentStub } from "../collab/index.ts";
-import { type CallContext, driveLimitOf, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import { type CallContext, driveLimitNames, driveLimitOf, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { audit, OperationError, sha256Hex } from "../platform/index.ts";
 import { unknownSharedDriveIds } from "./shared-index.ts";
 import {
@@ -93,6 +93,8 @@ export async function openSpace(call: CallContext, spaceId: string | undefined):
 	if (id !== call.caller.id && (await unknownSpaceIds(call.env.DIRECTORY, [id])).length > 0) {
 		throw new OperationError("not_found", NOT_FOUND);
 	}
+	// A drive that the Drive limit of the key does not name gets the answer of an id that is no drive.
+	if (id !== call.caller.id && !driveLimitNames(call.caller, id)) throw new OperationError("not_found", NOT_FOUND);
 	return spaceOf(call, id);
 }
 

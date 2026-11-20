@@ -941,11 +941,17 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * names each item that it uses in `items`, and the limit allows each of them.
 	 */
 	private gate(call: SpaceCall, need: SharedDriveRole, items?: readonly (string | null)[]): Refusal | null {
-		if (call.limit) {
-			if (items === undefined) return refuse("forbidden", LIMITED);
-			if (items.includes(null)) return refuse("forbidden", LIMITED_ROOT);
-			if (!items.every((id) => this.inLimit(call, id))) return refuse("not_found", NOT_FOUND);
-		}
+		// The roles come first, so a call with a limit gets the same answer as each other call for a
+		// drive that it cannot use.
+		const refused = this.roleGate(call, need);
+		if (refused || !call.limit) return refused;
+		if (items === undefined) return refuse("forbidden", LIMITED);
+		if (items.includes(null)) return refuse("forbidden", LIMITED_ROOT);
+		return items.every((id) => this.inLimit(call, id)) ? null : refuse("not_found", NOT_FOUND);
+	}
+
+	/** The refusal that the roles give for an action on the drive as a whole, without the limit of the call. */
+	private roleGate(call: SpaceCall, need: SharedDriveRole): Refusal | null {
 		if (!isSharedDriveId(call.spaceId)) return this.isOwner(call) ? null : refuse("forbidden", OWN_DRIVE_ONLY);
 		const role = this.memberRole(call.actor.principal_id);
 		if (role === null) return refuse("not_found", NO_DRIVE);
@@ -2644,7 +2650,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			uploadId,
 			call.actor.principal_id,
 		);
-		if (row?.state !== "open") return { aborted: false };
+		// An upload in a folder outside the limit of the call does not exist for the call.
+		if (row?.state !== "open" || !this.inLimit(call, row.parent_id)) return { aborted: false };
 		this.ctx.storage.transactionSync(() => this.removeUpload(row));
 		await this.schedule();
 		await this.abortMultipart(row.blob_key, row.r2_upload_id);
@@ -2723,12 +2730,13 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * admin always passes. A caller that is not a member and not an admin gets `not_found`.
 	 */
 	private manage(call: SpaceCall, need: "member" | "manager" | "admin"): DriveFacts | Refusal {
-		// The name and the members are facts of the drive as a whole.
-		if (call.limit) return refuse("forbidden", LIMITED);
 		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
 		if (!facts || facts.deleted_at !== null) return refuse("not_found", NO_DRIVE);
-		if (call.admin === true) return facts;
 		const role = this.memberRole(call.actor.principal_id);
+		if (role === null && call.admin !== true) return refuse("not_found", NO_DRIVE);
+		// The name and the members are facts of the drive as a whole.
+		if (call.limit) return refuse("forbidden", LIMITED);
+		if (call.admin === true) return facts;
 		if (role === null) return refuse("not_found", NO_DRIVE);
 		if (need === "admin") return refuse("forbidden", "Only owners and admins of the organization can do this.");
 		if (need === "manager" && role !== "manager") {

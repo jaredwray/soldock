@@ -14,11 +14,17 @@ import {
 } from "./store.ts";
 import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 
+/**
+ * The products whose webhooks the credential can use: it holds the webhook scope, and it has no resource
+ * limit for the product. An event has data that a limit does not apply to. So a key with a limit for a
+ * product does not see or change an endpoint that has a subscription of that product.
+ */
 function heldDomains(call: CallContext): WebhookDomain[] {
+	const { scopes, limits } = call.caller;
 	const domains: WebhookDomain[] = [];
-	if (call.caller.scopes.has("mail.webhooks")) domains.push("mail");
-	if (call.caller.scopes.has("chat.webhooks")) domains.push("chat");
-	if (call.caller.scopes.has("drive.webhooks")) domains.push("drive");
+	if (scopes.has("mail.webhooks") && limits?.mail === undefined) domains.push("mail");
+	if (scopes.has("chat.webhooks") && limits?.chat === undefined) domains.push("chat");
+	if (scopes.has("drive.webhooks") && limits?.drive === undefined) domains.push("drive");
 	return domains;
 }
 

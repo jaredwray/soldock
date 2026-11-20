@@ -252,6 +252,76 @@ describe("a Drive limit to a folder", () => {
 	});
 });
 
+describe("the lists and the stars of a key with a Drive limit", () => {
+	// The star of an item outside the limit is state outside the limit, and the answer tells if it was there.
+	it("sets and removes a star only on an item of the limit", async () => {
+		const work = await folder(ada, "Work");
+		const inside = await upload(ada, "inside.txt", "in", { parent_id: work.id });
+		const outside = await upload(ada, "outside.txt", "out");
+		await ada.call("drive.star_items", { item_ids: [outside.id], starred: true });
+		const key = await limitedKey(ada, ["drive.read", "drive.write"], {
+			drive: { items: [{ space_id: ada.id, item_id: work.id }] },
+		});
+		expect(await codeOf(key.call("drive.star_items", { item_ids: [outside.id], starred: false }))).toBe("not_found");
+		expect((await ada.call("drive.get_item", { item_id: outside.id })).item.starred).toBe(true);
+		expect((await key.call("drive.star_items", { item_ids: [inside.id], starred: true })).items_changed).toBe(1);
+		expect((await key.call("drive.star_items", { item_ids: [inside.id], starred: false })).items_changed).toBe(1);
+		// The starred and the shared lists are pointers into each drive. A cursor of them names a pointer.
+		for (const view of ["starred", "shared"] as const) {
+			expect(await codeOf(key.call("drive.list_items", { view }))).toBe("forbidden");
+		}
+	});
+
+	// A cursor holds the name and the id of the last drive of its page. So a page never ends at a drive
+	// outside the limit.
+	it("lists the shared drives of the limit in pages that never name a different drive", async () => {
+		const member = [{ principal_id: owner.id, role: "manager" as const }];
+		const make = async (name: string) =>
+			(await owner.call("drive.create_shared_drive", { name, members: member })).shared_drive.id;
+		await make("Alpha");
+		const team = await make("Team");
+		await make("Zulu");
+		const key = await limitedKey(owner, ["drive.read"], { drive: { items: [{ space_id: team }] } });
+		const first = await key.call("drive.list_shared_drives", { limit: 1 });
+		expect(first.shared_drives.map((drive) => drive.name)).toEqual(["Team"]);
+		expect(first.next_cursor).toBeNull();
+		// The list of each drive of the organization has the same limit.
+		const all = await key.call("drive.list_shared_drives", { all: "true", limit: 1 });
+		expect(all.shared_drives.map((drive) => drive.name)).toEqual(["Team"]);
+		expect(all.next_cursor).toBeNull();
+	});
+
+	it("stops only an upload in parts that is in the limit", async () => {
+		const work = await folder(ada, "Work");
+		const key = await limitedKey(ada, ["drive.read", "drive.write"], {
+			drive: { items: [{ space_id: ada.id, item_id: work.id }] },
+		});
+		const { upload: outside } = await ada.call("drive.create_upload", { name: "big.bin", size: 10 });
+		expect(await codeOf(key.call("drive.get_upload", { upload_id: outside.id }))).toBe("not_found");
+		expect((await key.call("drive.abort_upload", { upload_id: outside.id })).aborted).toBe(false);
+		expect((await ada.call("drive.get_upload", { upload_id: outside.id })).upload.state).toBe("open");
+		const { upload: inside } = await key.call("drive.create_upload", { name: "in.bin", size: 10, parent_id: work.id });
+		expect((await key.call("drive.abort_upload", { upload_id: inside.id })).aborted).toBe(true);
+	});
+
+	// An agent has its own drive, and its sponsor makes its keys. The limit of an agent key is the same limit.
+	it("limits a key of an agent that its sponsor makes", async () => {
+		const work = (await bot.call("drive.create_folder", { name: "Work" })).item;
+		const inside = await upload(bot, "inside.txt", "in", { parent_id: work.id });
+		const outside = await upload(bot, "outside.txt", "out");
+		const { api_key } = await ada.call("account.create_api_key", {
+			principal_id: bot.id,
+			label: "Bot folder",
+			scopes: ["account.read", "drive.read"],
+			limits: { drive: { items: [{ space_id: bot.id, item_id: work.id }] } },
+		});
+		const key = api(api_key.secret);
+		expect((await key("account.whoami", {})).principal.id).toBe(bot.id);
+		expect((await key("drive.get_item", { item_id: inside.id })).item.name).toBe("inside.txt");
+		expect(await codeOf(key("drive.get_item", { item_id: outside.id }))).toBe("not_found");
+	});
+});
+
 describe("a Drive limit to a whole drive", () => {
 	it("gives each item of that drive, and no other drive", async () => {
 		const team = (
@@ -283,7 +353,9 @@ describe("a Drive limit to a whole drive", () => {
 		).toBe("n.txt");
 		expect((await key.call("drive.list_shared_drives", {})).shared_drives.map((drive) => drive.name)).toEqual(["Team"]);
 		expect(await codeOf(key.call("drive.get_item", { space_id: other, item_id: board.id }))).toBe("not_found");
-		expect(await codeOf(key.call("drive.get_shared_drive", { drive_id: other }))).toBe("forbidden");
+		// A drive that the limit does not name gets the answer of an id that is no drive.
+		expect(await codeOf(key.call("drive.get_shared_drive", { drive_id: other }))).toBe("not_found");
+		expect(await codeOf(key.call("drive.get_about", { space_id: other }))).toBe("not_found");
 		expect(await codeOf(key.call("drive.get_item", { item_id: own.id }))).toBe("not_found");
 		// The own drive of the principal is not in the limit. Its root lists nothing.
 		expect((await key.call("drive.list_items", {})).items).toEqual([]);
@@ -374,6 +446,61 @@ describe("a Mail limit with a search query", () => {
 		expect(await codeOf(key.call("mail.get_settings", {}))).toBe("forbidden");
 	});
 
+	// The name of a label can tell what the mailbox holds outside the query.
+	it("lists the system labels and the labels of the messages that the query finds, and no other label", async () => {
+		await deliver({ from: "billing@vendor.example", subject: "Invoice 8" });
+		await deliver({ from: "hr@corp.example", subject: "Dismissal of J. Doe" });
+		const invoices = await ada.call("mail.create_label", { name: "Invoices" });
+		const legal = await ada.call("mail.create_label", { name: "Legal-Dismissal" });
+		await ada.call("mail.modify_threads", {
+			thread_ids: [(await threadOf("Invoice 8")).id],
+			add_label_ids: [invoices.id],
+		});
+		await ada.call("mail.modify_threads", {
+			thread_ids: [(await threadOf("Dismissal of J. Doe")).id],
+			add_label_ids: [legal.id],
+		});
+		const key = await limitedKey(ada, ["mail.read"], { mail: { query: "from:billing@vendor.example" } });
+		const names = (await key.call("mail.list_labels", {})).labels.map((label) => label.name);
+		expect(names).toContain("Invoices");
+		expect(names).toContain("INBOX");
+		expect(names).not.toContain("Legal-Dismissal");
+	});
+
+	it("gives a thread the subject of its first message that the query finds", async () => {
+		const first = "<first@corp.example>";
+		await inject(
+			rawMessage({ from: "hr@corp.example", to: "ada@dock.test", subject: "Private plan", messageId: first }),
+			"ada@dock.test",
+		);
+		await inject(
+			rawMessage({
+				from: "billing@vendor.example",
+				to: "ada@dock.test",
+				subject: "Re: Private plan (invoice)",
+				inReplyTo: first,
+				references: [first],
+			}),
+			"ada@dock.test",
+		);
+		const thread = await threadOf("Private plan");
+		expect(thread.message_count).toBe(2);
+		const key = await limitedKey(ada, ["mail.read"], { mail: { query: "from:billing@vendor.example" } });
+		const listed = (await key.call("mail.list_threads", {})).threads.find((entry) => entry.id === thread.id);
+		expect(listed?.subject).toBe("Re: Private plan (invoice)");
+		expect((await key.call("mail.get_thread", { thread_id: thread.id })).subject).toBe("Re: Private plan (invoice)");
+	});
+
+	// "me" in a query binds values for the address of the mailbox. The check at the create must count them.
+	it("refuses a query that leaves no room for the query of a call", async () => {
+		const query = Array.from({ length: 12 }, () => "from:me").join(" ");
+		expect(
+			await codeOf(
+				ada.call("account.create_api_key", { label: "x", scopes: ["mail.read"], limits: { mail: { query } } }),
+			),
+		).toBe("invalid");
+	});
+
 	it("shows only the messages of a thread that the query finds", async () => {
 		await deliver({ from: "billing@vendor.example", subject: "Contract" });
 		const thread = await threadOf("Contract");
@@ -435,6 +562,23 @@ describe("a Mail limit with recipients and mailboxes", () => {
 	});
 });
 
+describe("the webhook endpoints of a key with a limit", () => {
+	// An endpoint with a mail subscription sends events of the whole mailbox. A key with a Mail limit
+	// cannot use the subscriptions, so it must not read, change or delete that endpoint.
+	it("hides an endpoint that has a subscription of the limited product", async () => {
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: "https://hooks.example.com/asterra" });
+		await ada.call("mail.create_webhook_subscription", { endpoint_id: endpoint.id });
+		const key = await limitedKey(ada, ["mail.read", "mail.webhooks"], { mail: { query: "label:invoices" } });
+		expect((await key.call("webhooks.list_endpoints", {})).endpoints).toEqual([]);
+		expect(await codeOf(key.call("webhooks.update_endpoint", { endpoint_id: endpoint.id, label: "Mine" }))).toBe(
+			"not_found",
+		);
+		expect(await codeOf(key.call("webhooks.delete_endpoint", { endpoint_id: endpoint.id }))).toBe("not_found");
+		expect((await ada.call("webhooks.list_endpoints", {})).endpoints.map((entry) => entry.id)).toEqual([endpoint.id]);
+		expect((await ada.call("mail.list_webhook_subscriptions", {})).subscriptions).toHaveLength(1);
+	});
+});
+
 describe("a Chat limit", () => {
 	it("reads and posts only in the rooms of the limit", async () => {
 		const ops = (await ada.call("chat.create_room", { kind: "private", name: "Ops", member_ids: [bot.id] })).room;
@@ -442,7 +586,13 @@ describe("a Chat limit", () => {
 		const secret = (await ada.call("chat.post_message", { room_id: board.id, text: "The plan is secret" })).message;
 		const key = await limitedKey(ada, ["chat.read", "chat.write"], { chat: { room_ids: [ops.id] } });
 
-		expect((await key.call("chat.list_rooms", {})).rooms.map((room) => room.name)).toEqual(["Ops"]);
+		// The other room has the newest message. A page of one room still has the room of the limit, and
+		// no cursor: a cursor holds the id of the last room of its page.
+		const page = await key.call("chat.list_rooms", { limit: 1 });
+		expect(page.rooms.map((room) => room.name)).toEqual(["Ops"]);
+		expect(page.next_cursor).toBeNull();
+		expect((await key.call("chat.list_rooms", { query: "Boa" })).rooms).toEqual([]);
+		expect((await key.call("chat.list_rooms", { query: "op" })).rooms.map((room) => room.name)).toEqual(["Ops"]);
 		const posted = (await key.call("chat.post_message", { room_id: ops.id, text: "Status: green" })).message;
 		expect((await key.call("chat.list_messages", { room_id: ops.id })).messages.map((message) => message.id)).toEqual([
 			posted.id,

@@ -137,6 +137,32 @@ export async function listJoinedRooms(
 	return { rooms: shown.map(toRecord), nextCursor };
 }
 
+/**
+ * The joined rooms from a list of ids, with the newest message first: the list of an API key with a Chat
+ * limit. The list has one page and no cursor, so it never names a room outside the ids. `query` keeps
+ * the rooms whose name, or the name of the other member of a direct message, has the text.
+ */
+export async function listRoomsOf(
+	env: Env,
+	principalId: string,
+	roomIds: readonly string[],
+	input: { query: string | null; starred: boolean },
+): Promise<RoomRecord[]> {
+	const principal = principalStub(env, principalId);
+	let found = await principal.chatRoomsOf(roomIds);
+	if (!found.seeded) {
+		await seed(env, principalId);
+		found = await principal.chatRoomsOf(roomIds);
+	}
+	const wanted = input.query === null ? null : nameKey(input.query);
+	const time = (room: RoomRecord) => room.last_message_at ?? room.created_at;
+	return found.rooms
+		.map(toRecord)
+		.filter((room) => !input.starred || room.starred)
+		.filter((room) => wanted === null || nameKey(room.name ?? room.peer?.display_name ?? "").includes(wanted))
+		.sort((a, b) => time(b) - time(a) || (a.id < b.id ? 1 : -1));
+}
+
 /** A followed thread of a page, with the room as a record. */
 export interface FollowedThread {
 	room: RoomRecord;
