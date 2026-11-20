@@ -65,10 +65,15 @@ const DEFINITIONS = new Map<string, EventDefinition>(
 	]),
 );
 
-/** The event when the credential holds the webhook scope of its product. Else null, as for an unknown name. */
+/**
+ * The event when the credential holds the webhook scope of its product. Else null, as for an unknown name.
+ * A key with a resource limit for the product gets no event of it: an event has data that the limit
+ * does not apply to.
+ */
 function usableEvent(call: CallContext, name: string): McpEventDefinition | null {
 	const event = mcpEvents.get(name);
-	return event && call.caller.scopes.has(webhookScope(event.domain)) ? event : null;
+	if (!event || call.caller.limits?.[event.domain] !== undefined) return null;
+	return call.caller.scopes.has(webhookScope(event.domain)) ? event : null;
 }
 
 /**

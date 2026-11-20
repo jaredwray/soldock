@@ -1,4 +1,5 @@
-import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
+import { AllowlistEntry, EmailAddress, prefixedId, Timestamp } from "./common.ts";
+import { KeyLimits, UNLIMITED_KEY_SCOPES } from "./limits.ts";
 import { defineOperation } from "./operation.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
@@ -17,17 +18,6 @@ export const DisplayName = z
 	.refine(
 		(name) => !/[\p{Cc}"<>\\]/u.test(name),
 		"must not contain control characters, quotes, angle brackets or backslashes",
-	);
-
-/** A domain (`example.com`) or one address (`ada@example.com`). */
-export const AllowlistEntry = z
-	.string()
-	.trim()
-	.toLowerCase()
-	.max(254)
-	.regex(
-		/^(?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/,
-		"must be a domain such as example.com or an address such as ada@example.com",
 	);
 
 export const OutboundPolicy = z.object({
@@ -64,6 +54,11 @@ export const ApiKey = z.object({
 	principal_id: z.string(),
 	label: z.string(),
 	scopes: z.array(z.string()),
+	/**
+	 * The resource limits of the key, or null for a key without limits. A limit tells where the key
+	 * works: which drives and folders, which mail, and which recipients and rooms.
+	 */
+	limits: KeyLimits.nullable(),
 	created_at: Timestamp,
 	last_used_at: Timestamp.nullable(),
 	revoked: z.boolean(),
@@ -83,6 +78,7 @@ export const whoami = defineOperation({
 		"Returns who you are (a human or an agent), your address, and the scopes that the current credential holds.",
 		"missing_scopes lists the scopes that the credential does not hold, with the operations that need each one.",
 		"For an OAuth connection of an agent, the sponsor of the agent, an owner or an admin can add a scope. The scopes of an API key do not change: get a new key.",
+		"limits holds the resource limits of an API key, or null. With a drive limit, the key works only in the drives, folders and documents of limits.drive.items. With a mail limit, it uses only the mailboxes of mailbox_ids, reads and changes only the messages that query finds, and sends only to recipients. With a chat limit, it works only in the rooms of room_ids.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/account" },
 	scopes: ["account.read"],
@@ -105,6 +101,8 @@ export const whoami = defineOperation({
 		),
 		/** `oauth`: an access token that an MCP client got through OAuth. */
 		credential: z.enum(["session", "api_key", "oauth"]),
+		/** The resource limits of an API key, or null. A session and an OAuth connection have none. */
+		limits: KeyLimits.nullable(),
 		/** How a human signs in to the web app. Null for an agent, which never signs in. */
 		sign_in: z
 			.object({
@@ -318,8 +316,13 @@ export const listApiKeys = defineOperation({
 export const createApiKey = defineOperation({
 	name: "account.create_api_key",
 	summary: "Create an API key",
-	description:
+	description: [
 		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner. An agent key can hold only agent scopes. The secret is shown only once.",
+		"Set limits to make a key that works only on some resources. limits.drive.items names drives (space_id only), folders with all that they hold, and single documents (space_id and item_id).",
+		"limits.mail can name mailboxes (mailbox_ids), a search query in the syntax of mail.list_threads (the key reads and changes only the messages that the query finds), and recipients (the addresses and domains that the key can send to).",
+		"limits.chat.room_ids names the rooms and direct messages that the key can read and post in.",
+		`A product without a limit follows the scopes only. A key with limits cannot hold ${UNLIMITED_KEY_SCOPES.join(" or ")}, and it cannot call the operations that do not apply its limit, such as webhook subscriptions. The secret of a key with limits starts with sdl_.`,
+	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys" },
 	scopes: ["account.keys"],
 	callers: ["human"],
@@ -328,6 +331,7 @@ export const createApiKey = defineOperation({
 		principal_id: PrincipalId.optional(),
 		label: z.string().trim().min(1).max(100),
 		scopes: z.array(ScopeName).min(1),
+		limits: KeyLimits.optional(),
 	}),
 	output: z.object({ api_key: CreatedApiKey }),
 	errors: ["not_found"],

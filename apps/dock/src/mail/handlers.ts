@@ -4,10 +4,13 @@ import {
 	agentMailboxFor,
 	type CallContext,
 	canReadAgentMailboxes,
+	deniedRecipients,
 	domainOf,
 	isTeamMailboxId,
 	type MailboxRecord,
+	mailboxAllowed,
 	mailDomains,
+	mailQueryLimit,
 	resolveMailboxAddress,
 	teamMailboxesOf,
 	teamMailboxFor,
@@ -23,7 +26,7 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
-import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
+import type { MailFilter, Refusal, SendInput, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
@@ -69,8 +72,18 @@ type Access = "read" | "write";
  * is a member of. An owner or an admin can also read the own mailbox of an agent, but cannot change it
  * or send from it. This is the resource check of each mail operation. The scopes of the credential
  * decide what the caller can do, and this decides in which mailbox.
+ *
+ * An API key with a Mail limit can use only the mailboxes of the limit. `filter` is the search query of
+ * the limit: each read and each change of a message passes it to the mailbox, which then uses only the
+ * messages that the query finds.
  */
 async function openMailbox(call: CallContext, mailboxId: string | undefined, access: Access) {
+	if (!mailboxAllowed(call.caller, mailboxId ?? call.caller.id)) {
+		throw new OperationError(
+			"forbidden",
+			"This key has a mail limit that does not name this mailbox. account.whoami shows the limits of the key.",
+		);
+	}
 	let record: MailboxRecord;
 	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
 	else if (isTeamMailboxId(mailboxId)) record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id);
@@ -90,7 +103,40 @@ async function openMailbox(call: CallContext, mailboxId: string | undefined, acc
 			"You can use only your own mailbox and the team mailboxes that you are a member of.",
 		);
 	}
-	return { record, box: mailboxStub(call.env, record.id) };
+	const query = mailQueryLimit(call.caller);
+	// "me" in the query of a limit is the mailbox, as in a search.
+	const filter: MailFilter | null = query === null ? null : { query, self: [record.address], now: Date.now() };
+	return { record, box: mailboxStub(call.env, record.id), filter };
+}
+
+/**
+ * Refuses a key whose Mail limit has a search query. Use it for an operation that gives facts of the
+ * whole mailbox, which a query cannot limit.
+ */
+function refuseFiltered(filter: MailFilter | null, operation: string): void {
+	if (filter !== null) {
+		throw new OperationError(
+			"forbidden",
+			`This key reads only the mail that the query of its mail limit finds. ${operation} gives facts of the whole mailbox.`,
+		);
+	}
+}
+
+/**
+ * Refuses a send to an address that the Mail limit of the key does not name, before anything is
+ * stored. The limit applies to each recipient, also to a mailbox of this deployment.
+ */
+function checkRecipientLimit(call: CallContext, recipients: Recipient[]): void {
+	const denied = deniedRecipients(
+		call.caller,
+		recipients.map((recipient) => recipient.address),
+	);
+	if (denied.length > 0) {
+		throw new OperationError(
+			"forbidden",
+			`The mail limit of this key does not allow mail to ${denied.join(", ")}. account.whoami shows the recipients of the limit.`,
+		);
+	}
 }
 
 /** Turns a refusal from the mailbox into an OperationError, and returns any other result. */
@@ -248,7 +294,10 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
-		return { mailboxes: [ownMailbox(call), ...teams, ...agents] };
+		// A key with a Mail limit sees only the mailboxes of the limit.
+		return {
+			mailboxes: [ownMailbox(call), ...teams, ...agents].filter((mailbox) => mailboxAllowed(call.caller, mailbox.id)),
+		};
 	},
 
 	// The settings of a person live in their own mailbox. These operations take no mailbox_id, so a member
@@ -262,7 +311,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_profile"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		refuseFiltered(filter, "mail.get_profile");
 		const profile = await box.profile();
 		return {
 			mailbox_id: record.id,
@@ -275,8 +325,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.list_labels"(call, input) {
-		const { box } = await openMailbox(call, input.mailbox_id, "read");
-		return { labels: await box.listLabels() };
+		const { box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		return { labels: await box.listLabels(filter) };
 	},
 
 	async "mail.create_label"(call, input) {
@@ -294,7 +344,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.list_threads"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
 		const query = input.query ?? DEFAULT_QUERY;
 		const now = Date.now();
 		// "me" in a search is the mailbox: in a team mailbox, from:me finds mail from the team address.
@@ -313,6 +363,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				limit: input.limit ?? DEFAULT_PAGE,
 				self,
 				now,
+				filter,
 			}),
 		);
 		// The query can hold private words, so the audit line names the mailbox only.
@@ -336,8 +387,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_thread"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
-		const thread = await box.getThread(input.thread_id);
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		const thread = await box.getThread(input.thread_id, filter);
 		if (!thread) throw new OperationError("not_found", "No thread has that id.");
 		auditAgentRead(call, record, "mail.get_thread", input.thread_id);
 		const messages = await Promise.all(thread.messages.map(toMessage));
@@ -351,21 +402,22 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_message"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
-		const stored = await box.getMessage(input.message_id);
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		const stored = await box.getMessage(input.message_id, filter);
 		if (!stored) throw new OperationError("not_found", "No message has that id.");
 		auditAgentRead(call, record, "mail.get_message", input.message_id);
 		return toMessage(stored);
 	},
 
 	async "mail.modify_threads"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "write");
 		const result = accept(
 			await box.modifyThreads({
 				threadIds: input.thread_ids,
 				add: input.add_label_ids,
 				remove: input.remove_label_ids,
 				dryRun: input.dry_run,
+				filter,
 			}),
 		);
 		if (!input.dry_run) auditOk(call, record, "mail.modify_threads", input.thread_ids.join(","));
@@ -373,7 +425,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.send"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "write");
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));
@@ -391,10 +443,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		}
 		const recipients = await resolveRecipients(call, record, [...input.to, ...input.cc, ...input.bcc]);
 		checkOutboundPolicy(call, recipients);
+		checkRecipientLimit(call, recipients);
 
 		let reply: Awaited<ReturnType<typeof box.getReplyContext>> = null;
 		if (input.reply_to_message_id) {
-			reply = await box.getReplyContext(input.reply_to_message_id);
+			// A key with a query in its Mail limit answers only a message that the query finds.
+			reply = await box.getReplyContext(input.reply_to_message_id, filter);
 			if (!reply) throw new OperationError("not_found", "No message has the id in reply_to_message_id.");
 		}
 		const limit = recipients.some((r) => r.kind === "external")
@@ -505,7 +559,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.suggest_recipients"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		refuseFiltered(filter, "mail.suggest_recipients");
 		const recipients = await box.suggestRecipients(input.query ?? "", input.limit ?? DEFAULT_SUGGESTIONS);
 		// The addresses tell to whom the agent writes, so a read by an owner or an admin gets a line. The query
 		// can hold a private address, so the line names the mailbox only, as for mail.list_threads.
@@ -520,8 +575,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_attachment"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
-		const source = await box.getAttachmentSource(input.message_id);
+		const { record, box, filter } = await openMailbox(call, input.mailbox_id, "read");
+		const source = await box.getAttachmentSource(input.message_id, filter);
 		if (!source) throw new OperationError("not_found", "No message has that id.");
 		const meta = source.attachments[input.index];
 		if (!meta) throw new OperationError("not_found", "The message has no attachment with that index.");

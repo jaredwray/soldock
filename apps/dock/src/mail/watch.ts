@@ -1,4 +1,10 @@
-import { type CallContext, isTeamMailboxId, teamMailboxesOf } from "../identity/index.ts";
+import {
+	type CallContext,
+	isTeamMailboxId,
+	mailboxAllowed,
+	mailQueryLimit,
+	teamMailboxesOf,
+} from "../identity/index.ts";
 import type { ResourceWatcher, WatcherMap } from "../platform/index.ts";
 import { mailboxStub } from "./delivery.ts";
 import { INBOX_SIGNAL } from "./mailbox.ts";
@@ -13,11 +19,14 @@ import { INBOX_SIGNAL } from "./mailbox.ts";
 const inboxWatcher: ResourceWatcher<CallContext> = {
 	async allowed(call, resources) {
 		const ids = resources.map((vars) => vars.mailbox_id);
+		// A signal tells when a message arrives, also a message that the query of a Mail limit does not
+		// find. So a key with such a query watches no mailbox. A key with a list of mailboxes watches those.
+		if (mailQueryLimit(call.caller) !== null) return ids.map(() => false);
 		const own = (id: string | undefined) => id === call.caller.id;
 		const teams = ids.some((id) => id !== undefined && !own(id) && isTeamMailboxId(id))
 			? new Set((await teamMailboxesOf(call.env.DIRECTORY, call.caller.id)).map((mailbox) => mailbox.id))
 			: new Set<string>();
-		return ids.map((id) => id !== undefined && (own(id) || teams.has(id)));
+		return ids.map((id) => id !== undefined && mailboxAllowed(call.caller, id) && (own(id) || teams.has(id)));
 	},
 
 	async open(call, vars, listener) {

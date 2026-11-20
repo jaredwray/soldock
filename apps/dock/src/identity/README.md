@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms` and `chat_members` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO`: the Chat state of each principal now; later settings, the event feed, notifications and agent counters. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms` and `chat_threads` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `archived_at`, `deleted_at`), `addresses`, `api_keys` (with `limits`: the resource limits of a key, as JSON), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms` and `chat_threads` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -238,6 +238,7 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 | Credential | Who | Where |
 | --- | --- | --- |
 | API key `sdk_<43 base64url characters>` | Humans and agents | `Authorization: Bearer` on `/api/v1` and `/mcp`. Only the SHA-256 is stored |
+| API key with limits `sdl_<43 base64url characters>` | Humans and agents | The same as an API key. It works only on the resources of its limits ([Resource limits of an API key](#resource-limits-of-an-api-key)) |
 | Password (12 to 128 characters) | Humans only | `POST /auth/session`. Only a PBKDF2-HMAC-SHA256 hash is stored: 100,000 iterations (the most that workerd allows), a 16-byte random salt, NFKC normalization. The stored form names the scheme and the iterations, so a later version can raise the work |
 | TOTP code (6 digits, 30 seconds, HMAC-SHA1, RFC 6238) | Humans who turned it on | `POST /auth/session`, with the password. A code from one step before or after the current step also works. Each code works one time (`totp_last_step`) |
 | OAuth access token `sdo_<43 base64url characters>` | Agents, through an MCP client | `Authorization: Bearer` on `/api/v1` and `/mcp`. It works for one hour. Only the SHA-256 is stored |
@@ -514,6 +515,56 @@ Each call passes three checks:
    and the allowlist size. The old mode is the mode that this write replaced. Two changes at the
    same time record that order. The entries stay out of the log. The audit line of an agent `mail.send`
    records the mode and the external recipient count.
+
+## Resource limits of an API key
+
+Scopes tell what a key can do. Limits tell where. `account.create_api_key` takes `limits`
+(`KeyLimits` in `packages/contracts/src/limits.ts`), and a key keeps its limits for its whole life.
+A limit only makes a key smaller: the scopes, the roles and the agent policy still apply.
+
+| Limit | The key works only |
+| --- | --- |
+| `drive.items` | In these drives (`space_id`), folders with all that they hold, and single documents (`space_id` and `item_id`). Docs and Sheets are items of Drive ([`drive`](../drive/README.md#the-limit-of-an-api-key)) |
+| `mail.mailbox_ids` | In these mailboxes |
+| `mail.query` | On the messages that this search query finds ([`mail`](../mail/README.md#the-limit-of-an-api-key)) |
+| `mail.recipients` | With mail to these addresses and domains |
+| `chat.room_ids` | In these rooms and direct messages ([`chat`](../chat/README.md#the-limit-of-an-api-key)) |
+
+- Each product has its own limit. A product without a limit follows the scopes only. So a key with
+  a Drive limit and `mail.read` reads all mail of its principal.
+- Only an API key has limits. A session and an OAuth access token have `limits: null`
+  (`AuthContext.limits`). `account.whoami` and `account.list_api_keys` show the limits.
+- The checks are in two layers:
+  1. The shared invoker and the MCP tool list call `limitRefusal` of the contracts. A key with a
+     limit for a product calls only the operations in `LIMIT_AWARE_OPERATIONS`. Each other
+     operation of that product gets `forbidden`, and MCP does not list its tool. An operation that
+     a later change adds is refused until its handler applies the limit and its name is in the
+     list. An operation of a domain that `LIMIT_PRODUCTS` does not name is refused too.
+  2. The handler of each operation in the list applies the limit. `limits.ts` has the questions
+     that the handlers ask: `driveLimitOf`, `mailboxAllowed`, `mailQueryLimit`, `deniedRecipients`,
+     `roomAllowed`.
+- A path that is not an operation applies the limit of its product or refuses the key
+  (`refuseLimited`): the room socket takes only a room of the limit, and the events socket takes no
+  key with a Chat limit. MCP Events and the webhook subscriptions give no event of a limited product.
+- A key with limits cannot hold `account.keys` or `directory.write` (`UNLIMITED_KEY_SCOPES`). These
+  scopes can make a credential without limits. `account.create_api_key` refuses them with
+  `invalid`, and `authenticate` removes them from a stored key. So a key with limits can never
+  create a key, approve an OAuth connection, set a password or create a principal.
+- The limits are in `api_keys.limits` as JSON (migration `0017`). `NULL` is a key without limits.
+- The secret of a key with limits starts with `sdl_`. A Worker from before migration `0017`
+  accepts only `sdk_` secrets. So after a rollback, that Worker refuses a key with limits. It never
+  uses the key without its limits.
+- `findApiKey` refuses a key whose stored limits this version cannot read, and a key whose prefix
+  and stored limits do not agree. So a limit kind of a later version, or a row that lost its
+  limits, never gives a key without limits.
+- The identity module does not check that a drive, an item, a mailbox or a room of a limit exists.
+  An id that names nothing gives no access. The composition root (`handlers.ts`) checks that
+  `mail.query` compiles, because only the mail module knows the search syntax.
+- The audit line of `account.create_api_key` names the products that the key has a limit for. The
+  entries stay out of the log.
+
+Not built yet: limits for an OAuth connection, a change of the limits of a live key, and limits
+for the webhooks and the live feeds of a limited product.
 
 A lasting effect, such as a webhook, records the credential that made it (`credentialBinding`): the
 API key, the OAuth grant (`AuthContext.grantId`) or a session. `credentialState` tells if that

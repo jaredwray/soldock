@@ -276,3 +276,23 @@ export function compileQuery(clauses: Clause[], options: CompileOptions): Compil
 	}
 	return { where: parts.length > 0 ? parts.join(" AND ") : "1", params };
 }
+
+/** The bound values that the search query of a Mail limit can use. The query of a call gets the others. */
+export const MAX_LIMIT_QUERY_PARAMS = 40;
+
+/**
+ * The problem of a search query for the Mail limit of an API key, or null. The query must compile, and
+ * it must leave room for the query of a call: the two go into one statement.
+ */
+export function limitQueryProblem(query: string): string | null {
+	try {
+		const compiled = compileQuery(parseQuery(query), { self: [], now: Date.now() });
+		if (compiled.params.length > MAX_LIMIT_QUERY_PARAMS)
+			return "The query of a mail limit has too many terms. Use fewer terms.";
+		if (parseQuery(query).length === 0) return "The query of a mail limit has no term.";
+		return null;
+	} catch (error) {
+		if (error instanceof QueryError) return error.message;
+		throw error;
+	}
+}

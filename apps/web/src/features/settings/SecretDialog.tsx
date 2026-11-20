@@ -2,6 +2,7 @@ import type { CreatedApiKey, CreatedWebhookEndpoint } from "@asterra/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
+import { limitSummary } from "./keyLimits.ts";
 
 /** Shows the secret of a new API key. The server returns it once and never again. */
 export function SecretDialog({
@@ -25,6 +26,12 @@ export function SecretDialog({
 			onClose={onClose}
 		>
 			<p className="field-hint">Scopes: {apiKey.scopes.join(", ")}</p>
+			{apiKey.limits &&
+				limitSummary(apiKey.limits).map((line) => (
+					<p key={line.product} className="field-hint">
+						Limit for {line.product}: {line.text}
+					</p>
+				))}
 			{children}
 		</OneTimeSecretDialog>
 	);

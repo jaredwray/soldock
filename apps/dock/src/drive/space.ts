@@ -34,6 +34,12 @@ export interface SpaceCall {
 	 * caller manage the members and the name of a shared drive. It gives no access to an item.
 	 */
 	admin?: boolean;
+	/**
+	 * The resource limit of the credential of the caller in this drive: the items that the credential
+	 * can use, each with all that it holds. An empty list allows no item. Not set: the credential has no
+	 * limit in this drive. The limit only removes access: the roles and the grants still apply.
+	 */
+	limit?: { roots: string[] };
 }
 
 /** The R2 key of one version of a file. Each object has one owner: the version in its key. */
@@ -717,6 +723,10 @@ const IN_TRASH = "The item is in the trash. Restore it first.";
 const MOVING = "The item is moving to a different drive. Try again in a moment.";
 const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
 const NOT_COMPLETE = "The move did not complete. The items are in the source drive. Try again.";
+const LIMITED =
+	"This key works only on some items of this drive. This action needs the whole drive. account.whoami shows the limits of the key.";
+const LIMITED_ROOT =
+	"This key works only on some items of this drive, not at its root. Set parent_id to one of the folders in the limits of the key. account.whoami shows them.";
 const NO_UPLOAD = "No upload has that id, or it is not your upload, or it expired. Start a new upload.";
 /** The folder at the root of a drive that holds the folder of each room of Chat. */
 const CHAT_FOLDER = "Chat";
@@ -898,11 +908,44 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * The level of the highest item of the limit of the call that holds the item, counted from the item:
+	 * 0 when the item is in the limit itself. Null when the limit does not allow the item.
+	 */
+	private limitDepth(call: SpaceCall, itemId: string): number | null {
+		const roots = call.limit?.roots ?? [];
+		if (roots.length === 0) return null;
+		return (
+			this.one<{ depth: number | null }>(
+				`${UP} SELECT MAX(up.depth) AS depth FROM up WHERE up.id IN (SELECT value FROM json_each(?2))`,
+				itemId,
+				JSON.stringify(roots),
+			)?.depth ?? null
+		);
+	}
+
+	/**
+	 * True when the limit of the call allows the item: the call has no limit, or the item is in the limit
+	 * or under an item of the limit. `null` is the root of the drive, which a limit never allows.
+	 */
+	private inLimit(call: SpaceCall, itemId: string | null): boolean {
+		if (!call.limit) return true;
+		return itemId !== null && this.limitDepth(call, itemId) !== null;
+	}
+
+	/**
 	 * The refusal for a caller that cannot do an action on the drive as a whole, or null. A personal
 	 * drive lets only its owner do it. A shared drive lets a member with the `need` role do it. A grant
 	 * on an item does not count here.
+	 *
+	 * A call with a limit cannot do an action on the drive as a whole. It passes only when the action
+	 * names each item that it uses in `items`, and the limit allows each of them.
 	 */
-	private gate(call: SpaceCall, need: SharedDriveRole): Refusal | null {
+	private gate(call: SpaceCall, need: SharedDriveRole, items?: readonly (string | null)[]): Refusal | null {
+		if (call.limit) {
+			if (items === undefined) return refuse("forbidden", LIMITED);
+			if (items.includes(null)) return refuse("forbidden", LIMITED_ROOT);
+			if (!items.every((id) => this.inLimit(call, id))) return refuse("not_found", NOT_FOUND);
+		}
 		if (!isSharedDriveId(call.spaceId)) return this.isOwner(call) ? null : refuse("forbidden", OWN_DRIVE_ONLY);
 		const role = this.memberRole(call.actor.principal_id);
 		if (role === null) return refuse("not_found", NO_DRIVE);
@@ -926,8 +969,24 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 *
 	 * A shared drive has no owner. A member gets the higher of its member role and its grants. An item in
 	 * the trash exists for the members with the editor or the manager role only.
+	 *
+	 * A call with a limit gets access only to the items of the limit and to what they hold. It sees no
+	 * folder above the highest item of the limit.
 	 */
 	private access(call: SpaceCall, item: ItemRow): Access | null {
+		const access = this.roleAccess(call, item);
+		if (!access || !call.limit) return access;
+		const depth = this.limitDepth(call, item.id);
+		if (depth === null) return null;
+		return {
+			role: access.role,
+			parentVisible: access.parentVisible && depth >= 1,
+			visibleDepth: Math.min(access.visibleDepth, depth),
+		};
+	}
+
+	/** The access that the roles and the grants give, without the limit of the call. */
+	private roleAccess(call: SpaceCall, item: ItemRow): Access | null {
 		if (this.isOwner(call)) return { role: "owner", parentVisible: true, visibleDepth: WALK_LIMIT };
 		const member = isSharedDriveId(call.spaceId) ? this.memberRole(call.actor.principal_id) : null;
 		if (member === "manager" || member === "editor") {
@@ -987,7 +1046,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	private missing(call: SpaceCall, itemId: string, message: string): Refusal {
 		const moved = this.one<{ target: string }>("SELECT target FROM moved WHERE item_id = ?", itemId);
-		if (moved && (this.isOwner(call) || this.memberRole(call.actor.principal_id) !== null)) {
+		// A call with a limit does not learn where an item went: the item can be outside its limit.
+		if (moved && !call.limit && (this.isOwner(call) || this.memberRole(call.actor.principal_id) !== null)) {
 			return refuse("not_found", `The item moved to the drive ${moved.target}. Use that space_id.`);
 		}
 		return refuse("not_found", message);
@@ -1091,6 +1151,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	): Page<ItemRecord> | Refusal {
 		this.enter(call);
 		if (input.parentId === null) {
+			if (call.limit) return this.listLimit(call, input);
 			if (isSharedDriveId(call.spaceId)) {
 				const refused = this.gate(call, "viewer");
 				if (refused) return refused;
@@ -1144,6 +1205,33 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					)
 				: null;
 		return { items: this.records(call, page), nextCursor };
+	}
+
+	/**
+	 * The list of the root of the drive for a call with a limit: the items of the limit in this drive that
+	 * the caller can read, in one page. An item of the limit that is under a different item of the limit
+	 * is in the list of that item, not here. So a key finds the items that it can use.
+	 */
+	private listLimit(
+		call: SpaceCall,
+		input: { kind: ItemKind | null; cursor: string | null },
+	): Page<ItemRecord> | Refusal {
+		if (input.cursor !== null) return BAD_CURSOR;
+		const rows = (call.limit?.roots ?? [])
+			.map((id) => this.row(id))
+			.filter(
+				(row): row is ItemRow =>
+					row !== null &&
+					row.trash_root === null &&
+					(input.kind === null || row.kind === input.kind) &&
+					this.limitDepth(call, row.id) === 0,
+			)
+			.sort(
+				(a, b) =>
+					Number(a.kind !== "folder") - Number(b.kind !== "folder") ||
+					(a.name_key < b.name_key ? -1 : a.name_key > b.name_key ? 1 : a.id < b.id ? -1 : 1),
+			);
+		return { items: this.records(call, rows), nextCursor: null };
 	}
 
 	/**
@@ -1298,6 +1386,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	checkCreate(call: SpaceCall, parentId: string | null): { depth: number } | Refusal {
 		this.enter(call);
 		if (parentId === null) {
+			if (call.limit) return refuse("forbidden", LIMITED_ROOT);
 			if (isSharedDriveId(call.spaceId)) return this.gate(call, "editor") ?? { depth: 1 };
 			if (!this.isOwner(call)) return refuse("forbidden", "You can create an item at the root of your own drive only.");
 			return { depth: 1 };
@@ -1727,7 +1816,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	async move(call: SpaceCall, itemIds: string[], parentId: string | null): Promise<ItemRecord[] | Refusal> {
 		this.enter(call);
 		const boundary = await this.captureWebhookBoundary();
-		const refused = this.gate(call, "editor");
+		const refused = this.gate(call, "editor", [...itemIds, parentId]);
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		const target = this.checkCreate(call, parentId);
@@ -1806,7 +1895,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	async trash(call: SpaceCall, itemIds: string[], dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
 		const boundary = await this.captureWebhookBoundary();
-		const refused = this.gate(call, "editor");
+		const refused = this.gate(call, "editor", itemIds);
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		const rows: ItemRow[] = [];
@@ -1849,7 +1938,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	async restore(call: SpaceCall, itemIds: string[]): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
 		const boundary = await this.captureWebhookBoundary();
-		const refused = this.gate(call, "editor");
+		const refused = this.gate(call, "editor", itemIds);
 		if (refused) return refused;
 		const rows: ItemRow[] = [];
 		const wanted = new Set(itemIds);
@@ -1888,7 +1977,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	async remove(call: SpaceCall, itemIds: string[], dryRun: boolean): Promise<{ items_changed: number } | Refusal> {
 		this.enter(call);
 		const boundary = await this.captureWebhookBoundary();
-		const refused = this.gate(call, "manager");
+		const refused = this.gate(call, "manager", itemIds);
 		if (refused) return refused;
 		const ids = [...new Set(itemIds)];
 		for (const id of ids) {
@@ -2100,6 +2189,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (isSharedDriveId(call.spaceId) || !this.isOwner(call)) {
 			return refuse("forbidden", "The folders of Chat are in your own drive only.");
 		}
+		// The folder is at the root of the drive, under Chat. A limit never allows the root.
+		if (call.limit) return refuse("forbidden", LIMITED);
 		const boundary = await this.captureWebhookBoundary();
 		const live = (id: string | null): ItemRow | null => {
 			const row = id === null ? null : this.row(id);
@@ -2182,6 +2273,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		}
 		const item = this.row(itemId);
 		if (!item) return this.missing(call, itemId, NOT_FOUND);
+		if (!this.inLimit(call, itemId)) return refuse("not_found", NOT_FOUND);
 		if (item.kind !== "file")
 			return refuse("invalid", `The item ${itemId} is a ${item.kind}. A message can hold files only.`);
 		if (item.trash_root !== null) return refuse("invalid", `The file ${itemId} is in the trash. Restore it first.`);
@@ -2268,6 +2360,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (!row || row.principal_id !== call.actor.principal_id || row.expires_at <= Date.now()) {
 			return refuse("not_found", NO_UPLOAD);
 		}
+		// A different credential of the principal can have started the upload in a folder outside the limit.
+		if (!this.inLimit(call, row.parent_id)) return refuse("not_found", NO_UPLOAD);
 		return { row };
 	}
 
@@ -2316,6 +2410,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		if (row.request_hash !== requestHash) {
 			return refuse("conflict", "The idempotency key was used with a different request.");
 		}
+		if (!this.inLimit(call, row.parent_id)) return refuse("not_found", NO_UPLOAD);
 		if (row.state === "open") {
 			const allowed = this.checkCreate(call, row.parent_id);
 			if ("error" in allowed) return allowed;
@@ -2628,6 +2723,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * admin always passes. A caller that is not a member and not an admin gets `not_found`.
 	 */
 	private manage(call: SpaceCall, need: "member" | "manager" | "admin"): DriveFacts | Refusal {
+		// The name and the members are facts of the drive as a whole.
+		if (call.limit) return refuse("forbidden", LIMITED);
 		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
 		if (!facts || facts.deleted_at !== null) return refuse("not_found", NO_DRIVE);
 		if (call.admin === true) return facts;
@@ -2696,6 +2793,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	async createdSharedDrive(call: SpaceCall): Promise<SharedDriveRecord | Refusal | null> {
 		if (!isSharedDriveId(call.spaceId)) throw new Error("the id is not the id of a shared drive");
+		if (call.limit) return refuse("forbidden", LIMITED);
 		if (call.admin !== true) {
 			return refuse("forbidden", "Only owners and admins of the organization can create a shared drive.");
 		}
@@ -2718,6 +2816,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		input: { name: string; members: MemberInput[] },
 	): Promise<{ drive: SharedDriveRecord; duplicate: boolean } | Refusal> {
 		if (!isSharedDriveId(call.spaceId)) throw new Error("the id is not the id of a shared drive");
+		if (call.limit) return refuse("forbidden", LIMITED);
 		if (call.admin !== true) {
 			return refuse("forbidden", "Only owners and admins of the organization can create a shared drive.");
 		}
@@ -2846,6 +2945,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		this.enter(call);
 		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
 		if (!facts) return refuse("not_found", NO_DRIVE);
+		if (call.limit) return refuse("forbidden", LIMITED);
 		if (call.admin !== true) {
 			return refuse("forbidden", "Only owners and admins of the organization can delete a shared drive.");
 		}

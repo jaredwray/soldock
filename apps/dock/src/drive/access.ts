@@ -1,6 +1,6 @@
 import type { DriveItem } from "@asterra/contracts";
 import { documentStub } from "../collab/index.ts";
-import { type CallContext, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import { type CallContext, driveLimitOf, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import { audit, OperationError, sha256Hex } from "../platform/index.ts";
 import { unknownSharedDriveIds } from "./shared-index.ts";
 import {
@@ -56,9 +56,19 @@ export async function unknownSpaceIds(db: D1Database, ids: readonly string[]): P
 /**
  * The caller for the object of a drive. `admin` is true for a person with the owner or the admin role
  * of the organization. The object uses it for the members and the name of a shared drive only.
+ *
+ * `limit` holds the Drive limit of an API key for this drive. Each call to the object of a drive gets
+ * its caller from here, so the object applies the limit to each item. A drive that the limit does not
+ * name gets an empty limit, which allows no item.
  */
 export function spaceCall(call: CallContext, spaceId: string): SpaceCall {
-	return { spaceId, actor: actorOf(call), admin: call.caller.kind === "human" && isAdmin(call.caller) };
+	const allowed = driveLimitOf(call.caller, spaceId);
+	return {
+		spaceId,
+		actor: actorOf(call),
+		admin: call.caller.kind === "human" && isAdmin(call.caller),
+		...(allowed === "all" ? {} : { limit: { roots: allowed } }),
+	};
 }
 
 /** A drive by its id, without a check that the id is a drive. Use `openSpace` for an id from a caller. */

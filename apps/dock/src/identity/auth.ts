@@ -1,4 +1,4 @@
-import { ALL_SCOPES, type Scope } from "@asterra/contracts";
+import { ALL_SCOPES, type KeyLimits, type Scope, UNLIMITED_KEY_SCOPES } from "@asterra/contracts";
 import { type Caller, sha256Hex } from "../platform/index.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";
@@ -20,6 +20,12 @@ export interface AuthContext extends Caller {
 	/** The SHA-256 of the access token, for an `oauth` credential. A refresh of the grant replaces the token. */
 	accessHash: string | null;
 	scopes: ReadonlySet<Scope>;
+	/**
+	 * The resource limits of an API key, or null. A session and an OAuth access token have none. The
+	 * invoker refuses the operations that do not apply a limit, and each handler applies the limit of its
+	 * product (`limits.ts`).
+	 */
+	limits: KeyLimits | null;
 }
 
 /** The context that each operation handler gets. */
@@ -74,6 +80,7 @@ export async function authenticate(
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
 				scopes: new Set(granted.grant.scopes.filter((scope) => ceiling.has(scope))),
+				limits: null,
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
@@ -81,6 +88,8 @@ export async function authenticate(
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
 		const ceiling = new Set<Scope>(scopeCeiling(found.principal.kind));
+		// A key with limits never holds a scope that can make a credential without limits.
+		if (found.key.limits !== null) for (const scope of UNLIMITED_KEY_SCOPES) ceiling.delete(scope);
 		return {
 			id: found.principal.id,
 			principal: found.principal,
@@ -91,6 +100,7 @@ export async function authenticate(
 			sessionHash: null,
 			accessHash: null,
 			scopes: new Set(found.key.scopes.filter((scope) => ceiling.has(scope))),
+			limits: found.key.limits,
 		};
 	}
 	if (!options.allowSession) return null;
@@ -109,6 +119,7 @@ export async function authenticate(
 		sessionHash: session.tokenHash,
 		accessHash: null,
 		scopes: new Set<Scope>(ALL_SCOPES),
+		limits: null,
 	};
 }
 

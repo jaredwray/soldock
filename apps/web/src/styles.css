@@ -643,6 +643,23 @@ fieldset {
 	margin-bottom: 8px;
 }
 
+/* The resource limits of a new key: one row for each product, and under it the choices of that product. */
+.limit-list legend {
+	margin-bottom: 4px;
+}
+
+.limit-group {
+	display: grid;
+	gap: 8px;
+	margin: 0 0 12px 26px;
+}
+
+.limit-choices {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+	column-gap: 16px;
+}
+
 .notice {
 	margin: 12px 0;
 	padding: 10px 12px;

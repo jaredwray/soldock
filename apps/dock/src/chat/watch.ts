@@ -1,4 +1,4 @@
-import { type CallContext, openEventsSocket } from "../identity/index.ts";
+import { type CallContext, openEventsSocket, roomAllowed, roomLimit } from "../identity/index.ts";
 import { OperationError, type ResourceWatcher, type WatcherMap } from "../platform/index.ts";
 import { joinedRoomIds } from "./room-index.ts";
 import { openRoomSocket } from "./socket.ts";
@@ -38,7 +38,7 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 			call.caller.id,
 			ids.filter((id) => id !== undefined),
 		);
-		return ids.map((id) => id !== undefined && joined.has(id));
+		return ids.map((id) => id !== undefined && joined.has(id) && roomAllowed(call.caller, id));
 	},
 
 	async open(call, vars, listener) {
@@ -94,8 +94,11 @@ const ROOM_EVENTS: ReadonlySet<string> = new Set(["chat.room", "chat.room_remove
  * the limit, it refuses a new feed, and the stream leaves the resource out.
  */
 const roomsWatcher: ResourceWatcher<CallContext> = {
-	async allowed(_call, resources) {
-		return resources.map(() => true);
+	async allowed(call, resources) {
+		// The events socket has each room of the principal. A key with a Chat limit watches the rooms of
+		// its limit one by one, with the `chat.room` resource.
+		const limited = roomLimit(call.caller) !== null;
+		return resources.map(() => !limited);
 	},
 
 	async open(call, _vars, listener) {

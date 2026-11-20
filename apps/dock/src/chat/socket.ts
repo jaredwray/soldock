@@ -1,7 +1,7 @@
 import { isErrorCode, operations, RoomId } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
-import { type AuthContext, authenticate, credentialRef, isSameOrigin } from "../identity/index.ts";
+import { type AuthContext, authenticate, credentialRef, isSameOrigin, roomAllowed } from "../identity/index.ts";
 import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { type Refusal, SOCKET_HEADER, type SocketOpen } from "./room.ts";
 
@@ -27,6 +27,10 @@ export async function openRoomSocket(
 	roomId: string,
 	options: { feed: boolean },
 ): Promise<Response> {
+	// A key with a Chat limit gets a socket only for a room of the limit.
+	if (!roomAllowed(caller, roomId)) {
+		throw new OperationError("not_found", "No room has that id, or you have no access to it.");
+	}
 	const open: SocketOpen = {
 		roomId,
 		actor: {

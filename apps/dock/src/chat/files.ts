@@ -3,13 +3,15 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import { type ApiEnv, callOf, unauthenticatedResponse } from "../api/index.ts";
 import { contentOf, roomFile, versionResponse } from "../drive/index.ts";
-import type { CallContext } from "../identity/index.ts";
+import { type CallContext, roomAllowed } from "../identity/index.ts";
 import { bytesToBase64, downloadResponse, invokeOperation, log, OperationError } from "../platform/index.ts";
 import type { Refusal, RoomCall } from "./room.ts";
 
 // The files of a message. Each download makes two checks: the room checks that the caller is a member
 // and that the message holds the file, and the drive of the file checks that it has a grant for the room
 // and that the file is outside the trash. A member that leaves fails the first check at once.
+
+const NO_ROOM = "No room has that id, or you have no access to it.";
 
 const DOWNLOAD_OPERATION = operations["chat.download_file"];
 const LINK_IMAGE_OPERATION = operations["chat.download_link_image"];
@@ -34,6 +36,8 @@ function actorOf(call: CallContext) {
 
 /** The current version of a file of a message, for a member of the room. */
 async function messageFile(call: CallContext, roomId: string, messageId: string, itemId: string) {
+	// A key with a Chat limit reads only the files of the rooms of the limit.
+	if (!roomAllowed(call.caller, roomId)) throw new OperationError("not_found", NO_ROOM);
 	const ctx: RoomCall = { roomId, actor: actorOf(call) };
 	const ref = (await call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId)).fileRef(ctx, messageId, itemId)) as
 		| { spaceId: string; itemId: string }
@@ -44,6 +48,7 @@ async function messageFile(call: CallContext, roomId: string, messageId: string,
 
 /** The picture of a link preview of a message, for a member of the room. */
 async function linkImage(call: CallContext, roomId: string, messageId: string, url: string) {
+	if (!roomAllowed(call.caller, roomId)) throw new OperationError("not_found", NO_ROOM);
 	const ctx: RoomCall = { roomId, actor: actorOf(call) };
 	const found = (await call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId)).linkImage(ctx, messageId, url)) as
 		| { key: string; type: string; size: number }

@@ -28,9 +28,8 @@ export {
 	type RoomRole,
 } from "./chat.ts";
 export { ApiError, type ClientOptions, createClient, type FetchLike } from "./client.ts";
-export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
+export { Address, AllowlistEntry, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {
-	AllowlistEntry,
 	ApiKey,
 	CreatedApiKey,
 	DIRECTORY_LIMITS,
@@ -90,6 +89,20 @@ export {
 	EVENTS_SOCKET_PROTOCOL,
 	PrincipalEvent,
 } from "./events.ts";
+export {
+	ChatLimit,
+	DriveLimit,
+	DriveLimitEntry,
+	KEY_LIMITS,
+	KeyLimits,
+	LIMIT_AWARE_OPERATIONS,
+	LIMIT_PRODUCTS,
+	type LimitedProduct,
+	limitProductOf,
+	limitRefusal,
+	MailLimit,
+	UNLIMITED_KEY_SCOPES,
+} from "./limits.ts";
 export {
 	DeliveryStatus,
 	Label,

@@ -1,5 +1,5 @@
 import { DRIVE_LIMITS, isErrorCode } from "@asterra/contracts";
-import type { CallContext } from "../identity/index.ts";
+import { type CallContext, roomAllowed } from "../identity/index.ts";
 import { OperationError } from "../platform/index.ts";
 import { accept, actorOf, openSpace, spaceStub, unknownSpaceIds } from "./access.ts";
 import type { FileSnapshot, VersionRecord } from "./space.ts";
@@ -62,6 +62,10 @@ export async function chatFolderFor(call: CallContext, roomId: string): Promise<
 	// is Chat data, so the credential needs chat.read, as for a read of the room.
 	if (!call.caller.scopes.has("chat.read")) {
 		throw new OperationError("forbidden", "To use room_id, the credential needs the chat.read scope.");
+	}
+	// The name of the folder is the name of the room. A key with a Chat limit learns only the rooms of the limit.
+	if (!roomAllowed(call.caller, roomId)) {
+		throw new OperationError("not_found", "No room has that id, or you have no access to it.");
 	}
 	const room = call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId));
 	const answer = (await room.folderName({ roomId, actor: actorOf(call) })) as

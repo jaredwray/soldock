@@ -1,5 +1,5 @@
-import { AGENT_SCOPES, ALL_SCOPES, type Scope } from "@asterra/contracts";
-import { newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
+import { AGENT_SCOPES, ALL_SCOPES, KeyLimits, type Scope } from "@asterra/contracts";
+import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 export type PrincipalKind = "human" | "agent";
 export type OrgRole = "owner" | "admin" | "member";
@@ -29,6 +29,13 @@ export interface ApiKeyRecord {
 	principal_id: string;
 	label: string;
 	scopes: Scope[];
+	/** The resource limits of the key. Null: a key without limits. */
+	limits: KeyLimits | null;
+	/**
+	 * True when the key has stored limits that this Worker cannot read, for example a limit of a later
+	 * version. Such a key authenticates nobody: a key never works without its limits.
+	 */
+	limits_unreadable: boolean;
 	created_at: string;
 	last_used_at: string | null;
 	revoked_at: string | null;
@@ -40,8 +47,9 @@ interface PrincipalRow extends Omit<PrincipalRecord, "outbound_allowlist" | "pas
 	totp_enabled: number;
 }
 
-interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
+interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes" | "limits" | "limits_unreadable"> {
 	scopes: string;
+	limits: string | null;
 }
 
 /**
@@ -54,10 +62,17 @@ const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_i
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
 
-const API_KEY_SELECT = "SELECT id, principal_id, label, scopes, created_at, last_used_at, revoked_at FROM api_keys";
+const API_KEY_SELECT =
+	"SELECT id, principal_id, label, scopes, limits, created_at, last_used_at, revoked_at FROM api_keys";
 
-/** The prefix of every API key secret, so secret scanners and people can recognize one. */
+/** The prefix of the secret of an API key without limits, so secret scanners and people can recognize one. */
 export const API_KEY_PREFIX = "sdk_";
+
+/**
+ * The prefix of the secret of an API key with resource limits. A Worker from before the limits accepts
+ * only `sdk_` secrets. So after a rollback it refuses a key with limits, and never uses it without them.
+ */
+export const LIMITED_KEY_PREFIX = "sdl_";
 
 /** A session lasts 30 days. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
@@ -71,8 +86,21 @@ function toPrincipal(row: PrincipalRow): PrincipalRecord {
 	};
 }
 
+/** The stored limits of a key. `unreadable` when the text is not a `KeyLimits` value of this version. */
+function readLimits(stored: string | null): { limits: KeyLimits | null; unreadable: boolean } {
+	if (stored === null) return { limits: null, unreadable: false };
+	try {
+		const parsed = KeyLimits.safeParse(JSON.parse(stored));
+		if (parsed.success) return { limits: parsed.data, unreadable: false };
+	} catch {
+		// The text is not JSON.
+	}
+	return { limits: null, unreadable: true };
+}
+
 function toApiKey(row: ApiKeyRow): ApiKeyRecord {
-	return { ...row, scopes: JSON.parse(row.scopes) as Scope[] };
+	const { limits, unreadable } = readLimits(row.limits);
+	return { ...row, scopes: JSON.parse(row.scopes) as Scope[], limits, limits_unreadable: unreadable };
 }
 
 /**
@@ -283,6 +311,8 @@ export function conflictOf(error: unknown): OperationError | null {
 export interface NewApiKey {
 	label: string;
 	scopes: readonly Scope[];
+	/** The resource limits of the key. Leave it out for a key without limits. */
+	limits?: KeyLimits | null;
 	created_by: string | null;
 }
 
@@ -401,6 +431,8 @@ export async function createPrincipal(
 			principal_id: id,
 			label: key.label,
 			scopes: [...key.scopes],
+			limits: null,
+			limits_unreadable: false,
 			created_at: now,
 			last_used_at: null,
 			revoked_at: null,
@@ -670,12 +702,22 @@ export async function createApiKey(
 ): Promise<{ key: ApiKeyRecord; secret: string }> {
 	const now = new Date().toISOString();
 	const id = newId("key");
-	const secret = `${API_KEY_PREFIX}${randomToken(32)}`;
+	const limits = key.limits ?? null;
+	const secret = `${limits === null ? API_KEY_PREFIX : LIMITED_KEY_PREFIX}${randomToken(32)}`;
 	await db
 		.prepare(
-			"INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, limits, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		)
-		.bind(id, principalId, await sha256Hex(secret), key.label, JSON.stringify(key.scopes), key.created_by, now)
+		.bind(
+			id,
+			principalId,
+			await sha256Hex(secret),
+			key.label,
+			JSON.stringify(key.scopes),
+			limits === null ? null : JSON.stringify(limits),
+			key.created_by,
+			now,
+		)
 		.run();
 	return {
 		key: {
@@ -683,6 +725,8 @@ export async function createApiKey(
 			principal_id: principalId,
 			label: key.label,
 			scopes: [...key.scopes],
+			limits,
+			limits_unreadable: false,
 			created_at: now,
 			last_used_at: null,
 			revoked_at: null,
@@ -717,14 +761,24 @@ export async function findApiKey(
 	db: D1Database,
 	secret: string,
 ): Promise<{ key: ApiKeyRecord; principal: PrincipalRecord } | null> {
-	if (!secret.startsWith(API_KEY_PREFIX)) return null;
+	const limited = secret.startsWith(LIMITED_KEY_PREFIX);
+	if (!limited && !secret.startsWith(API_KEY_PREFIX)) return null;
 	const row = await db
 		.prepare(`${API_KEY_SELECT} WHERE key_hash = ? AND revoked_at IS NULL`)
 		.bind(await sha256Hex(secret))
 		.first<ApiKeyRow>();
 	if (!row) return null;
+	const key = toApiKey(row);
+	// A key never works without its limits. The prefix and the stored limits must also agree, so a row
+	// that lost its limits does not make an `sdl_` secret a key without limits.
+	if (key.limits_unreadable || limited !== (key.limits !== null)) {
+		log("error", "an API key has limits that do not match its secret, or that this version cannot read", {
+			keyId: key.id,
+		});
+		return null;
+	}
 	const principal = await getPrincipal(db, row.principal_id);
-	return principal ? { key: toApiKey(row), principal } : null;
+	return principal ? { key, principal } : null;
 }
 
 /** Records the use of a key, at most once an hour, so a busy agent does not write on each call. */

@@ -4,6 +4,7 @@ import { unauthenticatedResponse } from "../api/index.ts";
 import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { credentialRef } from "./access.ts";
 import { type AuthContext, authenticate, isSameOrigin } from "./auth.ts";
+import { refuseLimited } from "./limits.ts";
 import { EVENTS_SOCKET_HEADER, type EventsSocketOpen } from "./principal.ts";
 
 type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
@@ -24,6 +25,8 @@ export async function openEventsSocket(
 	caller: AuthContext,
 	options: { feed: boolean },
 ): Promise<Response> {
+	// The socket sends the state of each room of the principal. A Chat limit names only some rooms.
+	refuseLimited(caller, "chat", "The events socket");
 	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
 	const response = await principal.fetch("https://principal.internal/events", {

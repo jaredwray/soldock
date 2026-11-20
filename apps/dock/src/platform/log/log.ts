@@ -37,6 +37,8 @@ export function audit(fields: {
 	allowlistSize?: number;
 	/** The number of external recipients of an agent send. The addresses stay out of the log. */
 	externalRecipients?: number;
+	/** The products that a new API key has a resource limit for. The entries stay out of the log. */
+	limits?: string[];
 }): void {
 	log("info", "audit", { audit: true, ...fields });
 }

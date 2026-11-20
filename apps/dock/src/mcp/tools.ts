@@ -1,6 +1,7 @@
 // MCP tools: one tool for each operation of the registry.
 import {
 	holdsOperationScopes,
+	limitRefusal,
 	type Operation,
 	type OperationName,
 	operationList,
@@ -58,9 +59,16 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 	]),
 );
 
-/** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
+/**
+ * A tool is listed only when this credential can call it, so an agent never sees tools that would refuse
+ * it. A key with a resource limit does not see the tools that do not apply its limit.
+ */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
-	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
+	return (
+		operation.callers.includes(caller.kind) &&
+		holdsOperationScopes(operation, caller.scopes) &&
+		limitRefusal(operation.name, caller.limits) === null
+	);
 }
 
 /** The tools that this credential can call, in the order of the registry. */

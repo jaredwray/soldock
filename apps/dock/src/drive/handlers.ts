@@ -6,7 +6,7 @@ import {
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
-import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import { type CallContext, driveLimitNames, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
 import {
 	base64ToBytes,
 	bytesToBase64,
@@ -86,6 +86,8 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
+	// A pointer into a drive that the Drive limit of the key does not name gives no item.
+	for (const spaceId of [...bySpace.keys()]) if (!driveLimitNames(call.caller, spaceId)) bySpace.delete(spaceId);
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
@@ -694,13 +696,17 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
 		return {
-			shared_drives: page.map((row) => ({
-				id: row.id,
-				name: row.name,
-				role: row.role,
-				member_count: row.member_count,
-				created_at: new Date(row.created_at).toISOString(),
-			})),
+			// A key with a Drive limit sees only the shared drives that the limit names. So a page can have
+			// fewer drives than its limit, and the cursor still gives the next page.
+			shared_drives: page
+				.filter((row) => driveLimitNames(call.caller, row.id))
+				.map((row) => ({
+					id: row.id,
+					name: row.name,
+					role: row.role,
+					member_count: row.member_count,
+					created_at: new Date(row.created_at).toISOString(),
+				})),
 			next_cursor: rows.length > limit && last ? encodeDriveCursor(last.name_key, last.id) : null,
 		};
 	},

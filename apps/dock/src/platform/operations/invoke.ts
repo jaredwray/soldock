@@ -1,5 +1,7 @@
 import {
 	holdsOperationScopes,
+	type KeyLimits,
+	limitRefusal,
 	type Operation,
 	type OperationName,
 	type Operations,
@@ -15,6 +17,8 @@ export interface Caller {
 	kind: PrincipalKind;
 	scopes: ReadonlySet<string>;
 	credential: string;
+	/** The resource limits of the credential, or null. Only an API key can have limits. */
+	limits: KeyLimits | null;
 }
 
 /** One handler for each operation. `C` is the call context that the composition root builds. */
@@ -26,7 +30,7 @@ export type HandlerMap<C> = {
 export type AnyHandler<C> = (call: C, input: never) => Promise<unknown>;
 
 /**
- * Runs one operation for REST and MCP alike: the caller kind and scope checks, input validation,
+ * Runs one operation for REST and MCP alike: the caller kind, scope and limit checks, input validation,
  * the handler, and output validation. Output validation also drops fields that the contract does
  * not declare, so a handler cannot leak them. A refused change, and a refused call of an operation
  * with `auditDenied`, is audited here. Handlers audit the changes that they make.
@@ -88,6 +92,9 @@ async function run<C extends { caller: Caller }>(
 		const scopeText = missing.length > 0 ? needed.join(", ") : `one of ${needed.join(", ")}`;
 		throw new OperationError("forbidden", `The credential does not have the scope ${scopeText}.`);
 	}
+	// A key with a limit for a product calls only the operations that apply that limit.
+	const limited = limitRefusal(operation.name, call.caller.limits);
+	if (limited !== null) throw new OperationError("forbidden", limited);
 	if (isTooDeep(rawInput)) {
 		throw new OperationError("invalid", `The input has more than ${MAX_INPUT_DEPTH} levels of objects and lists.`);
 	}

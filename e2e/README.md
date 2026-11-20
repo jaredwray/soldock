@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the webhook check boxes, the reload after a deploy and the images of a doc have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the webhook check boxes, the reload after a deploy, the images of a doc and the resource limits of an API key have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -42,6 +42,7 @@ pnpm e2e
 | [`tests/webhooks.spec.ts`](tests/webhooks.spec.ts) | A new webhook with its events from check boxes. **Edit** shows the saved events, and a save adds and removes only the difference. The menu of a second target, a shared drive. A delete. A save that fails in part: the problem shows in the secret dialog after **Add webhook** and in the dialog after **Edit**, and a second save sends only the event that failed. A sponsor sends the events of an agent to a webhook. The chat events of an agent start with only the messages for the agent, and a different choice in the **Messages** menu replaces the saved subscription. An admin can clear an event of that agent, but cannot set one or change the menu |
 | [`tests/docsImages.spec.ts`](tests/docsImages.spec.ts) | A dropped image file shows, goes into the doc and stays after a reload. The image toolbar: the layout, the side, the size, the alt text, the caption, Undo and **Remove image**. A corner changes the size. The crop dialog with the keyboard. A pasted picture, and a picture in pasted HTML. A picture with a web address goes through the server, and a failure removes it. **Insert image** from this computer and from Drive. A file that is not an image. A viewer. A copy of an image from one doc to a different doc. The doc is not saved while an image uploads |
 | [`tests/newVersion.spec.ts`](tests/newVersion.spec.ts) | A page chunk that a deploy removed: the page reloads one time and shows Drive of the new version. A person who goes back to Mail before the version check ends stays on Mail, and the reload waits until Drive shows again. A page chunk that does not load in the current version: the page asks for a reload, and does not reload by itself |
+| [`tests/keyLimits.spec.ts`](tests/keyLimits.spec.ts) | A key from Settings with a Chat limit and a Mail search: the form turns `account.keys` off, the dialog and the list show the limits, the secret starts with `sdl_`, `account.whoami` has the limits, and the key reads the room of its limit and no other room |
 
 The first flows to cover, because they are tested by hand only:
 

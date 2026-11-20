@@ -7,6 +7,7 @@ import domainMigration from "../migrations/0003_mail_domains.sql?raw";
 import passwordMigration from "../migrations/0004_password_sign_in.sql?raw";
 import teamMailboxMigration from "../migrations/0005_team_mailboxes.sql?raw";
 import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
+import keyLimitsMigration from "../migrations/0017_api_key_limits.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -827,6 +828,8 @@ describe("directory upgrade", () => {
 		await run(passwordMigration.split("--> statement-breakpoint"));
 		await run(teamMailboxMigration.split("--> statement-breakpoint"));
 		await run(lifecycleMigration.split("--> statement-breakpoint"));
+		// The Worker reads the limits of a key, so the directory also gets 0017.
+		await run(keyLimitsMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({

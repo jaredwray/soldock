@@ -1,6 +1,6 @@
 import type { ChatRoom, ChatThreadFollow, OperationName } from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
-import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
+import { type CallContext, getPrincipals, isAdmin, roomAllowed, roomLimit } from "../identity/index.ts";
 import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
@@ -31,8 +31,14 @@ function actorOf(call: CallContext): ActorRecord {
 	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
 }
 
-/** The object of a room, with the caller for it. The object decides what the caller can do. */
+const NO_ROOM = "No room has that id, or you have no access to it.";
+
+/**
+ * The object of a room, with the caller for it. The object decides what the caller can do. An API key
+ * with a Chat limit opens only the rooms of the limit: each other room does not exist for it.
+ */
 function openRoom(call: CallContext, roomId: string): { room: ReturnType<typeof roomStub>; ctx: RoomCall } {
+	if (!roomAllowed(call.caller, roomId)) throw new OperationError("not_found", NO_ROOM);
 	return { room: roomStub(call.env, roomId), ctx: { roomId, actor: actorOf(call) } };
 }
 
@@ -134,6 +140,13 @@ async function idempotencyOf(
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	async "chat.list_rooms"(call, input) {
+		const limit = roomLimit(call.caller);
+		if (limit !== null && input.view === "public") {
+			throw new OperationError(
+				"forbidden",
+				"This key has a chat limit. It lists only the rooms of the limit: use the joined view.",
+			);
+		}
 		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
@@ -150,7 +163,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			);
 		}
 		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
-		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
+		// A key with a Chat limit sees only the rooms of the limit. So a page can have fewer rooms than its
+		// limit, and the cursor still gives the next page.
+		const rooms = limit === null ? shown.rooms : shown.rooms.filter((room) => limit.has(room.id));
+		return { rooms: rooms.map(toRoom), next_cursor: shown.nextCursor };
 	},
 
 	async "chat.list_threads"(call, input) {

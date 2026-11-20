@@ -16,6 +16,16 @@ export {
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export { identityHandlers } from "./handlers.ts";
+export {
+	deniedRecipients,
+	driveLimitNames,
+	driveLimitOf,
+	mailboxAllowed,
+	mailQueryLimit,
+	refuseLimited,
+	roomAllowed,
+	roomLimit,
+} from "./limits.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
 export {

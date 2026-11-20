@@ -24,6 +24,7 @@ export function toApiKeyOutput(record: ApiKeyRecord): ApiKey {
 		principal_id: record.principal_id,
 		label: record.label,
 		scopes: record.scopes,
+		limits: record.limits,
 		created_at: record.created_at,
 		last_used_at: record.last_used_at,
 		revoked: record.revoked_at !== null,

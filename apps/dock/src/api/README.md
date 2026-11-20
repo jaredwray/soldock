@@ -21,8 +21,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 3. A change (not GET) with the session cookie must have an `Origin` header equal to the origin.
 4. The input is the JSON body (or the query string for GET), plus the path parameters. The
    `Idempotency-Key` header fills `idempotency_key` when the operation has that field.
-5. The shared invoker (`platform`) checks the caller kind and the scopes, validates the input,
-   runs the handler and validates the output.
+5. The shared invoker (`platform`) checks the caller kind, the scopes and the resource limits of
+   an API key, validates the input, runs the handler and validates the output. A key with a limit
+   for a product calls only the operations that apply the limit
+   ([`identity`](../identity/README.md#resource-limits-of-an-api-key)).
 6. Errors are `application/problem+json` (RFC 9457) with the `code` from the error catalogue.
    A missing or bad credential gets `401` with `WWW-Authenticate: Bearer`.
 

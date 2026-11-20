@@ -1,10 +1,12 @@
-import { type ApiKey, type CreatedApiKey, SCOPES, type Scope } from "@asterra/contracts";
+import { type ApiKey, type CreatedApiKey, SCOPES, type Scope, UNLIMITED_KEY_SCOPES } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
+import { KeyLimitFields } from "./KeyLimitFields.tsx";
+import { draftIsLimited, EMPTY_LIMIT_DRAFT, type LimitDraft, limitSummary, limitsFromDraft } from "./keyLimits.ts";
 import { SecretDialog } from "./SecretDialog.tsx";
 
 /**
@@ -103,6 +105,12 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 												{key.revoked && <span className="status status-failed">Revoked</span>}
 											</div>
 											<div className="row-note cell-scopes">{key.scopes.join(", ")}</div>
+											{key.limits &&
+												limitSummary(key.limits).map((line) => (
+													<div key={line.product} className="row-note">
+														Limit for {line.product}: {line.text}
+													</div>
+												))}
 										</td>
 										<td className="cell-date col-optional" title={fullDate(key.created_at)}>
 											{shortDate(key.created_at)}
@@ -130,6 +138,7 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 				)}
 				<CreateKeyForm
 					principalId={principalId}
+					ownerId={principalId ?? whoami.principal.id}
 					allowedScopes={offeredScopes}
 					narrowed={offeredScopes.length < allowedScopes.length}
 					onCreated={(key) => {
@@ -162,11 +171,14 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 
 function CreateKeyForm({
 	principalId,
+	ownerId,
 	allowedScopes,
 	narrowed,
 	onCreated,
 }: {
 	principalId: string | undefined;
+	/** The principal that the key is for. */
+	ownerId: string;
 	allowedScopes: readonly Scope[];
 	/** True when this session holds fewer scopes than the key owner can have. */
 	narrowed: boolean;
@@ -176,9 +188,14 @@ function CreateKeyForm({
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(
 		() => new Set(allowedScopes.filter((scope) => !PRIVILEGED.includes(scope))),
 	);
+	const [limitDraft, setLimitDraft] = useState<LimitDraft>(EMPTY_LIMIT_DRAFT);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const labelId = useId();
+	// A key with a limit cannot hold the scopes that can make a credential without limits.
+	const limited = draftIsLimited(limitDraft);
+	const blocked = (scope: Scope) => limited && UNLIMITED_KEY_SCOPES.includes(scope);
+	const chosen = allowedScopes.filter((scope) => scopes.has(scope) && !blocked(scope));
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -186,8 +203,13 @@ function CreateKeyForm({
 			setError("Enter a label for the key.");
 			return;
 		}
-		if (scopes.size === 0) {
+		if (chosen.length === 0) {
 			setError("Select at least one scope.");
+			return;
+		}
+		const limits = limitsFromDraft(limitDraft, ownerId);
+		if ("error" in limits) {
+			setError(limits.error);
 			return;
 		}
 		setBusy(true);
@@ -195,10 +217,12 @@ function CreateKeyForm({
 		try {
 			const result = await api.call("account.create_api_key", {
 				label: label.trim(),
-				scopes: allowedScopes.filter((scope) => scopes.has(scope)),
+				scopes: chosen,
+				...(limits.limits ? { limits: limits.limits } : {}),
 				...(principalId ? { principal_id: principalId } : {}),
 			});
 			setLabel("");
+			setLimitDraft(EMPTY_LIMIT_DRAFT);
 			onCreated(result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -244,9 +268,9 @@ function CreateKeyForm({
 						<input
 							type="checkbox"
 							className="checkbox"
-							checked={scopes.has(scope)}
+							checked={scopes.has(scope) && !blocked(scope)}
 							onChange={() => toggle(scope)}
-							disabled={busy}
+							disabled={busy || blocked(scope)}
 						/>
 						<span>
 							<code>{scope}</code>
@@ -255,6 +279,13 @@ function CreateKeyForm({
 					</label>
 				))}
 			</fieldset>
+			<KeyLimitFields
+				draft={limitDraft}
+				onChange={setLimitDraft}
+				ownerId={ownerId}
+				own={principalId === undefined}
+				disabled={busy}
+			/>
 			{error && (
 				<p className="form-error" role="alert">
 					{error}

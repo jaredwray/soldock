@@ -77,7 +77,15 @@ export async function listResources(
 	for (const resource of resourceList) {
 		if (!canRead(call.caller, resource)) continue;
 		const operation = operations[resource.list.operation];
-		const output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
+		let output: unknown;
+		try {
+			output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
+		} catch (error) {
+			// A list that refuses this credential, for example for a resource limit of an API key, gives no
+			// resource of its kind. The other kinds stay in the list.
+			if (error instanceof OperationError && error.code === "forbidden") continue;
+			throw error;
+		}
 		for (const item of resource.list.items(output as never)) {
 			listed.push({
 				uri: expandTemplate(resource.uriTemplate, item.vars),

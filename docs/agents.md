@@ -87,6 +87,48 @@ Use an API key for a client that cannot use OAuth.
    claude mcp add --transport http asterra https://<dock-host>/mcp --header "Authorization: Bearer sdk_..."
    ```
 
+### A key for some resources only
+
+A key can have **resource limits**. Scopes tell what the key can do. Limits tell where. Use a key
+with limits to give a script or an agent one folder, one kind of mail, or one room.
+
+| Limit | The key works only |
+| --- | --- |
+| `drive.items` | In these drives, folders (with all that they hold) and single documents |
+| `mail.mailbox_ids` | In these mailboxes |
+| `mail.query` | On the mail that this search finds, such as `label:invoices` |
+| `mail.recipients` | With mail to these addresses and domains |
+| `chat.room_ids` | In these rooms and direct messages |
+
+- In the web app, open **Settings** (or the agent in **Admin › Members**), and select the products
+  under **Resource limits** when you create the key.
+- With the API, set `limits` in `account.create_api_key`:
+
+  ```sh
+  curl -X POST https://<dock-host>/api/v1/account/api-keys \
+    -H "authorization: Bearer <your API key>" -H "content-type: application/json" \
+    -d '{
+      "principal_id": "<agent id>",
+      "label": "Invoice reader",
+      "scopes": ["account.read", "mail.read", "mail.send", "drive.read", "drive.write"],
+      "limits": {
+        "mail": { "query": "label:invoices", "recipients": ["billing@vendor.example"] },
+        "drive": { "items": [{ "space_id": "<agent id>", "item_id": "<folder id>" }] }
+      }
+    }'
+  ```
+
+- Each product has its own limit. A product without a limit follows the scopes only.
+- The secret of a key with limits starts with `sdl_`. `account.whoami` shows the limits, so an
+  agent can read where it works. `drive.list_items` without `parent_id` lists the folders and
+  documents of the limit.
+- A key with limits cannot hold `account.keys` or `directory.write`.
+- A key with a limit for a product cannot call the operations of that product that do not apply
+  the limit, for example the webhook subscriptions, the search of a whole drive, or a new room.
+  MCP does not list their tools.
+- The limits of a key do not change. To change them, create a new key and revoke the old key.
+- An OAuth connection has no limits yet.
+
 An agent key or an OAuth connection can hold only `account.read`, `directory.read`, `mail.read`,
 `mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write` and `chat.webhooks`.
 An agent can never manage keys or connections, create principals or change its own policy.
@@ -94,7 +136,7 @@ An agent can never manage keys or connections, create principals or change its o
 ## The MCP endpoint
 
 - URL: `https://<dock-host>/mcp` (Streamable HTTP, no sessions)
-- Header: `Authorization: Bearer <token>`, with an OAuth access token (`sdo_…`) or an API key (`sdk_…`)
+- Header: `Authorization: Bearer <token>`, with an OAuth access token (`sdo_…`) or an API key (`sdk_…`, or `sdl_…` for a key with limits)
 - Protocol versions: `2026-07-28`, and `2025-11-25`, `2025-06-18` and `2025-03-26` with an
   `initialize` handshake. Only `2026-07-28` has subscriptions.
 

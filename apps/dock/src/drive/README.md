@@ -16,6 +16,39 @@
 | **Transfers** | `PUT /blob/drive/{space_id}/uploads/{upload_id}/parts/{part_number}` (the raw bytes of `drive.upload_part`) and `GET /dl/drive/{space_id}/{item_id}` (the stream of `drive.download_file`). See [Uploads in parts](#uploads-in-parts) and [Downloads](#downloads). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
+### The limit of an API key
+
+An API key can have a Drive limit ([`identity`](../identity/README.md#resource-limits-of-an-api-key)):
+a list of drives, folders and documents. The key then works only on those.
+
+- `spaceCall` (`access.ts`) makes the caller of each call to a `DriveSpaceDO`. It adds `limit`:
+  the items of the limit in that drive. A whole drive in the limit gets no `limit`. A drive that
+  the limit does not name gets an empty `limit`, which allows no item.
+- The object applies the limit in the same step as the roles. `access` gives an item only when it
+  is an item of the limit or under one. Each other item is `not_found`. The key sees no folder
+  above the highest item of the limit: no path, and no `parent_id`.
+- An action on the drive as a whole (`gate`) is `forbidden` for a call with a limit: the search,
+  the recent view, the trash view, `drive.get_about`, `drive.empty_trash`, a new item at the root,
+  a move to a different drive, and the name and the members of a shared drive. A move, the trash, a
+  restore and a delete name their items, and the limit must allow each one.
+- `drive.list_items` at the root lists the items of the limit in that drive, in one page. So a key
+  finds what it can use. `account.whoami` shows the limit with the drive of each entry.
+- The limit follows the folder. An item that somebody moves into the folder joins the limit, and an
+  item that leaves the folder leaves it.
+- Docs and Sheets check the item in the drive first, so the limit applies to them.
+- A file for a message of Chat (`fileForRoom`) must be in the limit. The folder of a room
+  (`chatFolder`) is at the root of the drive, so a key with a limit in that drive gets `forbidden`.
+- An upload in parts that a different credential of the principal started outside the limit is
+  `not_found`.
+- The stars and the Shared with me list are pointers in the own drive of the principal. A key with
+  a limit reads them, and each pointer gives an item only when the limit allows that item.
+- `drive.list_shared_drives` lists only the shared drives that the limit names. A page can have
+  fewer drives than its limit.
+- These operations are refused for each key with a Drive limit: `drive.create_shared_drive`,
+  `drive.update_shared_drive`, the member operations, `drive.delete_shared_drive`,
+  `drive.move_to_drive` and the webhook subscriptions. An event of a drive has items that the limit
+  does not allow.
+
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
 ## What exists

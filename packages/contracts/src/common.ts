@@ -19,6 +19,17 @@ export const EmailAddress = z
 		"must be one email address, such as ada@example.com",
 	);
 
+/** A domain (`example.com`) or one address (`ada@example.com`). */
+export const AllowlistEntry = z
+	.string()
+	.trim()
+	.toLowerCase()
+	.max(254)
+	.regex(
+		/^(?:[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/,
+		"must be a domain such as example.com or an address such as ada@example.com",
+	);
+
 /** A prefixed, time-sortable id such as `thr_01JD…`. */
 export function prefixedId(prefix: string) {
 	return z

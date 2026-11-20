@@ -61,7 +61,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   use [MCP Events](#events), or get a POST for new mail from a
   [webhook](../mail/README.md#webhooks): `mail_create_webhook_subscription` is a tool of each
   protocol era.
-- Authentication: a bearer OAuth access token (`sdo_`) or API key (`sdk_`) only. The session cookie
+- Authentication: a bearer OAuth access token (`sdo_`) or API key (`sdk_`, or `sdl_` for a key with limits) only. The session cookie
   is never accepted, so a web page cannot drive MCP with a person's session. A request with a
   different `Origin` gets `403`.
 - A request without a valid token gets `401` with
@@ -81,6 +81,10 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   to `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`.
+- An API key with a resource limit does not get the tools of that product that do not apply the
+  limit ([`identity`](../identity/README.md#resource-limits-of-an-api-key)). `resources/list`
+  leaves out a resource kind whose list operation refuses the key, and `events/list` has no event of
+  a limited product.
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). They also tell how to get the scope:
   - An OAuth connection: the sponsor, an owner or an admin opens the agent in Admin › Members

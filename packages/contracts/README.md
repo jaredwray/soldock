@@ -22,6 +22,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
+| `src/limits.ts` | The resource limits of an API key: `KeyLimits` (drives, folders and documents; mailboxes, a search query and recipients; rooms), `KEY_LIMITS`, `UNLIMITED_KEY_SCOPES`, and `LIMIT_AWARE_OPERATIONS` with `limitRefusal()`, which tell the operations that a key with a limit can call |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
 | `src/setup.ts` | The schemas of setup (`/auth/setup`), including the first `mail_domain`. Token verification (`POST /auth/setup/verify`) returns `SetupVerifyResult`, the directory state. Setup creates a credential, so it is not an operation |
 | `src/signin.ts` | The schemas and limits of sign-in with a password and an optional TOTP code (`/auth/session`): `Password`, `TotpCode`, `SignInInput`, `SignInResult`. Sign-in creates a credential, so it is not an operation |

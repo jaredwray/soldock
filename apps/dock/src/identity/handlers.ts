@@ -5,6 +5,7 @@ import {
 	mentionHandle,
 	SIGN_IN_LOCK_MINUTES,
 	TEAM_MAILBOX_LIMITS,
+	UNLIMITED_KEY_SCOPES,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
@@ -184,6 +185,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes: [...call.caller.scopes],
 			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
+			limits: call.caller.limits,
 			sign_in:
 				call.caller.kind === "human"
 					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }
@@ -444,12 +446,31 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "account.create_api_key"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		const scopes = grantableScopes(call.caller, target, input.scopes);
+		const limits = input.limits ?? null;
+		if (limits !== null) {
+			// These scopes can make a credential without limits, so a key with limits never holds them.
+			const refused = scopes.filter((scope) => UNLIMITED_KEY_SCOPES.includes(scope));
+			if (refused.length > 0) {
+				throw new OperationError("invalid", `A key with limits cannot hold ${refused.join(", ")}.`);
+			}
+		}
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
 			label: input.label,
 			scopes,
+			limits,
 			created_by: call.caller.principal.id,
 		});
-		auditOk(call, "account.create_api_key", created.key.id);
+		audit({
+			op: "account.create_api_key",
+			actor: call.caller.principal.id,
+			actorKind: call.caller.kind,
+			credential: call.caller.credential,
+			target: created.key.id,
+			// The products that the key has a limit for. The entries stay out of the log.
+			limits: limits === null ? [] : Object.keys(limits),
+			result: "ok",
+			requestId: call.requestId,
+		});
 		return { api_key: { ...toApiKeyOutput(created.key), secret: created.secret } };
 	},
 

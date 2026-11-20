@@ -3,6 +3,10 @@ import { z } from "zod";
 import {
 	AGENT_SCOPES,
 	expandTemplate,
+	LIMIT_AWARE_OPERATIONS,
+	LIMIT_PRODUCTS,
+	limitProductOf,
+	limitRefusal,
 	matchTemplate,
 	operationList,
 	operations,
@@ -81,6 +85,35 @@ describe("the operation registry", () => {
 
 	it("marks an operation read-only only when it is a GET, and a GET only when it is read-only", () => {
 		for (const op of operationList) expect(op.annotations.readOnly, op.name).toBe(op.http.method === "GET");
+	});
+});
+
+describe("the resource limits of an API key", () => {
+	// A key with a limit calls only the operations that apply the limit. A new domain without a product
+	// here would be refused for each such key, so each domain must have a decision.
+	it("gives each operation domain a product or null, and lists only operations of a limited product", () => {
+		for (const op of operationList) expect(limitProductOf(op.name), op.name).not.toBeUndefined();
+		for (const name of LIMIT_AWARE_OPERATIONS) {
+			expect(operations, name).toHaveProperty([name]);
+			expect(limitProductOf(name), name).not.toBeNull();
+		}
+		expect(Object.keys(LIMIT_PRODUCTS).sort()).toEqual(
+			[...new Set(operationList.map((op) => op.name.split(".")[0]))].sort(),
+		);
+	});
+
+	it("refuses an operation that does not apply the limit of its product, and each unknown domain", () => {
+		const drive = { drive: { items: [{ space_id: "prn_01JC0000000000000000000000" }] } };
+		expect(limitRefusal("drive.create_webhook_subscription", null)).toBeNull();
+		expect(limitRefusal("drive.get_item", drive)).toBeNull();
+		expect(limitRefusal("docs.get", drive)).toBeNull();
+		expect(limitRefusal("drive.create_webhook_subscription", drive)).toMatch(/drive limit/);
+		// Mail has no limit in this key, and the account operations have no product.
+		expect(limitRefusal("mail.delete_label", drive)).toBeNull();
+		expect(limitRefusal("account.whoami", drive)).toBeNull();
+		// A domain that this list does not know is refused for a key with limits, and only for such a key.
+		expect(limitRefusal("slides.get", drive)).toMatch(/limits/);
+		expect(limitRefusal("slides.get", null)).toBeNull();
 	});
 });
 

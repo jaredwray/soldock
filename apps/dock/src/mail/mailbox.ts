@@ -7,7 +7,7 @@ import type { WebhookEventJob } from "../webhooks/index.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
-import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
+import { type CompiledQuery, compileQuery, foldLabelName, MAX_QUERY_PARAMS, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
 
 class SenderUnavailable extends Error {
@@ -348,6 +348,18 @@ function backoff(attempts: number): number {
 }
 
 type Row = Record<string, SqlStorageValue>;
+
+/**
+ * The search query of the Mail limit of an API key, with what a query needs to compile. A call with a
+ * filter reads and changes only the messages that the query finds. The other messages do not exist for it.
+ */
+export interface MailFilter {
+	query: string;
+	/** The addresses of the mailbox, for `from:me` and `to:me`. */
+	self: string[];
+	/** Epoch milliseconds, for `older_than:` and `newer_than:`. */
+	now: number;
+}
 
 const MESSAGE_META_COLUMNS = `seq, id, thread_id, origin, message_id_header, subject, from_name, from_addr,
 	to_json, cc_json, bcc_json, reply_to_json, sent_date, internal_date, snippet, body_truncated, attachments_json, auth_json,
@@ -877,7 +889,23 @@ export class MailboxDO extends DurableObject<Env> {
 		return next;
 	}
 
-	listLabels(): LabelRecord[] {
+	/**
+	 * The condition of a filter on `messages m`: `1` without a filter. A filter that does not compile
+	 * finds no message, never each message: a key never reads mail without its limit.
+	 */
+	private filterOf(filter: MailFilter | null | undefined): CompiledQuery {
+		if (!filter) return { where: "1", params: [] };
+		try {
+			return compileQuery(parseQuery(filter.query), { self: filter.self, now: filter.now });
+		} catch (error) {
+			if (error instanceof QueryError) return { where: "0", params: [] };
+			throw error;
+		}
+	}
+
+	/** The labels of the mailbox. With a filter, the counts are those of the messages that the filter finds. */
+	listLabels(filter?: MailFilter | null): LabelRecord[] {
+		const only = this.filterOf(filter);
 		// Spam and trash count their own threads. Every other label hides the messages in spam or trash.
 		const counts = new Map(
 			this.all<{ id: string; total: number; unread: number }>(
@@ -886,10 +914,11 @@ export class MailboxDO extends DurableObject<Env> {
 				FROM message_labels ml
 				JOIN messages m ON m.seq = ml.message_seq
 				LEFT JOIN message_labels u ON u.message_seq = m.seq AND u.label_id = 'UNREAD'
-				WHERE ml.label_id IN ('SPAM', 'TRASH') OR NOT EXISTS (
+				WHERE (ml.label_id IN ('SPAM', 'TRASH') OR NOT EXISTS (
 					SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id IN ('SPAM', 'TRASH')
-				)
+				)) AND (${only.where})
 				GROUP BY ml.label_id`,
+				...only.params,
 			).map((row) => [row.id, row]),
 		);
 		return this.all<{ id: string; name: string; type: string }>("SELECT id, name, type FROM labels")
@@ -913,6 +942,7 @@ export class MailboxDO extends DurableObject<Env> {
 		limit: number;
 		self: string[];
 		now: number;
+		filter?: MailFilter | null;
 	}): { threads: ThreadSummaryRecord[]; nextCursor: string | null } | Refusal {
 		let compiled: ReturnType<typeof compileQuery>;
 		try {
@@ -920,6 +950,11 @@ export class MailboxDO extends DurableObject<Env> {
 		} catch (error) {
 			if (error instanceof QueryError) return { error: { code: "invalid", message: error.message } };
 			throw error;
+		}
+		const only = this.filterOf(params.filter);
+		// A message must match the query of the call and the filter of the key.
+		if (compiled.params.length + only.params.length > MAX_QUERY_PARAMS) {
+			return { error: { code: "invalid", message: "The query has too many terms. Use fewer terms." } };
 		}
 		let after: [number, string] | null = null;
 		if (params.cursor) {
@@ -935,12 +970,13 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 		const rows = this.all<{ thread_id: string; last_date: number }>(
 			`SELECT m.thread_id AS thread_id, MAX(m.internal_date) AS last_date FROM messages m
-			WHERE ${compiled.where}
+			WHERE (${compiled.where}) AND (${only.where})
 			GROUP BY m.thread_id
 			HAVING ? = 0 OR last_date < ? OR (last_date = ? AND m.thread_id < ?)
 			ORDER BY last_date DESC, m.thread_id DESC
 			LIMIT ?`,
 			...compiled.params,
+			...only.params,
 			after ? 1 : 0,
 			after?.[0] ?? 0,
 			after?.[0] ?? 0,
@@ -950,12 +986,13 @@ export class MailboxDO extends DurableObject<Env> {
 		const page = rows.slice(0, params.limit);
 		const last = page.at(-1);
 		return {
-			threads: page.map((row) => this.summarize(row.thread_id, row.last_date)),
+			threads: page.map((row) => this.summarize(row.thread_id, row.last_date, only)),
 			nextCursor: rows.length > params.limit && last ? btoa(JSON.stringify([last.last_date, last.thread_id])) : null,
 		};
 	}
 
-	private summarize(threadId: string, lastDate: number): ThreadSummaryRecord {
+	/** The summary of a thread, from its messages that the filter finds. */
+	private summarize(threadId: string, lastDate: number, only: CompiledQuery): ThreadSummaryRecord {
 		const thread = this.one<{ subject: string }>("SELECT subject FROM threads WHERE id = ?", threadId);
 		const messages = this.all<{
 			from_name: string | null;
@@ -964,12 +1001,16 @@ export class MailboxDO extends DurableObject<Env> {
 			origin: string;
 			has_attachments: number;
 		}>(
-			"SELECT from_name, from_addr, snippet, origin, has_attachments FROM messages WHERE thread_id = ? ORDER BY internal_date, seq",
+			`SELECT m.from_name, m.from_addr, m.snippet, m.origin, m.has_attachments FROM messages m
+			WHERE m.thread_id = ? AND (${only.where}) ORDER BY m.internal_date, m.seq`,
 			threadId,
+			...only.params,
 		);
 		const labels = this.all<{ label_id: string }>(
-			"SELECT DISTINCT ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE m.thread_id = ?",
+			`SELECT DISTINCT ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq
+			WHERE m.thread_id = ? AND (${only.where})`,
 			threadId,
+			...only.params,
 		).map((row) => row.label_id);
 		const participants = new Map<string, MailAddress>();
 		for (const message of messages) {
@@ -995,14 +1036,21 @@ export class MailboxDO extends DurableObject<Env> {
 	 * `THREAD_BODY_CHARS`: an RPC result can be at most 32 MiB, so the bodies of older messages in a
 	 * very large thread are left out (`omitted`), and `getMessage` returns each one.
 	 */
-	getThread(threadId: string): { id: string; subject: string; messages: StoredMessage[] } | null {
+	getThread(
+		threadId: string,
+		filter?: MailFilter | null,
+	): { id: string; subject: string; messages: StoredMessage[] } | null {
+		const only = this.filterOf(filter);
 		const thread = this.one<{ id: string; subject: string }>("SELECT id, subject FROM threads WHERE id = ?", threadId);
 		if (!thread) return null;
 		const rows = this.all<MessageMetaRow>(
 			`SELECT ${MESSAGE_META_COLUMNS}, length(text_body) AS text_chars, length(html_body) AS html_chars
-			FROM messages WHERE thread_id = ? ORDER BY internal_date, seq`,
+			FROM messages m WHERE m.thread_id = ? AND (${only.where}) ORDER BY m.internal_date, m.seq`,
 			threadId,
+			...only.params,
 		);
+		// With a filter, a thread without a message that the filter finds does not exist for the call.
+		if (filter && rows.length === 0) return null;
 		const withBody = new Set<number>();
 		let budget = THREAD_BODY_CHARS;
 		for (const row of [...rows].reverse()) {
@@ -1029,10 +1077,12 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	/** One message with its full body, or null. */
-	getMessage(messageId: string): StoredMessage | null {
+	getMessage(messageId: string, filter?: MailFilter | null): StoredMessage | null {
+		const only = this.filterOf(filter);
 		const row = this.one<MessageMetaRow & { text_body: string | null; html_body: string | null }>(
-			`SELECT ${MESSAGE_META_COLUMNS}, text_body, html_body FROM messages WHERE id = ?`,
+			`SELECT ${MESSAGE_META_COLUMNS}, text_body, html_body FROM messages m WHERE m.id = ? AND (${only.where})`,
 			messageId,
+			...only.params,
 		);
 		if (!row) return null;
 		return this.toStored(row, row, this.labelsOf("m.seq = ?", row.seq), this.deliveryOf("m.seq = ?", row.seq));
@@ -1107,10 +1157,13 @@ export class MailboxDO extends DurableObject<Env> {
 	/** What a reply needs from the message that it answers. */
 	getReplyContext(
 		messageId: string,
+		filter?: MailFilter | null,
 	): { threadId: string; messageIdHeader: string | null; references: string[]; subject: string } | null {
+		const only = this.filterOf(filter);
 		const row = this.one<{ seq: number; thread_id: string; message_id_header: string | null; subject: string }>(
-			"SELECT seq, thread_id, message_id_header, subject FROM messages WHERE id = ?",
+			`SELECT m.seq, m.thread_id, m.message_id_header, m.subject FROM messages m WHERE m.id = ? AND (${only.where})`,
 			messageId,
+			...only.params,
 		);
 		if (!row) return null;
 		const references = this.all<{ ref: string }>(
@@ -1128,10 +1181,13 @@ export class MailboxDO extends DurableObject<Env> {
 	/** Where the raw message of an attachment is. */
 	getAttachmentSource(
 		messageId: string,
+		filter?: MailFilter | null,
 	): { rawKey: string; origin: StoredMessage["origin"]; attachments: StoredMessage["attachments"] } | null {
+		const only = this.filterOf(filter);
 		const row = this.one<{ raw_key: string; origin: string; attachments_json: string }>(
-			"SELECT raw_key, origin, attachments_json FROM messages WHERE id = ?",
+			`SELECT m.raw_key, m.origin, m.attachments_json FROM messages m WHERE m.id = ? AND (${only.where})`,
 			messageId,
+			...only.params,
 		);
 		if (!row) return null;
 		return {
@@ -1234,7 +1290,9 @@ export class MailboxDO extends DurableObject<Env> {
 		add: string[];
 		remove: string[];
 		dryRun: boolean;
+		filter?: MailFilter | null;
 	}): { threads_changed: number; messages_changed: number; dry_run: boolean } | Refusal {
+		const only = this.filterOf(params.filter);
 		for (const label of [...params.add, ...params.remove]) {
 			if (!this.one("SELECT 1 AS found FROM labels WHERE id = ?", label)) {
 				return { error: { code: "not_found", message: `No label has the id ${label}.` } };
@@ -1248,7 +1306,16 @@ export class MailboxDO extends DurableObject<Env> {
 				return { error: { code: "not_found", message: `No thread has the id ${threadId}.` } };
 			}
 			let changed = false;
-			for (const { seq } of this.all<{ seq: number }>("SELECT seq FROM messages WHERE thread_id = ?", threadId)) {
+			// With a filter, only the messages that the filter finds change.
+			const messages = this.all<{ seq: number }>(
+				`SELECT m.seq FROM messages m WHERE m.thread_id = ? AND (${only.where})`,
+				threadId,
+				...only.params,
+			);
+			if (params.filter && messages.length === 0) {
+				return { error: { code: "not_found", message: `No thread has the id ${threadId}.` } };
+			}
+			for (const { seq } of messages) {
 				const has = new Set(
 					this.all<{ label_id: string }>("SELECT label_id FROM message_labels WHERE message_seq = ?", seq).map(
 						(row) => row.label_id,

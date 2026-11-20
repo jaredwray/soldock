@@ -449,6 +449,42 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 - The events of a mailbox stay on after its last webhook goes. An event with no webhook costs one
   queue message. So a create and a delete at the same time cannot turn off the events of a new webhook.
 
+## The limit of an API key
+
+An API key can have a Mail limit ([`identity`](../identity/README.md#resource-limits-of-an-api-key)).
+It has one, two or three parts.
+
+- **`mailbox_ids`**: the key uses only these mailboxes. `openMailbox` refuses each other mailbox
+  with `forbidden`, also the own mailbox of the principal when the list does not name it.
+  `mail.list_mailboxes` lists only the mailboxes of the limit.
+- **`query`**: a search query in the syntax of `mail.list_threads`, such as `label:invoices` or
+  `from:billing@vendor.example`. The key reads and changes only the messages that the query finds.
+  - `openMailbox` gives the query to the handler as `filter`, and each read and change passes it to
+    the `MailboxDO`. The mailbox joins the condition of the filter to each statement with `AND`.
+    The query of a call has its own brackets, so an `OR` in it cannot open the filter.
+  - A message outside the filter does not exist for the key: `mail.get_message`,
+    `mail.get_attachment` and a reply to it get `not_found`. A thread shows only its messages that
+    the filter finds, and a thread without such a message is `not_found`. `mail.modify_threads`
+    changes only those messages.
+  - The filter excludes spam and trash unless it names them, as each search does.
+  - `mail.list_labels` gives each label name, with the counts of the messages that the filter finds.
+  - `"me"` in the filter is the address of the mailbox. `newer_than:` and `older_than:` count from
+    the time of each call.
+  - `account.create_api_key` refuses a query that does not compile, and a query with more than 40
+    bound values (`MAX_LIMIT_QUERY_PARAMS`): the filter and the query of a call share one statement.
+    A stored filter that does not compile finds no message.
+  - These operations give facts of the whole mailbox, so a key with a query gets `forbidden`:
+    `mail.get_profile` and `mail.suggest_recipients`. The `mail.inbox` resource gives such a key no
+    change feed: a signal tells when a message arrives, also a message outside the filter.
+- **`recipients`**: addresses and domains. `mail.send` refuses each other recipient in `to`, `cc`
+  and `bcc` with `forbidden`, before anything is stored. The limit applies also to a mailbox of
+  this deployment. The outbound policy of an agent still applies.
+- These operations are refused for each key with a Mail limit: `mail.delete_label` (it changes
+  messages outside a filter), `mail.get_settings`, `mail.update_settings` and the webhook
+  subscriptions. MCP Events gives such a key no mail event.
+- Known limit: a key with a query and `mail.send` can send a message that its filter does not find.
+  The key then cannot read that message.
+
 ## Safety
 
 - `origin` comes from the delivery path, never from headers: `external` (from the internet),
