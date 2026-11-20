@@ -45,10 +45,18 @@ export type Route =
 	| { page: "sheet"; spaceId: string; itemId: string }
 	/**
 	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
-	 * points to. `profileId` is the person or the agent whose profile shows in the place of a room.
-	 * `threads` is true for the Threads view: the threads that the person follows.
+	 * points to. `replySeq` is a reply in the thread of that message, for a link to a reply. `profileId`
+	 * is the person or the agent whose profile shows in the place of a room. `threads` is true for the
+	 * Threads view: the threads that the person follows.
 	 */
-	| { page: "chat"; roomId: string | null; seq: number | null; profileId?: string; threads?: true }
+	| {
+			page: "chat";
+			roomId: string | null;
+			seq: number | null;
+			replySeq?: number;
+			profileId?: string;
+			threads?: true;
+	  }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
@@ -118,9 +126,13 @@ export function parseRoute(location: string): Route {
 		}
 		if (!isRoomId(second)) return { page: "not-found" };
 		if (parts.length === 2) return { page: "chat", roomId: second, seq: null };
-		// A link to one message has the seq of the message after the room.
-		return parts.length === 3 && third !== undefined && MESSAGE_SEQ.test(third)
-			? { page: "chat", roomId: second, seq: Number(third) }
+		// A link to one message has the seq of the message after the room. A link to a reply has the seq of
+		// the first message of its thread, then the seq of the reply, which always comes after it.
+		if (third === undefined || !MESSAGE_SEQ.test(third)) return { page: "not-found" };
+		if (parts.length === 3) return { page: "chat", roomId: second, seq: Number(third) };
+		const fourth = parts[3];
+		return parts.length === 4 && fourth !== undefined && MESSAGE_SEQ.test(fourth) && Number(fourth) > Number(third)
+			? { page: "chat", roomId: second, seq: Number(third), replySeq: Number(fourth) }
 			: { page: "not-found" };
 	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
@@ -264,12 +276,17 @@ const MESSAGE_SEQ = /^[1-9]\d{0,14}$/;
 
 /**
  * The path of a room of Chat, or of the Chat page without an open room. With `seq`, the path is a link
- * to one message of the room.
+ * to one message of the room. With `replySeq` too, it is a link to a reply in the thread of that message.
  */
-export function chatPath(roomId: string | null = null, seq: number | null = null): string {
+export function chatPath(
+	roomId: string | null = null,
+	seq: number | null = null,
+	replySeq: number | null = null,
+): string {
 	if (!roomId) return CHAT_PATH;
 	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
-	return seq === null ? room : `${room}/${seq}`;
+	if (seq === null) return room;
+	return replySeq === null ? `${room}/${seq}` : `${room}/${seq}/${replySeq}`;
 }
 
 /** The path of the Threads view of Chat: the threads that the person follows. */

@@ -763,7 +763,8 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
-- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/people/<principal_id>`). A sidebar with the rooms
+- **Chat** (`/chat`, `/chat/<room_id>`, `/chat/<room_id>/<seq>`, `/chat/<room_id>/<seq>/<reply seq>`,
+  `/chat/people/<principal_id>`). A sidebar with the rooms
   and the direct messages of the person, and one room with its messages and a box for a new
   message, or one profile.
   - Chat has no search yet, so its pages show no search box.
@@ -862,8 +863,9 @@ MCP clients. The app has no UI-only path.
       - A refused change opens the edit box again with the new text and files. A refusal shows its reason under the
         first message. The edits of one message go one at a time, in order (`createCallLine`), so the
         room gets the newest edit last.
-      - A reply has no "Copy a link": no path opens a thread yet. The time of each message shows its day
-        too (`fullDates`), because the view has no line for each day.
+      - **Copy a link** of the first message gives the link of the room to that message. Of a reply, it
+        gives the link to the reply (see the links below). The time of each message shows its day too
+        (`fullDates`), because the view has no line for each day.
       - Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that
         dialog only. The list of emoji finds its space in the scroll area of the view too.
     - A reply takes files and shows files and link previews, as a message of the room does. The files
@@ -963,6 +965,13 @@ MCP clients. The app has no UI-only path.
     - A room that does not have the message shows its newest messages.
     - Each message that the room has, and that is not deleted, has the action **Copy a link**,
       which puts the link on the clipboard.
+    - **A link to a reply** (`/chat/<room_id>/<seq>/<reply seq>`): a reply is not in the room list, so
+      its link has the seq of the first message of its thread, then the seq of the reply.
+      - The room goes to the first message and marks it, as for a link to one message. Then the view of
+        the thread opens at the reply.
+      - The view reads older pages until it has the reply, at most 20 (`LINK_PAGES`: 1,000 replies).
+        Then it goes to the reply and marks it, and a new reply does not move the list to its end.
+      - A seq that is not a reply of the thread opens the thread and marks nothing.
     - The link has no access of its own. The server gives the messages only to a member, as for
       each other read.
   - **Reactions** (`Reactions.tsx`, `emoji.ts`). The reactions of a message show under its text:

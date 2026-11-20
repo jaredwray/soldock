@@ -24,6 +24,8 @@ export interface ChatAppProps {
 	roomId: string | null;
 	/** The seq of the message that the path links to, or null. */
 	messageSeq: number | null;
+	/** The seq of a reply in the thread of that message, for a link to a reply, or null. */
+	replySeq: number | null;
 	/** The person or the agent whose profile shows, or null. */
 	profileId: string | null;
 	/** True for the Threads view: the threads that the person follows. */
@@ -36,7 +38,7 @@ export interface ChatAppProps {
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
-export function ChatApp({ roomId, messageSeq, profileId, threads, navOpen, onCloseNav }: ChatAppProps) {
+export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navOpen, onCloseNav }: ChatAppProps) {
 	const rooms = useRooms();
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
@@ -112,6 +114,7 @@ export function ChatApp({ roomId, messageSeq, profileId, threads, navOpen, onClo
 						key={roomId}
 						roomId={roomId}
 						focusSeq={messageSeq}
+						focusReplySeq={replySeq}
 						listed={listed}
 						listReady={rooms.status === "ready"}
 						listTick={rooms.tick}
