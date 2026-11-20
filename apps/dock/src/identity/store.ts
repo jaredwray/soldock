@@ -451,8 +451,8 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-					password_hash, created_at, alias_first, alias_full, aliases_set)
-					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, 1 ${guard}${condition}`,
+					password_hash, created_at)
+					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ? ${guard}${condition}`,
 				)
 				.bind(
 					id,
@@ -463,10 +463,13 @@ export async function createPrincipal(
 					outboundMode,
 					principal.kind === "human" ? principal.password_hash : null,
 					now,
-					aliases.first,
-					aliases.full,
 					...(options.condition?.params ?? []),
 				),
+			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
+			// this update then changes nothing.
+			db
+				.prepare("UPDATE principals SET alias_first = ?, alias_full = ?, aliases_set = 1 WHERE id = ?")
+				.bind(aliases.first, aliases.full, id),
 			db
 				.prepare(
 					"INSERT INTO addresses (address, principal_id, is_primary, created_at) SELECT ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?)",

@@ -140,7 +140,8 @@ contract of the socket.
     the rules need, and it changes no answer.
   - The name aliases of a principal (`nameAliasParts` in the contracts: the first word, and the full
     name without spaces, in lowercase and without accents) are in `alias_first` and `alias_full`, with
-    an index each. A create and a rename write them in the same statement as the name. A row from
+    an index each. A rename writes them in the same statement as the name. A create writes them in the
+    same transaction, with a bound update after the insert, so the insert keeps its form. A row from
     before migration `0017` has `aliases_set = 0`: SQL cannot remove accents the way the contracts do.
     `mentionCandidates` reads these rows from their partial index (not from a list of ids), and writes
     the aliases of all of them, 500 in each statement. So the first read after the migration costs about
