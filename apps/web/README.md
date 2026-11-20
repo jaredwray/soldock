@@ -614,6 +614,21 @@ MCP clients. The app has no UI-only path.
     A click on a button does not take the focus from the text.
   - The link dialog accepts only `http`, `https` and `mailto` links. Pasted HTML keeps only what
     the schema has. Pasted plain text keeps its lines.
+  - **Pasted Markdown** gets its formats (`markdownPaste.ts`): headings, bold, italic,
+    strikethrough, code, links, lists, quotes, code blocks and rules. `markdownToDoc` of the
+    contracts reads the text, so a paste reads Markdown as `docs.update` does.
+    - The text is Markdown when it has one format or more. Text without a format is plain text,
+      and keeps each line and each empty line.
+    - The paste is two steps of Undo. The first Undo gives the text back as the clipboard had it,
+      for text that only looks like Markdown. The second Undo removes the paste.
+    - A paste with `Shift` (`Ctrl+Shift+V`, `⌘⇧V` on a Mac) keeps the text. A paste into a code
+      block keeps the text too.
+    - A clipboard with HTML uses the HTML, not Markdown. A copy from VS Code is the exception: it
+      has HTML with only the colors of the editor. When VS Code says that the text is Markdown
+      (`vscode-editor-data`), the text is read as Markdown.
+    - The lines of one paragraph join, as in Markdown. An image stays text: the id of an image
+      can be the image of a different doc, and an image with a web address is not imported yet.
+      HTML in the Markdown stays text.
   - The page saves 1.5 seconds after the last change, with one request at a time. Each save sends
     `base_revision`. The header shows the state of the save. The page also saves when the tab
     hides and when the page closes, and the browser asks before it closes a tab with changes
@@ -1581,7 +1596,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
-| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
+| [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
 | [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |

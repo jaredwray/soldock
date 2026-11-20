@@ -6,13 +6,14 @@ import {
 	type DocBlock,
 	type DocContent,
 	type DocInline,
+	docToMarkdown,
 	type GroupMention,
+	markdownToDoc,
 } from "@asterra/contracts";
-import { docToMarkdown, markdownToDoc } from "../docs/index.ts";
 import { OperationError } from "../platform/index.ts";
 
 // The body of a message, from each form that a call can send: text, Markdown or the JSON tree. The
-// Markdown reads and writes with the code of the `docs` module, so a message and a doc have the same
+// Markdown reads and writes with the code of the contracts, so a message and a doc have the same
 // Markdown. A chat body has fewer formats than a doc: see `fromDoc`.
 
 /** The content of a message as the room stores it: the body, and its plain text. */
