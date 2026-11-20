@@ -6,7 +6,7 @@ import { inputRules } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
 import type { Slice } from "prosemirror-model";
 import { type Command, EditorState } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
+import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
 import {
 	type ReactNode,
 	type Ref,
@@ -30,6 +30,7 @@ import {
 	isCodeBlockActive,
 	markdownRules,
 	rich,
+	textMentions,
 	toggleCodeBlock,
 	typedEmoji,
 	typedMention,
@@ -345,6 +346,24 @@ export function ChatComposer({
 			viewRef.current = null;
 		};
 	}, [config]);
+
+	// A mention that the person typed, and did not take from the list, shows as a mention too: the room
+	// makes a mention of it (`textMentions`). The directory loads after the page, so each new directory
+	// gives the view its decorations again.
+	useEffect(() => {
+		viewRef.current?.setProps({
+			decorations(state) {
+				const typedMentions = textMentions(state.doc, directory);
+				if (typedMentions.length === 0) return null;
+				return DecorationSet.create(
+					state.doc,
+					typedMentions.map(({ from, to }) =>
+						Decoration.inline(from, to, { class: "chat-mention chat-mention-typed" }),
+					),
+				);
+			},
+		});
+	}, [directory]);
 
 	// The editable element is not a React element, so the attributes of the list go on it here.
 	useEffect(() => {
