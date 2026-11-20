@@ -1160,6 +1160,19 @@ describe("the directory list", () => {
 				.call("directory.list_principals", { query: "carol", order: "match", cursor: "x" })
 				.catch((error) => error),
 		).toMatchObject({ status: 400 });
+		// Among equal matches, the order "match" sorts by the folded name, as the ranking of the @ list does: no
+		// group of the agents first, as in the order of the names.
+		const zzBot = await createActor(owner, {
+			kind: "agent",
+			display_name: "Zz Bot",
+			address: "zzbot@dock.test",
+			sponsor_id: ada.id,
+		});
+		const zzAnn = await person("Zz Ann", "zzann@dock.test");
+		const firstZz = async (order: "name" | "match") =>
+			(await owner.call("directory.list_principals", { query: "zz", limit: 1, order })).principals[0]?.id;
+		expect(await firstZz("name")).toBe(zzBot.id);
+		expect(await firstZz("match")).toBe(zzAnn.id);
 		// An agent gets the same search through MCP.
 		const viaTool = await callTool(bot.key, "directory_list_principals", { query: "elo", active_only: "true" });
 		expect((viaTool.structuredContent as { principals: { id: string }[] }).principals.map((p) => p.id)).toEqual([

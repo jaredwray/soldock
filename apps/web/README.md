@@ -1220,7 +1220,8 @@ MCP clients. The app has no UI-only path.
         that page with the rules above (`rankMentions`), with the handle from the server. So one ask
         reads a bounded page, also in a directory of thousands of principals. The server puts a match
         at the start of an address or of a word of the name first, so the page has the matches that
-        the ranking puts first, and no archived principal.
+        the ranking puts first, and no archived principal. Equal matches come in the order of their
+        folded names, on the server and in the list, so the page has the best of them.
       - The members of the room (at most 500) join that page from the directory of the page, with their
         handles (`typedMentionCandidates`). So a member always comes before a principal that is not a
         member with the same rank, also when the server has more matches than its page. When Chat no

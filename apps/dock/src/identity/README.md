@@ -134,7 +134,8 @@ contract of the socket.
       Worker of `0017` sets `aliases_set = 1` without this column.
     - `active_only: "true"` leaves out the archived principals.
     - `order: "match"` with a query puts first each principal whose address, or a word of the name,
-      starts with the query, then the order of the names. It has one page: a cursor is refused. The
+      starts with the query, then the folded name (with no group of the agents), as the ranking of the
+      Chat `@` list orders equal matches. It has one page: a cursor is refused. The
       Chat `@` list uses it, so its page of 100 has the best matches.
   - Each principal has `handle`: the handle of a mention in Chat (`mentionHandle` in
     `packages/contracts/src/mentions.ts`). It is the part of the address before the `@`, or the full

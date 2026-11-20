@@ -106,6 +106,11 @@ function matchRank(query: string, handle: string, person: MentionPerson): number
 	return name.includes(query) || address.includes(query) ? 1 : null;
 }
 
+/** The order of two texts by their characters (code units), the order of SQLite for text. */
+function compareText(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** One suggestion of the list: a principal, its handle, and true when it is a member of the room. */
 export interface MentionSuggestion<P extends MentionPerson = MentionPerson> {
 	person: P;
@@ -176,7 +181,9 @@ export function rankMentions<P extends MentionPerson>(
 		(a, b) =>
 			a.rank - b.rank ||
 			Number(b.member) - Number(a.member) ||
-			a.person.display_name.localeCompare(b.person.display_name),
+			// The folded name in the order of its characters, as the server orders a page for the list.
+			compareText(fold(a.person.display_name), fold(b.person.display_name)) ||
+			compareText(a.person.display_name, b.person.display_name),
 	);
 	return found.slice(0, MENTION_SUGGESTIONS).map(({ person, handle, member }) => ({
 		person,

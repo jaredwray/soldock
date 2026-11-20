@@ -352,7 +352,10 @@ export async function listPrincipalPage(
 				CASE WHEN ?8 = 1 AND (substr(a.address, 1, length(?1)) = ?1 OR substr(a.address, 1, length(?6)) = ?6
 					OR instr(' ' || replace(replace(replace(p.name_folded, '-', ' '), '.', ' '), char(39), ' '), ' ' || ?6) > 0)
 				THEN 0 ELSE 1 END,
-				p.kind, p.display_name, p.id
+				-- Then the order of the ranking of the Chat @ list: the folded name, with no group of the agents.
+				-- The order of the names keeps the agents first.
+				CASE WHEN ?8 = 1 THEN p.name_folded ELSE p.kind END,
+				p.display_name, p.id
 			LIMIT ?5`,
 		)
 		.bind(
