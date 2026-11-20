@@ -510,6 +510,20 @@ app uses.
   then call `chat_mark_thread_read`. Each room sends at most its 50 threads with the newest replies. In
   many rooms, your first call can return no threads with a `next_cursor`: call again with it.
   No MCP resource has the threads yet: the events socket (`chat.threads`) tells you when they change.
+- **Search.** `chat_search_messages` finds the messages and the replies of the rooms that you are a
+  member of. Set `room_id` to search one room. The query has words and filters:
+  - each word must be in the text. Use double quotes for a phrase (`"release plan"`), and `*` for the
+    start of a word (`deploy*`);
+  - `from:ada`, `from:me` or `from:` with a principal id for the author;
+  - `in:general`, `in:` with a room id, or `in:@ada` for a direct message, without `room_id`;
+  - `mentions:me`, `has:link`, `has:file` and `is:thread` (a reply, or a message with replies);
+  - `before:2026-10-31`, `after:2026-10-01` and `on:2026-10-15`, as days in UTC.
+
+  `sort` is `rank` (the best match first) or `time` (the newest first). Each result has the room, the
+  message as it is now, and `highlights`: the places of the found words in `message.text`. A reply has
+  `parent_seq` and `message.parent_id`: read its thread with `chat_list_replies`. Without `room_id`, a
+  new message shows about one second after its post, and a page can have fewer results than `limit`
+  with a `next_cursor`. A deleted message, and a message of a room that you left, are never a result.
 - **Edits.** `chat_edit_message` changes a message that you wrote. The room keeps the text from
   before each edit, and owners and admins of the organization can read it. So an edit does not
   remove words. To remove a message and its earlier versions, delete it.

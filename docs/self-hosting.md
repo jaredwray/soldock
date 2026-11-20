@@ -294,6 +294,13 @@ dead letter queue: a room sends a job again when no result came, and after 3 sen
 preview. The fetch of a preview asks DNS over HTTPS at `cloudflare-dns.com`, a service of Cloudflare, to
 check that each address of a host is public. It needs no secret.
 
+Search in Chat adds one Durable Object class, `ChatSearchDO` (binding `CHAT_SEARCH`, migration tag `v5`
+of `wrangler.jsonc`), which the next deploy creates. It needs no D1 migration, no other Cloudflare
+resource and no secret. One object of the class holds the search index of the organization. Each chat
+room applies its object migration at its next start, and then sends its messages to the index. So the
+search in all rooms finds the old messages of a room after the first search of one of its members, or
+after the next message in the room. A room with many old messages needs some minutes.
+
 Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A subscription from before
 this migration keeps the filter `all`, so it sends each message as before, also a subscription of MCP Events
 after a refresh. Only a new subscription for an agent without `filter` gets `addressed`: see

@@ -3,6 +3,7 @@ import {
 	ADMIN_SECTIONS,
 	adminPath,
 	chatPath,
+	chatSearchPath,
 	chatThreadsPath,
 	type DriveView,
 	drivePath,
@@ -199,6 +200,21 @@ describe("routes", () => {
 	it("parses the path of the Threads view, and no longer path", () => {
 		expect(parseRoute(chatThreadsPath())).toEqual({ page: "chat", roomId: null, seq: null, threads: true });
 		expect(parseRoute(`${chatThreadsPath()}/x`)).toEqual({ page: "not-found" });
+	});
+
+	// A search has a link: the path has the query, and the room of a search in one room.
+	it("round-trips the Search view of Chat, with a query and a room", () => {
+		const roomId = "rm_01JD0000000000000000000000";
+		const chat = { page: "chat", roomId: null, seq: null };
+		expect(chatSearchPath()).toBe("/chat/search");
+		expect(parseRoute(chatSearchPath())).toEqual({ ...chat, search: { query: "", roomId: null } });
+		const query = 'from:ada "release plan" a&b=c#d';
+		expect(parseRoute(chatSearchPath(query))).toEqual({ ...chat, search: { query, roomId: null } });
+		expect(parseRoute(chatSearchPath(query, roomId))).toEqual({ ...chat, search: { query, roomId } });
+		expect(parseRoute(chatSearchPath("", roomId))).toEqual({ ...chat, search: { query: "", roomId } });
+		// A room parameter that is no room id is not a room, and a longer path is no view.
+		expect(parseRoute("/chat/search?q=x&room=itm_1")).toEqual({ ...chat, search: { query: "x", roomId: null } });
+		expect(parseRoute("/chat/search/x")).toEqual({ page: "not-found" });
 	});
 
 	// A deep link and a reload of a section open the same section.

@@ -1,4 +1,4 @@
-import type { ChatAddressedState, ChatRoomEntry, ChatRoomState } from "../identity/index.ts";
+import type { ChatAddressedState, ChatRoomEntry, ChatRoomRef, ChatRoomState } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, log } from "../platform/index.ts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
 import type { ListInput, RoomPage } from "./room-index.ts";
@@ -135,6 +135,21 @@ export async function listJoinedRooms(
 	let nextCursor = listed.rooms.length > input.limit && last ? encodeCursor([last.activity_at, last.room_id]) : null;
 	if (nextCursor === null && reached !== null) nextCursor = encodeCursor([reached.activityAt, reached.roomId]);
 	return { rooms: shown.map(toRecord), nextCursor };
+}
+
+/**
+ * Each room that a principal is a member of, for a search, from its `PrincipalDO`. The first fill of the
+ * object runs here too, as for the joined list. While that fill is not complete (more than `SEED_MAX` rooms
+ * from before the object), the list has the rooms that the object has until now.
+ */
+export async function joinedRoomRefs(env: Env, principalId: string): Promise<ChatRoomRef[]> {
+	const principal = principalStub(env, principalId);
+	let found = await principal.chatRoomRefs();
+	if (!found.seeded) {
+		await seed(env, principalId);
+		found = await principal.chatRoomRefs();
+	}
+	return found.rooms;
 }
 
 /** A followed thread of a page, with the room as a record. */

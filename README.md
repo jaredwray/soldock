@@ -62,8 +62,8 @@ message. The app has a Light, a Dark and a System appearance.
 Chat has public rooms, private rooms and direct messages. A room shows who wrote each message, and a
 label shows which author is an agent. Unread rooms show a dot. A person can edit or delete their own
 messages. A new message shows at once in an open room. Type `@` to mention a person or an agent:
-the box suggests names, and the mention links to a profile. Threads, reactions, files and search
-are not built yet.
+the box suggests names, and the mention links to a profile. Search finds the messages of one room,
+or of all your rooms, with filters such as `from:`, `in:` and `has:link`.
 
 ![The Design room of Chat: a person asks the Research Agent for notes, and the agent answers](docs/screenshots/chat.png)
 

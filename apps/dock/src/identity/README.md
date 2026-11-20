@@ -38,6 +38,9 @@ to it, so a list of that state reads one object and not the directory.
 - `chat_rooms.threads_known` is 1 for a room that sent its threads. The first fill of the threads
   (`threadFill`, `fillChatThreads`) asks the other joined rooms one time, then records `chat_threads_filled`
   in `meta`.
+- `chatRoomRefs` returns each joined room with its kind, its name and the other member of a direct
+  message. `chat.search_messages` reads it: the search index of Chat searches these rooms only
+  ([`chat`](../chat/README.md#search-across-rooms)).
 - The table `chat_addressed` has the newest change of each joined room that is for the principal: a
   message in a direct message, a mention, a reply in a followed thread, or a delete of its message by
   a different member. Each state of a room has that change (`addressed`), or null. The object keeps a

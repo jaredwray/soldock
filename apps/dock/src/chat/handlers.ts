@@ -1,25 +1,59 @@
-import type { ChatRoom, ChatThreadFollow, OperationName } from "@asterra/contracts";
+import {
+	CHAT_LIMITS,
+	type ChatRoom,
+	type ChatSearchResult,
+	type ChatSearchRoom,
+	type ChatThreadFollow,
+	mentionDirectory,
+	type OperationName,
+	prefixedId,
+	RoomId,
+} from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
-import { type CallContext, getPrincipals, isAdmin } from "../identity/index.ts";
-import { audit, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
+import { type CallContext, getPrincipals, isAdmin, mentionCandidates } from "../identity/index.ts";
+import {
+	audit,
+	decodeCursor,
+	encodeCursor,
+	type HandlerMap,
+	log,
+	newId,
+	OperationError,
+	sha256Hex,
+} from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
-import { listAddressedChanges, listFollowedThreads, listJoinedRooms, withOwnState } from "./principal-rooms.ts";
+import {
+	joinedRoomRefs,
+	listAddressedChanges,
+	listFollowedThreads,
+	listJoinedRooms,
+	withOwnState,
+} from "./principal-rooms.ts";
 import {
 	type ActorRecord,
 	messageOutput,
+	nameKey,
 	type Refusal,
 	type RoomCall,
 	type RoomRecord,
+	type SearchHitRecord,
 	type ThreadFollowRecord,
 } from "./room.ts";
 import { listPublicRooms } from "./room-index.ts";
+import { type ParsedSearch, parseSearch, type SearchFilter } from "./search.ts";
+import { searchIndex } from "./search-index.ts";
 
 import { chatWebhookHandlers } from "./webhooks.ts";
 
 type ChatOperation = Extract<OperationName, `chat.${string}`>;
 
 const DEFAULT_PAGE = 50;
+/** The results of a page of a search without `limit`. */
+const SEARCH_PAGE = 20;
+/** The rooms that a search reads at the same time: the rooms of the hits, and the rooms that the index does not know. */
+const SEARCH_PARALLEL = 25;
+const PrincipalId = prefixedId("prn");
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function roomStub(env: Pick<Env, "CHAT_ROOM">, roomId: string) {
@@ -131,6 +165,236 @@ async function idempotencyOf(
 	};
 }
 
+/** The input of chat.search_messages, after its checks. */
+interface SearchInput {
+	room_id?: string | undefined;
+	sort?: "rank" | "time" | undefined;
+	cursor?: string | undefined;
+	limit?: number | undefined;
+}
+
+interface SearchOutput {
+	results: ChatSearchResult[];
+	next_cursor: string | null;
+}
+
+/** True for the offset of a cursor of a read by rank: a whole number in the range of that read. */
+function isRankOffset(offset: number): boolean {
+	return Number.isInteger(offset) && offset >= 0 && offset < CHAT_LIMITS.searchRankResults;
+}
+
+const BAD_SEARCH_CURSOR = "The cursor is not valid. Use next_cursor from the last page of the same search.";
+
+/**
+ * The principal id of each value of the filters `from:` and `mentions:`, and of an `in:` filter with an
+ * "@": `me`, a principal id, or a handle or a name alias with the rules of a mention. One read of the
+ * directory finds the handles of the query.
+ */
+async function searchPrincipals(call: CallContext, values: readonly string[]): Promise<Map<string, string>> {
+	const ids = new Map<string, string>();
+	const keyOf = (value: string) => value.toLowerCase().replace(/^@/, "");
+	const keys: string[] = [];
+	for (const value of values) {
+		if (keyOf(value) === "me") ids.set(value, call.caller.id);
+		else if (PrincipalId.safeParse(value).success) ids.set(value, value);
+		else keys.push(keyOf(value));
+	}
+	if (keys.length === 0) return ids;
+	const directory = mentionDirectory(await mentionCandidates(call.env.DIRECTORY, keys, []));
+	for (const value of values) {
+		if (ids.has(value)) continue;
+		const person = directory.byHandle.get(keyOf(value));
+		if (!person) {
+			throw new OperationError(
+				"invalid",
+				`No person or agent has the handle @${keyOf(value)}. Use a handle as in a mention, me, or a principal id.`,
+			);
+		}
+		ids.set(value, person.id);
+	}
+	return ids;
+}
+
+/** The filter of a query for a room and for the index: each principal of the query has its id. */
+async function searchFilter(
+	call: CallContext,
+	parsed: ParsedSearch,
+): Promise<{ filter: SearchFilter; ids: Map<string, string> }> {
+	const ids = await searchPrincipals(call, [
+		...parsed.from,
+		...parsed.mentions,
+		...parsed.in.filter((value) => value.startsWith("@")),
+	]);
+	const idOf = (value: string) => ids.get(value) as string;
+	return {
+		filter: {
+			match: parsed.match,
+			from: [...new Set(parsed.from.map(idOf))],
+			mentions: [...new Set(parsed.mentions.map(idOf))],
+			hasLink: parsed.hasLink,
+			hasFile: parsed.hasFile,
+			isThread: parsed.isThread,
+			before: parsed.before,
+			after: parsed.after,
+		},
+		ids,
+	};
+}
+
+function searchResult(room: ChatSearchRoom, hit: SearchHitRecord): ChatSearchResult {
+	return { room, message: messageOutput(hit.message), parent_seq: hit.parentSeq, highlights: hit.highlights };
+}
+
+/** Runs `task` for each item, `SEARCH_PARALLEL` at the same time. A task that fails gives `null`. */
+async function inParts<T, R>(items: readonly T[], task: (item: T) => Promise<R>): Promise<(R | null)[]> {
+	const out: (R | null)[] = [];
+	for (let start = 0; start < items.length; start += SEARCH_PARALLEL) {
+		const answers = await Promise.allSettled(items.slice(start, start + SEARCH_PARALLEL).map(task));
+		for (const answer of answers) out.push(answer.status === "fulfilled" ? answer.value : null);
+	}
+	return out;
+}
+
+/**
+ * chat.search_messages in one room. The room reads its own search tables in the same step as its member
+ * check, so the result is always current.
+ */
+async function searchRoom(
+	call: CallContext,
+	input: SearchInput & { room_id: string },
+	parsed: ParsedSearch,
+): Promise<SearchOutput> {
+	if (parsed.in.length > 0) {
+		throw new OperationError(
+			"invalid",
+			"The search is in the room of room_id. Remove the in: filter, or remove room_id.",
+		);
+	}
+	const limit = input.limit ?? SEARCH_PAGE;
+	const ranked = (input.sort ?? "rank") === "rank" && parsed.match !== null;
+	// A cursor is the offset of a read by rank, or the seq of the last message of a read by time.
+	const cursor = input.cursor === undefined ? null : decodeCursor<[string, number]>(input.cursor, ["string", "number"]);
+	if (cursor !== null && (cursor[0] !== (ranked ? "r" : "s") || (ranked && !isRankOffset(cursor[1])))) {
+		throw new OperationError("invalid", BAD_SEARCH_CURSOR);
+	}
+	if (input.cursor !== undefined && cursor === null) throw new OperationError("invalid", BAD_SEARCH_CURSOR);
+	const offset = ranked ? (cursor?.[1] ?? 0) : 0;
+	const { filter } = await searchFilter(call, parsed);
+	const opened = openRoom(call, input.room_id);
+	const page = accept(
+		await opened.room.search(opened.ctx, filter, {
+			sort: ranked ? "rank" : "time",
+			before: ranked ? null : (cursor?.[1] ?? null),
+			offset,
+			limit,
+		}),
+	);
+	const last = page.results[page.results.length - 1];
+	let nextCursor: string | null = null;
+	if (page.hasMore && ranked && offset + limit < CHAT_LIMITS.searchRankResults)
+		nextCursor = encodeCursor(["r", offset + limit]);
+	if (page.hasMore && !ranked && last) nextCursor = encodeCursor(["s", last.message.seq]);
+	return { results: page.results.map((hit) => searchResult(page.room, hit)), next_cursor: nextCursor };
+}
+
+/**
+ * chat.search_messages in each room of the caller. The index of the organization finds the hits in the
+ * rooms that the `PrincipalDO` of the caller has: a room and a seq for each. The room of each hit then
+ * returns the message as it is now, and makes the member check and the filter again. So a member that
+ * left, a deleted message and a changed text never show, also when the index or the list of the caller
+ * is behind.
+ */
+async function searchRooms(call: CallContext, input: SearchInput, parsed: ParsedSearch): Promise<SearchOutput> {
+	const limit = input.limit ?? SEARCH_PAGE;
+	const ranked = (input.sort ?? "rank") === "rank" && parsed.match !== null;
+	let offset = 0;
+	let after: { createdAt: number; roomId: string; seq: number } | null = null;
+	if (input.cursor !== undefined) {
+		const rank = decodeCursor<[string, number]>(input.cursor, ["string", "number"]);
+		const time = decodeCursor<[string, number, string, number]>(input.cursor, ["string", "number", "string", "number"]);
+		if (ranked && rank?.[0] === "r" && isRankOffset(rank[1])) offset = rank[1];
+		else if (!ranked && time?.[0] === "t") after = { createdAt: time[1], roomId: time[2], seq: time[3] };
+		else throw new OperationError("invalid", BAD_SEARCH_CURSOR);
+	}
+	const { filter, ids } = await searchFilter(call, parsed);
+	const joined = await joinedRoomRefs(call.env, call.caller.id);
+	const byId = new Map(joined.map((room) => [room.room_id, room]));
+	let roomIds = [...byId.keys()];
+	if (parsed.in.length > 0) {
+		const named = new Set<string>();
+		for (const value of parsed.in) {
+			let found: string[];
+			if (value.startsWith("@")) found = [await dmRoomId(call.caller.id, ids.get(value) as string)];
+			else if (RoomId.safeParse(value).success) found = [value];
+			else {
+				const key = nameKey(value.replace(/^#/, ""));
+				found = joined.filter((room) => room.name_key === key).map((room) => room.room_id);
+			}
+			found = found.filter((roomId) => byId.has(roomId));
+			if (found.length === 0) {
+				throw new OperationError(
+					"invalid",
+					`You are a member of no room for in:${value}. Use the name or the id of a room of yours, or @ and a handle for a direct message.`,
+				);
+			}
+			for (const roomId of found) named.add(roomId);
+		}
+		roomIds = [...named];
+	}
+	if (roomIds.length === 0) return { results: [], next_cursor: null };
+
+	const index = searchIndex(call.env);
+	const query = { rooms: roomIds, filter, sort: ranked ? ("rank" as const) : ("time" as const), after, offset, limit };
+	let found = await index.search(query);
+	if (found.unknown.length > 0) {
+		// A room with no change since the version with search sent nothing to the index. Each such room
+		// sends its messages now, and the search runs again.
+		await inParts(found.unknown, async (roomId) => await roomStub(call.env, roomId).fillSearch());
+		found = await index.search(query);
+	}
+	const hits = found.hits.slice(0, limit);
+	const seqsOf = new Map<string, number[]>();
+	for (const hit of hits) seqsOf.set(hit.room_id, [...(seqsOf.get(hit.room_id) ?? []), hit.seq]);
+	const rooms = [...seqsOf.keys()];
+	const answers = await inParts(rooms, async (roomId) => {
+		const opened = openRoom(call, roomId);
+		return await opened.room.searchHits(opened.ctx, filter, seqsOf.get(roomId) ?? []);
+	});
+	const shown = new Map<string, SearchHitRecord>();
+	let failed = 0;
+	answers.forEach((answer, position) => {
+		if (answer === null) failed += 1;
+		// A refusal is a room that the caller left: the list of its `PrincipalDO` was behind.
+		if (answer === null || "error" in answer) return;
+		for (const hit of answer.results) shown.set(`${rooms[position]}:${hit.message.seq}`, hit);
+	});
+	if (failed > 0) log("warn", "chat search: rooms did not answer", { rooms: failed });
+	const results: ChatSearchResult[] = [];
+	for (const hit of hits) {
+		const record = shown.get(`${hit.room_id}:${hit.seq}`);
+		const room = byId.get(hit.room_id);
+		if (!record || !room) continue;
+		results.push(
+			searchResult(
+				{
+					id: room.room_id,
+					kind: room.kind,
+					name: room.name,
+					peer: room.peer_json === null ? null : (JSON.parse(room.peer_json) as ActorRecord),
+				},
+				record,
+			),
+		);
+	}
+	const last = hits[hits.length - 1];
+	let nextCursor: string | null = null;
+	if (found.hits.length > limit && last) {
+		if (!ranked) nextCursor = encodeCursor(["t", last.created_at, last.room_id, last.seq]);
+		else if (offset + limit < CHAT_LIMITS.searchRankResults) nextCursor = encodeCursor(["r", offset + limit]);
+	}
+	return { results, next_cursor: nextCursor };
+}
+
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	async "chat.list_rooms"(call, input) {
@@ -192,6 +456,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			changes: page.changes.map(({ room, change }) => ({ ...change, room: toRoom(room), at: iso(change.at) })),
 			next_cursor: page.nextCursor,
 		};
+	},
+
+	async "chat.search_messages"(call, input) {
+		const parsed = parseSearch(input.query);
+		const roomId = input.room_id;
+		return roomId === undefined
+			? searchRooms(call, input, parsed)
+			: searchRoom(call, { ...input, room_id: roomId }, parsed);
 	},
 
 	async "chat.create_room"(call, input) {

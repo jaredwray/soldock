@@ -5,8 +5,8 @@ import { api } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
-import { chatPath, chatThreadsPath } from "../../routes.ts";
-import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
+import { chatPath, chatSearchPath, chatThreadsPath } from "../../routes.ts";
+import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID, SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
@@ -15,6 +15,7 @@ import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
+import { SearchView } from "./SearchView.tsx";
 import { ThreadsView } from "./ThreadsView.tsx";
 import { PeopleProvider, usePeopleDirectory, usePeopleStore } from "./usePeople.ts";
 
@@ -29,6 +30,8 @@ export interface ChatAppProps {
 	profileId: string | null;
 	/** True for the Threads view: the threads that the person follows. */
 	threads: boolean;
+	/** The Search view: its query, and the room of a search in one room. Null for each other view. */
+	search: { query: string; roomId: string | null } | null;
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
@@ -37,7 +40,16 @@ export interface ChatAppProps {
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
-export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navOpen, onCloseNav }: ChatAppProps) {
+export function ChatApp({
+	roomId,
+	messageSeq,
+	replySeq,
+	profileId,
+	threads,
+	search,
+	navOpen,
+	onCloseNav,
+}: ChatAppProps) {
 	const rooms = useRooms();
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
@@ -54,8 +66,32 @@ export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navO
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null && !threads) document.title = "Chat – Asterra";
-	}, [roomId, profileId, threads]);
+		if (roomId === null && profileId === null && !threads && search === null) document.title = "Chat – Asterra";
+	}, [roomId, profileId, threads, search]);
+
+	// Ctrl+F and ⌘F open the Search view of Chat: a search of the page finds only the messages that show. From
+	// a room, the search is in that room. In the Search view, the keys move the focus to the box. While a
+	// dialog is open, the keys stay with the browser.
+	const searching = search !== null;
+	useEffect(() => {
+		function onKeyDown(event: KeyboardEvent) {
+			if (event.defaultPrevented || event.altKey || event.shiftKey || event.isComposing) return;
+			if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
+			if (document.querySelector("dialog[open]")) return;
+			event.preventDefault();
+			if (!searching) {
+				navigate(chatSearchPath("", roomId));
+				return;
+			}
+			const box = document.getElementById(SEARCH_INPUT_ID);
+			if (box instanceof HTMLInputElement) {
+				box.focus();
+				box.select();
+			}
+		}
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [searching, roomId]);
 
 	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {
@@ -71,6 +107,7 @@ export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navO
 					rooms={rooms}
 					activeId={roomId}
 					threadsActive={threads}
+					searchActive={search !== null}
 					unreadThreads={unreadThreads}
 					open={navOpen}
 					onClose={onCloseNav}
@@ -82,6 +119,8 @@ export function ChatApp({ roomId, messageSeq, replySeq, profileId, threads, navO
 					{profileId !== null ? (
 						// The key gives each profile its own view, so a button of one never acts for a different one.
 						<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
+					) : search !== null ? (
+						<SearchView query={search.query} roomId={search.roomId} rooms={rooms.rooms} />
 					) : threads ? (
 						<ThreadsView tick={rooms.threadsTick} directory={directory} />
 					) : roomId === null ? (
@@ -135,6 +174,8 @@ interface ChatSidebarProps {
 	activeId: string | null;
 	/** True while the Threads view shows. */
 	threadsActive: boolean;
+	/** True while the Search view shows. */
+	searchActive: boolean;
 	/** The threads with new replies, at most 100. */
 	unreadThreads: number;
 	open: boolean;
@@ -149,6 +190,7 @@ function ChatSidebar({
 	rooms,
 	activeId,
 	threadsActive,
+	searchActive,
 	unreadThreads,
 	open,
 	onClose,
@@ -191,6 +233,16 @@ function ChatSidebar({
 					New room
 				</button>
 				<ul className="nav-list chat-nav-views">
+					<li>
+						<Link
+							to={chatSearchPath()}
+							className={searchActive ? "nav-item nav-item-active" : "nav-item"}
+							aria-current={searchActive ? "page" : undefined}
+						>
+							<Icon name="search" />
+							<span className="nav-name">Search</span>
+						</Link>
+					</li>
 					<li>
 						<Link
 							to={chatThreadsPath()}

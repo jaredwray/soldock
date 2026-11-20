@@ -24,7 +24,8 @@ import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { chatPath } from "../../routes.ts";
+import { chatPath, chatSearchPath } from "../../routes.ts";
+import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
@@ -837,6 +838,7 @@ export function RoomView({
 				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
+					{isMember && <RoomSearch roomId={roomId} title={title} />}
 					<button
 						type="button"
 						className="chat-header-button"
@@ -1151,5 +1153,50 @@ function StarButton({ starred, onChange }: { starred: boolean; onChange: (starre
 		>
 			<Icon name="star" filled={starred} />
 		</button>
+	);
+}
+
+/**
+ * The search of the room, in its header: a box for the query. The Search view shows the results, for
+ * this room only. At a small width, the header has a button that opens that view.
+ */
+function RoomSearch({ roomId, title }: { roomId: string; title: string }) {
+	const [query, setQuery] = useState("");
+	const label = `Search in ${title}`;
+	return (
+		<>
+			<search className="search chat-header-search">
+				<form
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (query.trim() !== "") navigate(chatSearchPath(query.trim(), roomId));
+					}}
+				>
+					<label htmlFor={SEARCH_INPUT_ID} className="visually-hidden">
+						{label}
+					</label>
+					<Icon name="search" size={16} className="search-icon" />
+					<input
+						id={SEARCH_INPUT_ID}
+						className="search-input"
+						type="search"
+						placeholder="Search in this room"
+						autoComplete="off"
+						spellCheck={false}
+						maxLength={500}
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+					/>
+				</form>
+			</search>
+			<Link
+				to={chatSearchPath("", roomId)}
+				className="icon-button chat-header-search-link"
+				aria-label={label}
+				title={label}
+			>
+				<Icon name="search" />
+			</Link>
+		</>
 	);
 }

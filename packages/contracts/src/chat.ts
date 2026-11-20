@@ -54,6 +54,12 @@ export const CHAT_LIMITS = {
 	filesPerMessage: 10,
 	/** The links of one message that get a preview: the first ones, in the order of the text. */
 	linksPerMessage: 3,
+	/** The characters of the query of a search. */
+	searchQueryChars: 500,
+	/** The results of one page of a search. */
+	searchPageSize: 50,
+	/** The results that a search in the order of the rank returns, in all of its pages. */
+	searchRankResults: 1000,
 } as const;
 
 // The body of a message: a small tree of blocks in the JSON form of ProseMirror, the same form as the
@@ -998,6 +1004,65 @@ export const markThreadRead = defineOperation({
 	errors: ["not_found", "invalid"],
 });
 
+/** The room of a search result: what a client needs to show where the message is. */
+export const ChatSearchRoom = z.object({
+	id: z.string(),
+	kind: z.enum(ROOM_KINDS),
+	/** Null for a `dm` room: show the name of `peer`. */
+	name: z.string().nullable(),
+	/** The other member of a `dm` room. Null for each other kind. */
+	peer: Actor.nullable(),
+});
+export type ChatSearchRoom = z.infer<typeof ChatSearchRoom>;
+
+/** One message that a search found. */
+export const ChatSearchResult = z.object({
+	room: ChatSearchRoom,
+	/** The message as it is now, as chat.list_messages returns it. A reply has parent_id. */
+	message: ChatMessage,
+	/** For a reply, the seq of the first message of its thread. Null for each other message. */
+	parent_seq: z.number().int().nullable(),
+	/**
+	 * The parts of `message.text` that the words of the query found, in order. `start` and `end` are
+	 * positions in UTF-16 code units, and `end` is after the last character. A query without words has none.
+	 */
+	highlights: z.array(z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative() })),
+});
+export type ChatSearchResult = z.infer<typeof ChatSearchResult>;
+
+export const searchMessages = defineOperation({
+	name: "chat.search_messages",
+	summary: "Search the messages of your rooms",
+	description: [
+		"Finds the messages that you can read: the messages and the replies of the rooms and the direct messages that you are a member of. With room_id, the search is in that room only.",
+		"The query has words and filters. Each word must be in the text of the message. Letter case and accents do not matter.",
+		'Put a phrase in double quotes ("release plan") to find the words together. Put * after the start of a word (deploy*) to find each word with that start.',
+		"Filters: from:ada (the author: a handle as in a mention, me, or a principal id), in:general (a room by its name or its id, or in:@ada for your direct message with ada), mentions:me (a mention of you, or mentions:ada), has:link, has:file, is:thread (a reply, or a message with replies), before:2026-10-31, after:2026-10-01 and on:2026-10-15.",
+		"A date is a day in UTC. before finds the messages before that day, and after finds the messages of that day and later.",
+		"Two from filters find the messages of the one author or the other, and two in filters search the two rooms. Each other filter must be true. Do not set in with room_id.",
+		"sort is rank (the best match first, the default for a query with words) or time (the newest message first, the default for a query with filters only).",
+		`The order of the rank returns the first ${CHAT_LIMITS.searchRankResults} results at most. Use the order of the time, or dates, to read more.`,
+		"Each result has the room, the message as it is now, and highlights: the parts of message.text that the words found. A deleted message is never a result.",
+		"Without room_id, a new or changed message shows about one second later. A page can have fewer results than limit, also none, with a next_cursor: pass next_cursor as cursor to get the next page.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/search" },
+	scopes: ["chat.read"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({
+		query: z.string().trim().min(1).max(CHAT_LIMITS.searchQueryChars),
+		room_id: RoomId.optional().describe("Search in this room only. You must be a member of it."),
+		sort: z.enum(["rank", "time"]).optional(),
+		cursor: z.string().max(500).optional(),
+		limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.searchPageSize).optional(),
+	}),
+	output: z.object({
+		results: z.array(ChatSearchResult),
+		next_cursor: z.string().nullable(),
+	}),
+	errors: ["not_found", "invalid"],
+});
+
 export const editMessage = defineOperation({
 	name: "chat.edit_message",
 	summary: "Change the text of your message",
@@ -1212,6 +1277,7 @@ export const chatOperations = {
 	"chat.mark_thread_read": markThreadRead,
 	"chat.list_threads": listThreads,
 	"chat.list_addressed": listAddressed,
+	"chat.search_messages": searchMessages,
 	"chat.edit_message": editMessage,
 	"chat.delete_message": deleteMessage,
 	"chat.download_file": downloadChatFile,

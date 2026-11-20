@@ -8,7 +8,7 @@ import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
 import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
 
-export { ChatRoomDO } from "./chat/index.ts";
+export { ChatRoomDO, ChatSearchDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";
 export { DriveSpaceDO } from "./drive/index.ts";
 export { PrincipalDO } from "./identity/index.ts";
