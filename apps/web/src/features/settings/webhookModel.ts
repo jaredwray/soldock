@@ -110,6 +110,35 @@ export const CHAT_FILTER_LABELS: Record<ChatWebhookFilter, string> = {
 };
 
 /**
+ * The name of the check box that sets each event of a product. The chat events are changes to the
+ * messages of the menu, so the name does not say "all chat events". Mail has one event and no such check box.
+ */
+export const ALL_EVENTS_LABELS: Record<WebhookDomain, string> = {
+	mail: "All mail events",
+	chat: "All three changes",
+	drive: "All drive events",
+};
+
+/**
+ * The text under the menu of the chat messages. It tells which messages each chat check box sends for
+ * the filter. The rules are the reasons of `chat.create_webhook_subscription`: an edit uses the message
+ * after the edit, and a delete uses the message before the delete.
+ */
+export function chatFilterHint(filter: ChatWebhookFilter, agent: boolean): string {
+	if (filter === "all") {
+		return agent
+			? "Each message in the rooms and direct messages of the agent sends a POST."
+			: "Each message in your rooms and direct messages sends a POST.";
+	}
+	const own = agent ? "a message of the agent" : "your message";
+	return [
+		"Only these messages send a POST.",
+		"An edit counts when the message is one of these after the edit.",
+		`A delete counts when the message was one of these before the delete, or when a different member deletes ${own}.`,
+	].join(" ");
+}
+
+/**
  * The key of a check box. An event name, a target id and a filter have no space. A chat event that
  * sends only the messages for its target has the filter in its key. So a different filter is a
  * different choice, and a save deletes the subscription and adds it again.
