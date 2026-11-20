@@ -1,8 +1,10 @@
 import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@asterra/contracts";
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, useEffect } from "react";
 import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";
 import { type MentionContext, textParts } from "./mentions.ts";
+import { bodyPeople } from "./people.ts";
+import { useWantPeople } from "./usePeople.ts";
 
 // The body of a message as React nodes. The body is data, never HTML: each node of the schema has
 // one element here, and the text of a node is always text. A node that the schema does not have shows
@@ -76,7 +78,8 @@ type Mention = Extract<ChatBodyInline, { type: "mention" }>;
 
 /**
  * A mention node: a link to the profile of its principal, found by its id. So the link stays right when
- * the handle changes. A principal that the directory does not have (a deleted one) shows as text.
+ * the handle changes. A principal that the directory does not have (a deleted one, or one whose read
+ * did not come yet) shows as text.
  */
 function MentionNode({ node, mentions }: { node: Mention; mentions: MentionContext }) {
 	const person = mentions.directory.byId.get(node.attrs.id);
@@ -175,6 +178,9 @@ function Blocks({ blocks, mentions }: { blocks: readonly ChatBodyBlock[]; mentio
 /**
  * The body of a message. Without a body (a message from an older server, or an edit that waits for
  * the server), the text shows as it is, one paragraph with its line breaks.
+ *
+ * The body asks for the principals of its mentions (`useWantPeople`): its mention nodes by their ids, and the
+ * handles in its text. So a message reads its own people, not the directory.
  */
 export function MessageBody({
 	body,
@@ -185,6 +191,8 @@ export function MessageBody({
 	text: string;
 	mentions: MentionContext;
 }) {
+	const wantPeople = useWantPeople();
+	useEffect(() => wantPeople(bodyPeople(body, text)), [wantPeople, body, text]);
 	if (body) return <Blocks blocks={body.content} mentions={mentions} />;
 	return (
 		<p className="chat-paragraph">

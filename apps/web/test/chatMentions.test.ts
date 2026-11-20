@@ -9,7 +9,6 @@ import {
 	mentionAt,
 	mentionDirectory,
 	mentionKeyAction,
-	mentionSuggestions,
 	rankMentions,
 	textParts,
 	typedMentionCandidates,
@@ -146,20 +145,21 @@ describe("the mention that the person types", () => {
 
 describe("the suggestions for a mention", () => {
 	const ids = (list: { person: MentionPerson }[]) => list.map((entry) => entry.person.id);
+	/** The principals of a directory with their handles, as the server gives them to the list. */
+	const withHandles = (directory: typeof DIRECTORY) =>
+		directory.people.map((person) => ({ person, handle: directory.handleOf.get(person.id) ?? null }));
+	const ALL = withHandles(DIRECTORY);
 
 	it("matches the start of a handle, an address or a word of the name before a match inside", () => {
-		expect(ids(mentionSuggestions(DIRECTORY, "cap", { memberIds: new Set(), ownId: ADA.id }))).toEqual([CAPTAIN.id]);
-		expect(ids(mentionSuggestions(DIRECTORY, "hook", { memberIds: new Set(), ownId: ADA.id }))).toEqual([CAPTAIN.id]);
+		expect(ids(rankMentions(ALL, "cap", { memberIds: new Set(), ownId: ADA.id }))).toEqual([CAPTAIN.id]);
+		expect(ids(rankMentions(ALL, "hook", { memberIds: new Set(), ownId: ADA.id }))).toEqual([CAPTAIN.id]);
 		// "Élodie" for "elo", without the accent. "Lovelace" has "ela" inside, so it comes after "Élodie".
-		expect(ids(mentionSuggestions(DIRECTORY, "el", { memberIds: new Set(), ownId: CAPTAIN.id }))).toEqual([
-			ELLE.id,
-			ADA.id,
-		]);
+		expect(ids(rankMentions(ALL, "el", { memberIds: new Set(), ownId: CAPTAIN.id }))).toEqual([ELLE.id, ADA.id]);
 	});
 
 	// The server sends one page of matches for a typed name. A member of the room after that page must still
-	// come first (jaredwray/soldock#131), and a principal on the page and in the room must come one time.
-	it("ranks the members of the room from the directory with the page of the server, each one time", () => {
+	// come first, and a principal on the page and in the room must come one time.
+	it("ranks the members of the room from the people of the page with the page of the server, each one time", () => {
 		const page = [
 			{ ...CAPTAIN, handle: "captain" },
 			{ ...ADA, handle: "ada@example.com" },
@@ -174,7 +174,7 @@ describe("the suggestions for a mention", () => {
 
 	// A person mentions the members of the room most of the time.
 	it("puts the members of the room first, and leaves out the writer, archived principals and principals without a handle", () => {
-		const list = mentionSuggestions(DIRECTORY, "", { memberIds: new Set([ELLE.id]), ownId: ADA.id });
+		const list = rankMentions(ALL, "", { memberIds: new Set([ELLE.id]), ownId: ADA.id });
 		expect(ids(list)).toEqual([ELLE.id, ADA_ORG.id, CAPTAIN.id]);
 		expect(list.map((entry) => [entry.handle, entry.member])).toEqual([
 			["elodie.martin", true],
@@ -187,7 +187,7 @@ describe("the suggestions for a mention", () => {
 		const many = mentionDirectory(
 			Array.from({ length: 10 }, (_, index) => person(`p${index}`, `Person ${index}`, `p${index}@example.com`)),
 		);
-		expect(mentionSuggestions(many, "", { memberIds: new Set(), ownId: ADA.id })).toHaveLength(8);
+		expect(rankMentions(withHandles(many), "", { memberIds: new Set(), ownId: ADA.id })).toHaveLength(8);
 	});
 });
 

@@ -1,4 +1,4 @@
-import { type GroupMention, mentionFits } from "@asterra/contracts";
+import { type GroupMention, mentionFits, mentionKeys } from "@asterra/contracts";
 import { chainCommands, liftEmptyBlock, newlineInCode, splitBlock, toggleMark } from "prosemirror-commands";
 import { redo, undo } from "prosemirror-history";
 import { InputRule, textblockTypeInputRule, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";
@@ -258,6 +258,24 @@ function replaceTypedMention(state: EditorState, label: string, node: Node): Tra
 export interface TextMention {
 	from: number;
 	to: number;
+}
+
+/**
+ * The handles and name aliases that the texts of the box can name, in lowercase (`mentionKeys`). The box
+ * asks the server for their principals, so `textMentions` needs no directory of the organization. A text
+ * in code or in a link holds no mention.
+ */
+export function typedHandles(doc: Node): string[] {
+	const keys = new Set<string>();
+	doc.descendants((node) => {
+		if (node.type.spec.code) return false;
+		const text = node.isText ? (node.text ?? "") : "";
+		if (text.includes("@") && !node.marks.some((mark) => mark.type === marks.code || mark.type === marks.link)) {
+			for (const key of mentionKeys(text)) keys.add(key);
+		}
+		return true;
+	});
+	return [...keys];
 }
 
 /** One part of a line of the box, as the room reads it. */

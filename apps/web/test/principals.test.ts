@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sponsorsAgent } from "../src/features/admin/access.ts";
 import { listAllPrincipals } from "../src/lib/usePrincipals.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -51,5 +52,27 @@ describe("the people and agents of the organization", () => {
 		expect(fresh).not.toBe(running);
 		await Promise.all([running, fresh]);
 		expect(asked).toHaveLength(8);
+	});
+});
+
+describe("the admin link of a member", () => {
+	// Each page of the app asks if the person sponsors an agent. A read of the whole directory for this
+	// answer is a slow read on each page of a large organization.
+	it("asks for one agent of the sponsor, in one call", async () => {
+		const asked: string[] = [];
+		let agents = [principal("bot")];
+		vi.stubGlobal("fetch", async (url: string) => {
+			asked.push(url);
+			return new Response(JSON.stringify({ principals: agents, next_cursor: agents.length > 0 ? "more" : null }), {
+				headers: { "content-type": "application/json" },
+			});
+		});
+		expect(await sponsorsAgent("prn_ada")).toBe(true);
+		agents = [];
+		expect(await sponsorsAgent("prn_ada")).toBe(false);
+		expect(asked).toEqual([
+			"/api/v1/directory/principals?sponsor_id=prn_ada&limit=1",
+			"/api/v1/directory/principals?sponsor_id=prn_ada&limit=1",
+		]);
 	});
 });

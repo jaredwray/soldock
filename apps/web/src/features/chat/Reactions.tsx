@@ -3,7 +3,7 @@ import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, use
 import { emojiName, findEmoji } from "./emoji.ts";
 
 /** The names in the title of a reaction. More names than this show as "and N more". */
-const TITLE_NAMES = 10;
+export const TITLE_NAMES = 10;
 
 function countText(count: number): string {
 	return count === 1 ? "1 reaction" : `${count} reactions`;
