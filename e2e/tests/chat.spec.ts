@@ -1327,6 +1327,22 @@ test("a mention links to a profile, and the @ list puts the members first, witho
 	const alone = lists.filter((list) => !list.has("query") && !list.has("sponsor_id"));
 	expect(alone.map((list) => [list.get("active_only"), list.get("limit")])).toEqual([["true", "100"]]);
 
+	// A plain Enter at once after "@" waits for the list. It takes the first member, and sends no message.
+	await box.press("Control+a");
+	await box.press("Delete");
+	const page2 = await hold(
+		page,
+		(url) => url.pathname === "/api/v1/directory/principals" && !url.searchParams.has("query"),
+		"GET",
+	);
+	await box.pressSequentially("@");
+	await box.press("Enter");
+	await expect(box).toHaveText("@");
+	page2.release();
+	await expect(box).toHaveText(/^@tomasz\s$/);
+	await expect(rowsWithText(page, "@")).toHaveCount(0);
+	expect((await newest(nadia, roomId)).map((message) => message.text)).toEqual(["ask @chidi about the plan"]);
+
 	// No call reads the directory: each call of the list has one page of 100 principals at most, and each
 	// lookup has the ids and the handles of the page.
 	for (const list of lists) {
@@ -1337,4 +1353,24 @@ test("a mention links to a profile, and the @ list puts the members first, witho
 		expect(lookup.ids.length).toBeLessThanOrEqual(100);
 		expect(lookup.handles.length).toBeLessThanOrEqual(100);
 	}
+});
+
+// The sponsor of an agent is a second read. A profile that shows nothing when only that read fails hides
+// an agent that the page has.
+test("the profile of an agent shows when the read of its sponsor fails", async ({ browser }) => {
+	const nadia = await signIn(browser, "nadia");
+	const found = await nadia.request.get("/api/v1/directory/principals?query=triage%40example.com");
+	const { principals } = (await found.json()) as {
+		principals: { id: string; display_name: string; sponsor_id: string | null }[];
+	};
+	const agent = principals[0];
+	if (!agent?.sponsor_id) throw new Error("The seed data has no agent with a sponsor.");
+	const page = await nadia.newPage();
+	await page.route(
+		(url) => url.pathname === "/api/v1/directory/lookup" && url.searchParams.get("ids") === agent.sponsor_id,
+		(route) => route.abort(),
+	);
+	await page.goto(`/chat/people/${agent.id}`);
+	await expect(page.getByRole("heading", { name: agent.display_name })).toBeVisible();
+	await expect(page.getByText("The sponsor did not load.")).toBeVisible();
 });

@@ -1,5 +1,5 @@
 import type { DirectoryEntry, MentionDirectory } from "@asterra/contracts";
-import { createContext, useCallback, useContext, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "../../lib/api.ts";
 import { createPeople, type People, type PeopleNeeds } from "./people.ts";
 
@@ -9,12 +9,17 @@ const PeopleContext = createContext<People | null>(null);
 export const PeopleProvider = PeopleContext.Provider;
 
 /**
- * The store of the people for one visit of Chat: one store for each view below `PeopleProvider`, so a
- * principal is read one time. A new visit of Chat makes a new store, so it reads the people again, for
- * example after a change in Admin.
+ * The store of the people for one visit of Chat: one store for each view below `PeopleProvider`, so the
+ * page reads a principal one time. A new visit of Chat makes a new store, so it reads the people again, for
+ * example after a change in Admin. When the person leaves Chat, the store sends no more calls.
  */
 export function usePeopleStore(): People {
 	const [people] = useState(() => createPeople((input) => api.call("directory.get_principals", input)));
+	useEffect(() => {
+		// React can run an effect, its cleanup and the effect again for one view, so the effect sets true.
+		people.setActive(true);
+		return () => people.setActive(false);
+	}, [people]);
 	return people;
 }
 

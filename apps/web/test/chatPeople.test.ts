@@ -1,5 +1,5 @@
 import type { ChatBody, DirectoryEntry, InputOf, OutputOf } from "@asterra/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { textParts } from "../src/features/chat/mentions.ts";
 import { bodyPeople, createPeople } from "../src/features/chat/people.ts";
 
@@ -18,6 +18,8 @@ function entry(name: string, change: Partial<DirectoryEntry> = {}): DirectoryEnt
 		...change,
 	};
 }
+
+afterEach(() => vi.useRealTimers());
 
 type Input = InputOf<"directory.get_principals">;
 type Output = OutputOf<"directory.get_principals">;
@@ -111,20 +113,60 @@ describe("the people of a page", () => {
 		for (const call of api.calls) expect((call.handles ?? "").length).toBeLessThanOrEqual(4000);
 	});
 
-	// A call that fails must not hide a person for the life of the page.
-	it("asks again for the ids and handles of a failed call, when a view needs them again", async () => {
+	// A view asks for its people one time. A lost answer must not hide them while the view shows.
+	it("sends a failed call again after 2 s, without a second ask of a view", async () => {
+		vi.useFakeTimers();
 		const bot = entry("bot");
 		const api = server([bot]);
 		const people = createPeople(api.lookup);
 		api.fail(true);
 		people.want({ ids: [bot.id], handles: ["bot"] });
-		await api.flush();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls).toHaveLength(1);
 		expect(people.directory().byId.has(bot.id)).toBe(false);
 		api.fail(false);
-		people.want({ ids: [bot.id], handles: ["bot"] });
-		await api.flush();
-		expect(api.calls).toHaveLength(2);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(api.calls).toEqual([api.calls[0], api.calls[0]]);
 		expect(people.directory().byHandle.get("bot")).toEqual(bot);
+	});
+
+	// A server that stays down must not get a call each 2 s for the life of the page.
+	it("stops after 3 failed calls, and asks again when a view needs the people again", async () => {
+		vi.useFakeTimers();
+		const bot = entry("bot");
+		const api = server([bot]);
+		const people = createPeople(api.lookup);
+		api.fail(true);
+		people.want({ ids: [bot.id] });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.calls).toHaveLength(3);
+		api.fail(false);
+		people.want({ ids: [bot.id] });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls).toHaveLength(4);
+		expect(people.directory().byId.get(bot.id)).toEqual(bot);
+	});
+});
+
+describe("the people of a page after the person leaves Chat", () => {
+	// While the server is down, a store without views must not send its failed calls again, or the calls
+	// of its queue: nothing shows their answers.
+	it("sends no call while it is not active, and sends the calls of its queue when it is active again", async () => {
+		vi.useFakeTimers();
+		const api = server([]);
+		const people = createPeople(api.lookup);
+		api.fail(true);
+		people.want({ ids: Array.from({ length: 150 }, (_, index) => `prn_${index}`) });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls).toHaveLength(1);
+		people.setActive(false);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.calls).toHaveLength(1);
+		// The views of the store show again: the ids that did not go out go out.
+		api.fail(false);
+		people.setActive(true);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.calls.map((call) => list(call.ids).length)).toEqual([100, 50]);
 	});
 });
 

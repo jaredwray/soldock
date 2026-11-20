@@ -307,7 +307,7 @@ export function RoomView({
 		if (fresh && listedCount !== undefined && listedCount !== members.length) void loadMembers();
 	}, [fresh, listedCount, members.length, loadMembers]);
 	// The `@` list puts the members first, with their handles. The members are at most 500, so this read
-	// follows the room, not the directory. A member that a message already asked for is not read again.
+	// follows the room, not the directory. The page does not read again a member that a message asked for.
 	const wantPeople = useWantPeople();
 	useEffect(() => {
 		wantPeople({ ids: members.map((member) => member.principal_id) });

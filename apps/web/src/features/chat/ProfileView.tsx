@@ -1,4 +1,4 @@
-import type { ChatRoom, DirectoryEntry, Principal } from "@asterra/contracts";
+import { ApiError, type ChatRoom, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
@@ -20,8 +20,11 @@ export interface ProfileViewProps {
 	onOpened: (room: ChatRoom) => Promise<void>;
 }
 
-/** The read of a profile: the principal (null when the directory does not have it) and the sponsor of an agent. */
-type ProfileRead = { person: DirectoryEntry | null; sponsor: DirectoryEntry | null } | "failed" | null;
+/**
+ * The read of a profile: the principal (null when the directory does not have it) and the sponsor of an
+ * agent. The sponsor is "failed" when only its read failed: the profile then still shows the principal.
+ */
+type ProfileRead = { person: DirectoryEntry | null; sponsor: DirectoryEntry | null | "failed" } | "failed" | null;
 
 /**
  * The principal of a profile and the sponsor of an agent, from the server by their ids
@@ -35,10 +38,13 @@ function useProfile(principalId: string): ProfileRead {
 		const one = async (id: string) => (await api.call("directory.get_principals", { ids: id })).principals[0] ?? null;
 		(async () => {
 			const person = await one(principalId);
-			const sponsor = person?.sponsor_id ? await one(person.sponsor_id) : null;
+			const sponsor = person?.sponsor_id ? await one(person.sponsor_id).catch(() => "failed" as const) : null;
 			if (active) setRead({ person, sponsor });
-		})().catch(() => {
-			if (active) setRead("failed");
+		})().catch((error: unknown) => {
+			if (!active) return;
+			// The path can hold a text that is no id. The server refuses it, and no principal has it.
+			const noSuchId = error instanceof ApiError && error.code === "invalid";
+			setRead(noSuchId ? { person: null, sponsor: null } : "failed");
 		});
 		return () => {
 			active = false;
@@ -59,7 +65,11 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 	// Until the read comes, and when it fails, the profile shows what a message of the page already read.
 	const loaded = read !== null && read !== "failed" ? read : null;
 	const person = loaded ? loaded.person : (directory.byId.get(principalId) ?? null);
-	const sponsor = loaded ? loaded.sponsor : person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
+	const answered = loaded && loaded.sponsor !== "failed" ? loaded.sponsor : undefined;
+	const sponsor =
+		answered !== undefined ? answered : person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
+	// An agent has a sponsor that the page does not have yet, or that did not load. "None" is then wrong.
+	const sponsorUnknown = !sponsor && answered === undefined && Boolean(person?.sponsor_id);
 	const handle = person?.handle;
 	const name = person?.display_name ?? null;
 
@@ -148,7 +158,19 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 					{agent && (
 						<div className="setting-row">
 							<dt>Sponsor</dt>
-							<dd>{sponsor ? <Link to={profilePath(sponsor.id)}>{sponsor.display_name}</Link> : "None"}</dd>
+							<dd>
+								{sponsor ? (
+									<Link to={profilePath(sponsor.id)}>{sponsor.display_name}</Link>
+								) : sponsorUnknown ? (
+									read === null ? (
+										"Loading…"
+									) : (
+										"The sponsor did not load."
+									)
+								) : (
+									"None"
+								)}
+							</dd>
 						</div>
 					)}
 					<div className="setting-row">
