@@ -613,8 +613,8 @@ describe("a Chat limit", () => {
 		const secret = (await ada.call("chat.post_message", { room_id: board.id, text: "The plan is secret" })).message;
 		const key = await limitedKey(ada, ["chat.read", "chat.write"], { chat: { room_ids: [ops.id] } });
 
-		// The other room has the newest message. A page of one room still has the room of the limit, and
-		// no cursor: a cursor holds the id of the last room of its page.
+		// The room outside the limit has the newest message. A page of one room still has the room of the
+		// limit, and no cursor: a cursor holds the id of the last room of its page.
 		const page = await key.call("chat.list_rooms", { limit: 1 });
 		expect(page.rooms.map((room) => room.name)).toEqual(["Ops"]);
 		expect(page.next_cursor).toBeNull();
@@ -646,6 +646,34 @@ describe("a Chat limit", () => {
 		// The lists of all rooms are not for the key.
 		expect(await codeOf(key.call("chat.list_rooms", { view: "public" }))).toBe("forbidden");
 		expect(await codeOf(key.call("chat.list_threads", {}))).toBe("forbidden");
+	});
+
+	// The list keeps the page size and the name match of chat.list_rooms: a client asks for small pages,
+	// and a direct message has no name.
+	it("lists the rooms of the limit in pages, and never finds a direct message by a name", async () => {
+		const first = (await ada.call("chat.create_room", { kind: "private", name: "First" })).room;
+		const second = (await ada.call("chat.create_room", { kind: "private", name: "Second" })).room;
+		const outside = (await ada.call("chat.create_room", { kind: "private", name: "Outside" })).room;
+		const dm = (await ada.call("chat.open_dm", { principal_id: bot.id })).room;
+		// The newest message is in the room outside the limit, between the rooms of the limit.
+		await ada.call("chat.post_message", { room_id: first.id, text: "one" });
+		await ada.call("chat.post_message", { room_id: outside.id, text: "two" });
+		await ada.call("chat.post_message", { room_id: second.id, text: "three" });
+		const key = await limitedKey(ada, ["chat.read"], { chat: { room_ids: [first.id, second.id, dm.id] } });
+		const seen: string[] = [];
+		let cursor: string | undefined;
+		for (let pages = 0; pages < 5; pages++) {
+			const page = await key.call("chat.list_rooms", { limit: 1, ...(cursor ? { cursor } : {}) });
+			expect(page.rooms.length).toBeLessThanOrEqual(1);
+			seen.push(...page.rooms.map((room) => room.id));
+			if (page.next_cursor === null) break;
+			cursor = page.next_cursor;
+		}
+		expect([...seen].sort()).toEqual([first.id, second.id, dm.id].sort());
+		expect(seen.slice(0, 2)).toEqual([second.id, first.id]);
+		// The other member of the direct message is "Billing Bot".
+		expect((await key.call("chat.list_rooms", { query: "Billing" })).rooms).toEqual([]);
+		expect(await codeOf(key.call("chat.list_rooms", { cursor: "not-a-cursor" }))).toBe("invalid");
 	});
 
 	// A socket sends each message of its room, and the events socket sends the state of each room.

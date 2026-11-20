@@ -105,9 +105,9 @@ a list of rooms and direct messages. The key then reads and posts only in those 
 - `openRoom` (`handlers.ts`) refuses each other room with `not_found`, before a room object wakes.
   The downloads of files and link pictures, the room socket and the folder of a room in Drive make
   the same check.
-- `chat.list_rooms` lists the joined rooms of the limit in one page, without a cursor
-  (`listRoomsOf`): the list comes from the ids of the limit, so it never names a different room.
-  `query` keeps the rooms whose name has the text. The public view is `forbidden`.
+- `chat.list_rooms` lists the joined rooms of the limit (`listRoomsOf`). The list reads only the
+  rooms of the limit, so a page and its cursor never name a different room. It has the page size,
+  the order and the name match of the list of each other credential. The public view is `forbidden`.
 - The limit does not make the principal a member. The room still checks the member.
 - A key with a Drive limit downloads a file of a message only where its Drive limit allows that
   file ([`drive`](../drive/README.md#the-limit-of-an-api-key)). Each other file is `not_found`.

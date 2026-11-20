@@ -140,34 +140,26 @@ async function idempotencyOf(
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	async "chat.list_rooms"(call, input) {
-		// A key with a Chat limit lists only the joined rooms of its limit, in one page. A page of the list
-		// of all rooms, and its cursor, would name rooms outside the limit.
-		const limit = roomLimit(call.caller);
-		if (limit !== null) {
-			if (input.view === "public") {
-				throw new OperationError(
-					"forbidden",
-					"This key has a chat limit. It lists only the rooms of the limit: use the joined view.",
-				);
-			}
-			if (input.cursor !== undefined) {
-				throw new OperationError("invalid", "The list of a key with a chat limit has one page and no cursor.");
-			}
-			const rooms = await listRoomsOf(call.env, call.caller.id, [...limit], {
-				query: input.query ?? null,
-				starred: input.view === "starred",
-			});
-			return { rooms: rooms.map(toRoom), next_cursor: null };
-		}
 		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
 			limit: input.limit ?? DEFAULT_PAGE,
 		};
+		// A key with a Chat limit lists only the joined rooms of its limit. The list reads only those rooms,
+		// so a page and its cursor never name a room outside the limit.
+		const limit = roomLimit(call.caller);
+		if (limit !== null && input.view === "public") {
+			throw new OperationError(
+				"forbidden",
+				"This key has a chat limit. It lists only the rooms of the limit: use the joined view.",
+			);
+		}
 		const page =
-			input.view === "public"
-				? await listPublicRooms(call.env.DIRECTORY, call.caller.id, list)
-				: await listJoinedRooms(call.env, call.caller.id, list, input.view === "starred");
+			limit !== null
+				? await listRoomsOf(call.env, call.caller.id, [...limit], list, input.view === "starred")
+				: input.view === "public"
+					? await listPublicRooms(call.env.DIRECTORY, call.caller.id, list)
+					: await listJoinedRooms(call.env, call.caller.id, list, input.view === "starred");
 		if (page === null) {
 			throw new OperationError(
 				"invalid",

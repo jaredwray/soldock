@@ -138,16 +138,21 @@ export async function listJoinedRooms(
 }
 
 /**
- * The joined rooms from a list of ids, with the newest message first: the list of an API key with a Chat
- * limit. The list has one page and no cursor, so it never names a room outside the ids. `query` keeps
- * the rooms whose name, or the name of the other member of a direct message, has the text.
+ * One page of the joined rooms from a list of ids, with the newest message first: the list of an API key
+ * with a Chat limit. The list reads only the rooms of the ids, so a page and its cursor never name a
+ * different room. `query` keeps the rooms whose name has the text, and a direct message has no name.
+ * Returns null for a cursor that is not from this list.
  */
 export async function listRoomsOf(
 	env: Env,
 	principalId: string,
 	roomIds: readonly string[],
-	input: { query: string | null; starred: boolean },
-): Promise<RoomRecord[]> {
+	input: ListInput,
+	starred = false,
+): Promise<RoomPage | null> {
+	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
+	if (input.cursor !== null && cursor === null) return null;
+	const after = cursor === null ? null : { activityAt: cursor[0], roomId: cursor[1] };
 	const principal = principalStub(env, principalId);
 	let found = await principal.chatRoomsOf(roomIds);
 	if (!found.seeded) {
@@ -155,12 +160,18 @@ export async function listRoomsOf(
 		found = await principal.chatRoomsOf(roomIds);
 	}
 	const wanted = input.query === null ? null : nameKey(input.query);
-	const time = (room: RoomRecord) => room.last_message_at ?? room.created_at;
-	return found.rooms
-		.map(toRecord)
-		.filter((room) => !input.starred || room.starred)
-		.filter((room) => wanted === null || nameKey(room.name ?? room.peer?.display_name ?? "").includes(wanted))
-		.sort((a, b) => time(b) - time(a) || (a.id < b.id ? 1 : -1));
+	const place = (entry: ChatRoomEntry): Position => ({ activityAt: entry.activity_at, roomId: entry.room_id });
+	const rooms = found.rooms
+		.filter((entry) => !starred || entry.starred)
+		.filter((entry) => wanted === null || (entry.name !== null && nameKey(entry.name).includes(wanted)))
+		.filter((entry) => after === null || isAfter(place(entry), after))
+		.sort((a, b) => (isAfter(place(a), place(b)) ? 1 : -1));
+	const shown = rooms.slice(0, input.limit);
+	const last = shown[shown.length - 1];
+	return {
+		rooms: shown.map(toRecord),
+		nextCursor: rooms.length > input.limit && last ? encodeCursor([last.activity_at, last.room_id]) : null,
+	};
 }
 
 /** A followed thread of a page, with the room as a record. */
