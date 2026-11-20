@@ -3,6 +3,7 @@ import {
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
+	type ChatAddressedReason,
 	type ChatBody,
 	type ChatEventReason,
 	type ChatFile,
@@ -16,6 +17,7 @@ import {
 	type RoomRole,
 } from "@asterra/contracts";
 import {
+	type ChatAddressedState,
 	type ChatRoomState,
 	type ChatThreadState,
 	type CredentialCheck,
@@ -212,6 +214,8 @@ interface MemberRow extends Row {
 	last_read_seq: number;
 	/** 1 when the member put its star on the room, else 0. */
 	starred: number;
+	/** The newest change of the room that is for the member, as the JSON of `ChatAddressedState`, or null. */
+	addressed_json: string | null;
 }
 
 interface MessageRow extends Row {
@@ -438,6 +442,9 @@ const MIGRATIONS: string[][] = [
 			next_attempt_at INTEGER NOT NULL
 		) WITHOUT ROWID`,
 	],
+	// The newest change that is for each member (`ChatAddressedState`), for chat.list_addressed and the
+	// resource `chat.addressed`. It is part of the member row, so it goes away when the member leaves.
+	["ALTER TABLE members ADD COLUMN addressed_json TEXT"],
 ];
 
 /**
@@ -825,6 +832,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				version: room.version,
 				starred: member.starred === 1,
 				threads: this.followedThreads(principalId),
+				addressed: member.addressed_json === null ? null : (JSON.parse(member.addressed_json) as ChatAddressedState),
 			},
 		};
 	}
@@ -2557,7 +2565,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/**
 	 * Records one chat event for the members except the actor, with the reason of each member. Call this
 	 * inside the room transaction, after the change of the message. `version` is the version that the
-	 * message got from the change.
+	 * message got from the change. Each member that the change is for also keeps it in its member row
+	 * (`addressed_json`).
 	 */
 	private queueChatEvent(event: {
 		room: RoomRow;
@@ -2582,6 +2591,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 			reason: reasonOf(member.principal_id),
 		}));
 		if (recipients.length === 0) return;
+		// The change is for each recipient whose reason is not `room`. The state of the room for that member
+		// has it, so the `PrincipalDO` of the member knows the change without a webhook.
+		const addressed = new Map<ChatAddressedReason, string[]>();
+		for (const recipient of recipients) {
+			if (recipient.reason === "room") continue;
+			addressed.set(recipient.reason, [...(addressed.get(recipient.reason) ?? []), recipient.id]);
+		}
+		for (const [reason, ids] of addressed) {
+			// One statement for each reason, so a mention of a group in a large room makes one write.
+			this.sql.exec(
+				"UPDATE members SET addressed_json = ?1 WHERE principal_id IN (SELECT value FROM json_each(?2))",
+				JSON.stringify({
+					event: event.eventType,
+					reason,
+					message_id: event.messageId,
+					parent_id: event.parentId,
+					author_id: event.authorId,
+					version: event.version,
+					at: event.now,
+				} satisfies ChatAddressedState),
+				JSON.stringify(ids),
+			);
+		}
 		const job: ChatWebhookEventJob = {
 			v: 1,
 			kind: "chat_event",

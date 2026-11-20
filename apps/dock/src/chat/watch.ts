@@ -81,61 +81,71 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 	},
 };
 
-/** The events of the events socket that change the `chat.rooms` resource. */
-const ROOM_EVENTS: ReadonlySet<string> = new Set(["chat.room", "chat.room_removed"]);
-
 /**
- * The change feed of the `chat.rooms` resource: each room of the caller. The feed is the events socket
- * of the caller, the same socket that the web app opens, so the `PrincipalDO` makes the same credential
- * checks for the two. Each `chat.room` and `chat.room_removed` event is one change.
+ * A change feed from the events socket of the caller, the same socket that the web app opens, so the
+ * `PrincipalDO` makes the same credential checks for the two. Each event whose type is in `types` is one
+ * change.
  *
- * The resource has no variables, and each caller that can call `chat.list_rooms` can watch it. A feed
- * counts for the limit of sockets of the principal. The object never closes a feed for that limit. At
- * the limit, it refuses a new feed, and the stream leaves the resource out.
+ * A resource of this feed has no variables, and each caller that can read the resource can watch it. A
+ * feed counts for the limit of sockets of the principal. The object never closes a feed for that limit.
+ * At the limit, it refuses a new feed, and the stream leaves the resource out.
  */
-const roomsWatcher: ResourceWatcher<CallContext> = {
-	async allowed(_call, resources) {
-		return resources.map(() => true);
-	},
+function eventsWatcher(types: ReadonlySet<string>): ResourceWatcher<CallContext> {
+	return {
+		async allowed(_call, resources) {
+			return resources.map(() => true);
+		},
 
-	async open(call, _vars, listener) {
-		let response: Response;
-		try {
-			response = await openEventsSocket(call.env, call.caller, { feed: true });
-		} catch (error) {
-			if (error instanceof OperationError && error.code === "conflict") return null;
-			throw error;
-		}
-		const socket = response.webSocket as WebSocket;
-		socket.accept();
-		let closed = false;
-		const ended = () => {
-			if (closed) return;
-			closed = true;
-			listener.end();
-		};
-		socket.addEventListener("message", (event) => {
-			if (closed || typeof event.data !== "string") return;
-			const type = eventType(event.data);
-			if (type !== null && ROOM_EVENTS.has(type)) listener.change();
-		});
-		socket.addEventListener("close", ended);
-		socket.addEventListener("error", ended);
-		return {
-			close() {
+		async open(call, _vars, listener) {
+			let response: Response;
+			try {
+				response = await openEventsSocket(call.env, call.caller, { feed: true });
+			} catch (error) {
+				if (error instanceof OperationError && error.code === "conflict") return null;
+				throw error;
+			}
+			const socket = response.webSocket as WebSocket;
+			socket.accept();
+			let closed = false;
+			const ended = () => {
 				if (closed) return;
 				closed = true;
-				try {
-					socket.close(1000, "The subscription ended.");
-				} catch {
-					// Closed already.
-				}
-			},
-		};
-	},
-};
+				listener.end();
+			};
+			socket.addEventListener("message", (event) => {
+				if (closed || typeof event.data !== "string") return;
+				const type = eventType(event.data);
+				if (type !== null && types.has(type)) listener.change();
+			});
+			socket.addEventListener("close", ended);
+			socket.addEventListener("error", ended);
+			return {
+				close() {
+					if (closed) return;
+					closed = true;
+					try {
+						socket.close(1000, "The subscription ended.");
+					} catch {
+						// Closed already.
+					}
+				},
+			};
+		},
+	};
+}
 
-export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room" | "chat.rooms"> = {
+/** The change feed of the `chat.rooms` resource: each change of each room of the caller. */
+const roomsWatcher = eventsWatcher(new Set(["chat.room", "chat.room_removed"]));
+
+/**
+ * The change feed of the `chat.addressed` resource: only a change that is for the caller. The room finds
+ * the reason of each member at the change, and the `PrincipalDO` sends `chat.addressed` for a change that
+ * is newer than the one that it has. So this feed reads no message.
+ */
+const addressedWatcher = eventsWatcher(new Set(["chat.addressed"]));
+
+export const chatWatchers: Pick<WatcherMap<CallContext>, "chat.room" | "chat.rooms" | "chat.addressed"> = {
 	"chat.room": roomWatcher,
 	"chat.rooms": roomsWatcher,
+	"chat.addressed": addressedWatcher,
 };

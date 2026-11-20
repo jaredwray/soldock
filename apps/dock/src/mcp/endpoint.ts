@@ -95,6 +95,7 @@ function instructions(caller: AuthContext, era: Era): string {
 		text.push(
 			"To get a notification when new mail arrives, call resources/list, then send subscriptions/listen with the URI of each inbox in notifications.resourceSubscriptions.",
 			"Each notifications/resources/updated names the inbox that has new mail. Read it with resources/read, or search it with mail_list_threads.",
+			"To get a notification only for a chat message that is for you, subscribe to asterra://chat/addressed, then call chat_list_addressed.",
 		);
 		if (readsAgents) text.push("You can read the inbox of an agent, but you cannot subscribe to it.");
 	}

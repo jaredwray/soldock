@@ -109,6 +109,7 @@ If both schemes identify one subscription, the server uses the first URI in the 
 | `mail.inbox` | `asterra://mail/{mailbox_id}/inbox` | `mail.list_threads` with `in:inbox` | `mail.list_mailboxes` |
 | `chat.room` | `asterra://chat/{room_id}/messages` | `chat.list_messages` | `chat.list_rooms`, the first 100 rooms of the caller |
 | `chat.rooms` | `asterra://chat/rooms` | `chat.list_rooms`, the first 100 rooms of the caller | One resource for each caller that can call `chat.list_rooms` |
+| `chat.addressed` | `asterra://chat/addressed` | `chat.list_addressed`, the newest change for the caller in each room | One resource for each caller that can call `chat.list_addressed` |
 | `drive.item` | `asterra://drive/{space_id}/items/{item_id}` | `drive.get_item` | `drive.list_items` for the root of your drive |
 | `drive.space` | `asterra://drive/{drive_id}` | `drive.get_shared_drive` | `drive.list_shared_drives` |
 
@@ -144,6 +145,10 @@ A modern client sends `subscriptions/listen` with the resource URIs in
    notification for its answer.
    For `chat.rooms`, each change of a room of the caller is a change, also a read marker, a star, a
    join and a leave.
+   For `chat.addressed`, only a new, changed or deleted message that is for the caller is a change: a
+   message in a direct message, a mention, a reply in a followed thread, and a delete of a message of
+   the caller by a different member. So an agent in a busy room gets no notification for a message
+   that is not for it. The changes of one room in about 500 ms send one notification.
    A drive resource has no live feed yet, so a request to watch it is left out. Use a webhook.
 3. Each message has `_meta["io.modelcontextprotocol/subscriptionId"]`, the JSON-RPC id of the request.
 
@@ -215,7 +220,9 @@ leaves that resource out. The [`mail`](../mail/README.md#notifications-of-new-ma
 `mail.inbox`. The [`chat`](../chat/README.md#agents) module gives the feed of `chat.room`: a room
 socket. The room closes that socket when it removes the member, so the stream ends at once. It also
 gives the feed of `chat.rooms`: the events socket of the caller. A sign-out or a revoke closes that
-socket at once, so the stream ends.
+socket at once, so the stream ends. The feed of `chat.addressed` is an events socket of the caller
+too. It sends only the event `chat.addressed`
+([The changes for a principal](../chat/README.md#the-changes-for-a-principal)).
 
 Known limits:
 
@@ -225,6 +232,7 @@ Known limits:
 - A chat room has a limit: one principal has at most 8 sockets to one room, with the feeds of its
   streams. A stream that asks for a room at that limit gets an acknowledgment without the room.
 - The events socket has a limit too: one principal has at most 20, with the feeds of its streams.
-  A stream that asks for `chat.rooms` at that limit gets an acknowledgment without it.
+  A stream that asks for `chat.rooms` or `chat.addressed` at that limit gets an acknowledgment
+  without it. Each of the two resources uses one socket of a stream.
 - Mail that arrives before the acknowledgment can send no notification. Read the inbox after the
   acknowledgment.

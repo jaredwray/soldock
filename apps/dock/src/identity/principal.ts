@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+	type ChatAddressedReason,
 	type ChatRoom,
+	type ChatWebhookEvent,
 	EVENTS_LIMITS,
 	EVENTS_SOCKET_CLOSE,
 	EVENTS_SOCKET_PROTOCOL,
@@ -44,6 +46,39 @@ export interface ChatRoomView {
 	 * `THREADS_PER_ROOM`. A state from before threads has none.
 	 */
 	threads?: readonly ChatThreadState[] | undefined;
+	/**
+	 * The newest change of the room that is for the principal, or null when the room has none. A state
+	 * from before this field has no value.
+	 */
+	addressed?: ChatAddressedState | null | undefined;
+}
+
+/**
+ * A change of a room that is for a principal, as the room sends it: the facts of the `data` of a chat
+ * webhook POST. `at` is in milliseconds.
+ */
+export interface ChatAddressedState {
+	event: ChatWebhookEvent;
+	reason: ChatAddressedReason;
+	message_id: string;
+	/** For a reply in a thread, the first message of the thread. */
+	parent_id: string | null;
+	author_id: string;
+	/** The version that the message got from the change. It grows with each change of the room. */
+	version: number;
+	at: number;
+}
+
+/** A change for the principal in a list, with the room that it is in. */
+export interface ChatAddressedEntry {
+	room: ChatRoomEntry;
+	change: ChatAddressedState;
+}
+
+export interface ChatAddressedQuery {
+	/** The place of the last change of the page before. */
+	after: { at: number; roomId: string } | null;
+	limit: number;
 }
 
 /** A thread that the principal follows, as the room sends it. Times are in milliseconds. */
@@ -232,6 +267,17 @@ const MIGRATIONS: string[][] = [
 			WHERE unread_count > 0`,
 		"ALTER TABLE chat_rooms ADD COLUMN threads_known INTEGER NOT NULL DEFAULT 0",
 	],
+	// The newest change of each room that is for the principal, from the state of the room. A room with
+	// no such change has no row. `version` shows a newer change, and `at` gives the order of the list.
+	[
+		`CREATE TABLE chat_addressed (
+			room_id TEXT PRIMARY KEY,
+			at INTEGER NOT NULL,
+			version INTEGER NOT NULL,
+			change_json TEXT NOT NULL
+		) WITHOUT ROWID`,
+		"CREATE INDEX chat_addressed_recent ON chat_addressed (at DESC, room_id DESC)",
+	],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -293,6 +339,8 @@ export class PrincipalDO extends DurableObject<Env> {
 		const kept: { room_id: string; joined: number }[] = [];
 		/** The rooms whose followed threads changed in this call. Each one gets `chat.threads`. */
 		const threadRooms: string[] = [];
+		/** The changes for the principal that are new in this call. Each one gets `chat.addressed`. */
+		const addressed: { room_id: string; change: ChatAddressedState }[] = [];
 		/** The rooms that were joined before this call. Only those get `chat.room_removed`. */
 		let joinedBefore = new Set<string>();
 		this.ctx.storage.transactionSync(() => {
@@ -352,6 +400,10 @@ export class PrincipalDO extends DurableObject<Env> {
 					if (view) this.sql.exec("UPDATE chat_rooms SET threads_known = 1 WHERE room_id = ?", state.room_id);
 					if (this.replaceThreads(state.room_id, threads)) threadRooms.push(state.room_id);
 				}
+				if (accepted.length > 0) {
+					const change = this.keepAddressed(state.room_id, view === null ? null : view.addressed);
+					if (change) addressed.push({ room_id: state.room_id, change });
+				}
 			}
 		});
 		if (kept.length === 0 || this.ctx.getWebSockets().length === 0) return;
@@ -373,6 +425,9 @@ export class PrincipalDO extends DurableObject<Env> {
 					else if (joinedBefore.has(row.room_id)) events.push({ type: "chat.room_removed", room_id: row.room_id });
 				}
 				for (const roomId of threadRooms) events.push({ type: "chat.threads", room_id: roomId });
+				for (const { room_id, change } of addressed) {
+					events.push({ type: "chat.addressed", room_id, ...change, at: new Date(change.at).toISOString() });
+				}
 				return events;
 			}),
 		);
@@ -407,6 +462,61 @@ export class PrincipalDO extends DurableObject<Env> {
 			);
 		}
 		return true;
+	}
+
+	/**
+	 * Keeps the newest change of one room that is for the principal. Returns the change when it is newer
+	 * than the kept one: only that change sends `chat.addressed`. Each state of a room has its newest
+	 * change, so most states have the kept change again, and write nothing. `null` removes the row: the
+	 * room has no such change, or the principal left it. A state from a room on an older version has no
+	 * value: the row stays as it was.
+	 */
+	private keepAddressed(roomId: string, next: ChatAddressedState | null | undefined): ChatAddressedState | null {
+		if (next === undefined) return null;
+		if (next === null) {
+			this.sql.exec("DELETE FROM chat_addressed WHERE room_id = ?", roomId);
+			return null;
+		}
+		const kept = this.sql
+			.exec<{ version: number }>("SELECT version FROM chat_addressed WHERE room_id = ?", roomId)
+			.toArray()[0];
+		if (kept && kept.version >= next.version) return null;
+		this.sql.exec(
+			"INSERT OR REPLACE INTO chat_addressed (room_id, at, version, change_json) VALUES (?, ?, ?, ?)",
+			roomId,
+			next.at,
+			next.version,
+			JSON.stringify(next),
+		);
+		return next;
+	}
+
+	/**
+	 * A page of the changes for the principal in its joined rooms, one for each room, with the newest
+	 * change first. One row more than `limit` tells that a next page exists.
+	 */
+	listChatAddressed(query: ChatAddressedQuery): { changes: ChatAddressedEntry[] } {
+		// The page reads `chat_addressed` first (CROSS JOIN), in the order of the index `chat_addressed_recent`,
+		// and seeks to the cursor with the row value.
+		const after = query.after;
+		const rows = this.sql
+			.exec<EntryRow & { change_json: string }>(
+				`SELECT chat_addressed.change_json, ${ROOM_COLUMNS}
+				FROM chat_addressed CROSS JOIN chat_rooms ON chat_rooms.room_id = chat_addressed.room_id
+				WHERE chat_rooms.joined = 1
+					${after ? "AND (chat_addressed.at, chat_addressed.room_id) < (?2, ?3)" : ""}
+				ORDER BY chat_addressed.at DESC, chat_addressed.room_id DESC
+				LIMIT ?1`,
+				query.limit + 1,
+				...(after ? [after.at, after.roomId] : []),
+			)
+			.toArray();
+		return {
+			changes: rows.map(({ change_json, ...room }) => ({
+				room: toEntry(room as EntryRow),
+				change: JSON.parse(change_json) as ChatAddressedState,
+			})),
+		};
 	}
 
 	/**

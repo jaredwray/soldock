@@ -29,6 +29,7 @@ import {
 const inbox = (mailboxId: string) => `asterra://mail/${mailboxId}/inbox`;
 const roomMessages = (roomId: string) => `asterra://chat/${roomId}/messages`;
 const ROOMS = "asterra://chat/rooms";
+const ADDRESSED = "asterra://chat/addressed";
 
 /** The owner, Ada and the agent Bot, with a team mailbox that Bot is a member of and one that Bot is not. */
 async function seedTeams() {
@@ -93,12 +94,14 @@ describe("MCP resources", () => {
 			expect.objectContaining({ uri: inbox(support.id), title: "Inbox of support <support@dock.test>" }),
 			// Each principal with chat.read has the resource of its rooms, also with no room.
 			expect.objectContaining({ uri: ROOMS, title: "Your rooms" }),
+			expect.objectContaining({ uri: ADDRESSED, title: "Messages for you" }),
 		]);
 		const templates = (await modern(bot.key, "resources/templates/list")).body?.result as Record<string, unknown>;
 		expect(templates.resourceTemplates).toEqual([
 			expect.objectContaining({ uriTemplate: "asterra://mail/{mailbox_id}/inbox", name: "mail.inbox" }),
 			expect.objectContaining({ uriTemplate: "asterra://chat/{room_id}/messages", name: "chat.room" }),
 			expect.objectContaining({ uriTemplate: "asterra://chat/rooms", name: "chat.rooms" }),
+			expect.objectContaining({ uriTemplate: "asterra://chat/addressed", name: "chat.addressed" }),
 			expect.objectContaining({ uriTemplate: "asterra://drive/{space_id}/items/{item_id}", name: "drive.item" }),
 			expect.objectContaining({ uriTemplate: "asterra://drive/{drive_id}", name: "drive.space" }),
 		]);
@@ -164,6 +167,7 @@ describe("MCP resources", () => {
 			expect.objectContaining({ uri: roomMessages(room.id), title: "Messages of #Launch" }),
 			expect.objectContaining({ uri: roomMessages(dm.id), title: "Direct message with Ada Lovelace" }),
 			expect.objectContaining({ uri: ROOMS, name: "chat.rooms", title: "Your rooms" }),
+			expect.objectContaining({ uri: ADDRESSED, name: "chat.addressed", title: "Messages for you" }),
 		]);
 		// Parity: the resource of all rooms runs chat.list_rooms, so it returns what REST returns.
 		const rooms = (await modern(bot.key, "resources/read", { uri: ROOMS })).body?.result as {
@@ -189,7 +193,11 @@ describe("MCP resources", () => {
 		const init = await mcp(bot.key, "initialize", { protocolVersion: "2025-11-25", capabilities: {} });
 		expect(init.body?.result).toMatchObject({ capabilities: { resources: { subscribe: false } } });
 		expect((await mcp(bot.key, "resources/list")).body?.result).toMatchObject({
-			resources: [expect.objectContaining({ uri: inbox(bot.id) }), expect.objectContaining({ uri: ROOMS })],
+			resources: [
+				expect.objectContaining({ uri: inbox(bot.id) }),
+				expect.objectContaining({ uri: ROOMS }),
+				expect.objectContaining({ uri: ADDRESSED }),
+			],
 		});
 	});
 });
@@ -443,6 +451,63 @@ describe("MCP subscriptions/listen", () => {
 		await bot.call("chat.remove_member", { room_id: later.id, principal_id: bot.id });
 		expect(await stream.next()).toEqual(updated(ROOMS));
 		await stream.cancel();
+	});
+
+	// An agent in a busy room must not start a turn of its model for each message of the room.
+	it("notifies only about a change that is for the caller, in each of its rooms, with one subscription", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		// The stream has its own key. The end of that key ends the stream, which shows each notification that waits.
+		const { api_key } = await owner.call("account.create_api_key", {
+			principal_id: bot.id,
+			label: "Stream",
+			scopes: ["chat.read"],
+		});
+		const stream = await listen(api_key.secret, [ADDRESSED]);
+		expect(await stream.next()).toMatchObject({
+			method: "notifications/subscriptions/acknowledged",
+			params: { notifications: { resourceSubscriptions: [ADDRESSED] } },
+		});
+		/** Waits until the object of the agent has the state of the room after a message. */
+		const arrived = (roomId: string, seq: number) =>
+			vi.waitFor(
+				async () =>
+					expect((await bot.call("chat.list_rooms")).rooms).toContainEqual(
+						expect.objectContaining({ id: roomId, last_seq: seq }),
+					),
+				{ timeout: 5000, interval: 50 },
+			);
+
+		// A message that names nobody, and a message of the agent, send nothing. A mention is the first notification.
+		const plain = await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
+		await arrived(room.id, plain.message.seq);
+		const own = await bot.call("chat.post_message", { room_id: room.id, text: "I am ready." });
+		await arrived(room.id, own.message.seq);
+		const named = await ada.call("chat.post_message", { room_id: room.id, text: "@bot can you check the invoices?" });
+		expect(await stream.next()).toEqual(updated(ADDRESSED));
+		// Parity: the read runs chat.list_addressed, so it returns what REST returns.
+		const read = (await modern(bot.key, "resources/read", { uri: ADDRESSED })).body?.result as {
+			contents: { mimeType: string; text: string }[];
+		};
+		expect(read.contents.map((content) => content.mimeType)).toEqual(["application/json"]);
+		const listed = await bot.call("chat.list_addressed", {});
+		expect(JSON.parse(read.contents[0]?.text ?? "null")).toEqual(listed);
+		expect(listed.changes).toEqual([
+			expect.objectContaining({ reason: "mention", message_id: named.message.id, version: named.message.version }),
+		]);
+
+		// A later message of the room that names nobody sends nothing, also though the room has a change for the agent.
+		const later = await ada.call("chat.post_message", { room_id: room.id, text: "Thank you all." });
+		await arrived(room.id, later.message.seq);
+		// A direct message in a room from after the start of the stream: no new subscription.
+		const { room: dm } = await owner.call("chat.open_dm", { principal_id: bot.id });
+		const hello = await owner.call("chat.post_message", { room_id: dm.id, text: "Hello" });
+		await arrived(dm.id, hello.message.seq);
+		expect(await stream.next()).toEqual(updated(ADDRESSED));
+
+		// The two notifications were the only ones: the end of the key ends the stream with no other one before.
+		await owner.call("account.revoke_api_key", { key_id: api_key.id });
+		expect(await stream.next()).toBe("closed");
 	});
 
 	// A feed that the object closes ends its stream, with all of its other feeds. So a socket must not close a feed.
