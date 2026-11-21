@@ -1673,7 +1673,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views and threads, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `agents`, `shared-mailboxes` or `domains` |
+| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
@@ -1685,6 +1685,10 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
 | `/chat/people/<prn_id>` | The profile of a person or an agent |
 | `/chat/threads` | The Threads view: the threads that the person follows |
+| `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, and fired reminders |
+| `/chat/saved` | Saved messages and personal reminders |
+| `/chat/drafts` | Server-synced drafts and scheduled messages |
+| `/chat/search` | Search across rooms |
 | `/settings` | Settings |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
