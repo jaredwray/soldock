@@ -30,6 +30,16 @@ export {
 	type RoomKind,
 	type RoomRole,
 } from "./chat.ts";
+export {
+	CHAT_PRESENCE_LIMITS,
+	ChatActivity,
+	ChatDndSchedule,
+	ChatNotificationLevel,
+	ChatNotificationSettings,
+	ChatPresence,
+	ChatPushSubscription,
+	ChatStatus,
+} from "./chat-notifications.ts";
 export { ApiError, type ClientOptions, createClient, type FetchLike } from "./client.ts";
 export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {

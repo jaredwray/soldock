@@ -16,6 +16,7 @@ import {
 	ORIGIN,
 	PASSWORD,
 	request,
+	restartLegacyRoom,
 	SETUP_TOKEN,
 	seedOrg,
 } from "./helpers.ts";
@@ -638,6 +639,10 @@ describe("the state of each principal", () => {
 			["Busy", 2],
 			["Quiet", 1],
 		]);
+
+		// A client outside Chat gets the total from these rooms on its first notification snapshot.
+		await forget();
+		expect(await bot.call("chat.get_notification_settings")).toMatchObject({ unread_count: 3, unread_complete: true });
 
 		// The public list fills the object too, so it has the state of the agent in each room that it joined.
 		await forget();
@@ -1582,8 +1587,7 @@ describe("the mention count", () => {
 		// The room goes back to the schema before the table: the migrations after it are undone too, the
 		// table of earlier versions, the columns of threads, the table of follows, the files and links, the
 		// change for each member, and the search tables.
-		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			const sql = state.storage.sql;
+		await restartLegacyRoom(room.id, 7, (sql) => {
 			sql.exec("DROP TABLE mentions");
 			sql.exec("DROP TABLE message_edits");
 			sql.exec("DROP TABLE thread_follows");
@@ -1605,10 +1609,7 @@ describe("the mention count", () => {
 			sql.exec("DROP TABLE messages_fts");
 			sql.exec("DROP TABLE search_mentions");
 			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 8 AS TEXT) WHERE key = 'schema_version'");
 		});
-		// A new start of the object runs the migration.
-		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// The node in a quote counts. The mention of the author and a deleted message do not count.
 		const count = async (actor: Actor) => (await actor.call("chat.get_room", { room_id: room.id })).room.mention_count;
 		expect([await count(bot), await count(ada)]).toEqual([1, 0]);
@@ -2200,8 +2201,7 @@ describe("threads", () => {
 		await reply(owner, room.id, plan.id, "Early");
 		const done = await reply(bot, room.id, plan.id, "Done");
 		// The room goes back to the schema before the table.
-		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			const sql = state.storage.sql;
+		await restartLegacyRoom(room.id, 10, (sql) => {
 			sql.exec("DROP TABLE thread_follows");
 			sql.exec("DROP TABLE message_files");
 			sql.exec("DROP TABLE link_jobs");
@@ -2210,9 +2210,7 @@ describe("threads", () => {
 			sql.exec("DROP TABLE messages_fts");
 			sql.exec("DROP TABLE search_mentions");
 			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 5 AS TEXT) WHERE key = 'schema_version'");
 		});
-		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message
 		// follows, and the replies from before do not show as new, also when it wrote a reply.
 		const follow = async (actor: Actor) =>

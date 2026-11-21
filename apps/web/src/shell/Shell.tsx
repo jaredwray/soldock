@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
-import { AdminPage } from "../features/admin/AdminPage.tsx";
 import { useSession } from "../features/auth/session.tsx";
 import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
-import { SettingsPage } from "../features/settings/SettingsPage.tsx";
 import { Icon } from "../lib/icons.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
+import { setPageTitle } from "../lib/pageTitle.ts";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
+import { useChatNotifications } from "../lib/useChatNotifications.ts";
 import { useOnChange } from "../lib/useOnChange.ts";
+import { usePrincipalActivity } from "../lib/usePrincipalActivity.ts";
 import { INBOX_PATH, ownMailboxPath, parseRoute } from "../routes.ts";
 import { MENU_BUTTON_ID, RAIL_ID, sidebarId } from "./nav.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import { Rail } from "./Rail.tsx";
 
-// Drive, its editors, Chat and the OAuth approval page are separate chunks. A person who uses only Mail does
+// The editors, Chat, Drive, Admin, Settings and the OAuth approval page are separate chunks. A person who uses only Mail does
 // not load them.
+const AdminPage = lazyPage(() => import("../features/admin/AdminPage.tsx").then((module) => module.AdminPage));
+const SettingsPage = lazyPage(() =>
+	import("../features/settings/SettingsPage.tsx").then((module) => module.SettingsPage),
+);
 const ChatApp = lazyPage(() => import("../features/chat/ChatApp.tsx").then((module) => module.ChatApp));
 const DriveApp = lazyPage(() => import("../features/drive/DriveApp.tsx").then((module) => module.DriveApp));
 const ConnectPage = lazyPage(() => import("../features/connect/ConnectPage.tsx").then((module) => module.ConnectPage));
@@ -33,6 +38,8 @@ export function Shell() {
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
 	// sign in again after the session ends. Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
+	useChatNotifications(whoami.principal.id);
+	usePrincipalActivity();
 	const needsPassword = whoami.sign_in?.password_set === false && route.page !== "settings";
 
 	// The sidebar of the page, or null. At 900px and below, the menu button opens it with the rail.
@@ -161,7 +168,7 @@ export function Shell() {
 
 function NotFound() {
 	useEffect(() => {
-		document.title = "Not found – Asterra";
+		setPageTitle("Not found – Asterra");
 	}, []);
 	return (
 		<main id="main" className="page-main" tabIndex={-1}>

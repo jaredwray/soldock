@@ -8,6 +8,25 @@ async function problemOf(response: Response): Promise<ApiError> {
 	return new ApiError(response.status, problem);
 }
 
+// The session cookie belongs to the browser. A second tab must reopen its sockets under the new account.
+const SESSION_CHANGED = "asterra-session-changed";
+
+export function announceSessionChange(): void {
+	try {
+		localStorage.setItem(SESSION_CHANGED, crypto.randomUUID());
+	} catch {
+		// Storage can be unavailable in a private browser.
+	}
+}
+
+export function onSessionChange(listener: () => void): () => void {
+	const changed = (event: StorageEvent) => {
+		if (event.key === SESSION_CHANGED) listener();
+	};
+	window.addEventListener("storage", changed);
+	return () => window.removeEventListener("storage", changed);
+}
+
 /**
  * Sends the address, the password and, on the second step, the TOTP code. A success sets an HttpOnly
  * session cookie. `totp_required` means that the password is correct and the person must send a code.
@@ -24,6 +43,7 @@ export async function createSession(input: SignInInput): Promise<SignInResult["s
 	if (!result.success) {
 		throw new Error("This page and the server are different versions. Reload the page to get the current version.");
 	}
+	if (result.data.status === "signed_in") announceSessionChange();
 	return result.data.status;
 }
 
@@ -34,6 +54,7 @@ export async function createSession(input: SignInInput): Promise<SignInResult["s
 export async function endSession(): Promise<void> {
 	const response = await fetch("/auth/sign-out", { method: "POST", credentials: "same-origin" });
 	if (!response.ok) throw await problemOf(response);
+	announceSessionChange();
 }
 
 export const SIGN_OUT_FAILED = "Sign-out did not finish, so you are still signed in. Try again.";

@@ -1,4 +1,4 @@
-import { CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, ChatSocketEvent } from "@asterra/contracts";
+import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, ChatSocketEvent } from "@asterra/contracts";
 
 // The live connections of the page: the socket of one open room, and the events socket of the person.
 // They have no DOM and no network of their own, so apps/web/test checks them. The two sockets use the
@@ -54,7 +54,9 @@ export interface LiveSocketOptions<E extends { type: string }> {
 	onLive?(live: boolean): void;
 }
 
-export interface RoomSocket {
+export interface LiveSocket {
+	/** Sends a frame only after the server accepts the connection. */
+	send(data: string): boolean;
 	/** The tab shows again, or the network came back: connect now, or test the connection. */
 	wake(): void;
 	/** Closes the connection. No new connection opens. */
@@ -72,22 +74,42 @@ export interface RoomSocket {
  * - A ping goes out at each `PING_MS`. The server answers `pong`. A connection that is silent for
  *   `PONG_MS` after a ping is closed and opened again.
  *
- * The socket only tells the page about changes. A lost event is safe: each `message` event has the
- * version of the room, and the sync of the room gets what the page did not get.
+ * A visible view subscribes to typing again after each reconnect. Typing events expire.
+ * The room version lets the page recover a message change after a disconnect.
  */
-export function createRoomSocket(options: RoomSocketOptions): RoomSocket {
-	return createLiveSocket<ChatSocketEvent>({
+export function createRoomSocket(options: RoomSocketOptions) {
+	let showing = false;
+	let lastTyped = -Infinity;
+	const connection = createLiveSocket<ChatSocketEvent>({
 		...options,
 		parse: (value) => {
 			const event = ChatSocketEvent.safeParse(value);
 			return event.success ? event.data : null;
 		},
 		protocol: CHAT_SOCKET_PROTOCOL,
+		onEvent(event) {
+			if (event.type === "hello" && showing) connection.send("show");
+			options.onEvent(event);
+		},
 	});
+	return {
+		wake: connection.wake,
+		close: connection.close,
+		show(visible: boolean) {
+			if (showing === visible) return;
+			showing = visible;
+			connection.send(visible ? "show" : "hide");
+		},
+		typing() {
+			const now = Date.now();
+			if (showing && now - lastTyped >= CHAT_LIMITS.typingIntervalMs && connection.send("typing")) lastTyped = now;
+		},
+	};
 }
+export type RoomSocket = ReturnType<typeof createRoomSocket>;
 
 /** Keeps one live connection open. See `createRoomSocket` for the rules. */
-export function createLiveSocket<E extends { type: string }>(options: LiveSocketOptions<E>): RoomSocket {
+export function createLiveSocket<E extends { type: string }>(options: LiveSocketOptions<E>): LiveSocket {
 	let connection: Connection | null = null;
 	let live = false;
 
@@ -194,6 +216,15 @@ export function createLiveSocket<E extends { type: string }>(options: LiveSocket
 
 	open();
 	return {
+		send(data) {
+			if (!live || !connection) return false;
+			try {
+				connection.send(data);
+				return true;
+			} catch {
+				return false;
+			}
+		},
 		wake() {
 			if (closed) return;
 			if (connection) {

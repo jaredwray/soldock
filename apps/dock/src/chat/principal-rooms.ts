@@ -55,7 +55,7 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
  * Returns null when the fill is complete. Else it returns the place in the list of the last room
  * that the fill asked, by the index. Each room that the fill did not ask comes after that place.
  */
-async function seed(env: Env, principalId: string): Promise<Position | null> {
+export async function seedJoinedRooms(env: Env, principalId: string): Promise<Position | null> {
 	const principal = principalStub(env, principalId);
 	const { results } = await env.DIRECTORY.prepare(
 		`SELECT m.room_id, r.activity_at FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
@@ -126,7 +126,7 @@ export async function listJoinedRooms(
 	// the fill, and then the list after that place. A search then finds an old room too.
 	let reached: Position | null = null;
 	if (!listed.seeded) {
-		reached = await seed(env, principalId);
+		reached = await seedJoinedRooms(env, principalId);
 		if (reached !== null && after !== null && !isAfter(reached, after)) reached = null;
 		listed = await principal.listChatRooms({ ...query, until: reached });
 	}
@@ -146,7 +146,7 @@ export async function joinedRoomRefs(env: Env, principalId: string): Promise<Cha
 	const principal = principalStub(env, principalId);
 	let found = await principal.chatRoomRefs();
 	if (!found.seeded) {
-		await seed(env, principalId);
+		await seedJoinedRooms(env, principalId);
 		found = await principal.chatRoomRefs();
 	}
 	return found.rooms;
@@ -163,7 +163,7 @@ export interface FollowedThread {
 /**
  * The first fill of the threads. A joined room sends its threads with each state since this version. A
  * room with no change since then sent none, so the first lists ask each such room for its state, in the
- * same parts as `seed`. A room that does not answer stays for the next list. The fill is complete when each
+ * same parts as `seedJoinedRooms`. A room that does not answer stays for the next list. The fill is complete when each
  * joined room answered one time.
  *
  * Returns true while rooms remain that the fill did not ask yet: more than `SEED_MAX`, or rooms of a fill of
@@ -175,7 +175,7 @@ async function fillThreads(env: Env, principalId: string): Promise<boolean> {
 	if (fill.filled) return false;
 	// The rooms from before the object come with the fill of the room list first.
 	if (!fill.seeded) {
-		await seed(env, principalId);
+		await seedJoinedRooms(env, principalId);
 		fill = await principal.threadFill(SEED_MAX + 1);
 	}
 	const asked = fill.rooms.slice(0, SEED_MAX);
@@ -299,7 +299,7 @@ export async function withOwnState(env: Env, principalId: string, page: RoomPage
 	const principal = principalStub(env, principalId);
 	let found = await principal.chatRoomsOf(ids);
 	if (!found.seeded) {
-		await seed(env, principalId);
+		await seedJoinedRooms(env, principalId);
 		found = await principal.chatRoomsOf(ids);
 	}
 	const own = new Map(found.rooms.map((entry) => [entry.room_id, toRecord(entry)]));

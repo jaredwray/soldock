@@ -170,7 +170,45 @@ describe("the events socket", () => {
 		expect(await listed(bot, room.id)).toMatchObject({ kind: "dm", peer: { principal_id: ada.id } });
 	});
 
-	it("answers a ping, and closes for each other message from the client", async () => {
+	it("returns one presence for all devices and only the requested principals, with a status until its end", async () => {
+		// Keep the runtime alarm in the future. The test runs each renewal explicitly.
+		vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
+		const laptop = await connect(bearer(ada.key));
+		const phone = await connect(bearer(ada.key));
+		const adaObject = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+		const presence = async () => (await bot.call("chat.get_presence", { principal_ids: ada.id })).principals;
+		const status = { text: "At lunch", emoji: "🍽️", expires_at: new Date(Date.now() + 60_000).toISOString() };
+		await ada.call("chat.set_status", { status });
+		const activity = (active: boolean) => JSON.stringify({ type: "chat.activity", active, room_id: null });
+
+		await vi.waitFor(async () => expect(await checkedSockets(ada.id)).toBe(2));
+		laptop.socket.send(activity(true));
+		phone.socket.send(activity(false));
+		await vi.waitFor(async () => {
+			await runDurableObjectAlarm(adaObject);
+			expect(await presence()).toEqual([{ principal_id: ada.id, availability: "active", status }]);
+		});
+
+		laptop.socket.close();
+		await vi.waitFor(async () => {
+			await runDurableObjectAlarm(adaObject);
+			expect(await presence()).toEqual([{ principal_id: ada.id, availability: "away", status }]);
+		});
+
+		// A delayed renewal expires on read. The next renewal sees the connected phone again.
+		vi.setSystemTime(Date.now() + 91_000);
+		expect(await presence()).toEqual([{ principal_id: ada.id, availability: "offline", status: null }]);
+		await runDurableObjectAlarm(adaObject);
+		expect(await presence()).toEqual([{ principal_id: ada.id, availability: "away", status: null }]);
+
+		phone.socket.close();
+		await vi.waitFor(async () => {
+			await runDurableObjectAlarm(adaObject);
+			expect(await presence()).toEqual([{ principal_id: ada.id, availability: "offline", status: null }]);
+		});
+	});
+
+	it("answers a ping, and closes for an unknown message from the client", async () => {
 		const socket = await connect(bearer(ada.key));
 		socket.socket.send("ping");
 		expect(await socket.next()).toBe("pong");

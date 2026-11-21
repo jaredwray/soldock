@@ -154,6 +154,46 @@ const rows = async () =>
 		).all<{ id: string; expires_at: string; secret: string }>()
 	).results;
 
+it("honors the agent's room level for both callbacks, including a retry after a mute", async () => {
+	const room = await privateRoom("Release");
+	const queue = await roomQueue(room.id);
+	await ada.call("directory.update_agent_policy", {
+		principal_id: bot.id,
+		mode: "allowlist",
+		allowlist: ["receiver.example.com"],
+	});
+	const webhook = "https://receiver.example.com/webhook";
+	const { endpoint } = await ada.call("webhooks.create_endpoint", { url: webhook });
+	await ada.call("chat.create_webhook_subscription", {
+		endpoint_id: endpoint.id,
+		principal_id: bot.id,
+		event: "chat.message.created",
+		filter: "all",
+	});
+	const { events } = receiver(() => new Response(null, { status: 503 }));
+	expect(resultOf(await subscribe(bot.key, "chat.message.created", { arguments: { filter: "all" } })).id).toBeTruthy();
+	await bot.call("chat.set_room_notification_level", { room_id: room.id, level: "mentions" });
+	await ada.call("chat.post_message", { room_id: room.id, text: "A draft" });
+	const { message } = await ada.call("chat.post_message", { room_id: room.id, text: "@bot review the draft" });
+	await queue.drain();
+	const { delivered } = await deliver(queue.events);
+	expect(
+		events()
+			.map((post) => [post.url, JSON.parse(post.body).data.message_id])
+			.sort(),
+	).toEqual(
+		[
+			[CALLBACK, message.id],
+			[webhook, message.id],
+		].sort(),
+	);
+	expect(delivered.sent).toHaveLength(2);
+
+	await bot.call("chat.set_room_notification_level", { room_id: room.id, level: "none" });
+	await consumeWebhooks(delivered.sent);
+	expect(events()).toHaveLength(2);
+});
+
 describe("the event catalog", () => {
 	// ChatGPT shows the events of events/list next to the tools. A credential must not see an event that
 	// events/subscribe refuses.

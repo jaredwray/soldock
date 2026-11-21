@@ -68,6 +68,9 @@ So the owner of a room that deletes a message of the target sends a POST with ea
 The fan-out applies the filter, so a message that is not for the target makes no delivery job and no POST.
 Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
 A subscription from before the filter keeps `all`.
+Before each POST, the consumer also checks the notification level and quiet hours of the target.
+This applies to signed webhooks and MCP Events callbacks, including retries.
+For example, a room set to `mentions` sends only events with the `mention` reason, even with an `all` subscription.
 No operation changes the filter of a webhook subscription. Delete the subscription and create it again.
 `chat.list_addressed` and the MCP resource `chat.addressed` use the same reasons: they have each change whose reason is not `room` ([Chat](../chat/README.md#the-changes-for-a-principal)).
 

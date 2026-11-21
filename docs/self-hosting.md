@@ -123,6 +123,33 @@ adds a binding, it adds the permission to this table too.
   scripts/smoke-check.sh http://localhost:8787
   ```
 
+## Web Push
+
+To enable browser notifications, set one VAPID key pair for each environment.
+Generate the pair on a trusted computer. Keep its private key in your secret store.
+
+```sh
+node --input-type=module <<'JS'
+import { generateKeyPairSync } from "node:crypto";
+const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+const { x, y, d } = privateKey.export({ format: "jwk" });
+const point = Buffer.concat([Buffer.from([4]), Buffer.from(x, "base64url"), Buffer.from(y, "base64url")]);
+console.log("VAPID_PUBLIC_KEY=" + point.toString("base64url"));
+console.log("VAPID_PRIVATE_KEY=" + d);
+JS
+```
+
+In the Cloudflare dashboard, open the dock Worker. Select **Settings › Variables and Secrets**.
+Add `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` as secrets. Add `VAPID_SUBJECT` with a contact address, such as `mailto:admin@example.org`.
+Keep the same pair across deploys. After a key change, each browser must subscribe with the new public key.
+
+The deploy creates the queue `soldock-chat-push`. The room sends its recipients in groups of up to ten.
+Each eligible device then gets a separate delivery job.
+The consumer checks the subscription, room membership and notification settings before each attempt.
+It encrypts the message location and the unread count for the device.
+A failed request gets up to five retries. An HTTP 404 or 410 removes that subscription.
+The job and the push service each have a time limit of one hour from the original message.
+
 ## Mail
 
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { endSession } from "./features/auth/auth.ts";
+import { endSession, onSessionChange } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
@@ -10,6 +10,7 @@ import { forgetOtherSearches } from "./features/chat/searchModel.ts";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
 import { currentAccount, onAccountChange, setAccount } from "./lib/account.ts";
 import { api, onUnauthenticated } from "./lib/api.ts";
+import { syncPushDevices } from "./lib/chatPush.ts";
 import { ToastProvider } from "./lib/toast.tsx";
 import { Shell } from "./shell/Shell.tsx";
 
@@ -17,6 +18,7 @@ import { Shell } from "./shell/Shell.tsx";
 // the counts of the emoji of the person and the recent searches of the person. They go away when the person signs out, and when a different person signs in. This runs
 // also when the Chat page did not load.
 function forgetOtherPeople(): void {
+	void syncPushDevices(currentAccount()).catch(() => {});
 	void forgetOthers(currentAccount());
 	forgetOtherDrafts(draftStorage(), currentAccount());
 	forgetOtherEmoji(draftStorage(), currentAccount());
@@ -35,11 +37,12 @@ export function App() {
 	 * so work that waits for the person from before stops before the page can call as the new person.
 	 */
 	const show = useCallback((next: SessionState) => {
+		const alreadySignedOut = currentAccount() === null;
 		setAccount(next.status === "signed-in" ? next.whoami.principal.id : null);
 		// A session can end while the page is closed. The page then starts with nobody signed in, which
 		// is no change of the person, so the listeners do not run. The server told that nobody is signed
 		// in: the browser must not keep the text of the person from before.
-		if (next.status === "signed-out") forgetOtherPeople();
+		if (alreadySignedOut && next.status === "signed-out") forgetOtherPeople();
 		setState(next);
 	}, []);
 
@@ -51,7 +54,9 @@ export function App() {
 	);
 
 	useEffect(() => {
+		const stop = onSessionChange(() => window.location.reload());
 		void load();
+		return stop;
 	}, [load]);
 
 	// Any 401 from an operation call ends the session in the UI.

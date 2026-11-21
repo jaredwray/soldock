@@ -1,6 +1,6 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, chatSocketPath } from "@asterra/contracts";
+import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, chatSocketPath } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SOCKET_MAX_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {
@@ -8,6 +8,7 @@ import {
 	bearer,
 	connectRoomSocket as connect,
 	ORIGIN,
+	readSocket,
 	request,
 	seedOrg,
 	signIn,
@@ -30,6 +31,21 @@ const UNKNOWN_ROOM = "rm_01JD0000000000000000000000";
 
 const privateRoom = async (creator: Actor, member_ids: string[]) =>
 	(await creator.call("chat.create_room", { kind: "private", name: "Launch", member_ids })).room;
+
+/** The runtime can answer ping before the object processes a visibility change. */
+async function waitForViews(roomId: string, count: number): Promise<void> {
+	const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
+	await vi.waitFor(async () => {
+		const visible = await runInDurableObject(
+			stub,
+			(_instance, state) =>
+				state
+					.getWebSockets()
+					.filter((socket) => socket.readyState === WebSocket.OPEN && socket.deserializeAttachment()?.showing).length,
+		);
+		expect(visible).toBe(count);
+	});
+}
 
 describe("a room socket", () => {
 	it("gets each new, changed and deleted message as the operations return it, for a person and for an agent", async () => {
@@ -219,7 +235,157 @@ describe("a room socket", () => {
 		for (const socket of sockets.slice(1)) expect(await socket.next()).toEqual({ type: "message", message: posted });
 	});
 
-	// Each change of a room is an operation. The socket is for events from the room only.
+	it("joins a room with 500 sockets with only a hello for the new socket", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		const first = await connect(room.id, bearer(bot.key));
+		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		const clients: WebSocket[] = [];
+		await runInDurableObject(stub, (_instance, state) => {
+			const attachment = state.getWebSockets()[0]?.deserializeAttachment();
+			for (let index = 1; index < 500; index++) {
+				const pair = new WebSocketPair();
+				const principalId = `prn_${String(index).padStart(26, "0")}`;
+				state.acceptWebSocket(pair[1], [`p:${principalId}`]);
+				pair[1].serializeAttachment({ ...attachment, credential: { ...attachment.credential, principalId } });
+				pair[0].accept();
+				clients.push(pair[0]);
+			}
+		});
+		const newcomer = readSocket(await upgrade(room.id, bearer(ada.key)));
+		expect(await newcomer.next()).toEqual({
+			type: "hello",
+			protocol: CHAT_SOCKET_PROTOCOL,
+			room_id: room.id,
+			version: first.version,
+		});
+		for (const reader of [first, newcomer]) {
+			reader.socket.send("ping");
+			expect(await reader.next()).toBe("pong");
+		}
+		await runInDurableObject(stub, (_instance, state) => {
+			expect(state.getWebSockets()).toHaveLength(501);
+			for (const client of clients) client.close(1000);
+		});
+	});
+
+	it("sends one temporary typing event to other visible views without a member call", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		await runDurableObjectAlarm(stub);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const first = await connect(room.id, bearer(ada.key));
+		const second = await connect(room.id, bearer(ada.key));
+		const viewer = await connect(room.id, bearer(bot.key));
+		const background = await connect(room.id, bearer(bot.key));
+		let memberCalls = 0;
+		await runInDurableObject(stub, (instance) => {
+			const target = instance as unknown as { env: Env };
+			const principals = target.env.PRINCIPAL;
+			target.env = {
+				...target.env,
+				PRINCIPAL: {
+					idFromName: (id: string) => principals.idFromName(id),
+					get: (id: DurableObjectId) => {
+						memberCalls += 1;
+						return principals.get(id);
+					},
+				} as Env["PRINCIPAL"],
+			};
+		});
+		for (const reader of [first, second, viewer]) reader.socket.send("show");
+		await waitForViews(room.id, 3);
+		const event = () => ({
+			type: "typing",
+			principal_id: ada.id,
+			expires_at: new Date(Date.now() + CHAT_LIMITS.typingLifetimeMs).toISOString(),
+		});
+		first.socket.send("typing");
+		expect(await viewer.next()).toEqual(event());
+		first.socket.send("typing");
+		first.socket.send("unknown");
+		expect(await first.next()).toEqual({ closed: 1008 });
+		second.socket.send("typing");
+		second.socket.send("hide");
+		await waitForViews(room.id, 1);
+		for (const reader of [background, viewer]) {
+			reader.socket.send("ping");
+			expect(await reader.next()).toBe("pong");
+		}
+		second.socket.send("show");
+
+		vi.setSystemTime(Date.now() + CHAT_LIMITS.typingIntervalMs);
+		second.socket.send("typing");
+		expect(await viewer.next()).toEqual(event());
+
+		viewer.socket.send("hide");
+		await waitForViews(room.id, 1);
+		vi.setSystemTime(Date.now() + CHAT_LIMITS.typingIntervalMs);
+		second.socket.send("typing");
+		second.socket.send("unknown");
+		expect(await second.next()).toEqual({ closed: 1008 });
+		viewer.socket.send("ping");
+		expect(await viewer.next()).toBe("pong");
+		expect(memberCalls).toBe(0);
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).version).toBe(first.version);
+	});
+
+	it("keeps a member's typing limit after the sockets close and the room starts again", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		async function openViews() {
+			const sender = await connect(room.id, bearer(ada.key));
+			const observer = await connect(room.id, bearer(bot.key));
+			sender.socket.send("show");
+			observer.socket.send("show");
+			await waitForViews(room.id, 2);
+			return { sender, observer };
+		}
+		const first = await openViews();
+		first.sender.socket.send("typing");
+		expect(await first.observer.next()).toMatchObject({ type: "typing", principal_id: ada.id });
+		for (const reader of [first.sender, first.observer]) {
+			reader.socket.close(1000);
+			expect(await reader.next()).toEqual({ closed: 1000 });
+		}
+		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		await expect(runInDurableObject(stub, (_instance, state) => state.abort())).rejects.toThrow();
+		const { sender, observer } = await openViews();
+		sender.socket.send("typing");
+		sender.socket.send("unknown");
+		expect(await sender.next()).toEqual({ closed: 1008 });
+		observer.socket.send("ping");
+		expect(await observer.next()).toBe("pong");
+	});
+
+	it("requires write access to announce typing and checks the sender again after revocation", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		const { api_key: reader } = await ada.call("account.create_api_key", {
+			principal_id: bot.id,
+			label: "Read",
+			scopes: ["chat.read"],
+		});
+		const { api_key: writer } = await ada.call("account.create_api_key", {
+			principal_id: bot.id,
+			label: "Write",
+			scopes: ["chat.read", "chat.write"],
+		});
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const viewer = await connect(room.id, bearer(ada.key));
+		const read = await connect(room.id, bearer(reader.secret));
+		const write = await connect(room.id, bearer(writer.secret));
+		for (const socket of [viewer, read, write]) socket.socket.send("show");
+		await waitForViews(room.id, 3);
+		read.socket.send("typing");
+		read.socket.send("ping");
+		expect(await read.next()).toBe("pong");
+		await ada.call("account.revoke_api_key", { key_id: writer.id });
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		write.socket.send("typing");
+		expect(await write.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.ended });
+		viewer.socket.send("ping");
+		expect(await viewer.next()).toBe("pong");
+	});
+	// Only operations can change the messages in the room.
 	it("answers a ping, and closes when the client sends a message", async () => {
 		const room = await privateRoom(ada, []);
 		const mine = await connect(room.id, bearer(ada.key));

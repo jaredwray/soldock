@@ -1,18 +1,18 @@
 # `chat` module
 
-> Status: **started**. Two layers exist. The first layer has public and private rooms, direct
+> Status: **started**. The first layer has public and private rooms, direct
 > messages, messages with plain text, the read marker, and access for people and agents. The
 > second layer has the live socket of a room. Outbound webhooks notify members of new messages. The
 > third layer starts with the state of each principal in its `PrincipalDO`: the joined rooms, the
 > read markers and the unread counts. Layer 5 has files in messages, through Drive, and link
 > previews. Layer 6 has search: in one room, and in each room of the caller with the index of the
-> organization. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
+> organization. Layer 7 adds notifications, presence and typing. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
 > the module's contract. The plan for the next layers is in
 > [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews, search in one room and in each room of the caller. Later: browser notifications. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews, search in one room and in each room of the caller. It also supports browser notifications, presence and typing. |
 | **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it; `ChatSearchDO` (the search index of the organization: the plain text and the filter values of each message). |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/`). |
 | **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
@@ -124,7 +124,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     back to the same body.
   - `body`: the tree.
 - Each message has `body`, `markdown` (the body as Markdown, for agents and for an edit by an agent) and `text`:
-  the plain text of the body, one line for each block. Search and notifications use `text`.
+  the plain text of the body, one line for each block. Search uses `text`. Push notifications carry message identifiers.
 - The plain text has at most 8,000 characters (`CHAT_LIMITS.messageChars`), and one character that
   is not a space. The Markdown has at most 16,000 characters, and the JSON of the body at most
   64 KB. The limit of the Markdown applies to the input and to the Markdown that the server makes
@@ -180,7 +180,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     principal, without the author. A post and an edit write the rows of the message again, and a
     delete removes them. `mention_count` of a member counts its rows after its read marker (see
     [The read marker](#the-read-marker)).
-  - The room sends no notification of its own yet. A webhook for chat messages
+  - The [notification settings](#notifications-and-presence) control alerts for each member. A webhook for chat messages
     ([Webhooks for chat messages](#webhooks-for-chat-messages)) tells about each new message, or with the
     filter `addressed` only about a message for the principal. Its POST has the reason, for example `mention`.
 - **Mentions of a group.** `@here` and `@channel` mention each member of the room, except the
@@ -192,8 +192,6 @@ A room is one `ChatRoomDO`. The id of the room names the object.
     address as its handle.
   - Each message returns `group_mentions`: its groups, each one time. The plain text and the
     Markdown have `@` and the group.
-  - Until presence (layer 7, [jaredwray/soldock#76](https://github.com/jaredwray/soldock/issues/76)),
-    `@here` mentions each member too, as `@channel` does.
   - The limit by role: in a room with more than 50 members (`CHAT_LIMITS.groupMentionMembers`), only
     an owner of the room can add a mention of a group. A different member gets `forbidden`. An edit
     can keep the groups that the message has already, so its author can still change the text of a
@@ -291,7 +289,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
       rooms that sent no threads for its state (`stateFor`), at most 200 in one call, 25 at the same time,
       as the fill of the room list. A room that does not answer stays for the next list. When each room
       answered, the object records that the fill is complete, and later lists ask nothing. The fill of the
-      room list (`seed`) runs first when the object needs it.
+      room list (`seedJoinedRooms`) runs first when the object needs it.
     - While rooms remain that the fill did not ask (more than 200), the page is empty, and its
       `next_cursor` asks for the next part of the fill. The first page after the fill starts at the top. A
       later part of the fill could put a thread before the place of a cursor, so a cursor of a place comes
@@ -408,8 +406,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   - An edit that adds a mention to a message at or before the marker gives no count. The member read
     that message.
   - A mention of a principal that is not a member of a public room gives no count. That principal has
-    no state for the room. Notifications are part of layer 7
-    ([jaredwray/soldock#76](https://github.com/jaredwray/soldock/issues/76)).
+    no state for the room and receives no notification.
   - The rows of a principal that leaves the room stay. Only a member has a count, and a join starts
     after the newest message.
 - A post sets the marker of its author to the new message. A new member starts with each message
@@ -481,7 +478,7 @@ role, `last_read_seq`, `unread_count`, `mention_count`, the star and the other m
   target stays in the outbox, and the alarm tries again (1 minute, doubled, at most 1 hour).
 - The list of a principal can be behind for that time. `chat.get_room` and `chat.list_messages`
   read the room object, so they are always current.
-- The first list of a principal fills its object (`seed`), in the joined view and in the public
+- The first list of a principal fills its object (`seedJoinedRooms`), in the joined view and in the public
   view. A principal can have rooms from the time before the object existed. Those rooms are in the
   index in D1 only. So the fill reads the rooms of the principal in `chat_members`. Then it asks each
   room that sent no state yet for its state:
@@ -576,18 +573,55 @@ The public view reads an index in D1 `DIRECTORY`:
   state of the caller from its `PrincipalDO` replaces it when that object has the room.
 - Each post makes one D1 batch: the room row.
 
+## Notifications and presence
+
+Each principal chooses a default notification level. A room can inherit the default or use its own level.
+
+| Level | New messages that qualify |
+| --- | --- |
+| `all` (default) | Each message from another member |
+| `mentions` | A mention of the principal or a group in the room |
+| `none` | None |
+
+Quiet hours repeat in the principal's time zone. A schedule can cross midnight. Equal start and end times cover the whole day.
+Quiet hours and room levels control alerts. The read marker still controls the unread count.
+The total uses the unread counts of all joined rooms, including rooms outside the first page. Each room contributes at most 100.
+The app shows the count in the tab title and on the installed app where the browser supports badges.
+For a principal with rooms from before layer 3, `chat.get_notification_settings` also fills its room list.
+One snapshot asks at most 200 such rooms. The client requests another snapshot while `unread_complete` is false.
+
+The room records the event and its recipients in the same transaction as the message.
+A queue processes the event even when the recipient has no open tab.
+Each device has a separate subscription and receives an encrypted Web Push message.
+An active view of the room suppresses push on all devices of that principal.
+The consumer checks the current membership, credential, subscription and settings before delivery.
+A temporary failure retries. HTTP 404 and 410 remove the expired subscription.
+A click opens the message in its room or thread.
+The [deployment instructions](../../../../docs/self-hosting.md) describe the VAPID keys.
+
+An agent receives a signed callback through a Chat webhook or an MCP Events subscription.
+The target's settings and the subscription filter both apply.
+The read operations and the resource change feeds keep their normal room and thread history.
+
+The events socket reports the activity of its device. An active device makes the principal active.
+An open, idle device makes the principal away when no other device is active.
+A client reads presence and custom status for the principals it displays, in groups of up to 50 every ten seconds.
+The presence read uses the directory. A join needs no room roster or presence broadcast.
+See the [identity module](../identity/README.md) for presence leases and status expiry.
+
 ## The socket of a room
 
 A member can open a WebSocket to a room: `GET /ws/chat/rooms/{room_id}` with an upgrade. The room
 sends each change to its sockets at once. `chatSocketPath`, `ChatSocketEvent` and
 `CHAT_SOCKET_CLOSE` of the contracts are the contract of the socket.
 
-### Events only
+### Socket events
 
-- The socket carries events from the room only. Each change of a room is an operation, with REST
-  and MCP. So the socket adds no second way to write.
-- A message from a client closes the socket with code `1008`. The text `ping` is the exception: the
-  runtime answers `pong`, and the room object stays asleep.
+- Each stored change uses an operation with REST and MCP.
+- A client sends `show` when it displays the room and `hide` when it stops.
+- A visible client with `chat.write` can send `typing`. The room accepts one event per member every three seconds. The limit applies across tabs and after a reconnect.
+- Only other clients that show the room receive the event. The indicator expires after six seconds. Typing makes no outbox entry and calls no member object.
+- The runtime answers `ping` with `pong` while the object sleeps. Other frames close the socket with code `1008`.
 - The room object accepts the socket with `acceptWebSocket`. It can sleep while its sockets wait,
   and it wakes for a change.
 
@@ -597,6 +631,7 @@ sends each change to its sockets at once. `chatSocketPath`, `ChatSocketEvent` an
 | `message` | A message of the room list is new, changed or deleted | `message`: the message as `chat.list_messages` returns it |
 | `reply` | A reply that is not in the room list is new, changed or deleted | `message`: the reply as `chat.list_replies` returns it |
 | `room` | The name, the topic or the members changed | None. Call `chat.get_room` |
+| `typing` | Another member types in this room | `principal_id`, `expires_at` |
 
 - A client from before threads ignores `reply`, which its parse does not know. The missing version
   starts its sync, and `chat.list_messages` leaves the reply out. So an old client never shows a reply
@@ -655,7 +690,7 @@ A socket stays open after its request. It must not outlive the access that opene
 | `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, or an OAuth access token stopped while its connection works | Opens a new socket. An OAuth client uses its new token |
 | `4002` (`replaced`) | The member opened more than 8 sockets to the room (`CHAT_LIMITS.socketsPerMember`), and this one is the oldest | Opens no new socket for this one |
 | `4003` (`ended`) | The credential stopped and cannot be renewed, or the principal is not a member now | Opens no new socket with this credential |
-| `1008` | The client sent a message | A client must send nothing but `ping`. The web app sends nothing else |
+| `1008` | The client sent an unknown frame | Use the frames in [Socket events](#socket-events) |
 
 ### Agents
 
@@ -1076,7 +1111,7 @@ Known limits:
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
+| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key. A reply has `parent_id` and `also_in_room`. A parent keeps the summary of its replies (`reply_count`, `last_reply_at`, `reply_authors_json`) |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
@@ -1098,6 +1133,11 @@ Known limits:
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `search_stamp` grows with each batch that the room sends to the search index. `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
+| Notification settings and unread total | `PrincipalDO` metadata and `chat_notification_levels` | One default, quiet hours, a sound setting, room overrides and the aggregate unread count |
+| Devices and live alerts | `PrincipalDO` tables `chat_push_devices` and `chat_notification_sounds` | Each device has its endpoint, encryption keys and credential reference. Recent sound events suppress duplicates |
+| Notification outbox | `ChatRoomDO` table `chat_notification_outbox` | Created in the message transaction and kept until the push queue accepts its recipients |
+| Push jobs | Queue `soldock-chat-push` | Recipient and message identifiers. The consumer reads the current keys before it sends |
+| Presence and status | D1 `principals` and the open sockets of the principal | Availability expires. Each status has text, an emoji and an optional end time |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migration `0006_chat_index.sql`. `chat_members.last_read_seq` has the marker at the time of the join only |
 
@@ -1107,8 +1147,7 @@ files of messages are items of Drive: the room holds no reference to their bytes
 
 ## Later layers
 
-Not built yet: notifications of mentions, files of a shared drive in a message, the files of a moved
-item in a message, the MCP resource for the events of a principal, presence, typing,
-browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots,
+Not built yet: files of a shared drive in a message, the files of a moved
+item in a message, group direct messages, room deletion and archive, incoming webhooks for bots,
 sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.

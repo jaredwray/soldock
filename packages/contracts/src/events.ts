@@ -1,8 +1,8 @@
-import { z } from "zod";
 import { ChatAddressedChange, ChatRoom } from "./chat.ts";
+import { z } from "./zod.ts";
 
 // The events socket of a principal: one socket for each tab or client, with the changes of the state
-// of the principal. It carries events from the server only. Each change is an operation.
+// of the principal. A client can report its activity on this socket.
 
 /** The version of the events of this socket. A new version can add event types. */
 export const EVENTS_SOCKET_PROTOCOL = 1;
@@ -47,6 +47,13 @@ export const PrincipalEvent = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("chat.room"), room: ChatRoom }),
 	z.object({ type: z.literal("chat.room_removed"), room_id: z.string() }),
 	z.object({ type: z.literal("chat.threads"), room_id: z.string() }),
+	z.object({ type: z.literal("chat.unread"), unread_count: z.number().int().nonnegative() }),
+	z.object({
+		type: z.literal("chat.notification"),
+		room_id: z.string(),
+		message_id: z.string(),
+		parent_id: z.string().nullable(),
+	}),
 	ChatAddressedChange.omit({ room: true }).extend({ type: z.literal("chat.addressed"), room_id: z.string() }),
 ]);
 export type PrincipalEvent = z.infer<typeof PrincipalEvent>;

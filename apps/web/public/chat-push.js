@@ -1,0 +1,58 @@
+// The registration scope identifies the person who enabled notifications on this device.
+function messagePath(data) {
+	if (!data || !/^(rm|dm)_[A-Za-z0-9_-]+$/.test(data.room_id)) return null;
+	const scope = new URL(self.registration.scope);
+	if (scope.pathname !== `/chat-push/${encodeURIComponent(data.principal_id)}/`) return null;
+	const seq = (n) => Number.isSafeInteger(n) && n > 0;
+	if (!seq(data.seq) || (data.parent_seq !== null && !seq(data.parent_seq))) return null;
+	const path = `/chat/${data.room_id}`;
+	return data.parent_seq === null ? `${path}/${data.seq}` : `${path}/${data.parent_seq}/${data.seq}`;
+}
+
+self.addEventListener("push", (event) => {
+	if (!event.data) return;
+	let message;
+	try {
+		message = event.data.json();
+	} catch {
+		return;
+	}
+	const path = messagePath(message);
+	if (!path) return;
+	event.waitUntil(showMessage(message, path));
+});
+
+async function showMessage(message, path) {
+	const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+	// The focused page plays the account's tone on its socket.
+	const focused = windows.some((client) => client.focused && client.visibilityState === "visible");
+	const badge =
+		Number.isSafeInteger(message.unread_count) && message.unread_count >= 0
+			? self.navigator.setAppBadge?.(message.unread_count).catch(() => {})
+			: undefined;
+	await Promise.all([
+		badge,
+		self.registration.showNotification("New chat message", {
+			body: "Open the message in Asterra.",
+			icon: "/icon-192.png",
+			tag: path,
+			silent: !message.sound || focused,
+			data: message,
+		}),
+	]);
+}
+
+self.addEventListener("notificationclick", (event) => {
+	event.notification.close();
+	const path = messagePath(event.notification.data);
+	if (!path) return;
+	event.waitUntil(
+		(async () => {
+			const target = new URL(path, self.location.origin).href;
+			const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+			const open = windows.find((client) => client.url === target);
+			if (open) await open.focus();
+			else await self.clients.openWindow(target);
+		})(),
+	);
+});

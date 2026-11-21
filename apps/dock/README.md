@@ -65,7 +65,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound`, `soldock-webhooks` and `soldock-chat-previews` (the link previews of Chat),
+  `soldock-mail-inbound`, `soldock-webhooks`, `soldock-chat-push` and `soldock-chat-previews`,
   and acknowledges batches of other queues.
   `scheduled` logs.
 
@@ -78,6 +78,8 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, the bytes and the small picture of each version of each Drive file, the parts of an upload in progress, the images of docs, and the pictures of link previews of Chat |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
+| `CHAT_PUSH` | Queue producer | Recipient groups and one delivery job per eligible device. The consumer checks current access before each attempt |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets | The VAPID key pair and contact address for browser push. See [Web Push setup](../../docs/self-hosting.md#web-push) |
 | `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
@@ -132,6 +134,7 @@ with injected inbound mail.
 | The search index of Chat (a copy: the plain text and the filter values of each message) | [`chat`](src/chat/README.md#search-across-rooms) | `ChatSearchDO` SQLite |
 | Pictures of link previews | [`chat`](src/chat/README.md#link-previews) | R2 `BLOBS`, `chat/<room id>/<message id>/link-<id>` |
 | The cache of link previews | [`chat`](src/chat/README.md#link-previews) | D1 `DIRECTORY`, table `link_previews` |
+| Web Push jobs | [`chat`](src/chat/README.md) | Queue `soldock-chat-push`. Each job holds ids, an event reason and the event time. The subscription keys stay in the principal object |
 | Jobs of link previews | [`chat`](src/chat/README.md#link-previews) | Queue `soldock-chat-previews` |
 | The room index of Chat (a copy for the lists) | [`chat`](src/chat/README.md) | D1 `DIRECTORY`, tables `chat_rooms` and `chat_members` |
 

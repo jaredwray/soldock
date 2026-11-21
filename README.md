@@ -65,6 +65,9 @@ messages. A new message shows at once in an open room. Type `@` to mention a per
 the box suggests names, and the mention links to a profile. Search finds the messages of one room,
 or of all your rooms, with filters such as `from:`, `in:` and `has:link`.
 
+Choose which rooms can notify you and set quiet hours in Settings. A push notification opens the
+message or reply. Chat also shows when a member is active and when someone types in the open room.
+
 ![The Design room of Chat: a person asks the Research Agent for notes, and the agent answers](docs/screenshots/chat.png)
 
 ### Drive, Docs and Sheets

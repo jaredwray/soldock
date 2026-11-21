@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { useSession } from "../auth/session.tsx";
 import { type MessageWatch, useRoomWatch } from "./data.ts";
@@ -93,7 +94,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 	const listeners = useRef(new Set<(event: MessageWatch) => void>());
 
 	useEffect(() => {
-		document.title = "Threads – Asterra";
+		setPageTitle("Threads – Asterra");
 	}, []);
 
 	// Each tick, and each "Try again", reads the list again, with at least the threads that show.

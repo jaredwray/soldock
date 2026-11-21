@@ -1,3 +1,4 @@
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import "./chat.css";
 import type { ChatRoom } from "@asterra/contracts";
 import { useEffect, useId, useRef, useState } from "react";
@@ -13,6 +14,7 @@ import { useSession } from "../auth/session.tsx";
 import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
+import { Presence, PresenceProvider } from "./Presence.tsx";
 import { ProfileView } from "./ProfileView.tsx";
 import { RoomView } from "./RoomView.tsx";
 import { SearchView } from "./SearchView.tsx";
@@ -41,7 +43,15 @@ export interface ChatAppProps {
 type ChatDialog = "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
-export function ChatApp({
+export function ChatApp(props: ChatAppProps) {
+	return (
+		<PresenceProvider>
+			<ChatWorkspace {...props} />
+		</PresenceProvider>
+	);
+}
+
+function ChatWorkspace({
 	roomId,
 	messageSeq,
 	replySeq,
@@ -67,7 +77,7 @@ export function ChatApp({
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null && !threads && search === null) document.title = "Chat – Asterra";
+		if (roomId === null && profileId === null && !threads && search === null) setPageTitle("Chat – Asterra");
 	}, [roomId, profileId, threads, search]);
 
 	// Ctrl+F and ⌘F open the Search view of Chat, for all rooms. In the Search view, the keys move the focus
@@ -389,6 +399,7 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 					<Icon name={room.kind === "private" ? "lock" : "hash"} />
 				)}
 				<span className="nav-name">{title}</span>
+				{room.peer && <Presence id={room.peer.principal_id} compact />}
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{/* A mention of the person has a badge of its own color, with "@" and the count of mentions. */}
 				{unread && room.mention_count > 0 ? (
