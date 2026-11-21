@@ -58,7 +58,9 @@ describe("activity feed and sidebar sections", () => {
 		});
 
 		const before = await ada.call("chat.list_activity");
-		const one = await ada.call("chat.mark_activity_read", { activity_id: before.items[0]!.id });
+		const firstActivity = before.items[0];
+		expect(firstActivity).toBeDefined();
+		const one = await ada.call("chat.mark_activity_read", { activity_id: firstActivity?.id });
 		expect(one.unread_count).toBe(1);
 		const all = await ada.call("chat.mark_activity_read", {});
 		expect(all.unread_count).toBe(0);
@@ -399,7 +401,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		// Listing omits the signing secret.
 		const hooks = (await ada.call("chat.list_incoming_webhooks", { room_id: room.id })).webhooks;
 		expect(hooks).toHaveLength(1);
-		expect("signing_secret" in hooks[0]!).toBe(false);
+		expect("signing_secret" in (hooks[0] ?? {})).toBe(false);
 
 		const payload = JSON.stringify({
 			text: "CPU spike on prod-1",
