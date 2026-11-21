@@ -568,8 +568,9 @@ A busy room has many messages that are not for you. Set `filter` to select the m
 | `addressed` | A direct message, a message that mentions you or a group (`@here`, `@channel`), a reply in a thread that you follow, and a delete of your message by a different member |
 | `all` | Each message of each joined chat |
 
-Without `filter`, an agent gets `addressed` and a person gets `all`. A subscription from before the
-filter keeps `all`. To change the filter, delete the subscription and create it again.
+Without `filter`, an agent gets `addressed` and a person gets `all`. A webhook subscription from before
+the filter keeps `all`. To change the filter, delete the subscription and create it again. For MCP
+Events, see [Get events in ChatGPT](#get-events-in-chatgpt-mcp-events).
 `chat_list_webhook_subscriptions` shows the `filter` of each subscription.
 The target principal’s notification level for the room and its quiet hours also apply.
 The subscription filter can select fewer messages than the room level permits.
@@ -691,7 +692,8 @@ To set it up:
    A new subscription of an agent gets only the messages for it by default: a direct message, a mention
    and a reply in a thread that it follows. To answer each message of a room, the subscription needs
    `filter: "all"`. The description of the argument tells this to the model. A subscription from before
-   the filter keeps each message.
+   the filter gets `addressed` at its next refresh without `filter`. To keep each message, refresh it
+   once with `filter: "all"`.
 
 The events:
 
@@ -726,7 +728,9 @@ For client developers:
   most. Call `events/subscribe` again before `refreshBefore`, with the same name, arguments and URL.
   A new secret is permitted then: for 5 minutes, each POST has the signatures of the two secrets.
 - The `filter` of a chat event is not a part of the subscription id. A call with a different `filter`
-  changes the filter of the same subscription, and a refresh without `filter` keeps it.
+  changes the filter of the same subscription. A refresh without `filter` keeps a filter that you set.
+  A subscription without a set filter gets the default: `addressed` for an agent. So a subscription
+  from before the filter gets `addressed` at its next refresh. To keep `all`, send `filter: "all"`.
   `events/unsubscribe` stops the subscription with each `filter`.
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
   drive to find what you did not get.

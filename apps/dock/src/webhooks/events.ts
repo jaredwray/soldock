@@ -102,8 +102,8 @@ function parseArguments(
  * The id of a subscription. The same principal, credential, URL, event, target and room give the same id,
  * so a second events/subscribe refreshes the subscription, and a different credential cannot stop it.
  * The message filter of Chat is not a part of the id: a refresh with a different filter changes the
- * filter, and a refresh without a filter keeps it. So one URL never gets one message from two
- * subscriptions that differ only in the filter.
+ * filter, and a refresh without a filter keeps a filter that the client set. So one URL never gets one
+ * message from two subscriptions that differ only in the filter.
  */
 async function subscriptionId(
 	call: CallContext,
@@ -297,11 +297,15 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				? Math.max(MCP_EVENT_LIMITS.minTtlMs, Math.min(input.ttlMs, MCP_EVENT_LIMITS.ttlMs))
 				: MCP_EVENT_LIMITS.ttlMs;
 		const expiresAt = new Date(now + life).toISOString();
+		// The filter of a chat subscription without `filter` in the arguments. Mail and Drive have no filter.
+		const defaultFilter = event.domain === "chat" ? defaultChatWebhookFilter(call.caller.kind) : "all";
 
 		/**
 		 * Gives the subscription its new end and its new secret. A subscription that stopped starts again.
-		 * A filter in the arguments replaces the filter. Without one, the subscription keeps its filter: a
-		 * subscription from before the filter keeps `all`, and a client that sends the same call gets the same events.
+		 * A filter in the arguments replaces the filter, and the subscription records that the client set it.
+		 * Without one, the subscription keeps a filter that the client set. A subscription with the default
+		 * gets the default of the caller: a subscription of an agent from before the filter changes from `all`
+		 * to `addressed`, so an agent does not start a turn for each message of each room.
 		 * The limits count the other subscriptions, so a subscription that expired cannot start again above
 		 * a limit. The endpoint changes only when the subscription changed.
 		 */
@@ -310,7 +314,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				db
 					.prepare(
 						`UPDATE webhook_subscriptions SET expires_at = ?1, status = 'active', disabled_reason = NULL,
-							chat_filter = COALESCE(?11, chat_filter)
+							chat_filter = CASE WHEN ?11 IS NOT NULL THEN ?11 WHEN chat_filter_explicit = 1 THEN chat_filter ELSE ?12 END,
+							chat_filter_explicit = CASE WHEN ?11 IS NOT NULL THEN 1 ELSE chat_filter_explicit END
 						WHERE id = ?2 AND endpoint_id = ?3
 						AND (SELECT COUNT(*) FROM webhook_subscriptions s
 							JOIN webhook_endpoints e ON e.id = s.endpoint_id
@@ -330,6 +335,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						args.roomId,
 						WEBHOOK_LIMITS.perTarget,
 						args.filter,
+						defaultFilter,
 					),
 				db
 					.prepare(
@@ -403,8 +409,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 					.prepare(
 						`INSERT INTO webhook_subscriptions (
 							id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at,
-							expires_at, room_id, chat_filter)
-						SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+							expires_at, room_id, chat_filter, chat_filter_explicit)
+						SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
 						WHERE EXISTS (SELECT 1 FROM webhook_endpoints WHERE id = ?2)
 						ON CONFLICT (id) DO NOTHING RETURNING id`,
 					)
@@ -419,8 +425,9 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						nowText,
 						expiresAt,
 						args.roomId,
-						// Only a new subscription gets the default: an agent gets only the messages for it.
-						event.domain === "chat" ? (args.filter ?? defaultChatWebhookFilter(call.caller.kind)) : "all",
+						// Without `filter`, an agent gets only the messages for it.
+						args.filter ?? defaultFilter,
+						args.filter === null ? 0 : 1,
 					),
 			]);
 			const endpointStored = (results[1]?.results.length ?? 0) > 0;

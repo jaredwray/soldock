@@ -67,7 +67,10 @@ The filter of a subscription is `all` or `addressed` (`CHAT_WEBHOOK_FILTERS`, co
 So the owner of a room that deletes a message of the target sends a POST with each filter.
 The fan-out applies the filter, so a message that is not for the target makes no delivery job and no POST.
 Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
-A subscription from before the filter keeps `all`.
+A subscription records if its creator set the filter (column `chat_filter_explicit`).
+A refresh of MCP Events without `filter` keeps a filter that the client set, and gives each other subscription the default of the caller.
+So a subscription of MCP Events for an agent from before the filter gets `addressed` at its next refresh.
+A signed webhook has no refresh, so a signed webhook from before the filter keeps `all`.
 Before each POST, the consumer also checks the notification level and quiet hours of the target.
 This applies to signed webhooks and MCP Events callbacks, including retries.
 For example, a room set to `mentions` sends only events with the `mention` reason, even with an `all` subscription.
@@ -167,10 +170,10 @@ retries and the rules that disable an endpoint are those of each webhook. These 
   the target and the room. The same call again refreshes the subscription. A different key or a
   different OAuth connection of the same principal gets a different id, so it cannot stop the
   subscription. The id is the `id` of the subscription row. The filter of Chat is not a part of the
-  id. A refresh with a different filter changes the filter, and a refresh without `filter` keeps it.
-  Only a new subscription gets the default. So a subscription of an agent from before the filter keeps
-  `all`, one URL never gets one message from two subscriptions that differ only in the filter, and
-  `events/unsubscribe` finds the subscription with each filter.
+  id. A refresh with a filter changes the filter. A refresh without `filter` keeps a filter that the
+  client set, and gives each other subscription the default of the caller. So a subscription of an
+  agent from before the filter gets `addressed`, one URL never gets one message from two subscriptions
+  that differ only in the filter, and `events/unsubscribe` finds the subscription with each filter.
 - **Access.** The credential needs the webhook scope of the product. The target rules are those of the
   subscription operations. The outbound policy of an agent must allow the host of the URL. The
   default policy `internal-only` allows no host, so a sponsor adds the host first.
@@ -231,7 +234,7 @@ not read the end of a subscription.
 | State | Where | Notes |
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
-| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription |
+| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter |
 | Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |

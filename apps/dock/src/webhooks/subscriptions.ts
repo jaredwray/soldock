@@ -239,8 +239,9 @@ export function createSubscriptionHandlers(
 			const createdAt = new Date().toISOString();
 			const inserted = await call.env.DIRECTORY.prepare(
 				`INSERT INTO webhook_subscriptions (
-					id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at, chat_filter)
-				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?12
+					id, endpoint_id, domain, event_type, target_id, credential_kind, credential_id, created_at, chat_filter,
+					chat_filter_explicit)
+				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?12, ?13
 				WHERE (SELECT COUNT(*) FROM webhook_subscriptions s
 					JOIN webhook_endpoints e ON e.id = s.endpoint_id
 					WHERE e.created_by = ?9 AND e.protocol = 'webhook' AND s.domain = ?3 AND s.event_type = ?4) < ?10
@@ -261,6 +262,7 @@ export function createSubscriptionHandlers(
 					WEBHOOK_LIMITS.subscriptionsPerCreator,
 					WEBHOOK_LIMITS.perTarget,
 					filter,
+					domain === "chat" && input.filter !== undefined ? 1 : 0,
 				)
 				.first<{ id: string }>();
 			if (!inserted) {
