@@ -16,6 +16,7 @@ function room(id: string, lastMessageAt: string | null, unread = 0, starred = fa
 		name: id,
 		topic: "",
 		peer: null,
+		peers: [],
 		created_at: "2026-01-01T09:00:00.000Z",
 		created_by: { principal_id: "prn_1", kind: "human", display_name: "Ada Lovelace" },
 		member_count: 2,
@@ -28,6 +29,10 @@ function room(id: string, lastMessageAt: string | null, unread = 0, starred = fa
 		mention_count: 0,
 		version: unread,
 		starred,
+		archived_at: null,
+		posting_policy: "members",
+		can_post: true,
+		retention_days: null,
 	};
 }
 

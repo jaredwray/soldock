@@ -6,6 +6,7 @@ import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import { bodyText } from "./composerSchema.ts";
+import { EmojiGlyph } from "./customEmoji.tsx";
 import { emojiName } from "./emoji.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import { EditFiles, LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
@@ -103,6 +104,16 @@ export interface MessageItemProps {
 	quickEmoji: readonly string[];
 	/** Adds or removes the reaction of the person with one emoji. */
 	onReact: (emoji: string, add: boolean) => void;
+	/** Pins or unpins the message. */
+	onTogglePin?: (() => void) | undefined;
+	/** Saves the message for later. */
+	onSave?: (() => void) | undefined;
+	/** Opens the remind-me dialog for this message. */
+	onRemind?: (() => void) | undefined;
+	/** Opens the forward dialog for this message. */
+	onForward?: (() => void) | undefined;
+	/** Triggers an interactive button on one of the message's cards. */
+	onCardAction?: ((cardId: string, actionId: string, value: string) => void) | undefined;
 	/** One more class of the row, for a list that has rows of other kinds too. */
 	className?: string | undefined;
 	/** True for a list with no line for each day (the view of a thread): the time shows its day too. */
@@ -137,6 +148,11 @@ export function MessageItem({
 	ownId,
 	quickEmoji,
 	onReact,
+	onTogglePin,
+	onSave,
+	onRemind,
+	onForward,
+	onCardAction,
 	className,
 	fullDates,
 }: MessageItemProps) {
@@ -202,6 +218,8 @@ export function MessageItem({
 						<strong className="chat-author">{author}</strong>
 					)}
 					{message.author.kind === "agent" && <span className="kind kind-agent">agent</span>}
+					{message.untrusted && <span className="kind chat-badge-untrusted">external</span>}
+					{message.pinned && <span className="kind chat-badge-pinned">pinned</span>}
 					<time className="chat-time" dateTime={message.created_at} title={fullDate(message.created_at)}>
 						{fullDates ? shortDate(message.created_at) : timeLabel(message.created_at)}
 					</time>
@@ -286,6 +304,57 @@ export function MessageItem({
 							onFocusAway={onFocusBox}
 							onMediaLoad={onMediaLoad}
 						/>
+						{message.forwarded && (
+							<blockquote className="chat-forwarded-card">
+								<div className="chat-forwarded-meta">
+									<strong>{message.forwarded.author.display_name}</strong>
+									{message.forwarded.source_room_name && <span>in #{message.forwarded.source_room_name}</span>}
+									{message.forwarded.untrusted && <span className="kind chat-badge-untrusted">external</span>}
+								</div>
+								<p className="chat-forwarded-text">{message.forwarded.text}</p>
+							</blockquote>
+						)}
+						{message.cards && message.cards.length > 0 && (
+							<div className="chat-cards">
+								{message.cards.map((card) => (
+									<section key={card.id} className="chat-card" aria-label={card.title}>
+										<h4 className="chat-card-title">{card.title}</h4>
+										{card.text && <p className="chat-card-body">{card.text}</p>}
+										{card.fields && card.fields.length > 0 && (
+											<dl className="chat-card-fields">
+												{card.fields.map((field) => (
+													<div key={`${field.label}:${field.value}`} className="chat-card-field">
+														<dt>{field.label}</dt>
+														<dd>{field.value}</dd>
+													</div>
+												))}
+											</dl>
+										)}
+										{card.actions && card.actions.length > 0 && (
+											<div className="chat-card-actions">
+												{card.actions.map((action) => (
+													<button
+														key={action.action_id}
+														type="button"
+														className={
+															action.style === "primary"
+																? "button button-small button-primary"
+																: action.style === "danger"
+																	? "button button-small button-danger"
+																	: "button button-small"
+														}
+														disabled={!onCardAction}
+														onClick={() => onCardAction?.(card.id, action.action_id, action.value ?? "")}
+													>
+														{action.label}
+													</button>
+												))}
+											</div>
+										)}
+									</section>
+								))}
+							</div>
+						)}
 					</>
 				)}
 				{pending === null && !message.deleted && (
@@ -352,7 +421,9 @@ export function MessageItem({
 								title={emojiName(emoji)}
 								onClick={() => onReact(emoji, !mine)}
 							>
-								<span aria-hidden="true">{emoji}</span>
+								<span aria-hidden="true">
+									<EmojiGlyph emoji={emoji} />
+								</span>
 							</button>
 						);
 					})}
@@ -388,6 +459,50 @@ export function MessageItem({
 							onClick={onOpenThread}
 						>
 							<Icon name="reply" size={16} />
+						</button>
+					)}
+					{onTogglePin && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label={message.pinned ? "Unpin message" : "Pin message"}
+							title={message.pinned ? "Unpin" : "Pin"}
+							onClick={onTogglePin}
+						>
+							<Icon name="tag" size={16} />
+						</button>
+					)}
+					{onSave && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="Save message"
+							title="Save"
+							onClick={onSave}
+						>
+							<Icon name="star" size={16} />
+						</button>
+					)}
+					{onRemind && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="Remind me about this message"
+							title="Remind me"
+							onClick={onRemind}
+						>
+							<Icon name="clock" size={16} />
+						</button>
+					)}
+					{onForward && (
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="Forward message"
+							title="Forward"
+							onClick={onForward}
+						>
+							<Icon name="forward" size={16} />
 						</button>
 					)}
 					{own && (

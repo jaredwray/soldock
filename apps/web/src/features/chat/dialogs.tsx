@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@asterra/contracts";
+import { CHAT_LIMITS, type ChatMember, type ChatRoom, type ChatSection } from "@asterra/contracts";
 import {
 	type FormEvent,
 	type RefObject,
@@ -22,6 +22,7 @@ import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
 import { Presence } from "./Presence.tsx";
+import { RoomAdvancedSettings } from "./RoomAdvancedSettings.tsx";
 import { type RoomNotificationChoice, RoomNotificationChoices } from "./RoomNotifications.tsx";
 
 /** Creates a public or a private room. The person becomes its owner. */
@@ -284,12 +285,13 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 	);
 }
 
-/** Opens the direct message room with one person or one agent. */
+/** Opens a 1:1 direct message or a group direct message with people or agents. */
 export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (room: ChatRoom) => void }) {
 	const ownId = useSession().whoami.principal.id;
 	const principals = usePrincipals();
 	const [filter, setFilter] = useState("");
-	const [busyId, setBusyId] = useState<string | null>(null);
+	const [selectedIds, setSelectedIds] = useState<string[]>([]);
+	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const filterId = useId();
 	const words = filter.trim().toLowerCase();
@@ -301,20 +303,35 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 				principal.address.toLowerCase().includes(words)),
 	);
 
-	async function open(principal: Principal) {
-		setBusyId(principal.id);
+	function toggle(principalId: string) {
+		setSelectedIds((current) => {
+			if (current.includes(principalId)) return current.filter((id) => id !== principalId);
+			if (current.length >= CHAT_LIMITS.groupDmOthersMax) return current;
+			return [...current, principalId];
+		});
+	}
+
+	async function openSelected() {
+		if (selectedIds.length === 0 || busy) return;
+		setBusy(true);
 		setError(null);
 		try {
-			const { room } = await api.call("chat.open_dm", { principal_id: principal.id });
-			onOpened(room);
+			const first = selectedIds[0];
+			if (selectedIds.length === 1 && first) {
+				const { room } = await api.call("chat.open_dm", { principal_id: first });
+				onOpened(room);
+			} else {
+				const { room } = await api.call("chat.open_group_dm", { principal_ids: selectedIds });
+				onOpened(room);
+			}
 		} catch (caught) {
 			setError(errorMessage(caught));
-			setBusyId(null);
+			setBusy(false);
 		}
 	}
 
 	return (
-		<Dialog title="New direct message" onClose={onClose} className="dialog-small">
+		<Dialog title="New direct message" onClose={() => !busy && onClose()} className="dialog-small">
 			<div className="chat-browse-search">
 				<label htmlFor={filterId} className="visually-hidden">
 					Name or address
@@ -323,7 +340,7 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 					id={filterId}
 					className="input"
 					type="search"
-					placeholder="Name or address"
+					placeholder="Pick 1 person for DM, or up to 8 for group DM"
 					value={filter}
 					autoComplete="off"
 					onChange={(event) => setFilter(event.target.value)}
@@ -344,32 +361,45 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 				)}
 				{principals !== null && others.length === 0 && <p className="list-state">No person or agent matches.</p>}
 				<ul className="chat-rows">
-					{others.map((principal) => (
-						<li key={principal.id}>
-							<button
-								type="button"
-								className="chat-row chat-row-button"
-								disabled={busyId !== null}
-								onClick={() => void open(principal)}
-							>
-								<span className="avatar avatar-small" aria-hidden="true">
-									{initials(principal.display_name)}
-								</span>
-								<span className="chat-row-text">
-									<span className="chat-row-name">
-										<strong>{principal.display_name}</strong>
-										{principal.kind === "agent" && <span className="kind kind-agent">agent</span>}
+					{others.map((principal) => {
+						const checked = selectedIds.includes(principal.id);
+						return (
+							<li key={principal.id}>
+								<button
+									type="button"
+									className={checked ? "chat-row chat-row-button chat-row-selected" : "chat-row chat-row-button"}
+									aria-pressed={checked}
+									disabled={busy}
+									onClick={() => toggle(principal.id)}
+								>
+									<span className="avatar avatar-small" aria-hidden="true">
+										{initials(principal.display_name)}
 									</span>
-									<span className="muted">{principal.address}</span>
-								</span>
-							</button>
-						</li>
-					))}
+									<span className="chat-row-text">
+										<span className="chat-row-name">
+											<strong>{principal.display_name}</strong>
+											{principal.kind === "agent" && <span className="kind kind-agent">agent</span>}
+										</span>
+										<span className="muted">{principal.address}</span>
+									</span>
+									{checked && <Icon name="check" size={16} />}
+								</button>
+							</li>
+						);
+					})}
 				</ul>
 			</div>
 			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose}>
+				<button type="button" className="button" onClick={onClose} disabled={busy}>
 					Cancel
+				</button>
+				<button
+					type="button"
+					className="button button-primary"
+					disabled={busy || selectedIds.length === 0}
+					onClick={() => void openSelected()}
+				>
+					{busy ? "Opening…" : selectedIds.length > 1 ? `Open group DM (${selectedIds.length})` : "Open direct message"}
 				</button>
 			</div>
 		</Dialog>
@@ -600,14 +630,22 @@ function useConfirmedRoomDetails(room: ChatRoom, mounted: RefObject<boolean>, se
 /** Each member selects personal notifications. An owner can also edit a named room. */
 export function RoomSettingsDialog({
 	room,
+	members = [],
+	postAllowedIds = [],
+	sections = [],
 	onClose,
 	onDetailsSaved,
+	onDeleted,
 }: {
 	room: ChatRoom;
+	members?: readonly ChatMember[];
+	postAllowedIds?: readonly string[];
+	sections?: readonly ChatSection[];
 	onClose(): void;
 	onDetailsSaved(): void;
+	onDeleted?: () => void;
 }) {
-	const canEdit = room.kind !== "dm" && room.role === "owner";
+	const canEdit = room.kind !== "dm" && room.kind !== "group_dm" && room.role === "owner";
 	const [details, setDetails] = useState<{ initial: ChatRoom; name: string; topic: string } | null>(null);
 	const [session] = useState(accountChangeCount);
 	const mounted = useRef(false);
@@ -757,6 +795,17 @@ export function RoomSettingsDialog({
 							loading
 						)}
 					</section>
+					<RoomAdvancedSettings
+						room={saved}
+						members={members}
+						postAllowedIds={postAllowedIds}
+						sections={sections}
+						onChanged={onDetailsSaved}
+						onDeleted={() => {
+							onDeleted?.();
+							onClose();
+						}}
+					/>
 					{error && (
 						<p className="form-error" role="alert">
 							{error}

@@ -1,22 +1,37 @@
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import "./chat.css";
-import type { ChatRoom } from "@asterra/contracts";
-import { useEffect, useId, useRef, useState } from "react";
-import { api } from "../../lib/api.ts";
+import type { ChatRoom, ChatSection } from "@asterra/contracts";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
-import { chatPath, chatSearchPath, chatThreadsPath } from "../../routes.ts";
+import { useToast } from "../../lib/toast.tsx";
+import {
+	type ChatView,
+	chatActivityPath,
+	chatDraftsPath,
+	chatPath,
+	chatSavedPath,
+	chatSearchPath,
+	chatThreadsPath,
+} from "../../routes.ts";
 import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID, SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
+import { ActivityView } from "./ActivityView.tsx";
+import { CustomEmojiProvider } from "./customEmoji.tsx";
+import { DraftsView } from "./DraftsView.tsx";
 import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
+import { SectionDialog, ShortcutsDialog } from "./Layer8Dialogs.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { Presence, PresenceProvider } from "./Presence.tsx";
 import { ProfileView } from "./ProfileView.tsx";
+import { QuickSwitcher } from "./QuickSwitcher.tsx";
 import { RoomView } from "./RoomView.tsx";
+import { SavedView } from "./SavedView.tsx";
 import { SearchView } from "./SearchView.tsx";
 import { useSearchKeys } from "./searchKeys.ts";
 import { ThreadsView } from "./ThreadsView.tsx";
@@ -33,6 +48,8 @@ export interface ChatAppProps {
 	profileId: string | null;
 	/** True for the Threads view: the threads that the person follows. */
 	threads: boolean;
+	/** Personal view: activity, saved, or drafts. */
+	view?: ChatView | null;
 	/** The Search view: its query, and the room of a search in one room. Null for each other view. */
 	search: { query: string; roomId: string | null } | null;
 	/** True while the navigation drawer is open, at 900px and below. */
@@ -40,13 +57,22 @@ export interface ChatAppProps {
 	onCloseNav: () => void;
 }
 
-type ChatDialog = "new-room" | "browse" | "new-dm" | null;
+type ChatDialog =
+	| { kind: "new-room" }
+	| { kind: "browse" }
+	| { kind: "new-dm" }
+	| { kind: "switcher" }
+	| { kind: "shortcuts" }
+	| { kind: "section"; existing?: ChatSection }
+	| null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
 export function ChatApp(props: ChatAppProps) {
 	return (
 		<PresenceProvider>
-			<ChatWorkspace {...props} />
+			<CustomEmojiProvider>
+				<ChatWorkspace {...props} />
+			</CustomEmojiProvider>
 		</PresenceProvider>
 	);
 }
@@ -57,33 +83,66 @@ function ChatWorkspace({
 	replySeq,
 	profileId,
 	threads,
+	view = null,
 	search,
 	navOpen,
 	onCloseNav,
 }: ChatAppProps) {
 	const rooms = useRooms();
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
+	const [activityReadTick, setActivityReadTick] = useState(0);
+	const unreadActivity = useUnreadActivity(rooms.activityTick + activityReadTick);
+	const [sections, setSections] = useState<ChatSection[]>([]);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
 	const ownId = useSession().whoami.principal.id;
-	// The people that the views asked for: the handles of the mentions, and the names. It is not the whole
-	// directory. Each message asks for the principals that it shows.
+	const toast = useToast();
 	const people = usePeopleStore();
 	const directory = usePeopleDirectory(people);
 
-	// The messages that waited for the server before a reload of the page go out again.
+	const loadSections = useCallback(() => {
+		api
+			.call("chat.list_sections")
+			.then((res) => setSections(res.sections))
+			.catch(() => {});
+	}, []);
+
+	useEffect(() => {
+		loadSections();
+	}, [loadSections]);
+
 	useEffect(() => {
 		void restoreOutboxes(ownId);
 	}, [ownId]);
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null && !threads && search === null) setPageTitle("Chat – Asterra");
-	}, [roomId, profileId, threads, search]);
+		if (roomId === null && profileId === null && !threads && view === null && search === null) {
+			setPageTitle("Chat – Asterra");
+		}
+	}, [roomId, profileId, threads, view, search]);
 
-	// Ctrl+F and ⌘F open the Search view of Chat, for all rooms. In the Search view, the keys move the focus
-	// to the box. While a room shows, the room view handles the keys: it knows if the person is a member.
+	// Global Chat shortcuts: Cmd/Ctrl+K (quick switcher) and ? (shortcuts help).
+	useEffect(() => {
+		function onKeyDown(event: KeyboardEvent) {
+			const target = event.target as HTMLElement | null;
+			const inInput = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
+			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+				if (inInput && !event.shiftKey) return;
+				event.preventDefault();
+				setDialog((curr) => (curr?.kind === "switcher" ? null : { kind: "switcher" }));
+				return;
+			}
+			if (event.key === "?" && !inInput && !event.metaKey && !event.ctrlKey && !event.altKey) {
+				event.preventDefault();
+				setDialog((curr) => (curr?.kind === "shortcuts" ? null : { kind: "shortcuts" }));
+			}
+		}
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, []);
+
 	const searching = search !== null;
-	const roomShown = roomId !== null && profileId === null && !threads && !searching;
+	const roomShown = roomId !== null && profileId === null && !threads && view === null && !searching;
 	useSearchKeys(
 		roomShown
 			? null
@@ -100,11 +159,20 @@ function ChatWorkspace({
 				},
 	);
 
-	/** Shows a room that a dialog created, joined or opened. The list comes first, so the room is in it. */
 	async function open(room: ChatRoom) {
 		setDialog(null);
 		await rooms.refresh();
 		navigate(chatPath(room.id));
+	}
+
+	async function deleteSection(sectionId: string) {
+		try {
+			await api.call("chat.delete_section", { section_id: sectionId });
+			loadSections();
+			toast({ message: "Section deleted." });
+		} catch (caught) {
+			toast({ message: errorMessage(caught), tone: "error" });
+		}
 	}
 
 	return (
@@ -112,24 +180,39 @@ function ChatWorkspace({
 			<div className="chat-layout">
 				<ChatSidebar
 					rooms={rooms}
+					sections={sections}
 					activeId={roomId}
 					threadsActive={threads}
+					activeView={view}
 					searchActive={search !== null}
 					unreadThreads={unreadThreads}
+					unreadActivity={unreadActivity}
 					open={navOpen}
 					onClose={onCloseNav}
-					onNewRoom={() => setDialog("new-room")}
-					onBrowse={() => setDialog("browse")}
-					onNewDm={() => setDialog("new-dm")}
+					onNewRoom={() => setDialog({ kind: "new-room" })}
+					onBrowse={() => setDialog({ kind: "browse" })}
+					onNewDm={() => setDialog({ kind: "new-dm" })}
+					onQuickSwitch={() => setDialog({ kind: "switcher" })}
+					onNewSection={() => setDialog({ kind: "section" })}
+					onRenameSection={(existing) => setDialog({ kind: "section", existing })}
+					onDeleteSection={(id) => void deleteSection(id)}
 				/>
 				<main id="main" className="chat-main" tabIndex={-1}>
 					{profileId !== null ? (
-						// The key gives each profile its own view, so a button of one never acts for a different one.
 						<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
 					) : search !== null ? (
 						<SearchView query={search.query} roomId={search.roomId} rooms={rooms.rooms} />
 					) : threads ? (
 						<ThreadsView tick={rooms.threadsTick} directory={directory} />
+					) : view === "activity" ? (
+						<ActivityView
+							tick={rooms.activityTick}
+							onReadChange={() => setActivityReadTick((current) => current + 1)}
+						/>
+					) : view === "saved" ? (
+						<SavedView />
+					) : view === "drafts" ? (
+						<DraftsView rooms={rooms.rooms} />
 					) : roomId === null ? (
 						<>
 							<PageHeader title="Chat" icon="chat" />
@@ -140,17 +223,23 @@ function ChatWorkspace({
 								<h2 className="chat-empty-title">Your rooms and direct messages</h2>
 								<p>Select a room or a direct message, or start a new one.</p>
 								<p className="chat-start">
-									<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
+									<button
+										type="button"
+										className="button button-primary"
+										onClick={() => setDialog({ kind: "new-room" })}
+									>
 										New room
 									</button>
-									<button type="button" className="button" onClick={() => setDialog("browse")}>
+									<button type="button" className="button" onClick={() => setDialog({ kind: "browse" })}>
 										Find a public room
+									</button>
+									<button type="button" className="button" onClick={() => setDialog({ kind: "switcher" })}>
+										Jump to… (⌘K)
 									</button>
 								</p>
 							</div>
 						</>
 					) : (
-						// The key gives each room its own view, so the messages of one never show in a different one.
 						<RoomView
 							key={roomId}
 							roomId={roomId}
@@ -160,17 +249,29 @@ function ChatWorkspace({
 							listReady={rooms.status === "ready"}
 							listTick={rooms.tick}
 							onRoomsChanged={rooms.refresh}
+							rooms={rooms.rooms}
+							sections={sections}
+							onSectionsChanged={loadSections}
 							directory={directory}
 						/>
 					)}
 				</main>
-				{dialog === "new-room" && (
+				{dialog?.kind === "new-room" && (
 					<NewRoomDialog onClose={() => setDialog(null)} onCreated={(room) => void open(room)} />
 				)}
-				{dialog === "browse" && (
+				{dialog?.kind === "browse" && (
 					<BrowseRoomsDialog onClose={() => setDialog(null)} onOpen={(room) => void open(room)} />
 				)}
-				{dialog === "new-dm" && <NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />}
+				{dialog?.kind === "new-dm" && (
+					<NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />
+				)}
+				{dialog?.kind === "switcher" && (
+					<QuickSwitcher rooms={rooms.rooms} onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />
+				)}
+				{dialog?.kind === "shortcuts" && <ShortcutsDialog onClose={() => setDialog(null)} />}
+				{dialog?.kind === "section" && (
+					<SectionDialog existing={dialog.existing} onClose={() => setDialog(null)} onSaved={loadSections} />
+				)}
 			</div>
 		</PeopleProvider>
 	);
@@ -178,45 +279,61 @@ function ChatWorkspace({
 
 interface ChatSidebarProps {
 	rooms: RoomsState;
+	sections: readonly ChatSection[];
 	activeId: string | null;
-	/** True while the Threads view shows. */
 	threadsActive: boolean;
-	/** True while the Search view shows. */
+	activeView: ChatView | null;
 	searchActive: boolean;
-	/** The threads with new replies, at most 100. */
 	unreadThreads: number;
+	unreadActivity: number;
 	open: boolean;
 	onClose: () => void;
 	onNewRoom: () => void;
 	onBrowse: () => void;
 	onNewDm: () => void;
+	onQuickSwitch: () => void;
+	onNewSection: () => void;
+	onRenameSection: (section: ChatSection) => void;
+	onDeleteSection: (sectionId: string) => void;
 }
 
 /** The sidebar of Chat. At 900px and below it is part of the drawer that the menu button opens. */
 function ChatSidebar({
 	rooms,
+	sections,
 	activeId,
 	threadsActive,
+	activeView,
 	searchActive,
 	unreadThreads,
+	unreadActivity,
 	open,
 	onClose,
 	onNewRoom,
 	onBrowse,
 	onNewDm,
+	onQuickSwitch,
+	onNewSection,
+	onRenameSection,
+	onDeleteSection,
 }: ChatSidebarProps) {
 	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
-	const { starred, named, direct } = sidebarRooms(rooms.rooms);
-	// The text of an empty part is for a person without such a room. A room with a star is in its own part.
-	const hasNamed = rooms.rooms.some((room) => room.kind !== "dm");
-	const hasDirect = rooms.rooms.some((room) => room.kind === "dm");
-	// Each list has the name of its heading, so a screen reader names the part of a room.
+	const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({});
+	const roomsById = useMemo(() => new Map(rooms.rooms.map((r) => [r.id, r])), [rooms.rooms]);
+	const sectionedIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const section of sections) {
+			for (const id of section.room_ids) ids.add(id);
+		}
+		return ids;
+	}, [sections]);
+	const { starred, named, direct } = sidebarRooms(rooms.rooms, sectionedIds);
+	const hasNamed = rooms.rooms.some((room) => room.kind !== "dm" && room.kind !== "group_dm");
+	const hasDirect = rooms.rooms.some((room) => room.kind === "dm" || room.kind === "group_dm");
 	const headingId = useId();
 
-	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
-	// focus goes back to the menu button, if the focus was in the drawer.
 	useEffect(() => {
 		const nav = navRef.current;
 		if (!nav || open === wasOpen.current) return;
@@ -239,15 +356,37 @@ function ChatSidebar({
 					<Icon name="plus" size={16} />
 					New room
 				</button>
+				<button
+					type="button"
+					className="chat-switcher-trigger"
+					onClick={onQuickSwitch}
+					aria-label="Jump to room or person"
+				>
+					<Icon name="search" size={15} />
+					<span>Jump to…</span>
+					<kbd>⌘K</kbd>
+				</button>
 				<ul className="nav-list chat-nav-views">
 					<li>
 						<Link
-							to={chatSearchPath()}
-							className={searchActive ? "nav-item nav-item-active" : "nav-item"}
-							aria-current={searchActive ? "page" : undefined}
+							to={chatActivityPath()}
+							className={[
+								"nav-item",
+								activeView === "activity" ? "nav-item-active" : "",
+								unreadActivity > 0 ? "chat-nav-unread" : "",
+							]
+								.filter(Boolean)
+								.join(" ")}
+							aria-current={activeView === "activity" ? "page" : undefined}
 						>
-							<Icon name="search" />
-							<span className="nav-name">Search</span>
+							<Icon name="bell" />
+							<span className="nav-name">Activity</span>
+							{unreadActivity > 0 && (
+								<span className="chat-nav-count">
+									<span aria-hidden="true">{unreadLabel(unreadActivity)}</span>
+									<span className="visually-hidden">{unreadActivity} unread activity items</span>
+								</span>
+							)}
 						</Link>
 					</li>
 					<li>
@@ -272,6 +411,36 @@ function ChatSidebar({
 							)}
 						</Link>
 					</li>
+					<li>
+						<Link
+							to={chatSavedPath()}
+							className={activeView === "saved" ? "nav-item nav-item-active" : "nav-item"}
+							aria-current={activeView === "saved" ? "page" : undefined}
+						>
+							<Icon name="star" />
+							<span className="nav-name">Saved</span>
+						</Link>
+					</li>
+					<li>
+						<Link
+							to={chatDraftsPath()}
+							className={activeView === "drafts" ? "nav-item nav-item-active" : "nav-item"}
+							aria-current={activeView === "drafts" ? "page" : undefined}
+						>
+							<Icon name="pencil" />
+							<span className="nav-name">Drafts</span>
+						</Link>
+					</li>
+					<li>
+						<Link
+							to={chatSearchPath()}
+							className={searchActive ? "nav-item nav-item-active" : "nav-item"}
+							aria-current={searchActive ? "page" : undefined}
+						>
+							<Icon name="search" />
+							<span className="nav-name">Search</span>
+						</Link>
+					</li>
 				</ul>
 				{starred.length > 0 && (
 					<>
@@ -287,19 +456,78 @@ function ChatSidebar({
 						</ul>
 					</>
 				)}
-				<div className={starred.length > 0 ? "nav-section" : "nav-section nav-section-first"}>
+				{sections.map((section) => {
+					const isCollapsed = collapsed[section.id] === true;
+					const sectionRooms = section.room_ids
+						.map((id) => roomsById.get(id))
+						.filter((r): r is ChatRoom => r !== undefined && !r.starred);
+					return (
+						<div key={section.id}>
+							<div className="nav-section">
+								<button
+									type="button"
+									className="chat-section-toggle"
+									aria-expanded={!isCollapsed}
+									onClick={() => setCollapsed((curr) => ({ ...curr, [section.id]: !isCollapsed }))}
+								>
+									<Icon name={isCollapsed ? "chevronRight" : "chevronDown"} size={14} />
+									<span className="nav-heading">{section.name}</span>
+								</button>
+								<span className="chat-section-actions">
+									<button
+										type="button"
+										className="icon-button icon-button-small"
+										aria-label={`Rename section ${section.name}`}
+										title="Rename section"
+										onClick={() => onRenameSection(section)}
+									>
+										<Icon name="pencil" size={13} />
+									</button>
+									<button
+										type="button"
+										className="icon-button icon-button-small"
+										aria-label={`Delete section ${section.name}`}
+										title="Delete section"
+										onClick={() => onDeleteSection(section.id)}
+									>
+										<Icon name="trash" size={13} />
+									</button>
+								</span>
+							</div>
+							{!isCollapsed && (
+								<ul className="nav-list" aria-label={section.name}>
+									{sectionRooms.map((room) => (
+										<RoomLink key={room.id} room={room} active={room.id === activeId} />
+									))}
+								</ul>
+							)}
+						</div>
+					);
+				})}
+				<div className={starred.length > 0 || sections.length > 0 ? "nav-section" : "nav-section nav-section-first"}>
 					<h2 className="nav-heading" id={`${headingId}-rooms`}>
 						Rooms
 					</h2>
-					<button
-						type="button"
-						className="icon-button icon-button-small"
-						aria-label="Find a public room"
-						title="Find a public room"
-						onClick={onBrowse}
-					>
-						<Icon name="search" size={15} />
-					</button>
+					<span className="chat-section-actions">
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="New sidebar section"
+							title="New sidebar section"
+							onClick={onNewSection}
+						>
+							<Icon name="folderPlus" size={15} />
+						</button>
+						<button
+							type="button"
+							className="icon-button icon-button-small"
+							aria-label="Find a public room"
+							title="Find a public room"
+							onClick={onBrowse}
+						>
+							<Icon name="search" size={15} />
+						</button>
+					</span>
 				</div>
 				{rooms.status === "loading" && <p className="nav-empty">Loading…</p>}
 				{rooms.status === "error" && (
@@ -338,10 +566,6 @@ function ChatSidebar({
 	);
 }
 
-/**
- * The threads with new replies, for the count of "Threads" in the sidebar. Each change of `tick` (a
- * `chat.threads` event, or a read of the room list) reads the count again.
- */
 function useUnreadThreads(tick: number): number {
 	const [count, setCount] = useState(0);
 	useEffect(() => {
@@ -352,7 +576,24 @@ function useUnreadThreads(tick: number): number {
 			.then((page) => {
 				if (!stopped) setCount(page.unread_threads);
 			})
-			// The count stays as it was. The next tick reads it again.
+			.catch(() => {});
+		return () => {
+			stopped = true;
+		};
+	}, [tick]);
+	return count;
+}
+
+function useUnreadActivity(tick: number): number {
+	const [count, setCount] = useState(0);
+	useEffect(() => {
+		void tick;
+		let stopped = false;
+		api
+			.call("chat.list_activity", { filter: "unread", limit: 1 })
+			.then((page) => {
+				if (!stopped) setCount(page.unread_count);
+			})
 			.catch(() => {});
 		return () => {
 			stopped = true;
@@ -366,7 +607,6 @@ function threadsText(count: number): string {
 	return count === 1 ? "1 thread with new replies" : `${count} threads with new replies`;
 }
 
-/** The count of the sidebar. The server stops the count at 100, so 100 means 100 or more. */
 function unreadLabel(count: number): string {
 	return count > 99 ? "99+" : String(count);
 }
@@ -383,7 +623,6 @@ function mentionText(count: number): string {
 
 function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 	const title = roomTitle(room);
-	// The open room is read while it shows. Its marker reaches the list a moment later, so it gets no count.
 	const unread = room.unread && !active;
 	const className = ["nav-item", active ? "nav-item-active" : "", unread ? "chat-nav-unread" : ""]
 		.filter(Boolean)
@@ -396,12 +635,11 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 						{initials(title)}
 					</span>
 				) : (
-					<Icon name={room.kind === "private" ? "lock" : "hash"} />
+					<Icon name={room.kind === "group_dm" ? "team" : room.kind === "private" ? "lock" : "hash"} />
 				)}
 				<span className="nav-name">{title}</span>
 				{room.peer && <Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />}
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
-				{/* A mention of the person has a badge of its own color, with "@" and the count of mentions. */}
 				{unread && room.mention_count > 0 ? (
 					<span className="chat-nav-count chat-nav-mention">
 						<span aria-hidden="true">@{unreadLabel(room.mention_count)}</span>

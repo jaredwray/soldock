@@ -22,6 +22,10 @@ function message(seq: number, version: number): ChatMessage {
 		thread: null,
 		files: [],
 		link_previews: [],
+		pinned: false,
+		untrusted: false,
+		forwarded: null,
+		cards: [],
 	};
 }
 

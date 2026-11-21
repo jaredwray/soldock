@@ -130,6 +130,7 @@ export function useRooms() {
 	 * focus). The Threads view and its count in the sidebar read the threads again when it changes.
 	 */
 	const [threadsTick, setThreadsTick] = useState(0);
+	const [activityTick, setActivityTick] = useState(0);
 	const started = useRef(0);
 	const applied = useRef(0);
 	/** True while the events socket is connected. Then the list polls each minute only. */
@@ -163,6 +164,7 @@ export function useRooms() {
 			forgetChangesUpTo(changes.current, since);
 			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
 			setThreadsTick((current) => current + 1);
+			setActivityTick((current) => current + 1);
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
 			setState((current) =>
@@ -188,6 +190,10 @@ export function useRooms() {
 			// The followed threads of a room changed: the Threads view and its count read them again.
 			if (event.type === "chat.threads") {
 				setThreadsTick((current) => current + 1);
+				return;
+			}
+			if (event.type === "chat.activity") {
+				setActivityTick((current) => current + 1);
 				return;
 			}
 			// A change for the principal: the list of rooms has it with its `chat.room` event.
@@ -222,7 +228,7 @@ export function useRooms() {
 		};
 	}, [refresh]);
 
-	return { ...state, refresh, threadsTick };
+	return { ...state, refresh, threadsTick, activityTick };
 }
 
 /**
@@ -475,6 +481,10 @@ export interface RoomState extends PagerState {
 	room: ChatRoom | null;
 	/** The members of the room. The suggestions of a mention show them first. */
 	members: ChatMember[];
+	/** Principals permitted to post when `posting_policy` is `allowlist`. */
+	postAllowedIds: string[];
+	/** Number of pinned messages in the room. */
+	pinCount: number;
 	/**
 	 * True after the load of this view. Before it, a room that the page showed before has its last
 	 * list from the cache: the list can be behind the room, and it gets no changes.
@@ -487,6 +497,8 @@ const ROOM_LOADING: RoomState = {
 	status: "loading",
 	room: null,
 	members: [],
+	postAllowedIds: [],
+	pinCount: 0,
 	messages: [],
 	hasOlder: false,
 	hasNewer: false,
@@ -591,14 +603,23 @@ export function useRoom(
 			if (owner !== null && currentAccount() === owner) roomCache.remove(owner, roomId, started);
 		};
 		try {
-			const { room, members } = await api.call("chat.get_room", { room_id: roomId });
+			const { room, members, post_allowed_ids, pin_count } = await api.call("chat.get_room", { room_id: roomId });
 			if (room.role === null) forget();
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
 			loadMark.current = started;
 			// The load replaces the list. The pager starts the sync at the version of the list.
-			setState({ status: "ready", room, members, ...pager.replace(page), fresh: true, error: null });
+			setState({
+				status: "ready",
+				room,
+				members,
+				postAllowedIds: post_allowed_ids ?? [],
+				pinCount: pin_count ?? 0,
+				...pager.replace(page),
+				fresh: true,
+				error: null,
+			});
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
@@ -654,9 +675,19 @@ export function useRoom(
 	const loadMembers = useCallback(async () => {
 		const request = ++memberReads.current;
 		try {
-			const { members } = await api.call("chat.get_room", { room_id: roomId });
+			const { room, members, post_allowed_ids, pin_count } = await api.call("chat.get_room", { room_id: roomId });
 			if (!alive.current || request !== memberReads.current) return;
-			setState((current) => (current.status === "ready" ? { ...current, members } : current));
+			setState((current) =>
+				current.status === "ready"
+					? {
+							...current,
+							room,
+							members,
+							postAllowedIds: post_allowed_ids ?? [],
+							pinCount: pin_count ?? 0,
+						}
+					: current,
+			);
 		} catch {
 			// The members are only for the suggestions of a mention. The next load of the room gets them.
 		}

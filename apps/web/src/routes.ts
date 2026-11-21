@@ -30,8 +30,11 @@ export type DriveView =
  * The sections of the admin page. Each has one path under `/admin`. People and agents share `members`.
  * The old `/admin/agents` path redirects there.
  */
-export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "domains"] as const;
+export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
+
+export const CHAT_VIEWS = ["activity", "saved", "drafts"] as const;
+export type ChatView = (typeof CHAT_VIEWS)[number];
 
 export type Route =
 	/**
@@ -57,6 +60,7 @@ export type Route =
 			replySeq?: number;
 			profileId?: string;
 			threads?: true;
+			view?: ChatView;
 			search?: { query: string; roomId: string | null };
 	  }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
@@ -120,6 +124,9 @@ export function parseRoute(location: string): Route {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
 		if (second === "threads") {
 			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, threads: true } : { page: "not-found" };
+		}
+		if (second === "activity" || second === "saved" || second === "drafts") {
+			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, view: second } : { page: "not-found" };
 		}
 		if (second === "search") {
 			if (parts.length !== 2) return { page: "not-found" };
@@ -300,6 +307,21 @@ export function chatPath(
 /** The path of the Threads view of Chat: the threads that the person follows. */
 export function chatThreadsPath(): string {
 	return `${CHAT_PATH}/threads`;
+}
+
+/** The path of the Activity view of Chat. */
+export function chatActivityPath(): string {
+	return `${CHAT_PATH}/activity`;
+}
+
+/** The path of the Saved messages and reminders view of Chat. */
+export function chatSavedPath(): string {
+	return `${CHAT_PATH}/saved`;
+}
+
+/** The path of the Drafts and scheduled messages view of Chat. */
+export function chatDraftsPath(): string {
+	return `${CHAT_PATH}/drafts`;
 }
 
 /**
