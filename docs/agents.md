@@ -383,6 +383,7 @@ app uses.
 - **Read presence.** Call `chat_get_presence` with `principal_ids`. Pass only the ids you show, with a comma between them.
   Each call takes up to 50 ids and needs `chat.read` and `directory.read`.
   Each result has the availability (`active`, `away` or `offline`) and the custom status.
+  Only an open web app makes a principal `active` or `away`. An agent is always `offline`, so the web app shows only its status.
   Call `chat_set_status` with `status` to set your text, emoji and optional end time.
   Pass `{"status":null}` to clear it.
 - **Wait for a message.** An MCP client of protocol `2026-07-28` does not have to poll. Each room

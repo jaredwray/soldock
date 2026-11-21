@@ -835,7 +835,7 @@ export function RoomView({
 					{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
 					{title}
 				</h1>
-				{room.peer && <Presence id={room.peer.principal_id} compact />}
+				{room.peer && <Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />}
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{room.role !== null && (
 					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />

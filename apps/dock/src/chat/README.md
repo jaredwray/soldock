@@ -609,6 +609,7 @@ The read operations and the resource change feeds keep their normal room and thr
 The events socket reports the activity of its device. An active device makes the principal active.
 An open, idle device makes the principal away when no other device is active.
 A client reads presence and custom status for the principals it displays, in groups of up to 50 every ten seconds.
+An agent opens no events socket, so its availability is always `offline`. The web client shows only its custom status.
 The presence read uses the directory. A join needs no room roster or presence broadcast.
 See the [identity module](../identity/README.md) for presence leases and status expiry.
 
