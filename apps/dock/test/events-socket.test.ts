@@ -2,14 +2,13 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { EVENTS_LIMITS, EVENTS_SOCKET_CLOSE, EVENTS_SOCKET_PATH, EVENTS_SOCKET_PROTOCOL } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import {
 	EVENTS_SOCKET_HEADER,
 	EVENTS_SOCKET_MAX_MS,
 	EVENTS_SOCKET_RECHECK_MS,
 	type EventsSocketOpen,
 } from "../src/identity/principal.ts";
-import { type Actor, bearer, ORIGIN, readSocket, request, seedOrg, signIn } from "./helpers.ts";
+import { type Actor, bearer, deliverMemberStates, ORIGIN, readSocket, request, seedOrg, signIn } from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -44,20 +43,10 @@ const checkedSockets = (principalId: string) =>
 				.length,
 	);
 
-/**
- * With a fake clock, the alarm of a room is far in the future: the room sends the states of the other
- * members after `MEMBER_DELAY_MS`. This moves the clock past it, and runs the alarm.
- */
-async function sendToMembers(roomId: string): Promise<void> {
-	vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
-	await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)));
-}
-
 /** Start the socket scenario after the room sent its initial membership state. */
 async function roomAfterJoin(creator: Actor, name: string, member: Actor) {
-	vi.useFakeTimers({ toFake: ["Date"] });
 	const room = await privateRoom(creator, name, [member.id]);
-	await sendToMembers(room.id);
+	await deliverMemberStates(room.id);
 	return room;
 }
 
@@ -66,7 +55,7 @@ const listed = async (actor: Actor, roomId: string) =>
 
 describe("the events socket", () => {
 	it("sends each change of the rooms of the principal, for a person and for an agent, without a poll", async () => {
-		const room = await privateRoom(ada, "Launch", [bot.id]);
+		const room = await roomAfterJoin(ada, "Launch", bot);
 		// A person opens the socket with the session cookie, as the web app does. An agent sends its key.
 		const person = await connect({ cookie: await signIn(ada.address), origin: ORIGIN });
 		const agent = await connect(bearer(bot.key));
@@ -90,7 +79,7 @@ describe("the events socket", () => {
 		const phone = await connect({ cookie: await signIn(ada.address), origin: ORIGIN });
 		const laptop = await connect(bearer(ada.key));
 		await bot.call("chat.post_message", { room_id: room.id, text: "Disk is full." });
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		expect(await phone.next()).toMatchObject({ room: { unread_count: 1 } });
 		expect(await laptop.next()).toMatchObject({ room: { unread_count: 1 } });
 
@@ -101,19 +90,17 @@ describe("the events socket", () => {
 
 	// A star is the view of one member. The other members must not get a state for it.
 	it("sends a star to the sockets of its member only", async () => {
-		const room = await privateRoom(ada, "Launch", [bot.id]);
-		const person = await connect(bearer(ada.key));
 		const agent = await connect(bearer(bot.key));
-		// The agent gets the new room after the delay of the other members. Only then does the clock stop.
+		const room = await roomAfterJoin(ada, "Launch", bot);
+		const person = await connect(bearer(ada.key));
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { id: room.id, last_seq: 0 } });
-		vi.useFakeTimers({ toFake: ["Date"] });
 
 		await ada.call("chat.star_room", { room_id: room.id, starred: true });
 		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id, starred: true } });
 		// The delay of the other members ends. The next event of the agent is the message, not the star.
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		await ada.call("chat.post_message", { room_id: room.id, text: "Hello" });
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: 1, starred: false } });
 	});
 
@@ -168,12 +155,13 @@ describe("the events socket", () => {
 		const never = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(other.id)).stateFor(bot.id);
 		await principal.applyChatRoomStates([never as NonNullable<typeof never>]);
 		const posted = (await ada.call("chat.post_message", { room_id: room.id, text: "Hello" })).message;
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: posted.seq } });
 	});
 
 	it("sends a direct message room as chat.list_rooms returns it, with its peer", async () => {
 		const { room } = await ada.call("chat.open_dm", { principal_id: bot.id });
+		await deliverMemberStates(room.id);
 		const agent = await connect(bearer(bot.key));
 		await ada.call("chat.post_message", { room_id: room.id, text: "Hello" });
 		expect(await agent.next()).toEqual({ type: "chat.room", room: await listed(bot, room.id) });
@@ -228,7 +216,7 @@ describe("the events socket", () => {
 
 	// A failed check must not let a socket get events without a check, and must not stop the others.
 	it("closes the sockets that wait for a check that fails, and sends to the other sockets", async () => {
-		const room = await privateRoom(bot, "Ops", [ada.id]);
+		const room = await roomAfterJoin(bot, "Ops", ada);
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
 		const waits = await connect(bearer(second.secret));
 		const fresh = await connect(bearer(ada.key));
@@ -279,7 +267,7 @@ describe("the events socket", () => {
 
 	// A tab must learn of a sign-out at once: it does not poll while its socket is live.
 	it("closes the sockets of a session that signs out and of a revoked key at once, and no other socket", async () => {
-		const room = await privateRoom(owner, "Launch", [ada.id]);
+		const room = await roomAfterJoin(owner, "Launch", ada);
 		const cookie = await signIn(ada.address);
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
 		const signedOut = await connect({ cookie, origin: ORIGIN });
@@ -319,6 +307,7 @@ describe("the events socket", () => {
 
 	// A socket that stays open must not outlive the credential that opened it.
 	it("closes when its credential stops without a sign-out, and after its longest life", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
 		const room = await roomAfterJoin(owner, "Launch", ada);
 		const cookie = await signIn(ada.address);
 		const expired = await connect({ cookie, origin: ORIGIN });
@@ -333,14 +322,14 @@ describe("the events socket", () => {
 		// The next event after EVENTS_SOCKET_RECHECK_MS makes the object check each credential first.
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_RECHECK_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" });
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		expect(await expired.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 
 		// A socket older than EVENTS_SOCKET_MAX_MS closes at the next event. The client then opens a new one.
 		vi.setSystemTime(Date.now() + EVENTS_SOCKET_MAX_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "One hour later." });
-		await sendToMembers(room.id);
+		await deliverMemberStates(room.id);
 		expect(await steady.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
 	});
 });

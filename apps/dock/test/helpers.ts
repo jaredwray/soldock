@@ -33,6 +33,21 @@ export function request(path: string, init: RequestInit = {}): Promise<Response>
 	return exports.default.fetch(new Request(`${ORIGIN}${path}`, init));
 }
 
+/** Make delayed member projections due and wait until the room has delivered them to its principals. */
+export async function deliverMemberStates(roomId: string): Promise<void> {
+	const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
+	await runInDurableObject(stub, (_instance, state) => {
+		state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0 WHERE target LIKE 'principal:%'");
+	});
+	await vi.waitFor(async () => {
+		await runDurableObjectAlarm(stub);
+		const pending = await runInDurableObject(stub, (_instance, state) =>
+			state.storage.sql.exec("SELECT target FROM outbox WHERE target LIKE 'principal:%' LIMIT 1").toArray(),
+		);
+		expect(pending).toHaveLength(0);
+	});
+}
+
 /** Restart a room with an earlier schema. Commit the fixture before an alarm can read it. */
 export async function restartLegacyRoom(roomId: string, version: number, restore: (sql: SqlStorage) => void) {
 	const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));

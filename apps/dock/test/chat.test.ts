@@ -13,6 +13,7 @@ import {
 	codeOf,
 	connectRoomSocket,
 	createActor,
+	deliverMemberStates,
 	ORIGIN,
 	PASSWORD,
 	request,
@@ -55,15 +56,6 @@ const soon = (check: () => Promise<void>) => vi.waitFor(check, { timeout: 5000, 
 
 function roomStub(roomId: string) {
 	return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
-}
-
-/** Sends the waiting states of a room to the objects of its members, as its alarm does. */
-async function deliverMemberStates(roomId: string) {
-	const stub = roomStub(roomId);
-	await runInDurableObject(stub, (_instance, state) =>
-		state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0 WHERE target LIKE 'principal:%'"),
-	);
-	await runDurableObjectAlarm(stub);
 }
 
 describe("a public room", () => {
