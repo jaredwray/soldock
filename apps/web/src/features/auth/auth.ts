@@ -57,11 +57,11 @@ export async function createSession(input: SignInInput): Promise<SignInResult["s
 }
 
 /** A different account may have supplied the cookie while the initiating tab was waiting. */
-export async function endSession(expectedPrincipal: string): Promise<"ended" | "changed"> {
+export async function endSession(expectedPrincipal: string, expectedSession: string): Promise<"ended" | "changed"> {
 	const response = await fetch("/auth/sign-out", {
 		method: "POST",
 		credentials: "same-origin",
-		headers: { "x-asterra-expected-principal": expectedPrincipal },
+		headers: { "x-asterra-expected-principal": expectedPrincipal, "x-asterra-expected-session": expectedSession },
 	});
 	if (response.status === 409) return "changed";
 	if (!response.ok) throw await problemOf(response);

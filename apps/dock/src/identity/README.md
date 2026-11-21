@@ -426,9 +426,11 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 - The sign-in route needs an `Origin` header of this origin, or it gets `403`.
 - The bodies of `/auth/*` requests can be at most 4 KiB. A larger body gets `413` while it streams.
 - `POST /auth/sign-out` revokes the session. The web app sends the initiating principal id in
-  `X-Asterra-Expected-Principal`. A different or missing session returns 409. A bound request leaves
-  the revoked cookie in place so a delayed response cannot expire a newer login. Older clients can
-  omit the header and receive the original cookie expiry.
+  `X-Asterra-Expected-Principal` and the session tag from `account.whoami` in `X-Asterra-Expected-Session`.
+  The tag is a domain-separated digest of the cookie’s internal hash. Each login has its own tag.
+  A different session or incomplete binding returns 409. A bound request leaves the revoked cookie
+  in place so a delayed response cannot expire a newer login. Older clients can omit both headers
+  and receive the original cookie expiry.
 
 ## OAuth for agents
 

@@ -12,7 +12,7 @@ import {
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
-import type { AuthContext, CallContext } from "./auth.ts";
+import { type AuthContext, browserSessionTag, type CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
@@ -197,6 +197,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes: [...call.caller.scopes],
 			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
+			...(call.caller.sessionHash ? { session_tag: await browserSessionTag(call.caller.sessionHash) } : {}),
 			sign_in:
 				call.caller.kind === "human"
 					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }

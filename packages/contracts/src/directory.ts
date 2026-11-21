@@ -105,6 +105,11 @@ export const whoami = defineOperation({
 		),
 		/** `oauth`: an access token that an MCP client got through OAuth. */
 		credential: z.enum(["session", "api_key", "oauth"]),
+		/** Opaque identifier for binding browser sign-out to this session. Omitted for bearer credentials. */
+		session_tag: z
+			.string()
+			.regex(/^[0-9a-f]{64}$/)
+			.optional(),
 		/** How a human signs in to the web app. Null for an agent, which never signs in. */
 		sign_in: z
 			.object({

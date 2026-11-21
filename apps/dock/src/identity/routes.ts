@@ -20,7 +20,7 @@ import {
 	sameSecret,
 	sha256Hex,
 } from "../platform/index.ts";
-import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
+import { browserSessionTag, isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
 import { endEventSockets } from "./principal.ts";
@@ -224,17 +224,25 @@ export function mountAuthRoutes(app: AuthApp): void {
 
 	app.post("/auth/sign-out", async (c) => {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign out from the Asterra web app.");
-		const expected = c.req.header("x-asterra-expected-principal") ?? null;
+		const expectedPrincipal = c.req.header("x-asterra-expected-principal") ?? null;
+		const expectedSession = c.req.header("x-asterra-expected-session") ?? null;
+		const bound = expectedPrincipal !== null || expectedSession !== null;
 		const token = readCookie(c.req.raw, SESSION_COOKIE);
 		const hash = token ? await sha256Hex(token) : null;
-		const ended = hash ? await deleteSession(c.env.DIRECTORY, hash, expected) : null;
-		if (expected !== null && !ended) throw new OperationError("conflict", "The signed-in account changed.");
+		const matches =
+			!bound ||
+			(expectedPrincipal !== null &&
+				expectedSession !== null &&
+				hash !== null &&
+				sameSecret(expectedSession, await browserSessionTag(hash)));
+		const ended = hash && matches ? await deleteSession(c.env.DIRECTORY, hash, expectedPrincipal) : null;
+		if (bound && !ended) throw new OperationError("conflict", "The signed-in session changed.");
 		if (hash && ended) await endEventSockets(c.env, ended.principal_id, { kind: "session", id: hash });
 		// A delayed Set-Cookie can erase a newer login even when we revoked the correct session.
 		// Bound requests leave the revoked cookie inert. Keep the expiry header for older clients.
 		const headers = {
 			"cache-control": "no-store",
-			...(expected === null ? { "set-cookie": sessionCookie("", 0) } : {}),
+			...(!bound ? { "set-cookie": sessionCookie("", 0) } : {}),
 		};
 		return c.body(null, 204, headers);
 	});

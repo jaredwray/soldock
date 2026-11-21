@@ -65,3 +65,34 @@ test("a late response for the old session preserves a login made while sign-out 
 	expect(await principal(original)).toEqual(next);
 	expect(await page.evaluate((key) => localStorage.getItem(key), key)).toContain("Keep this draft");
 });
+
+test("a stale tab cannot sign out a newer login for the same person without a storage event", async ({ device }) => {
+	const stale = await device("nadia");
+	const replacement = await device("nadia");
+	const who = await principal(stale);
+	const page = await stale.newPage();
+	await page.goto("/settings");
+	const signOut = page.getByRole("button", { name: "Sign out", exact: true });
+	await expect(signOut).toBeVisible();
+	await saveLocalDraft(page, who.id, "Recover this draft");
+	await page.route("**/draft", (route) => route.abort());
+	page.once("dialog", async (dialog) => {
+		// This replaces the browser cookie without notifying the suspended page.
+		await stale.addCookies(await replacement.cookies());
+		await dialog.accept();
+	});
+	const reply = page.waitForResponse((r) => r.url().endsWith("/auth/sign-out"));
+	await signOut.click();
+	expect((await reply).status()).toBe(409);
+	await expect(page.getByRole("button", { name: `Account: ${who.display_name}` })).toBeVisible();
+	expect(await principal(replacement)).toEqual(who);
+	expect(await page.evaluate((id) => localStorage.getItem(`soldock:chat-drafts:${id}`), who.id)).toContain(
+		"Recover this draft",
+	);
+
+	// Once the UI has reconciled the replacement login, a new click can sign out that session.
+	page.once("dialog", (dialog) => dialog.accept());
+	await signOut.click();
+	await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+	expect((await replacement.request.get("/api/v1/account")).status()).toBe(401);
+});

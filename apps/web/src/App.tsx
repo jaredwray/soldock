@@ -34,6 +34,7 @@ export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 	const [signingOut, setSigningOut] = useState(false);
 	const sessionEvents = useRef(0);
+	const displayedSession = useRef<string | undefined>(undefined);
 	const endingSession = useRef(false);
 
 	/**
@@ -42,6 +43,7 @@ export function App() {
 	 */
 	const show = useCallback((next: SessionState) => {
 		const alreadySignedOut = currentAccount() === null;
+		displayedSession.current = next.status === "signed-in" ? next.whoami.session_tag : undefined;
 		setAccount(next.status === "signed-in" ? next.whoami.principal.id : null);
 		// A session can end while the page is closed. The page then starts with nobody signed in, which
 		// is no change of the person, so the listeners do not run. The server told that nobody is signed
@@ -72,6 +74,7 @@ export function App() {
 			onUnauthenticated(() => {
 				// Explicit sign-out verifies the current cookie after the revocation response.
 				if (endingSession.current) return;
+				displayedSession.current = undefined;
 				setAccount(null);
 				setState((current) => (current.status === "signed-in" ? { status: "signed-out", expired: true } : current));
 			}),
@@ -82,16 +85,34 @@ export function App() {
 	const signOut = useCallback(async () => {
 		const owner = currentAccount();
 		if (!owner || signingOut) return;
+		const sessionTag = displayedSession.current;
 		const generation = accountChangeCount();
 		const event = sessionEvents.current;
 		const stamp = sessionChangeStamp();
 		const stillSignedIn = () =>
 			accountChangeCount() === generation &&
 			currentAccount() === owner &&
+			displayedSession.current === sessionTag &&
 			sessionEvents.current === event &&
 			sessionChangeStamp() === stamp;
 		setSigningOut(true);
 		try {
+			if (!sessionTag) {
+				// An older Worker could omit the binding. Reload the session without using it to sign out.
+				const current = await loadSession(false);
+				if (!stillSignedIn()) return;
+				if (current.status === "signed-in" && !current.whoami.session_tag) {
+					setState({
+						status: "error",
+						message: "This page and the server are different versions. Reload to sign out.",
+					});
+				} else if (current.status === "error") {
+					setState(current);
+				} else {
+					show(current);
+				}
+				return;
+			}
 			const saved = await savePendingDrafts(owner, stillSignedIn);
 			if (!stillSignedIn()) return;
 			if (
@@ -101,7 +122,7 @@ export function App() {
 				return;
 			if (!stillSignedIn()) return;
 			endingSession.current = true;
-			const result = await endSession(owner);
+			const result = await endSession(owner, sessionTag);
 			if (!stillSignedIn()) return;
 			// A second login can replace the cookie before either the request or its response.
 			const current = await loadSession(false);
@@ -118,16 +139,15 @@ export function App() {
 		}
 	}, [show, signingOut]);
 
-	// After a change to the account, for example two-step verification, so each page shows the new value. A
-	// late answer applies only to the same person: after a sign-out and a sign-in as somebody else, it is dropped.
+	// A refresh can discover another login in the same browser. An older reply cannot replace a session
+	// that the page has already switched away from.
 	const refresh = useCallback(async () => {
+		const previous = displayedSession.current;
+		const generation = accountChangeCount();
 		const whoami = await api.call("account.whoami");
-		setState((current) =>
-			current.status === "signed-in" && current.whoami.principal.id === whoami.principal.id
-				? { status: "signed-in", whoami }
-				: current,
-		);
-	}, []);
+		if (previous === displayedSession.current && generation === accountChangeCount())
+			show({ status: "signed-in", whoami });
+	}, [show]);
 
 	const session = useMemo<Session | null>(
 		() => (state.status === "signed-in" ? { whoami: state.whoami, signOut, refresh } : null),
@@ -169,7 +189,7 @@ export function App() {
 				return <SignInPage expired={state.expired} onSignedIn={() => void load(false)} />;
 			case "signed-in":
 				return (
-					<SessionContext.Provider key={state.whoami.principal.id} value={session}>
+					<SessionContext.Provider key={state.whoami.session_tag ?? state.whoami.principal.id} value={session}>
 						<Shell signingOut={signingOut} />
 					</SessionContext.Provider>
 				);

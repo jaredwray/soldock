@@ -565,29 +565,47 @@ describe("sign-in with a password", () => {
 		expect(out.headers.get("set-cookie")).toMatch(/Max-Age=0/);
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
 	});
-	it("binds a delayed sign-out to its original principal and preserves a replacement cookie", async () => {
+	it("binds sign-out to the exact browser login and preserves replacement sessions", async () => {
 		const { owner, ada } = await seedOrg();
 		const original = await signIn(owner.address);
-		const replacement = await signIn(ada.address);
-		const end = (cookie: string) =>
-			request("/auth/sign-out", {
-				method: "POST",
-				headers: { cookie, origin: ORIGIN, "x-asterra-expected-principal": owner.id },
-			});
+		const sameOwner = await signIn(owner.address);
+		const otherOwner = await signIn(ada.address);
 		const who = (cookie: string) => request("/api/v1/account", { headers: { cookie } });
+		const tag = async (cookie: string) => ((await (await who(cookie)).json()) as { session_tag: string }).session_tag;
+		const originalTag = await tag(original);
+		const secondTag = await tag(sameOwner);
+		expect(originalTag).toMatch(/^[a-f0-9]{64}$/);
+		expect(secondTag).not.toBe(originalTag);
+		expect(await tag(original)).toBe(originalTag);
+		expect((await owner.call("account.whoami")).session_tag).toBeUndefined();
+		expect(
+			await env.DIRECTORY.prepare("SELECT 1 FROM sessions WHERE token_hash = ?").bind(originalTag).first(),
+		).toBeNull();
 
-		const mismatched = await end(replacement);
-		expect(mismatched.status).toBe(409);
-		expect(mismatched.headers.get("set-cookie")).toBeNull();
-		expect((await who(replacement)).status).toBe(200);
-		expect((await who(original)).status).toBe(200);
+		const end = (cookie: string, headers: Record<string, string>) =>
+			request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN, ...headers } });
+		const principalOnly = { "x-asterra-expected-principal": owner.id };
+		const tagOnly = { "x-asterra-expected-session": originalTag };
+		const expected = { ...principalOnly, ...tagOnly };
+		for (const [cookie, headers] of [
+			[sameOwner, expected],
+			[otherOwner, { ...principalOnly, "x-asterra-expected-session": await tag(otherOwner) }],
+			[original, principalOnly],
+			[original, tagOnly],
+		] as const) {
+			const mismatched = await end(cookie, headers);
+			expect(mismatched.status).toBe(409);
+			expect(mismatched.headers.get("set-cookie")).toBeNull();
+			expect((await who(cookie)).status).toBe(200);
+		}
 
-		const ended = await end(original);
+		const ended = await end(original, expected);
 		expect(ended.status).toBe(204);
 		// The response can arrive after a new login in another tab. It must not expire that cookie.
 		expect(ended.headers.get("set-cookie")).toBeNull();
 		expect((await who(original)).status).toBe(401);
-		expect((await who(replacement)).status).toBe(200);
+		expect((await who(sameOwner)).status).toBe(200);
+		expect((await who(otherOwner)).status).toBe(200);
 	});
 });
 

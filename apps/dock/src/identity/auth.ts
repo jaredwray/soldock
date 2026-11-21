@@ -6,6 +6,11 @@ import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKe
 /** `__Host-` makes the browser refuse the cookie unless it is Secure, host-only and on path `/`. */
 export const SESSION_COOKIE = "__Host-soldock_session";
 
+/** Public binding for browser sign-out. The cookie and the hash used to find its row stay private. */
+export function browserSessionTag(tokenHash: string): Promise<string> {
+	return sha256Hex(`asterra:browser-session-tag:v1\0${tokenHash}`);
+}
+
 /** The authenticated principal of a request and what its credential can do. */
 export interface AuthContext extends Caller {
 	principal: PrincipalRecord;
