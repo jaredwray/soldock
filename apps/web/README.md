@@ -78,7 +78,10 @@ MCP clients. The app has no UI-only path.
     When the VAPID key changes, the app renews the subscription on the next start or account change.
     If the browser refuses renewal, Settings shows the error. Select **Turn on device notifications** to try again.
   - The active tab can play a short tone after the person interacts with the page.
-  - In a room, **Room notifications** overrides the default for that room. Select **Use my default** to clear the override.
+  - The gear opens **Room settings** for each member, including direct messages. **Notifications** sets only that member’s preference.
+    Select **Use account default** and **Save changes** to clear the room override.
+    The owner of a named room can also select **Edit** to change its name and topic.
+    See the [room header](../../docs/screenshots/room-settings/header.png), [desktop settings](../../docs/screenshots/room-settings/desktop.png), [room editor](../../docs/screenshots/room-settings/edit.png), and [phone settings](../../docs/screenshots/room-settings/phone.png).
   - The rail has the mark of Asterra, which goes to the inbox, and a link to each product: Mail,
     Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
     Sheets are part of Drive.

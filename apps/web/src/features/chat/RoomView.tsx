@@ -53,7 +53,6 @@ import {
 	unseenSendsNote,
 } from "./model.ts";
 import { Presence } from "./Presence.tsx";
-import { RoomNotificationButton } from "./RoomNotifications.tsx";
 import { useSearchKeys } from "./searchKeys.ts";
 import { createSendSettler } from "./settle.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
@@ -831,18 +830,23 @@ export function RoomView({
 				) : (
 					<Icon name={room.kind === "private" ? "lock" : "hash"} size={22} />
 				)}
-				<h1 className="chat-title">
-					{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
-					{title}
-				</h1>
-				{room.peer && <Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />}
-				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
-				{room.role !== null && (
-					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
+				<div className="chat-room-heading">
+					<h1 className="chat-title">
+						{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
+						{title}
+					</h1>
+					{room.role !== null && (
+						<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
+					)}
+				</div>
+				{room.peer && (
+					<span className="chat-peer-detail">
+						<Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />
+						{room.peer.kind === "agent" && <span className="kind kind-agent">agent</span>}
+					</span>
 				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
-					{isMember && <RoomNotificationButton roomId={roomId} />}
 					{isMember && <RoomSearch roomId={roomId} title={title} />}
 					<button
 						type="button"
@@ -854,15 +858,15 @@ export function RoomView({
 						<Icon name="team" />
 						{room.member_count}
 					</button>
-					{room.role === "owner" && (
+					{isMember && (
 						<button
 							type="button"
 							className="icon-button"
-							aria-label="Change the name and the topic"
-							title="Change the name and the topic"
+							aria-label="Room settings"
+							title="Room settings"
 							onClick={() => setDialog({ type: "settings" })}
 						>
-							<Icon name="pencil" />
+							<Icon name="settings" />
 						</button>
 					)}
 				</span>
@@ -1106,15 +1110,8 @@ export function RoomView({
 					}}
 				/>
 			)}
-			{dialog?.type === "settings" && (
-				<RoomSettingsDialog
-					room={room}
-					onClose={() => setDialog(null)}
-					onSaved={() => {
-						setDialog(null);
-						void onRoomsChanged();
-					}}
-				/>
+			{dialog?.type === "settings" && isMember && (
+				<RoomSettingsDialog room={room} onClose={() => setDialog(null)} onDetailsSaved={() => void onRoomsChanged()} />
 			)}
 			{dialog?.type === "edits" &&
 				(() => {
