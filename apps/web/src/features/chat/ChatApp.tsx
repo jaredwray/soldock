@@ -399,7 +399,7 @@ function RoomLink({ room, active }: { room: ChatRoom; active: boolean }) {
 					<Icon name={room.kind === "private" ? "lock" : "hash"} />
 				)}
 				<span className="nav-name">{title}</span>
-				{room.peer && <Presence id={room.peer.principal_id} compact />}
+				{room.peer && <Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />}
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{/* A mention of the person has a badge of its own color, with "@" and the count of mentions. */}
 				{unread && room.mention_count > 0 ? (

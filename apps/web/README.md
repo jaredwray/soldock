@@ -822,6 +822,8 @@ MCP clients. The app has no UI-only path.
   - The account menu opens **Profile and status**. Set status text, an emoji, and an optional end time.
   - Profiles, room members, and direct messages show presence. The page reads only the names visible on screen.
     Each read includes up to 50 principals. The page refreshes them every 10 seconds.
+    An agent opens no events socket, so its availability is always offline. The page shows no availability
+    for an agent. A profile and the member list show only its custom status. The sidebar and the header show nothing.
   - The room composer sends one typing event every three seconds at most. The name clears after six seconds without another event.
     The room socket sends no typing events to hidden tabs or thread feeds.
   - **Search** (`/chat/search?q=<query>&room=<room_id>`, `SearchView.tsx`, `searchModel.ts`).

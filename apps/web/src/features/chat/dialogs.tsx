@@ -495,7 +495,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 									</strong>
 									{member.kind === "agent" && <span className="kind kind-agent">agent</span>}
 								</span>
-								<Presence id={member.principal_id} />
+								<Presence id={member.principal_id} agent={member.kind === "agent"} />
 								{member.role === "owner" && <span className="muted">Owner of the room</span>}
 							</span>
 							{!fixed && room.role === "owner" && member.principal_id !== ownId && (

@@ -131,7 +131,7 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 				</h2>
 				{handle && <p className="chat-profile-handle">@{handle}</p>}
 				<div className="chat-profile-status">
-					<Presence id={person.id} editable={person.id === ownId} />
+					<Presence id={person.id} agent={agent} editable={person.id === ownId} />
 				</div>
 				{person.archived_at !== null && (
 					<p className="chat-profile-note">An owner or an admin archived this {agent ? "agent" : "person"}.</p>

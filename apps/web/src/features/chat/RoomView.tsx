@@ -841,7 +841,7 @@ export function RoomView({
 				</div>
 				{room.peer && (
 					<span className="chat-peer-detail">
-						<Presence id={room.peer.principal_id} compact />
+						<Presence id={room.peer.principal_id} agent={room.peer.kind === "agent"} compact />
 						{room.peer.kind === "agent" && <span className="kind kind-agent">agent</span>}
 					</span>
 				)}

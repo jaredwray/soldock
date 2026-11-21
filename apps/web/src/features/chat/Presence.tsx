@@ -84,12 +84,18 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
 
 const AVAILABILITY = { active: "Active", away: "Away", offline: "Offline" } as const;
 
+/**
+ * An agent works through MCP or REST and opens no events socket, so its availability is always offline.
+ * For an agent, show only the custom status. A compact view shows only the dot, so it shows nothing for an agent.
+ */
 export function Presence({
 	id,
+	agent = false,
 	compact = false,
 	editable = false,
 }: {
 	id: string;
+	agent?: boolean;
 	compact?: boolean;
 	editable?: boolean;
 }) {
@@ -97,10 +103,11 @@ export function Presence({
 	const ref = useRef<HTMLSpanElement>(null);
 	const [presence, setPresence] = useState<ChatPresence | null>(null);
 	const [editing, setEditing] = useState(false);
+	const hidden = agent && compact;
 	useEffect(() => {
 		setPresence(null);
-		if (ref.current && reader) return reader.watch(ref.current, id, setPresence);
-	}, [id, reader]);
+		if (!hidden && ref.current && reader) return reader.watch(ref.current, id, setPresence);
+	}, [id, reader, hidden]);
 	const status = presence?.status;
 	// Each read replaces the snapshot. Near the end time, clear the label between two reads.
 	useEffect(() => {
@@ -115,11 +122,15 @@ export function Presence({
 		return () => clearTimeout(timer);
 	}, [status]);
 	const detail = status ? [status.emoji, status.text].filter(Boolean).join(" ") : "";
-	const label = presence ? [AVAILABILITY[presence.availability], detail].filter(Boolean).join(" · ") : "";
+	const availability = presence && !agent ? AVAILABILITY[presence.availability] : "";
+	const label = [availability, detail].filter(Boolean).join(" · ");
+	if (hidden) return null;
 	return (
 		<>
 			<span ref={ref} className="chat-presence" title={compact && label ? label : undefined}>
-				{presence && <span className={`chat-presence-dot chat-presence-${presence.availability}`} aria-hidden="true" />}
+				{presence && !agent && (
+					<span className={`chat-presence-dot chat-presence-${presence.availability}`} aria-hidden="true" />
+				)}
 				<span className={compact ? "visually-hidden" : undefined}>{label}</span>
 			</span>
 			{editable && (
