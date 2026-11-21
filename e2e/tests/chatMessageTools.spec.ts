@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, type Route } from "@playwright/test";
 import { composer, createRoom, openRoom, postMarkdown, unique } from "../support/chat.ts";
 import { test } from "../support/chatDevices.ts";
 
@@ -157,7 +157,17 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 	const room = await createRoom(laptop, name);
 	const first = await laptop.newPage();
 	const second = await phone.newPage();
-	await Promise.all([openRoom(first, room), openRoom(second, room)]);
+	const draftPath = `/api/v1/chat/rooms/${room}/draft`;
+	await Promise.all(
+		[first, second].map(async (page) => {
+			const initial = page.waitForResponse(
+				(response) =>
+					new URL(response.url()).pathname === draftPath && response.request().method() === "GET" && response.ok(),
+			);
+			await openRoom(page, room);
+			await initial;
+		}),
+	);
 	await laptop.setOffline(true);
 	await composer(first, name).fill("A local change");
 	await expect(first.getByText(/Draft sync failed/)).toBeVisible();
@@ -166,8 +176,29 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 	);
 	await composer(second, name).fill("A second change");
 	await stored;
+	// The reconnect can arrive in a background tab while its last offline attempt still waits for a response.
+	const retry = Promise.withResolvers<Route>();
+	await first.route(`**${draftPath}?*`, (route) => retry.resolve(route), { times: 1 });
+	await first
+		.getByText(/Draft sync failed/)
+		.getByRole("button", { name: "Try again" })
+		.click();
+	const offlineRead = await retry.promise;
+	await first.evaluate(() => {
+		Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+		window.addEventListener(
+			"online",
+			() => {
+				document.documentElement.dataset.reconnected = "yes";
+			},
+			{ once: true },
+		);
+	});
 	await laptop.setOffline(false);
+	await expect(first.locator("html")).toHaveAttribute("data-reconnected", "yes");
+	await offlineRead.abort("internetdisconnected");
 	await expect(first.getByRole("button", { name: "Keep this draft" })).toBeVisible();
+	await first.evaluate(() => Reflect.deleteProperty(document, "visibilityState"));
 	await first.getByRole("button", { name: /^Account:/ }).click();
 	const discard = first.waitForEvent("dialog").then(async (prompt) => {
 		expect(prompt.message()).toContain("unsaved edits");

@@ -29,7 +29,7 @@ export function useRoomDraft(
 	const [notice, setNotice] = useState<Notice>(null);
 	const generation = useRef(accountChangeCount());
 	const active = useRef(false);
-	const writing = useRef(false);
+	const syncing = useRef({ running: false, again: false });
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	const apply = useCallback(
@@ -44,10 +44,9 @@ export function useRoomDraft(
 		[store, key, editor],
 	);
 
-	const sync = useCallback(async () => {
+	const syncOnce = useCallback(async () => {
 		const signedIn = () => accountChangeCount() === generation.current && currentAccount() === owner;
-		if (writing.current || !signedIn()) return;
-		writing.current = true;
+		if (!signedIn()) return;
 		try {
 			let readRevision = store.get(key)?.revision ?? 0;
 			let remote = await api.call("chat.get_draft", address);
@@ -96,10 +95,27 @@ export function useRoomDraft(
 			}
 		} catch (error) {
 			if (active.current && signedIn()) setNotice({ error: errorMessage(error) });
-		} finally {
-			writing.current = false;
 		}
 	}, [address, store, key, owner, apply]);
+
+	// A reconnect or edit can arrive before an offline request reports its failure.
+	// One fresh read covers all requests made while an attempt was in flight.
+	const sync = useCallback(async () => {
+		const request = syncing.current;
+		if (request.running) {
+			request.again = true;
+			return;
+		}
+		request.running = true;
+		try {
+			do {
+				request.again = false;
+				await syncOnce();
+			} while (request.again);
+		} finally {
+			request.running = false;
+		}
+	}, [syncOnce]);
 
 	const change = useCallback(
 		(next: ChatBody | null) => {
@@ -122,13 +138,15 @@ export function useRoomDraft(
 		void sync();
 		const interval = setInterval(refresh, 30_000);
 		window.addEventListener("focus", refresh);
-		window.addEventListener("online", refresh);
+		window.addEventListener("online", sync);
+		document.addEventListener("visibilitychange", refresh);
 		return () => {
 			active.current = false;
 			clearInterval(interval);
 			clearTimeout(timer.current);
 			window.removeEventListener("focus", refresh);
-			window.removeEventListener("online", refresh);
+			window.removeEventListener("online", sync);
+			document.removeEventListener("visibilitychange", refresh);
 			if (store.get(key)?.dirty) void sync();
 		};
 	}, [sync, enabled, store, key]);
