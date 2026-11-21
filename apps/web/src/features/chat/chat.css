@@ -199,6 +199,7 @@
 /* The messages */
 
 .chat-scroll {
+	position: relative;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
@@ -1529,6 +1530,7 @@ a.chat-author:hover {
 }
 
 .chat-thread-body {
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -1619,6 +1621,7 @@ a.chat-author:hover {
 }
 
 .chat-threads {
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
@@ -1721,6 +1724,7 @@ a.chat-author:hover {
 /* The Search view: the box, the recent searches, and the results as cards. */
 
 .chat-search {
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
