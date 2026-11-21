@@ -691,7 +691,8 @@ To set it up:
    A new subscription of an agent gets only the messages for it by default: a direct message, a mention
    and a reply in a thread that it follows. To answer each message of a room, the subscription needs
    `filter: "all"`. The description of the argument tells this to the model. A subscription from before
-   the filter keeps each message.
+   the filter gets `addressed` at its next refresh without `filter`. To keep each message, refresh it
+   once with `filter: "all"`.
 
 The events:
 
