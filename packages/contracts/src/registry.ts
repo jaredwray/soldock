@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { chatOperations } from "./chat.ts";
+import { chatExtraOperations } from "./chat-extras.ts";
 import { chatNotificationOperations } from "./chat-notifications.ts";
 import { directoryOperations } from "./directory.ts";
 import { docsOperations } from "./docs.ts";
@@ -22,6 +23,7 @@ export const operations = {
 	...docsOperations,
 	...sheetsOperations,
 	...chatOperations,
+	...chatExtraOperations,
 	...chatNotificationOperations,
 	...oauthOperations,
 	...webhookOperations,

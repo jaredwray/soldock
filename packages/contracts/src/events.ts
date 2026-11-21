@@ -55,5 +55,16 @@ export const PrincipalEvent = z.discriminatedUnion("type", [
 		parent_id: z.string().nullable(),
 	}),
 	ChatAddressedChange.omit({ room: true }).extend({ type: z.literal("chat.addressed"), room_id: z.string() }),
+	z.object({ type: z.literal("chat.activity"), unread_count: z.number().int().nonnegative() }),
+	z.object({ type: z.literal("chat.sections") }),
+	z.object({ type: z.literal("chat.draft"), room_id: z.string(), parent_id: z.string().nullable() }),
+	z.object({
+		type: z.literal("chat.reminder"),
+		reminder_id: z.string(),
+		room_id: z.string(),
+		message_id: z.string(),
+		note: z.string(),
+	}),
+	z.object({ type: z.literal("chat.scheduled"), scheduled_id: z.string(), room_id: z.string() }),
 ]);
 export type PrincipalEvent = z.infer<typeof PrincipalEvent>;

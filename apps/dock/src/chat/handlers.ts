@@ -4,6 +4,7 @@ import {
 	type ChatSearchResult,
 	type ChatSearchRoom,
 	type ChatThreadFollow,
+	isCustomEmoji,
 	mentionDirectory,
 	type OperationName,
 	prefixedId,
@@ -28,7 +29,9 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
+import { hasCustomEmoji } from "./custom-emoji.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
+import { chatLayer8Handlers } from "./layer8-handlers.ts";
 import { chatNotificationHandlers } from "./notification-handlers.ts";
 import {
 	joinedRoomRefs,
@@ -109,6 +112,11 @@ function iso(ms: number): string {
 function toRoom(record: RoomRecord): ChatRoom {
 	return {
 		...record,
+		peers: record.peers ?? [],
+		archived_at: record.archived_at == null ? null : iso(record.archived_at),
+		posting_policy: record.posting_policy ?? "members",
+		can_post: record.can_post ?? true,
+		retention_days: record.retention_days ?? null,
 		created_at: iso(record.created_at),
 		last_message_at: record.last_message_at === null ? null : iso(record.last_message_at),
 	};
@@ -420,7 +428,14 @@ async function searchRooms(call: CallContext, input: SearchInput, parsed: Parsed
 		const room = byId.get(roomId);
 		if (!room) return null;
 		const peer = room.peer_json === null ? null : (JSON.parse(room.peer_json) as ActorRecord);
-		return { id: room.room_id, kind: room.kind, name: room.name, peer };
+		const peers = room.peers_json ? (JSON.parse(room.peers_json) as ActorRecord[]) : undefined;
+		return {
+			id: room.room_id,
+			kind: room.kind,
+			name: room.name,
+			peer,
+			...(peers === undefined ? {} : { peers }),
+		};
 	};
 	const found = hits.flatMap((hit) => {
 		const record = shown.get(keyOf(hit.room_id, hit.seq));
@@ -451,6 +466,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	...chatNotificationHandlers,
 	...chatPresenceHandlers,
+	...chatLayer8Handlers,
 	async "chat.list_rooms"(call, input) {
 		const list = {
 			query: input.query ?? null,
@@ -552,6 +568,8 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		return {
 			room: toRoom(found.room),
 			members: found.members.map((member) => ({ ...member, joined_at: iso(member.joined_at) })),
+			post_allowed_ids: found.post_allowed_ids,
+			pin_count: found.pin_count,
 		};
 	},
 
@@ -619,6 +637,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				clientKey: input.idempotency_key ?? null,
 				parentId: input.parent_id ?? null,
 				alsoInRoom: input.also_in_room ?? false,
+				...(input.cards === undefined ? {} : { cards: input.cards }),
 			}),
 		);
 		if (!posted.duplicate) auditOk(call, "chat.post_message", `${input.room_id}:${posted.message.id}`);
@@ -674,7 +693,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			files = { order: input.file_ids, added };
 		}
 		const edited = accept(
-			await opened.room.editMessage(opened.ctx, input.message_id, contentOf(input), files, call.origin),
+			await opened.room.editMessage(
+				opened.ctx,
+				input.message_id,
+				contentOf(input),
+				files,
+				call.origin,
+				input.cards ?? null,
+			),
 		);
 		if (edited.changed) auditOk(call, "chat.edit_message", `${input.room_id}:${input.message_id}`);
 		return { message: messageOutput(edited.message) };
@@ -736,6 +762,12 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.add_reaction"(call, input) {
+		if (isCustomEmoji(input.emoji)) {
+			const name = input.emoji.slice(1, -1);
+			if (!(await hasCustomEmoji(call.env.DIRECTORY, name))) {
+				throw new OperationError("invalid", `No custom emoji ${input.emoji} exists.`);
+			}
+		}
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, true));
 		if (result.changed) auditOk(call, "chat.add_reaction", `${input.room_id}:${input.message_id}`);

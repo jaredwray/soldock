@@ -5,6 +5,7 @@ import { type ApiEnv, callOf, unauthenticatedResponse } from "../api/index.ts";
 import { contentOf, roomFile, versionResponse } from "../drive/index.ts";
 import type { CallContext } from "../identity/index.ts";
 import { bytesToBase64, downloadResponse, invokeOperation, log, OperationError } from "../platform/index.ts";
+import { mountChatCustomEmoji } from "./custom-emoji.ts";
 import type { Refusal, RoomCall } from "./room.ts";
 
 // The files of a message. Each download makes two checks: the room checks that the caller is a member
@@ -102,6 +103,8 @@ export async function downloadChatFile(
 }
 
 export function mountChatFiles(app: Hono<ApiEnv>): void {
+	// Custom emoji images live at `/dl/chat/emoji/:name`, before room file routes.
+	mountChatCustomEmoji(app);
 	// The picture of a link preview. It comes before the route of a file: its path has one more part.
 	app.on(["GET", "HEAD"], "/dl/chat/:room_id/:message_id/links/image", async (c) => {
 		const call = await callOf(c, { change: false, ownSiteRead: true });

@@ -139,6 +139,8 @@ describe("the events socket", () => {
 			version: reply.version,
 			at: reply.created_at,
 		});
+		// A thread reply also adds an activity item for the thread author.
+		expect(await person.next()).toEqual({ type: "chat.activity", unread_count: 1 });
 		// A read marker of the thread changes its unread count.
 		await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 		expect(await person.next()).toMatchObject({ type: "chat.room" });

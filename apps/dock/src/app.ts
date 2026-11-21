@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { mountRestApi } from "./api/index.ts";
-import { mountChatFiles, mountChatSocket } from "./chat/index.ts";
+import { mountChatFiles, mountChatIncomingWebhooks, mountChatSocket } from "./chat/index.ts";
 import { mountDriveTransfer } from "./drive/index.ts";
 import { type CallContext, mountAuthRoutes, mountEventsSocket, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
@@ -41,6 +41,7 @@ export function createApp(
 	mountMcp(app, handlers, watchers, events);
 	mountDriveTransfer(app);
 	mountChatFiles(app);
+	mountChatIncomingWebhooks(app);
 	mountChatSocket(app);
 	mountEventsSocket(app);
 

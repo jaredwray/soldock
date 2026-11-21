@@ -22,6 +22,7 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
 		name: entry.name,
 		topic: entry.topic,
 		peer: entry.peer_json === null ? null : (JSON.parse(entry.peer_json) as ActorRecord),
+		peers: entry.peers_json ? (JSON.parse(entry.peers_json) as ActorRecord[]) : [],
 		created_at: entry.created_at,
 		created_by: JSON.parse(entry.created_by_json) as ActorRecord,
 		member_count: entry.member_count,
@@ -34,6 +35,10 @@ function toRecord(entry: ChatRoomEntry): RoomRecord {
 		mention_count: entry.mention_count,
 		version: entry.version,
 		starred: entry.starred,
+		archived_at: entry.archived_at ?? null,
+		posting_policy: entry.posting_policy ?? "members",
+		can_post: entry.can_post ?? true,
+		retention_days: entry.retention_days ?? null,
 	};
 }
 

@@ -1,6 +1,6 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
-import { chatHandlers, chatWatchers } from "./chat/index.ts";
+import { chatHandlers, chatWatchers, invokeSlashCommand, removeDeletedPrincipalFromRooms } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
 import { driveHandlers, driveWatchers, enableDriveEvents } from "./drive/index.ts";
 import { type CallContext, identityHandlers } from "./identity/index.ts";
@@ -17,6 +17,18 @@ export const handlers: HandlerMap<CallContext> = {
 	...sheetsHandlers,
 	...chatHandlers,
 	...endpointHandlers,
+	async "chat.invoke_slash_command"(call, input) {
+		return await invokeSlashCommand(call, handlers, {
+			room_id: input.room_id,
+			command: input.command,
+			text: input.text ?? "",
+		});
+	},
+	async "directory.delete_principal"(call, input) {
+		const result = await identityHandlers["directory.delete_principal"](call, input);
+		await removeDeletedPrincipalFromRooms(call.env, result.principal_id);
+		return result;
+	},
 };
 
 /** The change feed of each resource kind, for `subscriptions/listen` on MCP. */

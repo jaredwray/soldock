@@ -16,6 +16,7 @@ import mentionAliasSchema from "../../migrations/0017_mention_aliases.sql";
 import nameFoldedSchema from "../../migrations/0018_name_folded.sql";
 import directoryOrderSchema from "../../migrations/0019_directory_order.sql";
 import chatPresenceSchema from "../../migrations/0020_chat_presence.sql";
+import chatLayer8Schema from "../../migrations/0021_chat_layer8.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -80,6 +81,9 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TRIGGER IF EXISTS mail_domain_in_use_team",
 		// The room index of Chat names the old principals. The rooms stay in their objects, as old mail
 		// stays in storage, and no new account is a member of them.
+		"DROP TABLE IF EXISTS chat_slash_commands",
+		"DROP TABLE IF EXISTS chat_incoming_webhooks",
+		"DROP TABLE IF EXISTS chat_custom_emoji",
 		"DROP TABLE IF EXISTS chat_members",
 		"DROP TABLE IF EXISTS chat_rooms",
 		// The index of the shared drives names the old principals. The drives stay in their objects, and
@@ -128,6 +132,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...nameFoldedSchema.split("--> statement-breakpoint"),
 		...directoryOrderSchema.split("--> statement-breakpoint"),
 		...chatPresenceSchema.split("--> statement-breakpoint"),
+		...chatLayer8Schema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -158,4 +163,5 @@ const BUNDLED_MIGRATIONS = [
 	"0018_name_folded.sql",
 	"0019_directory_order.sql",
 	"0020_chat_presence.sql",
+	"0021_chat_layer8.sql",
 ] as const;
