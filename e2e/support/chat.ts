@@ -119,6 +119,19 @@ export async function newest(context: BrowserContext, roomId: string): Promise<M
 	).messages;
 }
 
+/**
+ * The texts of the messages that a search in each room of the person finds, as the server has them. A new
+ * message is in that search a short time after its post.
+ */
+export async function searchTexts(context: BrowserContext, query: string): Promise<string[]> {
+	const found = await call<{ results: { message: Message }[] }>(
+		context.request,
+		"GET",
+		`/api/v1/chat/search?query=${encodeURIComponent(query)}`,
+	);
+	return found.results.map((result) => result.message.text);
+}
+
 /** The rows of the message list with the text `text`. */
 export function rowsWithText(page: Page, text: string) {
 	return page.locator(".chat-message .chat-text").filter({ hasText: new RegExp(`^${escapeRegExp(text)}$`) });

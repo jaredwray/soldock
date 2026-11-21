@@ -96,12 +96,15 @@
 	// One DriveSpaceDO for each principal (items, versions, grants, trash, search index, stars, outbox).
 	// One DocumentDO for each doc and each sheet (the content, its revision, and the images of a doc).
 	// One ChatRoomDO for each room and each direct message of Chat (the members and the messages).
+	// One ChatSearchDO for the organization: the search index of Chat (the plain text and the filter values of
+	// each message). Its name has a shard key, so a later change can add more.
 	"durable_objects": {
 		"bindings": [
 			{ "name": "MAILBOX", "class_name": "MailboxDO" },
 			{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
 			{ "name": "DOCUMENT", "class_name": "DocumentDO" },
 			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
+			{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
 			{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
 		]
 	},
@@ -109,7 +112,8 @@
 		{ "tag": "v1", "new_sqlite_classes": ["MailboxDO"] },
 		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] },
 		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] },
-		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] }
+		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] },
+		{ "tag": "v5", "new_sqlite_classes": ["ChatSearchDO"] }
 	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
@@ -170,6 +174,7 @@
 					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
 					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
 					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
+					{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
 					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
 				]
 			},

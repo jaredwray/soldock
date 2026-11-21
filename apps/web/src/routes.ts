@@ -47,7 +47,8 @@ export type Route =
 	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
 	 * points to. `replySeq` is a reply in the thread of that message, for a link to a reply. `profileId`
 	 * is the person or the agent whose profile shows in the place of a room. `threads` is true for the
-	 * Threads view: the threads that the person follows.
+	 * Threads view: the threads that the person follows. `search` is the Search view: the query, and the
+	 * room of a search in one room, or null for a search in each room of the person.
 	 */
 	| {
 			page: "chat";
@@ -56,6 +57,7 @@ export type Route =
 			replySeq?: number;
 			profileId?: string;
 			threads?: true;
+			search?: { query: string; roomId: string | null };
 	  }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
 	| { page: "admin"; section: AdminSection | null }
@@ -118,6 +120,12 @@ export function parseRoute(location: string): Route {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
 		if (second === "threads") {
 			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, threads: true } : { page: "not-found" };
+		}
+		if (second === "search") {
+			if (parts.length !== 2) return { page: "not-found" };
+			const room = url.searchParams.get("room") ?? undefined;
+			const search = { query: url.searchParams.get("q") ?? "", roomId: isRoomId(room) ? room : null };
+			return { page: "chat", roomId: null, seq: null, search };
 		}
 		if (second === "people") {
 			return parts.length === 3 && isPrincipalId(third)
@@ -292,6 +300,18 @@ export function chatPath(
 /** The path of the Threads view of Chat: the threads that the person follows. */
 export function chatThreadsPath(): string {
 	return `${CHAT_PATH}/threads`;
+}
+
+/**
+ * The path of the Search view of Chat, with a query or without one. With `roomId`, the search is in that
+ * room only.
+ */
+export function chatSearchPath(query = "", roomId: string | null = null): string {
+	const params = new URLSearchParams();
+	if (query !== "") params.set("q", query);
+	if (roomId !== null) params.set("room", roomId);
+	const text = params.toString();
+	return text === "" ? `${CHAT_PATH}/search` : `${CHAT_PATH}/search?${text}`;
 }
 
 /** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */

@@ -5,16 +5,17 @@
 > second layer has the live socket of a room. Outbound webhooks notify members of new messages. The
 > third layer starts with the state of each principal in its `PrincipalDO`: the joined rooms, the
 > read markers and the unread counts. Layer 5 has files in messages, through Drive, and link
-> previews. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
+> previews. Layer 6 has search: in one room, and in each room of the caller with the index of the
+> organization. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
 > the module's contract. The plan for the next layers is in
 > [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews. Later: search, browser notifications. |
-| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it. |
+| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews, search in one room and in each room of the caller. Later: browser notifications. |
+| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it; `ChatSearchDO` (the search index of the organization: the plain text and the filter values of each message). |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/`). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
 | **Downloads** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture) and `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview). See [Files in messages](#files-in-messages) and [Link previews](#link-previews). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -41,6 +42,8 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `links.ts` | The links of a body that get a preview, the state of each preview, and the output of a preview |
 | `previews.ts` | The consumer of the queue `soldock-chat-previews`: the fetch of each preview with the guard, the cache, and the picture |
 | `watch.ts` | The change feeds of the `chat.room`, `chat.rooms` and `chat.addressed` resources, for MCP `subscriptions/listen` |
+| `search.ts` | The query of `chat.search_messages`: its words and filters, and the SQL conditions of a filter for a room and for the index |
+| `search-index.ts` | `ChatSearchDO`: the search index of the organization, which finds the hits of a search across rooms |
 
 ## Rooms
 
@@ -892,6 +895,157 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
   author can, and it writes an audit line. The preview does not come back, also after an edit that keeps
   the link.
 
+## Search
+
+`chat.search_messages` finds the messages that the caller can read. It has two modes. With `room_id`, the
+room searches its own tables. Without `room_id`, the index of the organization finds the hits in each
+room of the caller, and each room returns its messages.
+
+### The query
+
+`parseSearch` (`search.ts`) reads the text of a query into words and filters.
+
+- Each word must be in the plain text of the message. The letter case and the accents do not matter
+  (the FTS5 tokenizer `unicode61` with `remove_diacritics 2`, as Mail and Drive use).
+- A part in double quotes is a phrase. A `*` after a word, or after a quoted part, finds each word with
+  that start. The start has 3 letters or digits at least: a shorter start finds a large part of all
+  words. Each word is a quoted FTS5 string, so `AND`, `OR`, `NOT` and `NEAR` are words.
+- A text without a letter or a digit has no word. The query ignores it.
+
+| Filter | Finds |
+| --- | --- |
+| `from:` | The messages of an author: a handle or a name alias with the rules of a mention, `me`, or a principal id. Two `from:` filters find the messages of the one or the other |
+| `in:` | The messages of a room of the caller: a name (`in:general`, `in:#general`, `in:"Release plans"`), a room id, or `in:@ada` for the direct message with a principal. Two `in:` filters search the two rooms. Not with `room_id` |
+| `mentions:` | The messages with a mention node of a principal: `mentions:me`, a handle or a principal id |
+| `has:link` | The messages with a link mark in the body, or with `http://` or `https://` in the text |
+| `has:file` | The messages with a file |
+| `is:thread` | The replies, and the messages with replies that stay |
+| `before:`, `after:`, `on:` | A day in UTC, as `2026-10-31`. `before:` has the messages before that day. `after:` has the messages of that day and later |
+
+- A word with a `:` that is no filter is a word. A filter with a value that the server does not know
+  (`has:picture`, a date that is no date, a handle of no principal, a room that the caller is not in)
+  gets `invalid`, and the message tells what to write.
+- A room that the caller is not a member of is no room for `in:`. The answer is the same for a room that
+  does not exist.
+- The handler reads the directory for the handles of `from:` and `mentions:` before the room makes its
+  check. A handle of no principal gets `invalid` only for a caller with the scope `directory.read`, which
+  can read the directory. For each other caller, such a handle finds nothing. So a credential with only
+  the scopes of Chat does not learn which addresses the organization has.
+- A query has at most 500 characters and 30 words and filters.
+
+### The order and the pages
+
+- `sort: "rank"` gives the best match first (`bm25` of FTS5). It is the default for a query with words.
+  In one room, it reads with an offset, and it returns the first 1,000 hits at most
+  (`CHAT_LIMITS.searchRankResults`).
+- **The rank reads the words of one room only.** `bm25` gives a word more weight when few rows of the
+  table have it. A rank from the table of the index would thus depend on the words of each room of the
+  organization. A principal could then write two messages, and read from their order if a private room
+  that it is not in has a word. So the index gives no rank. Across rooms, the index gives the newest 200
+  hits (`CHAT_LIMITS.searchRankCandidates`), each room gives the rank of its own messages from its own
+  table, and the handler puts them in order. Each member of a room can read each message of that room,
+  so this rank tells nothing new. A word can have a different weight in two rooms, so the order across
+  rooms is not exact.
+- The answer has `sort`: the order that the search used.
+- `sort: "time"` gives the newest message first, with a keyset cursor. A query with filters only has no
+  rank, so it always reads by time.
+- A page has 20 results, or `limit`, at most 50 (`CHAT_LIMITS.searchPageSize`).
+- Each result has the room (id, kind, name and peer), the message as `chat.list_messages` returns it,
+  `parent_seq` for a reply, and `highlights`: the places of the found words in `text`, in UTF-16 code
+  units. The places come from `highlight()` of FTS5 with two characters of the private use area as
+  marks. The search tables keep these two characters as spaces, so a text cannot move a place.
+
+### Search in one room
+
+- The room has an FTS5 table (`messages_fts`) with the plain text of each message that stays. Its rowid
+  is the `seq` of the message. The table `search_mentions` has each principal that a message mentions,
+  and the column `messages.has_link` has the link filter.
+- A post, an edit and a delete write these rows in the transaction of the message (`indexMessage`). So
+  a search in a room is never behind the room.
+- `search` of the room makes the member check in the same step as the read. A principal that is not a
+  member gets `forbidden` for a public room, and `not_found` for each other room, as for
+  `chat.list_messages`.
+- The search reads the messages of the room list and the replies. A deleted message has no row.
+- The FTS5 tables of the room and of the index have the option `secure-delete`. So a delete of a message,
+  and an edit, remove the old text and its words from the storage of the table at once, not at a later
+  merge. The index removes them when it gets the change.
+
+### Search across rooms
+
+One `ChatSearchDO` is the index of the organization. Its name is `org:0`: the `0` is a shard key, so a
+later change can give a large organization more than one index.
+
+- **What the index keeps.** For each message that stays: the room, the `seq`, the author id, the time, the
+  three filter values (link, file, thread), the mentioned principal ids, and the plain text in an FTS5
+  table. It is no full copy of a message: the index has no body, no name, no reaction and no file name,
+  so a reaction writes nothing to it. A delete of a message removes its rows.
+- **How a room sends a change.** A post, an edit and a delete make the message a target of the outbox
+  (`search:<seq>`), in the transaction of the change. The first reply of a message, and the delete of its
+  last reply, make the parent a target too (`is:thread`). The target waits `MEMBER_DELAY_MS` (500 ms), so
+  the changes of that time go out as one batch (`sendSearch`).
+- **No change waits for the index.** Only the alarm of the room sends these targets (`sendSearchRows`),
+  in a line of its own. The writes that a post, an edit and a delete wait for (`flush`) do not have them.
+  So a slow index, for example during a large search, slows no room.
+- **What a batch holds.** The current search state of each message, or nothing for a deleted message. So
+  the order of two changes of one message does not matter. A batch that fails stays in the outbox, and
+  the alarm tries again (1 minute, doubled, at most 1 hour).
+- **Each batch applies one time.** A batch has a stamp, which grows with each batch of the room
+  (`search_stamp`). The index keeps the newest stamp of each room, and ignores a batch whose stamp is not
+  higher. So a second delivery, and an older batch that arrives late, change nothing.
+- **The rooms of the caller.** The handler reads the joined rooms of the caller from its `PrincipalDO`
+  (`chatRoomRefs`), and the index searches those rooms only. An `in:` filter keeps the named rooms.
+- **The room checks again.** The index returns hits: a room and a `seq`, the newest first. The handler
+  asks the room of each hit for the messages (`searchHits`), 25 rooms at the same time. The room makes the member check,
+  and runs the filter again on its own tables for those seqs. So these never show:
+  - a message of a room that the caller left, also while the list of its `PrincipalDO` is behind;
+  - a deleted message, also before the index gets the delete;
+  - a message whose text or filter values changed, while the index has the old ones.
+- When a room refuses the caller, the handler searches again without that room, at most 2 times more. So
+  no result, and no cursor, comes from a hit of a room that the caller left.
+- A room that does not answer gives no result, and the log line `chat search: rooms did not answer` has
+  the count. So a page can have fewer results than `limit`, also none, with a `next_cursor`.
+- **A room that the index does not know.** The answer of the index to a batch tells if the index had a
+  row of the room, and if the room told it that each stored message is a target (`rooms.filled`). While
+  one of the two is false, the room makes each stored message a target, with `search:filled` after
+  them. The batch with `search:filled` sets `rooms.filled`. A fill that runs does not start again. A new
+  room sends its first batch at its creation. This rule also fills an index that lost its rows, also when
+  the answer to a batch got lost.
+- **Rooms from before search.** The migration of a room fills its search tables from its stored messages,
+  and makes the room a target for the index (`search:room`). A room migrates at its next start. A search
+  names the rooms of the caller that the index has no row for (at most 200). The handler asks each of
+  them to send a batch (`fillSearch`), 25 at the same time, and then searches again. That call of the
+  search waits for the first messages of each such room (about 1,000), and the alarm sends the rest.
+
+Known limits:
+
+- The index is about one second behind a change: 500 ms, and the time of the alarm. A new message, and
+  the new words of an edit, show in a search across rooms after that time.
+- A room with more than 1,000 messages from before search is complete in the index only after its
+  alarms sent each message. A principal with more than 200 such rooms needs more than one search.
+- The handler reads each joined room of the caller for each search. While the first fill of a
+  `PrincipalDO` is not complete (more than 200 rooms from before the object), a search has the rooms
+  that the object has until then.
+- The tokenizer makes a word from letters and digits. An emoji is no word. A text without spaces, such
+  as Chinese or Japanese, is one word, so a search finds the start of it only with `*`.
+- A query has no negative filter, and no `OR` of words.
+- `mentions:` reads the mention nodes of a principal. A mention of a group (`@here`, `@channel`) is not a
+  mention of `me`.
+- A search with words reads each row of the index that has the words, in all rooms, and then keeps the
+  rows of the rooms of the caller. So its cost grows with the organization, not with the rooms of the
+  caller. The time of an answer can thus depend on the words of rooms that the caller is not in. A
+  caller that measures many searches could learn from it. The limit of a prefix makes the cost smaller,
+  and a rate limit for search is the next step.
+- A read by rank across rooms asks the rooms of the newest 200 hits for each page: 200 rooms at most.
+- The size of the index. A measure in local workerd with 50,000 messages of made-up words, 130
+  characters each on average, gave 23 MB: about 460 bytes for each message. A Durable Object with SQLite
+  holds 10 GB, so one index has room for about 20 million such messages. A search by rank in that index
+  took about 20 ms. Measure a real organization
+  before a second shard: the layout of the shards is not built, and each room must send its messages
+  again when the number of shards changes.
+- A fresh start of the directory keeps the rows of the old rooms in the index. No new account is a
+  member of them, so no search reads them.
+- The search has no rate limit of its own.
+
 ## Safety
 
 - Each change writes an audit line (`audit: true`): the room, and the message or the principal. The
@@ -912,6 +1066,10 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
   socket is a read, so it has no audit line, as `chat.list_messages` has none.
 - An event has only what `chat.list_messages` gives to the same member. The room sends it only to
   the sockets of its members.
+- A search is a read, so it has no audit line. No log line has the text of a query. The index of the
+  organization gives no access: each result comes from its room, after the member check of that room.
+  The index gives no rank, so the order of the results has no data of a room that the caller is not in.
+  See [The order and the pages](#the-order-and-the-pages).
 
 ## Data inventory
 
@@ -924,7 +1082,9 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
 | Earlier versions | `ChatRoomDO` table `message_edits` | One row for each edit of a message: the text and the body before the edit, the version of the room, the time of the write and the time of the edit. The 100 newest rows of each message stay. A delete of the message removes its rows |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
-| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), and the R2 objects to delete (`blob:<key>`). A row goes away after its write |
+| Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), the R2 objects to delete (`blob:<key>`), and the messages that the search index of the organization does not have yet (`search:<seq>`, `search:room` for the room, and `search:filled` at the end of a fill). A row goes away after its write |
+| Search rows of a room | `ChatRoomDO` tables `messages_fts` (FTS5) and `search_mentions`, column `messages.has_link` | The plain text of each message that stays, one row for each principal that it mentions, and 1 for a message with a link. A second copy of the text of a message, in the same object. A delete of the message removes its rows. Rebuildable from the table `messages`: the migration that adds the tables fills them |
+| The search index of the organization | `ChatSearchDO` (name `org:0`) tables `rooms`, `messages`, `messages_fts` (FTS5) and `mentions` | A copy that the rooms can build again. For each message that stays: the room, the `seq`, the author id, the time, three filter values, the mentioned principal ids, and the plain text. A third copy of the text of a message, in a different object. No body and no name. The index removes the rows of a deleted message when it gets the delete, about one second later, or after the retries of a send that failed. `rooms` has the stamp of the newest batch of each room, and `filled` after the room sent each stored message. A restore of a room object must not make its `search_stamp` lower: the index ignores each batch with a lower stamp. To build the index again, delete its rows: each room sends each message again with its next batch, and a search asks the rooms of its caller that sent no batch |
 | Files of messages | `ChatRoomDO` table `message_files` | One row for each file of a message that stays: the position, the drive, the item and the facts of the file at the time of the post. No bytes. A delete of the message, and an edit that removes the file, remove the row |
 | Link previews | `ChatRoomDO` column `messages.links_json` | The state of each link that gets a preview, with the plain text of the preview and the R2 key of its picture. A deleted message has null |
 | Jobs of link previews | `ChatRoomDO` table `link_jobs` | The message, the origin of the post, the sends and the time of the next send. A row goes away when no link waits |
@@ -935,7 +1095,7 @@ The guard (`publicFetch` in [`platform`](../platform/README.md)) takes the rules
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
-| Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
+| Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `search_stamp` grows with each batch that the room sends to the search index. `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
@@ -948,7 +1108,7 @@ files of messages are items of Drive: the room holds no reference to their bytes
 ## Later layers
 
 Not built yet: notifications of mentions, files of a shared drive in a message, the files of a moved
-item in a message, search, the MCP resource for the events of a principal, presence, typing,
+item in a message, the MCP resource for the events of a principal, presence, typing,
 browser notifications, group direct messages, room deletion and archive, incoming webhooks for bots,
 sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
 the order and the decisions.

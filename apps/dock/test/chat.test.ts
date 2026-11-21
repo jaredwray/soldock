@@ -1580,8 +1580,8 @@ describe("the mention count", () => {
 		const gone = await post(ada, room.id, "@bot deleted");
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		// The room goes back to the schema before the table: the migrations after it are undone too, the
-		// table of earlier versions, the columns of threads, the table of follows, the files and links, and
-		// the change for each member.
+		// table of earlier versions, the columns of threads, the table of follows, the files and links, the
+		// change for each member, and the search tables.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DROP TABLE mentions");
@@ -1602,7 +1602,10 @@ describe("the mention count", () => {
 				sql.exec(`ALTER TABLE messages DROP COLUMN ${column}`);
 			}
 			sql.exec("ALTER TABLE members DROP COLUMN addressed_json");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 7 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("DROP TABLE messages_fts");
+			sql.exec("DROP TABLE search_mentions");
+			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 8 AS TEXT) WHERE key = 'schema_version'");
 		});
 		// A new start of the object runs the migration.
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
@@ -2204,7 +2207,10 @@ describe("threads", () => {
 			sql.exec("DROP TABLE link_jobs");
 			sql.exec("ALTER TABLE messages DROP COLUMN links_json");
 			sql.exec("ALTER TABLE members DROP COLUMN addressed_json");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 4 AS TEXT) WHERE key = 'schema_version'");
+			sql.exec("DROP TABLE messages_fts");
+			sql.exec("DROP TABLE search_mentions");
+			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
+			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 5 AS TEXT) WHERE key = 'schema_version'");
 		});
 		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 		// Each author of a reply follows, with its marker at its newest reply. The author of the first message
@@ -2504,6 +2510,13 @@ describe("a room object", () => {
 	it("has an alarm from the change until the write to the index ends", async () => {
 		const room = await createRoom(ada, "public", "Launch");
 		const stub = roomStub(room.id);
+		const alarm = () => runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+		// A new room tells the search index about itself, with its alarm. The test starts after that send,
+		// so no alarm of the creation runs during the write of the post.
+		await soon(async () => {
+			await runDurableObjectAlarm(stub);
+			expect(await alarm()).toBeNull();
+		});
 		// Plain flags, not promises: a promise from the test cannot continue a call inside the object.
 		const gate = { entered: false, released: false };
 		await runInDurableObject(stub, (instance) => {
@@ -2524,12 +2537,16 @@ describe("a room object", () => {
 		});
 		const posting = post(ada, room.id, "Hello");
 		await vi.waitFor(() => expect(gate.entered).toBe(true), { timeout: 5000, interval: 10 });
-		expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).not.toBeNull();
+		expect(await alarm()).not.toBeNull();
 		gate.released = true;
 		await posting;
-		// The write is done: no row waits, so no alarm stays.
-		expect(await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm())).toBeNull();
+		// The write is done. Only the message waits a short time for the search index. Then no row waits, so
+		// no alarm stays.
 		expect((await joined(ada))[0]).toMatchObject({ last_seq: 1 });
+		await soon(async () => {
+			await runDurableObjectAlarm(stub);
+			expect(await alarm()).toBeNull();
+		});
 	});
 
 	it("stays out of the directory after a fresh start, also when it writes its rows again", async () => {

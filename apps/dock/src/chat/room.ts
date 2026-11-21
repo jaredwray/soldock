@@ -31,6 +31,16 @@ import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
 import { extractLinks, type LinkFacts, type LinkState, linkPreviews, mergeLinks, parseLinks } from "./links.ts";
 import { storedGroups, withMentions } from "./mentions.ts";
+import {
+	HAS_LINK_SQL,
+	hasLink,
+	highlightRanges,
+	indexedText,
+	type SearchColumns,
+	type SearchFilter,
+	searchSql,
+} from "./search.ts";
+import { type SearchEntry, searchIndex } from "./search-index.ts";
 
 /** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
 export type Refusal = {
@@ -218,6 +228,27 @@ interface MemberRow extends Row {
 	addressed_json: string | null;
 }
 
+/** A message that a search found, with the found parts of its text. */
+export interface SearchHitRecord {
+	message: MessageRecord;
+	/** For a reply, the seq of the first message of its thread. */
+	parentSeq: number | null;
+	/**
+	 * The rank of the message for the words of the query, from the words of this room only (`bm25`): a
+	 * lower number is a better match. 0 for a query without words.
+	 */
+	score: number;
+	highlights: { start: number; end: number }[];
+}
+
+/** The room of a search result. */
+export interface SearchRoomRecord {
+	id: string;
+	kind: RoomKind;
+	name: string | null;
+	peer: ActorRecord | null;
+}
+
 interface MessageRow extends Row {
 	seq: number;
 	id: string;
@@ -237,6 +268,8 @@ interface MessageRow extends Row {
 	last_reply_at: number | null;
 	reply_authors_json: string | null;
 	links_json: string | null;
+	/** 1 for a message with a link (`hasLink`), else 0. A search filter reads it. */
+	has_link: number;
 }
 
 interface OutboxRow extends Row {
@@ -283,6 +316,14 @@ const THREAD_FOLLOWS_BACKFILL_PARENTS = `INSERT INTO thread_follows (parent_id, 
 	GROUP BY parents.id
 	ON CONFLICT (parent_id, principal_id) DO UPDATE SET
 		last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`;
+
+/** The rows of `search_mentions` for the messages from before the table: each mention node of each body. */
+const SEARCH_MENTIONS_BACKFILL = `INSERT OR IGNORE INTO search_mentions (principal_id, seq)
+	SELECT json_extract(messages.body_json, node.path || '.attrs.id'), messages.seq
+	FROM messages, json_tree(messages.body_json) AS node
+	WHERE messages.body_json IS NOT NULL AND messages.deleted_at IS NULL
+		AND node.key = 'type' AND node.atom = 'mention'
+		AND json_extract(messages.body_json, node.path || '.attrs.id') IS NOT NULL`;
 
 const MIGRATIONS: string[][] = [
 	[
@@ -445,6 +486,29 @@ const MIGRATIONS: string[][] = [
 	// The newest change that is for each member (`ChatAddressedState`), for chat.list_addressed and the
 	// resource `chat.addressed`. It is part of the member row, so it goes away when the member leaves.
 	["ALTER TABLE members ADD COLUMN addressed_json TEXT"],
+	// Search. `messages_fts` has the plain text of each message that stays, with the seq as its rowid.
+	// `search_mentions` has each principal that a message mentions, also in a reply and also its author. The
+	// messages from before get their rows here. The room becomes a target of the outbox for the index of the
+	// organization (`SEARCH_ROOM_TARGET`): the index does not know the room, so the room then sends each
+	// stored message (`sendSearch`).
+	[
+		"ALTER TABLE messages ADD COLUMN has_link INTEGER NOT NULL DEFAULT 0",
+		`UPDATE messages SET has_link = 1 WHERE deleted_at IS NULL AND ${HAS_LINK_SQL}`,
+		"CREATE VIRTUAL TABLE messages_fts USING fts5 (text, tokenize = 'unicode61 remove_diacritics 2')",
+		// A delete removes the words of a message from the word index at once, not at a later merge. So the
+		// storage of the room keeps no word of a deleted message, and no word of the text before an edit.
+		"INSERT INTO messages_fts (messages_fts, rank) VALUES ('secure-delete', 1)",
+		`INSERT INTO messages_fts (rowid, text)
+			SELECT seq, replace(replace(text, char(57344), ' '), char(57345), ' ') FROM messages WHERE deleted_at IS NULL`,
+		`CREATE TABLE search_mentions (
+			principal_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			PRIMARY KEY (principal_id, seq)
+		) WITHOUT ROWID`,
+		"CREATE INDEX search_mentions_seq ON search_mentions (seq)",
+		SEARCH_MENTIONS_BACKFILL,
+		"INSERT OR IGNORE INTO outbox (target, gen, next_attempt_at) VALUES ('search:room', 1, 0)",
+	],
 ];
 
 /**
@@ -473,6 +537,38 @@ const PRINCIPAL_TARGET = "principal:";
 const GRANT_TARGET = "grant:";
 /** The start of an outbox target for the delete of an R2 object of the room: `blob:<key>`. */
 const BLOB_TARGET = "blob:";
+/**
+ * The start of an outbox target for the index of the organization: `search:<seq>` for one message, and
+ * `search:room` for the room, so the index knows a room without messages too.
+ */
+const SEARCH_TARGET = "search:";
+const SEARCH_ROOM_TARGET = `${SEARCH_TARGET}room`;
+/**
+ * The outbox target that tells the index that the room made each stored message a target. Its batch comes
+ * after the batches of those messages: the outbox sends the targets in their order, and a letter comes after
+ * each digit.
+ */
+const SEARCH_FILLED_TARGET = `${SEARCH_TARGET}filled`;
+/** The names of the search tables of a room, for `searchSql`. */
+const ROOM_SEARCH: SearchColumns = {
+	fts: "messages_fts",
+	messages: "messages m",
+	rowid: "m.seq",
+	author: "m.author_id",
+	createdAt: "m.created_at",
+	hasLink: "m.has_link = 1",
+	hasFile: "EXISTS (SELECT 1 FROM message_files f WHERE f.message_id = m.id)",
+	isThread: "(m.parent_id IS NOT NULL OR m.reply_count > 0)",
+	mentions: "EXISTS (SELECT 1 FROM search_mentions s WHERE s.seq = m.seq AND s.principal_id = ?)",
+};
+/**
+ * The columns of a result of a query with words: the text with the marks of `highlightRanges` around each
+ * found word, and the rank. The rank reads the words of this room only, which each member can read. So the
+ * order of the results tells nothing about a different room.
+ */
+const SEARCH_COLUMNS = "highlight(messages_fts, 0, char(57344), char(57345)) AS marked, bm25(messages_fts) AS score";
+/** A message row of a search, with its marked text and its rank. The two are null for a query without words. */
+type SearchRow = MessageRow & { marked: string | null; score: number | null };
 /** The time after a job of link previews goes to the queue, before the room sends it again. */
 const LINK_RESEND_MS = 10 * 60_000;
 /** The sends of one job of link previews. After them, each preview that waits gets no preview. */
@@ -615,6 +711,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private readonly allowances = new Map<string, { messages: number; at: number }>();
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
+	/** The end of the line of sends to the search index of the organization. See `sendSearchRows`. */
+	private searchSent: Promise<void> = Promise.resolve();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -899,6 +997,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A dm room has no owner: its two members are equal.
 			this.insertMember(call.actor, kind === "dm" ? "member" : "owner", now, 0);
 			for (const actor of others) this.insertMember(actor, "member", now, 0);
+			this.touch(SEARCH_ROOM_TARGET);
 			this.roomChanged(call.actor.principal_id);
 		});
 	}
@@ -1926,22 +2025,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// A reply changes its parent too. The parent gets the first version and the reply the next, so a
 			// client that gets the two events in that order has each version of the room.
 			const version = opened.room.version + (parent ? 2 : 1);
+			const bodyJson = JSON.stringify(content.body);
 			this.ctx.storage.transactionSync(() => {
 				const seq = this.one<{ seq: number }>(
 					`INSERT INTO messages (id, author_id, author_json, text, body_json, created_at, version, idempotency_key,
-						parent_id, also_in_room)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+						parent_id, also_in_room, has_link)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
 					call.actor.principal_id,
 					JSON.stringify(call.actor),
 					content.text,
-					JSON.stringify(content.body),
+					bodyJson,
 					now,
 					version,
 					input.clientKey,
 					parent?.id ?? null,
 					parent && input.alsoInRoom ? 1 : 0,
+					hasLink(content.text, bodyJson) ? 1 : 0,
 				)?.seq as number;
+				this.indexMessage(seq, content);
 				// A reply that is not in the room list leaves the room list as it was: its last message, its
 				// activity and the read markers.
 				if (inRoomList) {
@@ -1951,6 +2053,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				if (parent) {
 					this.addToThread(parent, call.actor, now, version - 1);
+					// The first reply makes the parent a message of a thread, which a search filter reads.
+					if (parent.reply_count === 0) this.touchSearch(parent.seq);
 					this.followOnReply(parent, call.actor.principal_id, seq, mentionIds(content.body));
 					// Each follow of the thread keeps the time of its newest reply, for `followedThreads`.
 					this.sql.exec("UPDATE thread_follows SET last_reply_at = ? WHERE parent_id = ?", now, parent.id);
@@ -2059,13 +2163,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				this.keepEarlierVersion(row, now);
 				this.sql.exec(
-					"UPDATE messages SET text = ?, body_json = ?, edited_at = ?, version = ? WHERE id = ?",
+					"UPDATE messages SET text = ?, body_json = ?, edited_at = ?, version = ?, has_link = ? WHERE id = ?",
 					content.text,
 					bodyJson,
 					now,
 					version,
+					hasLink(content.text, bodyJson) ? 1 : 0,
 					messageId,
 				);
+				this.indexMessage(row.seq, content);
 				this.setMentions(row.seq, row.author_id, content.body, row.parent_id === null || row.also_in_room === 1);
 				if (!sameFiles) this.setFiles(messageId, nextFiles);
 				if (input !== null)
@@ -2172,12 +2278,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec(
 					// The key goes with the text: an author can make a key from the content of the message.
-					"UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ? WHERE id = ?",
+					`UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ?,
+						has_link = 0 WHERE id = ?`,
 					now,
 					version,
 					messageId,
 				);
-				if (row.parent_id !== null) this.refreshThread(row.parent_id, version + 1);
+				this.indexMessage(row.seq, null);
+				if (row.parent_id !== null) {
+					this.refreshThread(row.parent_id, version + 1);
+					// A parent without replies is no message of a thread now, which a search filter reads.
+					const parent = this.message(row.parent_id);
+					if (parent && parent.reply_count === 0) this.touchSearch(parent.seq);
+				}
 				// A deleted message keeps no reaction, no mention, no file, no link preview and no earlier version.
 				this.setFiles(messageId, []);
 				this.setLinks(messageId, parseLinks(row.links_json), [], null);
@@ -2258,6 +2371,163 @@ export class ChatRoomDO extends DurableObject<Env> {
 			await this.flush();
 		}
 		return this.record(call.actor.principal_id);
+	}
+
+	// --- Search ---------------------------------------------------------------------------------
+
+	/**
+	 * Writes the search rows of a message, in the transaction of its change: the text in `messages_fts` and
+	 * the principals that it mentions. `content` null is a deleted message, which keeps no row. The message
+	 * becomes a target of the outbox too, so the index of the organization follows.
+	 */
+	private indexMessage(seq: number, content: MessageContent | null): void {
+		this.sql.exec("DELETE FROM messages_fts WHERE rowid = ?", seq);
+		this.sql.exec("DELETE FROM search_mentions WHERE seq = ?", seq);
+		if (content !== null) {
+			this.sql.exec("INSERT INTO messages_fts (rowid, text) VALUES (?, ?)", seq, indexedText(content.text));
+			for (const principalId of mentionIds(content.body)) {
+				this.sql.exec("INSERT OR IGNORE INTO search_mentions (principal_id, seq) VALUES (?, ?)", principalId, seq);
+			}
+		}
+		this.touchSearch(seq);
+	}
+
+	/**
+	 * Records that the index of the organization is behind for one message. The row waits `MEMBER_DELAY_MS`,
+	 * so the changes of that time go out as one batch. Only the alarm sends these rows (`sendSearchRows`),
+	 * so no change of a message waits for the index.
+	 */
+	private touchSearch(seq: number): void {
+		this.sql.exec(
+			`INSERT INTO outbox (target, gen, next_attempt_at) VALUES (?, 1, ?)
+			ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0,
+				next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at)`,
+			`${SEARCH_TARGET}${seq}`,
+			Date.now() + MEMBER_DELAY_MS,
+		);
+	}
+
+	/** The rows of a search as results: each message, with the found parts of its text. */
+	private searchHitRecords(roomId: string, rows: readonly SearchRow[]) {
+		const messages = this.messageRecords(roomId, rows);
+		const parentIds = [...new Set(rows.flatMap((row) => (row.parent_id === null ? [] : [row.parent_id])))];
+		const parentSeqs = new Map(
+			this.all<{ id: string; seq: number }>(
+				"SELECT messages.id, messages.seq FROM messages JOIN json_each(?) wanted ON wanted.value = messages.id",
+				JSON.stringify(parentIds),
+			).map((parent) => [parent.id, parent.seq]),
+		);
+		return rows.map(
+			(row, index): SearchHitRecord => ({
+				message: messages[index] as MessageRecord,
+				parentSeq: row.parent_id === null ? null : (parentSeqs.get(row.parent_id) ?? null),
+				score: row.score ?? 0,
+				highlights: row.marked === null ? [] : highlightRanges(row.marked),
+			}),
+		);
+	}
+
+	/**
+	 * A page of the messages of the room that a filter finds, for a member: the messages of the room list
+	 * and the replies, without deleted messages. `sort: "rank"` gives the best match first, from `offset`.
+	 * Each other read gives the newest message first, before the seq `before`. A filter without words has
+	 * no rank, so it reads by time.
+	 */
+	search(
+		call: RoomCall,
+		filter: SearchFilter,
+		input: { sort: "rank" | "time"; before: number | null; offset: number; limit: number },
+	): { room: SearchRoomRecord; results: SearchHitRecord[]; hasMore: boolean } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const { from, where, params } = searchSql(filter, ROOM_SEARCH);
+		where.push("m.deleted_at IS NULL");
+		const ranked = input.sort === "rank" && filter.match !== null;
+		// With words, the FTS5 table gives its rows in the order of its rowid, which is the seq.
+		const seq = filter.match === null ? "m.seq" : "messages_fts.rowid";
+		if (!ranked && input.before !== null) {
+			where.push(`${seq} < ?`);
+			params.push(input.before);
+		}
+		params.push(input.limit + 1);
+		if (ranked) params.push(input.offset);
+		const rows = this.all<SearchRow>(
+			`SELECT m.*, ${filter.match === null ? "NULL AS marked, NULL AS score" : SEARCH_COLUMNS} FROM ${from}
+			WHERE ${where.join(" AND ")}
+			ORDER BY ${ranked ? `bm25(messages_fts), ${seq} DESC` : `${seq} DESC`}
+			LIMIT ?${ranked ? " OFFSET ?" : ""}`,
+			...params,
+		);
+		const peer = this.peerJson(opened.room, call.actor.principal_id);
+		return {
+			room: {
+				id: opened.room.room_id,
+				kind: opened.room.kind,
+				name: opened.room.name,
+				peer: peer === null ? null : (JSON.parse(peer) as ActorRecord),
+			},
+			results: this.searchHitRecords(opened.room.room_id, rows.slice(0, input.limit)),
+			hasMore: rows.length > input.limit,
+		};
+	}
+
+	/**
+	 * The messages with the seqs of the list that the filter finds now, for a member. The index of the
+	 * organization found the seqs. The room makes the access check again, and reads its own tables: so a
+	 * deleted message, and a message whose text changed, never show from an index that is behind.
+	 */
+	searchHits(call: RoomCall, filter: SearchFilter, seqs: readonly number[]): { results: SearchHitRecord[] } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const { from, where, params } = searchSql(filter, ROOM_SEARCH);
+		where.push("m.deleted_at IS NULL", "m.seq IN (SELECT value FROM json_each(?))");
+		params.push(JSON.stringify(seqs));
+		const rows = this.all<SearchRow>(
+			`SELECT m.*, ${filter.match === null ? "NULL AS marked, NULL AS score" : SEARCH_COLUMNS} FROM ${from}
+			WHERE ${where.join(" AND ")}`,
+			...params,
+		);
+		return { results: this.searchHitRecords(opened.room.room_id, rows) };
+	}
+
+	/**
+	 * Sends a batch to the index of the organization, for a search that found that the index has no row of
+	 * this room: a room with no change since the version with search, or an index that lost its rows. The
+	 * index answers that it did not know the room, so the room makes each stored message a target
+	 * (`sendSearch`). This call sends the first of them, and the alarm sends the rest.
+	 */
+	async fillSearch(): Promise<void> {
+		if (!this.room()) return;
+		this.touch(SEARCH_ROOM_TARGET);
+		await this.sendSearchRows();
+		await this.schedule();
+	}
+
+	/**
+	 * Sends the outbox rows for the index of the organization that are due, after each send that started
+	 * before: one send at a time, so the stamps of the batches reach the index in their order. This line is
+	 * not the line of `flush`. So a post, an edit and a delete never wait for the index, also while the
+	 * index is slow. The alarm and `fillSearch` call it.
+	 */
+	private sendSearchRows(): Promise<void> {
+		const run = this.searchSent.then(async () => {
+			for (let round = 0; round < DRAIN_ROUNDS; round++) {
+				const room = this.room();
+				if (!room) return;
+				const rows = this.all<OutboxRow>(
+					`SELECT target, gen, attempts FROM outbox
+					WHERE next_attempt_at <= ? AND substr(target, 1, ${SEARCH_TARGET.length}) = '${SEARCH_TARGET}'
+					ORDER BY target LIMIT ?`,
+					Date.now(),
+					OUTBOX_BATCH,
+				);
+				if (rows.length === 0 || (await this.sendSearch(room, rows))) return;
+			}
+		});
+		this.searchSent = run.catch((error: unknown) => {
+			log("error", "chat search index drain failed", { error: error instanceof Error ? error.message : String(error) });
+		});
+		return this.searchSent;
 	}
 
 	// --- Live sockets ---------------------------------------------------------------------------
@@ -2511,6 +2781,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		const room = this.room();
 		if (room) await this.sendLinkJobs(room.room_id);
+		await this.sendSearchRows();
 		await this.schedule();
 	}
 
@@ -2649,8 +2920,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		for (let round = 0; round < DRAIN_ROUNDS; round++) {
 			const room = this.room();
 			if (!room) return;
+			// The rows for the search index are not in this pass: the alarm sends them (`sendSearchRows`).
 			const rows = this.all<OutboxRow>(
-				"SELECT target, gen, attempts FROM outbox WHERE next_attempt_at <= ? ORDER BY target LIMIT ?",
+				`SELECT target, gen, attempts FROM outbox
+				WHERE next_attempt_at <= ? AND substr(target, 1, ${SEARCH_TARGET.length}) <> '${SEARCH_TARGET}'
+				ORDER BY target LIMIT ?`,
 				Date.now(),
 				OUTBOX_BATCH,
 			);
@@ -2659,13 +2933,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const isGrant = (row: OutboxRow) => row.target.startsWith(GRANT_TARGET);
 			const isBlob = (row: OutboxRow) => row.target.startsWith(BLOB_TARGET);
 			const indexRows = rows.filter((row) => !isPrincipal(row) && !isGrant(row) && !isBlob(row));
-			const [indexFailed, principalsFailed, grantsFailed, blobsFailed] = await Promise.all([
+			const failures = await Promise.all([
 				this.writeIndex(room, indexRows),
 				this.sendStates(room, rows.filter(isPrincipal)),
 				this.sendGrants(room, rows.filter(isGrant)),
 				this.deleteBlobs(rows.filter(isBlob)),
 			]);
-			if (indexFailed || principalsFailed || grantsFailed || blobsFailed) break;
+			if (failures.some(Boolean)) break;
 		}
 		await this.schedule();
 	}
@@ -2727,6 +3001,85 @@ export class ChatRoomDO extends DurableObject<Env> {
 		});
 		if (failed > 0) log("warn", "chat principal state send failed", { targets: rows.length, failed });
 		return failed > 0;
+	}
+
+	/**
+	 * Sends the current search state of the message of each row to the index of the organization, in one
+	 * batch: the plain text and the filter values of a message that stays, or nothing for a deleted one.
+	 * So a second delivery changes nothing, and the order of two changes of one message does not matter.
+	 * The batch has a stamp that grows with each batch of the room. The index applies a batch only when its
+	 * stamp is higher than the stamp that it has for the room, so each batch applies one time, and an older
+	 * batch that arrives late changes nothing.
+	 *
+	 * The index tells when it had no row of the room before this batch (the first batch of a room, or an
+	 * index that lost its rows), and when the room did not tell it yet that each stored message is a target.
+	 * Each stored message then becomes a target, with `SEARCH_FILLED_TARGET` after them, so the index gets
+	 * all of them. The answer of the index is the state of the index, not of one call. So a fill starts
+	 * also when the answer to the first batch got lost. Returns true when the send failed.
+	 */
+	private async sendSearch(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
+		if (rows.length === 0) return false;
+		const entries: SearchEntry[] = [];
+		for (const row of rows) {
+			if (row.target === SEARCH_ROOM_TARGET || row.target === SEARCH_FILLED_TARGET) continue;
+			const seq = Number(row.target.slice(SEARCH_TARGET.length));
+			const message = this.one<MessageRow>("SELECT * FROM messages WHERE seq = ? AND deleted_at IS NULL", seq);
+			if (!message) {
+				entries.push({ seq, row: null });
+				continue;
+			}
+			entries.push({
+				seq,
+				row: {
+					author_id: message.author_id,
+					created_at: message.created_at,
+					text: indexedText(message.text),
+					has_link: message.has_link === 1,
+					has_file: this.one("SELECT 1 AS found FROM message_files WHERE message_id = ? LIMIT 1", message.id) !== null,
+					in_thread: message.parent_id !== null || message.reply_count > 0,
+					mentions: this.all<{ principal_id: string }>(
+						"SELECT principal_id FROM search_mentions WHERE seq = ?",
+						seq,
+					).map((mention) => mention.principal_id),
+				},
+			});
+		}
+		const stamp = Number(
+			this.one<{ value: string }>(
+				`INSERT INTO meta (key, value) VALUES ('search_stamp', '1')
+				ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1 RETURNING value`,
+			)?.value,
+		);
+		let answer: { known: boolean; filled: boolean };
+		try {
+			answer = await searchIndex(this.env).apply({
+				roomId: room.room_id,
+				stamp,
+				entries,
+				filled: rows.some((row) => row.target === SEARCH_FILLED_TARGET),
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log("warn", "chat search index send failed", { rows: rows.length, error: message });
+			for (const row of rows) this.retryLater(row, message);
+			return true;
+		}
+		for (const row of rows) this.done(row);
+		// A fill that runs has its last target in the outbox. It does not start again.
+		const filling = this.one("SELECT 1 AS found FROM outbox WHERE target = ?", SEARCH_FILLED_TARGET) !== null;
+		if (!answer.known || (!answer.filled && !filling)) {
+			this.touch(SEARCH_FILLED_TARGET);
+			this.sql.exec(
+				`INSERT INTO outbox (target, gen, next_attempt_at)
+					SELECT ?1 || seq, 1, ?2 FROM messages WHERE deleted_at IS NULL
+				ON CONFLICT (target) DO UPDATE SET gen = gen + 1, attempts = 0,
+					next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at)`,
+				SEARCH_TARGET,
+				Date.now(),
+			);
+			log("info", "chat search index fill started", { roomId: room.room_id });
+		}
+		return false;
 	}
 
 	/** Deletes the R2 objects of the rows: the pictures of link previews. Returns true when the delete failed. */

@@ -86,7 +86,8 @@ MCP clients. The app has no UI-only path.
   - Each page starts with a header row: the title of the page at the left, and the search box and
     the controls of the page at the right.
   - The search box is in the header row of Mail and of Drive. In Drive, the search box finds items
-    (`/drive/search?q=<query>`). In a shared drive, it finds the items of that drive. Chat has no search yet.
+    (`/drive/search?q=<query>`). In a shared drive, it finds the items of that drive. Chat has a search box in the header of a room,
+    and its own Search view.
   - At 900px and below, the rail and the sidebar are a drawer. The menu button at the left of the
     header row opens the drawer (`aria-expanded`, `aria-controls`). When the drawer opens, the focus
     goes to the first item of the sidebar, or of the rail on a page with no sidebar. Escape, a click
@@ -800,10 +801,36 @@ MCP clients. The app has no UI-only path.
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
 - **Chat** (`/chat`, `/chat/<room_id>`, `/chat/<room_id>/<seq>`, `/chat/<room_id>/<seq>/<reply seq>`,
-  `/chat/people/<principal_id>`). A sidebar with the rooms
+  `/chat/people/<principal_id>`, `/chat/threads`, `/chat/search`). A sidebar with the rooms
   and the direct messages of the person, and one room with its messages and a box for a new
   message, or one profile.
-  - Chat has no search yet, so its pages show no search box.
+  - **Search** (`/chat/search?q=<query>&room=<room_id>`, `SearchView.tsx`, `searchModel.ts`).
+    - "Search" at the top of the sidebar opens the view. The path has the query, so a search has a link,
+      and the back button of the browser goes to the search before. With `room`, the search is in that
+      room only, and a link goes to the search in all rooms.
+    - The header of a room has a search box for a member. A submit opens the view for that room. Below
+      1100px, the box is a button that opens the view.
+    - Ctrl+F and ⌘F open the view from each page of Chat (`useSearchKeys`): from a room that the person
+      is a member of, for that room. The room view handles the keys while a room shows, because it knows
+      the role of the person also for a room that is not in the sidebar list. In the view, the
+      keys move the focus to the box. A search of the browser finds only the messages that show, so Chat
+      takes these keys. While a dialog is open, the keys stay with the browser.
+    - The results come from `chat.search_messages`, 20 for each page, with **Show more**. A page of the
+      server can have no result and a next page: the view then asks for the next page, at most 5 times.
+      The menu **Best match** or **Newest** sets `sort`, and shows the order that the server used. For a
+      query with filters only that is the time: a note then tells that such a search has no best match.
+    - Each result has the room (for a search in all rooms), the author, the time and the text. The words
+      that the server found (`highlights`) are in `<mark>` elements (`resultParts`). A long text shows
+      280 characters around its first found word. A click opens the message in its room, or the reply
+      in its thread (`parent_seq`).
+    - A query that the server refuses shows the message of the server, which tells what to write.
+    - A submit of the query that shows reads again, for example after a failure.
+    - **Recent searches.** The browser keeps the last 8 queries of the person in `localStorage`
+      (`soldock:chat-searches:<principal id>`), the newest first. The view shows them while the box has
+      no search, and **Clear** removes them. A sign-out, and a sign-in of a different person, remove
+      them (`forgetOtherSearches` in `App.tsx`). They do not go to the server. An answer that comes after
+      the view went away, or after a sign-out, writes nothing. A search in one room shows no recent search
+      with an `in:` filter.
   - The sidebar has **New room**, the rooms (a lock for a private room), and the direct messages
     with the name of the other member. A room with a message that the person did not read shows in
     bold with the number of unread messages at the right ("99+" above 99). A screen reader reads

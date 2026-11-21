@@ -24,6 +24,7 @@ export {
 	type ChatAddressedState,
 	type ChatRoomEntry,
 	type ChatRoomQuery,
+	type ChatRoomRef,
 	type ChatRoomState,
 	type ChatRoomView,
 	type ChatThreadEntry,

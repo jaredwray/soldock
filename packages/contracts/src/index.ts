@@ -16,6 +16,8 @@ export {
 	ChatMessageEdit,
 	ChatReaction,
 	ChatRoom,
+	ChatSearchResult,
+	ChatSearchRoom,
 	ChatSocketEvent,
 	ChatThreadFollow,
 	chatFilePath,

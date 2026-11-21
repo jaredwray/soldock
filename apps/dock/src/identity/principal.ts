@@ -124,6 +124,15 @@ export interface ChatRoomEntry extends ChatRoomView {
 	activity_at: number;
 }
 
+/** A joined room, as a search reads it. */
+export interface ChatRoomRef {
+	room_id: string;
+	kind: "public" | "private" | "dm";
+	name: string | null;
+	name_key: string | null;
+	peer_json: string | null;
+}
+
 export interface ChatRoomQuery {
 	/** Keep the rooms whose `name_key` has this text. */
 	nameKey: string | null;
@@ -632,6 +641,17 @@ export class PrincipalDO extends DurableObject<Env> {
 			.toArray()
 			.map(toEntry);
 		return { seeded, rooms };
+	}
+
+	/**
+	 * Each joined room, with what a search needs: the id, and the kind, the name and the other member, which
+	 * find the rooms of an `in:` filter. `seeded` is as for `listChatRooms`.
+	 */
+	chatRoomRefs(): { seeded: boolean; rooms: ChatRoomRef[] } {
+		const rooms = this.sql
+			.exec<ChatRoomRef & Row>("SELECT room_id, kind, name, name_key, peer_json FROM chat_rooms WHERE joined = 1")
+			.toArray();
+		return { seeded: this.chatSeeded(), rooms };
 	}
 
 	/** The rooms of the list that this object has no row for: no state came from them. In the order of the list. */
