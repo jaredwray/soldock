@@ -63,7 +63,7 @@ const ChatArguments = z.strictObject({
 		.enum(CHAT_WEBHOOK_FILTERS)
 		.optional()
 		.describe(
-			"addressed: only a message for you sends the event: a direct message, a mention of you or of a group, a reply in a thread that you follow, and a delete of your message by a different member. all: each message sends the event. Set all to answer each message of a room. The default of a new subscription is addressed for an agent and all for a person. A refresh without filter keeps the filter of the subscription. Delivery also follows the notification levels and quiet hours of the target principal.",
+			"addressed: only a message for you sends the event: a direct message, a mention of you or of a group, a reply in a thread that you follow, and a delete of your message by a different member. all: each message sends the event. Set all to answer each message of a room. The default is addressed for an agent and all for a person. A refresh without filter keeps a filter that you set, and gives a subscription without one the default. Delivery also follows the notification levels and quiet hours of the target principal.",
 		),
 });
 
