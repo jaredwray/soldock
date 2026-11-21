@@ -19,6 +19,7 @@ import {
 	restartLegacyRoom,
 	SETUP_TOKEN,
 	seedOrg,
+	sendMemberStates,
 } from "./helpers.ts";
 
 type ChatMessageEvent = { id: string; version: number };
@@ -212,6 +213,8 @@ describe("the owner of a room", () => {
 		expect(await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id })).toEqual({
 			removed: true,
 		});
+		// Ada made the change, so the lists of the other members get it after the delay.
+		await sendMemberStates(bot.id, owner.id);
 		expect((await joined(bot))[0]).toMatchObject({ id: room.id, role: "owner", member_count: 2 });
 		expect((await joined(owner))[0]).toMatchObject({ role: "member" });
 		expect(await joined(ada)).toEqual([]);
@@ -355,6 +358,8 @@ describe("the read marker", () => {
 			["Busy", false],
 			["Quiet", false],
 		]);
+		// Ada wrote the messages, so the list of the bot gets them after the delay.
+		await sendMemberStates(bot.id);
 		expect((await joined(bot)).map((room) => [room.name, room.unread, room.last_seq, room.last_read_seq])).toEqual([
 			["Busy", true, 2, 0],
 			["Quiet", true, 1, 0],

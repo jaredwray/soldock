@@ -23,6 +23,7 @@ import {
 	readSse,
 	request,
 	seedOrg,
+	sendMemberStates,
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
@@ -168,6 +169,8 @@ describe("MCP resources", () => {
 		const { room: dm } = await ada.call("chat.open_dm", { principal_id: bot.id });
 		const { room: closed } = await ada.call("chat.create_room", { kind: "private", name: "Hiring" });
 		await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
+		// Ada made the changes, so the list of the bot gets them after the delay.
+		await sendMemberStates(bot.id);
 
 		const listed = (await modern(bot.key, "resources/list")).body?.result as { resources: Record<string, unknown>[] };
 		expect(listed.resources.filter((resource) => String(resource.uri).startsWith("asterra://chat/"))).toEqual([

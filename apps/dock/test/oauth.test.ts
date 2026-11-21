@@ -28,6 +28,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	sendMemberStates,
 	setupOwner,
 	signIn,
 	withEnv,
@@ -786,6 +787,8 @@ describe("OAuth and the state of Chat", () => {
 		});
 		await owner.call("chat.create_room", { kind: "private", name: "Owner only" });
 		await owner.call("chat.post_message", { room_id: shared.id, text: "Hello" });
+		// The owner made the changes, so the list of the agent gets them after the delay.
+		await sendMemberStates(agent.id);
 		const listed = await callTool(tokens.access_token, "chat_list_rooms");
 		// Only the room of the agent, with the count of the agent.
 		expect(listed.structuredContent?.rooms).toEqual([

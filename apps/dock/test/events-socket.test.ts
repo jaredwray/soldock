@@ -122,12 +122,10 @@ describe("the events socket", () => {
 
 	// A star is the view of one member. The other members must not get a state for it.
 	it("sends a star to the sockets of its member only", async () => {
-		const room = await privateRoom(ada, "Launch", [bot.id]);
+		// The room sends the join state before the sockets open. A slow runner cannot send it before the open.
+		const room = await roomAfterJoin(ada, "Launch", bot);
 		const person = await connect(bearer(ada.key));
 		const agent = await connect(bearer(bot.key));
-		// The agent gets the new room after the delay of the other members. Only then does the clock stop.
-		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { id: room.id, last_seq: 0 } });
-		vi.useFakeTimers({ toFake: ["Date"] });
 
 		await ada.call("chat.star_room", { room_id: room.id, starred: true });
 		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id, starred: true } });
