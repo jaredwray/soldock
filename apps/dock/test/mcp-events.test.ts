@@ -2,6 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { MCP_EVENT_LIMITS, mcpEvents, WEBHOOK_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import filterMigration from "../migrations/0021_chat_filter_explicit.sql?raw";
 import {
 	type Actor,
 	api,
@@ -603,42 +604,87 @@ describe("events/subscribe", () => {
 });
 
 describe("event delivery", () => {
+	/** Posts in the room, then runs the fan-out and the deliveries. `reasons` gives the message id and the reason of each event POST. */
+	async function chatFeed(roomId: string) {
+		const { events } = receiver();
+		const queue = await roomQueue(roomId);
+		return {
+			async say(author: Actor, text: string) {
+				const { message } = await author.call("chat.post_message", { room_id: roomId, text });
+				await queue.drain();
+				await deliver(queue.events);
+				return message;
+			},
+			reasons: () => events().map((post) => [JSON.parse(post.body).data.message_id, JSON.parse(post.body).data.reason]),
+		};
+	}
+
 	// An agent that monitors its rooms must not start a turn for each message of each room. The filter
 	// is not a part of the id, so one callback never gets one message from two subscriptions. A refresh
-	// without a filter keeps the filter: a subscription from before the filter must not go quiet.
+	// without a filter keeps a filter that the client set.
 	it("sends an agent only the messages for it by default, and only a refresh with a filter changes it", async () => {
 		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 		const room = await privateRoom("Launch");
-		const { events } = receiver();
-		const queue = await roomQueue(room.id);
-		const say = async (text: string) => {
-			const { message } = await ada.call("chat.post_message", { room_id: room.id, text });
-			await queue.drain();
-			await deliver(queue.events);
-			return message;
-		};
-		const reasons = () =>
-			events().map((post) => [JSON.parse(post.body).data.message_id, JSON.parse(post.body).data.reason]);
+		const { say, reasons } = await chatFeed(room.id);
 
 		const first = resultOf(await subscribe(bot.key, "chat.message.created"));
-		await say("Lunch is at noon");
-		const named = await say("@bot send the invoice");
+		await say(ada, "Lunch is at noon");
+		const named = await say(ada, "@bot send the invoice");
 		expect(reasons()).toEqual([[named.id, "mention"]]);
 
 		const second = resultOf(await subscribe(bot.key, "chat.message.created", { arguments: { filter: "all" } }));
 		expect(second.id).toBe(first.id);
 		expect(await rows()).toHaveLength(1);
-		const plain = await say("Dinner is at seven");
+		const plain = await say(ada, "Dinner is at seven");
 		expect(reasons().at(-1)).toEqual([plain.id, "room"]);
 
 		const third = resultOf(await subscribe(bot.key, "chat.message.created"));
 		expect(third.id).toBe(first.id);
-		const later = await say("Tea is at four");
+		const later = await say(ada, "Tea is at four");
 		expect(reasons().at(-1)).toEqual([later.id, "room"]);
 
 		// The arguments of events/unsubscribe name the same subscription with each filter.
 		await unsubscribe(bot.key, "chat.message.created", { arguments: { filter: "addressed" } });
 		expect(await rows()).toEqual([]);
+	});
+
+	// ChatGPT refreshes with the same call and no filter. A subscription of an agent from before the filter
+	// has `all`. If a refresh keeps it, the agent gets a POST for each message of each room, for all time.
+	it("gives a subscription of an agent with the default filter the default of an agent at its next refresh", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const room = await privateRoom("Launch");
+		const { say, reasons } = await chatFeed(room.id);
+		const { id } = resultOf(await subscribe(bot.key, "chat.message.created"));
+		// The row of a subscription from before the filter.
+		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET chat_filter = 'all' WHERE id = ?").bind(id).run();
+		const before = await say(ada, "Lunch is at noon");
+		expect(reasons()).toEqual([[before.id, "room"]]);
+
+		expect(resultOf(await subscribe(bot.key, "chat.message.created")).id).toBe(id);
+		await say(ada, "Dinner is at seven");
+		const named = await say(ada, "@bot send the invoice");
+		expect(reasons()).toEqual([
+			[before.id, "room"],
+			[named.id, "mention"],
+		]);
+	});
+
+	// The default of a person is `all`, so a person set each `addressed` from before migration 0021. The
+	// migration records that, or the next refresh without `filter` sends each message to the person again.
+	it("keeps the filter addressed of a person from before migration 0021 at a refresh", async () => {
+		const room = await privateRoom("Launch", bot, [ada.id]);
+		const { say, reasons } = await chatFeed(room.id);
+		const { id } = resultOf(await subscribe(ada.key, "chat.message.created", { arguments: { filter: "addressed" } }));
+		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET chat_filter_explicit = 0 WHERE id = ?")
+			.bind(id)
+			.run();
+		const mark = filterMigration.split("--> statement-breakpoint").find((statement) => statement.includes("UPDATE"));
+		await env.DIRECTORY.prepare(mark ?? "").run();
+
+		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(id);
+		await say(bot, "Lunch is at noon");
+		const named = await say(bot, "@ada check the release");
+		expect(reasons()).toEqual([[named.id, "mention"]]);
 	});
 
 	it("sends only the events of the room of the subscription, and each room without a room", async () => {

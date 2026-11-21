@@ -331,7 +331,12 @@ Do not deploy a Worker from before search again after this deploy. Such a Worker
 search tables of a room that has them, so the messages of that time are not in a search later. This is
 the rule of each object migration of a chat room: a room goes forward only.
 
-Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A subscription from before
-this migration keeps the filter `all`, so it sends each message as before, also a subscription of MCP Events
-after a refresh. Only a new subscription for an agent without `filter` gets `addressed`: see
+Migration `0016_chat_webhook_filter.sql` adds the filter of a chat subscription. A signed webhook from before
+this migration keeps the filter `all`, so it sends each message as before. A new subscription for an agent
+without `filter` gets `addressed`: see
 [Get a webhook for all joined chats](agents.md#get-a-webhook-for-all-joined-chats).
+
+Migration `0021_chat_filter_explicit.sql` records if the creator of a chat subscription set the filter. A
+row with `addressed` gets "set". Each other row gets "not set". At its next refresh without `filter`, a
+subscription of MCP Events for an agent with "not set" changes from `all` to `addressed`. This includes an
+agent that set `all` before this migration. Such an agent sends `filter: "all"` again to keep it.
