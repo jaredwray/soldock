@@ -1,4 +1,4 @@
-import { type BrowserContext, expect, type Page } from "@playwright/test";
+import { type BrowserContext, expect, type Page, type Route } from "@playwright/test";
 import { test } from "../support/chatDevices.ts";
 
 async function principal(device: BrowserContext): Promise<{ id: string; display_name: string }> {
@@ -50,18 +50,32 @@ test("a late response for the old session preserves a login made while sign-out 
 	const replacement = await device("rafael");
 	const next = await principal(replacement);
 	const page = await original.newPage();
+	// Hold a Settings request from the old session until the Worker has revoked its cookie.
+	const pendingKeys = Promise.withResolvers<Route>();
+	await page.route("**/api/v1/account/api-keys", (route) => pendingKeys.resolve(route), { times: 1 });
 	await page.goto("/settings");
 	const signOut = page.getByRole("button", { name: "Sign out", exact: true });
 	await expect(signOut).toBeVisible();
 	const key = await saveLocalDraft(page, next.id, "Keep this draft");
+	const earlier = await pendingKeys.promise;
+	const lateUnauthorized = Promise.withResolvers<void>();
 	await page.route("**/auth/sign-out", async (route) => {
 		const result = await route.fetch();
 		expect(result.status()).toBe(204);
+		const refused = await earlier.fetch();
+		expect(refused.status()).toBe(401);
 		await original.addCookies(await replacement.cookies());
 		await route.fulfill({ response: result });
+		const account = page.getByRole("button", { name: `Account: ${next.display_name}` });
+		// The replacement session is already on screen when the old response reaches the app.
+		await expect(account).toBeVisible();
+		await earlier.fulfill({ response: refused });
+		lateUnauthorized.resolve();
 	});
 	await signOut.click();
-	await expect(page.getByRole("button", { name: `Account: ${next.display_name}` })).toBeVisible();
+	await lateUnauthorized.promise;
+	await page.getByRole("button", { name: `Account: ${next.display_name}` }).click();
+	await expect(page.getByRole("link", { name: "Profile and status" })).toBeVisible();
 	expect(await principal(original)).toEqual(next);
 	expect(await page.evaluate((key) => localStorage.getItem(key), key)).toContain("Keep this draft");
 });

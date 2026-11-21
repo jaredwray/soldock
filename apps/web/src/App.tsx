@@ -68,18 +68,41 @@ export function App() {
 		return stop;
 	}, [load]);
 
-	// Any 401 from an operation call ends the session in the UI.
-	useEffect(
-		() =>
-			onUnauthenticated(() => {
-				// Explicit sign-out verifies the current cookie after the revocation response.
-				if (endingSession.current) return;
-				displayedSession.current = undefined;
-				setAccount(null);
-				setState((current) => (current.status === "signed-in" ? { status: "signed-out", expired: true } : current));
-			}),
-		[],
-	);
+	// An operation can finish after its cookie has been replaced. Confirm which session is live before
+	// changing the UI or deleting private data. Concurrent failures for the same session share one check.
+	useEffect(() => {
+		const session = () => displayedSession.current ?? currentAccount();
+		let checking: { session: string } | undefined;
+		const stop = onUnauthenticated(async () => {
+			const previous = session();
+			if (endingSession.current || !previous || checking?.session === previous) return;
+			const probe = { session: previous };
+			checking = probe;
+			const generation = accountChangeCount();
+			const stamp = sessionChangeStamp();
+			const current = await loadSession(false);
+			if (checking !== probe) return;
+			checking = undefined;
+			if (
+				endingSession.current ||
+				previous !== session() ||
+				generation !== accountChangeCount() ||
+				stamp !== sessionChangeStamp()
+			)
+				return;
+			if (current.status === "signed-out") show({ ...current, expired: true });
+			else if (
+				current.status === "signed-in" &&
+				(current.whoami.session_tag ?? current.whoami.principal.id) !== previous
+			) {
+				show(current);
+			}
+		});
+		return () => {
+			checking = undefined;
+			stop();
+		};
+	}, [show]);
 
 	// The UI shows signed-out only after the server ended the session. A failure throws to the caller.
 	const signOut = useCallback(async () => {
