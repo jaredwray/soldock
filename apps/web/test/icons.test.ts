@@ -71,6 +71,8 @@ const FILES: Record<IconName, string> = {
 	chevronLeft: "nav-arrow-left",
 	eye: "eye",
 	codeBlock: "code-brackets-square",
+	bell: "bell",
+	user: "user",
 	chat: "chat-lines",
 	hash: "hashtag",
 	bot: "cpu",

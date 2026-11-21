@@ -1,14 +1,18 @@
 import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@asterra/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
+import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";
+import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
 import { Presence } from "./Presence.tsx";
+import { type RoomNotificationChoice, RoomNotificationChoices } from "./RoomNotifications.tsx";
 
 /** Creates a public or a private room. The person becomes its owner. */
 export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (room: ChatRoom) => void }) {
@@ -518,79 +522,168 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 	);
 }
 
-/** The owner of a room changes its name and its topic. */
+/** Each member selects personal notifications. An owner can also edit a named room. */
 export function RoomSettingsDialog({
 	room,
 	onClose,
-	onSaved,
+	onDetailsSaved,
 }: {
 	room: ChatRoom;
-	onClose: () => void;
-	onSaved: () => void;
+	onClose(): void;
+	onDetailsSaved(): void;
 }) {
-	const [name, setName] = useState(room.name ?? "");
-	const [topic, setTopic] = useState(room.topic);
+	const canEdit = room.kind !== "dm" && room.role === "owner";
+	const [acknowledged, setAcknowledged] = useState<{ before: ChatRoom; after: ChatRoom } | null>(null);
+	// The room version counts messages. Use the response until the room list supplies a new snapshot.
+	const saved = acknowledged?.before === room ? acknowledged.after : room;
+	const [details, setDetails] = useState<{ initial: ChatRoom; name: string; topic: string } | null>(null);
+	const [session] = useState(accountChangeCount);
+	const mounted = useRef(false);
+	useLayoutEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+	const { data, loading } = useNotificationSettings();
+	const [level, setLevel] = useState<RoomNotificationChoice>();
 	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const [error, setError] = useState("");
+	const nameInput = useRef<HTMLInputElement>(null);
 	const nameId = useId();
 	const topicId = useId();
+	const sectionId = useId();
+	const toast = useToast();
+	const savedLevel = data?.settings.room_levels[room.id] ?? "default";
+	const selected = level ?? savedLevel;
+	const levelChanged = data !== null && selected !== savedLevel;
+	// The room stores a single-line topic. Preserve words pasted across lines.
+	const topic = details?.topic.replace(/[\r\n\t]+/g, " ").trim();
+	const changes = {
+		...(canEdit && details && details.name.trim() !== details.initial.name ? { name: details.name.trim() } : {}),
+		...(canEdit && details && topic !== details.initial.topic ? { topic } : {}),
+	};
+	const detailsChanged = Object.keys(changes).length > 0;
+	const dirty = detailsChanged || levelChanged;
+	const editing = canEdit && details !== null;
+	useEffect(() => {
+		if (editing) nameInput.current?.focus();
+	}, [editing]);
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!name.trim()) {
+		const current = () => mounted.current && accountChangeCount() === session;
+		if (!current() || busy || !dirty) return;
+		if (editing && !details.name.trim()) {
 			setError("Enter a name.");
-			return;
-		}
-		const changes = {
-			...(name.trim() !== room.name ? { name: name.trim() } : {}),
-			...(topic.trim() !== room.topic ? { topic: topic.trim() } : {}),
-		};
-		if (Object.keys(changes).length === 0) {
-			onClose();
+			nameInput.current?.focus();
 			return;
 		}
 		setBusy(true);
-		setError(null);
+		setError("");
+		let detailsSaved = false;
 		try {
-			await api.call("chat.update_room", { room_id: room.id, ...changes });
-			onSaved();
+			if (detailsChanged) {
+				const result = await api.call("chat.update_room", { room_id: room.id, ...changes });
+				if (!current()) return;
+				setAcknowledged({ before: room, after: result.room });
+				setDetails(null);
+				detailsSaved = true;
+				onDetailsSaved();
+			}
+			if (levelChanged) {
+				if (!current()) return;
+				await api.call("chat.set_room_notification_level", {
+					room_id: room.id,
+					level: selected === "default" ? null : selected,
+				});
+			}
+			if (!current()) return;
+			toast({ message: "Room settings saved." });
+			onClose();
 		} catch (caught) {
-			setError(errorMessage(caught));
+			if (!current()) return;
+			const reason = errorMessage(caught);
+			setError(detailsSaved ? `Room details saved. Your notification preference did not save. ${reason}` : reason);
 			setBusy(false);
 		}
 	}
 
 	return (
-		<Dialog title="Room name and topic" onClose={() => !busy && onClose()} className="dialog-small">
+		<Dialog title="Room settings" onClose={() => !busy && onClose()} className="dialog-small room-settings">
 			<form onSubmit={submit} noValidate>
-				<div className="dialog-body chat-form">
-					<div className="field">
-						<label htmlFor={nameId} className="field-label">
-							Room name
-						</label>
-						<input
-							id={nameId}
-							className="input"
-							value={name}
-							maxLength={CHAT_LIMITS.nameChars}
-							autoComplete="off"
-							onChange={(event) => setName(event.target.value)}
-							data-autofocus
-						/>
-					</div>
-					<div className="field">
-						<label htmlFor={topicId} className="field-label">
-							Topic
-						</label>
-						<input
-							id={topicId}
-							className="input"
-							value={topic}
-							maxLength={CHAT_LIMITS.topicChars}
-							autoComplete="off"
-							onChange={(event) => setTopic(event.target.value)}
-						/>
-					</div>
+				<div className="dialog-body">
+					{editing ? (
+						<div className="room-detail-fields">
+							<div className="field">
+								<label htmlFor={nameId} className="field-label">
+									Room name
+								</label>
+								<input
+									ref={nameInput}
+									id={nameId}
+									className="input"
+									value={details.name}
+									maxLength={CHAT_LIMITS.nameChars}
+									autoComplete="off"
+									disabled={busy}
+									onChange={(event) => setDetails({ ...details, name: event.target.value })}
+								/>
+							</div>
+							<div className="field">
+								<label htmlFor={topicId} className="field-label">
+									Topic
+								</label>
+								<textarea
+									id={topicId}
+									className="input"
+									rows={2}
+									value={details.topic}
+									maxLength={CHAT_LIMITS.topicChars}
+									disabled={busy}
+									onChange={(event) => setDetails({ ...details, topic: event.target.value })}
+								/>
+							</div>
+						</div>
+					) : (
+						<div className="room-detail-summary">
+							<Icon name={room.kind === "dm" ? "user" : room.kind === "private" ? "lock" : "hash"} size={18} />
+							<div className="room-detail-text">
+								<strong>{room.kind === "dm" ? roomTitle(room) : saved.name}</strong>
+								{saved.topic && <p className="room-setting-hint">{saved.topic}</p>}
+							</div>
+							{canEdit && (
+								<button
+									type="button"
+									className="button button-ghost button-small"
+									aria-label="Edit room details"
+									disabled={busy}
+									onClick={() => setDetails({ initial: saved, name: saved.name ?? "", topic: saved.topic })}
+								>
+									Edit
+								</button>
+							)}
+						</div>
+					)}
+					<section className="room-setting-notifications" aria-labelledby={sectionId}>
+						<h3 id={sectionId}>
+							<Icon name="bell" size={18} /> Notifications
+						</h3>
+						<p className="room-setting-hint">Your preference for this room.</p>
+						{data ? (
+							<RoomNotificationChoices
+								defaultLevel={data.settings.default_level}
+								value={selected}
+								disabled={busy}
+								onChange={(next) => {
+									setError("");
+									setLevel(next);
+								}}
+							/>
+						) : (
+							loading
+						)}
+					</section>
 					{error && (
 						<p className="form-error" role="alert">
 							{error}
@@ -598,11 +691,11 @@ export function RoomSettingsDialog({
 					)}
 				</div>
 				<div className="dialog-actions">
-					<button type="button" className="button" onClick={onClose} disabled={busy}>
+					<button type="button" className="button button-ghost" onClick={onClose} disabled={busy}>
 						Cancel
 					</button>
-					<button type="submit" className="button button-primary" disabled={busy}>
-						{busy ? "Saving…" : "Save"}
+					<button type="submit" className="button button-primary" disabled={busy || !dirty}>
+						{busy ? "Saving…" : "Save changes"}
 					</button>
 				</div>
 			</form>
