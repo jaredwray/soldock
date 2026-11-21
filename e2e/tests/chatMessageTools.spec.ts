@@ -204,11 +204,14 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 		{ timeout: 10_000 },
 	);
 	await offlineRead.abort("internetdisconnected");
-	expect(await (await recovered).json()).toMatchObject({
+	const [response] = await Promise.all([
+		recovered,
+		expect(first.getByRole("button", { name: "Keep this draft" })).toBeVisible(),
+	]);
+	expect(await response.json()).toMatchObject({
 		revision: 1,
 		body: { content: [{ content: [{ text: "A second change" }] }] },
 	});
-	await expect(first.getByRole("button", { name: "Keep this draft" })).toBeVisible();
 	await first.evaluate(() => Reflect.deleteProperty(document, "visibilityState"));
 	await first.getByRole("button", { name: /^Account:/ }).click();
 	const discard = first.waitForEvent("dialog").then(async (prompt) => {
