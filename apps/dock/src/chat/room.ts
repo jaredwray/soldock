@@ -4442,7 +4442,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 			try {
 				const res = await searchIndex(this.env).deleteRoom(room.room_id);
 				if (!res.done) {
-					for (const row of rows) this.retryLater(row, "More indexed rows remain to delete.");
+					for (const row of rows) {
+						this.sql.exec(
+							"UPDATE outbox SET next_attempt_at = ? WHERE target = ? AND gen = ?",
+							Date.now(),
+							row.target,
+							row.gen,
+						);
+					}
 					return true;
 				}
 			} catch (error) {

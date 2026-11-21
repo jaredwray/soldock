@@ -84,6 +84,22 @@ test("room archive shows read-only notice and admin chat manages rooms and slash
 		await page.getByRole("textbox", { name: "Input template JSON" }).fill("{}");
 		await page.getByRole("button", { name: "Add command" }).click();
 		await expect(page.locator("main")).toContainText(`/${cmdName}`);
+
+		// Run the read slash command in a live room and verify both confirm and result dialogs appear.
+		const activeRoomName = unique("Layer8 Slash");
+		const activeRoomId = await createRoom(nadia, activeRoomName);
+		await openRoom(page, activeRoomId);
+		const composer = page.getByRole("textbox", { name: new RegExp(`Message to ${activeRoomName}`) });
+		await composer.fill(`/${cmdName}`);
+		await composer.press("Enter");
+		const confirmDialog = page.getByRole("dialog", { name: `Run /${cmdName}?` });
+		await expect(confirmDialog).toBeVisible();
+		await confirmDialog.getByRole("button", { name: "Run command" }).click();
+		const resultDialog = page.getByRole("dialog", { name: `/${cmdName} result` });
+		await expect(resultDialog).toBeVisible();
+		await expect(resultDialog).toContainText("chat.list_rooms");
+		await resultDialog.getByRole("button", { name: "Done" }).click();
+		await expect(resultDialog).toBeHidden();
 	} finally {
 		await nadia.close();
 	}

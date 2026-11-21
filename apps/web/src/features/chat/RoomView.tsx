@@ -1360,7 +1360,7 @@ export function RoomView({
 				<ConfirmDialog
 					title={`Run /${dialog.command.command}?`}
 					confirmLabel="Run command"
-					onClose={() => setDialog(null)}
+					onClose={() => setDialog((current) => (current?.type === "slash" ? null : current))}
 					onConfirm={async () => {
 						const { command, text } = dialog;
 						const res = await api.call("chat.invoke_slash_command", {
