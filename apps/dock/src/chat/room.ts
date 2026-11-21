@@ -2905,17 +2905,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const { message, member } = target;
 		if (message.author_id === principalId || message.deleted_at !== null) return null;
 		const inRoom = message.parent_id === null || message.also_in_room === 1;
-		const lastRead = inRoom
-			? member.last_read_seq
-			: (this.one<{ last_read_seq: number }>(
-					"SELECT last_read_seq FROM thread_follows WHERE parent_id = ? AND principal_id = ?",
-					message.parent_id,
-					principalId,
-				)?.last_read_seq ?? 0);
-		if (message.seq <= lastRead) return null;
+		if (inRoom && message.seq <= member.last_read_seq) return null;
 		const parent = message.parent_id
-			? this.one<{ seq: number }>("SELECT seq FROM messages WHERE id = ?", message.parent_id)
+			? this.one<{ seq: number; last_read_seq: number | null }>(
+					`SELECT parent.seq, follow.last_read_seq FROM messages parent
+					LEFT JOIN thread_follows follow ON follow.parent_id = parent.id AND follow.principal_id = ?
+					WHERE parent.id = ?`,
+					principalId,
+					message.parent_id,
+				)
 			: null;
+		if (message.seq <= (parent?.last_read_seq ?? 0)) return null;
 		return { seq: message.seq, parent_seq: parent?.seq ?? null, unread_count: this.unreadCount(member) };
 	}
 

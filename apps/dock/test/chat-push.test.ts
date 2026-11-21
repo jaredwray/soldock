@@ -168,6 +168,10 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	await consume([retry], 3);
 	expect(posts).toHaveLength(4);
 	await ada.call("chat.mark_read", { room_id: room.id, seq: 0 });
+	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
+	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
+	expect(posts).toHaveLength(4);
+	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id, seq: 0 });
 	await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
 	await consume([retry], 3);
 	expect(posts).toHaveLength(4);
