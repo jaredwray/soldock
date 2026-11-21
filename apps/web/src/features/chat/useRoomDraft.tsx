@@ -1,8 +1,9 @@
 import { ApiError, type ChatBody } from "@asterra/contracts";
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { accountChangeCount, currentAccount } from "../../lib/account.ts";
+import { accountChangeCount, currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import type { ChatComposerHandle } from "./ChatComposer.tsx";
+import { createDraftSync, isTransientDraftError } from "./draftSync.ts";
 import { createDraftStore, type DraftCopy, draftStorage, sameDraftBody, threadDraftKey } from "./drafts.ts";
 
 type Remote = Pick<DraftCopy, "body" | "revision">;
@@ -29,7 +30,6 @@ export function useRoomDraft(
 	const [notice, setNotice] = useState<Notice>(null);
 	const generation = useRef(accountChangeCount());
 	const active = useRef(false);
-	const syncing = useRef({ running: false, again: false });
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
 	const apply = useCallback(
@@ -94,28 +94,25 @@ export function useRoomDraft(
 				}
 			}
 		} catch (error) {
-			if (active.current && signedIn()) setNotice({ error: errorMessage(error) });
+			if (!active.current || !signedIn()) return;
+			setNotice({ error: errorMessage(error) });
+			return isTransientDraftError(error);
 		}
 	}, [address, store, key, owner, apply]);
 
-	// A reconnect or edit can arrive before an offline request reports its failure.
-	// One fresh read covers all requests made while an attempt was in flight.
-	const sync = useCallback(async () => {
-		const request = syncing.current;
-		if (request.running) {
-			request.again = true;
-			return;
-		}
-		request.running = true;
-		try {
-			do {
-				request.again = false;
-				await syncOnce();
-			} while (request.again);
-		} finally {
-			request.running = false;
-		}
-	}, [syncOnce]);
+	const { run: sync, cancelRetry } = useMemo(
+		() =>
+			createDraftSync(
+				syncOnce,
+				() =>
+					active.current &&
+					currentAccount() === owner &&
+					accountChangeCount() === generation.current &&
+					navigator.onLine &&
+					store.get(key)?.dirty === true,
+			),
+		[syncOnce, store, key, owner],
+	);
 
 	const change = useCallback(
 		(next: ChatBody | null) => {
@@ -138,18 +135,21 @@ export function useRoomDraft(
 		void sync();
 		const interval = setInterval(refresh, 30_000);
 		window.addEventListener("focus", refresh);
+		const stopAccount = onAccountChange(cancelRetry);
 		window.addEventListener("online", sync);
 		document.addEventListener("visibilitychange", refresh);
 		return () => {
 			active.current = false;
 			clearInterval(interval);
 			clearTimeout(timer.current);
+			stopAccount();
+			cancelRetry();
 			window.removeEventListener("focus", refresh);
 			window.removeEventListener("online", sync);
 			document.removeEventListener("visibilitychange", refresh);
 			if (store.get(key)?.dirty) void sync();
 		};
-	}, [sync, enabled, store, key]);
+	}, [sync, cancelRetry, enabled, store, key]);
 
 	const status =
 		notice &&

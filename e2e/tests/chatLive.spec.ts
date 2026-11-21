@@ -74,9 +74,12 @@ test("a second tab reopens its notification session when the account changes", a
 	await expect(second.getByRole("button", { name: /^Account: Chidi/ })).toBeVisible();
 	await editor.getByRole("button", { name: /^Account:/ }).click();
 	await editor.getByRole("navigation", { name: "Products" }).getByRole("button", { name: "Sign out" }).click();
-	await expect(second.getByRole("heading", { name: "Sign in" })).toBeVisible();
-	await editor.getByLabel("Address").fill("nadia@example.com");
-	await editor.getByLabel("Password").fill("nadia local password");
+	await Promise.all([
+		expect(editor.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible(),
+		expect(second.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible(),
+	]);
+	await editor.getByRole("textbox", { name: "Address", exact: true }).fill("nadia@example.com");
+	await editor.getByLabel("Password", { exact: true }).fill("nadia local password");
 	await editor.getByRole("button", { name: "Sign in", exact: true }).click();
 	await expect(second.getByRole("button", { name: /^Account: Nadia/ })).toBeVisible();
 });

@@ -184,6 +184,8 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 		.getByRole("button", { name: "Try again" })
 		.click();
 	const offlineRead = await retry.promise;
+	// The network interface is online before its first request can reach the Worker.
+	await first.route(`**${draftPath}?*`, (route) => route.abort("connectionreset"), { times: 1 });
 	await first.evaluate(() => {
 		Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
 		window.addEventListener(
@@ -196,7 +198,16 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 	});
 	await laptop.setOffline(false);
 	await expect(first.locator("html")).toHaveAttribute("data-reconnected", "yes");
+	const recovered = first.waitForResponse(
+		(response) =>
+			new URL(response.url()).pathname === draftPath && response.request().method() === "GET" && response.ok(),
+		{ timeout: 10_000 },
+	);
 	await offlineRead.abort("internetdisconnected");
+	expect(await (await recovered).json()).toMatchObject({
+		revision: 1,
+		body: { content: [{ content: [{ text: "A second change" }] }] },
+	});
 	await expect(first.getByRole("button", { name: "Keep this draft" })).toBeVisible();
 	await first.evaluate(() => Reflect.deleteProperty(document, "visibilityState"));
 	await first.getByRole("button", { name: /^Account:/ }).click();

@@ -11,7 +11,7 @@ Select the clock beside **Send** to schedule a text message or a thread reply. S
 
 ## Drafts
 
-The room composer and each reply composer have separate drafts. The browser saves each change locally and sends it with the last server revision. It checks the server when the editor opens, when its tab gains focus or becomes visible, after a reconnect, and every 30 seconds while visible. A reconnect during an unfinished save triggers a fresh check as soon as that attempt finishes.
+The room composer and each reply composer have separate drafts. The browser saves each change locally and sends it with the last server revision. It checks the server when the editor opens, when its tab gains focus or becomes visible, after a reconnect, and every 30 seconds while visible. A reconnect during an unfinished save triggers a fresh check as soon as that attempt finishes. If the browser is online but a pending edit encounters a network or server failure, the editor retries after one, two and four seconds.
 
 When two devices change the same draft, select which copy to keep. Files stay on the device that selected them. Before signing out, the browser saves pending edits from open and closed rooms. If a draft cannot sync, you can stay signed in to keep editing or discard the unsaved changes and sign out. Signing out clears the local cache.
 
