@@ -8,6 +8,7 @@ import { Select } from "../../lib/Select.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
+import { Presence } from "./Presence.tsx";
 
 /** Creates a public or a private room. The person becomes its owner. */
 export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (room: ChatRoom) => void }) {
@@ -480,6 +481,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 									</strong>
 									{member.kind === "agent" && <span className="kind kind-agent">agent</span>}
 								</span>
+								<Presence id={member.principal_id} />
 								{member.role === "owner" && <span className="muted">Owner of the room</span>}
 							</span>
 							{!fixed && room.role === "owner" && member.principal_id !== ownId && (

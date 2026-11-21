@@ -1,5 +1,6 @@
 import { EmailAddress, TOTP_DIGITS } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { createSession, signInErrorMessage } from "./auth.ts";
 
@@ -35,7 +36,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 	}, [focusRequest, busy]);
 
 	useEffect(() => {
-		document.title = "Sign in – Asterra";
+		setPageTitle("Sign in – Asterra");
 	}, []);
 
 	useEffect(() => {

@@ -1,5 +1,6 @@
 // Public surface of the identity module. Other modules import from here, never from its files.
 export {
+	auditOk,
 	type CredentialBinding,
 	type CredentialCheck,
 	type CredentialRef,
@@ -18,6 +19,7 @@ export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
+export { chatPresenceHandlers } from "./presence.ts";
 export {
 	type ChatAddressedEntry,
 	type ChatAddressedQuery,

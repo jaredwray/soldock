@@ -10,6 +10,7 @@ import {
 } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
@@ -51,7 +52,7 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 	}
 
 	useEffect(() => {
-		document.title = "Set up – Asterra";
+		setPageTitle("Set up – Asterra");
 	}, []);
 
 	return (

@@ -28,7 +28,7 @@ MCP clients. The app has no UI-only path.
   - After a deploy, an open tab can run an older SPA than the Worker. If the setup status then has
     an unknown shape, the boot error tells the person to reload.
   - "Try again" on the boot error reloads the page, so the tab gets the current SPA.
-  - Drive, Chat, Docs, Sheets and the OAuth approval page are separate chunks
+  - Drive, Chat, Docs, Sheets, Admin, Settings and the OAuth approval page are separate chunks
     ([`lazyPage.tsx`](src/lib/lazyPage.tsx)). A deploy removes the chunks of the previous build. So
     an open tab of that build cannot load these pages, and the server sends index.html in place of
     the chunk.
@@ -67,6 +67,18 @@ MCP clients. The app has no UI-only path.
     **Skip for now**. If the setup session failed, the panel shows the error, and the owner can skip.
   - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Shell.** Each signed-in page has a rail at the left. The page of the route fills the other space.
+  - Each signed-in tab shares one principal socket between its pages. The title shows the unread message count for Chat.
+  - An installed app shows that count on its icon when the device supports app badges.
+    An open tab updates the badge even during quiet hours. A closed app gets the current count with its next push or when it opens.
+  - In Settings, **Chat notifications** sets the default level, sound and daily quiet hours for the account.
+    Select the start, the end and the time zone. Equal times keep notifications quiet all day.
+  - **Turn on device notifications** asks for browser permission on this device.
+    A click on a notification opens the message or the reply in its thread.
+    The notification keeps message text off the lock screen.
+    When the VAPID key changes, the app renews the subscription on the next start or account change.
+    If the browser refuses renewal, Settings shows the error. Select **Turn on device notifications** to try again.
+  - The active tab can play a short tone after the person interacts with the page.
+  - In a room, **Room notifications** overrides the default for that room. Select **Use my default** to clear the override.
   - The rail has the mark of Asterra, which goes to the inbox, and a link to each product: Mail,
     Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
     Sheets are part of Drive.
@@ -804,6 +816,11 @@ MCP clients. The app has no UI-only path.
   `/chat/people/<principal_id>`, `/chat/threads`, `/chat/search`). A sidebar with the rooms
   and the direct messages of the person, and one room with its messages and a box for a new
   message, or one profile.
+  - The account menu opens **Profile and status**. Set status text, an emoji, and an optional end time.
+  - Profiles, room members, and direct messages show presence. The page reads only the names visible on screen.
+    Each read includes up to 50 principals. The page refreshes them every 10 seconds.
+  - The room composer sends one typing event every three seconds at most. The name clears after six seconds without another event.
+    The room socket sends no typing events to hidden tabs or thread feeds.
   - **Search** (`/chat/search?q=<query>&room=<room_id>`, `SearchView.tsx`, `searchModel.ts`).
     - "Search" at the top of the sidebar opens the view. The path has the query, so a search has a link,
       and the back button of the browser goes to the search before. With `room`, the search is in that
@@ -1769,6 +1786,8 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 
 | Where | Key | What |
 | --- | --- | --- |
+| Session change | Browser local storage, `asterra-session-changed` | A fresh random value signals other tabs to load the current account after sign-in or sign-out. It holds no credential. |
+| Service worker | `/chat-push/<principal id>/` | The browser holds a push subscription for the person who enabled this device. A sign-out or an account change removes the previous registration and its notifications. |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the body and its text, the files (the ids, the names, the types and the sizes of files in the drive of the person), the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
 | `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room and each thread (key `<room id>/<first message id>`), the body in the box and the time of its last change. 100 drafts at most. A draft goes away when the person sends it, and when the box is empty |

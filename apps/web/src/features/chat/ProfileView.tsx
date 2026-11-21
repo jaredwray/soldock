@@ -3,12 +3,14 @@ import { useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
 import type { MentionDirectory } from "./mentions.ts";
 import { dayLabel } from "./model.ts";
+import { Presence } from "./Presence.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -74,7 +76,7 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 	const name = person?.display_name ?? null;
 
 	useEffect(() => {
-		document.title = `${name ?? "Profile"} – Asterra Chat`;
+		setPageTitle(`${name ?? "Profile"} – Asterra Chat`);
 	}, [name]);
 
 	async function message(target: Principal) {
@@ -128,6 +130,9 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 					{agent && <span className="kind kind-agent">agent</span>}
 				</h2>
 				{handle && <p className="chat-profile-handle">@{handle}</p>}
+				<div className="chat-profile-status">
+					<Presence id={person.id} editable={person.id === ownId} />
+				</div>
 				{person.archived_at !== null && (
 					<p className="chat-profile-note">An owner or an admin archived this {agent ? "agent" : "person"}.</p>
 				)}

@@ -170,6 +170,11 @@ export interface CredentialRef {
 	grantId?: string;
 }
 
+/** The same credential can open several sockets and register a push device. */
+export function credentialKey(ref: CredentialRef): string {
+	return `${ref.kind}:${ref.id}`;
+}
+
 export function credentialRef(caller: AuthContext): CredentialRef {
 	const id =
 		caller.credential === "session"
@@ -202,7 +207,7 @@ export type CredentialCheck = "live" | "renew" | "ended";
  */
 export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
-	const keys = refs.map((ref) => `${ref.kind}:${ref.id}`);
+	const keys = refs.map(credentialKey);
 	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(

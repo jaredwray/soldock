@@ -24,6 +24,9 @@ export const CHAT_LIMITS = {
 	queryChars: 100,
 	/** The live sockets of one member in one room, with the feeds of its MCP streams. */
 	socketsPerMember: 8,
+	/** The minimum time between typing events and the time until each event expires. */
+	typingIntervalMs: 3000,
+	typingLifetimeMs: 6000,
 	/** The new and changed messages that one member can send to one room without a wait. */
 	messageBurst: 20,
 	/** After that, the member can send one new or changed message to that room in each of these seconds. */
@@ -111,7 +114,6 @@ const BodyMention = z.strictObject({
 
 /**
  * A mention of a group: "@here" or "@channel". It mentions each member of the room, except the author.
- * Until presence (layer 7 of Chat), "@here" mentions each member too.
  */
 const BodyGroupMention = z.strictObject({
 	type: z.literal("group_mention"),
@@ -501,8 +503,7 @@ export const CHAT_SOCKET_CLOSE = {
 } as const;
 
 /**
- * An event of a room socket. The socket carries events from the server only: each change of a room is
- * an operation.
+ * An event from the room. A visible client sends "show" and "typing". It sends "hide" when it hides the room.
  *
  * - `hello` is the first event. `version` is the version of the room at that time. A client that has an
  *   older version calls chat.list_messages with changed_after.
@@ -511,6 +512,7 @@ export const CHAT_SOCKET_CLOSE = {
  * - `reply` has a new, changed or deleted reply that is not in the room list, as chat.list_replies
  *   returns it. Its `version` is a version of the room too. A client without threads ignores it, and
  *   its sync gets the changes of the room list.
+ * - `typing` tells a visible socket who types until `expires_at`. It does not change the room version.
  * - `room` tells that the name, the topic or the members changed. Call chat.get_room.
  */
 export const ChatSocketEvent = z.discriminatedUnion("type", [
@@ -523,6 +525,7 @@ export const ChatSocketEvent = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("message"), message: ChatMessage }),
 	z.object({ type: z.literal("reply"), message: ChatMessage }),
 	z.object({ type: z.literal("room") }),
+	z.object({ type: z.literal("typing"), principal_id: PrincipalId, expires_at: Timestamp }),
 ]);
 export type ChatSocketEvent = z.infer<typeof ChatSocketEvent>;
 
@@ -1213,6 +1216,7 @@ const createChatWebhookSubscription = defineOperation({
 		"With filter: addressed, only a message for the principal sends a POST: a direct message, a mention of the principal or of a group, a reply in a thread that the principal follows, and a delete of a message of the principal by a different member.",
 		"With filter: all, each message of a joined chat sends a POST. Without filter, an agent gets addressed and a person gets all.",
 		"The POST has no message text. It has reason, author_id and version, so the receiver can decide before a read. Read the room with your own credential.",
+		"The notification level and quiet hours of the target principal also apply to delivery.",
 		"A message that arrived before this subscription sends no POST.",
 		"The endpoint must be yours and active.",
 	].join(" "),

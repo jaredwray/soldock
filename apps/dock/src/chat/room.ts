@@ -31,6 +31,7 @@ import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
 import { extractLinks, type LinkFacts, type LinkState, linkPreviews, mergeLinks, parseLinks } from "./links.ts";
 import { storedGroups, withMentions } from "./mentions.ts";
+import { type ChatPushFanout, enqueuePushFanout } from "./push-fanout.ts";
 import {
 	HAS_LINK_SQL,
 	hasLink,
@@ -169,6 +170,7 @@ export interface SocketOpen {
 	roomId: string;
 	actor: ActorRecord;
 	credential: CredentialRef;
+	canType: boolean;
 	/**
 	 * True for the change feed of an MCP stream. One stream holds many feeds, and the end of one feed
 	 * ends the stream. So the room never closes a feed to make room for a new socket.
@@ -189,6 +191,9 @@ export const SOCKET_MAX_MS = 60 * 60_000;
 
 /** What a socket keeps while the object sleeps. */
 interface SocketState {
+	/** Sockets from an older Worker do not announce typing. */
+	canType?: boolean;
+	showing?: boolean;
 	credential: CredentialRef;
 	feed: boolean;
 	openedAt: number;
@@ -509,6 +514,13 @@ const MIGRATIONS: string[][] = [
 		SEARCH_MENTIONS_BACKFILL,
 		"INSERT OR IGNORE INTO outbox (target, gen, next_attempt_at) VALUES ('search:room', 1, 0)",
 	],
+	[
+		`CREATE TABLE chat_notification_outbox (
+		event_id TEXT PRIMARY KEY, job TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at INTEGER NOT NULL
+	) WITHOUT ROWID`,
+		"ALTER TABLE members ADD COLUMN last_typed_at INTEGER",
+	],
 ];
 
 /**
@@ -692,8 +704,8 @@ export function messageOutput(record: MessageRecord): ChatMessage {
  * object writes the current state of the changed rows to that index. The `outbox` table names the rows
  * that are behind. A write that fails stays there, and the alarm tries it again.
  *
- * A member can hold live sockets to the room. The room sends each change of a message to them. A
- * socket carries events from the room only: each change is a call of a method of this class.
+ * Members receive message changes on their room sockets. A visible room also receives temporary typing events.
+ * Each change to stored messages goes through a room operation.
  *
  * An object that nobody created has no tables. Such an object costs nothing, so a call with a random
  * id leaves no data.
@@ -711,6 +723,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	private readonly allowances = new Map<string, { messages: number; at: number }>();
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
+	private socketCheck: Promise<void> | undefined;
 	/** The end of the line of sends to the search index of the organization. See `sendSearchRows`. */
 	private searchSent: Promise<void> = Promise.resolve();
 
@@ -725,8 +738,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				// A change sets the alarm after its transaction commits. If the object stopped between the
 				// two, the outbox has rows and no alarm: set one now.
 				const pending =
-					this.one<{ n: number }>("SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM webhook_outbox) AS n")
-						?.n ?? 0;
+					this.one<{ n: number }>(
+						"SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM webhook_outbox) + (SELECT COUNT(*) FROM chat_notification_outbox) AS n",
+					)?.n ?? 0;
 				if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 			});
 		}
@@ -912,6 +926,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return {
 			room_id: room.room_id,
 			stamp,
+			membership_id: member.membership_id,
 			view: {
 				kind: room.kind,
 				name: room.name,
@@ -2566,6 +2581,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const now = Date.now();
 		server.serializeAttachment({
 			credential: open.credential,
+			canType: open.canType,
 			feed: open.feed,
 			openedAt: now,
 			checkedAt: now,
@@ -2581,9 +2597,47 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	/** A client sends nothing but pings, which the runtime answers. Each other message closes the socket. */
-	override webSocketMessage(socket: WebSocket): void {
-		this.end(socket, 1008, "This socket takes no messages. Use the operations.");
+	/** The runtime answers pings. Each other accepted frame controls only the live view of this room. */
+	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		const state = socket.deserializeAttachment() as SocketState | null;
+		if (!state || state.feed || (message !== "show" && message !== "hide" && message !== "typing")) {
+			this.end(socket, 1008, "Unknown room socket frame.");
+			return;
+		}
+		if (message !== "typing") {
+			const showing = message === "show";
+			if (Boolean(state.showing) !== showing) socket.serializeAttachment({ ...state, showing } satisfies SocketState);
+			return;
+		}
+		if (!state.showing || !state.canType || socket.readyState !== WebSocket.OPEN) return;
+
+		const now = Date.now();
+		if (now - state.openedAt >= SOCKET_MAX_MS) {
+			this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The socket reached its longest life.");
+			return;
+		}
+		if (now - state.checkedAt >= SOCKET_RECHECK_MS) {
+			await this.recheckSockets();
+			if (!this.checkedSocket(socket)?.showing) return;
+		}
+		// All sockets of the member share this limit, also after a reconnect or a restart of the room.
+		const member = state.credential.principalId;
+		const at = Date.now();
+		const sent = this.sql.exec(
+			`UPDATE members SET last_typed_at = ? WHERE principal_id = ?
+			AND (last_typed_at IS NULL OR last_typed_at <= ?)`,
+			at,
+			member,
+			at - CHAT_LIMITS.typingIntervalMs,
+		);
+		if (sent.rowsWritten === 0) return;
+		const event: ChatSocketEvent = {
+			type: "typing",
+			principal_id: member,
+			expires_at: new Date(at + CHAT_LIMITS.typingLifetimeMs).toISOString(),
+		};
+		// Typing does not change the room version, run the outbox or wake a principal.
+		await this.deliver(JSON.stringify(event), socketTag(member), true);
 	}
 
 	override webSocketClose(socket: WebSocket, code: number, reason: string): void {
@@ -2638,55 +2692,77 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 *
 	 * A feed with the tag `quietTag` gets no event, but its credential check runs as for each socket.
 	 */
-	private async deliver(text: string, quietTag: string | null): Promise<void> {
+	private async deliver(text: string, quietTag: string | null, typing = false): Promise<void> {
 		const now = Date.now();
-		const open: { socket: WebSocket; state: SocketState; waits: boolean }[] = [];
+		const waiting: WebSocket[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
 			const state = socket.deserializeAttachment() as SocketState | null;
 			if (!state || now - state.openedAt >= SOCKET_MAX_MS) {
 				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
 				continue;
 			}
-			const quiet = state.feed && quietTag !== null && this.ctx.getTags(socket).includes(quietTag);
-			// A quiet socket never waits for an event: the check below only keeps or closes it.
-			const waits = !quiet && now - state.checkedAt >= SOCKET_RECHECK_MS;
-			if (!waits && !quiet) this.send(socket, text);
-			open.push({ socket, state, waits });
+			const own = quietTag === socketTag(state.credential.principalId);
+			if (typing ? own || state.feed || !state.showing : own && state.feed) continue;
+			if (now - state.checkedAt >= SOCKET_RECHECK_MS) waiting.push(socket);
+			else this.send(socket, text);
 		}
-		if (!open.some((entry) => entry.waits)) return;
-		let checks: CredentialCheck[] | null = null;
+		if (waiting.length === 0) return;
+		await this.recheckSockets();
+		for (const socket of waiting) {
+			const state = this.checkedSocket(socket);
+			if (state && (!typing || state.showing)) this.send(socket, text);
+		}
+	}
+
+	/** A socket can close or hide the room during a directory read. Read its attachment again. */
+	private checkedSocket(socket: WebSocket): SocketState | null {
+		if (socket.readyState !== WebSocket.OPEN) return null;
+		const state = socket.deserializeAttachment() as SocketState | null;
+		if (state && Date.now() - state.checkedAt < SOCKET_RECHECK_MS) return state;
+		this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
+		return null;
+	}
+
+	/** Incoming typing frames and outgoing events share one credential check, also when they arrive together. */
+	private recheckSockets(): Promise<void> {
+		this.socketCheck ??= this.refreshSocketCredentials().finally(() => {
+			this.socketCheck = undefined;
+		});
+		return this.socketCheck;
+	}
+
+	private async refreshSocketCredentials(): Promise<void> {
+		const open: { socket: WebSocket; credential: CredentialRef }[] = [];
+		for (const socket of this.ctx.getWebSockets()) {
+			const state = socket.deserializeAttachment() as SocketState | null;
+			if (state) open.push({ socket, credential: state.credential });
+		}
+		let checks: CredentialCheck[];
 		try {
 			checks = await checkCredentials(
 				this.env.DIRECTORY,
-				open.map((entry) => entry.state.credential),
+				open.map((entry) => entry.credential),
 			);
 		} catch (error) {
-			log("warn", "chat socket credential check failed; the sockets that waited close", {
-				sockets: open.filter((entry) => entry.waits).length,
+			log("warn", "chat socket credential check failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
+			return;
 		}
 		const checkedAt = Date.now();
 		let ended = 0;
-		for (const [index, { socket, state, waits }] of open.entries()) {
-			const check = checks?.[index];
-			if (check === undefined) {
-				if (waits) this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
+		for (const [index, { socket }] of open.entries()) {
+			if (socket.readyState !== WebSocket.OPEN) continue;
+			const check = checks[index];
+			if (check === "live") {
+				const current = socket.deserializeAttachment() as SocketState;
+				socket.serializeAttachment({ ...current, checkedAt } satisfies SocketState);
 			} else if (check === "renew") {
-				ended += 1;
+				ended++;
 				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access token stopped. Open a new socket with a new token.");
 			} else if (check === "ended") {
-				ended += 1;
+				ended++;
 				this.end(socket, CHAT_SOCKET_CLOSE.ended, "The credential stopped.");
-			} else {
-				// The room can remove a member during the check. Its sockets are closed then: the two calls
-				// below do nothing for a closed socket.
-				try {
-					socket.serializeAttachment({ ...state, checkedAt } satisfies SocketState);
-				} catch {
-					// Closed during the check.
-				}
-				if (waits) this.send(socket, text);
 			}
 		}
 		if (ended > 0) log("info", "chat sockets closed: the credential stopped", { sockets: ended });
@@ -2736,7 +2812,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const next =
 			this.one<{ at: number | null }>(
 				`SELECT MIN(next_attempt_at) AS at FROM (SELECT next_attempt_at FROM outbox
-				UNION ALL SELECT next_attempt_at FROM webhook_outbox UNION ALL SELECT next_attempt_at FROM link_jobs)`,
+				UNION ALL SELECT next_attempt_at FROM webhook_outbox UNION ALL SELECT next_attempt_at FROM chat_notification_outbox
+				UNION ALL SELECT next_attempt_at FROM link_jobs)`,
 			)?.at ?? null;
 		if (next === null) await this.ctx.storage.deleteAlarm();
 		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
@@ -2757,28 +2834,33 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return this.flushed;
 	}
 
-	override async alarm(): Promise<void> {
-		await this.flush();
+	private async sendEventJobs(table: "webhook_outbox" | "chat_notification_outbox"): Promise<void> {
 		const rows = this.all<{ event_id: string; job: string; attempts: number }>(
-			"SELECT event_id, job, attempts FROM webhook_outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?",
+			`SELECT event_id, job, attempts FROM ${table} WHERE next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?`,
 			Date.now(),
 			OUTBOX_BATCH,
 		);
 		for (const row of rows) {
 			try {
-				await this.env.WEBHOOKS.send(JSON.parse(row.job) as ChatWebhookEventJob);
-				this.sql.exec("DELETE FROM webhook_outbox WHERE event_id = ?", row.event_id);
+				if (table === "webhook_outbox") await this.env.WEBHOOKS.send(JSON.parse(row.job) as ChatWebhookEventJob);
+				else await enqueuePushFanout(this.env, JSON.parse(row.job) as ChatPushFanout);
+				this.sql.exec(`DELETE FROM ${table} WHERE event_id = ?`, row.event_id);
 			} catch {
 				const attempts = row.attempts + 1;
 				this.sql.exec(
-					"UPDATE webhook_outbox SET attempts = ?, next_attempt_at = ? WHERE event_id = ?",
+					`UPDATE ${table} SET attempts = ?, next_attempt_at = ? WHERE event_id = ?`,
 					attempts,
 					Date.now() + backoff(attempts),
 					row.event_id,
 				);
-				log("warn", "chat webhook queue send failed", { eventId: row.event_id, attempts });
+				log("warn", "chat event queue send failed", { table, eventId: row.event_id, attempts });
 			}
 		}
+	}
+
+	override async alarm(): Promise<void> {
+		await this.flush();
+		await Promise.all([this.sendEventJobs("webhook_outbox"), this.sendEventJobs("chat_notification_outbox")]);
 		const room = this.room();
 		if (room) await this.sendLinkJobs(room.room_id);
 		await this.sendSearchRows();
@@ -2792,14 +2874,50 @@ export class ChatRoomDO extends DurableObject<Env> {
 		membershipId: string,
 		eventType: ChatWebhookEvent = "chat.message.created",
 	): boolean {
-		if (!this.hasTables) return false;
-		const member = this.one<MemberRow>("SELECT * FROM members WHERE principal_id = ?", principalId);
-		const message = this.message(messageId);
-		if (member?.membership_id !== membershipId || message === null) return false;
+		const target = this.notificationMessage(principalId, messageId, membershipId);
+		if (!target) return false;
+		const { message } = target;
 		// A delete still goes to the author when another member deleted the message.
 		if (eventType === "chat.message.deleted") return message.deleted_at !== null;
 		if (message.author_id === principalId) return false;
 		return message.deleted_at === null;
+	}
+
+	private notificationMessage(
+		principalId: string,
+		messageId: string,
+		membershipId: string,
+	): { message: MessageRow; member: MemberRow } | null {
+		if (!this.hasTables) return null;
+		const member = this.member(principalId);
+		if (member?.membership_id !== membershipId) return null;
+		const message = this.message(messageId);
+		return message ? { message, member } : null;
+	}
+
+	/** The position for a push click. Check the same membership and message again on each retry. */
+	chatPushMessage(
+		principalId: string,
+		messageId: string,
+		membershipId: string,
+	): { seq: number; parent_seq: number | null; unread_count: number } | null {
+		const target = this.notificationMessage(principalId, messageId, membershipId);
+		if (!target) return null;
+		const { message, member } = target;
+		if (message.author_id === principalId || message.deleted_at !== null) return null;
+		const inRoom = message.parent_id === null || message.also_in_room === 1;
+		if (inRoom && message.seq <= member.last_read_seq) return null;
+		const parent = message.parent_id
+			? this.one<{ seq: number; last_read_seq: number | null }>(
+					`SELECT parent.seq, follow.last_read_seq FROM messages parent
+					LEFT JOIN thread_follows follow ON follow.parent_id = parent.id AND follow.principal_id = ?
+					WHERE parent.id = ?`,
+					principalId,
+					message.parent_id,
+				)
+			: null;
+		if (message.seq <= (parent?.last_read_seq ?? 0)) return null;
+		return { seq: message.seq, parent_seq: parent?.seq ?? null, unread_count: this.unreadCount(member) };
 	}
 
 	/**
@@ -2853,21 +2971,41 @@ export class ChatRoomDO extends DurableObject<Env> {
 		parentId: string | null;
 	}): void {
 		const reasonOf = this.chatEventReasons(event.room.kind, event.body, event.authorId, event.parentId);
-		const recipients = this.all<{ principal_id: string; membership_id: string }>(
-			"SELECT principal_id, membership_id FROM members WHERE principal_id != ?",
+		const members = this.all<{ principal_id: string; membership_id: string; kind: ActorRecord["kind"] }>(
+			"SELECT principal_id, membership_id, json_extract(actor_json, '$.kind') AS kind FROM members WHERE principal_id != ?",
 			event.actorId,
-		).map((member) => ({
-			id: member.principal_id,
-			membershipId: member.membership_id,
-			reason: reasonOf(member.principal_id),
-		}));
-		if (recipients.length === 0) return;
-		// The change is for each recipient whose reason is not `room`. The state of the room for that member
-		// has it, so the `PrincipalDO` of the member knows the change without a webhook.
+		);
+		if (members.length === 0) return;
+		const recipients: ChatPushFanout["recipients"] = [];
+		const people: ChatPushFanout["recipients"] = [];
 		const addressed = new Map<ChatAddressedReason, string[]>();
-		for (const recipient of recipients) {
-			if (recipient.reason === "room") continue;
-			addressed.set(recipient.reason, [...(addressed.get(recipient.reason) ?? []), recipient.id]);
+		for (const member of members) {
+			const reason = reasonOf(member.principal_id);
+			const recipient = { id: member.principal_id, membershipId: member.membership_id, reason };
+			recipients.push(recipient);
+			if (member.kind === "human") people.push(recipient);
+			if (reason !== "room") {
+				const ids = addressed.get(reason);
+				if (ids) ids.push(recipient.id);
+				else addressed.set(reason, [recipient.id]);
+			}
+		}
+		if (event.eventType === "chat.message.created" && people.length > 0) {
+			const notification: ChatPushFanout = {
+				v: 1,
+				kind: "recipients",
+				roomId: event.room.room_id,
+				messageId: event.messageId,
+				occurredAt: event.now,
+				recipients: people,
+				...(event.parentId === null ? {} : { parentId: event.parentId }),
+			};
+			this.sql.exec(
+				"INSERT INTO chat_notification_outbox (event_id, job, next_attempt_at) VALUES (?, ?, ?)",
+				event.eventId,
+				JSON.stringify(notification),
+				event.now,
+			);
 		}
 		for (const [reason, ids] of addressed) {
 			// One statement for each reason, so a mention of a group in a large room makes one write.

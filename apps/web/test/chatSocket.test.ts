@@ -1,4 +1,5 @@
 import {
+	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,
 	type ChatSocketEvent,
@@ -99,6 +100,26 @@ describe("the socket of an open room", () => {
 			{ type: "message", message },
 			{ type: "room" },
 		]);
+	});
+
+	it("sends typing only for the visible room and restores its view after a reconnect", () => {
+		const server = fakeServer();
+		server.socket.show(true);
+		server.socket.typing();
+		expect(server.last().sent).toEqual([]);
+		server.last().handlers.message(HELLO);
+		server.socket.typing();
+		server.socket.typing();
+		vi.advanceTimersByTime(CHAT_LIMITS.typingIntervalMs);
+		server.socket.typing();
+		server.socket.show(false);
+		server.socket.typing();
+		expect(server.last().sent).toEqual(["show", "typing", "typing", "hide"]);
+		server.last().handlers.close(1006);
+		server.socket.show(true);
+		vi.advanceTimersByTime(RETRY_MIN_MS);
+		server.last().handlers.message(HELLO);
+		expect(server.last().sent).toEqual(["show"]);
 	});
 
 	// A server that is down must not get a request from each tab each half second.

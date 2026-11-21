@@ -2,6 +2,7 @@
 export { mountChatFiles } from "./files.ts";
 export { chatHandlers } from "./handlers.ts";
 export { CHAT_PREVIEW_QUEUE, handleLinkPreviewBatch } from "./previews.ts";
+export { CHAT_PUSH_QUEUE, handleChatPushBatch } from "./push.ts";
 export { ChatRoomDO } from "./room.ts";
 export { ChatSearchDO } from "./search-index.ts";
 export { mountChatSocket } from "./socket.ts";

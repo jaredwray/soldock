@@ -1,11 +1,4 @@
-import {
-	CHAT_LIMITS,
-	type ChatBody,
-	type ChatFile,
-	type ChatMessage,
-	type ChatRoom,
-	type Principal,
-} from "@asterra/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
 import {
 	Fragment,
 	useCallback,
@@ -22,8 +15,10 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { useViewedRoom } from "../../lib/usePrincipalActivity.ts";
 import { chatPath, chatSearchPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
@@ -57,6 +52,8 @@ import {
 	startsNew,
 	unseenSendsNote,
 } from "./model.ts";
+import { Presence } from "./Presence.tsx";
+import { RoomNotificationButton } from "./RoomNotifications.tsx";
 import { useSearchKeys } from "./searchKeys.ts";
 import { createSendSettler } from "./settle.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
@@ -150,6 +147,7 @@ export function RoomView({
 	const reactions = useMemo(() => createToggleLine(), []);
 	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
 	function setDraft(body: ChatBody | null) {
+		if (body !== null) view.typing();
 		setDraftBody(body);
 		drafts.set(roomId, body);
 	}
@@ -242,7 +240,7 @@ export function RoomView({
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });
 
 	useEffect(() => {
-		document.title = `${title} – Asterra Chat`;
+		setPageTitle(`${title} – Asterra Chat`);
 	}, [title]);
 
 	// The membership changed in a different tab, or a different member changed it: load the room again.
@@ -436,6 +434,7 @@ export function RoomView({
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
 	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	useViewedRoom(isMember ? roomId : null);
 	// Ctrl+F and ⌘F search this room. Only a member can search a room: for each other person, and while the
 	// room loads, the search is in all rooms.
 	useSearchKeys(() => navigate(chatSearchPath("", isMember ? roomId : null)));
@@ -836,12 +835,14 @@ export function RoomView({
 					{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
 					{title}
 				</h1>
+				{room.peer && <Presence id={room.peer.principal_id} compact />}
 				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
 				{room.role !== null && (
 					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
 				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
+					{isMember && <RoomNotificationButton roomId={roomId} />}
 					{isMember && <RoomSearch roomId={roomId} title={title} />}
 					<button
 						type="button"
@@ -1011,6 +1012,9 @@ export function RoomView({
 							send();
 						}}
 					>
+						<p className="chat-typing" role="status">
+							{typingLabel(view.members, view.typists)}
+						</p>
 						<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
 							<ChatComposer
 								ref={composer}
@@ -1203,4 +1207,15 @@ function RoomSearch({ roomId, title }: { roomId: string; title: string }) {
 			</Link>
 		</>
 	);
+}
+
+function typingLabel(
+	members: readonly { principal_id: string; display_name: string }[],
+	typists: ReadonlyMap<string, number>,
+): string {
+	if (typists.size === 0) return "";
+	const names = members.filter((member) => typists.has(member.principal_id)).map((member) => member.display_name);
+	if (typists.size === 1) return `${names[0] ?? "Someone"} is typing…`;
+	if (typists.size === 2 && names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+	return `${typists.size} people are typing…`;
 }

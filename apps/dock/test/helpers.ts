@@ -31,6 +31,25 @@ export function request(path: string, init: RequestInit = {}): Promise<Response>
 	return exports.default.fetch(new Request(`${ORIGIN}${path}`, init));
 }
 
+/** Restart a room with an earlier schema. Commit the fixture before an alarm can read it. */
+export async function restartLegacyRoom(roomId: string, version: number, restore: (sql: SqlStorage) => void) {
+	const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
+	await expect(
+		runInDurableObject(room, (_instance, state) =>
+			state.blockConcurrencyWhile(async () => {
+				await state.storage.deleteAlarm();
+				const sql = state.storage.sql;
+				restore(sql);
+				sql.exec("DROP TABLE chat_notification_outbox");
+				sql.exec("ALTER TABLE members DROP COLUMN last_typed_at");
+				sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(version));
+				await state.storage.sync();
+				state.abort("Restart the legacy room.");
+			}),
+		),
+	).rejects.toThrow("Restart the legacy room.");
+}
+
 /** The password of each human that these helpers create. */
 export const PASSWORD = "correct horse battery staple";
 

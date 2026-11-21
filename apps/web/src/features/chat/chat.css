@@ -2260,3 +2260,40 @@ a.chat-author:hover {
 		max-height: 64px;
 	}
 }
+
+.chat-typing {
+	min-height: 1.4em;
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 0.8rem;
+}
+
+.chat-profile-status,
+.chat-presence {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+}
+
+.chat-presence {
+	min-width: 0.6rem;
+	min-height: 0.6rem;
+	color: var(--muted-foreground);
+	font-size: 0.85rem;
+}
+
+.chat-presence-dot {
+	width: 0.55rem;
+	height: 0.55rem;
+	flex-shrink: 0;
+	border-radius: 50%;
+	background: var(--muted-foreground);
+}
+
+.chat-presence-active {
+	background: var(--positive);
+}
+
+.chat-presence-away {
+	background: var(--warning);
+}
