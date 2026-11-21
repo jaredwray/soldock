@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CHAT_LIMITS, CHAT_SOCKET_CLOSE, CHAT_SOCKET_PROTOCOL, chatSocketPath } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SOCKET_MAX_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
+import { MEMBER_DELAY_MS, SOCKET_MAX_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
 import {
 	type Actor,
 	bearer,
@@ -269,10 +269,12 @@ describe("a room socket", () => {
 	});
 
 	it("sends one temporary typing event to other visible views without a member call", async () => {
+		vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
 		const room = await privateRoom(ada, [bot.id]);
 		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		// Finish the room creation before the test counts calls to its members.
+		vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
 		await runDurableObjectAlarm(stub);
-		vi.useFakeTimers({ toFake: ["Date"] });
 		const first = await connect(room.id, bearer(ada.key));
 		const second = await connect(room.id, bearer(ada.key));
 		const viewer = await connect(room.id, bearer(bot.key));
@@ -376,8 +378,8 @@ describe("a room socket", () => {
 		for (const socket of [viewer, read, write]) socket.socket.send("show");
 		await waitForViews(room.id, 3);
 		read.socket.send("typing");
-		read.socket.send("ping");
-		expect(await read.next()).toBe("pong");
+		read.socket.send("unknown");
+		expect(await read.next()).toEqual({ closed: 1008 });
 		await ada.call("account.revoke_api_key", { key_id: writer.id });
 		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
 		write.socket.send("typing");

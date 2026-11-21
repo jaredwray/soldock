@@ -53,6 +53,14 @@ async function sendToMembers(roomId: string): Promise<void> {
 	await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)));
 }
 
+/** Start the socket scenario after the room sent its initial membership state. */
+async function roomAfterJoin(creator: Actor, name: string, member: Actor) {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	const room = await privateRoom(creator, name, [member.id]);
+	await sendToMembers(room.id);
+	return room;
+}
+
 const listed = async (actor: Actor, roomId: string) =>
 	(await actor.call("chat.list_rooms")).rooms.find((room) => room.id === roomId);
 
@@ -78,10 +86,11 @@ describe("the events socket", () => {
 	});
 
 	it("clears the count on each device of a person when one device calls chat.mark_read", async () => {
-		const room = await privateRoom(bot, "Ops", [ada.id]);
+		const room = await roomAfterJoin(bot, "Ops", ada);
 		const phone = await connect({ cookie: await signIn(ada.address), origin: ORIGIN });
 		const laptop = await connect(bearer(ada.key));
 		await bot.call("chat.post_message", { room_id: room.id, text: "Disk is full." });
+		await sendToMembers(room.id);
 		expect(await phone.next()).toMatchObject({ room: { unread_count: 1 } });
 		expect(await laptop.next()).toMatchObject({ room: { unread_count: 1 } });
 
@@ -145,7 +154,7 @@ describe("the events socket", () => {
 
 	// A room can send the same state two times, after a failure. The sockets must not get it two times.
 	it("sends nothing for a state that the object does not keep", async () => {
-		const room = await privateRoom(ada, "Launch", [bot.id]);
+		const room = await roomAfterJoin(ada, "Launch", bot);
 		const agent = await connect(bearer(bot.key));
 		const roomStub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
 		const older = await roomStub.stateFor(bot.id);
@@ -159,6 +168,7 @@ describe("the events socket", () => {
 		const never = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(other.id)).stateFor(bot.id);
 		await principal.applyChatRoomStates([never as NonNullable<typeof never>]);
 		const posted = (await ada.call("chat.post_message", { room_id: room.id, text: "Hello" })).message;
+		await sendToMembers(room.id);
 		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { last_seq: posted.seq } });
 	});
 
@@ -309,10 +319,8 @@ describe("the events socket", () => {
 
 	// A socket that stays open must not outlive the credential that opened it.
 	it("closes when its credential stops without a sign-out, and after its longest life", async () => {
-		const room = await privateRoom(owner, "Launch", [ada.id]);
+		const room = await roomAfterJoin(owner, "Launch", ada);
 		const cookie = await signIn(ada.address);
-		// Only the clock is fake: the object checks the age of a socket and of its last check against Date.now().
-		vi.useFakeTimers({ toFake: ["Date"] });
 		const expired = await connect({ cookie, origin: ORIGIN });
 		const steady = await connect(bearer(ada.key));
 		// The first check of a socket starts at its accept. It must end before the clock moves.

@@ -69,6 +69,7 @@ MCP clients. The app has no UI-only path.
 - **Shell.** Each signed-in page has a rail at the left. The page of the route fills the other space.
   - Each signed-in tab shares one principal socket between its pages. The title shows the unread message count for Chat.
   - An installed app shows that count on its icon when the device supports app badges.
+    An open tab updates the badge even during quiet hours. A closed app gets the current count with its next push or when it opens.
   - In Settings, **Chat notifications** sets the default level, sound and daily quiet hours for the account.
     Select the start, the end and the time zone. Equal times keep notifications quiet all day.
   - **Turn on device notifications** asks for browser permission on this device.

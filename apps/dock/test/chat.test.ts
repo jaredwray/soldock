@@ -624,11 +624,17 @@ describe("the state of each principal", () => {
 
 	// A principal that joined rooms before its object existed has those rooms in the index only.
 	it("fills an object without state from the rooms of the principal in the index", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
 		const quiet = await createRoom(ada, "public", "Quiet", [bot.id]);
 		const busy = await createRoom(ada, "private", "Busy", [bot.id]);
 		await post(ada, quiet.id, "One");
+		vi.setSystemTime(Date.now() + 1);
 		await post(ada, busy.id, "Two");
 		await post(ada, busy.id, "Three");
+		// Complete the current writes before the fixture restores the state from before the principal object.
+		vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
+		await Promise.all([runDurableObjectAlarm(roomStub(quiet.id)), runDurableObjectAlarm(roomStub(busy.id))]);
+		vi.useRealTimers();
 		const forget = () =>
 			runInDurableObject(principalStub(bot.id), (_instance, state) => {
 				state.storage.sql.exec("DELETE FROM chat_rooms");

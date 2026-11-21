@@ -593,6 +593,7 @@ One snapshot asks at most 200 such rooms. The client requests another snapshot w
 The room records the event and its recipients in the same transaction as the message.
 A queue processes the event even when the recipient has no open tab.
 Each device has a separate subscription and receives an encrypted Web Push message.
+The credential that registers it needs `chat.webhooks` for delivery and `chat.read` for the unread count.
 An active view of the room suppresses push on all devices of that principal.
 The consumer checks the current membership, credential, subscription and settings before delivery.
 A temporary failure retries. HTTP 404 and 410 remove the expired subscription.

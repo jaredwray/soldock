@@ -141,7 +141,7 @@ export const chatNotificationOperations = {
 		description:
 			"Register the endpoint and keys from your browser's PushSubscription. The endpoint gets encrypted notifications for this account.",
 		http: { method: "POST", path: "/api/v1/chat/push-subscriptions" },
-		scopes: ["chat.webhooks"],
+		scopes: ["chat.read", "chat.webhooks"],
 		callers: ["human"],
 		annotations: { ...CHANGE, openWorld: true },
 		input: ChatPushSubscription.extend({ expected_principal_id: ExpectedPrincipal }),

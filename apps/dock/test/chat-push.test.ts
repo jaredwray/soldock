@@ -11,7 +11,7 @@ import { createDecipheriv, createECDH, generateKeyPairSync, hkdfSync, randomByte
 import { afterEach, expect, it, vi } from "vitest";
 import { CHAT_PUSH_QUEUE, type ChatPushJob } from "../src/chat/push.ts";
 import worker from "../src/index.ts";
-import { seedOrg } from "./helpers.ts";
+import { api, seedOrg } from "./helpers.ts";
 
 const origin = "https://push.example.com";
 afterEach(() => vi.restoreAllMocks());
@@ -189,4 +189,12 @@ it("refuses to change a device when the browser tab still shows the previous acc
 	expect(
 		await owner.call("chat.unsubscribe_push", { endpoint: subscription.endpoint, expected_principal_id: owner.id }),
 	).toEqual({ deleted: true });
+});
+
+it("requires access to the unread count before a credential can send it to a device", async () => {
+	const { ada } = await seedOrg();
+	const { api_key } = await ada.call("account.create_api_key", { label: "Chat webhooks", scopes: ["chat.webhooks"] });
+	const { subscription } = device("/scoped");
+	await expect(api(api_key.secret)("chat.subscribe_push", subscription)).rejects.toMatchObject({ code: "forbidden" });
+	expect(await ada.call("chat.unsubscribe_push", { endpoint: subscription.endpoint })).toEqual({ deleted: false });
 });
