@@ -3,8 +3,9 @@ import { currentAccount } from "./account.ts";
 import { api } from "./api.ts";
 import { setChatUnread } from "./pageTitle.ts";
 import { onPrincipalEvent, principalSocketLive, startPrincipalSocket } from "./principalSocket.ts";
+import { activeChatTab } from "./usePrincipalActivity.ts";
 
-/** The browser permits audio after a gesture. Only the focused tab plays the tone. */
+/** The browser permits audio after a gesture. Only an active tab plays the tone. */
 function messageSound() {
 	let audio: AudioContext | undefined;
 	function unlock() {
@@ -16,7 +17,7 @@ function messageSound() {
 	window.addEventListener("keydown", unlock);
 	return {
 		play() {
-			if (audio?.state !== "running" || !document.hasFocus() || document.visibilityState !== "visible") return;
+			if (audio?.state !== "running" || !activeChatTab()) return;
 			const tone = audio.createOscillator();
 			const volume = audio.createGain();
 			tone.frequency.value = 660;

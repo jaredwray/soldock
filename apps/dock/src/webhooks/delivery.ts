@@ -481,7 +481,10 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 		// The target can change its notification level while a delivery waits for a retry.
 		const target = pair.subscription.target_id;
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(target));
-		if (!(await principal.chatNotificationAllowed(job.roomId, knownReason(job.reason), job.occurredAt))) return;
+		if (
+			!(await principal.chatNotificationAllowed(job.roomId, knownReason(job.reason), job.occurredAt, job.membershipId))
+		)
+			return;
 		const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
 		const messageId = job.messageId ?? job.eventId;
 		const eventType = job.eventType ?? "chat.message.created";

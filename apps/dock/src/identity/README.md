@@ -54,13 +54,14 @@ to it, so a list of that state reads one object and not the directory.
   checks the credentials of its sockets (see below).
 - The data of the object stays when its principal is deleted. Nobody can read it, because only a
   credential of the principal reads it.
-- `chat_notification_levels` stores one override for each room with a selected level. A removal from the room deletes its override.
+- `chat_notification_levels` stores one override for each room with a selected level. The room sends the id of the current membership with its state.
+  A removal or a different membership id clears the override. The first id from a room binds an override from an earlier release.
 - The `chat_notifications` key in `meta` holds the default level, the sound setting, and the daily quiet hours with their time zone.
 - The `chat_unread` key in `meta` holds the sum of the unread counts from the rooms. The migration uses the rooms already in the object.
   An insert or update of a room adjusts this total in the same transaction.
 - `chat_push_devices` holds each push endpoint, its encryption keys, the registration time, and the credential that registered it.
   A changed registration gets a new identifier. A retry checks the registration and its credential before delivery.
-- `chat_notification_sounds` records recent message ids that sent a sound event. A retry cannot repeat the sound.
+- `chat_notification_sounds` records recent messages that sent a sound event. Its `foreground_devices` field lists the registered devices whose credential had an active socket for that event. A retry uses the same list.
 - Later layers add agent counters.
 
 ### The events socket
@@ -126,7 +127,10 @@ while the person uses the app. Set `room_id` to the room that the device shows, 
 no room. A hidden tab sends null. Send a report after each change and every 30 seconds.
 
 The object keeps the latest report in the socket attachment. A report expires after 90 seconds.
-A push checks the current reports of all devices for the visible room. This check uses no directory read.
+A device suppresses pushes only while its report is active, current, and names the room.
+A focused tab that reports away still permits a push. This check uses no directory read.
+A live sound needs an active device with a current report and a socket that opened before the post.
+A push can defer to the foreground sound only when its own device qualified and still has an active socket.
 
 The object groups socket changes for 10 seconds. Its alarm checks the open sockets and writes two
 expiry times to the directory row of its principal. One active socket makes the principal active.

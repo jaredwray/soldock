@@ -13,7 +13,7 @@ function worker() {
 	const openWindow = vi.fn();
 	const focus = vi.fn();
 	const setAppBadge = vi.fn(async () => {});
-	let windows: { url: string; focus: typeof focus }[] = [];
+	let windows: { url: string; focus: typeof focus; focused: boolean; visibilityState: string }[] = [];
 	runInNewContext(script, {
 		URL,
 		self: {
@@ -43,7 +43,7 @@ function worker() {
 		click: (notification: NotificationOptions) =>
 			emit("notificationclick", { notification: { ...notification, close: () => {} } }),
 		openTab(url: string) {
-			windows = [{ url, focus }];
+			windows = [{ url, focus, focused: true, visibilityState: "visible" }];
 		},
 	};
 }
@@ -62,6 +62,16 @@ it("a quiet push updates the badge and opens its reply from the notification", a
 	await sw.click(notification);
 	expect(sw.focus).toHaveBeenCalledOnce();
 	expect(sw.openWindow).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the system sound on a focused device that did not receive the foreground sound", async () => {
+	const sw = worker();
+	sw.openTab(origin);
+	await sw.push({ ...message, sound: true, foreground_sound: false });
+	await sw.push({ ...message, sound: true, foreground_sound: true });
+	// A push from an older Worker uses the previous rule for a focused tab.
+	await sw.push({ ...message, sound: true });
+	expect(sw.show.mock.calls.map(([, options]) => options.silent)).toEqual([false, true, true]);
 });
 
 it("a device ignores a push for a different account", async () => {

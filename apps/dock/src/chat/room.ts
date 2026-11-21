@@ -926,6 +926,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return {
 			room_id: room.room_id,
 			stamp,
+			membership_id: member.membership_id,
 			view: {
 				kind: room.kind,
 				name: room.name,

@@ -11,7 +11,7 @@ import {
 	type PrincipalEvent,
 } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
-import { type CredentialCheck, type CredentialRef, checkCredentials } from "./access.ts";
+import { type CredentialCheck, type CredentialRef, checkCredentials, credentialKey } from "./access.ts";
 import {
 	ChatNotifications,
 	NOTIFICATION_MIGRATION,
@@ -21,9 +21,11 @@ import {
 } from "./notifications.ts";
 import {
 	type EventsSocketState,
+	listensForSound,
 	publishPresence,
 	readActivity,
 	schedulePresence,
+	soundListeners,
 	viewsRoom,
 } from "./socket-presence.ts";
 
@@ -127,6 +129,8 @@ export interface ChatThreadQuery {
  */
 export interface ChatRoomState {
 	room_id: string;
+	/** The id of this membership. Earlier rooms and states for a removed member omit it. */
+	membership_id?: string;
 	stamp: number;
 	/** Null when the principal is not a member of the room now. */
 	view: ChatRoomView | null;
@@ -293,6 +297,14 @@ const MIGRATIONS: string[][] = [
 		"CREATE INDEX chat_addressed_recent ON chat_addressed (at DESC, room_id DESC)",
 	],
 	NOTIFICATION_MIGRATION,
+	[
+		"ALTER TABLE chat_rooms ADD COLUMN membership_id TEXT",
+		// A leave and a new join can produce a single room state. The old override ends in both cases.
+		`CREATE TRIGGER chat_notification_membership AFTER UPDATE OF joined, membership_id ON chat_rooms
+			WHEN NEW.joined = 0 OR (OLD.membership_id IS NOT NULL AND NEW.membership_id != OLD.membership_id) BEGIN
+			DELETE FROM chat_notification_levels WHERE room_id = NEW.room_id; END`,
+	],
+	["ALTER TABLE chat_notification_sounds ADD COLUMN foreground_devices TEXT NOT NULL DEFAULT '[]'"],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -378,8 +390,8 @@ export class PrincipalDO extends DurableObject<Env> {
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
 					`INSERT INTO chat_rooms (room_id, stamp, joined, kind, name, name_key, topic, created_at, created_by_json,
 						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version,
-						starred, mention_count)
-					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+						starred, mention_count, membership_id)
+					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
 					ON CONFLICT (room_id) DO UPDATE SET stamp = excluded.stamp, joined = excluded.joined, kind = excluded.kind,
 						name = excluded.name, name_key = excluded.name_key, topic = excluded.topic,
 						created_at = excluded.created_at, created_by_json = excluded.created_by_json,
@@ -387,7 +399,8 @@ export class PrincipalDO extends DurableObject<Env> {
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
 						last_read_seq = excluded.last_read_seq, unread_count = excluded.unread_count,
 						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred,
-						mention_count = excluded.mention_count
+						mention_count = excluded.mention_count,
+						membership_id = CASE WHEN excluded.joined = 1 THEN COALESCE(excluded.membership_id, chat_rooms.membership_id) END
 					WHERE excluded.stamp > chat_rooms.stamp
 					RETURNING room_id, joined`,
 					state.room_id,
@@ -410,6 +423,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.version ?? null,
 					view?.starred ? 1 : 0,
 					view?.mention_count ?? 0,
+					state.membership_id ?? null,
 				);
 				const accepted = row.toArray();
 				kept.push(...accepted);
@@ -420,7 +434,6 @@ export class PrincipalDO extends DurableObject<Env> {
 					if (this.replaceThreads(state.room_id, threads)) threadRooms.push(state.room_id);
 				}
 				if (accepted.length > 0) {
-					if (!view) this.notifications.setRoomLevel(state.room_id, null);
 					const change = this.keepAddressed(state.room_id, view === null ? null : view.addressed);
 					if (change) addressed.push({ room_id: state.room_id, change });
 				}
@@ -712,14 +725,27 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	setChatNotificationLevel(state: ChatRoomState, level: ChatNotificationLevel | null): boolean {
 		this.applyChatRoomStates([state]);
-		if (!this.sql.exec("SELECT 1 FROM chat_rooms WHERE room_id = ? AND joined = 1", state.room_id).toArray().length)
-			return false;
+		// A newer state of the same membership still accepts the change. A later join must reject it.
+		const member = this.sql
+			.exec(
+				"SELECT 1 FROM chat_rooms WHERE room_id = ? AND joined = 1 AND (membership_id = ? OR stamp = ?)",
+				state.room_id,
+				state.membership_id ?? null,
+				state.stamp,
+			)
+			.toArray();
+		if (!member.length) return false;
 		this.notifications.setRoomLevel(state.room_id, level);
 		return true;
 	}
 
-	chatNotificationAllowed(roomId: string, reason: string | undefined, occurredAt: number): boolean {
-		return this.notifications.policy(roomId, reason, occurredAt).allowed;
+	chatNotificationAllowed(
+		roomId: string,
+		reason: string | undefined,
+		occurredAt: number,
+		membershipId: string,
+	): boolean {
+		return this.notifications.policy(roomId, reason, occurredAt, membershipId).allowed;
 	}
 
 	async subscribePush(device: PushDevice, credential: CredentialRef): Promise<boolean> {
@@ -755,57 +781,73 @@ export class PrincipalDO extends DurableObject<Env> {
 		occurredAt: number;
 	}): Promise<string[]> {
 		const { roomId, occurredAt } = event;
-		const policy = this.notifications.policy(roomId, event.reason, occurredAt);
+		const policy = this.notifications.policy(roomId, event.reason, occurredAt, event.membershipId);
 		if (!policy.allowed) return [];
-		const recent = Date.now() - occurredAt <= SOUND_WINDOW_MS;
-		const listening =
-			recent &&
-			policy.sound &&
-			this.ctx.getWebSockets().some((socket) => {
-				const state = socket.deserializeAttachment() as EventsSocketState | null;
-				return state?.activity && !state.feed && state.openedAt <= occurredAt;
-			});
-		if (listening) {
-			const room = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(roomId));
-			if (
-				(await room.canNotifyWebhook(event.principalId, event.messageId, event.membershipId)) &&
-				this.notifications.claimSound(event.messageId, occurredAt)
-			) {
-				this.ctx.waitUntil(
-					this.enqueue(
-						[
-							JSON.stringify({
-								type: "chat.notification",
-								room_id: roomId,
-								message_id: event.messageId,
-								parent_id: event.parentId,
-							} satisfies PrincipalEvent),
-						],
-						occurredAt,
-					),
-				);
+		const now = Date.now();
+		const recent = now - occurredAt <= SOUND_WINDOW_MS;
+		const listening = recent && policy.sound && soundListeners(this.ctx, occurredAt, now).length > 0;
+		const authorized =
+			listening &&
+			(await this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(roomId)).canNotifyWebhook(
+				event.principalId,
+				event.messageId,
+				event.membershipId,
+			));
+		const devices = viewsRoom(this.ctx, roomId) ? [] : this.notifications.credentials(occurredAt);
+		if (authorized) {
+			const listeners = new Set(
+				soundListeners(this.ctx, occurredAt, Date.now()).map((state) => credentialKey(state.credential)),
+			);
+			const foregroundDevices = devices.filter(({ ref }) => listeners.has(credentialKey(ref))).map(({ id }) => id);
+			if (listeners.size && this.notifications.claimSound(event.messageId, occurredAt, foregroundDevices)) {
+				const sound: PrincipalEvent = {
+					type: "chat.notification",
+					room_id: roomId,
+					message_id: event.messageId,
+					parent_id: event.parentId,
+				};
+				this.ctx.waitUntil(this.enqueue([JSON.stringify(sound)], occurredAt));
 			}
 		}
-		return viewsRoom(this.ctx, roomId) ? [] : this.notifications.deviceIds(occurredAt);
+		return devices.map(({ id }) => id);
 	}
 
 	/** Check the current registration and the credential that created it before each outbound push. */
-	async pushTarget(id: string, roomId: string, reason: string, occurredAt: number, roomUnread: number) {
+	async pushTarget(
+		id: string,
+		roomId: string,
+		reason: string,
+		occurredAt: number,
+		roomUnread: number,
+		membershipId: string,
+		messageId?: string,
+	) {
 		const device = this.notifications.device(id, occurredAt);
 		if (!device) return null;
-		const [state] = await checkCredentials(this.env.DIRECTORY, [JSON.parse(device.credential) as CredentialRef]);
+		const credential = JSON.parse(device.credential) as CredentialRef;
+		const [state] = await checkCredentials(this.env.DIRECTORY, [credential]);
 		if (state !== "live") {
 			this.expirePushSubscription(id);
 			return null;
 		}
-		const { allowed, sound } = this.notifications.policy(roomId, reason, occurredAt);
+		const { allowed, sound } = this.notifications.policy(roomId, reason, occurredAt, membershipId);
 		if (!allowed || viewsRoom(this.ctx, roomId) || !this.notifications.device(id, occurredAt)) return null;
 		const projected =
 			this.sql
 				.exec<{ unread_count: number }>("SELECT unread_count FROM chat_rooms WHERE joined = 1 AND room_id = ?", roomId)
 				.toArray()[0]?.unread_count ?? 0;
+		const now = Date.now();
+		const foreground =
+			sound &&
+			messageId !== undefined &&
+			now - occurredAt <= SOUND_WINDOW_MS &&
+			this.notifications.sentForegroundSound(messageId, id) &&
+			soundListeners(this.ctx, occurredAt, now).some(
+				(socket) => credentialKey(socket.credential) === credentialKey(credential),
+			);
 		return {
 			endpoint: device.endpoint,
+			foreground_sound: foreground,
 			keys: { p256dh: device.p256dh, auth: device.auth },
 			unread_count: this.notifications.unreadCount() - projected + roomUnread,
 			sound,
@@ -992,11 +1034,9 @@ export class PrincipalDO extends DurableObject<Env> {
 				this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
 				continue;
 			}
-			if (
-				notificationAt !== undefined &&
-				(!state.activity || state.feed || (notificationAt !== null && state.openedAt > notificationAt))
-			)
-				continue;
+			if (socket.readyState !== WebSocket.OPEN) continue;
+			if (notificationAt === null && (!state.activity || state.feed)) continue;
+			if (typeof notificationAt === "number" && !listensForSound(state, notificationAt, now)) continue;
 			const waits = now - state.checkedAt >= EVENTS_SOCKET_RECHECK_MS;
 			if (!waits) for (const text of texts) this.send(socket, text);
 			open.push({ socket, state, waits });
@@ -1034,10 +1074,11 @@ export class PrincipalDO extends DurableObject<Env> {
 				try {
 					const current = socket.deserializeAttachment() as EventsSocketState;
 					socket.serializeAttachment({ ...current, checkedAt } satisfies EventsSocketState);
+					if (typeof notificationAt === "number" && !listensForSound(current, notificationAt, checkedAt)) continue;
+					if (waits) for (const text of texts) this.send(socket, text);
 				} catch {
 					// Closed during the check.
 				}
-				if (waits) for (const text of texts) this.send(socket, text);
 			}
 		}
 		if (ended > 0) log("info", "events sockets closed: the credential stopped", { sockets: ended });

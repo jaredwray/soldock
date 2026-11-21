@@ -1,13 +1,19 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createECDH, randomBytes } from "node:crypto";
-import { EVENTS_SOCKET_PATH } from "@asterra/contracts";
+import { CHAT_PRESENCE_LIMITS, EVENTS_SOCKET_PATH } from "@asterra/contracts";
 import { afterEach, expect, it, vi } from "vitest";
 import { type ChatPushFanout, fanOutPush } from "../src/chat/push-fanout.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
-import { bearer, codeOf, readSocket, request, seedOrg } from "./helpers.ts";
+import { api, bearer, codeOf, readSocket, request, seedOrg } from "./helpers.ts";
 
 afterEach(() => vi.useRealTimers());
+
+async function membership(roomId: string, principalId: string): Promise<string> {
+	const state = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).stateFor(principalId);
+	if (!state?.membership_id) throw new Error("Expected a joined member.");
+	return state.membership_id;
+}
 
 it("applies quiet hours in the selected time zone and keeps the room count and room override independent", async () => {
 	const { owner, ada, bot } = await seedOrg();
@@ -36,7 +42,7 @@ it("applies quiet hours in the selected time zone and keeps the room count and r
 		roomId: room.id,
 		messageId: message.id,
 		occurredAt: Date.now(),
-		recipients: [{ id: ada.id, reason: "room", membershipId: "at-post" }],
+		recipients: [{ id: ada.id, reason: "room", membershipId: await membership(room.id, ada.id) }],
 	};
 	const jobs: unknown[] = [];
 	const queued = {
@@ -72,8 +78,9 @@ it("applies quiet hours in the selected time zone and keeps the room count and r
 	});
 });
 
-it("suppresses push only while a device shows the room and discards jobs for an earlier registration", async () => {
+it("suppresses push only while a device is active in the room and discards jobs for an earlier registration", async () => {
 	const { owner, ada } = await seedOrg();
+	vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
 	const { room } = await owner.call("chat.create_room", {
 		kind: "private",
 		name: "Shift change",
@@ -100,7 +107,7 @@ it("suppresses push only while a device shows the room and discards jobs for an 
 		roomId: room.id,
 		messageId: message.id,
 		occurredAt: Date.now(),
-		recipients: [{ id: ada.id, reason: "room", membershipId: "at-post" }],
+		recipients: [{ id: ada.id, reason: "room", membershipId: await membership(room.id, ada.id) }],
 	};
 	const devices: string[] = [];
 	const bindings = {
@@ -113,18 +120,25 @@ it("suppresses push only while a device shows the room and discards jobs for an 
 	};
 	await fanOutPush(fanout, bindings);
 	expect(devices).toHaveLength(0);
-	reader.socket.send(JSON.stringify({ type: "chat.activity", active: false, room_id: null }));
+	// The focused desktop keeps the room open after the person walks away.
+	reader.socket.send(JSON.stringify({ type: "chat.activity", active: false, room_id: room.id }));
 	await vi.waitFor(async () => {
 		await fanOutPush(fanout, bindings);
 		expect(devices).toHaveLength(1);
 	});
 	const id = devices[0] as string;
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+	reader.socket.send(JSON.stringify({ type: "chat.activity", active: true, room_id: room.id }));
+	const membershipId = await membership(room.id, ada.id);
+	const target = () => principal.pushTarget(id, room.id, "room", fanout.occurredAt, 1, membershipId, message.id);
+	await vi.waitFor(async () => expect(await target()).toBeNull());
+	vi.setSystemTime(Date.now() + 3 * CHAT_PRESENCE_LIMITS.heartbeatMs);
+	expect(await target()).toMatchObject({ endpoint: device.endpoint });
 	await ada.call("chat.subscribe_push", {
 		...device,
 		keys: { ...device.keys, auth: randomBytes(16).toString("base64url") },
 	});
-	expect(await principal.pushTarget(id, room.id, "room", fanout.occurredAt, 1)).toBeNull();
+	expect(await target()).toBeNull();
 	await principal.expirePushSubscription(id);
 	expect(await ada.call("chat.unsubscribe_push", { endpoint: device.endpoint })).toEqual({ deleted: true });
 	reader.socket.close();
@@ -146,11 +160,30 @@ it("sends a live sound once for each eligible post and respects the sound settin
 			} as unknown as Queue,
 		};
 	});
-	const reader = readSocket(
-		await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(ada.key) } }),
-	);
-	expect(await reader.next()).toMatchObject({ type: "hello" });
-	reader.socket.send(JSON.stringify({ type: "chat.activity", active: true, room_id: null }));
+	const { api_key: phoneKey } = await ada.call("account.create_api_key", {
+		label: "Phone",
+		scopes: ["chat.read", "chat.webhooks"],
+	});
+	for (const [key, name] of [
+		[ada.key, "desktop"],
+		[phoneKey.secret, "phone"],
+	] as const) {
+		await api(key)("chat.subscribe_push", {
+			endpoint: `https://push.example.com/${name}`,
+			keys: {
+				p256dh: createECDH("prime256v1").generateKeys().toString("base64url"),
+				auth: randomBytes(16).toString("base64url"),
+			},
+		});
+	}
+	async function openTab(key: string, active: boolean) {
+		const reader = readSocket(await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(key) } }));
+		expect(await reader.next()).toMatchObject({ type: "hello" });
+		reader.socket.send(JSON.stringify({ type: "chat.activity", active, room_id: null }));
+		return reader;
+	}
+	const reader = await openTab(ada.key, true);
+	const idle = await openTab(phoneKey.secret, false);
 	async function post(text: string) {
 		const { message } = await owner.call("chat.post_message", { room_id: room.id, text });
 		await vi.waitFor(async () => {
@@ -159,21 +192,81 @@ it("sends a live sound once for each eligible post and respects the sound settin
 		});
 		return fanouts.get(message.id) as ChatPushFanout;
 	}
-	async function nextSound() {
+	async function nextSound(tab = reader) {
 		for (;;) {
-			const event = (await reader.next()) as { type: string; message_id?: string };
+			const event = (await tab.next()) as { type: string; message_id?: string };
 			if (event.type === "chat.notification") return event.message_id;
 		}
 	}
 	const first = await post("One");
-	await fanOutPush(first, env);
+	const deviceIds: string[] = [];
+	await fanOutPush(first, {
+		...env,
+		CHAT_PUSH: {
+			sendBatch: async (jobs: { body: { subscriptionId: string } }[]) => {
+				deviceIds.push(...jobs.map(({ body }) => body.subscriptionId));
+			},
+		} as unknown as Queue,
+	});
 	expect(await nextSound()).toBe(first.messageId);
+	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+	const membershipId = await membership(room.id, ada.id);
+	const getTargets = async () =>
+		Promise.all(
+			deviceIds.map((id) =>
+				principal.pushTarget(id, room.id, "room", first.occurredAt, 1, membershipId, first.messageId),
+			),
+		);
+	const targets = await getTargets();
+	expect(targets).toHaveLength(2);
+	expect(targets).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ endpoint: "https://push.example.com/desktop", foreground_sound: true }),
+			expect.objectContaining({ endpoint: "https://push.example.com/phone", foreground_sound: false }),
+		]),
+	);
 	await fanOutPush(first, env);
 	await ada.call("chat.set_notification_settings", { sound: false });
 	await fanOutPush(await post("Muted"), env);
 	await ada.call("chat.set_notification_settings", { sound: true });
+	idle.socket.send(JSON.stringify({ type: "chat.activity", active: true, room_id: null }));
 	const last = await post("Three");
 	await fanOutPush(last, env);
 	expect(await nextSound()).toBe(last.messageId);
+	expect(await nextSound(idle)).toBe(last.messageId);
+	// A later retry for the earlier message must still let the phone play its system sound.
+	expect(await getTargets()).toContainEqual(
+		expect.objectContaining({ endpoint: "https://push.example.com/phone", foreground_sound: false }),
+	);
 	reader.socket.close();
+	idle.socket.close();
+});
+
+it("keeps a room override with its membership when the outbox skips the removal", async () => {
+	const { ada, owner } = await seedOrg();
+	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Shift", member_ids: [ada.id] });
+	const source = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+	const before = await source.stateFor(ada.id);
+	await owner.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
+	await owner.call("chat.add_members", { room_id: room.id, principal_ids: [ada.id] });
+	const after = await source.stateFor(ada.id);
+	if (!before?.view || !before.membership_id || !after?.view || !after.membership_id)
+		throw new Error("Expected two joined states.");
+
+	// Replay the two joined snapshots into an empty projection. The outbox sent no leave between them.
+	const principal = env.PRINCIPAL.get(env.PRINCIPAL.newUniqueId());
+	await principal.updateChatNotificationSettings({ default_level: "none" });
+	// An earlier room supplies no membership id. The first state with an id keeps that override.
+	const legacy = { room_id: before.room_id, stamp: before.stamp - 1, view: before.view };
+	expect(await principal.setChatNotificationLevel(legacy, "all")).toBe(true);
+	await principal.applyChatRoomStates([before]);
+	// A job from the new membership can reach the object before its state.
+	expect(await principal.chatNotificationAllowed(room.id, "room", Date.now(), before.membership_id)).toBe(true);
+	expect(await principal.chatNotificationAllowed(room.id, "room", Date.now(), after.membership_id)).toBe(false);
+	await principal.applyChatRoomStates([after]);
+	expect((await principal.getChatNotificationSettings()).settings.room_levels).toEqual({});
+	expect(await principal.setChatNotificationLevel(before, "all")).toBe(false);
+	expect(await principal.setChatNotificationLevel(after, "mentions")).toBe(true);
+	await principal.applyChatRoomStates([before]);
+	expect((await principal.getChatNotificationSettings()).settings.room_levels).toEqual({ [room.id]: "mentions" });
 });

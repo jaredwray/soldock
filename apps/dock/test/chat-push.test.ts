@@ -158,6 +158,7 @@ it("delivers an offline mention, retries only the failed device and removes expi
 		seq: message.seq,
 		parent_seq: parent.seq,
 		sound: false,
+		foreground_sound: false,
 		unread_count: 2,
 	});
 

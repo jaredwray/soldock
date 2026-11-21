@@ -30,10 +30,24 @@ function openSockets(ctx: DurableObjectState): EventsSocketState[] {
 	});
 }
 
+function activeDevice(state: EventsSocketState, now: number): boolean {
+	const activity = state.activity;
+	return !state.feed && activity?.active === true && activity.at + LEASE_MS > now;
+}
+
+/** Only a device that was connected at the post can play its live sound. */
+export function listensForSound(state: EventsSocketState, occurredAt: number, now: number): boolean {
+	return state.openedAt <= occurredAt && activeDevice(state, now);
+}
+
+export function soundListeners(ctx: DurableObjectState, occurredAt: number, now: number): EventsSocketState[] {
+	return openSockets(ctx).filter((state) => listensForSound(state, occurredAt, now));
+}
+
 /** Read the current attachments. The directory projection can be behind a tab that just changed rooms. */
 export function viewsRoom(ctx: DurableObjectState, roomId: string): boolean {
 	const now = Date.now();
-	return openSockets(ctx).some(({ activity }) => activity?.room_id === roomId && activity.at + LEASE_MS > now);
+	return openSockets(ctx).some((state) => state.activity?.room_id === roomId && activeDevice(state, now));
 }
 
 /** Keep the earliest alarm. Device changes in one interval produce one directory write. */

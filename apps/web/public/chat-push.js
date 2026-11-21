@@ -24,7 +24,7 @@ self.addEventListener("push", (event) => {
 
 async function showMessage(message, path) {
 	const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-	// The focused page plays the account's tone on its socket.
+	// Older pushes omit foreground_sound. Those use the previous focus check.
 	const focused = windows.some((client) => client.focused && client.visibilityState === "visible");
 	const badge =
 		Number.isSafeInteger(message.unread_count) && message.unread_count >= 0
@@ -36,7 +36,7 @@ async function showMessage(message, path) {
 			body: "Open the message in Asterra.",
 			icon: "/icon-192.png",
 			tag: path,
-			silent: !message.sound || focused,
+			silent: !message.sound || (message.foreground_sound !== false && focused),
 			data: message,
 		}),
 	]);

@@ -576,6 +576,7 @@ The public view reads an index in D1 `DIRECTORY`:
 ## Notifications and presence
 
 Each principal chooses a default notification level. A room can inherit the default or use its own level.
+A room override lasts for one membership. A member who joins again starts with the default.
 
 | Level | New messages that qualify |
 | --- | --- |
@@ -594,7 +595,8 @@ The room records the event and its recipients in the same transaction as the mes
 A queue processes the event even when the recipient has no open tab.
 Each device has a separate subscription and receives an encrypted Web Push message.
 The credential that registers it needs `chat.webhooks` for delivery and `chat.read` for the unread count.
-An active view of the room suppresses push on all devices of that principal.
+An active view of the room suppresses push on all devices of that principal. An idle tab permits push.
+A focused browser silences the system sound only if its device qualified for the live sound and still has an active socket.
 The consumer checks the current membership, credential, subscription and settings before delivery.
 A temporary failure retries. HTTP 404 and 410 remove the expired subscription.
 A click opens the message in its room or thread.

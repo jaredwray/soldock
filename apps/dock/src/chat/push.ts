@@ -48,6 +48,8 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 		job.reason,
 		job.occurredAt,
 		location.unread_count,
+		job.membershipId,
+		job.messageId,
 	);
 	if (!target) return;
 
@@ -64,6 +66,7 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 			parent_seq: location.parent_seq,
 			unread_count: target.unread_count,
 			sound: target.sound,
+			foreground_sound: target.foreground_sound,
 		}),
 	);
 	const response = await fetch(endpoint.href, {

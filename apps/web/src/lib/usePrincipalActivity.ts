@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { onPrincipalConnection, sendPrincipalFrame } from "./principalSocket.ts";
 
 const IDLE_MS = 5 * 60_000;
+let lastInput = 0;
 let shownRoom: string | null = null;
 let reportRoom: (() => void) | undefined;
 
@@ -18,17 +19,25 @@ export function useViewedRoom(roomId: string | null): void {
 	}, [roomId]);
 }
 
+function focusedTab(): boolean {
+	return document.visibilityState === "visible" && document.hasFocus();
+}
+
+/** A queued sound can arrive after the tab goes idle. Check the same activity as its next report. */
+export function activeChatTab(): boolean {
+	return focusedTab() && Date.now() - lastInput < IDLE_MS;
+}
+
 /** Each signed-in tab reports its own activity, including a tab outside Chat. */
 export function usePrincipalActivity(): void {
 	useEffect(() => {
-		let lastInput = Date.now();
+		lastInput = Date.now();
 		let reported: ChatActivity | null = null;
 		function report(force = false) {
-			const focused = document.visibilityState === "visible" && document.hasFocus();
 			const frame: ChatActivity = {
 				type: "chat.activity",
-				active: focused && Date.now() - lastInput < IDLE_MS,
-				room_id: focused ? shownRoom : null,
+				active: activeChatTab(),
+				room_id: focusedTab() ? shownRoom : null,
 			};
 			if (force || frame.active !== reported?.active || frame.room_id !== reported?.room_id) {
 				sendPrincipalFrame(frame);

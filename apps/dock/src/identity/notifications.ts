@@ -104,11 +104,22 @@ export class ChatNotifications {
 	}
 
 	/** Check quiet hours at the post and at delivery. A delayed retry must respect both times. */
-	policy(roomId: string, reason: string | undefined, occurredAt: number): { allowed: boolean; sound: boolean } {
+	policy(
+		roomId: string,
+		reason: string | undefined,
+		occurredAt: number,
+		membershipId: string | undefined,
+	): { allowed: boolean; sound: boolean } {
 		const settings = this.preferences();
+		// An earlier Worker can call the object without an id. Earlier snapshots also have no id until their next update.
 		const level =
 			this.sql
-				.exec<{ level: ChatNotificationLevel }>("SELECT level FROM chat_notification_levels WHERE room_id = ?", roomId)
+				.exec<{ level: ChatNotificationLevel }>(
+					`SELECT level FROM chat_notification_levels JOIN chat_rooms USING (room_id)
+					WHERE room_id = ?1 AND joined = 1 AND (?2 IS NULL OR membership_id IS NULL OR membership_id = ?2)`,
+					roomId,
+					membershipId ?? null,
+				)
 				.toArray()[0]?.level ?? settings.default_level;
 		const allowed =
 			(level === "all" || (level === "mentions" && reason === "mention")) &&
@@ -154,16 +165,12 @@ export class ChatNotifications {
 		this.sql.exec("DELETE FROM chat_push_devices WHERE id = ?", id);
 	}
 
-	deviceIds(at: number): string[] {
+	credentials(at = Number.MAX_SAFE_INTEGER): { id: string; ref: CredentialRef }[] {
 		return this.sql
-			.exec<{ id: string }>("SELECT id FROM chat_push_devices WHERE registered_at <= ?", at)
-			.toArray()
-			.map(({ id }) => id);
-	}
-
-	credentials(): { id: string; ref: CredentialRef }[] {
-		return this.sql
-			.exec<{ id: string; credential: string }>("SELECT id, credential FROM chat_push_devices")
+			.exec<{ id: string; credential: string }>(
+				"SELECT id, credential FROM chat_push_devices WHERE registered_at <= ?",
+				at,
+			)
 			.toArray()
 			.map(({ id, credential }) => ({ id, ref: JSON.parse(credential) as CredentialRef }));
 	}
@@ -174,11 +181,27 @@ export class ChatNotifications {
 			.toArray()[0];
 	}
 
-	claimSound(messageId: string, at: number): boolean {
+	claimSound(messageId: string, at: number, devices: string[]): boolean {
 		this.sql.exec("DELETE FROM chat_notification_sounds WHERE at < ?", Date.now() - SOUND_WINDOW_MS);
 		return (
-			this.sql.exec("INSERT OR IGNORE INTO chat_notification_sounds (message_id, at) VALUES (?, ?)", messageId, at)
-				.rowsWritten > 0
+			this.sql.exec(
+				"INSERT OR IGNORE INTO chat_notification_sounds (message_id, at, foreground_devices) VALUES (?, ?, ?)",
+				messageId,
+				at,
+				JSON.stringify(devices),
+			).rowsWritten > 0
+		);
+	}
+	/** A retry can use the system sound when this device received no live alert for the post. */
+	sentForegroundSound(messageId: string, deviceId: string): boolean {
+		return (
+			this.sql
+				.exec(
+					"SELECT 1 FROM chat_notification_sounds s, json_each(s.foreground_devices) d WHERE s.message_id = ? AND d.value = ?",
+					messageId,
+					deviceId,
+				)
+				.toArray().length > 0
 		);
 	}
 }
