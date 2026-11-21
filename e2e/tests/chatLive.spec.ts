@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
-import { composer, createRoom, markRead, openRoom, post, signIn, unique } from "../support/chat.ts";
+import { expect } from "@playwright/test";
+import { composer, createRoom, markRead, openRoom, post, unique } from "../support/chat.ts";
+import { test } from "../support/chatDevices.ts";
 
-test("a draft shows a typing indicator on another device and the indicator expires", async ({ browser }) => {
-	const sender = await signIn(browser, "tomasz");
-	const reader = await signIn(browser, "chidi");
+test("a draft shows a typing indicator on another device and the indicator expires", async ({ device }) => {
+	const sender = await device("tomasz");
+	const reader = await device("chidi");
 	const name = unique("Typing");
 	const room = await createRoom(sender, name, [reader]);
 	const senderPage = await sender.newPage();
@@ -24,10 +25,10 @@ test("a draft shows a typing indicator on another device and the indicator expir
 });
 
 test("an unread chat changes the title and app badge outside Chat until another device reads it", async ({
-	browser,
+	device,
 }) => {
-	const sender = await signIn(browser, "nadia");
-	const reader = await signIn(browser, "ingrid");
+	const sender = await device("nadia");
+	const reader = await device("ingrid");
 	const room = await createRoom(sender, unique("Tab count"), [reader]);
 	const page = await reader.newPage();
 	// Capture the operating system badge request at the browser boundary.
@@ -65,8 +66,8 @@ test("an unread chat changes the title and app badge outside Chat until another 
 	await expect(page.locator("html")).toHaveAttribute("data-badge", String(before));
 });
 
-test("a second tab reopens its notification session when the account changes", async ({ browser }) => {
-	const context = await signIn(browser, "chidi");
+test("a second tab reopens its notification session when the account changes", async ({ device }) => {
+	const context = await device("chidi");
 	const editor = await context.newPage();
 	const second = await context.newPage();
 	await Promise.all([editor.goto("/settings"), second.goto("/chat")]);

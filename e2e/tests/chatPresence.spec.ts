@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
-import { signIn, unique } from "../support/chat.ts";
+import { expect } from "@playwright/test";
+import { unique } from "../support/chat.ts";
+import { test } from "../support/chatDevices.ts";
 
-test("a person sets and clears a status that another person sees on the open profile", async ({ browser }) => {
-	const author = await signIn(browser, "meiling");
-	const viewer = await signIn(browser, "rafael");
+test("a person sets and clears a status that another person sees on the open profile", async ({ device }) => {
+	const author = await device("meiling");
+	const viewer = await device("rafael");
 	const profile = await author.newPage();
 	await profile.goto("/chat");
 	await profile.getByRole("button", { name: /^Account:/ }).click();
