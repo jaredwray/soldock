@@ -101,6 +101,7 @@ type RoomDialog =
 	| { type: "remind"; message: ChatMessage }
 	| { type: "schedule"; body: ChatBody }
 	| { type: "slash"; command: ChatSlashCommand; text: string }
+	| { type: "slashResult"; command: string; operation: string; result: unknown }
 	| null;
 
 function renderSlashPreview(template: Record<string, unknown>, vars: Record<string, string>): string {
@@ -1362,15 +1363,24 @@ export function RoomView({
 					onClose={() => setDialog(null)}
 					onConfirm={async () => {
 						const { command, text } = dialog;
-						await api.call("chat.invoke_slash_command", {
+						const res = await api.call("chat.invoke_slash_command", {
 							room_id: roomId,
 							command: command.command,
 							...(text ? { text } : {}),
 						});
 						setDraft(null);
 						composer.current?.clear();
-						toast({ message: `Ran /${command.command}.`, tone: "info" });
-						void view.sync();
+						if (command.operation === "chat.post_message") {
+							toast({ message: `Ran /${command.command}.`, tone: "info" });
+							void view.sync();
+						} else {
+							setDialog({
+								type: "slashResult",
+								command: command.command,
+								operation: res.operation,
+								result: res.result,
+							});
+						}
 					}}
 				>
 					<p>
@@ -1383,6 +1393,21 @@ export function RoomView({
 							caller_id: ownId,
 						})}
 					</pre>
+				</ConfirmDialog>
+			)}
+			{dialog?.type === "slashResult" && (
+				<ConfirmDialog
+					title={`/${dialog.command} result`}
+					confirmLabel="Done"
+					onClose={() => setDialog(null)}
+					onConfirm={async () => {
+						setDialog(null);
+					}}
+				>
+					<p>
+						Output from <code>{dialog.operation}</code>:
+					</p>
+					<pre className="chat-slash-preview">{JSON.stringify(dialog.result, null, 2)}</pre>
 				</ConfirmDialog>
 			)}
 			{dialog?.type === "delete" && (

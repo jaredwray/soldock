@@ -241,15 +241,19 @@ export class ChatSearchDO extends DurableObject<Env> {
 		return { hits, unknown };
 	}
 
-	/** Removes every indexed message and the room row for a deleted room in bounded chunks. */
-	deleteRoom(roomId: string): void {
+	/** Removes indexed messages for a deleted room in bounded chunks. Returns done=false if more remain. */
+	deleteRoom(roomId: string): { done: boolean } {
 		const BATCH = 500;
-		for (;;) {
+		const MAX_CHUNKS = 10;
+		for (let chunk = 0; chunk < MAX_CHUNKS; chunk++) {
 			const ids = this.sql
 				.exec<{ id: number }>("SELECT id FROM messages WHERE room_id = ? LIMIT ?", roomId, BATCH)
 				.toArray()
 				.map((r) => r.id);
-			if (ids.length === 0) break;
+			if (ids.length === 0) {
+				this.sql.exec("DELETE FROM rooms WHERE room_id = ?", roomId);
+				return { done: true };
+			}
 			this.ctx.storage.transactionSync(() => {
 				for (const id of ids) {
 					this.sql.exec("DELETE FROM messages_fts WHERE rowid = ?", id);
@@ -257,7 +261,11 @@ export class ChatSearchDO extends DurableObject<Env> {
 					this.sql.exec("DELETE FROM messages WHERE id = ?", id);
 				}
 			});
+			if (ids.length < BATCH) {
+				this.sql.exec("DELETE FROM rooms WHERE room_id = ?", roomId);
+				return { done: true };
+			}
 		}
-		this.sql.exec("DELETE FROM rooms WHERE room_id = ?", roomId);
+		return { done: false };
 	}
 }

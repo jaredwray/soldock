@@ -540,21 +540,32 @@ function CardActionsHistory({ roomId, messageId }: { roomId: string; messageId: 
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [actions, setActions] = useState<ChatCardAction[]>([]);
+	const [nextCursor, setNextCursor] = useState<string | null>(null);
 
-	async function toggle() {
-		const next = !open;
-		setOpen(next);
-		if (!next) return;
+	async function loadPage(cursor: string | null) {
 		setLoading(true);
 		setError(null);
 		try {
-			const res = await api.call("chat.list_card_actions", { room_id: roomId, message_id: messageId, limit: 20 });
-			setActions(res.actions);
+			const res = await api.call("chat.list_card_actions", {
+				room_id: roomId,
+				message_id: messageId,
+				limit: 20,
+				...(cursor ? { cursor } : {}),
+			});
+			setActions((prev) => (cursor ? [...prev, ...res.actions] : res.actions));
+			setNextCursor(res.next_cursor);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
 			setLoading(false);
 		}
+	}
+
+	async function toggle() {
+		const next = !open;
+		setOpen(next);
+		if (!next) return;
+		await loadPage(null);
 	}
 
 	return (
@@ -564,14 +575,13 @@ function CardActionsHistory({ roomId, messageId }: { roomId: string; messageId: 
 			</button>
 			{open && (
 				<div className="chat-card-history-body">
-					{loading && <p className="muted">Loading…</p>}
 					{error && (
 						<p className="form-error" role="alert">
 							{error}
 						</p>
 					)}
 					{!loading && !error && actions.length === 0 && <p className="muted">No button clicks recorded yet.</p>}
-					{!loading && !error && actions.length > 0 && (
+					{actions.length > 0 && (
 						<ul className="chat-card-history-list">
 							{actions.map((item) => (
 								<li key={item.id}>
@@ -580,6 +590,12 @@ function CardActionsHistory({ roomId, messageId }: { roomId: string; messageId: 
 								</li>
 							))}
 						</ul>
+					)}
+					{loading && <p className="muted">Loading…</p>}
+					{!loading && nextCursor !== null && (
+						<button type="button" className="button button-small" onClick={() => void loadPage(nextCursor)}>
+							Load older
+						</button>
 					)}
 				</div>
 			)}

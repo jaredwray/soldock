@@ -798,8 +798,23 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		const firedItem = botFeed.items.find((i) => i.kind === "reminder" && i.message_id === firstBody.message_id);
 		expect(firedItem).toBeUndefined();
 
-		// Deleting the room causes incoming webhook to return 401 (no room enumeration).
+		// Deleting the room removes D1 webhook rows, removes ChatSearchDO rows, and returns 401 on hooks.
+		const roomStub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		await runDurableObjectAlarm(roomStub);
 		await ada.call("chat.delete_room", { room_id: room.id });
+		const webhookRow = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM chat_incoming_webhooks WHERE room_id = ?")
+			.bind(room.id)
+			.first<{ n: number }>();
+		expect(webhookRow?.n).toBe(0);
+		const searchStub = env.CHAT_SEARCH.get(env.CHAT_SEARCH.idFromName("org:0"));
+		const searchCount = await runInDurableObject(
+			searchStub,
+			(_instance, state) =>
+				state.storage.sql
+					.exec<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE room_id = ?", room.id)
+					.toArray()[0]?.n ?? 0,
+		);
+		expect(searchCount).toBe(0);
 		const afterRoomDel = await request(created.webhook.url_path, {
 			method: "POST",
 			headers: {
@@ -864,9 +879,173 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		expect(afterDel.room.role).toBe("owner");
 		expect(afterDel.members.map((m) => m.principal_id)).toEqual([bot.id]);
 
-		// admin_assign_owner refuses adding a non-member to an ownerless private room.
+		// admin_assign_owner refuses adding a non-member to an ownerless private room,
+		// while an org owner with a full credential can delete the 0-member orphaned room.
 		expect(await codeOf(owner.call("chat.admin_assign_owner", { room_id: soloPriv.id, principal_id: owner.id }))).toBe(
 			"forbidden",
 		);
+		const deletedOrphan = await owner.call("chat.delete_room", { room_id: soloPriv.id });
+		expect(deletedOrphan.deleted).toBe(true);
+	});
+
+	it("keeps versions monotonic during concurrent retention prune and posts, and prunes with delete events on alarm", async () => {
+		const room = await createRoom(ada, "private", "ConcurrentRetention", [bot.id]);
+		const old1 = await post(ada, room.id, "Old 1");
+		const old2 = await post(ada, room.id, "Old 2");
+		const old3 = await post(ada, room.id, "Old 3");
+		const roomStub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id));
+		const tenDaysAgo = Date.now() - 10 * 86_400_000;
+		await runInDurableObject(roomStub, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE messages SET created_at = ? WHERE id IN (?, ?, ?)",
+				tenDaysAgo,
+				old1.id,
+				old2.id,
+				old3.id,
+			);
+		});
+
+		// Run retention prune concurrently with 8 new posts.
+		const [retentionRes, ...posted] = await Promise.all([
+			ada.call("chat.set_room_retention", { room_id: room.id, retention_days: 5 }),
+			...Array.from({ length: 8 }, (_, i) => post(bot, room.id, `Concurrent ${i}`)),
+		]);
+		expect(retentionRes.purged_count).toBe(3);
+		expect(posted).toHaveLength(8);
+
+		const state = await runInDurableObject(roomStub, (_instance, st) => {
+			const roomVersion = st.storage.sql
+				.exec<{ version: number }>("SELECT version FROM room WHERE id = 1")
+				.one().version;
+			const versions = st.storage.sql
+				.exec<{ version: number }>("SELECT version FROM messages ORDER BY version")
+				.toArray()
+				.map((r) => r.version);
+			return { roomVersion, versions };
+		});
+		expect(new Set(state.versions).size).toBe(state.versions.length);
+		expect(state.roomVersion).toBeGreaterThanOrEqual(Math.max(...state.versions));
+
+		// A post after concurrent prune is always visible via changed_after.
+		const afterConcurrent = await post(ada, room.id, "After concurrent");
+		const delta = await bot.call("chat.list_messages", { room_id: room.id, changed_after: state.roomVersion });
+		expect(delta.messages.map((m) => m.id)).toContain(afterConcurrent.id);
+
+		// Alarm-driven prune deletes newly expired messages, emits socket message delete event, and queues chat.message.deleted webhook.
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: "https://hooks.example.com/retention" });
+		await ada.call("chat.create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			event: "chat.message.deleted",
+			filter: "all",
+		});
+		const sentJobs: unknown[] = [];
+		await runInDurableObject(roomStub, (instance) => {
+			const target = instance as unknown as { env: Env };
+			target.env = {
+				...target.env,
+				WEBHOOKS: {
+					send: async (job: unknown) => {
+						sentJobs.push(job);
+					},
+				} as unknown as Queue,
+			};
+		});
+		const wsRes = await request(`/ws/chat/rooms/${room.id}`, {
+			headers: { ...bearer(ada.key), upgrade: "websocket" },
+		});
+		const ws = wsRes.webSocket;
+		expect(ws).toBeDefined();
+		ws?.accept();
+		const socketEvents: Array<{ type: string; message?: { id: string; deleted: boolean } }> = [];
+		ws?.addEventListener("message", (event) => {
+			if (typeof event.data === "string" && event.data !== "pong") {
+				socketEvents.push(JSON.parse(event.data) as { type: string; message?: { id: string; deleted: boolean } });
+			}
+		});
+		try {
+			const expireTarget = posted[0];
+			expect(expireTarget).toBeDefined();
+			await runInDurableObject(roomStub, async (_instance, st) => {
+				st.storage.sql.exec("UPDATE messages SET created_at = ? WHERE id = ?", tenDaysAgo, expireTarget?.id ?? "");
+				await st.storage.setAlarm(Date.now() - 100);
+			});
+			await runDurableObjectAlarm(roomStub);
+
+			const prunedState = await runInDurableObject(roomStub, (_instance, st) => {
+				const deletedAt = st.storage.sql
+					.exec<{ deleted_at: number | null }>("SELECT deleted_at FROM messages WHERE id = ?", expireTarget?.id ?? "")
+					.one().deleted_at;
+				return { deletedAt };
+			});
+			expect(prunedState.deletedAt).not.toBeNull();
+			await soon(async () => {
+				expect(
+					socketEvents.some((e) => e.type === "message" && e.message?.id === expireTarget?.id && e.message?.deleted),
+				).toBe(true);
+			});
+			expect(
+				sentJobs.some(
+					(job) =>
+						typeof job === "object" &&
+						job !== null &&
+						(job as { eventType?: string; messageId?: string }).eventType === "chat.message.deleted" &&
+						(job as { messageId?: string }).messageId === expireTarget?.id,
+				),
+			).toBe(true);
+		} finally {
+			ws?.close();
+		}
+	});
+
+	it("rate-limits card actions and fails scheduled messages after 5 transient attempts", async () => {
+		const room = await createRoom(ada, "private", "Limits", [bot.id]);
+		const cardMsg = (
+			await bot.call("chat.post_message", {
+				room_id: room.id,
+				text: "Rate test",
+				cards: [{ id: "c1", title: "Card", actions: [{ action_id: "go", label: "Go" }] }],
+			})
+		).message;
+
+		// Exhaust the per-caller burst allowance (20) on card actions; the next call must be rate_limited.
+		let rateLimited = false;
+		for (let i = 0; i < 25; i++) {
+			try {
+				await ada.call("chat.trigger_card_action", {
+					room_id: room.id,
+					message_id: cardMsg.id,
+					card_id: "c1",
+					action_id: "go",
+				});
+			} catch (caught) {
+				if (caught instanceof Error && "code" in caught && caught.code === "rate_limited") {
+					rateLimited = true;
+					break;
+				}
+				throw caught;
+			}
+		}
+		expect(rateLimited).toBe(true);
+
+		// A scheduled message that hits rate_limited on its 5th attempt transitions to failed.
+		const sched = (
+			await ada.call("chat.schedule_message", {
+				room_id: room.id,
+				text: "Retry cap",
+				send_at: new Date(Date.now() + 60_000).toISOString(),
+			})
+		).scheduled;
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
+		await runInDurableObject(principal, async (_instance, st) => {
+			st.storage.sql.exec(
+				"UPDATE chat_scheduled_messages SET send_at = ?, attempts = 4, next_attempt_at = NULL WHERE id = ?",
+				Date.now() - 1000,
+				sched.id,
+			);
+			await st.storage.setAlarm(Date.now() - 100);
+		});
+		await runDurableObjectAlarm(principal);
+		const failed = (await ada.call("chat.list_scheduled_messages", { status: "failed" })).scheduled;
+		expect(failed.some((s) => s.id === sched.id)).toBe(true);
 	});
 });

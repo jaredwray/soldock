@@ -6,6 +6,7 @@ import { driveHandlers, driveWatchers, enableDriveEvents } from "./drive/index.t
 import { type CallContext, identityHandlers } from "./identity/index.ts";
 import { enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
+import { log } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
 import { createEventSubscriptions, endpointHandlers } from "./webhooks/index.ts";
 
@@ -29,8 +30,11 @@ export const handlers: HandlerMap<CallContext> = {
 		// Bounded best-effort cleanup on delete; admins can finish larger memberships via chat.admin_remove_deleted_principal.
 		try {
 			await removeDeletedPrincipalFromRooms(call.env, result.principal_id, 50);
-		} catch {
-			// Best-effort cleanup; remaining memberships can be cleaned with chat.admin_remove_deleted_principal.
+		} catch (error) {
+			log("warn", "best-effort chat membership cleanup failed on principal delete", {
+				principalId: result.principal_id,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 		return result;
 	},

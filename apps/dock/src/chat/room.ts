@@ -1511,14 +1511,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		const memberCount = this.memberCount();
+		const isOrphanPrivate = room.kind === "private" && memberCount === 0 && input.allowAdmin;
+		if (!member && room.kind !== "public" && !isOrphanPrivate) return refuse("not_found", NOT_FOUND);
 		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be deleted.");
-		const canManage = member?.role === "owner" || (input.allowAdmin && room.kind === "public");
+		const canManage = member?.role === "owner" || (input.allowAdmin && (room.kind === "public" || isOrphanPrivate));
 		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can delete this room.");
 		}
 		const messageCount = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE deleted_at IS NULL")?.n ?? 0;
-		const memberCount = this.memberCount();
 		if (input.dryRun) {
 			return { deleted: false, dry_run: true, message_count: messageCount, member_count: memberCount };
 		}
@@ -1605,77 +1606,83 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** Deletes messages older than retention_days with full cleanup, socket updates, and webhooks. */
 	private async pruneExpiredMessages(now: number, limit = 200): Promise<number> {
-		const room = this.room();
-		if (!room || room.retention_days === null) return 0;
-		const cutoff = now - room.retention_days * 86_400_000;
-		const expired = this.all<MessageRow>(
-			"SELECT * FROM messages WHERE deleted_at IS NULL AND created_at < ? ORDER BY seq LIMIT ?",
-			cutoff,
-			limit,
-		);
-		if (expired.length === 0) return 0;
-		const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
-		const touchedParents = new Set<string>();
-		let version = room.version;
-		const deletedRecords: MessageRecord[] = [];
-		const parentRecords: MessageRecord[] = [];
-		this.ctx.storage.transactionSync(() => {
+		const pruned = await this.ctx.blockConcurrencyWhile(async () => {
+			// Wait for the D1 subscription boundary before reading room state and versions so concurrent
+			// writes cannot interleave between reading room.version and committing the prune transaction.
+			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
+			const room = this.room();
+			if (!room || room.retention_days === null) return null;
+			const cutoff = now - room.retention_days * 86_400_000;
+			const expired = this.all<MessageRow>(
+				"SELECT * FROM messages WHERE deleted_at IS NULL AND created_at < ? ORDER BY seq LIMIT ?",
+				cutoff,
+				limit,
+			);
+			if (expired.length === 0) return null;
+			const touchedParents = new Set<string>();
+			let version = room.version;
+			this.ctx.storage.transactionSync(() => {
+				for (const row of expired) {
+					version += 1;
+					this.sql.exec(
+						`UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ?,
+							has_link = 0, forwarded_json = NULL, cards_json = NULL WHERE id = ?`,
+						now,
+						version,
+						row.id,
+					);
+					this.indexMessage(row.seq, null);
+					this.setFiles(row.id, []);
+					this.setLinks(row.id, parseLinks(row.links_json), [], null);
+					this.sql.exec("DELETE FROM reactions WHERE message_id = ?", row.id);
+					this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
+					this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", row.id);
+					this.sql.exec("DELETE FROM pins WHERE message_id = ?", row.id);
+					this.sql.exec("DELETE FROM card_actions WHERE message_id = ?", row.id);
+					this.queueChatEvent({
+						room,
+						eventType: "chat.message.deleted",
+						messageId: row.id,
+						eventId: `${row.id}:${version}`,
+						actorId: "system",
+						authorId: row.author_id,
+						body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
+						version,
+						now,
+						subscriptionSequence,
+						parentId: row.parent_id,
+					});
+					if (row.parent_id !== null) touchedParents.add(row.parent_id);
+				}
+				for (const parentId of touchedParents) {
+					version += 1;
+					this.refreshThread(parentId, version);
+					const parent = this.message(parentId);
+					if (parent && parent.reply_count === 0) this.touchSearch(parent.seq);
+				}
+				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
+				this.roomChanged("system");
+			});
+			const deletedRecords: MessageRecord[] = [];
+			const parentRecords: MessageRecord[] = [];
 			for (const row of expired) {
-				version += 1;
-				this.sql.exec(
-					`UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ?,
-						has_link = 0, forwarded_json = NULL, cards_json = NULL WHERE id = ?`,
-					now,
-					version,
-					row.id,
-				);
-				this.indexMessage(row.seq, null);
-				this.setFiles(row.id, []);
-				this.setLinks(row.id, parseLinks(row.links_json), [], null);
-				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", row.id);
-				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
-				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", row.id);
-				this.sql.exec("DELETE FROM pins WHERE message_id = ?", row.id);
-				this.sql.exec("DELETE FROM card_actions WHERE message_id = ?", row.id);
-				this.queueChatEvent({
-					room,
-					eventType: "chat.message.deleted",
-					messageId: row.id,
-					eventId: `${row.id}:${version}`,
-					actorId: "system",
-					authorId: row.author_id,
-					body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
-					version,
-					now,
-					subscriptionSequence,
-					parentId: row.parent_id,
-				});
-				if (row.parent_id !== null) touchedParents.add(row.parent_id);
+				const updated = this.message(row.id);
+				if (updated) deletedRecords.push(this.messageRecord(room.room_id, updated));
 			}
 			for (const parentId of touchedParents) {
-				version += 1;
-				this.refreshThread(parentId, version);
 				const parent = this.message(parentId);
-				if (parent && parent.reply_count === 0) this.touchSearch(parent.seq);
+				if (parent) parentRecords.push(this.messageRecord(room.room_id, parent));
 			}
-			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
-			this.roomChanged("system");
+			return { count: expired.length, deletedRecords, parentRecords };
 		});
-		for (const row of expired) {
-			const updated = this.message(row.id);
-			if (updated) deletedRecords.push(this.messageRecord(room.room_id, updated));
-		}
-		for (const parentId of touchedParents) {
-			const parent = this.message(parentId);
-			if (parent) parentRecords.push(this.messageRecord(room.room_id, parent));
-		}
-		for (const message of deletedRecords) {
+		if (!pruned) return 0;
+		for (const message of pruned.deletedRecords) {
 			await this.publish(messageEvent(message));
 		}
-		for (const parent of parentRecords) {
+		for (const parent of pruned.parentRecords) {
 			await this.publish(messageEvent(parent));
 		}
-		return expired.length;
+		return pruned.count;
 	}
 
 	/** Sets or clears message retention for a public or private room, with optional dry-run preview. */
@@ -2626,7 +2633,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const row = this.message(messageId);
 		if (!row || row.deleted_at !== null) return refuse("not_found", NO_MESSAGE);
 		const inner = row.forwarded_json ? (JSON.parse(row.forwarded_json) as ChatForwardedMessage) : null;
-		const text = row.text.trim() !== "" ? row.text : (inner?.text ?? "");
+		const cards = row.cards_json ? (JSON.parse(row.cards_json) as ChatCard[]) : [];
+		const cardSummary = cards
+			.map((card) => (card.text ? `${card.title}: ${card.text}` : card.title))
+			.join(" — ")
+			.slice(0, 500);
+		const text = row.text.trim() !== "" ? row.text : inner?.text || cardSummary;
 		return {
 			source_room_id: opened.room.room_id,
 			source_room_name: opened.room.kind === "public" ? opened.room.name : null,
@@ -2701,6 +2713,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			}
 		}
 		const value = button.value ?? "";
+		const limited = this.spendAllowance(call, now);
+		if (limited) return limited;
 		const action: ChatCardAction = {
 			id: input.id,
 			room_id: opened.room.room_id,
@@ -4426,7 +4440,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (rows.length === 0) return false;
 		if (room.deleted_at !== null || rows.some((row) => row.target === SEARCH_DELETE_TARGET)) {
 			try {
-				await searchIndex(this.env).deleteRoom(room.room_id);
+				const res = await searchIndex(this.env).deleteRoom(room.room_id);
+				if (!res.done) {
+					for (const row of rows) this.retryLater(row, "More indexed rows remain to delete.");
+					return true;
+				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				log("warn", "chat search room delete failed", { roomId: room.room_id, error: message });
