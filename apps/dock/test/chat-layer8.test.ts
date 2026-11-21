@@ -173,7 +173,43 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 
 		const messages = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
 		expect(messages.map((m) => m.text)).toEqual(["Edited update"]);
+		const sentId = messages[0]?.id ?? "";
+		expect(sentId.startsWith("cmsg_")).toBe(true);
 		expect((await ada.call("chat.list_scheduled_messages", { status: "sent" })).scheduled[0]?.status).toBe("sent");
+
+		// Delivered scheduled messages must have valid cmsg_ IDs and support reactions, edits, pins, and deletes.
+		await ada.call("chat.add_reaction", { room_id: room.id, message_id: sentId, emoji: "🎉" });
+		await ada.call("chat.pin_message", { room_id: room.id, message_id: sentId });
+		await ada.call("chat.edit_message", { room_id: room.id, message_id: sentId, text: "Edited after send" });
+
+		// Revoking the credential that scheduled a message stops delivery when due.
+		const { api_key: tempKey } = await ada.call("account.create_api_key", {
+			label: "sched-temp",
+			scopes: ["chat.read", "chat.write"],
+		});
+		const tempClient = api(tempKey.secret);
+		const revokedSched = (
+			await tempClient("chat.schedule_message", {
+				room_id: room.id,
+				text: "Should not deliver",
+				send_at: new Date(Date.now() + 120_000).toISOString(),
+			})
+		).scheduled;
+		await ada.call("account.revoke_api_key", { key_id: tempKey.id });
+		await runInDurableObject(principal, async (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE chat_scheduled_messages SET send_at = ? WHERE id = ?",
+				Date.now() - 1000,
+				revokedSched.id,
+			);
+			await state.storage.setAlarm(Date.now() - 100);
+		});
+		await runDurableObjectAlarm(principal);
+		const failedRows = (await ada.call("chat.list_scheduled_messages", { status: "failed" })).scheduled;
+		expect(failedRows.some((r) => r.id === revokedSched.id)).toBe(true);
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages.map((m) => m.text)).toEqual([
+			"Edited after send",
+		]);
 
 		expect(
 			await codeOf(
@@ -264,7 +300,7 @@ describe("custom emoji, forwarding, and group DMs", () => {
 		expect((await request(created.url_path, { headers: bearer(ada.key) })).status).toBe(404);
 	});
 
-	it("opens deterministic group DMs and allows self-leave", async () => {
+	it("opens deterministic group DMs and refuses member removal", async () => {
 		const g1 = (await ada.call("chat.open_group_dm", { principal_ids: [owner.id, bot.id] })).room;
 		const g2 = (await owner.call("chat.open_group_dm", { principal_ids: [bot.id, ada.id] })).room;
 		expect(g1.id).toBe(g2.id);
@@ -272,8 +308,7 @@ describe("custom emoji, forwarding, and group DMs", () => {
 		expect(g1.peers.map((p) => p.principal_id).sort()).toEqual([bot.id, owner.id].sort());
 
 		await post(ada, g1.id, "Group hello");
-		await bot.call("chat.remove_member", { room_id: g1.id, principal_id: bot.id });
-		expect(await codeOf(bot.call("chat.list_messages", { room_id: g1.id }))).toBe("not_found");
+		expect(await codeOf(bot.call("chat.remove_member", { room_id: g1.id, principal_id: bot.id }))).toBe("invalid");
 	});
 });
 
@@ -492,37 +527,57 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		expect(afterDel.status).toBe(401);
 	});
 
-	it("runs slash commands under caller privileges and blocks forbidden target operations", async () => {
+	it("runs slash commands under caller privileges and enforces the strict allowlist", async () => {
 		const room = await createRoom(ada, "public", "Commands");
+		const otherRoom = await createRoom(owner, "private", "Secret");
 
-		// Forbidden target ops are rejected on registration.
+		// Mutating and sensitive target ops are rejected on registration.
+		for (const forbiddenOp of [
+			"chat.delete_room",
+			"chat.admin_list_rooms",
+			"chat.add_members",
+			"drive.share_item",
+			"directory.update_agent_policy",
+		]) {
+			expect(
+				await codeOf(
+					owner.call("chat.create_slash_command", {
+						command: "badcmd",
+						description: "Bad",
+						operation: forbiddenOp,
+						input_template: { room_id: "{{room_id}}" },
+					}),
+				),
+			).toBe("forbidden");
+		}
+
+		// A chat.post_message slash command cannot redirect posts to a different room.
+		await owner.call("chat.create_slash_command", {
+			command: "redirect",
+			description: "Cross-room attempt",
+			operation: "chat.post_message",
+			input_template: { room_id: otherRoom.id, text: "Sneaky {{text}}" },
+		});
 		expect(
-			await codeOf(
-				owner.call("chat.create_slash_command", {
-					command: "boom",
-					description: "Bad",
-					operation: "chat.delete_room",
-					input_template: { room_id: "{{room_id}}" },
-				}),
-			),
+			await codeOf(owner.call("chat.invoke_slash_command", { room_id: room.id, command: "redirect", text: "x" })),
 		).toBe("forbidden");
 
-		// Admin registers a command calling an admin-only operation (to prove no privilege escalation).
+		// Allowed read-only op executes under caller's own scopes, and checks room membership first.
 		await owner.call("chat.create_slash_command", {
-			command: "rooms",
-			description: "Admin list rooms",
-			operation: "chat.admin_list_rooms",
-			input_template: {},
+			command: "pins",
+			description: "List pins",
+			operation: "chat.list_pins",
+			input_template: { room_id: "{{room_id}}" },
 		});
-		// Regular member gets forbidden when invoking it!
-		expect(await codeOf(ada.call("chat.invoke_slash_command", { room_id: room.id, command: "rooms" }))).toBe(
+		// Non-member (bot) is refused on invocation.
+		expect(await codeOf(bot.call("chat.invoke_slash_command", { room_id: room.id, command: "pins" }))).toBe(
 			"forbidden",
 		);
-		// Owner succeeds.
-		const ownerRes = await owner.call("chat.invoke_slash_command", { room_id: room.id, command: "rooms" });
-		expect(ownerRes.operation).toBe("chat.admin_list_rooms");
+		// Member succeeds.
+		const pinsRes = await ada.call("chat.invoke_slash_command", { room_id: room.id, command: "pins" });
+		expect(pinsRes.operation).toBe("chat.list_pins");
 
-		// Register a normal member-usable command with template substitution.
+		// Register a normal member-usable post_message command with template substitution.
 		const cmd = (
 			await owner.call("chat.create_slash_command", {
 				command: "shout",
@@ -538,7 +593,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		await owner.call("chat.delete_slash_command", { command_id: cmd.id });
 	});
 
-	it("triggers card button actions, notifies the message author, and enforces delegated token scopes", async () => {
+	it("triggers card button actions idempotently, paginates newest-first, and enforces delegated token scopes", async () => {
 		const room = await createRoom(ada, "private", "Approvals", [bot.id]);
 		const cardMsg = (
 			await bot.call("chat.post_message", {
@@ -550,7 +605,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 						title: "Release v1.2",
 						actions: [
 							{ action_id: "approve", label: "Approve", style: "primary", value: "v1.2" },
-							{ action_id: "reject", label: "Reject", style: "danger" },
+							{ action_id: "reject", label: "Reject", style: "danger", value: "no" },
 						],
 					},
 				],
@@ -563,11 +618,51 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 			message_id: cardMsg.id,
 			card_id: "rel-1",
 			action_id: "approve",
+			idempotency_key: "click-1",
 		});
 		expect(triggered.action).toMatchObject({ card_id: "rel-1", action_id: "approve", value: "v1.2" });
 
-		const recorded = (await bot.call("chat.list_card_actions", { room_id: room.id, message_id: cardMsg.id })).actions;
-		expect(recorded).toHaveLength(1);
+		// Replaying with the same idempotency_key returns the same recorded action.
+		const replayed = await ada.call("chat.trigger_card_action", {
+			room_id: room.id,
+			message_id: cardMsg.id,
+			card_id: "rel-1",
+			action_id: "approve",
+			idempotency_key: "click-1",
+		});
+		expect(replayed.action.id).toBe(triggered.action.id);
+
+		// Different action with the same idempotency_key is refused with conflict.
+		expect(
+			await codeOf(
+				ada.call("chat.trigger_card_action", {
+					room_id: room.id,
+					message_id: cardMsg.id,
+					card_id: "rel-1",
+					action_id: "reject",
+					idempotency_key: "click-1",
+				}),
+			),
+		).toBe("conflict");
+
+		// Second distinct click appears first (newest-first) and paginates with cursor.
+		const second = await bot.call("chat.trigger_card_action", {
+			room_id: room.id,
+			message_id: cardMsg.id,
+			card_id: "rel-1",
+			action_id: "reject",
+		});
+		const page1 = await bot.call("chat.list_card_actions", { room_id: room.id, message_id: cardMsg.id, limit: 1 });
+		expect(page1.actions.map((a) => a.id)).toEqual([second.action.id]);
+		expect(page1.next_cursor).not.toBeNull();
+		const page2 = await bot.call("chat.list_card_actions", {
+			room_id: room.id,
+			message_id: cardMsg.id,
+			limit: 1,
+			cursor: page1.next_cursor ?? undefined,
+		});
+		expect(page2.actions.map((a) => a.id)).toEqual([triggered.action.id]);
+		expect(page2.next_cursor).toBeNull();
 
 		await soon(async () => {
 			const feed = await bot.call("chat.list_activity");
@@ -591,5 +686,187 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 				}),
 			),
 		).toBe("forbidden");
+	});
+
+	it("sanitizes Slack attachments, validates native cards, deduplicates webhook replays, and propagates untrusted marks", async () => {
+		const room = await createRoom(ada, "private", "Alerts", [bot.id]);
+		const target = await createRoom(ada, "public", "Triage", [bot.id]);
+		const created = await ada.call("chat.create_incoming_webhook", { room_id: room.id, name: "Pager" });
+		const nowSec = Math.floor(Date.now() / 1000);
+
+		// Malformed native cards return 400 and do not corrupt room history.
+		const badCards = JSON.stringify({ text: "Bad", cards: [{ id: "bad id!", title: "" }] });
+		const badRes = await request(created.webhook.url_path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-slack-request-timestamp": String(nowSec),
+				"x-slack-signature": await signSlackWebhook(created.signing_secret, nowSec, badCards),
+			},
+			body: badCards,
+		});
+		expect(badRes.status).toBe(400);
+
+		// Slack attachments with spaced action_id, empty field values, and control characters sanitize cleanly.
+		const slackPayload = JSON.stringify({
+			text: "High latency",
+			attachments: [
+				{
+					title: "API\x00 Alert",
+					fields: [
+						{ title: "Region", value: "us-east" },
+						{ title: "Empty", value: "" },
+					],
+					actions: [{ name: "Ack Alert!", text: "Acknowledge", value: "ack-1" }],
+				},
+			],
+		});
+		const sig = await signSlackWebhook(created.signing_secret, nowSec, slackPayload);
+		const first = await request(created.webhook.url_path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-slack-request-timestamp": String(nowSec),
+				"x-slack-signature": sig,
+			},
+			body: slackPayload,
+		});
+		expect(first.status).toBe(200);
+		const firstBody = (await first.json()) as { message_id: string };
+
+		// Replaying the exact signed webhook payload returns the same message_id without creating a duplicate.
+		const replay = await request(created.webhook.url_path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-slack-request-timestamp": String(nowSec),
+				"x-slack-signature": sig,
+			},
+			body: slackPayload,
+		});
+		expect(replay.status).toBe(200);
+		const replayBody = (await replay.json()) as { message_id: string };
+		expect(replayBody.message_id).toBe(firstBody.message_id);
+
+		// Listing messages succeeds with strict contract schema and preserves untrusted: true.
+		const msgs = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
+		expect(msgs).toHaveLength(1);
+		expect(msgs[0]?.untrusted).toBe(true);
+		expect(msgs[0]?.cards?.[0]?.title).toBe("API Alert");
+		expect(msgs[0]?.cards?.[0]?.fields).toEqual([{ label: "Region", value: "us-east" }]);
+
+		// Forwarding from a private room omits source_room_name, and forwarding a forward keeps text and untrusted.
+		const fwd1 = (
+			await ada.call("chat.forward_message", {
+				room_id: room.id,
+				message_id: firstBody.message_id,
+				target_room_id: target.id,
+			})
+		).message;
+		expect(fwd1.forwarded?.source_room_name).toBeNull();
+		expect(fwd1.untrusted).toBe(true);
+		const fwd2 = (
+			await ada.call("chat.forward_message", {
+				room_id: target.id,
+				message_id: fwd1.id,
+				target_room_id: target.id,
+			})
+		).message;
+		expect(fwd2.forwarded?.source_room_name).toBe("Triage");
+		expect(fwd2.forwarded?.text).toBe("High latency");
+		expect(fwd2.untrusted).toBe(true);
+
+		// Reminder on an untrusted message marks reminder and fired activity as untrusted.
+		const rem = (
+			await bot.call("chat.create_reminder", {
+				room_id: room.id,
+				message_id: firstBody.message_id,
+				remind_at: new Date(Date.now() + 60_000).toISOString(),
+				note: "Check alert",
+			})
+		).reminder;
+		expect(rem.untrusted).toBe(true);
+		// Bot leaves the private room before the reminder fires -> preview must not leak.
+		await bot.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		const botPrincipal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
+		await runInDurableObject(botPrincipal, async (_instance, state) => {
+			state.storage.sql.exec("UPDATE chat_reminders SET remind_at = ? WHERE id = ?", Date.now() - 1000, rem.id);
+			await state.storage.setAlarm(Date.now() - 100);
+		});
+		await runDurableObjectAlarm(botPrincipal);
+		const botFeed = await bot.call("chat.list_activity");
+		const firedItem = botFeed.items.find((i) => i.kind === "reminder" && i.message_id === firstBody.message_id);
+		expect(firedItem).toBeUndefined();
+
+		// Deleting the room causes incoming webhook to return 401 (no room enumeration).
+		await ada.call("chat.delete_room", { room_id: room.id });
+		const afterRoomDel = await request(created.webhook.url_path, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-slack-request-timestamp": String(nowSec + 1),
+				"x-slack-signature": await signSlackWebhook(
+					created.signing_secret,
+					nowSec + 1,
+					JSON.stringify({ text: "late" }),
+				),
+			},
+			body: JSON.stringify({ text: "late" }),
+		});
+		expect(afterRoomDel.status).toBe(401);
+	});
+
+	it("enforces privacy boundaries for non-member admins, full credential on delete_room, and safe admin_assign_owner", async () => {
+		const priv = await createRoom(ada, "private", "Ada Secret", [bot.id]);
+		const dm = (await ada.call("chat.open_dm", { principal_id: bot.id })).room;
+
+		// Org owner who is NOT a member of Ada's private room or DM gets not_found on all management ops.
+		for (const targetId of [priv.id, dm.id]) {
+			expect(await codeOf(owner.call("chat.archive_room", { room_id: targetId }))).toBe("not_found");
+			expect(await codeOf(owner.call("chat.unarchive_room", { room_id: targetId }))).toBe("not_found");
+			expect(await codeOf(owner.call("chat.delete_room", { room_id: targetId }))).toBe("not_found");
+			expect(await codeOf(owner.call("chat.set_posting_rules", { room_id: targetId, policy: "owners_only" }))).toBe(
+				"not_found",
+			);
+			expect(await codeOf(owner.call("chat.set_room_retention", { room_id: targetId, retention_days: 7 }))).toBe(
+				"not_found",
+			);
+		}
+
+		// DM member gets invalid on set_room_retention.
+		expect(await codeOf(ada.call("chat.set_room_retention", { room_id: dm.id, retention_days: 7 }))).toBe("invalid");
+
+		// Narrow API key (chat.write only) and agent cannot call chat.delete_room.
+		const { api_key: narrowKey } = await ada.call("account.create_api_key", {
+			label: "narrow-chat",
+			scopes: ["chat.read", "chat.write"],
+		});
+		const narrowClient = api(narrowKey.secret);
+		expect(await codeOf(narrowClient("chat.delete_room", { room_id: priv.id }))).toBe("forbidden");
+		expect(await codeOf(bot.call("chat.delete_room", { room_id: priv.id }))).toBe("forbidden");
+
+		// admin_assign_owner refuses when room already has an owner.
+		expect(await codeOf(owner.call("chat.admin_assign_owner", { room_id: priv.id, principal_id: owner.id }))).toBe(
+			"conflict",
+		);
+
+		// Deleting a member automatically removes them from private rooms and transfers ownership to the remaining member.
+		const tempHuman = await createActor(owner, {
+			kind: "human",
+			display_name: "Temp Member",
+			address: "temp@dock.test",
+			password: PASSWORD,
+		});
+		const orphanPriv = await createRoom(tempHuman, "private", "Orphan", [bot.id]);
+		const soloPriv = await createRoom(tempHuman, "private", "SoloPrivate");
+		await owner.call("directory.delete_principal", { principal_id: tempHuman.id });
+		const afterDel = await bot.call("chat.get_room", { room_id: orphanPriv.id });
+		expect(afterDel.room.role).toBe("owner");
+		expect(afterDel.members.map((m) => m.principal_id)).toEqual([bot.id]);
+
+		// admin_assign_owner refuses adding a non-member to an ownerless private room.
+		expect(await codeOf(owner.call("chat.admin_assign_owner", { room_id: soloPriv.id, principal_id: owner.id }))).toBe(
+			"forbidden",
+		);
 	});
 });

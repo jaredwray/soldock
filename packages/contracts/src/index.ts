@@ -1,5 +1,6 @@
 // Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
 export {
+	CardsInput,
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
 	CHAT_SOCKET_PROTOCOL,

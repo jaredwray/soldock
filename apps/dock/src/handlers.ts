@@ -26,7 +26,12 @@ export const handlers: HandlerMap<CallContext> = {
 	},
 	async "directory.delete_principal"(call, input) {
 		const result = await identityHandlers["directory.delete_principal"](call, input);
-		await removeDeletedPrincipalFromRooms(call.env, result.principal_id);
+		// Bounded best-effort cleanup on delete; admins can finish larger memberships via chat.admin_remove_deleted_principal.
+		try {
+			await removeDeletedPrincipalFromRooms(call.env, result.principal_id, 50);
+		} catch {
+			// Best-effort cleanup; remaining memberships can be cleaned with chat.admin_remove_deleted_principal.
+		}
 		return result;
 	},
 };

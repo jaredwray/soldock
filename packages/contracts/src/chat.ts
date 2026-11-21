@@ -915,7 +915,7 @@ export const listMessages = defineOperation({
 
 const THREADS = `To reply in a thread, set parent_id to the id of a message of the room. A thread has one level: a reply cannot have replies, and a deleted message takes no reply. A reply is not in the room list and does not make the room unread. Set also_in_room: true to show the reply in the room list too.`;
 
-const CardsInput = z
+export const CardsInput = z
 	.array(ChatCard)
 	.max(CHAT_LIMITS.cardsPerMessage)
 	.refine((cards) => new Set(cards.map((card) => card.id)).size === cards.length, "each card id must be unique");

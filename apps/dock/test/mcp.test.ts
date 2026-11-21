@@ -97,7 +97,6 @@ describe("the MCP endpoint", () => {
 			"chat_delete_draft",
 			"chat_delete_message",
 			"chat_delete_reminder",
-			"chat_delete_room",
 			"chat_delete_section",
 			"chat_delete_webhook_subscription",
 			"chat_download_file",

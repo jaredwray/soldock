@@ -240,4 +240,24 @@ export class ChatSearchDO extends DurableObject<Env> {
 			.toArray();
 		return { hits, unknown };
 	}
+
+	/** Removes every indexed message and the room row for a deleted room in bounded chunks. */
+	deleteRoom(roomId: string): void {
+		const BATCH = 500;
+		for (;;) {
+			const ids = this.sql
+				.exec<{ id: number }>("SELECT id FROM messages WHERE room_id = ? LIMIT ?", roomId, BATCH)
+				.toArray()
+				.map((r) => r.id);
+			if (ids.length === 0) break;
+			this.ctx.storage.transactionSync(() => {
+				for (const id of ids) {
+					this.sql.exec("DELETE FROM messages_fts WHERE rowid = ?", id);
+					this.sql.exec("DELETE FROM mentions WHERE id = ?", id);
+					this.sql.exec("DELETE FROM messages WHERE id = ?", id);
+				}
+			});
+		}
+		this.sql.exec("DELETE FROM rooms WHERE room_id = ?", roomId);
+	}
 }

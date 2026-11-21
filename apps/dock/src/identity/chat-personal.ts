@@ -23,6 +23,7 @@ export interface ActivityRecord {
 	actor: ActivityActor;
 	emoji: string | null;
 	preview: string;
+	untrusted: boolean;
 	created_at: number;
 	read_at: number | null;
 }
@@ -39,6 +40,7 @@ export interface ActivityInsert {
 	actor: ActivityActor;
 	emoji: string | null;
 	preview: string;
+	untrusted?: boolean | undefined;
 	created_at: number;
 }
 
@@ -80,6 +82,9 @@ export interface ScheduledRecord {
 	status: "pending" | "sent" | "failed";
 	sent_message_id: string | null;
 	error: string | null;
+	credential_binding_json: string | null;
+	attempts: number;
+	next_attempt_at: number | null;
 }
 
 export interface ReminderRecord {
@@ -91,6 +96,7 @@ export interface ReminderRecord {
 	parent_seq: number | null;
 	note: string;
 	preview: string;
+	untrusted: boolean;
 	remind_at: number;
 	created_at: number;
 	triggered_at: number | null;
@@ -110,6 +116,7 @@ export const CHAT_PERSONAL_MIGRATION: string[] = [
 		actor_json TEXT NOT NULL,
 		emoji TEXT,
 		preview TEXT NOT NULL,
+		untrusted INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL,
 		read_at INTEGER
 	) WITHOUT ROWID`,
@@ -158,7 +165,10 @@ export const CHAT_PERSONAL_MIGRATION: string[] = [
 		created_at INTEGER NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
 		sent_message_id TEXT,
-		error TEXT
+		error TEXT,
+		credential_binding_json TEXT,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_attempt_at INTEGER
 	) WITHOUT ROWID`,
 	"CREATE INDEX chat_scheduled_due ON chat_scheduled_messages (send_at ASC) WHERE status = 'pending'",
 	`CREATE TABLE chat_reminders (
@@ -170,6 +180,7 @@ export const CHAT_PERSONAL_MIGRATION: string[] = [
 		parent_seq INTEGER,
 		note TEXT NOT NULL,
 		preview TEXT NOT NULL,
+		untrusted INTEGER NOT NULL DEFAULT 0,
 		remind_at INTEGER NOT NULL,
 		created_at INTEGER NOT NULL,
 		triggered_at INTEGER,
@@ -194,6 +205,7 @@ interface ActivityRow extends Row {
 	actor_json: string;
 	emoji: string | null;
 	preview: string;
+	untrusted: number;
 	created_at: number;
 	read_at: number | null;
 }
@@ -213,6 +225,9 @@ interface ScheduledRow extends Row {
 	status: "pending" | "sent" | "failed";
 	sent_message_id: string | null;
 	error: string | null;
+	credential_binding_json: string | null;
+	attempts: number;
+	next_attempt_at: number | null;
 }
 
 interface ReminderRow extends Row {
@@ -224,6 +239,7 @@ interface ReminderRow extends Row {
 	parent_seq: number | null;
 	note: string;
 	preview: string;
+	untrusted: number;
 	remind_at: number;
 	created_at: number;
 	triggered_at: number | null;
@@ -243,6 +259,7 @@ function toActivity(row: ActivityRow): ActivityRecord {
 		actor: JSON.parse(row.actor_json) as ActivityActor,
 		emoji: row.emoji,
 		preview: row.preview,
+		untrusted: row.untrusted === 1,
 		created_at: row.created_at,
 		read_at: row.read_at,
 	};
@@ -253,7 +270,7 @@ function toScheduled(row: ScheduledRow): ScheduledRecord {
 }
 
 function toReminder(row: ReminderRow): ReminderRecord {
-	return { ...row };
+	return { ...row, untrusted: row.untrusted === 1 };
 }
 
 export class ChatPersonalStore {
@@ -270,8 +287,8 @@ export class ChatPersonalStore {
 			.exec<{ id: string }>(
 				`INSERT OR IGNORE INTO chat_activity (
 					id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
-					actor_json, emoji, preview, created_at, read_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) RETURNING id`,
+					actor_json, emoji, preview, untrusted, created_at, read_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) RETURNING id`,
 				item.id,
 				item.kind,
 				item.room_id,
@@ -283,6 +300,7 @@ export class ChatPersonalStore {
 				JSON.stringify(item.actor),
 				item.emoji,
 				item.preview.slice(0, 200),
+				item.untrusted ? 1 : 0,
 				item.created_at,
 			)
 			.toArray();
@@ -341,6 +359,10 @@ export class ChatPersonalStore {
 	removeRoomPersonalState(roomId: string): void {
 		this.sql.exec("DELETE FROM chat_activity WHERE room_id = ?", roomId);
 		this.sql.exec("DELETE FROM chat_section_rooms WHERE room_id = ?", roomId);
+		this.sql.exec("DELETE FROM chat_saved_messages WHERE room_id = ?", roomId);
+		this.sql.exec("DELETE FROM chat_drafts WHERE room_id = ?", roomId);
+		this.sql.exec("DELETE FROM chat_reminders WHERE room_id = ?", roomId);
+		this.sql.exec("DELETE FROM chat_scheduled_messages WHERE room_id = ? AND status = 'pending'", roomId);
 	}
 
 	// --- Sidebar sections ---
@@ -556,17 +578,19 @@ export class ChatPersonalStore {
 		markdown: string;
 		sendAt: number;
 		now: number;
+		credentialBindingJson?: string | null;
 	}): ScheduledRecord | "full" {
 		const pending = this.sql
 			.exec<{ n: number }>("SELECT COUNT(*) AS n FROM chat_scheduled_messages WHERE status = 'pending'")
 			.one().n;
 		if (pending >= CHAT_LIMITS.scheduledMessages) return "full";
 		const actorJson = JSON.stringify(input.actor);
+		const bindingJson = input.credentialBindingJson ?? null;
 		this.sql.exec(
 			`INSERT INTO chat_scheduled_messages (
 				id, principal_id, actor_json, room_id, parent_id, also_in_room, text, body_json, markdown,
-				send_at, created_at, status, sent_message_id, error
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL)`,
+				send_at, created_at, status, sent_message_id, error, credential_binding_json, attempts, next_attempt_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, 0, NULL)`,
 			input.id,
 			input.principalId,
 			actorJson,
@@ -578,6 +602,7 @@ export class ChatPersonalStore {
 			input.markdown,
 			input.sendAt,
 			input.now,
+			bindingJson,
 		);
 		return {
 			id: input.id,
@@ -594,6 +619,9 @@ export class ChatPersonalStore {
 			status: "pending",
 			sent_message_id: null,
 			error: null,
+			credential_binding_json: bindingJson,
+			attempts: 0,
+			next_attempt_at: null,
 		};
 	}
 
@@ -647,16 +675,28 @@ export class ChatPersonalStore {
 	dueScheduled(now: number): ScheduledRecord[] {
 		return this.sql
 			.exec<ScheduledRow>(
-				"SELECT * FROM chat_scheduled_messages WHERE status = 'pending' AND send_at <= ? ORDER BY send_at ASC LIMIT 25",
+				`SELECT * FROM chat_scheduled_messages
+				WHERE status = 'pending' AND COALESCE(next_attempt_at, send_at) <= ?
+				ORDER BY COALESCE(next_attempt_at, send_at) ASC LIMIT 25`,
 				now,
 			)
 			.toArray()
 			.map(toScheduled);
 	}
 
+	markScheduledRetry(id: string, attempts: number, nextAttemptAt: number, error: string): void {
+		this.sql.exec(
+			"UPDATE chat_scheduled_messages SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ?",
+			attempts,
+			nextAttemptAt,
+			error.slice(0, 300),
+			id,
+		);
+	}
+
 	markScheduledSent(id: string, messageId: string): void {
 		this.sql.exec(
-			"UPDATE chat_scheduled_messages SET status = 'sent', sent_message_id = ?, error = NULL WHERE id = ?",
+			"UPDATE chat_scheduled_messages SET status = 'sent', sent_message_id = ?, error = NULL, next_attempt_at = NULL WHERE id = ?",
 			messageId,
 			id,
 		);
@@ -664,7 +704,7 @@ export class ChatPersonalStore {
 
 	markScheduledFailed(id: string, error: string): void {
 		this.sql.exec(
-			"UPDATE chat_scheduled_messages SET status = 'failed', error = ? WHERE id = ?",
+			"UPDATE chat_scheduled_messages SET status = 'failed', error = ?, next_attempt_at = NULL WHERE id = ?",
 			error.slice(0, 300),
 			id,
 		);
@@ -681,6 +721,7 @@ export class ChatPersonalStore {
 		parentSeq: number | null;
 		note: string;
 		preview: string;
+		untrusted?: boolean | undefined;
 		remindAt: number;
 		now: number;
 	}): ReminderRecord | "full" {
@@ -688,10 +729,11 @@ export class ChatPersonalStore {
 			.exec<{ n: number }>("SELECT COUNT(*) AS n FROM chat_reminders WHERE completed_at IS NULL")
 			.one().n;
 		if (active >= CHAT_LIMITS.reminders) return "full";
+		const untrusted = input.untrusted === true;
 		this.sql.exec(
 			`INSERT INTO chat_reminders (
-				id, room_id, message_id, seq, parent_id, parent_seq, note, preview, remind_at, created_at, triggered_at, completed_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+				id, room_id, message_id, seq, parent_id, parent_seq, note, preview, untrusted, remind_at, created_at, triggered_at, completed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
 			input.id,
 			input.roomId,
 			input.messageId,
@@ -700,6 +742,7 @@ export class ChatPersonalStore {
 			input.parentSeq,
 			input.note,
 			input.preview.slice(0, 200),
+			untrusted ? 1 : 0,
 			input.remindAt,
 			input.now,
 		);
@@ -712,6 +755,7 @@ export class ChatPersonalStore {
 			parent_seq: input.parentSeq,
 			note: input.note,
 			preview: input.preview.slice(0, 200),
+			untrusted,
 			remind_at: input.remindAt,
 			created_at: input.now,
 			triggered_at: null,
@@ -753,7 +797,13 @@ export class ChatPersonalStore {
 			.map(toReminder);
 	}
 
-	markReminderTriggered(id: string, now: number, actor: ActivityActor, roomName: string | null): ReminderRecord | null {
+	markReminderTriggered(
+		id: string,
+		now: number,
+		actor: ActivityActor,
+		roomName: string | null,
+		isMember = true,
+	): ReminderRecord | null {
 		const row = this.sql
 			.exec<ReminderRow>(
 				"UPDATE chat_reminders SET triggered_at = ? WHERE id = ? AND triggered_at IS NULL RETURNING *",
@@ -762,18 +812,22 @@ export class ChatPersonalStore {
 			)
 			.toArray()[0];
 		if (!row) return null;
+		// Never surface a message preview after the principal left the room.
+		const preview = isMember ? row.note || row.preview : row.note || "Reminder";
+		const untrusted = isMember && row.untrusted === 1;
 		this.recordActivity({
 			id: `reminder:${row.id}`,
 			kind: "reminder",
 			room_id: row.room_id,
-			room_name: roomName,
+			room_name: isMember ? roomName : null,
 			message_id: row.message_id,
 			parent_id: row.parent_id,
 			seq: row.seq,
 			parent_seq: row.parent_seq,
 			actor,
 			emoji: null,
-			preview: row.note || row.preview,
+			preview,
+			untrusted,
 			created_at: now,
 		});
 		return toReminder(row);
@@ -781,7 +835,9 @@ export class ChatPersonalStore {
 
 	nextAlarmAt(): number | null {
 		const sched = this.sql
-			.exec<{ t: number | null }>("SELECT MIN(send_at) AS t FROM chat_scheduled_messages WHERE status = 'pending'")
+			.exec<{ t: number | null }>(
+				"SELECT MIN(COALESCE(next_attempt_at, send_at)) AS t FROM chat_scheduled_messages WHERE status = 'pending'",
+			)
 			.one().t;
 		const rem = this.sql
 			.exec<{ t: number | null }>(

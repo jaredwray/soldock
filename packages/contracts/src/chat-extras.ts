@@ -51,6 +51,7 @@ export const ChatActivityItem = z.object({
 	actor: Actor,
 	emoji: z.string().nullable(),
 	preview: z.string(),
+	untrusted: z.boolean().default(false),
 	created_at: Timestamp,
 	read_at: Timestamp.nullable(),
 });
@@ -190,7 +191,7 @@ export const setRoomSection = defineOperation({
 		room_id: z.string(),
 		section_id: z.string().nullable(),
 	}),
-	errors: ["not_found"],
+	errors: ["not_found", "forbidden"],
 });
 
 // ---------------------------------------------------------------------------
@@ -412,6 +413,7 @@ export const ChatReminder = z.object({
 	parent_seq: z.number().int().nullable(),
 	note: z.string(),
 	preview: z.string(),
+	untrusted: z.boolean().default(false),
 	remind_at: Timestamp,
 	created_at: Timestamp,
 	triggered_at: Timestamp.nullable(),
@@ -667,38 +669,38 @@ export const archiveRoom = defineOperation({
 	name: "chat.archive_room",
 	summary: "Archive a room",
 	description:
-		"Makes a public or private room read-only. Members can still read history and leave, but nobody can post, edit, delete, react, pin or join. Room owners and organization admins can archive a room.",
+		"Makes a public or private room read-only. Members can still read history and leave, but nobody can post, edit, delete, react, pin or join. Room owners can archive any room they own; organization admins can also archive public rooms.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/archive" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId }),
 	output: z.object({ room: ChatRoom }),
-	errors: ["not_found", "forbidden", "invalid"],
+	errors: ["not_found", "forbidden", "invalid", "conflict"],
 });
 
 export const unarchiveRoom = defineOperation({
 	name: "chat.unarchive_room",
 	summary: "Unarchive a room",
 	description:
-		"Restores an archived room so members can post and join again. Room owners and organization admins can unarchive a room.",
+		"Restores an archived room so members can post and join again. Room owners can unarchive any room they own; organization admins can also unarchive public rooms.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/unarchive" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId }),
 	output: z.object({ room: ChatRoom }),
-	errors: ["not_found", "forbidden", "invalid"],
+	errors: ["not_found", "forbidden", "invalid", "conflict"],
 });
 
 export const deleteRoom = defineOperation({
 	name: "chat.delete_room",
 	summary: "Delete a room and all of its messages",
 	description:
-		"Permanently deletes a public or private room and its messages. Cannot be undone. Set dry_run: true to preview member and message counts without deleting. Room owners and organization admins can delete a room.",
+		"Permanently deletes a public or private room and its messages. Cannot be undone. Set dry_run: true to preview member and message counts without deleting. Requires a full human credential; room owners can delete any room they own, and organization admins can also delete public rooms.",
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human"],
 	annotations: REMOVE,
 	input: z.strictObject({
 		room_id: RoomId,
@@ -717,7 +719,7 @@ export const setPostingRules = defineOperation({
 	name: "chat.set_posting_rules",
 	summary: "Set who can post messages in a room",
 	description:
-		"Sets the posting rule of a public or private room: members (all members), owners_only (room owners only), or allowlist (room owners plus allowed_principal_ids). Room owners only.",
+		"Sets the posting rule of a public or private room: members (all members), owners_only (room owners only), or allowlist (room owners plus allowed_principal_ids). Room owners can change any room they own; organization admins can also change public rooms.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/posting-rules" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
@@ -1039,7 +1041,7 @@ export const triggerCardAction = defineOperation({
 	name: "chat.trigger_card_action",
 	summary: "Trigger a button action on a message card",
 	description:
-		"Records a click on an action button of a card inside message_id and notifies the author (human or agent) in their Activity feed.",
+		"Records a click on an action button of a card inside message_id using the button's defined value and notifies the author (human or agent) in their Activity feed.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/actions" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
@@ -1049,7 +1051,7 @@ export const triggerCardAction = defineOperation({
 		message_id: MessageId,
 		card_id: z.string().min(1).max(64),
 		action_id: z.string().min(1).max(64),
-		value: z.string().max(500).optional(),
+		idempotency_key: z.string().min(1).max(128).optional(),
 	}),
 	output: z.object({ action: ChatCardAction }),
 	errors: ["not_found", "invalid", "conflict"],
@@ -1059,7 +1061,7 @@ export const listCardActions = defineOperation({
 	name: "chat.list_card_actions",
 	summary: "List recorded button clicks on a message card",
 	description:
-		"Returns the button clicks recorded on the cards of message_id, oldest first. You must be a member of the room.",
+		"Returns the button clicks recorded on the cards of message_id, newest first. Pass next_cursor as cursor for older pages. You must be a member of the room.",
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/actions" },
 	scopes: ["chat.read"],
 	callers: ["human", "agent"],
@@ -1067,9 +1069,14 @@ export const listCardActions = defineOperation({
 	input: z.strictObject({
 		room_id: RoomId,
 		message_id: MessageId,
+		cursor: z.string().max(500).optional(),
+		limit: z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional(),
 	}),
-	output: z.object({ actions: z.array(ChatCardAction) }),
-	errors: ["not_found"],
+	output: z.object({
+		actions: z.array(ChatCardAction),
+		next_cursor: z.string().nullable(),
+	}),
+	errors: ["not_found", "invalid"],
 });
 
 export const chatExtraOperations = {

@@ -31,7 +31,7 @@ import {
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
-import { log, OperationError } from "../platform/index.ts";
+import { log, newId, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
 import { extractLinks, type LinkFacts, type LinkState, linkPreviews, mergeLinks, parseLinks } from "./links.ts";
@@ -600,6 +600,7 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE messages ADD COLUMN untrusted INTEGER NOT NULL DEFAULT 0",
 		"ALTER TABLE messages ADD COLUMN forwarded_json TEXT",
 		"ALTER TABLE messages ADD COLUMN cards_json TEXT",
+		"CREATE INDEX IF NOT EXISTS messages_active_created ON messages (created_at) WHERE deleted_at IS NULL",
 	],
 ];
 
@@ -641,6 +642,7 @@ const SEARCH_ROOM_TARGET = `${SEARCH_TARGET}room`;
  * each digit.
  */
 const SEARCH_FILLED_TARGET = `${SEARCH_TARGET}filled`;
+const SEARCH_DELETE_TARGET = `${SEARCH_TARGET}delete`;
 /** The names of the search tables of a room, for `searchSql`. */
 const ROOM_SEARCH: SearchColumns = {
 	fts: "messages_fts",
@@ -949,6 +951,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		text: string,
 		parent: MessageRow | null,
 		now: number,
+		untrusted: boolean,
 	): void {
 		const preview = this.previewOf(text);
 		const mentioned = new Set(mentionIds(body));
@@ -974,6 +977,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				actor: author,
 				emoji: null,
 				preview,
+				untrusted,
 				created_at: now,
 			});
 		}
@@ -997,6 +1001,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					actor: author,
 					emoji: null,
 					preview,
+					untrusted,
 					created_at: now,
 				});
 			}
@@ -1030,6 +1035,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const opened = this.open(call, "member");
 		if ("error" in opened) return opened;
 		return { room: opened.room, member: opened.member as MemberRow };
+	}
+
+	/** Verifies the caller is a member of this live room. */
+	checkMember(call: RoomCall): { ok: true } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return { ok: true };
 	}
 
 	/** The other member of a direct message, as JSON, or null for each other kind of room. */
@@ -1415,17 +1427,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async removeMember(call: RoomCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
-		if (opened.room.kind === "dm") return refuse("invalid", "A direct message keeps its two members.");
+		if (this.isDmKind(opened.room.kind)) return refuse("invalid", "Direct messages keep their members.");
 		const self = principalId === call.actor.principal_id;
-		if (opened.room.kind === "group_dm" && !self) {
-			return refuse("forbidden", "You can only leave a group direct message yourself.");
-		}
 		if (!self && opened.member.role !== "owner") {
 			return refuse("forbidden", "Only the owner of the room can remove a different member.");
 		}
 		const target = self ? opened.member : this.member(principalId);
 		if (!target) return { removed: false };
-		if (self && (opened.room.kind === "private" || opened.room.kind === "group_dm") && this.memberCount() === 1) {
+		if (self && opened.room.kind === "private" && this.memberCount() === 1) {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
 		this.ctx.storage.transactionSync(() => {
@@ -1453,16 +1462,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { removed: true };
 	}
 
-	/** Archives a room so it becomes read-only. Room owner or org admin/owner. */
+	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */
 	async archiveRoom(call: RoomCall, allowAdmin: boolean): Promise<RoomRecord | Refusal> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!allowAdmin && !member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
-		if (!allowAdmin && member?.role !== "owner") {
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be archived.");
+		const canManage = member?.role === "owner" || (allowAdmin && room.kind === "public");
+		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can archive this room.");
 		}
-		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be archived.");
 		if (room.archived_at !== null) return refuse("conflict", "This room is already archived.");
 		const now = Date.now();
 		this.ctx.storage.transactionSync(() => {
@@ -1473,16 +1483,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return this.record(call.actor.principal_id);
 	}
 
-	/** Unarchives a room so members can post again. Room owner or org admin/owner. */
+	/** Unarchives a room so members can post again. Room owner, or org admin/owner on a public room. */
 	async unarchiveRoom(call: RoomCall, allowAdmin: boolean): Promise<RoomRecord | Refusal> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!allowAdmin && !member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
-		if (!allowAdmin && member?.role !== "owner") {
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be archived.");
+		const canManage = member?.role === "owner" || (allowAdmin && room.kind === "public");
+		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can unarchive this room.");
 		}
-		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be archived.");
 		if (room.archived_at === null) return refuse("conflict", "This room is not archived.");
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("UPDATE room SET archived_at = NULL, version = version + 1 WHERE id = 1");
@@ -1492,7 +1503,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return this.record(call.actor.principal_id);
 	}
 
-	/** Deletes a room and cleans up all messages, pins, grants, blobs, search rows, and member views. */
+	/** Deletes a room and cleans up all messages, pins, grants, blobs, webhooks, search rows, and member views. */
 	async deleteRoom(
 		call: RoomCall,
 		input: { dryRun: boolean; allowAdmin: boolean },
@@ -1500,11 +1511,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!input.allowAdmin && !member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
-		if (!input.allowAdmin && member?.role !== "owner") {
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be deleted.");
+		const canManage = member?.role === "owner" || (input.allowAdmin && room.kind === "public");
+		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can delete this room.");
 		}
-		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot be deleted.");
 		const messageCount = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM messages WHERE deleted_at IS NULL")?.n ?? 0;
 		const memberCount = this.memberCount();
 		if (input.dryRun) {
@@ -1518,7 +1530,6 @@ export class ChatRoomDO extends DurableObject<Env> {
 			"SELECT DISTINCT space_id, item_id FROM message_files",
 		);
 		const linkRows = this.all<{ links_json: string }>("SELECT links_json FROM messages WHERE links_json IS NOT NULL");
-		const seqs = this.all<{ seq: number }>("SELECT seq FROM messages WHERE deleted_at IS NULL").map((row) => row.seq);
 		const blobKeys: string[] = [];
 		for (const row of linkRows) {
 			for (const link of parseLinks(row.links_json)) {
@@ -1541,14 +1552,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM card_actions");
 			this.sql.exec("DELETE FROM activity_outbox");
 			this.sql.exec("DELETE FROM members");
+			this.sql.exec(`DELETE FROM outbox WHERE substr(target, 1, ${SEARCH_TARGET.length}) = ?`, SEARCH_TARGET);
 			this.touch("room");
+			this.touch("webhooks");
 			for (const id of memberIds) {
 				this.touch(`member:${id}`);
 				this.touch(`${PRINCIPAL_TARGET}${id}`);
 			}
 			for (const f of fileTargets) this.touch(`${GRANT_TARGET}${f.space_id}:${f.item_id}`);
 			for (const key of blobKeys) this.touch(`${BLOB_TARGET}${key}`);
-			for (const seq of seqs) this.touchSearch(seq);
+			this.touch(SEARCH_DELETE_TARGET);
 		});
 		for (const socket of this.ctx.getWebSockets()) {
 			this.end(socket, CHAT_SOCKET_CLOSE.ended, "This room was deleted.");
@@ -1565,14 +1578,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 	): Promise<{ room: RoomRecord; post_allowed_ids: string[] } | Refusal> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
-		const archived = this.ensureNotArchived(room);
-		if (archived) return archived;
 		const member = this.member(call.actor.principal_id);
-		if (!input.allowAdmin && !member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
-		if (!input.allowAdmin && member?.role !== "owner") {
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot restrict posting.");
+		const canManage = member?.role === "owner" || (input.allowAdmin && room.kind === "public");
+		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can change posting rules.");
 		}
-		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot restrict posting.");
+		const archived = this.ensureNotArchived(room);
+		if (archived) return archived;
 		const allowed = input.policy === "allowlist" ? [...new Set(input.allowedIds)] : [];
 		if (allowed.length > CHAT_LIMITS.membersPerRoom) {
 			return refuse("invalid", `At most ${CHAT_LIMITS.membersPerRoom} allowed posters can be set.`);
@@ -1589,8 +1603,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { room: this.record(call.actor.principal_id), post_allowed_ids: this.postAllowedIds() };
 	}
 
-	/** Deletes messages older than retention_days with full cleanup. Returns pruned count. */
-	private pruneExpiredMessages(now: number, limit = 200): number {
+	/** Deletes messages older than retention_days with full cleanup, socket updates, and webhooks. */
+	private async pruneExpiredMessages(now: number, limit = 200): Promise<number> {
 		const room = this.room();
 		if (!room || room.retention_days === null) return 0;
 		const cutoff = now - room.retention_days * 86_400_000;
@@ -1600,8 +1614,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 			limit,
 		);
 		if (expired.length === 0) return 0;
+		const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 		const touchedParents = new Set<string>();
 		let version = room.version;
+		const deletedRecords: MessageRecord[] = [];
+		const parentRecords: MessageRecord[] = [];
 		this.ctx.storage.transactionSync(() => {
 			for (const row of expired) {
 				version += 1;
@@ -1620,6 +1637,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", row.id);
 				this.sql.exec("DELETE FROM pins WHERE message_id = ?", row.id);
 				this.sql.exec("DELETE FROM card_actions WHERE message_id = ?", row.id);
+				this.queueChatEvent({
+					room,
+					eventType: "chat.message.deleted",
+					messageId: row.id,
+					eventId: `${row.id}:${version}`,
+					actorId: "system",
+					authorId: row.author_id,
+					body: row.body_json === null ? textBody(row.text) : (JSON.parse(row.body_json) as ChatBody),
+					version,
+					now,
+					subscriptionSequence,
+					parentId: row.parent_id,
+				});
 				if (row.parent_id !== null) touchedParents.add(row.parent_id);
 			}
 			for (const parentId of touchedParents) {
@@ -1631,10 +1661,24 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 			this.roomChanged("system");
 		});
+		for (const row of expired) {
+			const updated = this.message(row.id);
+			if (updated) deletedRecords.push(this.messageRecord(room.room_id, updated));
+		}
+		for (const parentId of touchedParents) {
+			const parent = this.message(parentId);
+			if (parent) parentRecords.push(this.messageRecord(room.room_id, parent));
+		}
+		for (const message of deletedRecords) {
+			await this.publish(messageEvent(message));
+		}
+		for (const parent of parentRecords) {
+			await this.publish(messageEvent(parent));
+		}
 		return expired.length;
 	}
 
-	/** Sets or clears message retention for a room, with optional dry-run preview. */
+	/** Sets or clears message retention for a public or private room, with optional dry-run preview. */
 	async setRetention(
 		call: RoomCall,
 		input: { retentionDays: number | null; dryRun: boolean; allowAdmin: boolean },
@@ -1642,8 +1686,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!input.allowAdmin && !member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
-		if (!input.allowAdmin && member?.role !== "owner") {
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages cannot set message retention.");
+		const canManage = member?.role === "owner" || (input.allowAdmin && room.kind === "public");
+		if (!canManage) {
 			return refuse("forbidden", "Only the room owner or an organization admin can change message retention.");
 		}
 		const now = Date.now();
@@ -1667,7 +1713,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE room SET retention_days = ?, version = version + 1 WHERE id = 1", input.retentionDays);
 			this.roomChanged(call.actor.principal_id);
 		});
-		const pruned = this.pruneExpiredMessages(now);
+		const pruned = await this.pruneExpiredMessages(now);
 		await this.publish({ type: "room" });
 		return {
 			room: this.record(call.actor.principal_id),
@@ -1677,12 +1723,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 		};
 	}
 
-	/** Admin action: assigns an owner to a public or private room (adds them if not already a member). */
+	/** Admin action: assigns an owner to an ownerless public or private room. */
 	async adminAssignOwner(actorId: string, target: ActorRecord): Promise<RoomRecord | Refusal> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages do not have owners.");
+		const ownerCount = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM members WHERE role = 'owner'")?.n ?? 0;
+		if (ownerCount > 0) {
+			return refuse("conflict", "This room already has an owner.");
+		}
 		const existing = this.member(target.principal_id);
+		if (room.kind === "private" && !existing) {
+			return refuse("forbidden", "An owner assigned to a private room must already be a member of that room.");
+		}
 		if (!existing && this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 		this.ctx.storage.transactionSync(() => {
 			if (existing) {
@@ -2572,21 +2625,29 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if ("error" in opened) return opened;
 		const row = this.message(messageId);
 		if (!row || row.deleted_at !== null) return refuse("not_found", NO_MESSAGE);
+		const inner = row.forwarded_json ? (JSON.parse(row.forwarded_json) as ChatForwardedMessage) : null;
+		const text = row.text.trim() !== "" ? row.text : (inner?.text ?? "");
 		return {
 			source_room_id: opened.room.room_id,
-			source_room_name: opened.room.name,
+			source_room_name: opened.room.kind === "public" ? opened.room.name : null,
 			source_message_id: row.id,
 			author: JSON.parse(row.author_json) as ActorRecord,
-			text: row.text,
+			text,
 			created_at: iso(row.created_at),
-			untrusted: row.untrusted === 1,
+			untrusted: row.untrusted === 1 || inner?.untrusted === true,
 		};
 	}
 
 	/** Triggers a button action on a message card, recording it and notifying the message author. */
 	async triggerCardAction(
 		call: RoomCall,
-		input: { id: string; messageId: string; cardId: string; actionId: string; value?: string | undefined },
+		input: {
+			id: string;
+			messageId: string;
+			cardId: string;
+			actionId: string;
+			idempotencyKey?: string | undefined;
+		},
 	): Promise<{ action: ChatCardAction } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
@@ -2599,7 +2660,47 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const button = card?.actions?.find((a) => a.action_id === input.actionId);
 		if (!card || !button) return refuse("not_found", "No card action has that id on this message.");
 		const now = Date.now();
-		const value = input.value ?? button.value ?? "";
+		const idempKey = input.idempotencyKey ? `card:${call.actor.principal_id}:${row.id}:${input.idempotencyKey}` : null;
+		if (idempKey) {
+			const existing = this.one<{ request_hash: string; message_id: string }>(
+				"SELECT request_hash, message_id FROM idempotency WHERE key = ? AND created_at > ?",
+				idempKey,
+				now - IDEMPOTENCY_TTL_MS,
+			);
+			if (existing) {
+				const requestHash = `${card.id}:${button.action_id}`;
+				if (existing.request_hash !== requestHash) {
+					return refuse("conflict", "That idempotency key was already used for a different card action.");
+				}
+				const stored = this.one<{
+					id: string;
+					message_id: string;
+					card_id: string;
+					action_id: string;
+					value: string;
+					actor_json: string;
+					created_at: number;
+				}>(
+					"SELECT id, message_id, card_id, action_id, value, actor_json, created_at FROM card_actions WHERE id = ?",
+					existing.message_id,
+				);
+				if (stored) {
+					return {
+						action: {
+							id: stored.id,
+							room_id: opened.room.room_id,
+							message_id: stored.message_id,
+							card_id: stored.card_id,
+							action_id: stored.action_id,
+							value: stored.value,
+							actor: JSON.parse(stored.actor_json) as ActorRecord,
+							created_at: iso(stored.created_at),
+						},
+					};
+				}
+			}
+		}
+		const value = button.value ?? "";
 		const action: ChatCardAction = {
 			id: input.id,
 			room_id: opened.room.room_id,
@@ -2622,6 +2723,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 				JSON.stringify(call.actor),
 				now,
 			);
+			if (idempKey) {
+				this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
+				this.sql.exec(
+					"INSERT OR REPLACE INTO idempotency (key, request_hash, message_id, created_at) VALUES (?, ?, ?, ?)",
+					idempKey,
+					`${card.id}:${button.action_id}`,
+					input.id,
+					now,
+				);
+			}
 			if (row.author_id !== call.actor.principal_id && this.member(row.author_id)) {
 				this.queueActivity(row.author_id, {
 					id: `act:card:${input.id}`,
@@ -2635,6 +2746,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					actor: call.actor,
 					emoji: null,
 					preview: `${button.label}${value ? ` (${value})` : ""}`.slice(0, 200),
+					untrusted: row.untrusted === 1,
 					created_at: now,
 				});
 			}
@@ -2643,27 +2755,57 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return { action };
 	}
 
-	/** Lists recorded card button clicks on a message, oldest first. */
-	listCardActions(call: RoomCall, messageId: string, limit = 100): { actions: ChatCardAction[] } | Refusal {
+	/** Lists recorded card button clicks on a message, newest first, with keyset pagination. */
+	listCardActions(
+		call: RoomCall,
+		messageId: string,
+		cursor: [number, string] | null = null,
+		limit = 50,
+	): { actions: ChatCardAction[]; nextCursor: [number, string] | null } | Refusal {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		const row = this.message(messageId);
 		if (!row) return refuse("not_found", NO_MESSAGE);
-		const rows = this.all<{
-			id: string;
-			message_id: string;
-			card_id: string;
-			action_id: string;
-			value: string;
-			actor_json: string;
-			created_at: number;
-		}>(
-			"SELECT id, message_id, card_id, action_id, value, actor_json, created_at FROM card_actions WHERE message_id = ? ORDER BY created_at ASC, id ASC LIMIT ?",
-			messageId,
-			limit,
-		);
+		const rows = cursor
+			? this.all<{
+					id: string;
+					message_id: string;
+					card_id: string;
+					action_id: string;
+					value: string;
+					actor_json: string;
+					created_at: number;
+				}>(
+					`SELECT id, message_id, card_id, action_id, value, actor_json, created_at
+					FROM card_actions
+					WHERE message_id = ? AND (created_at, id) < (?, ?)
+					ORDER BY created_at DESC, id DESC LIMIT ?`,
+					messageId,
+					cursor[0],
+					cursor[1],
+					limit + 1,
+				)
+			: this.all<{
+					id: string;
+					message_id: string;
+					card_id: string;
+					action_id: string;
+					value: string;
+					actor_json: string;
+					created_at: number;
+				}>(
+					`SELECT id, message_id, card_id, action_id, value, actor_json, created_at
+					FROM card_actions
+					WHERE message_id = ?
+					ORDER BY created_at DESC, id DESC LIMIT ?`,
+					messageId,
+					limit + 1,
+				);
+		const hasMore = rows.length > limit;
+		const page = hasMore ? rows.slice(0, limit) : rows;
+		const last = page.at(-1);
 		return {
-			actions: rows.map((r) => ({
+			actions: page.map((r) => ({
 				id: r.id,
 				room_id: opened.room.room_id,
 				message_id: r.message_id,
@@ -2673,6 +2815,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				actor: JSON.parse(r.actor_json) as ActorRecord,
 				created_at: iso(r.created_at),
 			})),
+			nextCursor: hasMore && last ? [last.created_at, last.id] : null,
 		};
 	}
 
@@ -2780,6 +2923,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 						actor: call.actor,
 						preview: this.previewOf(row.text),
 						emoji,
+						untrusted: row.untrusted === 1,
 						created_at: now,
 					});
 				}
@@ -2998,7 +3142,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 						now,
 					);
 				}
-				this.queueMessageActivities(opened.room, input.id, seq, call.actor, content.body, content.text, parent, now);
+				this.queueMessageActivities(
+					opened.room,
+					input.id,
+					seq,
+					call.actor,
+					content.body,
+					content.text,
+					parent,
+					now,
+					untrusted,
+				);
 				this.queueChatEvent({
 					room: opened.room,
 					eventType: "chat.message.created",
@@ -3045,7 +3199,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const result = await this.postMessage(
 			{ roomId: input.roomId, actor: input.actor },
 			{
-				id: `msg_${crypto.randomUUID().replaceAll("-", "")}`,
+				id: newId("cmsg"),
 				content,
 				idempotency: { key: `${input.actor.principal_id}:sched:${input.scheduledId}`, requestHash: input.scheduledId },
 				clientKey: null,
@@ -3064,7 +3218,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		author: ActorRecord;
 		text: string;
 		cards?: ChatCard[];
-	}): Promise<{ message: MessageRecord } | Refusal> {
+		replayKey?: string | undefined;
+	}): Promise<{ message: MessageRecord; duplicate: boolean } | Refusal> {
 		const posted = await this.ctx.blockConcurrencyWhile(async () => {
 			const room = this.room();
 			if (!room) return refuse("not_found", NOT_FOUND);
@@ -3072,6 +3227,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (archived) return archived;
 			if (this.isDmKind(room.kind)) return refuse("invalid", "Incoming webhooks cannot post to direct messages.");
 			const now = Date.now();
+			const idempKey = input.replayKey ? `wh:${input.author.principal_id}:${input.replayKey}` : null;
+			if (idempKey) {
+				const existing = this.one<{ message_id: string }>(
+					"SELECT message_id FROM idempotency WHERE key = ? AND created_at > ?",
+					idempKey,
+					now - IDEMPOTENCY_TTL_MS,
+				);
+				if (existing) {
+					const existingRow = this.message(existing.message_id);
+					if (existingRow) {
+						return { message: this.messageRecord(room.room_id, existingRow), duplicate: true };
+					}
+				}
+			}
 			const limited = this.spendAllowance({ roomId: input.roomId, actor: input.author }, now);
 			if (limited) return limited;
 			const cards = input.cards ?? [];
@@ -3096,6 +3265,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 					cards.length > 0 ? JSON.stringify(cards) : null,
 				)?.seq as number;
 				this.indexMessage(seq, content);
+				if (idempKey && input.replayKey) {
+					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
+					this.sql.exec(
+						"INSERT OR REPLACE INTO idempotency (key, request_hash, message_id, created_at) VALUES (?, ?, ?, ?)",
+						idempKey,
+						input.replayKey,
+						input.messageId,
+						now,
+					);
+				}
 				this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ?, version = ? WHERE id = 1", seq, now, version);
 				this.queueChatEvent({
 					room,
@@ -3112,9 +3291,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 				});
 				this.roomChanged(input.author.principal_id);
 			});
-			return { message: this.messageRecord(room.room_id, this.message(input.messageId) as MessageRow) };
+			return {
+				message: this.messageRecord(room.room_id, this.message(input.messageId) as MessageRow),
+				duplicate: false,
+			};
 		});
-		if (!("error" in posted)) {
+		if (!("error" in posted) && !posted.duplicate) {
 			await this.publish(messageEvent(posted.message), input.author.principal_id);
 		}
 		return posted;
@@ -3891,7 +4073,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	override async alarm(): Promise<void> {
 		const activeRoom = this.room();
 		if (activeRoom && activeRoom.retention_days !== null) {
-			const pruned = this.pruneExpiredMessages(Date.now());
+			const pruned = await this.pruneExpiredMessages(Date.now());
 			if (pruned > 0) await this.publish({ type: "room" });
 		}
 		await this.flush();
@@ -4242,6 +4424,18 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 */
 	private async sendSearch(room: RoomRow, rows: OutboxRow[]): Promise<boolean> {
 		if (rows.length === 0) return false;
+		if (room.deleted_at !== null || rows.some((row) => row.target === SEARCH_DELETE_TARGET)) {
+			try {
+				await searchIndex(this.env).deleteRoom(room.room_id);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log("warn", "chat search room delete failed", { roomId: room.room_id, error: message });
+				for (const row of rows) this.retryLater(row, message);
+				return true;
+			}
+			for (const row of rows) this.done(row);
+			return false;
+		}
 		const entries: SearchEntry[] = [];
 		for (const row of rows) {
 			if (row.target === SEARCH_ROOM_TARGET || row.target === SEARCH_FILLED_TARGET) continue;
@@ -4368,6 +4562,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 */
 	private indexStatement(room: RoomRow, target: string): D1PreparedStatement {
 		const db = this.env.DIRECTORY;
+		if (target === "webhooks") {
+			return db.prepare("DELETE FROM chat_incoming_webhooks WHERE room_id = ?").bind(room.room_id);
+		}
 		if (target === "room") {
 			if (room.deleted_at !== null) {
 				return db.prepare("DELETE FROM chat_rooms WHERE id = ?").bind(room.room_id);

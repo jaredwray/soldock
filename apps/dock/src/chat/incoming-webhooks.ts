@@ -1,4 +1,10 @@
-import { CHAT_LIMITS, type ChatCard, type ChatIncomingWebhook, chatIncomingWebhookPath } from "@asterra/contracts";
+import {
+	CardsInput,
+	CHAT_LIMITS,
+	type ChatCard,
+	type ChatIncomingWebhook,
+	chatIncomingWebhookPath,
+} from "@asterra/contracts";
 import type { Hono } from "hono";
 import type { ApiEnv } from "../api/index.ts";
 import type { CallContext } from "../identity/index.ts";
@@ -11,6 +17,7 @@ import {
 	randomToken,
 	readBodyText,
 	sameSecret,
+	sha256Hex,
 } from "../platform/index.ts";
 
 // Incoming webhooks for Chat rooms. External systems POST Slack-compatible JSON payloads to
@@ -136,13 +143,39 @@ export async function deleteIncomingWebhook(call: CallContext, roomId: string, w
 	return deleted;
 }
 
-/** Extracts text and optional Asterra cards from a Slack-compatible incoming webhook JSON body. */
-function parseSlackPayload(raw: unknown): { text: string; username: string | undefined; cards: ChatCard[] } | null {
+function stripCtrl(raw: string): string {
+	return raw.replace(/\p{Cc}/gu, "").trim();
+}
+
+function sanitizeCardId(raw: unknown, fallback: string, used: Set<string>): string {
+	const cleaned =
+		typeof raw === "string"
+			? raw
+					.trim()
+					.replace(/[^a-zA-Z0-9._-]+/g, "_")
+					.replace(/^_+|_+$/g, "")
+					.slice(0, 60)
+			: "";
+	const base = cleaned || fallback;
+	let candidate = base;
+	let suffix = 2;
+	while (used.has(candidate)) {
+		candidate = `${base.slice(0, 56)}_${suffix++}`;
+	}
+	used.add(candidate);
+	return candidate;
+}
+
+/** Extracts text and validated Asterra cards from a Slack-compatible incoming webhook JSON body. */
+function parseSlackPayload(
+	raw: unknown,
+): { text: string; username: string | undefined; cards: ChatCard[] } | { invalid: string } | null {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
 	const obj = raw as Record<string, unknown>;
 	const parts: string[] = [];
 	if (typeof obj.text === "string" && obj.text.trim().length > 0) parts.push(obj.text.trim());
 	const cards: ChatCard[] = [];
+	const usedCardIds = new Set<string>();
 
 	// Slack `blocks` (section / header)
 	if (Array.isArray(obj.blocks)) {
@@ -159,13 +192,13 @@ function parseSlackPayload(raw: unknown): { text: string; username: string | und
 		}
 	}
 
-	// Slack `attachments` mapped to structured cards
+	// Slack `attachments` mapped to structured cards (sanitized to satisfy `ChatCard`)
 	if (Array.isArray(obj.attachments)) {
 		for (let i = 0; i < obj.attachments.length && cards.length < CHAT_LIMITS.cardsPerMessage; i++) {
 			const att = obj.attachments[i];
 			if (typeof att !== "object" || att === null) continue;
 			const a = att as Record<string, unknown>;
-			const title = typeof a.title === "string" ? a.title.trim().slice(0, 200) : "";
+			const title = typeof a.title === "string" ? stripCtrl(a.title).slice(0, 200) : "";
 			const body =
 				typeof a.text === "string"
 					? a.text.trim().slice(0, 2000)
@@ -174,28 +207,33 @@ function parseSlackPayload(raw: unknown): { text: string; username: string | und
 						: "";
 			const fields: NonNullable<ChatCard["fields"]> = [];
 			if (Array.isArray(a.fields)) {
-				for (const field of a.fields.slice(0, 10)) {
+				for (const field of a.fields.slice(0, CHAT_LIMITS.cardFieldsPerCard)) {
 					if (typeof field === "object" && field !== null) {
 						const f = field as Record<string, unknown>;
 						if (typeof f.title === "string" && typeof f.value === "string") {
-							fields.push({ label: f.title.slice(0, 80), value: f.value.slice(0, 300) });
+							const label = stripCtrl(f.title).slice(0, 80);
+							const value = stripCtrl(f.value).slice(0, 300);
+							if (label && value) fields.push({ label, value });
 						}
 					}
 				}
 			}
 			const actions: NonNullable<ChatCard["actions"]> = [];
+			const usedActionIds = new Set<string>();
 			if (Array.isArray(a.actions)) {
 				for (let j = 0; j < a.actions.length && actions.length < CHAT_LIMITS.cardActionsPerCard; j++) {
 					const act = a.actions[j];
 					if (typeof act === "object" && act !== null) {
 						const ac = act as Record<string, unknown>;
-						const label = typeof ac.text === "string" ? ac.text.trim().slice(0, 60) : "";
+						const label = typeof ac.text === "string" ? stripCtrl(ac.text).slice(0, 60) : "";
 						if (label) {
+							const actionId = sanitizeCardId(ac.name, `act_${j + 1}`, usedActionIds);
+							const val = typeof ac.value === "string" ? ac.value.slice(0, 200) : undefined;
 							actions.push({
-								action_id: typeof ac.name === "string" && ac.name.trim() ? ac.name.trim().slice(0, 64) : `act_${j + 1}`,
+								action_id: actionId,
 								label,
 								style: ac.style === "primary" ? "primary" : ac.style === "danger" ? "danger" : "default",
-								value: typeof ac.value === "string" ? ac.value.slice(0, 200) : "",
+								...(val !== undefined ? { value: val } : {}),
 							});
 						}
 					}
@@ -203,7 +241,7 @@ function parseSlackPayload(raw: unknown): { text: string; username: string | und
 			}
 			if (title || body || fields.length > 0 || actions.length > 0) {
 				cards.push({
-					id: `card_${i + 1}`,
+					id: sanitizeCardId(a.id, `card_${i + 1}`, usedCardIds),
 					title: title || "Attachment",
 					...(body ? { text: body } : {}),
 					...(fields.length > 0 ? { fields } : {}),
@@ -213,46 +251,27 @@ function parseSlackPayload(raw: unknown): { text: string; username: string | und
 		}
 	}
 
-	// Native `cards` array if caller passes Asterra format
-	if (Array.isArray(obj.cards) && cards.length === 0) {
-		for (let i = 0; i < obj.cards.length && cards.length < CHAT_LIMITS.cardsPerMessage; i++) {
-			const c = obj.cards[i];
-			if (typeof c === "object" && c !== null) {
-				const card = c as Record<string, unknown>;
-				const id = typeof card.id === "string" && card.id.trim() ? card.id.trim().slice(0, 64) : `card_${i + 1}`;
-				const title = typeof card.title === "string" && card.title.trim() ? card.title.trim().slice(0, 200) : "Card";
-				const body = typeof card.text === "string" ? card.text.slice(0, 2000) : undefined;
-				const actions: NonNullable<ChatCard["actions"]> = Array.isArray(card.actions)
-					? card.actions
-							.slice(0, CHAT_LIMITS.cardActionsPerCard)
-							.filter(
-								(a): a is Record<string, unknown> =>
-									typeof a === "object" && a !== null && typeof (a as Record<string, unknown>).label === "string",
-							)
-							.map((a, idx) => ({
-								action_id:
-									typeof a.action_id === "string" && a.action_id.trim()
-										? a.action_id.trim().slice(0, 64)
-										: `act_${idx + 1}`,
-								label: String(a.label).slice(0, 60),
-								style: a.style === "primary" ? "primary" : a.style === "danger" ? "danger" : "default",
-								value: typeof a.value === "string" ? a.value.slice(0, 200) : "",
-							}))
-					: [];
-				cards.push({
-					id,
-					title,
-					...(body ? { text: body } : {}),
-					...(actions.length > 0 ? { actions } : {}),
-				});
-			}
+	// Native `cards` array if caller passes Asterra format: validate strictly against `CardsInput`.
+	if (obj.cards !== undefined && cards.length === 0) {
+		const parsedCards = CardsInput.safeParse(obj.cards);
+		if (!parsedCards.success) {
+			return { invalid: `Invalid cards payload: ${parsedCards.error.issues[0]?.message ?? "schema mismatch"}` };
+		}
+		cards.push(...parsedCards.data);
+	}
+
+	// Final invariant check: never allow an unparseable card into room storage.
+	if (cards.length > 0) {
+		const checked = CardsInput.safeParse(cards);
+		if (!checked.success) {
+			return { invalid: `Invalid cards payload: ${checked.error.issues[0]?.message ?? "schema mismatch"}` };
 		}
 	}
 
 	const text = parts.join("\n").slice(0, CHAT_LIMITS.messageChars);
 	if (text.length === 0 && cards.length === 0) return null;
 	const username =
-		typeof obj.username === "string" && obj.username.trim() ? obj.username.trim().slice(0, 80) : undefined;
+		typeof obj.username === "string" && stripCtrl(obj.username) ? stripCtrl(obj.username).slice(0, 80) : undefined;
 	return { text, username, cards };
 }
 
@@ -324,20 +343,48 @@ export function mountChatIncomingWebhooks(app: Hono<ApiEnv>): void {
 				"Incoming webhook payload needs text, blocks, attachments, or cards.",
 			).toResponse({ instance, requestId });
 		}
+		if ("invalid" in payload) {
+			return new OperationError("invalid", payload.invalid).toResponse({ instance, requestId });
+		}
 
+		const replayKey = await sha256Hex(`${tsHeader}.${rawBody}`);
 		const messageId = newId("cmsg");
 		const displayName = payload.username ? `${hook.name} (${payload.username})`.slice(0, 120) : hook.name;
 		const res = await c.env.CHAT_ROOM.get(c.env.CHAT_ROOM.idFromName(hook.room_id)).postIncomingWebhook({
 			roomId: hook.room_id,
 			messageId,
+			replayKey,
 			author: { principal_id: hook.id, kind: "agent", display_name: displayName },
 			text: payload.text,
 			cards: payload.cards,
 		});
 		if ("error" in res) {
+			// Hide whether a webhook's target room was deleted vs unknown webhook id.
+			if (res.error.code === "not_found") {
+				return new OperationError("unauthenticated", "Invalid webhook or signature.").toResponse({
+					instance,
+					requestId,
+				});
+			}
 			return new OperationError(res.error.code, res.error.message).toResponse({ instance, requestId });
 		}
-		log("info", "chat incoming webhook delivered", { webhookId: hook.id, roomId: hook.room_id, messageId });
+		if (!res.duplicate) {
+			audit({
+				op: "chat.incoming_webhook.post",
+				actor: hook.id,
+				actorKind: "agent",
+				credential: "webhook",
+				target: `${hook.room_id}:${res.message.id}`,
+				result: "ok",
+				requestId,
+			});
+		}
+		log("info", "chat incoming webhook delivered", {
+			webhookId: hook.id,
+			roomId: hook.room_id,
+			messageId: res.message.id,
+			duplicate: res.duplicate,
+		});
 		return c.json({ ok: true, message_id: res.message.id, room_id: hook.room_id, untrusted: true }, 200);
 	});
 }

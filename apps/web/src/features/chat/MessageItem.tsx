@@ -1,5 +1,6 @@
-import { CHAT_LIMITS, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
+import { CHAT_LIMITS, type ChatBody, type ChatCardAction, type ChatFile, type ChatMessage } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
@@ -113,7 +114,7 @@ export interface MessageItemProps {
 	/** Opens the forward dialog for this message. */
 	onForward?: (() => void) | undefined;
 	/** Triggers an interactive button on one of the message's cards. */
-	onCardAction?: ((cardId: string, actionId: string, value: string) => void) | undefined;
+	onCardAction?: ((cardId: string, actionId: string) => void) | undefined;
 	/** One more class of the row, for a list that has rows of other kinds too. */
 	className?: string | undefined;
 	/** True for a list with no line for each day (the view of a thread): the time shows its day too. */
@@ -344,7 +345,7 @@ export function MessageItem({
 																	: "button button-small"
 														}
 														disabled={!onCardAction}
-														onClick={() => onCardAction?.(card.id, action.action_id, action.value ?? "")}
+														onClick={() => onCardAction?.(card.id, action.action_id)}
 													>
 														{action.label}
 													</button>
@@ -353,6 +354,7 @@ export function MessageItem({
 										)}
 									</section>
 								))}
+								<CardActionsHistory roomId={message.room_id} messageId={message.id} />
 							</div>
 						)}
 					</>
@@ -530,5 +532,57 @@ export function MessageItem({
 				</span>
 			)}
 		</li>
+	);
+}
+
+function CardActionsHistory({ roomId, messageId }: { roomId: string; messageId: string }) {
+	const [open, setOpen] = useState(false);
+	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [actions, setActions] = useState<ChatCardAction[]>([]);
+
+	async function toggle() {
+		const next = !open;
+		setOpen(next);
+		if (!next) return;
+		setLoading(true);
+		setError(null);
+		try {
+			const res = await api.call("chat.list_card_actions", { room_id: roomId, message_id: messageId, limit: 20 });
+			setActions(res.actions);
+		} catch (caught) {
+			setError(errorMessage(caught));
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	return (
+		<div className="chat-card-history">
+			<button type="button" className="button button-small" onClick={() => void toggle()}>
+				{open ? "Hide actions" : "Action history"}
+			</button>
+			{open && (
+				<div className="chat-card-history-body">
+					{loading && <p className="muted">Loading…</p>}
+					{error && (
+						<p className="form-error" role="alert">
+							{error}
+						</p>
+					)}
+					{!loading && !error && actions.length === 0 && <p className="muted">No button clicks recorded yet.</p>}
+					{!loading && !error && actions.length > 0 && (
+						<ul className="chat-card-history-list">
+							{actions.map((item) => (
+								<li key={item.id}>
+									<strong>{item.actor.display_name}</strong> clicked <code>{item.action_id}</code>
+									{item.value ? ` (${item.value})` : ""} · {shortDate(item.created_at)}
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+			)}
+		</div>
 	);
 }

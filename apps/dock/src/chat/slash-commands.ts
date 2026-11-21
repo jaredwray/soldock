@@ -3,19 +3,19 @@ import type { CallContext } from "../identity/index.ts";
 import { type AnyHandler, audit, type HandlerMap, invokeOperation, newId, OperationError } from "../platform/index.ts";
 
 // Organization slash commands stored in D1 `chat_slash_commands`. Each command maps `/<command>` to
-// a registered Asterra operation and an input JSON template (`{{text}}`, `{{room_id}}`,
-// `{{caller_id}}`). Invocation always executes through `invokeOperation` with the caller's own
-// `CallContext`, so a slash command never escalates privileges beyond the caller's scopes/role.
+// an allowlisted Asterra operation and an input JSON template (`{{text}}`, `{{room_id}}`,
+// `{{caller_id}}`). Only safe read operations and `chat.post_message` (pinned to the invoking room)
+// may be bound, preventing confused-deputy privilege abuse. Invocation verifies room membership and
+// executes through `invokeOperation` with the caller's own `CallContext`.
 
-const BLOCKED_TARGET_PREFIXES = ["account.", "oauth."];
-const BLOCKED_TARGET_OPS = new Set<string>([
-	"chat.invoke_slash_command",
-	"chat.create_slash_command",
-	"chat.delete_slash_command",
-	"chat.delete_room",
-	"directory.delete_principal",
-	"directory.archive_principal",
+const BLOCKED_READ_PREFIXES = ["account.", "oauth."];
+const BLOCKED_READ_OPS = new Set<string>([
+	"chat.export_room",
+	"chat.list_message_edits",
+	"chat.list_incoming_webhooks",
+	"chat.admin_list_rooms",
 ]);
+const ALLOWED_WRITE_OPS = new Set<string>(["chat.post_message"]);
 
 interface SlashRow {
 	id: string;
@@ -42,15 +42,21 @@ function toSlashCommand(row: SlashRow): ChatSlashCommand {
 }
 
 export function assertAllowedSlashTarget(targetOperation: string): Operation {
-	if (
-		BLOCKED_TARGET_OPS.has(targetOperation) ||
-		BLOCKED_TARGET_PREFIXES.some((prefix) => targetOperation.startsWith(prefix))
-	) {
-		throw new OperationError("forbidden", `Operation ${targetOperation} cannot be bound to a slash command.`);
-	}
 	const op = (operations as Record<string, Operation | undefined>)[targetOperation];
 	if (!op) {
 		throw new OperationError("invalid", `Unknown operation: ${targetOperation}.`);
+	}
+	if (ALLOWED_WRITE_OPS.has(targetOperation)) return op;
+	const isSafeRead =
+		op.http.method === "GET" &&
+		op.annotations.readOnly &&
+		!BLOCKED_READ_OPS.has(targetOperation) &&
+		!BLOCKED_READ_PREFIXES.some((prefix) => targetOperation.startsWith(prefix));
+	if (!isSafeRead) {
+		throw new OperationError(
+			"forbidden",
+			`Operation ${targetOperation} cannot be bound to a slash command. Only safe read operations and chat.post_message are allowed.`,
+		);
 	}
 	return op;
 }
@@ -178,6 +184,17 @@ export async function invokeSlashCommand(
 	allHandlers: HandlerMap<CallContext>,
 	input: { room_id: string; command: string; text: string },
 ): Promise<{ command: string; operation: string; result: Record<string, unknown> }> {
+	const membership = await call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(input.room_id)).checkMember({
+		roomId: input.room_id,
+		actor: {
+			principal_id: call.caller.principal.id,
+			kind: call.caller.principal.kind,
+			display_name: call.caller.principal.display_name,
+		},
+	});
+	if ("error" in membership) {
+		throw new OperationError(membership.error.code, membership.error.message);
+	}
 	const row = await call.env.DIRECTORY.prepare(
 		"SELECT id, command, description, usage_hint, operation, input_template_json, created_by, created_at FROM chat_slash_commands WHERE command = ?",
 	)
@@ -195,6 +212,17 @@ export async function invokeSlashCommand(
 		room_id: input.room_id,
 		caller_id: call.caller.principal.id,
 	});
+	// Pin room-scoped write commands to the room where the user typed the command.
+	if (row.operation === "chat.post_message") {
+		if (typeof rawInput !== "object" || rawInput === null || Array.isArray(rawInput)) {
+			throw new OperationError("invalid", "Slash command template must produce an object.");
+		}
+		const obj = rawInput as Record<string, unknown>;
+		if (obj.room_id !== undefined && obj.room_id !== input.room_id) {
+			throw new OperationError("forbidden", "A slash command can only post to the room where it is invoked.");
+		}
+		obj.room_id = input.room_id;
+	}
 	const rawResult = await invokeOperation(op, handler as AnyHandler<CallContext>, call, rawInput);
 	const result =
 		typeof rawResult === "object" && rawResult !== null && !Array.isArray(rawResult)

@@ -205,13 +205,14 @@ export async function adminListRooms(
 	};
 }
 
-/** Removes a deleted principal from every room it belonged to. Idempotent. */
+/** Removes a deleted principal from rooms it belonged to (bounded per call). Idempotent. */
 export async function removeDeletedPrincipalFromRooms(
 	env: Pick<Env, "DIRECTORY" | "CHAT_ROOM">,
 	principalId: string,
+	maxRooms = 500,
 ): Promise<{ roomsCleaned: number; failedRoomIds: string[] }> {
-	const { results } = await env.DIRECTORY.prepare("SELECT room_id FROM chat_members WHERE principal_id = ?")
-		.bind(principalId)
+	const { results } = await env.DIRECTORY.prepare("SELECT room_id FROM chat_members WHERE principal_id = ? LIMIT ?")
+		.bind(principalId, maxRooms)
 		.all<{ room_id: string }>();
 	let roomsCleaned = 0;
 	const failedRoomIds: string[] = [];

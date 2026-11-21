@@ -80,7 +80,11 @@ contract of the socket.
 | `chat.notification` | A recent message meets the notification level, sound setting, and quiet hours | `room_id`, `message_id`, and optional parent as `parent_id` |
 | `chat.threads` | The object kept a state that changed the followed threads of a room: a new reply, a read marker, a follow or a stop | `room_id`. The client calls `chat.list_threads` again |
 | `chat.addressed` | The object kept a newer change of a room that is for the principal | `room_id`, and the fields of an entry of `chat.list_addressed` without the room: `event`, `reason`, `message_id`, `parent_id`, `author_id`, `version` and `at`. No message text |
-| `chat.activity` | The object kept a new activity item (mention, reply, reaction, pin, or fired reminder) | `unread_count`. The client refreshes `chat.list_activity` |
+| `chat.activity` | The object kept a new activity item (mention, reply, reaction, card action, or fired reminder) | `unread_count`. The client refreshes `chat.list_activity` |
+| `chat.reminder` | A scheduled reminder fired | `reminder_id`, `room_id`, `message_id`, and `note` |
+| `chat.draft` | A synced draft changed or was deleted | `room_id` and `parent_id` |
+| `chat.scheduled` | A scheduled message was created, updated, sent, or failed | `scheduled_id` and `room_id` |
+| `chat.sections` | Custom sidebar sections changed | None. The client refreshes `chat.list_sections` |
 
 - A client can send a `chat.activity` report on its own socket. An MCP resource feed takes no reports.
   The runtime answers the text `ping` with `pong`. Other client messages close the socket with code `1008`.

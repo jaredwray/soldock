@@ -100,7 +100,22 @@ type RoomDialog =
 	| { type: "forward"; message: ChatMessage }
 	| { type: "remind"; message: ChatMessage }
 	| { type: "schedule"; body: ChatBody }
+	| { type: "slash"; command: ChatSlashCommand; text: string }
 	| null;
+
+function renderSlashPreview(template: Record<string, unknown>, vars: Record<string, string>): string {
+	const apply = (value: unknown): unknown => {
+		if (typeof value === "string") {
+			return value.replace(/\{\{(text|room_id|caller_id)\}\}/g, (_, key: string) => vars[key] ?? "");
+		}
+		if (Array.isArray(value)) return value.map(apply);
+		if (value !== null && typeof value === "object") {
+			return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, apply(v)]));
+		}
+		return value;
+	};
+	return JSON.stringify(apply(template), null, 2);
+}
 
 /** The width under which the view of a thread takes the width of the room and hides it. */
 const THREAD_HIDES_ROOM = "(max-width: 899px)";
@@ -588,20 +603,10 @@ export function RoomView({
 		if (plain.startsWith("/") && files.list.length === 0) {
 			const match = /^\/([a-z0-9][a-z0-9_-]*)(?:\s+(.*))?$/s.exec(plain);
 			const cmdName = match?.[1];
-			if (cmdName && slashCommands.some((c) => c.command === cmdName)) {
-				const argText = (match[2] ?? "").trim();
-				setDraft(null);
-				composer.current?.clear();
-				void api
-					.call("chat.invoke_slash_command", {
-						room_id: roomId,
-						command: cmdName,
-						...(argText ? { text: argText } : {}),
-					})
-					.then(() => {
-						toast({ message: `Ran /${cmdName}.`, tone: "info" });
-						void view.sync();
-					}, fail);
+			const matchedCmd = cmdName ? slashCommands.find((c) => c.command === cmdName) : undefined;
+			if (matchedCmd) {
+				const argText = (match?.[2] ?? "").trim();
+				setDialog({ type: "slash", command: matchedCmd, text: argText });
 				return;
 			}
 		}
@@ -839,14 +844,14 @@ export function RoomView({
 		}, fail);
 	}
 
-	function triggerCardAction(messageId: string, cardId: string, actionId: string, value: string) {
+	function triggerCardAction(messageId: string, cardId: string, actionId: string) {
 		api
 			.call("chat.trigger_card_action", {
 				room_id: roomId,
 				message_id: messageId,
 				card_id: cardId,
 				action_id: actionId,
-				...(value ? { value } : {}),
+				idempotency_key: crypto.randomUUID(),
 			})
 			.then(() => {
 				toast({ message: "Action recorded.", tone: "info" });
@@ -1105,9 +1110,7 @@ export function RoomView({
 												onSave={() => saveMessage(message)}
 												onRemind={() => setDialog({ type: "remind", message })}
 												onForward={() => setDialog({ type: "forward", message })}
-												onCardAction={(cardId, actionId, value) =>
-													triggerCardAction(message.id, cardId, actionId, value)
-												}
+												onCardAction={(cardId, actionId) => triggerCardAction(message.id, cardId, actionId)}
 											/>
 										</Fragment>
 									);
@@ -1352,6 +1355,36 @@ export function RoomView({
 						/>
 					);
 				})()}
+			{dialog?.type === "slash" && (
+				<ConfirmDialog
+					title={`Run /${dialog.command.command}?`}
+					confirmLabel="Run command"
+					onClose={() => setDialog(null)}
+					onConfirm={async () => {
+						const { command, text } = dialog;
+						await api.call("chat.invoke_slash_command", {
+							room_id: roomId,
+							command: command.command,
+							...(text ? { text } : {}),
+						});
+						setDraft(null);
+						composer.current?.clear();
+						toast({ message: `Ran /${command.command}.`, tone: "info" });
+						void view.sync();
+					}}
+				>
+					<p>
+						This command runs <code>{dialog.command.operation}</code> with your permissions.
+					</p>
+					<pre className="chat-slash-preview">
+						{renderSlashPreview(dialog.command.input_template, {
+							text: dialog.text,
+							room_id: roomId,
+							caller_id: ownId,
+						})}
+					</pre>
+				</ConfirmDialog>
+			)}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete this message?"

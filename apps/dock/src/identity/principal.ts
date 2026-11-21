@@ -14,7 +14,14 @@ import {
 	type RoomKind,
 } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
-import { type CredentialCheck, type CredentialRef, checkCredentials, credentialKey } from "./access.ts";
+import {
+	type CredentialBinding,
+	type CredentialCheck,
+	type CredentialRef,
+	checkCredentials,
+	credentialKey,
+	credentialState,
+} from "./access.ts";
 import {
 	type ActivityActor,
 	type ActivityInsert,
@@ -1115,6 +1122,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		bodyJson: string;
 		markdown: string;
 		sendAt: number;
+		credentialBindingJson?: string | null;
 	}): Promise<ScheduledRecord | "full"> {
 		const created = this.personal.createScheduled({ ...input, now: Date.now() });
 		if (created !== "full") {
@@ -1165,6 +1173,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		parentSeq: number | null;
 		note: string;
 		preview: string;
+		untrusted?: boolean | undefined;
 		remindAt: number;
 		actor: ActivityActor;
 	}): Promise<ReminderRecord | "full"> {
@@ -1201,16 +1210,20 @@ export class PrincipalDO extends DurableObject<Env> {
 				: { principal_id: "unknown", kind: "human", display_name: "Reminder" };
 			for (const reminder of dueRem) {
 				const roomRow = this.sql
-					.exec<{ name: string | null }>("SELECT name FROM chat_rooms WHERE room_id = ?", reminder.room_id)
+					.exec<{ name: string | null; joined: number }>(
+						"SELECT name, joined FROM chat_rooms WHERE room_id = ?",
+						reminder.room_id,
+					)
 					.toArray()[0];
-				const fired = this.personal.markReminderTriggered(reminder.id, now, selfActor, roomRow?.name ?? null);
+				const isMember = roomRow?.joined === 1;
+				const fired = this.personal.markReminderTriggered(reminder.id, now, selfActor, roomRow?.name ?? null, isMember);
 				if (fired) {
 					events.push({
 						type: "chat.reminder",
 						reminder_id: fired.id,
 						room_id: fired.room_id,
 						message_id: fired.message_id,
-						note: fired.note || fired.preview,
+						note: isMember ? fired.note || fired.preview : fired.note || "Reminder",
 					});
 				}
 			}
@@ -1218,24 +1231,46 @@ export class PrincipalDO extends DurableObject<Env> {
 		}
 
 		// 2. Deliver due scheduled messages.
+		const MAX_SCHEDULED_ATTEMPTS = 5;
 		const dueSched = this.personal.dueScheduled(now);
-		let needsRetry = false;
 		for (const item of dueSched) {
-			const principal = await this.env.DIRECTORY.prepare(
-				"SELECT id, kind, display_name FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL",
-			)
-				.bind(item.principal_id)
-				.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
-			if (!principal) {
-				this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
-				events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
-				continue;
+			let actor: { principal_id: string; kind: "human" | "agent"; display_name: string } | null = null;
+			if (item.credential_binding_json) {
+				const binding = JSON.parse(item.credential_binding_json) as CredentialBinding;
+				const checked = await credentialState(this.env.DIRECTORY, binding);
+				if (checked.state !== "live") {
+					this.personal.markScheduledFailed(
+						item.id,
+						checked.state === "archived"
+							? "Principal is archived."
+							: "The credential that scheduled this message is no longer valid.",
+					);
+					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					continue;
+				}
+				actor = {
+					principal_id: checked.principal.id,
+					kind: checked.principal.kind,
+					display_name: checked.principal.display_name,
+				};
+			} else {
+				const principal = await this.env.DIRECTORY.prepare(
+					"SELECT id, kind, display_name FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL",
+				)
+					.bind(item.principal_id)
+					.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
+				if (!principal) {
+					this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
+					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					continue;
+				}
+				actor = { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
 			}
 			try {
 				const room = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(item.room_id));
 				const result = await room.postScheduledMessage({
 					roomId: item.room_id,
-					actor: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
+					actor,
 					scheduledId: item.id,
 					text: item.text,
 					bodyJson: item.body_json,
@@ -1244,7 +1279,18 @@ export class PrincipalDO extends DurableObject<Env> {
 				});
 				if ("error" in result) {
 					if (result.error.code === "rate_limited") {
-						needsRetry = true;
+						const attempts = item.attempts + 1;
+						if (attempts >= MAX_SCHEDULED_ATTEMPTS) {
+							this.personal.markScheduledFailed(item.id, "Rate limited after maximum delivery attempts.");
+							events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+						} else {
+							this.personal.markScheduledRetry(
+								item.id,
+								attempts,
+								now + 60_000 * 2 ** (attempts - 1),
+								result.error.message,
+							);
+						}
 					} else {
 						this.personal.markScheduledFailed(item.id, result.error.message);
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
@@ -1254,11 +1300,19 @@ export class PrincipalDO extends DurableObject<Env> {
 					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 				}
 			} catch (error) {
-				log("warn", "scheduled chat message delivery failed; will retry", {
+				const message = error instanceof Error ? error.message : String(error);
+				const attempts = item.attempts + 1;
+				log("warn", "scheduled chat message delivery failed", {
 					scheduledId: item.id,
-					error: error instanceof Error ? error.message : String(error),
+					attempts,
+					error: message,
 				});
-				needsRetry = true;
+				if (attempts >= MAX_SCHEDULED_ATTEMPTS) {
+					this.personal.markScheduledFailed(item.id, `Delivery failed after ${MAX_SCHEDULED_ATTEMPTS} attempts.`);
+					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+				} else {
+					this.personal.markScheduledRetry(item.id, attempts, now + 60_000 * 2 ** (attempts - 1), message);
+				}
 			}
 		}
 
@@ -1266,13 +1320,7 @@ export class PrincipalDO extends DurableObject<Env> {
 			this.ctx.waitUntil(this.publish(() => events));
 		}
 
-		if (needsRetry) {
-			const retryAt = Date.now() + 60_000;
-			const current = await this.ctx.storage.getAlarm();
-			if (current === null || retryAt < current) await this.ctx.storage.setAlarm(retryAt);
-		} else {
-			await this.schedulePersonalAlarm();
-		}
+		await this.schedulePersonalAlarm();
 	}
 
 	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {

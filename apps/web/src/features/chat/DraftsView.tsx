@@ -17,6 +17,10 @@ export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
 	const [scheduled, setScheduled] = useState<ChatScheduledMessage[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
+	const [editingId, setEditingId] = useState<string | null>(null);
+	const [editText, setEditText] = useState("");
+	const [editSendAt, setEditSendAt] = useState("");
+	const [savingEdit, setSavingEdit] = useState(false);
 
 	const roomsById = useMemo(() => new Map(rooms.map((r) => [r.id, r])), [rooms]);
 
@@ -62,9 +66,38 @@ export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
 		try {
 			await api.call("chat.cancel_scheduled_message", { scheduled_id: id });
 			setScheduled((current) => current.filter((s) => s.id !== id));
+			if (editingId === id) setEditingId(null);
 			toast({ message: "Scheduled message cancelled." });
 		} catch (caught) {
 			toast({ message: errorMessage(caught), tone: "error" });
+		}
+	}
+
+	function startEditScheduled(item: ChatScheduledMessage) {
+		setEditingId(item.id);
+		setEditText(item.text);
+		const d = new Date(item.send_at);
+		const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+		setEditSendAt(local);
+	}
+
+	async function saveEditScheduled(id: string) {
+		if (!editText.trim()) return;
+		setSavingEdit(true);
+		try {
+			const sendAtIso = new Date(editSendAt).toISOString();
+			const res = await api.call("chat.update_scheduled_message", {
+				scheduled_id: id,
+				text: editText.trim(),
+				send_at: sendAtIso,
+			});
+			setScheduled((current) => current.map((s) => (s.id === id ? res.scheduled : s)));
+			setEditingId(null);
+			toast({ message: "Scheduled message updated." });
+		} catch (caught) {
+			toast({ message: errorMessage(caught), tone: "error" });
+		} finally {
+			setSavingEdit(false);
 		}
 	}
 
@@ -152,19 +185,65 @@ export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
 										<span className="chat-feed-actor">{labelOf(item.room_id)}</span>
 										<span className="chat-feed-time">Sends {fullDate(item.send_at)}</span>
 									</div>
-									<p className="chat-feed-preview">{item.text}</p>
-									<div className="chat-feed-actions">
-										<button
-											type="button"
-											className="button button-small"
-											onClick={() => navigate(chatPath(item.room_id))}
+									{editingId === item.id ? (
+										<form
+											className="chat-feed-edit"
+											onSubmit={(event) => {
+												event.preventDefault();
+												void saveEditScheduled(item.id);
+											}}
 										>
-											Open room
-										</button>
-										<button type="button" className="button button-small" onClick={() => void cancelScheduled(item.id)}>
-											Cancel
-										</button>
-									</div>
+											<label className="field">
+												<span>Message</span>
+												<textarea
+													rows={2}
+													value={editText}
+													onChange={(event) => setEditText(event.target.value)}
+													required
+												/>
+											</label>
+											<label className="field">
+												<span>Send time</span>
+												<input
+													type="datetime-local"
+													value={editSendAt}
+													onChange={(event) => setEditSendAt(event.target.value)}
+													required
+												/>
+											</label>
+											<div className="chat-feed-actions">
+												<button type="submit" className="button button-small button-primary" disabled={savingEdit}>
+													{savingEdit ? "Saving…" : "Save"}
+												</button>
+												<button type="button" className="button button-small" onClick={() => setEditingId(null)}>
+													Cancel
+												</button>
+											</div>
+										</form>
+									) : (
+										<>
+											<p className="chat-feed-preview">{item.text}</p>
+											<div className="chat-feed-actions">
+												<button
+													type="button"
+													className="button button-small"
+													onClick={() => navigate(chatPath(item.room_id))}
+												>
+													Open room
+												</button>
+												<button type="button" className="button button-small" onClick={() => startEditScheduled(item)}>
+													Edit
+												</button>
+												<button
+													type="button"
+													className="button button-small"
+													onClick={() => void cancelScheduled(item.id)}
+												>
+													Cancel
+												</button>
+											</div>
+										</>
+									)}
 								</div>
 							</li>
 						))}

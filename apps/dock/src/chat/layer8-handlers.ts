@@ -1,4 +1,5 @@
 import {
+	ALL_SCOPES,
 	CHAT_LIMITS,
 	type ChatActivityItem,
 	type ChatDraft,
@@ -13,6 +14,7 @@ import {
 import {
 	type ActivityRecord,
 	type CallContext,
+	credentialBinding,
 	type DraftRecord,
 	getPrincipals,
 	isAdmin,
@@ -31,6 +33,7 @@ import {
 } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { createCustomEmoji, deleteCustomEmoji, listCustomEmoji } from "./custom-emoji.ts";
+import { dmRoomId } from "./handlers.ts";
 import {
 	createIncomingWebhook,
 	deleteIncomingWebhook,
@@ -165,6 +168,7 @@ function toActivity(record: ActivityRecord): ChatActivityItem {
 		actor: record.actor,
 		preview: record.preview,
 		emoji: record.emoji,
+		untrusted: record.untrusted,
 		read_at: record.read_at === null ? null : iso(record.read_at),
 		created_at: iso(record.created_at),
 	};
@@ -218,6 +222,7 @@ function toReminder(record: ReminderRecord): ChatReminder {
 		parent_seq: record.parent_seq,
 		note: record.note,
 		preview: record.preview,
+		untrusted: record.untrusted,
 		remind_at: iso(record.remind_at),
 		triggered_at: record.triggered_at === null ? null : iso(record.triggered_at),
 		completed_at: record.completed_at === null ? null : iso(record.completed_at),
@@ -256,17 +261,6 @@ async function actorsOf(call: CallContext, ids: readonly string[]): Promise<Acto
 		kind: principal.kind,
 		display_name: principal.display_name,
 	}));
-}
-
-async function pairDmRoomId(a: string, b: string): Promise<string> {
-	const [low, high] = a < b ? [a, b] : [b, a];
-	let value = BigInt(`0x${(await sha256Hex(`chat-dm:${low}:${high}`)).slice(0, 32)}`);
-	let out = "";
-	for (let i = 0; i < 26; i++) {
-		out = CROCKFORD[Number(value & 31n)] + out;
-		value >>= 5n;
-	}
-	return `dm_${out}`;
 }
 
 /** Deterministic ID for a group DM from sorted unique member IDs. */
@@ -489,6 +483,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			bodyJson: JSON.stringify(content.body),
 			markdown: bodyMarkdown(content.body),
 			sendAt,
+			credentialBindingJson: JSON.stringify(credentialBinding(call.caller)),
 		});
 		if (scheduled === "full") {
 			throw new OperationError(
@@ -544,6 +539,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			parentSeq: verified.parentSeq,
 			note: input.note ?? "",
 			preview: verified.message.text.replace(/\s+/g, " ").trim().slice(0, 200),
+			untrusted: verified.message.untrusted,
 			remindAt,
 			actor: actorOf(call),
 		});
@@ -680,7 +676,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const peers = await actorsOf(call, uniqueOthers);
 		if (peers.length === 1) {
 			const peer = peers[0] as ActorRecord;
-			const opened = openRoom(call, await pairDmRoomId(call.caller.id, peer.principal_id));
+			const opened = openRoom(call, await dmRoomId(call.caller.id, peer.principal_id));
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
 			if (res.created) auditOk(call, "chat.open_dm", res.room.id);
 			return { room: toRoom(res.room) };
@@ -708,6 +704,13 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 	},
 
 	async "chat.delete_room"(call, input) {
+		const missing = ALL_SCOPES.filter((scope) => !call.caller.scopes.has(scope));
+		if (missing.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`Deleting a room requires a full human credential. Your credential does not hold ${missing.join(", ")}.`,
+			);
+		}
 		const opened = openRoom(call, input.room_id);
 		const res = accept(
 			await opened.room.deleteRoom(opened.ctx, {
@@ -895,7 +898,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 				messageId: input.message_id,
 				cardId: input.card_id,
 				actionId: input.action_id,
-				value: input.value,
+				idempotencyKey: input.idempotency_key,
 			}),
 		);
 		auditOk(call, "chat.trigger_card_action", `${input.room_id}:${input.message_id}:${input.action_id}`);
@@ -903,7 +906,16 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 	},
 
 	async "chat.list_card_actions"(call, input) {
+		const cursor =
+			input.cursor === undefined ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
+		if (input.cursor !== undefined && cursor === null) {
+			throw new OperationError("invalid", "The cursor is not from this list.");
+		}
 		const opened = openRoom(call, input.room_id);
-		return accept(await opened.room.listCardActions(opened.ctx, input.message_id));
+		const res = accept(await opened.room.listCardActions(opened.ctx, input.message_id, cursor, input.limit ?? 50));
+		return {
+			actions: res.actions,
+			next_cursor: res.nextCursor ? encodeCursor(res.nextCursor) : null,
+		};
 	},
 };
