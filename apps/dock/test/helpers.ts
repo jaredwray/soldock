@@ -309,6 +309,41 @@ export async function drainOutbox(principalId: string): Promise<void> {
 	);
 }
 
+/**
+ * A room sends the state of a change to the object of the actor at once. It sends the state to the
+ * objects of the other members after `MEMBER_DELAY_MS`. In that time, the list of a different member
+ * shows the state before the change. A slow runner reads a list in that time more often. So a test that
+ * reads the list of a member that did not make the change calls this first.
+ *
+ * Each room sends its waiting states for the principals now, as if the delay ended. The runtime can run
+ * the alarm by itself, so this tries again until the states are sent. A state that failed keeps its retry time.
+ */
+export async function sendMemberStates(...principalIds: string[]): Promise<void> {
+	const targets = JSON.stringify(principalIds.map((id) => `principal:${id}`));
+	const { results } = await env.DIRECTORY.prepare("SELECT id FROM chat_rooms").all<{ id: string }>();
+	await Promise.all(
+		results.map(async ({ id }) => {
+			const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(id));
+			const waiting = () =>
+				runInDurableObject(room, (_instance, state) => {
+					const sql = state.storage.sql;
+					const where = "attempts = 0 AND target IN (SELECT value FROM json_each(?))";
+					sql.exec(`UPDATE outbox SET next_attempt_at = 0 WHERE ${where}`, targets);
+					return sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM outbox WHERE ${where}`, targets).one().n;
+				});
+			await vi.waitFor(
+				async () => {
+					if ((await waiting()) === 0) return;
+					await runDurableObjectAlarm(room);
+					const left = await waiting();
+					if (left > 0) throw new Error(`${left} member states wait in room ${id}`);
+				},
+				{ timeout: 5000, interval: 20 },
+			);
+		}),
+	);
+}
+
 /** The error code of a call that must fail. */
 export async function codeOf(promise: Promise<unknown>): Promise<string> {
 	const error = await promise.then(
