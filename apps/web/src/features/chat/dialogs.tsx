@@ -1,5 +1,15 @@
 import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@asterra/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+	type FormEvent,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useEffectEvent,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx";
@@ -522,6 +532,71 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 	);
 }
 
+const ROOM_DETAILS_RECHECK_MS = 5000;
+
+interface ConfirmedRoomDetails {
+	details: ChatRoom;
+	checked: ChatRoom;
+}
+
+interface RoomDetailsCheck {
+	room: ChatRoom;
+	startedAt: number;
+}
+
+function sameDetails(first: ChatRoom, second: ChatRoom): boolean {
+	return first.name === second.name && first.topic === second.topic;
+}
+
+/** Read the room when its list disagrees with a write. A list can still have the old name or topic. */
+function useConfirmedRoomDetails(room: ChatRoom, mounted: RefObject<boolean>, session: number) {
+	const [confirmed, setConfirmed] = useState<ConfirmedRoomDetails | null>(null);
+	const checking = useRef(false);
+	const [lastCheck, setLastCheck] = useState<RoomDetailsCheck | null>(null);
+
+	const finish = useEffectEvent((base: ConfirmedRoomDetails, check: RoomDetailsCheck, answer?: ChatRoom) => {
+		checking.current = false;
+		if (!mounted.current || accountChangeCount() !== session) return;
+		// A new local save takes priority. Ignore an answer for a conflict that no longer shows.
+		const details = answer && sameDetails(check.room, room) ? answer : base.details;
+		setConfirmed((current) => (current === base ? { details, checked: check.room } : current));
+		setLastCheck(check);
+	});
+
+	useEffect(() => {
+		if (checking.current || !confirmed || confirmed.checked === room || sameDetails(confirmed.details, room)) return;
+		// During a read, React keeps the latest room prop. When the read ends, check only that snapshot.
+		const read = () => {
+			if (checking.current || !mounted.current || accountChangeCount() !== session) return;
+			checking.current = true;
+			const check = { room, startedAt: performance.now() };
+			void api.call("chat.get_room", { room_id: room.id }).then(
+				({ room: answer }) => finish(confirmed, check, answer),
+				() => finish(confirmed, check),
+			);
+		};
+		// A real rename can restore an old name. Space the reads for consecutive snapshots with the same details.
+		const delay =
+			lastCheck && sameDetails(lastCheck.room, room)
+				? lastCheck.startedAt + ROOM_DETAILS_RECHECK_MS - performance.now()
+				: 0;
+		if (delay <= 0) {
+			read();
+			return;
+		}
+		const timer = window.setTimeout(read, delay);
+		return () => window.clearTimeout(timer);
+	}, [lastCheck, confirmed, mounted, room, session]);
+
+	return {
+		saved: confirmed?.details ?? room,
+		confirm(details: ChatRoom) {
+			setLastCheck(null);
+			setConfirmed({ details, checked: room });
+		},
+	};
+}
+
 /** Each member selects personal notifications. An owner can also edit a named room. */
 export function RoomSettingsDialog({
 	room,
@@ -533,8 +608,6 @@ export function RoomSettingsDialog({
 	onDetailsSaved(): void;
 }) {
 	const canEdit = room.kind !== "dm" && room.role === "owner";
-	const [confirmed, setConfirmed] = useState<{ details: ChatRoom; checked: ChatRoom } | null>(null);
-	const saved = confirmed?.details ?? room;
 	const [details, setDetails] = useState<{ initial: ChatRoom; name: string; topic: string } | null>(null);
 	const [session] = useState(accountChangeCount);
 	const mounted = useRef(false);
@@ -544,25 +617,7 @@ export function RoomSettingsDialog({
 			mounted.current = false;
 		};
 	}, []);
-	// A list can still have the old details after a save. Ask the room if a different name or topic is current.
-	// Check each new snapshot, because a later rename can restore the same name as an old snapshot.
-	useEffect(() => {
-		if (!confirmed || confirmed.checked === room) return;
-		if (room.name === confirmed.details.name && room.topic === confirmed.details.topic) return;
-		let obsolete = false;
-		void api.call("chat.get_room", { room_id: room.id }).then(
-			({ room: details }) => {
-				if (obsolete || !mounted.current || accountChangeCount() !== session) return;
-				setConfirmed((latest) => (latest === confirmed ? { details, checked: room } : latest));
-			},
-			() => {
-				// Keep the last confirmed details. The next room list starts another check.
-			},
-		);
-		return () => {
-			obsolete = true;
-		};
-	}, [confirmed, room, session]);
+	const { saved, confirm } = useConfirmedRoomDetails(room, mounted, session);
 	const { data, loading } = useNotificationSettings();
 	const [level, setLevel] = useState<RoomNotificationChoice>();
 	const [busy, setBusy] = useState(false);
@@ -604,7 +659,7 @@ export function RoomSettingsDialog({
 			if (detailsChanged) {
 				const result = await api.call("chat.update_room", { room_id: room.id, ...changes });
 				if (!current()) return;
-				setConfirmed({ details: result.room, checked: room });
+				confirm(result.room);
 				setDetails(null);
 				detailsSaved = true;
 				onDetailsSaved();

@@ -131,8 +131,9 @@ test("a delayed room list cannot undo a saved name, and a later rename can resto
 	const saved = unique("Name after save");
 	const room = await createRoom(person, first);
 	const page = await person.newPage();
-	// Without the principal socket, the sidebar gets each snapshot from its list request.
-	await page.routeWebSocket("**/ws/events", () => {});
+	await page.clock.install();
+	// The lists use HTTP. Room socket events must not start an independent read of the members.
+	await page.routeWebSocket("**/ws/**", () => {});
 	await openRoom(page, room);
 	await expect(
 		page.getByRole("navigation", { name: "Rooms" }).getByRole("link", { name: first }).first(),
@@ -145,6 +146,9 @@ test("a delayed room list cannot undo a saved name, and a later rename can resto
 
 	const readEarlier = Promise.withResolvers<void>();
 	const captured = Promise.withResolvers<void>();
+	const checking = Promise.withResolvers<void>();
+	const failCheck = Promise.withResolvers<void>();
+	let checks = 0;
 	const showEarlier = Promise.withResolvers<void>();
 	const resume = Promise.withResolvers<void>();
 	let waiting = true;
@@ -188,13 +192,43 @@ test("a delayed room list cannot undo a saved name, and a later rename can resto
 		await dialog.getByRole("button", { name: "Save changes" }).click();
 		await expect(dialog.getByRole("alert")).toContainText("Room details saved.");
 		await expect(dialog.getByText(saved, { exact: true })).toBeVisible();
+		await page.route(
+			(url) => url.pathname === `/api/v1/chat/rooms/${room}`,
+			async (route) => {
+				if (++checks === 1) {
+					checking.resolve();
+					await failCheck.promise;
+					await route.abort();
+				} else {
+					await route.continue();
+				}
+			},
+		);
 		showEarlier.resolve();
 		await expect(page.locator(".chat-title")).toHaveText(earlier);
 		await expect(dialog.getByText(saved, { exact: true })).toBeVisible();
+		await checking.promise;
+		// Keep the first check open across the poll and the delay between repeated checks.
+		await page.clock.fastForward(10_000);
 		await rename();
 		resume.resolve();
+		// Each change of the star proves that the browser applied a different list with the same name.
+		const star = page.locator(".chat-room-heading button[aria-pressed]");
+		for (const starred of [true, false, true]) {
+			const changed = await person.request.post(`/api/v1/chat/rooms/${room}/star`, {
+				headers: { origin: BASE_URL },
+				data: { starred },
+			});
+			expect(changed.ok()).toBe(true);
+			await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+			await expect(star).toHaveAttribute("aria-pressed", String(starred));
+		}
+		expect(checks).toBe(1);
+		failCheck.resolve();
 		await expect(dialog.getByText(earlier, { exact: true })).toBeVisible();
+		expect(checks).toBe(2);
 	} finally {
+		failCheck.resolve();
 		readEarlier.resolve();
 		showEarlier.resolve();
 		resume.resolve();
