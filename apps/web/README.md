@@ -75,6 +75,8 @@ MCP clients. The app has no UI-only path.
   - **Turn on device notifications** asks for browser permission on this device.
     A click on a notification opens the message or the reply in its thread.
     The notification keeps message text off the lock screen.
+    When the VAPID key changes, the app renews the subscription on the next start or account change.
+    If the browser refuses renewal, Settings shows the error. Select **Turn on device notifications** to try again.
   - The active tab can play a short tone after the person interacts with the page.
   - In a room, **Room notifications** overrides the default for that room. Select **Use my default** to clear the override.
   - The rail has the mark of Asterra, which goes to the inbox, and a link to each product: Mail,

@@ -146,18 +146,21 @@ function DevicePush({ publicKey }: { publicKey: string | null }) {
 	const [busy, setBusy] = useState(false);
 	useEffect(() => {
 		let stopped = false;
-		void devicePushEnabled(account).then(
+		void devicePushEnabled(account, publicKey).then(
 			(value) => {
 				if (!stopped) setEnabled(value);
 			},
 			(reason) => {
-				if (!stopped) setError(errorMessage(reason));
+				if (!stopped) {
+					setEnabled(false);
+					setError(errorMessage(reason));
+				}
 			},
 		);
 		return () => {
 			stopped = true;
 		};
-	}, [account]);
+	}, [account, publicKey]);
 	const available = supportsPush() && publicKey !== null;
 	return (
 		<div className="panel-card panel-form">
@@ -184,7 +187,7 @@ function DevicePush({ publicKey }: { publicKey: string | null }) {
 					try {
 						if (enabled) await disableDevicePush(account);
 						else if (publicKey) await enableDevicePush(account, publicKey);
-						setEnabled(await devicePushEnabled(account));
+						setEnabled(await devicePushEnabled(account, publicKey));
 					} catch (reason) {
 						setError(errorMessage(reason));
 					} finally {

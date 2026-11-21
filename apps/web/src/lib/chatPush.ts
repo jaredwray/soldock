@@ -3,6 +3,7 @@ import { api } from "./api.ts";
 import { base64ToBytes } from "./base64.ts";
 
 const SCOPE = "/chat-push/";
+let restore: { account: string | null; done: Promise<void> } | undefined;
 
 export function supportsPush(): boolean {
 	return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -47,31 +48,51 @@ async function registerDevice(account: string, subscription: PushSubscription): 
 	});
 }
 
+function applicationKey(publicKey: string): Uint8Array<ArrayBuffer> {
+	return base64ToBytes(publicKey.replaceAll("-", "+").replaceAll("_", "/"));
+}
+
+function matchesKey(subscription: PushSubscription, key: Uint8Array): boolean {
+	const buffer = subscription.options.applicationServerKey;
+	if (!buffer || key.length !== buffer.byteLength) return false;
+	const current = new Uint8Array(buffer);
+	return key.every((byte, index) => byte === current[index]);
+}
+
+/** Two tabs can notice a new key at the same time. Finish one change before the next tab reads the subscription. */
+function changeDevice(account: string, change: () => Promise<void>): Promise<void> {
+	return navigator.locks ? navigator.locks.request(scopeFor(account), change) : change();
+}
+
+async function bindDevice(account: string, registration: ServiceWorkerRegistration, publicKey: string): Promise<void> {
+	await activeWorker(registration);
+	const key = applicationKey(publicKey);
+	let subscription = await registration.pushManager.getSubscription();
+	if (currentAccount() !== account) throw new Error("Your session changed.");
+	if (subscription && !matchesKey(subscription, key)) {
+		await api.call("chat.unsubscribe_push", { expected_principal_id: account, endpoint: subscription.endpoint });
+		await subscription.unsubscribe();
+		subscription = null;
+	}
+	subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+	await registerDevice(account, subscription);
+}
+
 /** Ask for permission only from the button of the person. The browser can refuse a request after an await. */
 export async function enableDevicePush(account: string, publicKey: string): Promise<void> {
 	if ((await Notification.requestPermission()) !== "granted")
 		throw new Error("Allow notifications for this site in your browser.");
-	if (currentAccount() !== account) return;
-	const registration = await navigator.serviceWorker.register("/chat-push.js", { scope: scopeFor(account) });
-	try {
-		await activeWorker(registration);
-		const key = base64ToBytes(publicKey.replaceAll("-", "+").replaceAll("_", "/"));
-		let subscription = await registration.pushManager.getSubscription();
-		const existingKey = subscription?.options.applicationServerKey;
-		const currentKey = existingKey ? new Uint8Array(existingKey) : null;
-		if (
-			subscription &&
-			(!currentKey || key.length !== currentKey.length || !key.every((byte, index) => byte === currentKey[index]))
-		) {
-			await subscription.unsubscribe();
-			subscription = null;
+	await changeDevice(account, async () => {
+		if (currentAccount() !== account) throw new Error("Your session changed.");
+		const registration = await navigator.serviceWorker.register("/chat-push.js", { scope: scopeFor(account) });
+		try {
+			await bindDevice(account, registration, publicKey);
+			if (restore?.account === account) restore = undefined;
+		} catch (error) {
+			await removeRegistration(registration);
+			throw error;
 		}
-		subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-		await registerDevice(account, subscription);
-	} catch (error) {
-		await removeRegistration(registration);
-		throw error;
-	}
+	});
 }
 
 async function removeRegistration(registration: ServiceWorkerRegistration): Promise<void> {
@@ -84,35 +105,49 @@ async function removeRegistration(registration: ServiceWorkerRegistration): Prom
 	}
 }
 
-export async function disableDevicePush(account: string): Promise<void> {
-	const registration = await deviceRegistration(account);
-	if (!registration) return;
-	const subscription = await registration.pushManager.getSubscription();
-	if (subscription && currentAccount() === account) {
-		await api.call("chat.unsubscribe_push", { expected_principal_id: account, endpoint: subscription.endpoint });
-	}
-	await removeRegistration(registration);
+export function disableDevicePush(account: string): Promise<void> {
+	return changeDevice(account, async () => {
+		const registration = await deviceRegistration(account);
+		if (!registration) return;
+		const subscription = await registration.pushManager.getSubscription();
+		if (subscription && currentAccount() === account) {
+			await api.call("chat.unsubscribe_push", { expected_principal_id: account, endpoint: subscription.endpoint });
+		}
+		await removeRegistration(registration);
+	});
 }
 
-export async function devicePushEnabled(account: string): Promise<boolean> {
-	if (!supportsPush()) return false;
+export async function devicePushEnabled(account: string, publicKey: string | null): Promise<boolean> {
+	if (!supportsPush() || Notification.permission !== "granted") return false;
+	if (restore?.account === account) await restore.done;
 	const registration = await deviceRegistration(account);
-	return Boolean(await registration?.pushManager.getSubscription());
+	const subscription = await registration?.pushManager.getSubscription();
+	// An existing device can still opt out while the server has no VAPID configuration.
+	return Boolean(subscription && (publicKey === null || matchesKey(subscription, applicationKey(publicKey))));
 }
 
 /** Bind the device to the current session. Remove the registrations of previous accounts. */
-export async function syncPushDevices(account: string | null): Promise<void> {
+export function syncPushDevices(account: string | null): Promise<void> {
+	const done = restorePushDevices(account);
+	restore = { account, done };
+	return done;
+}
+
+async function restorePushDevices(account: string | null): Promise<void> {
 	if (!supportsPush()) return;
 	const own = account ? scopeFor(account) : null;
 	const registrations = await navigator.serviceWorker.getRegistrations();
 	for (const registration of registrations) {
 		if (account !== currentAccount()) return;
 		if (!registration.scope.startsWith(pushScopes())) continue;
-		if (account && registration.scope === own) {
-			const subscription = await registration.pushManager.getSubscription();
-			if (subscription) await registerDevice(account, subscription);
-		} else {
-			await removeRegistration(registration);
-		}
+		if (registration.scope !== own) await removeRegistration(registration);
 	}
+	if (!account || !registrations.some((registration) => registration.scope === own)) return;
+	await changeDevice(account, async () => {
+		// A different tab can turn push off before this tab gets the lock.
+		const registration = await deviceRegistration(account);
+		if (!registration || currentAccount() !== account || Notification.permission !== "granted") return;
+		const { vapid_public_key } = await api.call("chat.get_notification_settings", {});
+		if (vapid_public_key) await bindDevice(account, registration, vapid_public_key);
+	});
 }
