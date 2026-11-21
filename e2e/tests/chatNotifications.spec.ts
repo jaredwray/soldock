@@ -76,6 +76,16 @@ test("an owner can save room details and retry a personal notification change in
 	await page.keyboard.press("Escape");
 	await expect(button).toBeFocused();
 
+	const title = page.getByRole("heading", { level: 1, name: newName });
+	for (const width of [320, 360, 390]) {
+		await page.setViewportSize({ width, height: 640 });
+		await expect(title).toBeInViewport({ ratio: 1 });
+		// The room name needs space for more than an ellipsis next to the header controls.
+		expect((await title.boundingBox())?.width).toBeGreaterThan(64);
+		for (const action of await page.locator(".chat-header-actions").getByRole("button").all()) {
+			await expect(action).toBeInViewport({ ratio: 1 });
+		}
+	}
 	await button.click();
 	await expect(mentions).toBeChecked();
 	await inherit.check();

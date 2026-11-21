@@ -1227,20 +1227,21 @@ a.chat-author:hover {
 	}
 }
 
-/* Give the name of a peer the full first row on small phones. */
-@media (max-width: 440px) {
-	.chat-header:has(.chat-peer-detail) {
-		grid-template-areas:
-			"mark heading heading"
-			"detail detail actions";
-	}
-}
-
-@media (max-width: 359px) {
+/* The product menu sits over the first row. Give the room controls their own row on smaller screens. */
+@media (max-width: 520px) {
 	.chat-header:has(.chat-room-heading) {
+		padding-left: 8px;
+		grid-template-columns: 44px auto minmax(0, 1fr);
 		grid-template-areas:
-			"mark heading heading"
-			"detail detail actions";
+			". mark heading"
+			". mark detail"
+			"actions actions actions";
+	}
+
+	.chat-header-actions {
+		max-width: 100%;
+		justify-content: flex-end;
+		flex-wrap: wrap;
 	}
 }
 
