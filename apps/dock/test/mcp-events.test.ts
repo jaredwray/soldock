@@ -622,7 +622,7 @@ describe("event delivery", () => {
 	// An agent that monitors its rooms must not start a turn for each message of each room. The filter
 	// is not a part of the id, so one callback never gets one message from two subscriptions. A refresh
 	// without a filter keeps a filter that the client set.
-	it("sends an agent only the messages for it by default, and only a refresh with a filter changes it", async () => {
+	it("sends an agent only the messages for it by default, and a refresh without a filter keeps a filter that the client set", async () => {
 		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
 		const room = await privateRoom("Launch");
 		const { say, reasons } = await chatFeed(room.id);
@@ -678,7 +678,7 @@ describe("event delivery", () => {
 		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET chat_filter_explicit = 0 WHERE id = ?")
 			.bind(id)
 			.run();
-		const mark = filterMigration.split("--> statement-breakpoint").find((statement) => statement.includes("UPDATE"));
+		const [, mark] = filterMigration.split("--> statement-breakpoint");
 		await env.DIRECTORY.prepare(mark ?? "").run();
 
 		expect(resultOf(await subscribe(ada.key, "chat.message.created")).id).toBe(id);

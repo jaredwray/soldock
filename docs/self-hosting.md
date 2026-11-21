@@ -340,3 +340,5 @@ Migration `0021_chat_filter_explicit.sql` records if the creator of a chat subsc
 row with `addressed` gets "set". Each other row gets "not set". At its next refresh without `filter`, a
 subscription of MCP Events for an agent with "not set" changes from `all` to `addressed`. This includes an
 agent that set `all` before this migration. Such an agent sends `filter: "all"` again to keep it.
+The deploy applies the migration before the new Worker starts. A row that the previous Worker writes gets
+"not set", also after a rollback. If a client set the filter in that time, it sends `filter` again.
