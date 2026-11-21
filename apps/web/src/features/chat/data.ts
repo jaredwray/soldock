@@ -573,7 +573,7 @@ export function useRoom(
 	});
 	const alive = useRef(true);
 	const loads = useRef(0);
-	/** The number of reads of the members. Only the last read applies. A load of the room counts as a read. */
+	/** Orders room metadata reads and local policy saves so an earlier response cannot undo a change. */
 	const memberReads = useRef(0);
 	/** The mark of the last load of this view that gave the messages of the room. The cache keeps it with the list. */
 	const loadMark = useRef(0);
@@ -704,6 +704,12 @@ export function useRoom(
 		}
 	}, [tick, listedVersion, sync]);
 
+	/** Apply the confirmed save before closing controls. Supersede metadata reads already in flight. */
+	const applyPolicy = useCallback((policy: ChatRoomPolicy) => {
+		const metadataRead = ++memberReads.current;
+		setState((current) => (current.status === "ready" ? { ...current, metadataRead, policy } : current));
+	}, []);
+
 	/** Gets the members again after the socket told that they changed. */
 	const loadMembers = useCallback(async () => {
 		const request = ++memberReads.current;
@@ -797,6 +803,7 @@ export function useRoom(
 		cancelReads: pager.cancel,
 		follow: pager.follow,
 		apply,
+		applyPolicy,
 		loadMembers,
 		watchMessages,
 		typists,

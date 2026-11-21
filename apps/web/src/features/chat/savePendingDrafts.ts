@@ -1,5 +1,5 @@
 import { api } from "../../lib/api.ts";
-import { createDraftStore, draftStorage } from "./drafts.ts";
+import { createDraftStore, draftStorage, sameDraftBody } from "./drafts.ts";
 
 /** Flush drafts from every room before explicit sign-out, including editors that have since closed. */
 export async function savePendingDrafts(owner: string, stillSignedIn: () => boolean): Promise<boolean> {
@@ -22,7 +22,7 @@ export async function savePendingDrafts(owner: string, stillSignedIn: () => bool
 			// Another tab or the active editor can finish a save or make another edit during the request.
 			const latest = store.get(key);
 			if (latest?.dirty && latest.revision === sent.revision)
-				store.set(key, { ...latest, revision, dirty: JSON.stringify(latest.body) !== JSON.stringify(sent.body) });
+				store.set(key, { ...latest, revision, dirty: !sameDraftBody(latest.body, sent.body) });
 		} catch {
 			// Keep this local edit, including a conflict. Other drafts can still be saved.
 		}

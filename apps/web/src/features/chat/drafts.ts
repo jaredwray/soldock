@@ -20,6 +20,10 @@ export interface DraftCopy {
 	dirty: boolean;
 }
 
+export function sameDraftBody(left: ChatBody | null, right: ChatBody | null): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 interface Draft extends DraftCopy {
 	/** The time of the last change, in milliseconds. */
 	at: number;
@@ -28,6 +32,8 @@ interface Draft extends DraftCopy {
 export interface DraftStore {
 	/** The local copy, including the revision it came from. */
 	get(key: string): DraftCopy | null;
+	/** Store a user edit and return the server revision on which that edit is based. */
+	edit(key: string, previous: Pick<DraftCopy, "body" | "revision">, body: ChatBody | null): number;
 	/** Rooms and threads with a local edit that the server has not acknowledged. */
 	pending(): string[];
 	/** A null copy removes the cache entry. A copy with a null body records a clear. */
@@ -123,8 +129,7 @@ function write(storage: DraftStorage | null, owner: string, drafts: Map<string, 
  * write that failed. Two tabs that change the draft of the same room keep the last change.
  */
 export function createDraftStore(storage: DraftStorage | null, owner: string): DraftStore {
-	function put(roomId: string, copy: DraftCopy | null) {
-		const drafts = read(storage, owner);
+	function put(drafts: Map<string, Draft>, roomId: string, copy: DraftCopy | null) {
 		const changed = [roomId];
 		if (copy === null) drafts.delete(roomId);
 		else drafts.set(roomId, { ...copy, at: Date.now() });
@@ -142,7 +147,19 @@ export function createDraftStore(storage: DraftStorage | null, owner: string): D
 	return {
 		get: (key) => read(storage, owner).get(key) ?? null,
 		pending: () => [...read(storage, owner)].filter(([, draft]) => draft.dirty).map(([key]) => key),
-		set: put,
+		set: (key, copy) => put(read(storage, owner), key, copy),
+		edit(key, previous, body) {
+			const drafts = read(storage, owner);
+			const cached = drafts.get(key);
+			// Sign-out or another tab can acknowledge the exact body the person is now editing.
+			// A different body is a concurrent change and must still go through the conflict check.
+			const revision =
+				cached && !cached.dirty && cached.revision > previous.revision && sameDraftBody(cached.body, previous.body)
+					? cached.revision
+					: previous.revision;
+			put(drafts, key, { body, revision, dirty: true });
+			return revision;
+		},
 	};
 }
 

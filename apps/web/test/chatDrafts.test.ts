@@ -46,6 +46,22 @@ afterEach(() => {
 });
 
 describe("the drafts of the rooms", () => {
+	it("rebases an edit only on the acknowledged copy of the text that was in the editor", () => {
+		const store = createDraftStore(fakeStorage(), ADA);
+		const original = textToBody("Original draft");
+		const next = textToBody("Next edit");
+		const previous = { body: original, revision: 3 };
+
+		store.set("room", { body: original, revision: 4, dirty: false });
+		expect(store.edit("room", previous, next)).toBe(4);
+		expect(store.get("room")).toMatchObject({ body: next, revision: 4, dirty: true });
+
+		store.set("room", { body: textToBody("From another device"), revision: 5, dirty: false });
+		expect(store.edit("room", previous, next)).toBe(3);
+		store.set("room", { body: original, revision: 5, dirty: true });
+		expect(store.edit("room", previous, next)).toBe(3);
+	});
+
 	it("stay for each room and each person, also for a new page with the same storage", () => {
 		const storage = fakeStorage();
 		const drafts = textStore(storage, ADA);

@@ -224,16 +224,18 @@ export function mountAuthRoutes(app: AuthApp): void {
 
 	app.post("/auth/sign-out", async (c) => {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign out from the Asterra web app.");
+		const expected = c.req.header("x-asterra-expected-principal") ?? null;
 		const token = readCookie(c.req.raw, SESSION_COOKIE);
-		if (token) {
-			const hash = await sha256Hex(token);
-			const session = await c.env.DIRECTORY.prepare("SELECT principal_id FROM sessions WHERE token_hash = ?")
-				.bind(hash)
-				.first<{ principal_id: string }>();
-			await deleteSession(c.env.DIRECTORY, token);
-			// The events sockets of this session close at once, so each tab of the session learns of the sign-out.
-			if (session) await endEventSockets(c.env, session.principal_id, { kind: "session", id: hash });
-		}
-		return c.body(null, 204, { "set-cookie": sessionCookie("", 0), "cache-control": "no-store" });
+		const hash = token ? await sha256Hex(token) : null;
+		const ended = hash ? await deleteSession(c.env.DIRECTORY, hash, expected) : null;
+		if (expected !== null && !ended) throw new OperationError("conflict", "The signed-in account changed.");
+		if (hash && ended) await endEventSockets(c.env, ended.principal_id, { kind: "session", id: hash });
+		// A delayed Set-Cookie can erase a newer login even when we revoked the correct session.
+		// Bound requests leave the revoked cookie inert. Keep the expiry header for older clients.
+		const headers = {
+			"cache-control": "no-store",
+			...(expected === null ? { "set-cookie": sessionCookie("", 0) } : {}),
+		};
+		return c.body(null, 204, headers);
 	});
 }

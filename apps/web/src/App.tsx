@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { endSession, onSessionChange } from "./features/auth/auth.ts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { announceSessionChange, endSession, onSessionChange, sessionChangeStamp } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
@@ -33,6 +33,8 @@ onAccountChange(forgetOtherPeople);
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 	const [signingOut, setSigningOut] = useState(false);
+	const sessionEvents = useRef(0);
+	const endingSession = useRef(false);
 
 	/**
 	 * Shows a new state. Code outside the signed-in app learns in the same step who the person is now,
@@ -56,7 +58,10 @@ export function App() {
 	);
 
 	useEffect(() => {
-		const stop = onSessionChange(() => window.location.reload());
+		const stop = onSessionChange(() => {
+			sessionEvents.current++;
+			window.location.reload();
+		});
 		void load();
 		return stop;
 	}, [load]);
@@ -65,6 +70,8 @@ export function App() {
 	useEffect(
 		() =>
 			onUnauthenticated(() => {
+				// Explicit sign-out verifies the current cookie after the revocation response.
+				if (endingSession.current) return;
 				setAccount(null);
 				setState((current) => (current.status === "signed-in" ? { status: "signed-out", expired: true } : current));
 			}),
@@ -76,7 +83,13 @@ export function App() {
 		const owner = currentAccount();
 		if (!owner || signingOut) return;
 		const generation = accountChangeCount();
-		const stillSignedIn = () => accountChangeCount() === generation && currentAccount() === owner;
+		const event = sessionEvents.current;
+		const stamp = sessionChangeStamp();
+		const stillSignedIn = () =>
+			accountChangeCount() === generation &&
+			currentAccount() === owner &&
+			sessionEvents.current === event &&
+			sessionChangeStamp() === stamp;
 		setSigningOut(true);
 		try {
 			const saved = await savePendingDrafts(owner, stillSignedIn);
@@ -86,9 +99,21 @@ export function App() {
 				!window.confirm("Some chat drafts could not be saved. Sign out and discard the unsaved edits on this device?")
 			)
 				return;
-			await endSession();
-			show({ status: "signed-out", expired: false });
+			if (!stillSignedIn()) return;
+			endingSession.current = true;
+			const result = await endSession(owner);
+			if (!stillSignedIn()) return;
+			// A second login can replace the cookie before either the request or its response.
+			const current = await loadSession(false);
+			if (!stillSignedIn()) return;
+			if (current.status === "error") {
+				setState(current);
+				return;
+			}
+			if (result === "ended") announceSessionChange();
+			show(current);
 		} finally {
+			endingSession.current = false;
 			setSigningOut(false);
 		}
 	}, [show, signingOut]);
@@ -144,7 +169,7 @@ export function App() {
 				return <SignInPage expired={state.expired} onSignedIn={() => void load(false)} />;
 			case "signed-in":
 				return (
-					<SessionContext.Provider value={session}>
+					<SessionContext.Provider key={state.whoami.principal.id} value={session}>
 						<Shell signingOut={signingOut} />
 					</SessionContext.Provider>
 				);

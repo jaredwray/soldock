@@ -1,4 +1,6 @@
-import { expect, it } from "vitest";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import { expect, it, vi } from "vitest";
 import { api, callTool, codeOf, request, seedOrg } from "./helpers.ts";
 
 async function signed(body: string, secret: string, timestamp = Math.floor(Date.now() / 1000)) {
@@ -93,4 +95,40 @@ it("delivers a validated card selection to the agent as one attributed reply", a
 	]);
 	await bot.call("chat.delete_message", { room_id, message_id: message.id });
 	expect(await codeOf(ada.call("chat.click_button", { ...click, idempotency_key: "click-again" }))).toBe("invalid");
+	await ada.call("chat.delete_message", { room_id, message_id: selection.message.id });
+	const history = await ada.call("chat.list_replies", { room_id, message_id: message.id });
+	expect(history.parent).toMatchObject({ deleted: true, text: "" });
+	expect(history.parent).not.toHaveProperty("buttons");
+	expect(history.replies[0]).toMatchObject({ deleted: true, text: "" });
+	expect(history.replies[0]).not.toHaveProperty("action_id");
+});
+
+it("removes buttons and selected actions from history when a room's retention period expires", async () => {
+	const { owner, bot } = await seedOrg();
+	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Approvals", member_ids: [bot.id] });
+	const room_id = room.id;
+	const buttons = [{ id: "accept", label: "Accept February budget" }];
+	const { message: card } = await bot.call("chat.post_card", { room_id, text: "Budget", buttons });
+	const { message: click } = await owner.call("chat.click_button", {
+		room_id,
+		message_id: card.id,
+		action_id: "accept",
+		idempotency_key: "budget-selection",
+	});
+	const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room_id));
+	await runInDurableObject(stub, (_instance, state) => {
+		state.storage.sql.exec("UPDATE messages SET created_at = 0 WHERE id IN (?, ?)", card.id, click.id);
+	});
+	await owner.call("chat.set_room_policy", { room_id, retention_days: 1 });
+	await vi.waitFor(async () => {
+		await runDurableObjectAlarm(stub);
+		const thread = await owner.call("chat.list_replies", { room_id, message_id: card.id });
+		expect(thread.parent).toMatchObject({ id: card.id, deleted: true, text: "" });
+		expect(thread.parent).not.toHaveProperty("buttons");
+		expect(thread.replies[0]).toMatchObject({ id: click.id, deleted: true, text: "" });
+		expect(thread.replies[0]).not.toHaveProperty("action_id");
+	});
+	const { messages } = await owner.call("chat.list_messages", { room_id, changed_after: card.version });
+	expect(messages[0]).toMatchObject({ id: card.id, deleted: true });
+	expect(messages[0]).not.toHaveProperty("buttons");
 });

@@ -81,6 +81,47 @@ test("sign-out saves a pending draft from a closed room and removes its local co
 	await expect(composer(other, name)).toHaveText("Keep this across sign-out");
 });
 
+test("a canceled sign-out preserves the revision of an open draft that was saved", async ({ device }) => {
+	const laptop = await device("tomasz");
+	const phone = await device("tomasz");
+	const closedName = unique("Closed draft");
+	const openName = unique("Open draft");
+	const closedRoom = await createRoom(laptop, closedName);
+	const open = await createRoom(laptop, openName);
+	const draftPath = `/api/v1/chat/rooms/${open}/draft`;
+	const page = await laptop.newPage();
+	let allowOpenWrites = false;
+	let allowReads = true;
+	await page.route("**/rooms/*/draft*", (route) => {
+		const request = route.request();
+		const allow =
+			request.method() === "GET" ? allowReads : allowOpenWrites && new URL(request.url()).pathname === draftPath;
+		return allow ? route.continue() : route.abort();
+	});
+
+	await openRoom(page, closedRoom);
+	await composer(page, closedName).fill("Pending in a closed room");
+	await expect(page.getByText(/Draft sync failed/)).toBeVisible();
+	await openRoom(page, open);
+	await composer(page, openName).fill("Saved during sign-out");
+	await expect(page.getByText(/Draft sync failed/)).toBeVisible();
+
+	// Only the open draft can be saved. Hold background reads so they cannot repair the revision before the next edit.
+	allowOpenWrites = true;
+	allowReads = false;
+	await page.getByRole("button", { name: /^Account:/ }).click();
+	const cancel = page.waitForEvent("dialog").then((prompt) => prompt.dismiss());
+	await Promise.all([
+		cancel,
+		page.getByRole("navigation", { name: "Products" }).getByRole("button", { name: "Sign out" }).click(),
+	]);
+	const remoteText = async () => (await (await phone.request.get(draftPath)).json()).body?.content[0].content[0].text;
+	expect(await remoteText()).toBe("Saved during sign-out");
+	await composer(page, openName).fill("New edit after cancel");
+	allowReads = true;
+	await expect.poll(remoteText).toBe("New edit after cancel");
+});
+
 test("a room pin is shared and a saved message stays private", async ({ device }) => {
 	const owner = await device("rafael");
 	const member = await device("meiling");

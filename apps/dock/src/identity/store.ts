@@ -1020,9 +1020,10 @@ export async function findSession(
 	return principal ? { principal, tokenHash } : null;
 }
 
-export async function deleteSession(db: D1Database, token: string): Promise<void> {
-	await db
-		.prepare("DELETE FROM sessions WHERE token_hash = ?")
-		.bind(await sha256Hex(token))
-		.run();
+/** Revokes just the presented credential. A delayed browser request can pin it to its original principal. */
+export async function deleteSession(db: D1Database, tokenHash: string, expectedPrincipal: string | null) {
+	return db
+		.prepare("DELETE FROM sessions WHERE token_hash = ?1 AND (?2 IS NULL OR principal_id = ?2) RETURNING principal_id")
+		.bind(tokenHash, expectedPrincipal)
+		.first<{ principal_id: string }>();
 }

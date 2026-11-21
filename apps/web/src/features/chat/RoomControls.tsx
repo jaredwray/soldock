@@ -17,17 +17,20 @@ export function RoomControls({
 	room: ChatRoom;
 	policy: ChatRoomPolicy;
 	onClose: () => void;
-	onSaved: () => void;
+	onSaved: (policy: ChatRoomPolicy) => void;
 	onDeleted: () => void;
 }) {
 	const canExport = useSession().whoami.principal.org_role === "owner" && room.role !== null;
 	const manage = room.kind !== "dm" && room.role === "owner";
 	const canSetRetention = manage || (room.kind === "dm" && canExport);
-	// Compare edits with the values at open. A save must preserve concurrent changes to other fields.
-	const [initial] = useState(policy);
-	const [archived, setArchived] = useState(initial.archived);
-	const [posting, setPosting] = useState(initial.posting);
-	const [days, setDays] = useState(initial.retention_days?.toString() ?? "");
+	// Untouched fields follow the live policy while the owner edits another field.
+	const [archiveEdit, setArchiveEdit] = useState<boolean>();
+	const [postingEdit, setPostingEdit] = useState<ChatRoomPolicy["posting"]>();
+	const [daysEdit, setDaysEdit] = useState<string>();
+	const archived = archiveEdit ?? policy.archived;
+	const posting = postingEdit ?? policy.posting;
+	const savedDays = policy.retention_days?.toString() ?? "";
+	const days = daysEdit ?? savedDays;
 	const [removing, setRemoving] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [exported, setExported] = useState<number | null>(null);
@@ -36,20 +39,20 @@ export function RoomControls({
 	const id = useId();
 	useEffect(() => () => cancelExport.current?.abort(), []);
 	const retention = days === "" ? null : Number(days);
-	const changed = archived !== initial.archived || posting !== initial.posting || retention !== initial.retention_days;
+	const changed = archived !== policy.archived || posting !== policy.posting || retention !== policy.retention_days;
 
 	async function save() {
 		if (!canSetRetention || !changed || saving) return;
 		setSaving(true);
 		setError("");
 		try {
-			await api.call("chat.set_room_policy", {
+			const saved = await api.call("chat.set_room_policy", {
 				room_id: room.id,
-				...(archived !== initial.archived && { archived }),
-				...(posting !== initial.posting && { posting }),
-				...(retention !== initial.retention_days && { retention_days: retention }),
+				...(archived !== policy.archived && { archived }),
+				...(posting !== policy.posting && { posting }),
+				...(retention !== policy.retention_days && { retention_days: retention }),
 			});
-			onSaved();
+			onSaved(saved);
 		} catch (caught) {
 			setSaving(false);
 			setError(errorMessage(caught));
@@ -133,7 +136,10 @@ export function RoomControls({
 									className="input"
 									value={posting}
 									disabled={saving}
-									onChange={(event) => setPosting(event.target.value === "owners" ? "owners" : "members")}
+									onChange={(event) => {
+										const next = event.target.value === "owners" ? "owners" : "members";
+										setPostingEdit(next === policy.posting ? undefined : next);
+									}}
 								>
 									<option value="members">All room members</option>
 									<option value="owners">Room owners only</option>
@@ -145,7 +151,9 @@ export function RoomControls({
 									type="checkbox"
 									checked={archived}
 									disabled={saving}
-									onChange={(event) => setArchived(event.target.checked)}
+									onChange={(event) =>
+										setArchiveEdit(event.target.checked === policy.archived ? undefined : event.target.checked)
+									}
 								/>{" "}
 								Archive this room
 							</label>
@@ -165,7 +173,7 @@ export function RoomControls({
 								placeholder="Forever"
 								value={days}
 								disabled={saving}
-								onChange={(event) => setDays(event.target.value)}
+								onChange={(event) => setDaysEdit(event.target.value === savedDays ? undefined : event.target.value)}
 							/>
 							<span className="field-hint">
 								Older messages are permanently deleted. Leave this empty to keep all messages.

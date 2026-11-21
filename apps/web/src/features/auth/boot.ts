@@ -1,4 +1,5 @@
-import { api, errorMessage, isUnauthenticated } from "../../lib/api.ts";
+import { createClient } from "@asterra/contracts";
+import { errorMessage, isUnauthenticated } from "../../lib/api.ts";
 import { getSetupStatus, type SetupNeeded } from "../setup/setup.ts";
 import type { Whoami } from "./session.tsx";
 
@@ -16,7 +17,9 @@ export async function loadSession(showSetup = true): Promise<SessionState> {
 			const setup = await getSetupStatus();
 			if (setup.setup_needed) return { status: "setup", setup };
 		}
-		const whoami = await api.call("account.whoami");
+		// The caller applies this result after checking the session generation. A probe that gets 401
+		// must not sign out the UI or clear browser data before that check.
+		const whoami = await createClient().call("account.whoami");
 		return { status: "signed-in", whoami };
 	} catch (error) {
 		return isUnauthenticated(error)

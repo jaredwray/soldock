@@ -364,6 +364,9 @@ describe("the read marker", () => {
 			["Busy", false],
 			["Quiet", false],
 		]);
+		// Each room sends the other member's unread count from its own alarm.
+		await deliverMemberStates(quiet.id);
+		await deliverMemberStates(busy.id);
 		expect((await joined(bot)).map((room) => [room.name, room.unread, room.last_seq, room.last_read_seq])).toEqual([
 			["Busy", true, 2, 0],
 			["Quiet", true, 1, 0],

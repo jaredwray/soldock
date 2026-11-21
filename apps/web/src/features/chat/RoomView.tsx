@@ -1186,7 +1186,8 @@ export function RoomView({
 					room={room}
 					policy={view.policy}
 					onClose={() => setDialog(null)}
-					onSaved={() => {
+					onSaved={(policy) => {
+						view.applyPolicy(policy);
 						setDialog(null);
 						void view.loadMembers();
 					}}

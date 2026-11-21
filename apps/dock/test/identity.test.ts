@@ -565,6 +565,30 @@ describe("sign-in with a password", () => {
 		expect(out.headers.get("set-cookie")).toMatch(/Max-Age=0/);
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
 	});
+	it("binds a delayed sign-out to its original principal and preserves a replacement cookie", async () => {
+		const { owner, ada } = await seedOrg();
+		const original = await signIn(owner.address);
+		const replacement = await signIn(ada.address);
+		const end = (cookie: string) =>
+			request("/auth/sign-out", {
+				method: "POST",
+				headers: { cookie, origin: ORIGIN, "x-asterra-expected-principal": owner.id },
+			});
+		const who = (cookie: string) => request("/api/v1/account", { headers: { cookie } });
+
+		const mismatched = await end(replacement);
+		expect(mismatched.status).toBe(409);
+		expect(mismatched.headers.get("set-cookie")).toBeNull();
+		expect((await who(replacement)).status).toBe(200);
+		expect((await who(original)).status).toBe(200);
+
+		const ended = await end(original);
+		expect(ended.status).toBe(204);
+		// The response can arrive after a new login in another tab. It must not expire that cookie.
+		expect(ended.headers.get("set-cookie")).toBeNull();
+		expect((await who(original)).status).toBe(401);
+		expect((await who(replacement)).status).toBe(200);
+	});
 });
 
 describe("passwords", () => {

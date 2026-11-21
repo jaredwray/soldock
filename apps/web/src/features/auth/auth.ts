@@ -11,6 +11,15 @@ async function problemOf(response: Response): Promise<ApiError> {
 // The session cookie belongs to the browser. A second tab must reopen its sockets under the new account.
 const SESSION_CHANGED = "asterra-session-changed";
 
+/** Storage updates synchronously across tabs, even when a native confirmation delays the storage event. */
+export function sessionChangeStamp(): string | null {
+	try {
+		return localStorage.getItem(SESSION_CHANGED);
+	} catch {
+		return null;
+	}
+}
+
 export function announceSessionChange(): void {
 	try {
 		localStorage.setItem(SESSION_CHANGED, crypto.randomUUID());
@@ -47,14 +56,16 @@ export async function createSession(input: SignInInput): Promise<SignInResult["s
 	return result.data.status;
 }
 
-/**
- * Ends the session on the server. The cookie is HttpOnly, so only the server can end it: a failed
- * call throws, and the app stays signed in instead of showing a sign-out that did not happen.
- */
-export async function endSession(): Promise<void> {
-	const response = await fetch("/auth/sign-out", { method: "POST", credentials: "same-origin" });
+/** A different account may have supplied the cookie while the initiating tab was waiting. */
+export async function endSession(expectedPrincipal: string): Promise<"ended" | "changed"> {
+	const response = await fetch("/auth/sign-out", {
+		method: "POST",
+		credentials: "same-origin",
+		headers: { "x-asterra-expected-principal": expectedPrincipal },
+	});
+	if (response.status === 409) return "changed";
 	if (!response.ok) throw await problemOf(response);
-	announceSessionChange();
+	return "ended";
 }
 
 export const SIGN_OUT_FAILED = "Sign-out did not finish, so you are still signed in. Try again.";

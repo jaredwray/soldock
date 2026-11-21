@@ -3,14 +3,10 @@ import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } fro
 import { accountChangeCount, currentAccount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import type { ChatComposerHandle } from "./ChatComposer.tsx";
-import { createDraftStore, type DraftCopy, draftStorage, threadDraftKey } from "./drafts.ts";
+import { createDraftStore, type DraftCopy, draftStorage, sameDraftBody, threadDraftKey } from "./drafts.ts";
 
 type Remote = Pick<DraftCopy, "body" | "revision">;
 type Notice = { error: string } | { conflict: Remote } | null;
-
-function equal(a: ChatBody | null, b: ChatBody | null) {
-	return JSON.stringify(a) === JSON.stringify(b);
-}
 
 /** Save each edit on this device first. The server compares revisions before it accepts a write. */
 export function useRoomDraft(
@@ -40,7 +36,7 @@ export function useRoomDraft(
 		(copy: DraftCopy) => {
 			revision.current = copy.revision;
 			store.set(key, copy);
-			if (!active.current || equal(body.current, copy.body)) return;
+			if (!active.current || sameDraftBody(body.current, copy.body)) return;
 			body.current = copy.body;
 			setDraft(copy.body);
 			editor.current?.replace(copy.body);
@@ -64,12 +60,12 @@ export function useRoomDraft(
 					continue;
 				}
 				// A leave removes the server copy. A later join can start again at revision zero.
-				if (!local?.dirty || equal(local.body, remote.body)) {
+				if (!local?.dirty || sameDraftBody(local.body, remote.body)) {
 					if (
 						local?.dirty ||
 						(local?.revision ?? 0) !== remote.revision ||
 						revision.current !== remote.revision ||
-						!equal(body.current, remote.body)
+						!sameDraftBody(body.current, remote.body)
 					) {
 						apply({ ...remote, dirty: false });
 					}
@@ -93,7 +89,7 @@ export function useRoomDraft(
 				if (!signedIn()) return;
 				// An edit during this write starts from the revision that the write just produced.
 				const latest = store.get(key);
-				if (latest?.dirty && latest.revision === local.revision && !equal(latest.body, local.body)) {
+				if (latest?.dirty && latest.revision === local.revision && !sameDraftBody(latest.body, local.body)) {
 					revision.current = remote.revision;
 					store.set(key, { ...latest, revision: remote.revision });
 				}
@@ -108,9 +104,9 @@ export function useRoomDraft(
 	const change = useCallback(
 		(next: ChatBody | null) => {
 			if (accountChangeCount() !== generation.current || currentAccount() !== owner) return;
+			revision.current = store.edit(key, { body: body.current, revision: revision.current }, next);
 			body.current = next;
 			setDraft(next);
-			store.set(key, { body: next, revision: revision.current, dirty: true });
 			clearTimeout(timer.current);
 			timer.current = setTimeout(() => void sync(), 500);
 		},
@@ -174,7 +170,7 @@ export function useRoomDraft(
 			</p>
 		));
 	const clearSent = (sent: ChatBody | null) => {
-		if (sent && equal(store.get(key)?.body ?? null, sent)) {
+		if (sent && sameDraftBody(store.get(key)?.body ?? null, sent)) {
 			change(null);
 			editor.current?.clear();
 		}

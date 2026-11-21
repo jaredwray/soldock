@@ -33,11 +33,15 @@ test("a room owner archives and restores a room while a member reads it", async 
 	await Promise.all([openRoom(page, room), openRoom(reader, room)]);
 	const dialog = page.getByRole("dialog");
 	await page.getByRole("button", { name: "Room controls" }).click();
+	// The owner's metadata refresh can still be unavailable when they reopen the dialog.
+	// The save response carries the policy that the room actually applied.
+	await page.route(`**/api/v1/chat/rooms/${room}`, (route) => route.abort());
 	await dialog.getByLabel("Archive this room").check();
 	await dialog.getByRole("button", { name: "Save changes" }).click();
 	await expect(reader.getByText("This room is archived.")).toBeVisible();
 	await expect(reader.getByRole("textbox", { name: `Message to ${name}` })).toHaveCount(0);
 	await page.getByRole("button", { name: "Room controls" }).click();
+	await expect(dialog.getByLabel("Archive this room")).toBeChecked();
 	await dialog.getByLabel("Archive this room").uncheck();
 	await dialog.getByRole("button", { name: "Save changes" }).click();
 	await expect(reader.getByRole("textbox", { name: `Message to ${name}` })).toBeVisible();
