@@ -1,11 +1,13 @@
 import { ALL_SCOPES } from "@asterra/contracts";
 import { useEffect, useId } from "react";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { useToast } from "../../lib/toast.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SIGN_OUT_FAILED } from "../auth/auth.ts";
 import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "./ApiKeys.tsx";
+import { ChatNotifications } from "./ChatNotifications.tsx";
 import { PasswordCard, TwoStepCard } from "./SignInSettings.tsx";
 import { WebhookSettings } from "./Webhooks.tsx";
 
@@ -18,7 +20,7 @@ export function SettingsPage() {
 	const ids = { account: useId(), signOut: useId() };
 
 	useEffect(() => {
-		document.title = "Settings – Asterra";
+		setPageTitle("Settings – Asterra");
 	}, []);
 
 	return (
@@ -53,6 +55,7 @@ export function SettingsPage() {
 						</div>
 					</dl>
 				</section>
+				<ChatNotifications />
 				<PasswordCard />
 				<TwoStepCard />
 				<ApiKeyManager

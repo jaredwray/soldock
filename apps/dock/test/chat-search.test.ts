@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, api, base64, callTool, codeOf, seedOrg } from "./helpers.ts";
+import { type Actor, api, base64, callTool, codeOf, restartLegacyRoom, seedOrg } from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -672,19 +672,16 @@ describe("the search index of the organization", () => {
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		await indexed(room.id);
 		// The room goes back to the schema before search, and the index forgets the room.
-		await runInDurableObject(roomStub(room.id), (_instance, state) => {
-			const sql = state.storage.sql;
+		await restartLegacyRoom(room.id, 14, (sql) => {
 			sql.exec("DROP TABLE messages_fts");
 			sql.exec("DROP TABLE search_mentions");
 			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
 			sql.exec("DELETE FROM outbox WHERE target LIKE 'search:%'");
-			sql.exec("UPDATE meta SET value = CAST(CAST(value AS INTEGER) - 1 AS TEXT) WHERE key = 'schema_version'");
 		});
 		await runInDurableObject(index(), (_instance, state) => {
 			for (const table of ["rooms", "messages", "messages_fts", "mentions"])
 				state.storage.sql.exec(`DELETE FROM ${table}`);
 		});
-		await expect(runInDurableObject(roomStub(room.id), (_instance, state) => state.abort())).rejects.toThrow();
 
 		// The first search across the rooms asks the room, which sends its messages.
 		expect(await find(bot, "old", { sort: "time" })).toEqual([

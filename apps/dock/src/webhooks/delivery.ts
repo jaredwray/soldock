@@ -478,10 +478,17 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 		return;
 	}
 	if (job.kind === "chat_delivery") {
+		// The target can change its notification level while a delivery waits for a retry.
+		const target = pair.subscription.target_id;
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(target));
+		if (
+			!(await principal.chatNotificationAllowed(job.roomId, knownReason(job.reason), job.occurredAt, job.membershipId))
+		)
+			return;
 		const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
 		const messageId = job.messageId ?? job.eventId;
 		const eventType = job.eventType ?? "chat.message.created";
-		if (!(await room.canNotifyWebhook(pair.subscription.target_id, messageId, job.membershipId, eventType))) return;
+		if (!(await room.canNotifyWebhook(target, messageId, job.membershipId, eventType))) return;
 	}
 	const result = await post(pair.endpoint, pair.subscription, job);
 	if (result === "ok") {

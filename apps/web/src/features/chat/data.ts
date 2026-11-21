@@ -6,14 +6,12 @@ import {
 	chatSocketPath,
 	DIRECTORY_LIMITS,
 	type DirectoryEntry,
-	EVENTS_SOCKET_PATH,
-	EVENTS_SOCKET_PROTOCOL,
 	type InputOf,
-	PrincipalEvent,
 } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { currentAccount, onAccountChange } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
+import { onPrincipalConnection, onPrincipalEvent, principalSocketLive } from "../../lib/principalSocket.ts";
 import { uploadFile } from "../../lib/upload.ts";
 import { type Attachments, createAttachments } from "./attachments.ts";
 import { inRoomList } from "./model.ts";
@@ -23,7 +21,7 @@ import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
 import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom, withStarred } from "./roomList.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
-import { type Connection, createLiveSocket, createRoomSocket, type SocketHandlers } from "./socket.ts";
+import { type Connection, createRoomSocket, type RoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
 
 /**
@@ -111,16 +109,6 @@ export interface RoomsState {
 	tick: number;
 }
 
-/** One connection to the events socket of the person. The session cookie authenticates it. */
-function connectEvents(handlers: SocketHandlers): Connection {
-	const url = new URL(EVENTS_SOCKET_PATH, window.location.href);
-	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-	const socket = new WebSocket(url);
-	socket.onmessage = (event) => handlers.message(event.data);
-	socket.onclose = (event) => handlers.close(event.code);
-	return { send: (data) => socket.send(data), close: () => socket.close(1000) };
-}
-
 /**
  * The rooms and the direct messages of the person, newest message first. This first layer shows the
  * first 100 rooms, and each room with a star of the first 100 of the starred view.
@@ -145,7 +133,7 @@ export function useRooms() {
 	const started = useRef(0);
 	const applied = useRef(0);
 	/** True while the events socket is connected. Then the list polls each minute only. */
-	const live = useRef(false);
+	const live = useRef(principalSocketLive());
 	/** The time of the start of the last read of the list. */
 	const lastRead = useRef(0);
 	/** The number of the last event, and the last change of each room from the socket. */
@@ -188,61 +176,49 @@ export function useRooms() {
 	useEffect(() => {
 		void refresh();
 		let stopped = false;
-		const socket = createLiveSocket<PrincipalEvent>({
-			connect: connectEvents,
-			parse: (value) => {
-				const event = PrincipalEvent.safeParse(value);
-				return event.success ? event.data : null;
-			},
-			protocol: EVENTS_SOCKET_PROTOCOL,
-			onLive: (next) => {
-				live.current = next;
-				// A socket that closes, for example after a sign-out, makes the list read at once.
-				if (!next) pollIfVisible();
-			},
-			onEvent: (event) => {
-				if (event.type === "hello") {
-					void refresh();
-					return;
-				}
-				// The followed threads of a room changed: the Threads view and its count read them again.
-				if (event.type === "chat.threads") {
-					setThreadsTick((current) => current + 1);
-					return;
-				}
-				// A change for the principal: the list of rooms has it with its `chat.room` event.
-				if (event.type === "chat.addressed") return;
-				const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
-				const room = event.type === "chat.room" ? event.room : null;
-				const at = ++events.current;
-				changes.current.set(roomId, { at, room });
-				setState((current) =>
-					current.status === "ready"
-						? { ...current, rooms: withRoom(current.rooms, roomId, room), tick: current.tick + 1 }
-						: current,
-				);
-			},
+		const disconnect = onPrincipalConnection((next) => {
+			live.current = next;
+			if (!next) pollIfVisible();
+		});
+		const unsubscribe = onPrincipalEvent((event) => {
+			if (event.type === "hello") {
+				void refresh();
+				return;
+			}
+			// The followed threads of a room changed: the Threads view and its count read them again.
+			if (event.type === "chat.threads") {
+				setThreadsTick((current) => current + 1);
+				return;
+			}
+			// A change for the principal: the list of rooms has it with its `chat.room` event.
+			if (event.type !== "chat.room" && event.type !== "chat.room_removed") return;
+			const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
+			const room = event.type === "chat.room" ? event.room : null;
+			const at = ++events.current;
+			changes.current.set(roomId, { at, room });
+			setState((current) =>
+				current.status === "ready"
+					? { ...current, rooms: withRoom(current.rooms, roomId, room), tick: current.tick + 1 }
+					: current,
+			);
 		});
 		function pollIfVisible() {
 			if (stopped || document.visibilityState !== "visible") return;
 			if (live.current && Date.now() - lastRead.current < LIVE_POLL_MS) return;
 			void refresh();
 		}
-		const wake = () => {
-			if (document.visibilityState === "visible") socket.wake();
-			pollIfVisible();
-		};
 		const timer = window.setInterval(pollIfVisible, POLL_MS);
-		window.addEventListener("focus", wake);
-		window.addEventListener("online", wake);
-		document.addEventListener("visibilitychange", wake);
+		window.addEventListener("focus", pollIfVisible);
+		window.addEventListener("online", pollIfVisible);
+		document.addEventListener("visibilitychange", pollIfVisible);
 		return () => {
 			stopped = true;
-			socket.close();
+			disconnect();
+			unsubscribe();
 			window.clearInterval(timer);
-			window.removeEventListener("focus", wake);
-			window.removeEventListener("online", wake);
-			document.removeEventListener("visibilitychange", wake);
+			window.removeEventListener("focus", pollIfVisible);
+			window.removeEventListener("online", pollIfVisible);
+			document.removeEventListener("visibilitychange", pollIfVisible);
 		};
 	}, [refresh]);
 
@@ -687,6 +663,19 @@ export function useRoom(
 	}, [roomId]);
 
 	// The socket opens after the load, for a member only: the room gives its messages to its members.
+	const [typists, setTypists] = useState<ReadonlyMap<string, number>>(new Map());
+	const roomSocket = useRef<RoomSocket | null>(null);
+	useEffect(() => {
+		if (typists.size === 0) return;
+		const earliest = Math.min(...typists.values());
+		const timer = setTimeout(
+			() => {
+				setTypists((current) => new Map([...current].filter(([, end]) => end > Date.now())));
+			},
+			Math.max(0, earliest - Date.now()),
+		);
+		return () => clearTimeout(timer);
+	}, [typists]);
 	const member = state.status === "ready" && state.room !== null && state.room.role !== null;
 	useEffect(() => {
 		if (!member) return;
@@ -701,6 +690,9 @@ export function useRoom(
 					void sync.notice(event.version);
 					if (connects++ > 0) void loadMembers();
 					for (const watcher of watchers.current) watcher({ type: "catch-up" });
+				} else if (event.type === "typing") {
+					const end = Math.min(Date.parse(event.expires_at), Date.now() + CHAT_LIMITS.typingLifetimeMs);
+					if (end > Date.now()) setTypists((current) => new Map(current).set(event.principal_id, end));
 				} else if (event.type === "message" || event.type === "reply") {
 					sync.push(event.message);
 					for (const watcher of watchers.current) watcher({ type: "message", message: event.message });
@@ -711,15 +703,21 @@ export function useRoom(
 			},
 			onEnd: () => roomChanged.current(),
 		});
+		roomSocket.current = socket;
+		socket.show(document.visibilityState === "visible");
 		const wake = () => {
-			if (document.visibilityState === "visible") socket.wake();
+			const visible = document.visibilityState === "visible";
+			socket.show(visible);
+			if (visible) socket.wake();
 		};
 		document.addEventListener("visibilitychange", wake);
 		window.addEventListener("online", wake);
 		return () => {
 			document.removeEventListener("visibilitychange", wake);
 			window.removeEventListener("online", wake);
+			roomSocket.current = null;
 			socket.close();
+			setTypists(new Map());
 		};
 	}, [member, roomId, sync, loadMembers]);
 
@@ -745,6 +743,8 @@ export function useRoom(
 		apply,
 		loadMembers,
 		watchMessages,
+		typists,
+		typing: () => roomSocket.current?.typing(),
 	};
 }
 

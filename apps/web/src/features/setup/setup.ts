@@ -1,4 +1,5 @@
 import { ApiError, type SetupInput, type SetupResult, SetupStatus, SetupVerifyResult } from "@asterra/contracts";
+import { announceSessionChange } from "../auth/auth.ts";
 
 // The /auth/setup endpoints are not operations, so they use plain fetch, like features/auth/auth.ts.
 
@@ -58,6 +59,7 @@ export async function runSetup(token: string, input: SetupInput): Promise<SetupR
 		credentials: "same-origin",
 	});
 	if (!response.ok) throw await problemOf(response);
+	announceSessionChange();
 	return (await response.json()) as SetupResult;
 }
 

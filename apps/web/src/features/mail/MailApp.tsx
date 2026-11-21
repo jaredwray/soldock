@@ -1,5 +1,6 @@
 import type { Label, Mailbox } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
@@ -76,7 +77,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 
 	useEffect(() => {
 		const mailbox = mailboxName ? ` – ${mailboxName}` : "";
-		document.title = `${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`;
+		setPageTitle(`${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`);
 	}, [title, inboxUnread, mailboxName]);
 
 	const compose = useCallback(

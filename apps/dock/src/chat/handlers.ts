@@ -10,7 +10,13 @@ import {
 	RoomId,
 } from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
-import { type CallContext, getPrincipals, isAdmin, mentionCandidates } from "../identity/index.ts";
+import {
+	type CallContext,
+	chatPresenceHandlers,
+	getPrincipals,
+	isAdmin,
+	mentionCandidates,
+} from "../identity/index.ts";
 import {
 	audit,
 	decodeCursor,
@@ -23,6 +29,7 @@ import {
 } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
+import { chatNotificationHandlers } from "./notification-handlers.ts";
 import {
 	joinedRoomRefs,
 	listAddressedChanges,
@@ -43,7 +50,6 @@ import {
 import { listPublicRooms } from "./room-index.ts";
 import { type ParsedSearch, parseSearch, type SearchFilter } from "./search.ts";
 import { type SearchHit, searchIndex } from "./search-index.ts";
-
 import { chatWebhookHandlers } from "./webhooks.ts";
 
 type ChatOperation = Extract<OperationName, `chat.${string}`>;
@@ -443,6 +449,8 @@ async function searchRooms(call: CallContext, input: SearchInput, parsed: Parsed
 
 export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
+	...chatNotificationHandlers,
+	...chatPresenceHandlers,
 	async "chat.list_rooms"(call, input) {
 		const list = {
 			query: input.query ?? null,

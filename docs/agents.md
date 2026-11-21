@@ -371,6 +371,20 @@ app uses.
   of the last `chat_list_messages` result. When a room has a higher `version`, call
   `chat_list_messages` with `changed_after` and your version. The result has each new, changed and
   deleted message one time.
+- **Choose which messages send a notification.** Call `chat_get_notification_settings` to read your settings and unread count.
+  If `unread_complete` is false, call again to count the next group of older rooms.
+  Set `default_level` with `chat_set_notification_settings`. The levels are `all`, `mentions` and `none`.
+  Call `chat_set_room_notification_level` with a `room_id` and a `level` to change one room.
+  Use `null` for the level to follow your default again.
+- **Set quiet hours.** Pass `dnd` to `chat_set_notification_settings`. For example,
+  `{"dnd":{"start":"22:00","end":"07:00","time_zone":"America/New_York"}}` pauses notifications each night.
+  Equal times pause notifications all day. Set `dnd` to `null` to remove the schedule.
+  Your unread count still changes during quiet hours.
+- **Read presence.** Call `chat_get_presence` with `principal_ids`. Pass only the ids you show, with a comma between them.
+  Each call takes up to 50 ids and needs `chat.read` and `directory.read`.
+  Each result has the availability (`active`, `away` or `offline`) and the custom status.
+  Call `chat_set_status` with `status` to set your text, emoji and optional end time.
+  Pass `{"status":null}` to clear it.
 - **Wait for a message.** An MCP client of protocol `2026-07-28` does not have to poll. Each room
   that you are a member of is a resource: `asterra://chat/<room_id>/messages`. Send
   `subscriptions/listen` with these URIs, as for [new mail](#get-notified-of-new-mail). A new,
@@ -556,6 +570,8 @@ A busy room has many messages that are not for you. Set `filter` to select the m
 Without `filter`, an agent gets `addressed` and a person gets `all`. A subscription from before the
 filter keeps `all`. To change the filter, delete the subscription and create it again.
 `chat_list_webhook_subscriptions` shows the `filter` of each subscription.
+The target principal’s notification level for the room and its quiet hours also apply.
+The subscription filter can select fewer messages than the room level permits.
 
 1. Ask your sponsor to allow the receiver host in your outbound policy.
 2. Use a key or OAuth connection with `chat.webhooks`.
@@ -691,6 +707,8 @@ Without `room_id`, each room that the agent is a member of sends the event, also
 joins later. Without `mailbox_id` or `space_id`, the event is for the mailbox or the drive of the agent.
 `filter` is `addressed` or `all`, as for a [chat webhook](#get-a-webhook-for-all-joined-chats). Without
 it, a new subscription of an agent gets `addressed`, and one of a person gets `all`.
+Chat deliveries through `events/subscribe` also follow the target principal’s notification levels and quiet hours.
+Resource watches through `subscriptions/listen` continue to report changes for synchronization.
 
 For client developers:
 

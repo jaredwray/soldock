@@ -1,6 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+	CHAT_PRESENCE_LIMITS,
 	type ChatAddressedReason,
+	type ChatNotificationLevel,
 	type ChatRoom,
 	type ChatWebhookEvent,
 	EVENTS_LIMITS,
@@ -9,12 +11,26 @@ import {
 	type PrincipalEvent,
 } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
-import { type CredentialCheck, type CredentialRef, checkCredentials } from "./access.ts";
+import { type CredentialCheck, type CredentialRef, checkCredentials, credentialKey } from "./access.ts";
+import {
+	ChatNotifications,
+	NOTIFICATION_MIGRATION,
+	type NotificationUpdate,
+	type PushDevice,
+	SOUND_WINDOW_MS,
+} from "./notifications.ts";
+import {
+	type EventsSocketState,
+	listensForSound,
+	publishPresence,
+	readActivity,
+	schedulePresence,
+	soundListeners,
+	viewsRoom,
+} from "./socket-presence.ts";
 
-// `PrincipalDO`: one object for each person and each agent, keyed by the principal id. It holds the
-// state of the principal that other objects send to it. This version holds the Chat part only: the
-// state of each room of the principal. Later parts (settings, the event feed, notifications, agent
-// counters) add their own tables.
+// Each person and agent has one PrincipalDO. It holds their room state, notification settings,
+// registered push devices and events sockets. Its name is the principal id.
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -113,6 +129,8 @@ export interface ChatThreadQuery {
  */
 export interface ChatRoomState {
 	room_id: string;
+	/** The id of this membership. Earlier rooms and states for a removed member omit it. */
+	membership_id?: string;
 	stamp: number;
 	/** Null when the principal is not a member of the room now. */
 	view: ChatRoomView | null;
@@ -192,15 +210,6 @@ export async function endEventSockets(
 export const EVENTS_SOCKET_RECHECK_MS = 60_000;
 /** The longest life of one socket. Then the object closes it, and the Worker authenticates the new one. */
 export const EVENTS_SOCKET_MAX_MS = 60 * 60_000;
-
-/** What a socket keeps while the object sleeps. */
-interface EventsSocketState {
-	credential: CredentialRef;
-	feed: boolean;
-	openedAt: number;
-	/** The time of the last check of the credential. */
-	checkedAt: number;
-}
 
 /** A room of the principal as chat.list_rooms returns it. */
 export function chatRoomOutput(entry: ChatRoomEntry): ChatRoom {
@@ -287,6 +296,15 @@ const MIGRATIONS: string[][] = [
 		) WITHOUT ROWID`,
 		"CREATE INDEX chat_addressed_recent ON chat_addressed (at DESC, room_id DESC)",
 	],
+	NOTIFICATION_MIGRATION,
+	[
+		"ALTER TABLE chat_rooms ADD COLUMN membership_id TEXT",
+		// A leave and a new join can produce a single room state. The old override ends in both cases.
+		`CREATE TRIGGER chat_notification_membership AFTER UPDATE OF joined, membership_id ON chat_rooms
+			WHEN NEW.joined = 0 OR (OLD.membership_id IS NOT NULL AND NEW.membership_id != OLD.membership_id) BEGIN
+			DELETE FROM chat_notification_levels WHERE room_id = NEW.room_id; END`,
+	],
+	["ALTER TABLE chat_notification_sounds ADD COLUMN foreground_devices TEXT NOT NULL DEFAULT '[]'"],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -313,12 +331,14 @@ type ThreadRow = EntryRow & { parent_id: string; thread_last_reply_at: number; t
  */
 export class PrincipalDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
+	private readonly notifications: ChatNotifications;
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
+		this.notifications = new ChatNotifications(this.sql);
 		this.migrate();
 	}
 
@@ -345,6 +365,8 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * wait for the sockets, so a change of a room never waits for the credential check of a socket.
 	 */
 	applyChatRoomStates(states: readonly ChatRoomState[]): void {
+		const hasSockets = this.ctx.getWebSockets().length > 0;
+		const beforeUnread = hasSockets ? this.notifications.unreadCount() : null;
 		const kept: { room_id: string; joined: number }[] = [];
 		/** The rooms whose followed threads changed in this call. Each one gets `chat.threads`. */
 		const threadRooms: string[] = [];
@@ -368,8 +390,8 @@ export class PrincipalDO extends DurableObject<Env> {
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
 					`INSERT INTO chat_rooms (room_id, stamp, joined, kind, name, name_key, topic, created_at, created_by_json,
 						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version,
-						starred, mention_count)
-					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+						starred, mention_count, membership_id)
+					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
 					ON CONFLICT (room_id) DO UPDATE SET stamp = excluded.stamp, joined = excluded.joined, kind = excluded.kind,
 						name = excluded.name, name_key = excluded.name_key, topic = excluded.topic,
 						created_at = excluded.created_at, created_by_json = excluded.created_by_json,
@@ -377,7 +399,8 @@ export class PrincipalDO extends DurableObject<Env> {
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
 						last_read_seq = excluded.last_read_seq, unread_count = excluded.unread_count,
 						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred,
-						mention_count = excluded.mention_count
+						mention_count = excluded.mention_count,
+						membership_id = CASE WHEN excluded.joined = 1 THEN COALESCE(excluded.membership_id, chat_rooms.membership_id) END
 					WHERE excluded.stamp > chat_rooms.stamp
 					RETURNING room_id, joined`,
 					state.room_id,
@@ -400,6 +423,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.version ?? null,
 					view?.starred ? 1 : 0,
 					view?.mention_count ?? 0,
+					state.membership_id ?? null,
 				);
 				const accepted = row.toArray();
 				kept.push(...accepted);
@@ -415,7 +439,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				}
 			}
 		});
-		if (kept.length === 0 || this.ctx.getWebSockets().length === 0) return;
+		if (kept.length === 0 || !hasSockets) return;
 		// The events come from the rows after this write. They go out after the events from before, in the
 		// order of the writes. A failure of the events never fails the write. The object stays awake until
 		// the send ends.
@@ -440,6 +464,12 @@ export class PrincipalDO extends DurableObject<Env> {
 				return events;
 			}),
 		);
+		const unread = this.notifications.unreadCount();
+		if (unread !== beforeUnread) {
+			this.ctx.waitUntil(
+				this.enqueue([JSON.stringify({ type: "chat.unread", unread_count: unread } satisfies PrincipalEvent)], null),
+			);
+		}
 	}
 
 	/**
@@ -681,6 +711,149 @@ export class PrincipalDO extends DurableObject<Env> {
 		if (done) this.sql.exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('chat_seeded', '1')");
 	}
 
+	getChatNotificationSettings() {
+		return {
+			settings: this.notifications.settings(),
+			unread_count: this.notifications.unreadCount(),
+			unread_complete: this.chatSeeded(),
+		};
+	}
+
+	updateChatNotificationSettings(input: NotificationUpdate) {
+		return this.notifications.update(input);
+	}
+
+	setChatNotificationLevel(state: ChatRoomState, level: ChatNotificationLevel | null): boolean {
+		this.applyChatRoomStates([state]);
+		// A newer state of the same membership still accepts the change. A later join must reject it.
+		const member = this.sql
+			.exec(
+				"SELECT 1 FROM chat_rooms WHERE room_id = ? AND joined = 1 AND (membership_id = ? OR stamp = ?)",
+				state.room_id,
+				state.membership_id ?? null,
+				state.stamp,
+			)
+			.toArray();
+		if (!member.length) return false;
+		this.notifications.setRoomLevel(state.room_id, level);
+		return true;
+	}
+
+	chatNotificationAllowed(
+		roomId: string,
+		reason: string | undefined,
+		occurredAt: number,
+		membershipId: string,
+	): boolean {
+		return this.notifications.policy(roomId, reason, occurredAt, membershipId).allowed;
+	}
+
+	async subscribePush(device: PushDevice, credential: CredentialRef): Promise<boolean> {
+		if (this.notifications.register(device, credential)) return true;
+		// A device can sign out without another message to trigger cleanup.
+		const devices = this.notifications.credentials();
+		const checks = await checkCredentials(
+			this.env.DIRECTORY,
+			devices.map(({ ref }) => ref),
+		);
+		for (const [index, entry] of devices.entries()) {
+			if (checks[index] === "ended" || checks[index] === "renew") this.notifications.expire(entry.id);
+		}
+		return this.notifications.register(device, credential);
+	}
+
+	unsubscribePush(endpoint: string): boolean {
+		return this.notifications.unsubscribe(endpoint);
+	}
+
+	expirePushSubscription(id: string): void {
+		this.notifications.expire(id);
+	}
+
+	/** The room outbox holds each post until the queue accepts it. A retry keeps the device ids. */
+	async chatNotificationDevices(event: {
+		principalId: string;
+		membershipId: string;
+		roomId: string;
+		messageId: string;
+		parentId: string | null;
+		reason: string | undefined;
+		occurredAt: number;
+	}): Promise<string[]> {
+		const { roomId, occurredAt } = event;
+		const policy = this.notifications.policy(roomId, event.reason, occurredAt, event.membershipId);
+		if (!policy.allowed) return [];
+		const now = Date.now();
+		const recent = now - occurredAt <= SOUND_WINDOW_MS;
+		const listening = recent && policy.sound && soundListeners(this.ctx, occurredAt, now).length > 0;
+		const authorized =
+			listening &&
+			(await this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(roomId)).canNotifyWebhook(
+				event.principalId,
+				event.messageId,
+				event.membershipId,
+			));
+		const devices = viewsRoom(this.ctx, roomId) ? [] : this.notifications.credentials(occurredAt);
+		if (authorized) {
+			const listeners = new Set(
+				soundListeners(this.ctx, occurredAt, Date.now()).map((state) => credentialKey(state.credential)),
+			);
+			const foregroundDevices = devices.filter(({ ref }) => listeners.has(credentialKey(ref))).map(({ id }) => id);
+			if (listeners.size && this.notifications.claimSound(event.messageId, occurredAt, foregroundDevices)) {
+				const sound: PrincipalEvent = {
+					type: "chat.notification",
+					room_id: roomId,
+					message_id: event.messageId,
+					parent_id: event.parentId,
+				};
+				this.ctx.waitUntil(this.enqueue([JSON.stringify(sound)], occurredAt));
+			}
+		}
+		return devices.map(({ id }) => id);
+	}
+
+	/** Check the current registration and the credential that created it before each outbound push. */
+	async pushTarget(
+		id: string,
+		roomId: string,
+		reason: string,
+		occurredAt: number,
+		roomUnread: number,
+		membershipId: string,
+		messageId?: string,
+	) {
+		const device = this.notifications.device(id, occurredAt);
+		if (!device) return null;
+		const credential = JSON.parse(device.credential) as CredentialRef;
+		const [state] = await checkCredentials(this.env.DIRECTORY, [credential]);
+		if (state !== "live") {
+			this.expirePushSubscription(id);
+			return null;
+		}
+		const { allowed, sound } = this.notifications.policy(roomId, reason, occurredAt, membershipId);
+		if (!allowed || viewsRoom(this.ctx, roomId) || !this.notifications.device(id, occurredAt)) return null;
+		const projected =
+			this.sql
+				.exec<{ unread_count: number }>("SELECT unread_count FROM chat_rooms WHERE joined = 1 AND room_id = ?", roomId)
+				.toArray()[0]?.unread_count ?? 0;
+		const now = Date.now();
+		const foreground =
+			sound &&
+			messageId !== undefined &&
+			now - occurredAt <= SOUND_WINDOW_MS &&
+			this.notifications.sentForegroundSound(messageId, id) &&
+			soundListeners(this.ctx, occurredAt, now).some(
+				(socket) => credentialKey(socket.credential) === credentialKey(credential),
+			);
+		return {
+			endpoint: device.endpoint,
+			foreground_sound: foreground,
+			keys: { p256dh: device.p256dh, auth: device.auth },
+			unread_count: this.notifications.unreadCount() - projected + roomUnread,
+			sound,
+		};
+	}
+
 	// --- The events sockets -----------------------------------------------------------------------
 
 	/**
@@ -725,7 +898,12 @@ export class PrincipalDO extends DurableObject<Env> {
 		// The runtime answers a ping by itself, so a client can test its connection and the object stays asleep.
 		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
 		this.send(server, JSON.stringify({ type: "hello", protocol: EVENTS_SOCKET_PROTOCOL } satisfies PrincipalEvent));
+		this.sql.exec(
+			"INSERT OR IGNORE INTO meta (key, value) VALUES ('presence_principal', ?)",
+			open.credential.principalId,
+		);
 		this.ctx.waitUntil(this.enqueue([]));
+		await schedulePresence(this.ctx);
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
@@ -750,14 +928,50 @@ export class PrincipalDO extends DurableObject<Env> {
 		return ended;
 	}
 
-	/** A client sends nothing but pings, which the runtime answers. Each other message closes the socket. */
-	override webSocketMessage(socket: WebSocket): void {
-		this.end(socket, 1008, "This socket takes no messages. Use the operations.");
+	override async alarm(): Promise<void> {
+		await this.enqueue([]);
+		await publishPresence(this.ctx, this.env.DIRECTORY);
+	}
+
+	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+		const activity = readActivity(message);
+		if (!activity) {
+			this.end(socket, 1008, "Send a chat.activity message or a ping.");
+			return;
+		}
+		let state = socket.deserializeAttachment() as EventsSocketState | null;
+		if (!state || state.feed) {
+			this.end(socket, 1008, "This feed takes no activity.");
+			return;
+		}
+		if (
+			Date.now() - state.checkedAt >= EVENTS_SOCKET_RECHECK_MS ||
+			Date.now() - state.openedAt >= EVENTS_SOCKET_MAX_MS
+		) {
+			await this.enqueue([]);
+			if (socket.readyState !== WebSocket.OPEN) return;
+			state = socket.deserializeAttachment() as EventsSocketState;
+		}
+		const now = Date.now();
+		const previous = state.activity;
+		const changed = previous?.active !== activity.active;
+		if (!changed && previous?.room_id === activity.room_id && now - previous.at < CHAT_PRESENCE_LIMITS.heartbeatMs / 2)
+			return;
+		socket.serializeAttachment({
+			...state,
+			activity: { active: activity.active, room_id: activity.room_id, at: now },
+		} satisfies EventsSocketState);
+		if (changed || (previous && now - previous.at >= 2 * CHAT_PRESENCE_LIMITS.heartbeatMs))
+			await schedulePresence(this.ctx);
 	}
 
 	override webSocketClose(socket: WebSocket, code: number, reason: string): void {
 		// Completes the close handshake. The runtime can reply by itself, and a closed socket throws.
 		this.end(socket, code, reason);
+	}
+
+	override webSocketError(socket: WebSocket): void {
+		this.end(socket, 1011, "The connection failed.");
 	}
 
 	private end(socket: WebSocket, code: number, reason: string): void {
@@ -766,6 +980,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		} catch {
 			// Closed already, or the code is one that only the runtime can send.
 		}
+		this.ctx.waitUntil(schedulePresence(this.ctx));
 	}
 
 	private send(socket: WebSocket, text: string): void {
@@ -795,9 +1010,9 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * Puts a send behind each send from before. An empty list sends nothing, and checks each socket whose
 	 * check is due, as for a send.
 	 */
-	private enqueue(texts: string[]): Promise<void> {
+	private enqueue(texts: string[], notificationAt?: number | null): Promise<void> {
 		this.announced = this.announced
-			.then(() => this.deliver(texts))
+			.then(() => this.deliver(texts, notificationAt))
 			.catch((error: unknown) => {
 				log("error", "events socket send failed", { error: error instanceof Error ? error.message : String(error) });
 			});
@@ -810,7 +1025,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * of all sockets with one query. A socket whose credential stopped closes. If the check fails, the
 	 * sockets that waited for it close, and their clients open new ones, which the Worker authenticates.
 	 */
-	private async deliver(texts: string[]): Promise<void> {
+	private async deliver(texts: string[], notificationAt?: number | null): Promise<void> {
 		const now = Date.now();
 		const open: { socket: WebSocket; state: EventsSocketState; waits: boolean }[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
@@ -819,6 +1034,9 @@ export class PrincipalDO extends DurableObject<Env> {
 				this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The socket reached its longest life. Open a new socket.");
 				continue;
 			}
+			if (socket.readyState !== WebSocket.OPEN) continue;
+			if (notificationAt === null && (!state.activity || state.feed)) continue;
+			if (typeof notificationAt === "number" && !listensForSound(state, notificationAt, now)) continue;
 			const waits = now - state.checkedAt >= EVENTS_SOCKET_RECHECK_MS;
 			if (!waits) for (const text of texts) this.send(socket, text);
 			open.push({ socket, state, waits });
@@ -838,7 +1056,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		}
 		const checkedAt = Date.now();
 		let ended = 0;
-		for (const [index, { socket, state, waits }] of open.entries()) {
+		for (const [index, { socket, waits }] of open.entries()) {
 			const check = checks?.[index];
 			if (check === undefined) {
 				if (waits) this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
@@ -854,11 +1072,13 @@ export class PrincipalDO extends DurableObject<Env> {
 				this.end(socket, EVENTS_SOCKET_CLOSE.ended, "The credential stopped.");
 			} else {
 				try {
-					socket.serializeAttachment({ ...state, checkedAt } satisfies EventsSocketState);
+					const current = socket.deserializeAttachment() as EventsSocketState;
+					socket.serializeAttachment({ ...current, checkedAt } satisfies EventsSocketState);
+					if (typeof notificationAt === "number" && !listensForSound(current, notificationAt, checkedAt)) continue;
+					if (waits) for (const text of texts) this.send(socket, text);
 				} catch {
 					// Closed during the check.
 				}
-				if (waits) for (const text of texts) this.send(socket, text);
 			}
 		}
 		if (ended > 0) log("info", "events sockets closed: the credential stopped", { sockets: ended });

@@ -10,6 +10,7 @@ import {
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link } from "../../lib/router.tsx";
 import { Select } from "../../lib/Select.tsx";
 import { listAllPrincipals } from "../../lib/usePrincipals.ts";
@@ -64,7 +65,7 @@ export function ConnectPage({ requestId }: { requestId: string }) {
 	}, [requestId, canCreate, elevated, me.id]);
 
 	useEffect(() => {
-		document.title = "Connect an agent – Asterra";
+		setPageTitle("Connect an agent – Asterra");
 		void load();
 	}, [load]);
 

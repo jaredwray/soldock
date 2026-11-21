@@ -1,3 +1,4 @@
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import "./drive.css";
 import type { DriveItem } from "@asterra/contracts";
 import {
@@ -299,7 +300,7 @@ export function DriveApp({ view, navOpen, onCloseNav }: DriveAppProps) {
 	const bulk = bulkActions(selectedItems, roles);
 
 	useEffect(() => {
-		document.title = `${title} – Asterra`;
+		setPageTitle(`${title} – Asterra`);
 	}, [title]);
 
 	const fail = (caught: unknown) => toast({ message: errorMessage(caught), tone: "error" });

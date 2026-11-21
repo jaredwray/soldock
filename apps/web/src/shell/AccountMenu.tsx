@@ -4,7 +4,9 @@ import { useSession } from "../features/auth/session.tsx";
 import { type Appearance, chooseAppearance, useAppearance } from "../lib/appearance.ts";
 import { initials } from "../lib/format.ts";
 import { Icon, type IconName } from "../lib/icons.tsx";
+import { Link } from "../lib/router.tsx";
 import { useToast } from "../lib/toast.tsx";
+import { profilePath } from "../routes.ts";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
@@ -91,6 +93,9 @@ export function AccountMenu() {
 						</div>
 					</fieldset>
 					<div className="menu-separator" />
+					<Link to={profilePath(principal.id)} className="menu-item" onClick={() => setOpen(false)}>
+						Profile and status
+					</Link>
 					<button
 						type="button"
 						className="menu-item"

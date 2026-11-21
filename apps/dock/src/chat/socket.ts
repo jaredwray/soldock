@@ -36,6 +36,7 @@ export async function openRoomSocket(
 		},
 		credential: credentialRef(caller),
 		feed: options.feed,
+		canType: caller.scopes.has("chat.write"),
 	};
 	const response = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).fetch("https://room.internal/socket", {
 		headers: { upgrade: "websocket", [SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },

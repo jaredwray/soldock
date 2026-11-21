@@ -1,3 +1,4 @@
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import "./sheets.css";
 import { ApiError } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
@@ -66,7 +67,7 @@ export function SheetPage({ spaceId, itemId }: SheetPageProps) {
 	}, [store]);
 
 	useEffect(() => {
-		document.title = `${name ?? "Sheet"} – Asterra Sheets`;
+		setPageTitle(`${name ?? "Sheet"} – Asterra Sheets`);
 	}, [name]);
 
 	// Other people can change the sheet. While no change of this page waits, get the sheet again

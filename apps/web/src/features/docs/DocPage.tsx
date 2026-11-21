@@ -1,3 +1,4 @@
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import "./docs.css";
 import { ApiError, type DriveItem } from "@asterra/contracts";
 import type { Node } from "prosemirror-model";
@@ -135,7 +136,7 @@ export function DocPage({ spaceId, itemId }: DocPageProps) {
 
 	const name = loaded?.item.name ?? null;
 	useEffect(() => {
-		document.title = `${name ?? "Doc"} – Asterra Docs`;
+		setPageTitle(`${name ?? "Doc"} – Asterra Docs`);
 	}, [name]);
 
 	// While the editor has no changes of its own, it shows the changes of other people and agents.

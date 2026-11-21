@@ -63,7 +63,8 @@
 			{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
 			{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
 			{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
-			{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" }
+			{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" },
+			{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" }
 		],
 		"consumers": [
 			{
@@ -86,6 +87,12 @@
 				"max_batch_timeout": 1,
 				"max_retries": 3,
 				"max_concurrency": 2
+			},
+			{
+				"queue": "soldock-chat-push",
+				"max_batch_size": 10,
+				"max_batch_timeout": 1,
+				"max_retries": 5
 			}
 		]
 	},
@@ -141,7 +148,8 @@
 					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
 					{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
 					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
-					{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" }
+					{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" },
+					{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" }
 				],
 				"consumers": [
 					{
@@ -164,6 +172,12 @@
 						"max_batch_timeout": 1,
 						"max_retries": 3,
 						"max_concurrency": 2
+					},
+					{
+						"queue": "soldock-chat-push",
+						"max_batch_size": 10,
+						"max_batch_timeout": 1,
+						"max_retries": 5
 					}
 				]
 			},

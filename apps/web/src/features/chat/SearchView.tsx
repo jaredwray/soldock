@@ -4,6 +4,7 @@ import { currentAccount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link, navigate } from "../../lib/router.tsx";
 import { Select, type SelectOption } from "../../lib/Select.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
@@ -109,7 +110,7 @@ export function SearchView({ query, roomId, rooms }: SearchViewProps) {
 	useOnChange(query, () => setValue(query));
 
 	useEffect(() => {
-		document.title = query === "" ? "Search – Chat – Asterra" : `${query} – Search – Asterra`;
+		setPageTitle(query === "" ? "Search – Chat – Asterra" : `${query} – Search – Asterra`);
 	}, [query]);
 
 	// The view opens for a search: the box has the focus.
