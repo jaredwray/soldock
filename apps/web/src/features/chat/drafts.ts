@@ -28,6 +28,8 @@ interface Draft extends DraftCopy {
 export interface DraftStore {
 	/** The local copy, including the revision it came from. */
 	get(key: string): DraftCopy | null;
+	/** Rooms and threads with a local edit that the server has not acknowledged. */
+	pending(): string[];
 	/** A null copy removes the cache entry. A copy with a null body records a clear. */
 	set(key: string, copy: DraftCopy | null): void;
 }
@@ -139,6 +141,7 @@ export function createDraftStore(storage: DraftStorage | null, owner: string): D
 	}
 	return {
 		get: (key) => read(storage, owner).get(key) ?? null,
+		pending: () => [...read(storage, owner)].filter(([, draft]) => draft.dirty).map(([key]) => key),
 		set: put,
 	};
 }

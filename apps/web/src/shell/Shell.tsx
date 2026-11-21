@@ -27,7 +27,7 @@ const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((modu
 const SheetPage = lazyPage(() => import("../features/sheets/SheetPage.tsx").then((module) => module.SheetPage));
 
 /** The signed-in app: the rail and the page for the current route. */
-export function Shell() {
+export function Shell({ signingOut }: { signingOut: boolean }) {
 	const location = useLocation();
 	const route = useMemo(() => parseRoute(location), [location]);
 	const [navOpen, setNavOpen] = useState(false);
@@ -74,7 +74,7 @@ export function Shell() {
 	}, [route, ownPath]);
 
 	return (
-		<div className={needsPassword ? "app app-with-banner" : "app"}>
+		<div className={needsPassword ? "app app-with-banner" : "app"} inert={signingOut} aria-busy={signingOut}>
 			<a className="skip-link" href="#main">
 				Skip to content
 			</a>

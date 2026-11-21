@@ -540,7 +540,7 @@ export function ThreadPanel({
 			mentions,
 			head: true,
 			fullDates: true,
-			own,
+			canEdit: readOnly === null && own,
 			canDelete: own || canDeleteAll,
 			editing: editing?.id === message.id ? editing : null,
 			onEditStart: () => {

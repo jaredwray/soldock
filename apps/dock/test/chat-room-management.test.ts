@@ -1,6 +1,8 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, it, vi } from "vitest";
+import { textBody } from "../src/chat/body.ts";
+import { ROOM_DAY_MS } from "../src/chat/room-policy.ts";
 import { codeOf, restartLegacyRoom, seedOrg } from "./helpers.ts";
 
 it("opens one group direct message for the same participants in any order", async () => {
@@ -46,6 +48,18 @@ it("upgrades a notifications-era room while preserving its messages and member t
 		state.storage.sql.exec("SELECT last_typed_at FROM members WHERE principal_id = ?", owner.id).one(),
 	);
 	expect(member.last_typed_at).toBe(typedAt);
+});
+
+it("applies the current posting rule and authorship check to edits", async () => {
+	const { owner, ada } = await seedOrg();
+	const { room } = await owner.call("chat.create_room", { kind: "private", name: "News", member_ids: [ada.id] });
+	const room_id = room.id;
+	const { message } = await ada.call("chat.post_message", { room_id, text: "Original notice" });
+	await owner.call("chat.set_room_policy", { room_id, posting: "owners" });
+	const edit = { room_id, message_id: message.id, text: "Changed after restriction" };
+	expect(await codeOf(ada.call("chat.edit_message", edit))).toBe("forbidden");
+	expect(await codeOf(owner.call("chat.edit_message", edit))).toBe("forbidden");
+	expect((await owner.call("chat.list_messages", { room_id })).messages[0]?.text).toBe("Original notice");
 });
 
 it("enforces the posting rule in the room, hides an archive, and revokes access on deletion", async () => {
@@ -141,6 +155,43 @@ it("applies retention to earlier versions and search while retaining newer messa
 	});
 	expect((await owner.call("chat.search_messages", { room_id, query: "After" })).results).toHaveLength(0);
 	expect((await owner.call("chat.list_message_edits", { room_id, message_id: message.id })).edits).toHaveLength(0);
+});
+
+it("expires retry keys in a quiet room with retention and preserves current retries", async () => {
+	const { owner } = await seedOrg();
+	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Receipts" });
+	const room_id = room.id;
+	const original = { room_id, text: "Original", idempotency_key: "Original" };
+	const kept = { room_id, text: "Keep", idempotency_key: "Keep" };
+	const { message } = await owner.call("chat.post_message", original);
+	const { message: recent } = await owner.call("chat.post_message", kept);
+	await owner.call("chat.delete_message", { room_id, message_id: message.id });
+	const scheduled = await owner.call("chat.schedule_message", {
+		room_id,
+		body: textBody("Later"),
+		send_at: new Date(Date.now() + 60_000).toISOString(),
+		idempotency_key: "Later",
+	});
+	await owner.call("chat.cancel_scheduled_message", { room_id, message_id: scheduled.message_id });
+	const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room_id));
+	await runInDurableObject(stub, (_instance, state) => {
+		state.storage.sql.exec("UPDATE idempotency SET created_at = 0 WHERE message_id = ?", message.id);
+		state.storage.sql.exec("UPDATE schedule_receipts SET expires_at = 0 WHERE message_id = ?", scheduled.message_id);
+	});
+	await owner.call("chat.set_room_policy", { room_id, retention_days: 30 });
+	await vi.waitFor(async () => {
+		await runDurableObjectAlarm(stub);
+		// The remaining receipt expires before the next message. A quiet room needs an alarm for it.
+		const alarm = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+		expect(alarm).toBe(Date.parse(recent.created_at) + ROOM_DAY_MS);
+	});
+	const receipts = await runInDurableObject(stub, (_instance, state) =>
+		state.storage.sql
+			.exec("SELECT message_id FROM idempotency UNION ALL SELECT message_id FROM schedule_receipts")
+			.toArray(),
+	);
+	expect(receipts).toEqual([{ message_id: recent.id }]);
+	expect((await owner.call("chat.post_message", kept)).message.id).toBe(recent.id);
 });
 
 it("repairs a private room after deletion of its owner without granting its contents to the administrator", async () => {

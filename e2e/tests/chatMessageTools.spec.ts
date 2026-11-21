@@ -37,6 +37,50 @@ test("a second device reads the draft and the first sees it clear after a schedu
 	await expect(page.getByRole("dialog").getByText("You have no scheduled messages in this room.")).toBeVisible();
 });
 
+test("a stale editor cannot copy private drafts across a replaced session", async ({ device }) => {
+	const first = await device("nadia");
+	const second = await device("rafael");
+	const name = unique("Private draft");
+	const room = await createRoom(first, name, [second]);
+	const editor = await first.newPage();
+	const other = await second.newPage();
+	await Promise.all([openRoom(editor, room), openRoom(other, room)]);
+	const saved = other.waitForResponse(
+		(response) => response.url().endsWith("/draft") && response.request().method() === "POST" && response.ok(),
+	);
+	await composer(other, name).fill("Rafael's private draft");
+	await saved;
+	// A resumed tab can miss its session-change notification. The server sees the new cookie immediately.
+	await first.addCookies(await second.cookies());
+	await composer(editor, name).fill("Nadia's local draft");
+	await expect(editor.getByText(/Your account changed/)).toBeVisible();
+	await expect(composer(editor, name)).toHaveText("Nadia's local draft");
+	await other.reload();
+	await expect(composer(other, name)).toHaveText("Rafael's private draft");
+});
+
+test("sign-out saves a pending draft from a closed room and removes its local copy", async ({ device }) => {
+	const laptop = await device("meiling");
+	const phone = await device("meiling");
+	const name = unique("Draft at sign-out");
+	const room = await createRoom(laptop, name);
+	const page = await laptop.newPage();
+	await openRoom(page, room);
+	await page.route("**/draft", (route) => route.abort());
+	await composer(page, name).fill("Keep this across sign-out");
+	await expect(page.getByText(/Draft sync failed/)).toBeVisible();
+	await page.goto("/settings");
+	await page.unroute("**/draft");
+	await page.getByRole("button", { name: "Sign out", exact: true }).click();
+	await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+	expect(
+		await page.evaluate(() => Object.keys(localStorage).some((key) => key.startsWith("soldock:chat-drafts:"))),
+	).toBe(false);
+	const other = await phone.newPage();
+	await openRoom(other, room);
+	await expect(composer(other, name)).toHaveText("Keep this across sign-out");
+});
+
 test("a room pin is shared and a saved message stays private", async ({ device }) => {
 	const owner = await device("rafael");
 	const member = await device("meiling");
@@ -83,6 +127,15 @@ test("a disconnected editor keeps its draft until the person resolves a conflict
 	await stored;
 	await laptop.setOffline(false);
 	await expect(first.getByRole("button", { name: "Keep this draft" })).toBeVisible();
+	await first.getByRole("button", { name: /^Account:/ }).click();
+	const discard = first.waitForEvent("dialog").then(async (prompt) => {
+		expect(prompt.message()).toContain("unsaved edits");
+		await prompt.dismiss();
+	});
+	await Promise.all([
+		discard,
+		first.getByRole("navigation", { name: "Products" }).getByRole("button", { name: "Sign out" }).click(),
+	]);
 	await expect(composer(first, name)).toHaveText("A local change");
 	await first.getByRole("button", { name: "Use the other draft" }).click();
 	await expect(composer(first, name)).toHaveText("A second change");

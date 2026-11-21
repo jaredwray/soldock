@@ -75,7 +75,8 @@ export interface MessageItemProps {
 	mentions: MentionContext;
 	/** True when the message shows its author and its time. */
 	head: boolean;
-	own: boolean;
+	/** True when this author can currently edit under the room posting policy. */
+	canEdit: boolean;
 	canDelete: boolean;
 	/** The bodies and the files of the edit box, or null when the message is not in edit. */
 	editing: Editing | null;
@@ -121,7 +122,7 @@ export function MessageItem({
 	pending,
 	mentions,
 	head,
-	own,
+	canEdit,
 	canDelete,
 	editing,
 	onEditStart,
@@ -167,6 +168,9 @@ export function MessageItem({
 	const failed = pending?.state === "failed";
 	// A message that the server does not have yet cannot change, and it has no id to delete or to link to.
 	const hasActions = pending === null && !message.deleted && editing === null;
+	const saveEdit = () => {
+		if (canEdit) onEditSave();
+	};
 	return (
 		// On a touch screen, a tap gives the focus to a row with actions. The row then shows its buttons.
 		<li
@@ -215,7 +219,7 @@ export function MessageItem({
 						className="chat-edit"
 						onSubmit={(event) => {
 							event.preventDefault();
-							onEditSave();
+							saveEdit();
 						}}
 					>
 						<ChatComposer
@@ -224,7 +228,7 @@ export function MessageItem({
 							placeholder="Write the message"
 							initial={editing.initial}
 							onChange={onEditChange}
-							onSubmit={onEditSave}
+							onSubmit={saveEdit}
 							onCancel={onEditCancel}
 							mentions={mentions}
 							placement="below"
@@ -241,7 +245,11 @@ export function MessageItem({
 							<button type="button" className="button button-small" onClick={onEditCancel}>
 								Cancel
 							</button>
-							<button type="submit" className="button button-small button-primary" disabled={!editSavable(editing)}>
+							<button
+								type="submit"
+								className="button button-small button-primary"
+								disabled={!canEdit || !editSavable(editing)}
+							>
 								Save
 							</button>
 						</span>
@@ -417,7 +425,7 @@ export function MessageItem({
 							<Icon name="reply" size={16} />
 						</button>
 					)}
-					{own && !archived && !message.untrusted && !message.action_id && !message.forwarded_from && (
+					{canEdit && !message.untrusted && !message.action_id && !message.forwarded_from && (
 						<button
 							type="button"
 							className="icon-button icon-button-small"

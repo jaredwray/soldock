@@ -10,12 +10,6 @@ function requireAdmin(call: CallContext) {
 	if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only an owner or admin can change custom emoji.");
 }
 
-export async function requireKnownEmoji(db: D1Database, emoji: string): Promise<void> {
-	if (!emoji.startsWith(":")) return;
-	const row = await db.prepare("SELECT 1 FROM chat_emoji WHERE name = ?").bind(emoji.slice(1, -1)).first();
-	if (!row) throw new OperationError("invalid", "The organization has no emoji with this name.");
-}
-
 export const chatEmojiHandlers = {
 	async "chat.list_emoji"(call) {
 		const rows = await call.env.DIRECTORY.prepare("SELECT name FROM chat_emoji ORDER BY name").all<{ name: string }>();

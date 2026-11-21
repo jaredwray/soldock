@@ -13,7 +13,7 @@ import { type CallContext, chatPresenceHandlers, isAdmin, mentionCandidates } fr
 import { audit, decodeCursor, encodeCursor, type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { chatBotHandlers } from "./bots.ts";
-import { chatEmojiHandlers, requireKnownEmoji } from "./custom-emoji.ts";
+import { chatEmojiHandlers } from "./custom-emoji.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
 import { messageToolHandlers } from "./message-tools.ts";
 import { chatNavigationHandlers } from "./navigation.ts";
@@ -627,9 +627,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.add_reaction"(call, input) {
-		await requireKnownEmoji(call.env.DIRECTORY, input.emoji);
 		const opened = openRoom(call, input.room_id);
-		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, true));
+		const result = accept(
+			await opened.room.react(opened.ctx, input.message_id, input.emoji, true, call.caller.scopes.has("chat.read")),
+		);
 		if (result.changed) auditOk(call, "chat.add_reaction", `${input.room_id}:${input.message_id}`);
 		return { message: messageOutput(result.message) };
 	},

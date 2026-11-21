@@ -2043,12 +2043,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 		messageId: string,
 		emoji: string,
 		add: boolean,
+		canReadCatalog = false,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
+		let emojiExists = true;
+		if (add && emoji.startsWith(":")) {
+			const access = this.openAsMember(call);
+			if ("error" in access) return access;
+			if (!canReadCatalog) return refuse("forbidden", "Adding a custom emoji requires chat.read.");
+			const found = await this.env.DIRECTORY.prepare("SELECT 1 FROM chat_emoji WHERE name = ?")
+				.bind(emoji.slice(1, -1))
+				.first();
+			emojiExists = found !== null;
+		}
+		// Membership, the archive flag and the message may have changed during the catalog lookup.
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (add && opened.room.archived) return refuse("conflict", "This room is archived.");
 		const row = this.message(messageId);
 		if (!row) return refuse("not_found", NO_MESSAGE);
+		if (!emojiExists) return refuse("invalid", "The organization has no emoji with this name.");
 		const roomId = opened.room.room_id;
 		const principalId = call.actor.principal_id;
 		const has =
@@ -2532,7 +2545,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
 			const opened = this.openAsMember(call);
 			if ("error" in opened) return opened;
-			if (opened.room.archived) return refuse("conflict", "This room is archived.");
+			const blocked = postRefusal(opened.room, opened.member);
+			if (blocked) return blocked;
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 			const row = this.message(messageId);
 			const room = this.room();
@@ -2708,6 +2722,19 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.room();
 		if (!room || room.retention_days === null) return;
 		const now = Date.now();
+		// A caller can use message text as its retry key. Expire old receipts even in a quiet room.
+		this.sql.exec(
+			`DELETE FROM idempotency WHERE key IN
+			(SELECT key FROM idempotency WHERE created_at <= ? ORDER BY created_at LIMIT ?)`,
+			now - IDEMPOTENCY_TTL_MS,
+			OUTBOX_BATCH,
+		);
+		this.sql.exec(
+			`DELETE FROM schedule_receipts WHERE (principal_id, key) IN
+			(SELECT principal_id, key FROM schedule_receipts WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)`,
+			now,
+			OUTBOX_BATCH,
+		);
 		const rows = room.deleted
 			? this.all<MessageRow>("SELECT * FROM messages ORDER BY seq LIMIT 25")
 			: this.all<MessageRow>(
@@ -3259,11 +3286,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 			SELECT MIN(next_attempt_at) FROM webhook_outbox UNION ALL
 			SELECT MIN(next_attempt_at) FROM chat_notification_outbox UNION ALL
 			SELECT MIN(next_attempt_at) FROM link_jobs)`)?.at;
-		const retention = this.one<{ at: number | null }>(`SELECT CASE
-			WHEN deleted = 1 AND EXISTS (SELECT 1 FROM messages) THEN 0
-			WHEN deleted = 0 AND retention_days IS NOT NULL THEN retention_days * ${ROOM_DAY_MS}
-				+ (SELECT MIN(created_at) FROM messages WHERE deleted_at IS NULL)
-			END AS at FROM room`)?.at;
+		const retention = this.one<{ at: number | null }>(`SELECT MIN(due) AS at FROM (
+			SELECT CASE WHEN deleted = 1 AND EXISTS (SELECT 1 FROM messages) THEN 0
+				WHEN deleted = 0 THEN retention_days * ${ROOM_DAY_MS}
+					+ (SELECT MIN(created_at) FROM messages WHERE deleted_at IS NULL)
+				END AS due FROM room UNION ALL
+			SELECT MIN(created_at) + ${IDEMPOTENCY_TTL_MS} FROM idempotency UNION ALL
+			SELECT MIN(expires_at) FROM schedule_receipts
+		) WHERE (SELECT retention_days FROM room WHERE id = 1) IS NOT NULL`)?.at;
 		const next = Math.min(queued ?? Infinity, retention ?? Infinity);
 		if (Number.isFinite(next)) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 		else await this.ctx.storage.deleteAlarm();

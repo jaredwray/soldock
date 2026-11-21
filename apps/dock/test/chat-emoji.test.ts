@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { codeOf, seedOrg } from "./helpers.ts";
+import { api, codeOf, seedOrg } from "./helpers.ts";
 
 const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPQyvf5DwADkQHlohpSOwAAAABJRU5ErkJggg==";
 
@@ -19,4 +19,27 @@ it("keeps custom emoji in the organization and lets members remove old reactions
 	await owner.call("chat.delete_emoji", { name: "ship" });
 	expect(await codeOf(bot.call("chat.add_reaction", reaction))).toBe("invalid");
 	expect((await bot.call("chat.remove_reaction", reaction)).message.reactions).toEqual([]);
+});
+
+it("checks membership and catalog access before revealing whether a custom reaction exists", async () => {
+	const { owner, ada } = await seedOrg();
+	await owner.call("chat.create_emoji", { name: "ship", content_base64: pixel });
+	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Launch" });
+	const { message } = await owner.call("chat.post_message", { room_id: room.id, text: "Ready" });
+	const target = { room_id: room.id, message_id: message.id };
+	const { api_key } = await ada.call("account.create_api_key", { label: "Reactions", scopes: ["chat.write"] });
+	const writeOnly = api(api_key.secret);
+	for (const emoji of [":ship:", ":unknown:"]) {
+		expect(await codeOf(writeOnly("chat.add_reaction", { ...target, emoji }))).toBe("not_found");
+		expect(await codeOf(ada.call("chat.add_reaction", { ...target, emoji }))).toBe("not_found");
+	}
+
+	await owner.call("chat.add_members", { room_id: room.id, principal_ids: [ada.id] });
+	for (const emoji of [":ship:", ":unknown:"]) {
+		expect(await codeOf(writeOnly("chat.add_reaction", { ...target, emoji }))).toBe("forbidden");
+	}
+	expect((await writeOnly("chat.add_reaction", { ...target, emoji: "👍" })).message.reactions[0]?.emoji).toBe("👍");
+	await ada.call("chat.add_reaction", { ...target, emoji: ":ship:" });
+	await owner.call("chat.delete_emoji", { name: "ship" });
+	expect((await writeOnly("chat.remove_reaction", { ...target, emoji: ":ship:" })).message.reactions).toHaveLength(1);
 });

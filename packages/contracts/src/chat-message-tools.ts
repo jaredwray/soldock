@@ -8,6 +8,12 @@ const messagePath = `${roomPath}/messages/{message_id}`;
 const MessageId = prefixedId("cmsg");
 const message = { room_id: RoomId, message_id: MessageId };
 const draft = { room_id: RoomId, parent_id: MessageId.optional() };
+const privateDraft = {
+	...draft,
+	expected_principal_id: prefixedId("prn")
+		.optional()
+		.describe("The account that opened the editor. A different session gives conflict."),
+};
 const Draft = z.object({ body: ChatBody.nullable(), revision: z.number().int().nonnegative() });
 const Limit = z.coerce.number().int().min(1).max(CHAT_LIMITS.pageSize).optional();
 const ParentSeqs = z.record(z.string(), z.number().int().positive());
@@ -94,7 +100,8 @@ export const messageToolsOperations = {
 		summary: "Read your room or thread draft",
 		description: "Read the private draft and its revision. A new draft has revision zero.",
 		http: { method: "GET", path: `${roomPath}/draft` },
-		input: z.strictObject(draft),
+		errors: ["not_found", "conflict"],
+		input: z.strictObject(privateDraft),
 		output: Draft,
 	}),
 	"chat.set_draft": defineOperation({
@@ -104,7 +111,7 @@ export const messageToolsOperations = {
 		description:
 			"Send the revision you read and a body, or null to clear it. A newer revision gives conflict. Read the draft again.",
 		http: { method: "POST", path: `${roomPath}/draft` },
-		input: z.strictObject({ ...draft, body: ChatBody.nullable(), revision: z.number().int().nonnegative() }),
+		input: z.strictObject({ ...privateDraft, body: ChatBody.nullable(), revision: z.number().int().nonnegative() }),
 		output: Draft,
 	}),
 	"chat.schedule_message": defineOperation({

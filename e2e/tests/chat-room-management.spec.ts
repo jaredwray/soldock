@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { createRoom, openRoom, post, reply, unique } from "../support/chat.ts";
+import { createRoom, editorReady, openRoom, post, reply, unique } from "../support/chat.ts";
 import { test } from "../support/chatDevices.ts";
 
 test("a group direct message keeps its name and members after a reload", async ({ device }) => {
@@ -41,6 +41,53 @@ test("a room owner archives and restores a room while a member reads it", async 
 	await dialog.getByLabel("Archive this room").uncheck();
 	await dialog.getByRole("button", { name: "Save changes" }).click();
 	await expect(reader.getByRole("textbox", { name: `Message to ${name}` })).toBeVisible();
+});
+
+test("a member keeps open room and reply edits when posting changes to owners only", async ({ device }) => {
+	const owner = await device("nadia");
+	const member = await device("rafael");
+	const room = await createRoom(owner, unique("Posting"), [member]);
+	const parent = await post(member, room, "Original room message");
+	const child = await reply(member, room, parent.id, "Original reply");
+	const page = await member.newPage();
+	const controls = await owner.newPage();
+	await Promise.all([openRoom(page, room), openRoom(controls, room)]);
+	const roomRow = page.locator(`.chat-messages [data-seq="${parent.seq}"]`);
+	await roomRow.getByRole("button", { name: /1 reply/ }).click();
+	const thread = page.getByRole("complementary", { name: "Thread" });
+	const replyRow = thread.locator(`.chat-thread-reply[data-seq="${child.seq}"]`);
+	const edits = [
+		{ row: roomRow, original: parent.text },
+		{ row: replyRow, original: child.text },
+	];
+	for (const { row, original } of edits) {
+		await row.hover();
+		await row.getByRole("button", { name: /Change your message/ }).click();
+		const edit = row.getByRole("textbox", { name: "New text of the message" });
+		await editorReady(edit);
+		await edit.fill(`Unsaved: ${original}`);
+	}
+
+	await controls.getByRole("button", { name: "Room controls" }).click();
+	const dialog = controls.getByRole("dialog");
+	await dialog.getByLabel("Who can post").selectOption("owners");
+	await dialog.getByRole("button", { name: "Save changes" }).click();
+	await expect(thread.getByText("Only room owners can post in this room.")).toBeVisible();
+
+	const saves: string[] = [];
+	page.on("request", (request) => {
+		if (request.method() === "POST" && request.url().endsWith("/edit")) saves.push(request.url());
+	});
+	for (const { row, original } of edits) {
+		await expect(row.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+		const edit = row.getByRole("textbox", { name: "New text of the message" });
+		await edit.press("Enter");
+		await expect(edit).toHaveText(`Unsaved: ${original}`);
+		await row.getByRole("button", { name: "Cancel" }).click();
+		await expect(row.getByText(original, { exact: true })).toBeVisible();
+		await expect(row.getByRole("button", { name: /Change your message/ })).toHaveCount(0);
+	}
+	expect(saves).toEqual([]);
 });
 
 test("an organization owner downloads messages and thread replies from a joined room", async ({ device }) => {

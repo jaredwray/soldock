@@ -991,7 +991,7 @@ export function RoomView({
 												pending={pending}
 												mentions={mentions}
 												head={isNew || startsGroup(previous, message)}
-												own={message.author.principal_id === ownId}
+												canEdit={readOnly === null && message.author.principal_id === ownId}
 												canDelete={message.author.principal_id === ownId || room.role === "owner"}
 												editing={editing?.id === message.id ? editing : null}
 												onEditStart={() => {

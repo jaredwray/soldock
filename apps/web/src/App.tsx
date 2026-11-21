@@ -6,9 +6,10 @@ import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { draftStorage, forgetOtherDrafts } from "./features/chat/drafts.ts";
 import { forgetOtherEmoji } from "./features/chat/frequentEmoji.ts";
 import { forgetOthers } from "./features/chat/outboxStore.ts";
+import { savePendingDrafts } from "./features/chat/savePendingDrafts.ts";
 import { forgetOtherSearches } from "./features/chat/searchModel.ts";
 import { SetupPage } from "./features/setup/SetupPage.tsx";
-import { currentAccount, onAccountChange, setAccount } from "./lib/account.ts";
+import { accountChangeCount, currentAccount, onAccountChange, setAccount } from "./lib/account.ts";
 import { api, onUnauthenticated } from "./lib/api.ts";
 import { syncPushDevices } from "./lib/chatPush.ts";
 import { ToastProvider } from "./lib/toast.tsx";
@@ -31,6 +32,7 @@ onAccountChange(forgetOtherPeople);
  */
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
+	const [signingOut, setSigningOut] = useState(false);
 
 	/**
 	 * Shows a new state. Code outside the signed-in app learns in the same step who the person is now,
@@ -71,9 +73,25 @@ export function App() {
 
 	// The UI shows signed-out only after the server ended the session. A failure throws to the caller.
 	const signOut = useCallback(async () => {
-		await endSession();
-		show({ status: "signed-out", expired: false });
-	}, [show]);
+		const owner = currentAccount();
+		if (!owner || signingOut) return;
+		const generation = accountChangeCount();
+		const stillSignedIn = () => accountChangeCount() === generation && currentAccount() === owner;
+		setSigningOut(true);
+		try {
+			const saved = await savePendingDrafts(owner, stillSignedIn);
+			if (!stillSignedIn()) return;
+			if (
+				!saved &&
+				!window.confirm("Some chat drafts could not be saved. Sign out and discard the unsaved edits on this device?")
+			)
+				return;
+			await endSession();
+			show({ status: "signed-out", expired: false });
+		} finally {
+			setSigningOut(false);
+		}
+	}, [show, signingOut]);
 
 	// After a change to the account, for example two-step verification, so each page shows the new value. A
 	// late answer applies only to the same person: after a sign-out and a sign-in as somebody else, it is dropped.
@@ -127,7 +145,7 @@ export function App() {
 			case "signed-in":
 				return (
 					<SessionContext.Provider value={session}>
-						<Shell />
+						<Shell signingOut={signingOut} />
 					</SessionContext.Provider>
 				);
 		}

@@ -1182,14 +1182,14 @@ export const listMessageEdits = defineOperation({
 export const addReaction = defineOperation({
 	name: "chat.add_reaction",
 	summary: "React to a message",
-	description: `Adds your reaction with one emoji to a message. A second call with the same emoji changes nothing. A message can have reactions with ${CHAT_LIMITS.reactionEmoji} different emoji at most. A deleted message takes no reaction. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
+	description: `Adds your reaction with one emoji to a message. Adding an organization emoji requires chat.read to check the catalog. A second call with the same emoji changes nothing. A message can have reactions with ${CHAT_LIMITS.reactionEmoji} different emoji at most. A deleted message takes no reaction. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: z.union([Emoji, CustomEmojiToken]) }),
 	output: z.object({ message: ChatMessage }),
-	errors: ["not_found", "invalid", "conflict", "rate_limited"],
+	errors: ["not_found", "forbidden", "invalid", "conflict", "rate_limited"],
 });
 
 export const removeReaction = defineOperation({

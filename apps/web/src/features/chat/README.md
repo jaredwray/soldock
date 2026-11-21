@@ -13,7 +13,7 @@ Select the clock beside **Send** to schedule a text message or a thread reply. S
 
 The room composer and each reply composer have separate drafts. The browser saves each change locally and sends it with the last server revision. It checks the server on open, on focus, after a reconnect and every 30 seconds while visible.
 
-When two devices change the same draft, select which copy to keep. Files stay on the device that selected them. Sign-out clears the local cache.
+When two devices change the same draft, select which copy to keep. Files stay on the device that selected them. Before signing out, the browser saves pending edits from open and closed rooms. If a draft cannot sync, you can stay signed in to keep editing or discard the unsaved changes and sign out. Signing out clears the local cache.
 
 ## Navigation
 

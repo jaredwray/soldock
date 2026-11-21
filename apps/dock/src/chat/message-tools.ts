@@ -9,6 +9,13 @@ function principal(call: CallContext) {
 	return call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(call.caller.id));
 }
 
+/** Session cookies can change in another tab while a private draft is waiting to sync. */
+function openDraftRoom(call: CallContext, input: { room_id: string; expected_principal_id?: string | undefined }) {
+	if (input.expected_principal_id !== undefined && input.expected_principal_id !== call.caller.id)
+		throw new OperationError("conflict", "Your account changed. Reload before syncing this draft.");
+	return openRoom(call, input.room_id);
+}
+
 async function readMessage(call: CallContext, roomId: string, id: string) {
 	const { room, ctx } = openRoom(call, roomId);
 	const page = accept(await room.markedMessages(ctx, [id]));
@@ -96,14 +103,14 @@ export const messageToolHandlers = {
 		};
 	},
 	async "chat.get_draft"(call, input) {
-		const { room, ctx } = openRoom(call, input.room_id);
+		const { room, ctx } = openDraftRoom(call, input);
 		return accept(await room.getDraft(ctx, input.parent_id ?? null));
 	},
 	async "chat.set_draft"(call, input) {
 		// A draft can be too long to send. Bound its stored size while the author edits it.
 		if (new TextEncoder().encode(JSON.stringify(input.body)).length > CHAT_LIMITS.bodyBytes)
 			throw new OperationError("payload_too_large", "The draft exceeds the maximum body size.");
-		const { room, ctx } = openRoom(call, input.room_id);
+		const { room, ctx } = openDraftRoom(call, input);
 		return accept(await room.setDraft(ctx, input.parent_id ?? null, input.body, input.revision));
 	},
 	async "chat.schedule_message"(call, input) {

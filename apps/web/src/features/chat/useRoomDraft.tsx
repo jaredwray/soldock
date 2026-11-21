@@ -23,8 +23,8 @@ export function useRoomDraft(
 	const store = useMemo(() => createDraftStore(draftStorage(), owner), [owner]);
 	const key = parentId ? threadDraftKey(roomId, parentId) : roomId;
 	const address = useMemo(
-		() => ({ room_id: roomId, ...(parentId ? { parent_id: parentId } : {}) }),
-		[roomId, parentId],
+		() => ({ expected_principal_id: owner, room_id: roomId, ...(parentId ? { parent_id: parentId } : {}) }),
+		[owner, roomId, parentId],
 	);
 	const [initial] = useState(() => store.get(key));
 	const [draft, setDraft] = useState(initial?.body ?? null);
@@ -65,7 +65,12 @@ export function useRoomDraft(
 				}
 				// A leave removes the server copy. A later join can start again at revision zero.
 				if (!local?.dirty || equal(local.body, remote.body)) {
-					if (local?.dirty || (local?.revision ?? 0) !== remote.revision || !equal(body.current, remote.body)) {
+					if (
+						local?.dirty ||
+						(local?.revision ?? 0) !== remote.revision ||
+						revision.current !== remote.revision ||
+						!equal(body.current, remote.body)
+					) {
 						apply({ ...remote, dirty: false });
 					}
 					if (active.current) setNotice(null);

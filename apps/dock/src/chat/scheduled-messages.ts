@@ -7,6 +7,8 @@ import type { ChatRoomDO } from "./room.ts";
 import { type Refusal, refuse } from "./room-errors.ts";
 
 const RECEIPT_MS = 24 * 60 * 60 * 1000;
+const MIN_ARCHIVE_RETRY_MS = 60_000;
+const MAX_ARCHIVE_RETRY_MS = 60 * MIN_ARCHIVE_RETRY_MS;
 
 /** Reserve a message id and its send time together. The receipt also covers a retry after delivery. */
 export function queueScheduled(
@@ -81,6 +83,10 @@ export function scheduledFor(sql: SqlStorage, owner: string) {
 	};
 }
 
+function retryAfter(sql: SqlStorage, messageId: string, delay: number): void {
+	sql.exec("UPDATE scheduled_messages SET next_attempt_at = ? WHERE message_id = ?", Date.now() + delay, messageId);
+}
+
 /** Use the normal post path. The room checks membership and consumes the pending row in its message transaction. */
 export async function sendScheduled(
 	sql: SqlStorage,
@@ -98,6 +104,12 @@ export async function sendScheduled(
 	for (const row of due) {
 		try {
 			const credential = await credentialState(db, JSON.parse(row.binding_json) as ScheduledInput["binding"]);
+			if (credential.state === "archived") {
+				// Check soon after the missed send, then less often for accounts that stay archived.
+				const elapsed = Date.now() - row.send_at;
+				retryAfter(sql, row.message_id, Math.min(MAX_ARCHIVE_RETRY_MS, Math.max(MIN_ARCHIVE_RETRY_MS, elapsed)));
+				continue;
+			}
 			if (credential.state === "live") {
 				const principal = credential.principal;
 				const result = await room.postMessage(
@@ -114,22 +126,14 @@ export async function sendScheduled(
 				);
 				if (!("error" in result)) continue;
 				if (result.error.code === "rate_limited") {
-					sql.exec(
-						"UPDATE scheduled_messages SET next_attempt_at = ? WHERE message_id = ?",
-						Date.now() + 1000,
-						row.message_id,
-					);
+					retryAfter(sql, row.message_id, 1000);
 					continue;
 				}
 			}
 			sql.exec("DELETE FROM scheduled_messages WHERE message_id = ?", row.message_id);
 		} catch {
 			// A binding can be temporarily unavailable. Keep the send and let the other alarm work proceed.
-			sql.exec(
-				"UPDATE scheduled_messages SET next_attempt_at = ? WHERE message_id = ?",
-				Date.now() + 60_000,
-				row.message_id,
-			);
+			retryAfter(sql, row.message_id, 60_000);
 			log("warn", "scheduled chat send will retry", { roomId, messageId: row.message_id });
 		}
 	}

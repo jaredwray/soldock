@@ -32,6 +32,18 @@ describe("message tools", () => {
 		expect((await owner.call("chat.list_pins", { room_id })).messages).toEqual([]);
 	});
 
+	it("rejects draft reads and writes when another tab replaced the editor's account", async () => {
+		const { owner, ada } = await seedOrg();
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Drafts", member_ids: [ada.id] });
+		const target = { room_id: room.id, expected_principal_id: ada.id };
+		const local = { ...target, revision: 0, body: textBody("Private to Ada") };
+		expect(await codeOf(owner.call("chat.set_draft", local))).toBe("conflict");
+		const saved = await ada.call("chat.set_draft", local);
+		expect(await ada.call("chat.get_draft", target)).toEqual(saved);
+		expect(await codeOf(owner.call("chat.get_draft", target))).toBe("conflict");
+		expect(await owner.call("chat.get_draft", { room_id: room.id })).toEqual({ body: null, revision: 0 });
+	});
+
 	it("keeps distinct room and thread drafts and detects stale device writes after a clear", async () => {
 		const { ada, bot } = await seedOrg();
 		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Draft", member_ids: [bot.id] });
@@ -47,6 +59,47 @@ describe("message tools", () => {
 			await codeOf(ada.call("chat.set_draft", { ...thread, revision: saved.revision, body: textBody("stale") })),
 		).toBe("conflict");
 		expect(await ada.call("chat.get_draft", thread)).toEqual(clear);
+	});
+
+	it("postpones a scheduled message while its author is archived and delivers it once after restoration", async () => {
+		const { owner, bot } = await seedOrg();
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Later", member_ids: [bot.id] });
+		const room_id = room.id;
+		const { message_id } = await bot.call("chat.schedule_message", {
+			room_id,
+			body: textBody("Send after restoration"),
+			send_at: new Date(Date.now() + 60_000).toISOString(),
+			idempotency_key: "restore",
+		});
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room_id));
+		const makeDue = () =>
+			runInDurableObject(stub, (_instance, state) => {
+				state.storage.sql.exec(
+					"UPDATE scheduled_messages SET send_at = ?, next_attempt_at = 0",
+					Date.now() - 86_400_000,
+				);
+			});
+		await makeDue();
+		const before = Date.now();
+		await runDurableObjectAlarm(stub);
+		const pending = await runInDurableObject(stub, (_instance, state) =>
+			state.storage.sql
+				.exec<{ message_id: string; next_attempt_at: number }>(
+					"SELECT message_id, next_attempt_at FROM scheduled_messages",
+				)
+				.one(),
+		);
+		expect(pending.message_id).toBe(message_id);
+		expect(pending.next_attempt_at).toBeGreaterThanOrEqual(before + 3_600_000);
+		expect(pending.next_attempt_at).toBeLessThanOrEqual(Date.now() + 3_600_000);
+		expect((await owner.call("chat.list_messages", { room_id })).messages).toEqual([]);
+		await owner.call("directory.restore_principal", { principal_id: bot.id });
+		await makeDue();
+		await runDurableObjectAlarm(stub);
+		await runDurableObjectAlarm(stub);
+		expect((await owner.call("chat.list_messages", { room_id })).messages.map((m) => m.id)).toEqual([message_id]);
+		expect((await bot.call("chat.list_scheduled_messages", { room_id })).messages).toEqual([]);
 	});
 
 	it("sends each scheduled message once and cancels sends for revoked credentials", async () => {
