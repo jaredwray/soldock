@@ -128,7 +128,7 @@ export function composerKeys(submit: Command, openLink: Command): Record<string,
 		"Mod-i": toggleMark(marks.em),
 		"Shift-Mod-x": toggleMark(marks.strike),
 		"Mod-e": toggleMark(marks.code),
-		"Mod-k": openLink,
+		"Shift-Mod-k": openLink,
 		"Shift-Mod-7": rich.toggleList(nodes.ordered_list),
 		"Shift-Mod-8": rich.toggleList(nodes.bullet_list),
 		"Shift-Mod-9": rich.toggleQuote,
@@ -170,31 +170,35 @@ function markRule(pattern: RegExp, delimiter: number, type: MarkType): InputRule
  * - `:tada:`, the full code of an emoji: the emoji.
  * A mark in a word, such as `2*3*4`, stays text. Backspace right after a shortcut gives the text back.
  */
-export const markdownRules: readonly InputRule[] = [
-	markRule(/(^|[^*])\*\*([^*\s](?:[^*]*[^*\s])?)\*\*$/u, 2, marks.strong),
-	markRule(/(^|[^*\p{L}\p{N}])\*([^*\s](?:[^*]*[^*\s])?)\*$/u, 1, marks.em),
-	markRule(/(^|[^_\p{L}\p{N}])_([^_\s](?:[^_]*[^_\s])?)_$/u, 1, marks.em),
-	markRule(/(^|[^~])~~([^~\s](?:[^~]*[^~\s])?)~~$/u, 2, marks.strike),
-	markRule(/(^|[^`])`([^`]+)`$/u, 1, marks.code),
-	wrappingInputRule(/^\s*([-+*])\s$/, nodes.bullet_list),
-	wrappingInputRule(
-		/^(\d{1,5})\.\s$/,
-		nodes.ordered_list,
-		(match) => ({ order: Number(match[1]) }),
-		(match, node) => node.childCount + (node.attrs.order as number) === Number(match[1]),
-	),
-	wrappingInputRule(/^\s*>\s$/, nodes.blockquote),
-	textblockTypeInputRule(/^```$/, nodes.code_block),
-	// A full code such as `:tada:` becomes its emoji. A code that no emoji has stays text.
-	new InputRule(
-		FULL_CODE,
-		(state, match, start, end) => {
-			const choice = emojiOfCode(match[1] ?? "");
-			return choice ? state.tr.insertText(choice.emoji, start, end) : null;
-		},
-		{ inCodeMark: false },
-	),
-];
+export function markdownRules(isCustomEmoji: (name: string) => boolean): readonly InputRule[] {
+	return [
+		markRule(/(^|[^*])\*\*([^*\s](?:[^*]*[^*\s])?)\*\*$/u, 2, marks.strong),
+		markRule(/(^|[^*\p{L}\p{N}])\*([^*\s](?:[^*]*[^*\s])?)\*$/u, 1, marks.em),
+		markRule(/(^|[^_\p{L}\p{N}])_([^_\s](?:[^_]*[^_\s])?)_$/u, 1, marks.em),
+		markRule(/(^|[^~])~~([^~\s](?:[^~]*[^~\s])?)~~$/u, 2, marks.strike),
+		markRule(/(^|[^`])`([^`]+)`$/u, 1, marks.code),
+		wrappingInputRule(/^\s*([-+*])\s$/, nodes.bullet_list),
+		wrappingInputRule(
+			/^(\d{1,5})\.\s$/,
+			nodes.ordered_list,
+			(match) => ({ order: Number(match[1]) }),
+			(match, node) => node.childCount + (node.attrs.order as number) === Number(match[1]),
+		),
+		wrappingInputRule(/^\s*>\s$/, nodes.blockquote),
+		textblockTypeInputRule(/^```$/, nodes.code_block),
+		// A full code such as `:tada:` becomes its emoji. A code that no emoji has stays text.
+		new InputRule(
+			FULL_CODE,
+			(state, match, start, end) => {
+				const name = match[1] ?? "";
+				if (isCustomEmoji(name)) return null;
+				const choice = emojiOfCode(name);
+				return choice ? state.tr.insertText(choice.emoji, start, end) : null;
+			},
+			{ inCodeMark: false },
+		),
+	];
+}
 
 /** The mention that the person types: from its "@" (`from`) to the caret (`to`), in positions of the document. */
 export interface TypedMention {

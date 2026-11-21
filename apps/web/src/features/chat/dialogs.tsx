@@ -1,5 +1,5 @@
-import { CHAT_LIMITS, type ChatMember, type ChatRoom, type Principal } from "@asterra/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
+import { CHAT_LIMITS, type ChatMember, type ChatRoom } from "@asterra/contracts";
+import { type FormEvent, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
@@ -9,6 +9,7 @@ import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
 import { Presence } from "./Presence.tsx";
+import { RoomArchiveContext } from "./roomPolicy.ts";
 
 /** Creates a public or a private room. The person becomes its owner. */
 export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (room: ChatRoom) => void }) {
@@ -270,37 +271,43 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 	);
 }
 
-/** Opens the direct message room with one person or one agent. */
+/** Opens the direct message room with a person, an agent, or a group. */
 export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (room: ChatRoom) => void }) {
 	const ownId = useSession().whoami.principal.id;
 	const principals = usePrincipals();
 	const [filter, setFilter] = useState("");
-	const [busyId, setBusyId] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
+	const [group, setGroup] = useState(false);
+	const [selected, setSelected] = useState<string[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const filterId = useId();
 	const words = filter.trim().toLowerCase();
 	const others = (principals ?? []).filter(
 		(principal) =>
 			principal.id !== ownId &&
+			principal.archived_at === null &&
 			(words === "" ||
 				principal.display_name.toLowerCase().includes(words) ||
 				principal.address.toLowerCase().includes(words)),
 	);
 
-	async function open(principal: Principal) {
-		setBusyId(principal.id);
+	async function open(ids: string[]) {
+		setBusy(true);
 		setError(null);
 		try {
-			const { room } = await api.call("chat.open_dm", { principal_id: principal.id });
+			const { room } =
+				ids.length === 1 && ids[0]
+					? await api.call("chat.open_dm", { principal_id: ids[0] })
+					: await api.call("chat.open_group_dm", { principal_ids: ids });
 			onOpened(room);
 		} catch (caught) {
 			setError(errorMessage(caught));
-			setBusyId(null);
+			setBusy(false);
 		}
 	}
 
 	return (
-		<Dialog title="New direct message" onClose={onClose} className="dialog-small">
+		<Dialog title="New direct message" onClose={() => !busy && onClose()} className="dialog-small">
 			<div className="chat-browse-search">
 				<label htmlFor={filterId} className="visually-hidden">
 					Name or address
@@ -316,6 +323,11 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 					data-autofocus
 				/>
 			</div>
+			{group && (
+				<p className="dialog-description" role="status">
+					Select 2 to 8 people or agents. {selected.length} selected.
+				</p>
+			)}
 			{error && (
 				<p className="form-error" role="alert">
 					{error}
@@ -335,8 +347,14 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 							<button
 								type="button"
 								className="chat-row chat-row-button"
-								disabled={busyId !== null}
-								onClick={() => void open(principal)}
+								disabled={busy || (group && selected.length >= 8 && !selected.includes(principal.id))}
+								aria-pressed={group ? selected.includes(principal.id) : undefined}
+								onClick={() => {
+									if (!group) return void open([principal.id]);
+									setSelected((ids) =>
+										ids.includes(principal.id) ? ids.filter((id) => id !== principal.id) : [...ids, principal.id],
+									);
+								}}
 							>
 								<span className="avatar avatar-small" aria-hidden="true">
 									{initials(principal.display_name)}
@@ -348,15 +366,30 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 									</span>
 									<span className="muted">{principal.address}</span>
 								</span>
+								{group && selected.includes(principal.id) && <Icon name="check" />}
 							</button>
 						</li>
 					))}
 				</ul>
 			</div>
 			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose}>
+				<button type="button" className="button" disabled={busy} onClick={onClose}>
 					Cancel
 				</button>
+				{group ? (
+					<button
+						type="button"
+						className="button button-primary"
+						disabled={busy || selected.length < 2}
+						onClick={() => void open(selected)}
+					>
+						Start group message
+					</button>
+				) : (
+					<button type="button" className="button" disabled={busy} onClick={() => setGroup(true)}>
+						Select a group
+					</button>
+				)}
 			</div>
 		</Dialog>
 	);
@@ -373,7 +406,7 @@ interface MembersDialogProps {
 
 /**
  * The members of a room. Each member adds people and agents. The owner removes a member. Each member
- * can leave. A direct message keeps its two members, so it shows the list only.
+ * can leave. A direct message keeps its members, so it shows the list only.
  */
 export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialogProps) {
 	const ownId = useSession().whoami.principal.id;
@@ -384,6 +417,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 	const [principalId, setPrincipalId] = useState("");
 	const personId = useId();
 	const fixed = room.kind === "dm";
+	const archived = useContext(RoomArchiveContext);
 
 	const load = useCallback(async () => {
 		try {
@@ -437,7 +471,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 
 	return (
 		<Dialog title={`Members of ${roomTitle(room)}`} onClose={onClose}>
-			{!fixed && room.role !== null && (
+			{!fixed && !archived && room.role !== null && (
 				<form className="chat-browse-search" onSubmit={add} noValidate>
 					<label htmlFor={personId} className="visually-hidden">
 						Person or agent to add

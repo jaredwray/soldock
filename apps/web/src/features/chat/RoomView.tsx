@@ -1,4 +1,4 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
+import { CHAT_LIMITS, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
 import {
 	Fragment,
 	useCallback,
@@ -24,16 +24,19 @@ import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
+import { messageKeys } from "./ChatNavigation.tsx";
 import { AttachButton, AttachmentChips } from "./ComposerFiles.tsx";
 import { createCallLine, createToggleLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { attachmentsOf, useAttachments, useOutbox, usePageVisible, useRoom } from "./data.ts";
 import { MembersDialog, RoomSettingsDialog } from "./dialogs.tsx";
-import { createDraftStore, draftStorage } from "./drafts.ts";
+import { draftStorage } from "./drafts.ts";
 import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { useFileDrop } from "./fileDrop.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
+import { ScheduleButton } from "./MessageActions.tsx";
 import { type Editing, editedBody, editSavable, MessageItem } from "./MessageItem.tsx";
+import { RoomMessagesButton } from "./MessageTools.tsx";
 import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import {
 	chatRows,
@@ -53,11 +56,16 @@ import {
 	unseenSendsNote,
 } from "./model.ts";
 import { Presence } from "./Presence.tsx";
+import { CommandHelp, IncomingHooks } from "./RoomBots.tsx";
+import { RoomControls } from "./RoomControls.tsx";
 import { RoomNotificationButton } from "./RoomNotifications.tsx";
-import { useSearchKeys } from "./searchKeys.ts";
+import { roomCommand, runRoomCommand } from "./roomCommands.ts";
+import { postingNotice, RoomArchiveContext } from "./roomPolicy.ts";
+import { useChatShortcut } from "./searchKeys.ts";
 import { createSendSettler } from "./settle.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
 import { useWantPeople } from "./usePeople.ts";
+import { useRoomDraft } from "./useRoomDraft.tsx";
 
 export interface RoomViewProps {
 	roomId: string;
@@ -78,8 +86,11 @@ export interface RoomViewProps {
 }
 
 type RoomDialog =
+	| { type: "hooks" }
+	| { type: "commands" }
 	| { type: "members" }
 	| { type: "settings" }
+	| { type: "controls" }
 	| { type: "delete"; message: ChatMessage }
 	| { type: "edits"; message: ChatMessage }
 	| null;
@@ -137,21 +148,20 @@ export function RoomView({
 	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
-	// The message in the box stays for the room when the person opens a different room, and after a reload.
-	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
 	// The emoji that the person uses most, for the quick reactions of each message. The list is the list
 	// of the time that the room opened, so a button does not move after a click on it.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a new room reads the counts again.
 	const quickEmoji = useMemo(() => frequentEmoji(draftStorage(), ownId), [ownId, roomId]);
 	/** The reaction calls of each "message id" and "emoji": see `createToggleLine`. */
 	const reactions = useMemo(() => createToggleLine(), []);
-	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
-	function setDraft(body: ChatBody | null) {
-		if (body !== null) view.typing();
-		setDraftBody(body);
-		drafts.set(roomId, body);
-	}
 	const composer = useRef<ChatComposerHandle>(null);
+	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
+	const {
+		draft,
+		change: setDraft,
+		status: draftStatus,
+		clearSent,
+	} = useRoomDraft(ownId, roomId, null, composer, isMember);
 	/** The characters of the draft above the limit of the plain text, or 0. */
 	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
 	// The files of the new message upload at once, to the drive of the person. They stay for the room when
@@ -159,7 +169,8 @@ export function RoomView({
 	const attachments = useMemo(() => attachmentsOf(ownId, roomId), [ownId, roomId]);
 	const files = useAttachments(attachments);
 	/** True when the message has text or files, and each file is in the drive. */
-	const canSend = canSendWith(draft !== null, files.list) && draftOver === 0;
+	const readOnly = postingNotice(view.policy, (listed ?? view.room)?.role ?? null);
+	const canSend = !readOnly && canSendWith(draft !== null, files.list) && draftOver === 0;
 	const addFiles = useCallback(
 		(added: File[], folders: readonly string[] = []) => {
 			if (folders.length > 0) {
@@ -433,11 +444,10 @@ export function RoomView({
 
 	// The list also stays at the same message when its size changes: the window gets a different
 	// width, or the keyboard of a phone opens.
-	const isMember = view.status === "ready" && (listed ?? view.room)?.role != null;
 	useViewedRoom(isMember ? roomId : null);
 	// Ctrl+F and ⌘F search this room. Only a member can search a room: for each other person, and while the
 	// room loads, the search is in all rooms.
-	useSearchKeys(() => navigate(chatSearchPath("", isMember ? roomId : null)));
+	useChatShortcut("f", () => navigate(chatSearchPath("", isMember ? roomId : null)));
 	// After a close, the focus goes back to the button that opened the thread, or to the box of the room. It
 	// waits for the commit: on a narrow screen the room is hidden while the view of the thread shows.
 	useEffect(() => {
@@ -532,8 +542,33 @@ export function RoomView({
 		if (!hasNewer) setSentUnseen(0);
 	}, [hasNewer]);
 
+	const commandPending = useRef(false);
+	const commandRetry = useRef({ text: "", key: "" });
 	function send() {
-		if (!canSend) return;
+		if (!canSend || commandPending.current) return;
+		const command = roomCommand(draft);
+		if (command) {
+			if (files.list.length) {
+				fail(new Error("Remove the files before you run a room command."));
+				return;
+			}
+			commandPending.current = true;
+			if (commandRetry.current.text !== command.text)
+				commandRetry.current = { text: command.text, key: crypto.randomUUID() };
+			runRoomCommand(roomId, command, commandRetry.current.key)
+				.then(() => {
+					clearSent(draft);
+					commandRetry.current.text = "";
+					if (command.name === "hooks") setDialog({ type: "hooks" });
+					else if (command.name === "help") setDialog({ type: "commands" });
+					else void onRoomsChanged();
+				})
+				.catch(fail)
+				.finally(() => {
+					commandPending.current = false;
+				});
+			return;
+		}
 		// Each file is in the drive, so the outbox carries only the files. They leave the box at once.
 		const sentFiles = attachments.take() ?? [];
 		// A new message goes after the newest message of the room. When the list is not there, it goes
@@ -822,7 +857,7 @@ export function RoomView({
 	}
 
 	return (
-		<>
+		<RoomArchiveContext.Provider value={view.policy?.archived === true}>
 			<header className="chat-header">
 				{room.kind === "dm" ? (
 					<span className="avatar avatar-small chat-header-avatar" aria-hidden="true">
@@ -843,6 +878,29 @@ export function RoomView({
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
 					{isMember && <RoomNotificationButton roomId={roomId} />}
+					{view.policy && isMember && (
+						<button
+							type="button"
+							className="icon-button"
+							title="Room controls"
+							aria-label="Room controls"
+							onClick={() => setDialog({ type: "controls" })}
+						>
+							<Icon name="settings" />
+						</button>
+					)}
+					{isMember && <RoomMessagesButton roomId={roomId} />}
+					{isMember && (
+						<button
+							type="button"
+							className="chat-header-button"
+							title="Room commands"
+							aria-label="Room commands"
+							onClick={() => setDialog({ type: "commands" })}
+						>
+							/
+						</button>
+					)}
 					{isMember && <RoomSearch roomId={roomId} title={title} />}
 					<button
 						type="button"
@@ -854,7 +912,7 @@ export function RoomView({
 						<Icon name="team" />
 						{room.member_count}
 					</button>
-					{room.role === "owner" && (
+					{room.role === "owner" && !view.policy?.archived && (
 						<button
 							type="button"
 							className="icon-button"
@@ -871,7 +929,7 @@ export function RoomView({
 			{isMember ? (
 				<>
 					{/* The list and the box take the files of a drop (`useFileDrop`). */}
-					<div className="chat-list" data-file-drop="room">
+					<div className="chat-list" data-file-drop={readOnly ? undefined : "room"}>
 						<div className="chat-scroll" ref={scrollRef} onScroll={onScroll} tabIndex={-1}>
 							{view.hasOlder && (
 								<p className="chat-more">
@@ -898,7 +956,14 @@ export function RoomView({
 									</p>
 								</div>
 							)}
-							<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
+							<ol
+								className="chat-messages"
+								// biome-ignore lint/a11y/noNoninteractiveTabindex: The list is the entry point for arrow key navigation.
+								tabIndex={0}
+								onKeyDown={messageKeys}
+								role="log"
+								aria-label={`Messages of ${title}`}
+							>
 								{rows.map(({ key, message, pending }, index) => {
 									const previous = rows[index - 1]?.message;
 									// The first new message shows its author: the line starts a new part of the list.
@@ -1004,65 +1069,81 @@ export function RoomView({
 							</div>
 						)}
 					</div>
-					<form
-						className="chat-composer"
-						data-file-drop="room"
-						onSubmit={(event) => {
-							event.preventDefault();
-							send();
-						}}
-					>
-						<p className="chat-typing" role="status">
-							{typingLabel(view.members, view.typists)}
+					{readOnly ? (
+						<p className="chat-thread-closed" role="status">
+							{readOnly}
 						</p>
-						<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
-							<ChatComposer
-								ref={composer}
-								id={draftId}
-								label={`Message to ${title}`}
-								placeholder={draftPlaceholder(room)}
-								initial={draft}
-								onChange={setDraft}
-								onSubmit={send}
-								onFiles={addFiles}
-								mentions={mentions}
-								placement="above"
-								files={
-									<AttachmentChips
-										files={files.list}
-										notice={files.notice}
-										onRetry={attachments.retry}
-										onRemove={attachments.remove}
-										onFocusAway={() => composer.current?.focus()}
-									/>
-								}
-							>
-								<span className="chat-composer-actions">
-									<AttachButton count={files.list.length} onFiles={addFiles} />
-									<button
-										type="submit"
-										className="chat-send"
-										aria-label="Send the message"
-										title="Send (Enter)"
-										disabled={!canSend}
-									>
-										<Icon name="arrowUp" size={18} />
-									</button>
-								</span>
-							</ChatComposer>
-						</div>
-						{filesNote(files.list) !== null && (
-							<p className="chat-composer-files-note" role="status">
-								{filesNote(files.list)}
+					) : (
+						<form
+							className="chat-composer"
+							data-file-drop="room"
+							onSubmit={(event) => {
+								event.preventDefault();
+								send();
+							}}
+						>
+							<p className="chat-typing" role="status">
+								{typingLabel(view.members, view.typists)}
 							</p>
-						)}
-						{draftOver > 0 && (
-							<p className="chat-composer-limit" role="status">
-								The message has {plural(draftOver, "character")} more than the limit of{" "}
-								{CHAT_LIMITS.messageChars.toLocaleString()}.
-							</p>
-						)}
-					</form>
+							<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
+								<ChatComposer
+									ref={composer}
+									id={draftId}
+									label={`Message to ${title}`}
+									placeholder={draftPlaceholder(room)}
+									initial={draft}
+									onChange={(body) => {
+										if (body !== null) view.typing();
+										setDraft(body);
+									}}
+									onSubmit={send}
+									onFiles={addFiles}
+									mentions={mentions}
+									placement="above"
+									files={
+										<AttachmentChips
+											files={files.list}
+											notice={files.notice}
+											onRetry={attachments.retry}
+											onRemove={attachments.remove}
+											onFocusAway={() => composer.current?.focus()}
+										/>
+									}
+								>
+									<span className="chat-composer-actions">
+										<ScheduleButton
+											roomId={roomId}
+											body={draft}
+											disabled={!canSend || files.list.length > 0}
+											onSent={clearSent}
+										/>
+										<AttachButton count={files.list.length} onFiles={addFiles} />
+										<button
+											type="submit"
+											className="chat-send"
+											aria-label="Send the message"
+											title="Send (Enter)"
+											disabled={!canSend}
+										>
+											<Icon name="arrowUp" size={18} />
+										</button>
+									</span>
+								</ChatComposer>
+							</div>
+							{draftStatus}
+							{filesNote(files.list) !== null && (
+								<p className="chat-composer-files-note" role="status">
+									{filesNote(files.list)}
+								</p>
+							)}
+							{draftOver > 0 && (
+								<p className="chat-composer-limit" role="status">
+									The message has {plural(draftOver, "character")} more than the limit of{" "}
+									{CHAT_LIMITS.messageChars.toLocaleString()}.
+								</p>
+							)}
+						</form>
+					)}
 				</>
 			) : (
 				<div className="chat-empty chat-empty-page">
@@ -1071,8 +1152,13 @@ export function RoomView({
 					</span>
 					<p className="chat-empty-title">#{title}</p>
 					<p>You are not a member of this public room. Join it to read and write messages.</p>
-					<button type="button" className="button button-primary" disabled={joining} onClick={() => void join()}>
-						{joining ? "Joining…" : "Join the room"}
+					<button
+						type="button"
+						className="button button-primary"
+						disabled={joining || view.policy?.archived}
+						onClick={() => void join()}
+					>
+						{view.policy?.archived ? "Archived" : joining ? "Joining…" : "Join the room"}
 					</button>
 				</div>
 			)}
@@ -1082,6 +1168,7 @@ export function RoomView({
 					key={threadId}
 					roomId={roomId}
 					roomTitle={title}
+					readOnly={readOnly}
 					parentId={threadId}
 					focus={threadFocus}
 					mentions={mentions}
@@ -1094,6 +1181,24 @@ export function RoomView({
 					}}
 				/>
 			)}
+			{dialog?.type === "controls" && view.policy && (
+				<RoomControls
+					room={room}
+					policy={view.policy}
+					onClose={() => setDialog(null)}
+					onSaved={() => {
+						setDialog(null);
+						void view.loadMembers();
+					}}
+					onDeleted={() => {
+						setDialog(null);
+						void onRoomsChanged();
+						navigate(chatPath());
+					}}
+				/>
+			)}
+			{dialog?.type === "commands" && <CommandHelp onClose={() => setDialog(null)} />}
+			{dialog?.type === "hooks" && <IncomingHooks roomId={roomId} onClose={() => setDialog(null)} />}
 			{dialog?.type === "members" && (
 				<MembersDialog
 					room={room}
@@ -1143,7 +1248,7 @@ export function RoomView({
 					<p>The text of the message is deleted for each member. This cannot be undone.</p>
 				</ConfirmDialog>
 			)}
-		</>
+		</RoomArchiveContext.Provider>
 	);
 }
 

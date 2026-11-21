@@ -77,6 +77,7 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 
 - One tool for each operation. The name replaces each dot with an underscore (`mail.send` →
   `mail_send`).
+- The first `tools/list` request for a tool builds its description. Later requests reuse the description in that isolate.
 - `inputSchema` and `outputSchema` are the JSON Schemas of the Zod schemas. The annotations map
   to `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call

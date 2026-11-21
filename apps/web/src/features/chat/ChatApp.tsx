@@ -6,21 +6,27 @@ import { api } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
-import { chatPath, chatSearchPath, chatThreadsPath } from "../../routes.ts";
+import { chatActivityPath, chatPath, chatSearchPath, chatThreadsPath } from "../../routes.ts";
 import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID, SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
+import { ActivityView } from "./ActivityView.tsx";
+import { QuickSwitcher, SectionDialog, ShortcutDialog } from "./ChatNavigation.tsx";
+import { CustomEmojiProvider } from "./CustomEmoji.tsx";
 import { type RoomsState, restoreOutboxes, useRooms } from "./data.ts";
 import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
+import { PersonalMessagesButton } from "./MessageTools.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { Presence, PresenceProvider } from "./Presence.tsx";
 import { ProfileView } from "./ProfileView.tsx";
+import { RoomAdministration } from "./RoomAdministration.tsx";
 import { RoomView } from "./RoomView.tsx";
 import { SearchView } from "./SearchView.tsx";
-import { useSearchKeys } from "./searchKeys.ts";
+import { useChatShortcut } from "./searchKeys.ts";
 import { ThreadsView } from "./ThreadsView.tsx";
 import { PeopleProvider, usePeopleDirectory, usePeopleStore } from "./usePeople.ts";
+import { useSidebarSections } from "./useSidebarSections.ts";
 
 export interface ChatAppProps {
 	/** The open room, or null for the page without a room. */
@@ -33,6 +39,7 @@ export interface ChatAppProps {
 	profileId: string | null;
 	/** True for the Threads view: the threads that the person follows. */
 	threads: boolean;
+	activity: boolean;
 	/** The Search view: its query, and the room of a search in one room. Null for each other view. */
 	search: { query: string; roomId: string | null } | null;
 	/** True while the navigation drawer is open, at 900px and below. */
@@ -40,7 +47,7 @@ export interface ChatAppProps {
 	onCloseNav: () => void;
 }
 
-type ChatDialog = "new-room" | "browse" | "new-dm" | null;
+type ChatDialog = "switch" | "shortcuts" | "admin" | "new-room" | "browse" | "new-dm" | null;
 
 /** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
 export function ChatApp(props: ChatAppProps) {
@@ -57,6 +64,7 @@ function ChatWorkspace({
 	replySeq,
 	profileId,
 	threads,
+	activity,
 	search,
 	navOpen,
 	onCloseNav,
@@ -64,6 +72,7 @@ function ChatWorkspace({
 	const rooms = useRooms();
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
+	useChatShortcut("k", () => setDialog("switch"));
 	const ownId = useSession().whoami.principal.id;
 	// The people that the views asked for: the handles of the mentions, and the names. It is not the whole
 	// directory. Each message asks for the principals that it shows.
@@ -77,14 +86,16 @@ function ChatWorkspace({
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null && !threads && search === null) setPageTitle("Chat – Asterra");
-	}, [roomId, profileId, threads, search]);
+		if (roomId === null && profileId === null && !threads && !activity && search === null)
+			setPageTitle("Chat – Asterra");
+	}, [roomId, profileId, threads, activity, search]);
 
 	// Ctrl+F and ⌘F open the Search view of Chat, for all rooms. In the Search view, the keys move the focus
 	// to the box. While a room shows, the room view handles the keys: it knows if the person is a member.
 	const searching = search !== null;
 	const roomShown = roomId !== null && profileId === null && !threads && !searching;
-	useSearchKeys(
+	useChatShortcut(
+		"f",
 		roomShown
 			? null
 			: () => {
@@ -108,79 +119,95 @@ function ChatWorkspace({
 	}
 
 	return (
-		<PeopleProvider value={people}>
-			<div className="chat-layout">
-				<ChatSidebar
-					rooms={rooms}
-					activeId={roomId}
-					threadsActive={threads}
-					searchActive={search !== null}
-					unreadThreads={unreadThreads}
-					open={navOpen}
-					onClose={onCloseNav}
-					onNewRoom={() => setDialog("new-room")}
-					onBrowse={() => setDialog("browse")}
-					onNewDm={() => setDialog("new-dm")}
-				/>
-				<main id="main" className="chat-main" tabIndex={-1}>
-					{profileId !== null ? (
-						// The key gives each profile its own view, so a button of one never acts for a different one.
-						<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
-					) : search !== null ? (
-						<SearchView query={search.query} roomId={search.roomId} rooms={rooms.rooms} />
-					) : threads ? (
-						<ThreadsView tick={rooms.threadsTick} directory={directory} />
-					) : roomId === null ? (
-						<>
-							<PageHeader title="Chat" icon="chat" />
-							<div className="chat-empty chat-empty-page">
-								<span className="chat-empty-tile" aria-hidden="true">
-									<Icon name="chat" size={24} />
-								</span>
-								<h2 className="chat-empty-title">Your rooms and direct messages</h2>
-								<p>Select a room or a direct message, or start a new one.</p>
-								<p className="chat-start">
-									<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
-										New room
-									</button>
-									<button type="button" className="button" onClick={() => setDialog("browse")}>
-										Find a public room
-									</button>
-								</p>
-							</div>
-						</>
-					) : (
-						// The key gives each room its own view, so the messages of one never show in a different one.
-						<RoomView
-							key={roomId}
-							roomId={roomId}
-							focusSeq={messageSeq}
-							focusReplySeq={replySeq}
-							listed={listed}
-							listReady={rooms.status === "ready"}
-							listTick={rooms.tick}
-							onRoomsChanged={rooms.refresh}
-							directory={directory}
-						/>
+		<CustomEmojiProvider key={ownId}>
+			<PeopleProvider value={people}>
+				<div className="chat-layout">
+					<ChatSidebar
+						rooms={rooms}
+						activeId={roomId}
+						threadsActive={threads}
+						activityActive={activity}
+						onSwitch={() => setDialog("switch")}
+						onShortcuts={() => setDialog("shortcuts")}
+						searchActive={search !== null}
+						unreadThreads={unreadThreads}
+						open={navOpen}
+						onClose={onCloseNav}
+						onNewRoom={() => setDialog("new-room")}
+						onAdmin={() => setDialog("admin")}
+						onBrowse={() => setDialog("browse")}
+						onNewDm={() => setDialog("new-dm")}
+					/>
+					<main id="main" className="chat-main" tabIndex={-1}>
+						{profileId !== null ? (
+							// The key gives each profile its own view, so a button of one never acts for a different one.
+							<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
+						) : search !== null ? (
+							<SearchView query={search.query} roomId={search.roomId} rooms={rooms.rooms} />
+						) : activity ? (
+							<ActivityView tick={rooms.tick} />
+						) : threads ? (
+							<ThreadsView tick={rooms.threadsTick} directory={directory} />
+						) : roomId === null ? (
+							<>
+								<PageHeader title="Chat" icon="chat" />
+								<div className="chat-empty chat-empty-page">
+									<span className="chat-empty-tile" aria-hidden="true">
+										<Icon name="chat" size={24} />
+									</span>
+									<h2 className="chat-empty-title">Your rooms and direct messages</h2>
+									<p>Select a room or a direct message, or start a new one.</p>
+									<p className="chat-start">
+										<button type="button" className="button button-primary" onClick={() => setDialog("new-room")}>
+											New room
+										</button>
+										<button type="button" className="button" onClick={() => setDialog("browse")}>
+											Find a public room
+										</button>
+									</p>
+								</div>
+							</>
+						) : (
+							// The key gives each room its own view, so the messages of one never show in a different one.
+							<RoomView
+								key={roomId}
+								roomId={roomId}
+								focusSeq={messageSeq}
+								focusReplySeq={replySeq}
+								listed={listed}
+								listReady={rooms.status === "ready"}
+								listTick={rooms.tick}
+								onRoomsChanged={rooms.refresh}
+								directory={directory}
+							/>
+						)}
+					</main>
+					{dialog === "admin" && <RoomAdministration onClose={() => setDialog(null)} />}
+					{dialog === "switch" && (
+						<QuickSwitcher ownId={ownId} onOpened={(room) => void open(room)} onClose={() => setDialog(null)} />
 					)}
-				</main>
-				{dialog === "new-room" && (
-					<NewRoomDialog onClose={() => setDialog(null)} onCreated={(room) => void open(room)} />
-				)}
-				{dialog === "browse" && (
-					<BrowseRoomsDialog onClose={() => setDialog(null)} onOpen={(room) => void open(room)} />
-				)}
-				{dialog === "new-dm" && <NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />}
-			</div>
-		</PeopleProvider>
+					{dialog === "shortcuts" && <ShortcutDialog onClose={() => setDialog(null)} />}
+					{dialog === "new-room" && (
+						<NewRoomDialog onClose={() => setDialog(null)} onCreated={(room) => void open(room)} />
+					)}
+					{dialog === "browse" && (
+						<BrowseRoomsDialog onClose={() => setDialog(null)} onOpen={(room) => void open(room)} />
+					)}
+					{dialog === "new-dm" && <NewDmDialog onClose={() => setDialog(null)} onOpened={(room) => void open(room)} />}
+				</div>
+			</PeopleProvider>
+		</CustomEmojiProvider>
 	);
 }
 
 interface ChatSidebarProps {
-	rooms: RoomsState;
+	rooms: RoomsState & { sectionsTick: number };
 	activeId: string | null;
 	/** True while the Threads view shows. */
 	threadsActive: boolean;
+	activityActive: boolean;
+	onSwitch: () => void;
+	onShortcuts: () => void;
 	/** True while the Search view shows. */
 	searchActive: boolean;
 	/** The threads with new replies, at most 100. */
@@ -188,6 +215,7 @@ interface ChatSidebarProps {
 	open: boolean;
 	onClose: () => void;
 	onNewRoom: () => void;
+	onAdmin: () => void;
 	onBrowse: () => void;
 	onNewDm: () => void;
 }
@@ -197,18 +225,26 @@ function ChatSidebar({
 	rooms,
 	activeId,
 	threadsActive,
+	activityActive,
+	onSwitch,
+	onShortcuts,
 	searchActive,
 	unreadThreads,
 	open,
 	onClose,
 	onNewRoom,
+	onAdmin,
 	onBrowse,
 	onNewDm,
 }: ChatSidebarProps) {
 	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
-	const { starred, named, direct } = sidebarRooms(rooms.rooms);
+	const [organizing, setOrganizing] = useState(false);
+	const { sections, sectionError, refreshSections } = useSidebarSections(rooms.sectionsTick);
+	const assigned = new Set(sections.flatMap((s) => s.rooms.map((r) => r.id)));
+	const { starred, named, direct } = sidebarRooms(rooms.rooms.filter((room) => !assigned.has(room.id)));
+	const latest = new Map(rooms.rooms.map((room) => [room.id, room]));
 	// The text of an empty part is for a person without such a room. A room with a star is in its own part.
 	const hasNamed = rooms.rooms.some((room) => room.kind !== "dm");
 	const hasDirect = rooms.rooms.some((room) => room.kind === "dm");
@@ -240,6 +276,33 @@ function ChatSidebar({
 					New room
 				</button>
 				<ul className="nav-list chat-nav-views">
+					<li>
+						<button type="button" className="nav-item" onClick={onSwitch}>
+							<Icon name="search" />
+							Switch rooms or people
+						</button>
+					</li>
+					<li>
+						<Link
+							to={chatActivityPath()}
+							className={activityActive ? "nav-item nav-item-active" : "nav-item"}
+							aria-current={activityActive ? "page" : undefined}
+						>
+							<Icon name="chat" />
+							Activity
+						</Link>
+					</li>
+					<li>
+						<PersonalMessagesButton />
+					</li>
+					{isOrgAdmin(whoami.principal) && (
+						<li>
+							<button type="button" className="nav-item" onClick={onAdmin}>
+								<Icon name="settings" />
+								<span className="nav-name">Room administration</span>
+							</button>
+						</li>
+					)}
 					<li>
 						<Link
 							to={chatSearchPath()}
@@ -273,6 +336,48 @@ function ChatSidebar({
 						</Link>
 					</li>
 				</ul>
+				<div className="nav-section">
+					<button className="button" type="button" onClick={() => setOrganizing(true)}>
+						Organize sidebar
+					</button>
+					<button
+						className="icon-button"
+						type="button"
+						onClick={onShortcuts}
+						aria-label="Keyboard shortcuts"
+						title="Keyboard shortcuts"
+					>
+						?
+					</button>
+				</div>
+				{sectionError && (
+					<p role="alert" className="nav-error">
+						{sectionError}
+					</p>
+				)}
+				{organizing && (
+					<SectionDialog
+						activeId={activeId}
+						rooms={rooms.rooms}
+						sections={sections}
+						onSaved={refreshSections}
+						onClose={() => setOrganizing(false)}
+					/>
+				)}
+				{sections.map((section, index) => (
+					<div key={section.name}>
+						<div className="nav-section">
+							<h2 className="nav-heading" id={`${headingId}-section-${index}`}>
+								{section.name}
+							</h2>
+						</div>
+						<ul className="nav-list" aria-labelledby={`${headingId}-section-${index}`}>
+							{section.rooms.map((room) => (
+								<RoomLink key={room.id} room={latest.get(room.id) ?? room} active={room.id === activeId} />
+							))}
+						</ul>
+					</div>
+				))}
 				{starred.length > 0 && (
 					<>
 						<div className="nav-section nav-section-first">

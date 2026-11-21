@@ -663,6 +663,19 @@ describe("the search index of the organization", () => {
 		expect(await find(ada, "budget", { sort: "time" })).toEqual(["The second budget.", "The first budget."]);
 	});
 
+	it("finishes a registered room's initial index fill before returning its search results", async () => {
+		const { id: roomId } = await createRoom(ada, "private", "History");
+		await post(ada, roomId, "Find this invoice");
+		await indexed(roomId);
+		await runInDurableObject(index(), (instance, state) => {
+			for (const table of ["rooms", "messages", "messages_fts", "mentions"])
+				state.storage.sql.exec(`DELETE FROM ${table}`);
+			// The first room batch registers the room. Its message batch has not arrived yet.
+			instance.apply({ roomId, stamp: 1, entries: [], filled: false });
+		});
+		expect(await find(ada, "invoice")).toEqual(["Find this invoice"]);
+	});
+
 	// A room from before search has its messages in its own tables only, until it starts again.
 	it("gets the messages of a room from before the index, when a search finds that the index does not know the room", async () => {
 		const room = await createRoom(ada, "private", "Old room", [bot.id]);
@@ -672,15 +685,15 @@ describe("the search index of the organization", () => {
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: gone.id });
 		await indexed(room.id);
 		// The room goes back to the schema before search, and the index forgets the room.
+		await runInDurableObject(index(), (_instance, state) => {
+			for (const table of ["rooms", "messages", "messages_fts", "mentions"])
+				state.storage.sql.exec(`DELETE FROM ${table}`);
+		});
 		await restartLegacyRoom(room.id, 14, (sql) => {
 			sql.exec("DROP TABLE messages_fts");
 			sql.exec("DROP TABLE search_mentions");
 			sql.exec("ALTER TABLE messages DROP COLUMN has_link");
 			sql.exec("DELETE FROM outbox WHERE target LIKE 'search:%'");
-		});
-		await runInDurableObject(index(), (_instance, state) => {
-			for (const table of ["rooms", "messages", "messages_fts", "mentions"])
-				state.storage.sql.exec(`DELETE FROM ${table}`);
 		});
 
 		// The first search across the rooms asks the room, which sends its messages.

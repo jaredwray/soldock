@@ -19,8 +19,10 @@ import {
 import { expect, vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
+import { restoreChatSchema16 } from "./chat-schema.ts";
 
 export const ORIGIN = "https://dock.test";
+
 /** The SETUP_TOKEN binding of vitest.config.ts. */
 export const SETUP_TOKEN = (env as Env).SETUP_TOKEN as string;
 
@@ -39,10 +41,15 @@ export async function restartLegacyRoom(roomId: string, version: number, restore
 			state.blockConcurrencyWhile(async () => {
 				await state.storage.deleteAlarm();
 				const sql = state.storage.sql;
-				restore(sql);
-				sql.exec("DROP TABLE chat_notification_outbox");
-				sql.exec("ALTER TABLE members DROP COLUMN last_typed_at");
-				sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(version));
+				state.storage.transactionSync(() => {
+					restoreChatSchema16(sql);
+					if (version < 16) {
+						sql.exec("DROP TABLE chat_notification_outbox");
+						sql.exec("ALTER TABLE members DROP COLUMN last_typed_at");
+					}
+					restore(sql);
+					sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(version));
+				});
 				await state.storage.sync();
 				state.abort("Restart the legacy room.");
 			}),

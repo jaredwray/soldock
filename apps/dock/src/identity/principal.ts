@@ -12,6 +12,7 @@ import {
 } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
 import { type CredentialCheck, type CredentialRef, checkCredentials, credentialKey } from "./access.ts";
+import { type MarkKind, personalMarkPage, personalMessageTables, setPersonalMark } from "./chat-marks.ts";
 import {
 	ChatNotifications,
 	NOTIFICATION_MIGRATION,
@@ -62,6 +63,7 @@ export interface ChatRoomView {
 	 * `THREADS_PER_ROOM`. A state from before threads has none.
 	 */
 	threads?: readonly ChatThreadState[] | undefined;
+	activity?: { version: number; at: number }[];
 	/**
 	 * The newest change of the room that is for the principal, or null when the room has none. A state
 	 * from before this field has no value.
@@ -305,6 +307,21 @@ const MIGRATIONS: string[][] = [
 			DELETE FROM chat_notification_levels WHERE room_id = NEW.room_id; END`,
 	],
 	["ALTER TABLE chat_notification_sounds ADD COLUMN foreground_devices TEXT NOT NULL DEFAULT '[]'"],
+	personalMessageTables,
+	[
+		"ALTER TABLE chat_rooms ADD COLUMN section TEXT",
+		"CREATE INDEX chat_room_sections ON chat_rooms (room_id) WHERE joined = 1 AND section IS NOT NULL",
+		`CREATE TABLE chat_activity_refs (room_id TEXT NOT NULL, version INTEGER NOT NULL, at INTEGER NOT NULL,
+			PRIMARY KEY (room_id, version)) WITHOUT ROWID`,
+		"CREATE INDEX chat_activity_recent ON chat_activity_refs (at DESC, room_id DESC, version DESC)",
+		// A room can coalesce a leave and a rejoin into a single update with a new membership id.
+		`CREATE TRIGGER chat_personal_membership AFTER UPDATE OF joined, membership_id ON chat_rooms
+			WHEN NEW.joined = 0 OR (OLD.membership_id IS NOT NULL AND NEW.membership_id != OLD.membership_id) BEGIN
+			DELETE FROM chat_marks WHERE room_id = NEW.room_id;
+			DELETE FROM chat_activity_refs WHERE room_id = NEW.room_id;
+			UPDATE chat_rooms SET section = NULL WHERE room_id = NEW.room_id AND section IS NOT NULL;
+		END`,
+	],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -340,6 +357,58 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		this.notifications = new ChatNotifications(this.sql);
 		this.migrate();
+	}
+
+	setChatMark(kind: MarkKind, roomId: string, messageId: string, at: number | null): void {
+		setPersonalMark(this.sql, kind, roomId, messageId, at);
+	}
+
+	chatMarkPage(kind: MarkKind, before: number, limit: number, due: boolean) {
+		return personalMarkPage(this.sql, kind, before, limit, due);
+	}
+
+	chatSectionRefs(afterRoomId: string | null, limit: number) {
+		return this.sql
+			.exec<{ room_id: string; section: string }>(
+				`SELECT room_id, section FROM chat_rooms WHERE joined = 1 AND section IS NOT NULL AND room_id > ?
+			ORDER BY room_id LIMIT ?`,
+				afterRoomId ?? "",
+				limit + 1,
+			)
+			.toArray();
+	}
+
+	/** A newer state from the same membership still accepts the write. A leave and a later join reject it. */
+	private joinedMembership(state: ChatRoomState): { section: string | null } | undefined {
+		this.applyChatRoomStates([state]);
+		return this.sql
+			.exec<{ section: string | null }>(
+				"SELECT section FROM chat_rooms WHERE room_id = ? AND joined = 1 AND (membership_id = ? OR stamp = ?)",
+				state.room_id,
+				state.membership_id ?? null,
+				state.stamp,
+			)
+			.toArray()[0];
+	}
+
+	setRoomSection(state: ChatRoomState, name: string | null): "ok" | "not_found" {
+		const own = this.joinedMembership(state);
+		if (!own) return "not_found";
+		if (own.section === name) return "ok";
+		this.sql.exec("UPDATE chat_rooms SET section = ? WHERE room_id = ?", name, state.room_id);
+		if (this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publish(() => [{ type: "chat.sections" }]));
+		return "ok";
+	}
+
+	chatActivityPage(after: [number, string, number] | null, limit: number) {
+		return this.sql
+			.exec<{ room_id: string; version: number; at: number }>(
+				`SELECT room_id, version, at FROM chat_activity_refs ${after ? "WHERE (at, room_id, version) < (?, ?, ?)" : ""}
+			ORDER BY at DESC, room_id DESC, version DESC LIMIT ?`,
+				...(after ?? []),
+				limit + 1,
+			)
+			.toArray();
 	}
 
 	private migrate(): void {
@@ -434,6 +503,22 @@ export class PrincipalDO extends DurableObject<Env> {
 					if (this.replaceThreads(state.room_id, threads)) threadRooms.push(state.room_id);
 				}
 				if (accepted.length > 0) {
+					const refs = view === null ? [] : view.activity;
+					if (refs !== undefined) {
+						const json = JSON.stringify(refs);
+						this.sql.exec(
+							`DELETE FROM chat_activity_refs WHERE room_id = ? AND version NOT IN
+							(SELECT json_extract(value, '$.version') FROM json_each(?))`,
+							state.room_id,
+							json,
+						);
+						this.sql.exec(
+							`INSERT OR IGNORE INTO chat_activity_refs (room_id, version, at)
+							SELECT ?1, json_extract(value, '$.version'), json_extract(value, '$.at') FROM json_each(?2)`,
+							state.room_id,
+							json,
+						);
+					}
 					const change = this.keepAddressed(state.room_id, view === null ? null : view.addressed);
 					if (change) addressed.push({ room_id: state.room_id, change });
 				}
@@ -724,17 +809,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	}
 
 	setChatNotificationLevel(state: ChatRoomState, level: ChatNotificationLevel | null): boolean {
-		this.applyChatRoomStates([state]);
-		// A newer state of the same membership still accepts the change. A later join must reject it.
-		const member = this.sql
-			.exec(
-				"SELECT 1 FROM chat_rooms WHERE room_id = ? AND joined = 1 AND (membership_id = ? OR stamp = ?)",
-				state.room_id,
-				state.membership_id ?? null,
-				state.stamp,
-			)
-			.toArray();
-		if (!member.length) return false;
+		if (!this.joinedMembership(state)) return false;
 		this.notifications.setRoomLevel(state.room_id, level);
 		return true;
 	}

@@ -857,6 +857,12 @@ MCP clients. The app has no UI-only path.
     the other member, and an "agent" mark for an agent. The magnifier opens the list of the public
     rooms, where the person joins a room. The plus opens a list of people and agents for a new
     direct message.
+  - **New direct message** opens a conversation with one account. **Select a group** starts one with two to eight other accounts.
+  - **Room controls** lets the room owner archive or reopen the room, delete it, and choose who can post.
+    The owner can also set how long to keep messages. An empty field keeps them indefinitely.
+    An owner of the organization can export the messages of a joined room as JSON Lines.
+    They can also set the retention period for a direct message they belong to.
+  - **Room administration** lists rooms for organization admins and owners. They can remove deleted accounts and assign an owner to an ownerless room.
   - A room or a direct message with a star of the person is in the **Starred** part at the top of
     the sidebar, and not in its other part. The Starred part shows only when the person has a
     star. Each list of the sidebar has the name of its heading for a screen reader.
@@ -1080,7 +1086,7 @@ MCP clients. The app has no UI-only path.
       the list of the newest message is not cut off.
     - The message shows the answer of the server. The reactions of other members come through
       the socket of the room.
-    - The list has about 70 common emoji. A full list of each emoji is a later step.
+    - The list has common Unicode emoji and the custom emoji of the organization. See the [Chat controls](src/features/chat/README.md).
   - **New messages** is a line before the first message that the person did not see (`Reading`,
     `nextReading` and `startsNew` in `model.ts`).
     - When a room opens, the line is after the read marker of the person, if the room has a
@@ -1147,8 +1153,8 @@ MCP clients. The app has no UI-only path.
     - A message with only files has no text. It shows no empty line of text.
   - The message in the box is the draft of the room (`drafts.ts`). It stays when the person opens a
     different room, and after a reload of the page. A send, and an empty box, remove it. The page
-    keeps the drafts in `localStorage` ([Data inventory](#data-inventory)). The drafts are for
-    this browser only: a different device does not have them.
+    keeps the drafts in `localStorage` ([Data inventory](#data-inventory)). Each device reads the latest server revision. Changes wait in this browser when it is offline.
+    See the [chat message tools](src/features/chat/README.md).
   - A message shows in the list at once, in a lighter color, and the box for the message is empty
     again. The page sends the messages of one room one at a time, in the order of the sends, so the
     room has them in that order. The person can write the next message during a send.
@@ -1207,7 +1213,7 @@ MCP clients. The app has no UI-only path.
     body (`composerSchema.ts`). It sends the body (`body`), not Markdown. The edit box of a message
     is the same editor, and opens with the body of the message.
     - The toolbar has Bold (`Ctrl+B`), Italic (`Ctrl+I`), Strikethrough (`Ctrl+Shift+X`), Code
-      (`Ctrl+E`), Link (`Ctrl+K`), Bulleted list (`Ctrl+Shift+8`), Numbered list (`Ctrl+Shift+7`),
+      (`Ctrl+E`), Link (`Ctrl+Shift+K`), Bulleted list (`Ctrl+Shift+8`), Numbered list (`Ctrl+Shift+7`),
       Quote (`Ctrl+Shift+9`) and Code block (`Ctrl+Alt+C`). On a Mac, ⌘ replaces Ctrl. The toolbar
       is one tab stop, as in Mail. The toolbar, the commands and the link dialog are the code of
       the Mail editor (`createRichTextCommands`, `FormatToolbar`, `LinkDialog`).
@@ -1790,7 +1796,7 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 | Service worker | `/chat-push/<principal id>/` | The browser holds a push subscription for the person who enabled this device. A sign-out or an account change removes the previous registration and its notifications. |
 | `localStorage` | `soldock:appearance` | The Appearance choice: `light`, `dark` or `system`. A display setting of this browser. It is not on the server |
 | IndexedDB | Database `soldock-chat`, store `outbox`, one record for each message, with the key of its send | The chat messages of the signed-in person that wait for the server: the body and its text, the files (the ids, the names, the types and the sizes of files in the drive of the person), the room, the person, the time and the state of the send. A record goes away when the room has the message, and when the person removes the message |
-| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room and each thread (key `<room id>/<first message id>`), the body in the box and the time of its last change. 100 drafts at most. A draft goes away when the person sends it, and when the box is empty |
+| `localStorage` | `soldock:chat-drafts:` and the id of the person | The chat drafts of the signed-in person: for each room and each thread (key `<room id>/<first message id>`), the body, the last server revision, the pending change and its time. The cache holds 100 entries. An empty entry records a deletion |
 | `localStorage` | `soldock:chat-emoji:` and the id of the person | The counts of the reactions of the signed-in person: for each emoji, the number of uses and the time of the last use. 50 emoji at most. It gives the quick reactions of a message |
 
 - The store has the messages of one person at most. A sign-out, the end of the session, and a
@@ -1811,3 +1817,11 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
 
 The app keeps no other data in `localStorage`, `sessionStorage` or IndexedDB. All other state comes
 from the operations.
+
+### Chat commands and agent cards
+
+Open **Room commands** in the room header, or enter `/help` in the composer.
+Use `/star`, `/unstar` and `/topic` to change the room through its operations.
+Use `/ask @agent message` to send a mention.
+Use `/hooks` to create or revoke a signed incoming webhook.
+A card button records a selection in the message thread.

@@ -19,8 +19,13 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/markdown.ts` | `markdownToDoc` and `docToMarkdown`: the Markdown form of `DocContent`. The server reads and writes Markdown with it for Docs and Chat, and the web app reads pasted Markdown with it. [`docs`](../../apps/dock/src/docs/README.md#markdown) describes the Markdown, and has the tests |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
+| `src/chat-emoji.ts` | The organization emoji catalog and its image limits. |
+| `src/chat-room-management.ts` | Room policy, group direct messages, administration and export. |
+| `src/chat-navigation.ts` | Activity and personal sidebar sections. |
+| `src/chat-bots.ts` | The operations for signed incoming webhooks and agent cards. |
 | `src/chat.ts` | The Chat operations, the room, member and message schemas, the room kinds and roles, and `CHAT_LIMITS`. Also the chat subscription operations, and the contract of the room socket: `chatSocketPath`, `ChatSocketEvent`, `CHAT_SOCKET_CLOSE` and `CHAT_SOCKET_PROTOCOL` |
 | `src/chat-notifications.ts` | The Chat notification settings, Web Push subscriptions, quiet hours, presence and custom status. A browser reports its activity with `ChatActivity` on its events socket. |
+| `src/chat-message-tools.ts` | The operations for pins, bookmarks, reminders, drafts, scheduled sends and forwards. |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |

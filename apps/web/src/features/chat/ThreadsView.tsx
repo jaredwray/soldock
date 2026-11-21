@@ -9,6 +9,7 @@ import { useSession } from "../auth/session.tsx";
 import { type MessageWatch, useRoomWatch } from "./data.ts";
 import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import { roomTitle } from "./model.ts";
+import { RoomArchiveContext } from "./roomPolicy.ts";
 import { ThreadPanel } from "./ThreadPanel.tsx";
 
 /** The threads of one page of the view. */
@@ -143,7 +144,7 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 	}
 
 	/** The socket of the room of the open thread: each change of a message of the room. */
-	const roomWatch = useRoomWatch(open?.room.id ?? null);
+	const { watch: roomWatch, readOnly, archived } = useRoomWatch(open?.room.id ?? null);
 	/** The socket of the view: the changes of the room of the open thread, and the ticks as catch-ups. */
 	const watch = useCallback(
 		(listener: (event: MessageWatch) => void) => {
@@ -235,18 +236,21 @@ export function ThreadsView({ tick, directory }: { tick: number; directory: Ment
 				</div>
 			)}
 			{open && mentions && (
-				<ThreadPanel
-					key={threadKey(open)}
-					roomId={open.room.id}
-					roomTitle={roomTitle(open.room)}
-					parentId={open.message_id}
-					mentions={mentions}
-					canDeleteAll={open.room.role === "owner"}
-					watch={watch}
-					// The view has no list of the room: the room shows the reply when it opens.
-					onSentToRoom={() => {}}
-					onClose={close}
-				/>
+				<RoomArchiveContext.Provider value={archived}>
+					<ThreadPanel
+						key={threadKey(open)}
+						roomId={open.room.id}
+						roomTitle={roomTitle(open.room)}
+						readOnly={readOnly}
+						parentId={open.message_id}
+						mentions={mentions}
+						canDeleteAll={open.room.role === "owner"}
+						watch={watch}
+						// The view has no list of the room: the room shows the reply when it opens.
+						onSentToRoom={() => {}}
+						onClose={close}
+					/>
+				</RoomArchiveContext.Provider>
 			)}
 		</>
 	);

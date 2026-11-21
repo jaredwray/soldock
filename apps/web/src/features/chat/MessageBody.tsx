@@ -2,6 +2,7 @@ import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@asterra/contracts
 import { Fragment, type ReactNode, useEffect } from "react";
 import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";
+import { EmojiText } from "./CustomEmoji.tsx";
 import { type MentionContext, textParts } from "./mentions.ts";
 import { bodyPeople } from "./people.ts";
 import { useWantPeople } from "./usePeople.ts";
@@ -31,7 +32,9 @@ function TextWithMentions({ text, mentions }: { text: string; mentions: MentionC
 					</Link>
 				) : (
 					// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
-					<Fragment key={index}>{part.text}</Fragment>
+					<Fragment key={index}>
+						<EmojiText text={part.text} />
+					</Fragment>
 				),
 			)}
 		</>

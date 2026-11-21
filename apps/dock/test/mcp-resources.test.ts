@@ -163,25 +163,35 @@ describe("MCP resources", () => {
 	});
 
 	it("lists the rooms of the caller, and reads the messages of one with the data of REST", async () => {
-		const { ada, bot } = await seedOrg();
+		const { ada, bot, owner } = await seedOrg();
 		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
+		const { room: group } = await bot.call("chat.open_group_dm", { principal_ids: [ada.id, owner.id] });
 		const { room: dm } = await ada.call("chat.open_dm", { principal_id: bot.id });
 		const { room: closed } = await ada.call("chat.create_room", { kind: "private", name: "Hiring" });
 		await ada.call("chat.post_message", { room_id: room.id, text: "We ship on Friday." });
 
-		const listed = (await modern(bot.key, "resources/list")).body?.result as { resources: Record<string, unknown>[] };
-		expect(listed.resources.filter((resource) => String(resource.uri).startsWith("asterra://chat/"))).toEqual([
-			expect.objectContaining({ uri: roomMessages(room.id), title: "Messages of #Launch" }),
-			expect.objectContaining({ uri: roomMessages(dm.id), title: "Direct message with Ada Lovelace" }),
-			expect.objectContaining({ uri: ROOMS, name: "chat.rooms", title: "Your rooms" }),
-			expect.objectContaining({ uri: ADDRESSED, name: "chat.addressed", title: "Messages for you" }),
-		]);
+		// The room outbox sends the new message position to the other members.
+		await vi.waitFor(
+			async () => {
+				const listed = (await modern(bot.key, "resources/list")).body?.result as {
+					resources: Record<string, unknown>[];
+				};
+				expect(listed.resources.filter((resource) => String(resource.uri).startsWith("asterra://chat/"))).toEqual([
+					expect.objectContaining({ uri: roomMessages(room.id), title: "Messages of #Launch" }),
+					expect.objectContaining({ uri: roomMessages(dm.id), title: "Direct message with Ada Lovelace" }),
+					expect.objectContaining({ uri: roomMessages(group.id), title: `Direct message with ${group.name}` }),
+					expect.objectContaining({ uri: ROOMS, name: "chat.rooms", title: "Your rooms" }),
+					expect.objectContaining({ uri: ADDRESSED, name: "chat.addressed", title: "Messages for you" }),
+				]);
+			},
+			{ timeout: 5000 },
+		);
 		// Parity: the resource of all rooms runs chat.list_rooms, so it returns what REST returns.
 		const rooms = (await modern(bot.key, "resources/read", { uri: ROOMS })).body?.result as {
 			contents: { text: string }[];
 		};
 		expect(JSON.parse(rooms.contents[0]?.text ?? "null")).toEqual(await bot.call("chat.list_rooms", { limit: 100 }));
-		// Parity: the read runs chat.list_messages, so it returns what REST returns. Chat has no content from outside.
+		// The room contains one internal message. REST and MCP return the same content.
 		const read = (await modern(bot.key, "resources/read", { uri: roomMessages(room.id) })).body?.result as {
 			contents: { mimeType: string; text: string }[];
 		};

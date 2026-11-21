@@ -1,3 +1,4 @@
+import { CustomEmojiToken } from "./chat-emoji.ts";
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
@@ -226,7 +227,7 @@ export type ChatThreadFollow = z.infer<typeof ChatThreadFollow>;
 
 /**
  * The kinds of a room. Each person and each agent can find and join a `public` room. Only its
- * members can find a `private` room. A `dm` room has two members, and it has no name.
+ * members can find a `private` room. A `dm` room has a fixed set of participants.
  */
 export const ROOM_KINDS = ["public", "private", "dm"] as const;
 export type RoomKind = (typeof ROOM_KINDS)[number];
@@ -305,11 +306,11 @@ const IdempotencyKey = z
 export const ChatRoom = z.object({
 	id: z.string(),
 	kind: z.enum(ROOM_KINDS),
-	/** Null for a `dm` room: show the name of `peer`. */
+	/** Null for a two-person direct message. Use the display name of its peer. */
 	name: z.string().nullable(),
 	/** One line about the room. Empty when the room has no topic. */
 	topic: z.string(),
-	/** The other member of a `dm` room. Null for each other kind. */
+	/** The other participant in a two-person direct message. Null for other rooms. */
 	peer: Actor.nullable(),
 	created_at: Timestamp,
 	created_by: Actor,
@@ -396,7 +397,33 @@ export const ChatLinkPreview = z.object({
 });
 export type ChatLinkPreview = z.infer<typeof ChatLinkPreview>;
 
+export const CardButtons = z
+	.array(
+		z.strictObject({
+			id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+			label: z.string().trim().min(1).max(80),
+		}),
+	)
+	.min(1)
+	.max(5)
+	.refine(
+		(buttons) => new Set(buttons.map((button) => button.id)).size === buttons.length,
+		"Each button needs a different id.",
+	);
+
 export const ChatMessage = z.object({
+	forwarded_from: z
+		.object({
+			room_id: RoomId,
+			seq: z.number().int().positive(),
+			parent_seq: z.number().int().positive().nullable(),
+			author: Actor,
+		})
+		.optional(),
+	untrusted: z.literal(true).optional(),
+	buttons: CardButtons.optional(),
+	/** Only the room sets this field, after it validates the button of the parent card. */
+	action_id: z.string().optional(),
 	id: z.string(),
 	room_id: z.string(),
 	/** The position of the message in the room. It starts at 1 and never changes. */
@@ -545,7 +572,7 @@ export const listRooms = defineOperation({
 		"Returns the rooms of one view. The default view is joined: the rooms and the direct messages that you are a member of, with the newest message first.",
 		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you can join with chat.join_room.",
 		"The starred view has the rooms and the direct messages of the joined view that have your star (chat.star_room), with the newest message first.",
-		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
+		"Set query to get only the rooms whose name has that text. A two-person direct message has no name. A group direct message uses the names of its participants.",
 		"Each room has unread, unread_count, mention_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
 		"Each room sends its changes to the lists after the change. A list can be a moment behind a change.",
 		"Pass next_cursor as cursor to get the next page.",
@@ -605,6 +632,13 @@ export const openDm = defineOperation({
 	errors: ["not_found"],
 });
 
+export const ChatRoomPolicy = z.object({
+	archived: z.boolean(),
+	posting: z.enum(["members", "owners"]),
+	retention_days: z.number().int().min(1).max(3650).nullable(),
+});
+export type ChatRoomPolicy = z.infer<typeof ChatRoomPolicy>;
+
 export const getRoom = defineOperation({
 	name: "chat.get_room",
 	summary: "Get one room and its members",
@@ -615,7 +649,7 @@ export const getRoom = defineOperation({
 	callers: ["human", "agent"],
 	annotations: READ,
 	input: z.strictObject({ room_id: RoomId }),
-	output: z.object({ room: ChatRoom, members: z.array(ChatMember) }),
+	output: z.object({ room: ChatRoom, members: z.array(ChatMember), policy: ChatRoomPolicy }),
 	errors: ["not_found"],
 });
 
@@ -623,7 +657,7 @@ export const updateRoom = defineOperation({
 	name: "chat.update_room",
 	summary: "Change the name or the topic of a room",
 	description:
-		"Sets a new name, a new topic, or the two. An empty topic removes the topic. Only the owner of the room can do this. A direct message has no name and no topic.",
+		"Sets a new name, a new topic, or the two. An empty topic removes the topic. Only the owner of the room can do this. Direct messages have fixed names and no topic.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/update" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
@@ -652,7 +686,7 @@ export const joinRoom = defineOperation({
 export const addMembers = defineOperation({
 	name: "chat.add_members",
 	summary: "Add people and agents to a room",
-	description: `Makes each principal a member of the room. Each member of a room can add members. A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members. ${MEMBERS_ONLY}`,
+	description: `Makes each principal a member of the room. Each member of a room can add members. A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. Direct messages have a fixed membership. ${MEMBERS_ONLY}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/members" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
@@ -675,7 +709,7 @@ export const removeMember = defineOperation({
 	description: [
 		"With your own id as principal_id, you leave the room. When the owner leaves, the member that joined first becomes the owner.",
 		"The last member of a private room cannot leave. Only the owner of a room can remove a different member.",
-		"A direct message keeps its two members.",
+		"Direct messages have a fixed membership.",
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/members/{principal_id}" },
 	scopes: ["chat.write"],
@@ -1013,9 +1047,9 @@ export const markThreadRead = defineOperation({
 export const ChatSearchRoom = z.object({
 	id: z.string(),
 	kind: z.enum(ROOM_KINDS),
-	/** Null for a `dm` room: show the name of `peer`. */
+	/** Null for a two-person direct message. Use the display name of its peer. */
 	name: z.string().nullable(),
-	/** The other member of a `dm` room. Null for each other kind. */
+	/** The other participant in a two-person direct message. Null for other rooms. */
 	peer: Actor.nullable(),
 });
 export type ChatSearchRoom = z.infer<typeof ChatSearchRoom>;
@@ -1153,7 +1187,7 @@ export const addReaction = defineOperation({
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
-	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: z.union([Emoji, CustomEmojiToken]) }),
 	output: z.object({ message: ChatMessage }),
 	errors: ["not_found", "invalid", "conflict", "rate_limited"],
 });
@@ -1166,7 +1200,7 @@ export const removeReaction = defineOperation({
 	scopes: ["chat.write"],
 	callers: ["human", "agent"],
 	annotations: CHANGE,
-	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
+	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: z.union([Emoji, CustomEmojiToken]) }),
 	output: z.object({ message: ChatMessage }),
 	errors: ["not_found", "rate_limited"],
 });

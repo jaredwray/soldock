@@ -57,6 +57,15 @@ function roomStub(roomId: string) {
 	return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
 }
 
+/** Sends the waiting states of a room to the objects of its members, as its alarm does. */
+async function deliverMemberStates(roomId: string) {
+	const stub = roomStub(roomId);
+	await runInDurableObject(stub, (_instance, state) =>
+		state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0 WHERE target LIKE 'principal:%'"),
+	);
+	await runDurableObjectAlarm(stub);
+}
+
 describe("a public room", () => {
 	it("shows in the public list for each principal, and a principal reads and posts after it joins", async () => {
 		const room = await createRoom(ada, "public", "Launch");
@@ -1514,17 +1523,6 @@ describe("mentions after a change", () => {
 });
 
 describe("the mention count", () => {
-	/** Sends the waiting states of a room to the objects of its members, as its alarm does. */
-	const deliver = async (roomId: string) => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		try {
-			vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
-			await runDurableObjectAlarm(roomStub(roomId));
-		} finally {
-			vi.useRealTimers();
-		}
-	};
-
 	// A person sees in the room list which rooms mention them, as in other chat apps.
 	it("counts the messages after the read marker that mention a member, in chat.get_room and in the room list after each change", async () => {
 		const room = await createRoom(ada, "public", "Launch", [bot.id]);
@@ -1532,7 +1530,7 @@ describe("the mention count", () => {
 		const listed = async (actor: Actor) => (await joined(actor)).find((one) => one.id === room.id);
 		// The object of the agent has its rooms before the posts, so the list below shows the states that
 		// the room sends, not the first fill.
-		await deliver(room.id);
+		await deliverMemberStates(room.id);
 		await soon(async () => expect((await listed(bot))?.mention_count).toBe(0));
 
 		const first = await post(ada, room.id, "@bot one");
@@ -1542,22 +1540,22 @@ describe("the mention count", () => {
 		expect([await count(bot), await count(ada)]).toEqual([2, 0]);
 		await owner.call("chat.join_room", { room_id: room.id });
 		expect(await count(owner)).toBe(0);
-		await deliver(room.id);
+		await deliverMemberStates(room.id);
 		await soon(async () => expect(await listed(bot)).toMatchObject({ mention_count: 2, unread_count: 3 }));
 
 		// An edit without the mention and a delete remove the mention. An edit that adds one counts it.
 		await ada.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "one" });
-		await deliver(room.id);
+		await deliverMemberStates(room.id);
 		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([1, 1]));
 		await ada.call("chat.delete_message", { room_id: room.id, message_id: third.id });
-		await deliver(room.id);
+		await deliverMemberStates(room.id);
 		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([0, 0]));
 		await ada.call("chat.edit_message", { room_id: room.id, message_id: first.id, text: "@bot one again" });
 		expect(await count(bot)).toBe(1);
 
 		// A read clears it, in the room and in the list.
 		await bot.call("chat.mark_read", { room_id: room.id });
-		await deliver(room.id);
+		await deliverMemberStates(room.id);
 		await soon(async () => expect([await count(bot), (await listed(bot))?.mention_count]).toEqual([0, 0]));
 
 		// A delete by the owner of the room, of the message of a different member, removes its mention too.
@@ -2267,9 +2265,8 @@ describe("the changes for a principal", () => {
 		await post(ada, launch.id, "We ship on Friday.");
 		const alert = await post(bot, ops.id, "Disk is full");
 		const named = await post(ada, launch.id, "@bot can you check the invoices?");
-		await soon(async () =>
-			expect(shown(await addressed(bot))).toEqual([["Launch", "chat.message.created", "mention", named.id]]),
-		);
+		await deliverMemberStates(launch.id);
+		expect(shown(await addressed(bot))).toEqual([["Launch", "chat.message.created", "mention", named.id]]);
 		const [entry] = (await addressed(bot)).changes;
 		expect(entry).toMatchObject({ parent_id: null, author_id: ada.id, version: named.version });
 		expect(entry?.room).toMatchObject({ id: launch.id, kind: "public", role: "member", mention_count: 1 });
@@ -2281,13 +2278,13 @@ describe("the changes for a principal", () => {
 			.message;
 		const { room: dm } = await owner.call("chat.open_dm", { principal_id: bot.id });
 		const hello = await post(owner, dm.id, "Hello");
-		await soon(async () =>
-			expect(shown(await addressed(bot))).toEqual([
-				[null, "chat.message.created", "dm", hello.id],
-				["Ops", "chat.message.created", "thread_reply", answer.id],
-				["Launch", "chat.message.created", "mention", named.id],
-			]),
-		);
+		await deliverMemberStates(ops.id);
+		await deliverMemberStates(dm.id);
+		expect(shown(await addressed(bot))).toEqual([
+			[null, "chat.message.created", "dm", hello.id],
+			["Ops", "chat.message.created", "thread_reply", answer.id],
+			["Launch", "chat.message.created", "mention", named.id],
+		]);
 		expect((await addressed(bot)).changes[1]).toMatchObject({ parent_id: alert.id, author_id: ada.id });
 		// The changes of the agent are for Ada only when they have a reason: no reply, no mention, no entry.
 		expect(shown(await addressed(ada))).toEqual([]);
@@ -2303,13 +2300,13 @@ describe("the changes for a principal", () => {
 		// The owner of a room deletes a message of the agent: the reason is `author`.
 		const note = await post(bot, launch.id, "The invoices are correct.");
 		await ada.call("chat.delete_message", { room_id: launch.id, message_id: note.id });
-		await soon(async () =>
-			expect(shown(await addressed(bot))[0]).toEqual(["Launch", "chat.message.deleted", "author", note.id]),
-		);
+		await deliverMemberStates(launch.id);
+		expect(shown(await addressed(bot))[0]).toEqual(["Launch", "chat.message.deleted", "author", note.id]);
 		expect((await addressed(bot)).changes).toHaveLength(3);
 		// A later message that is not for the agent keeps the entry.
 		const later = await post(ada, launch.id, "Thank you all.");
-		await soon(async () => expect((await joined(bot))[0]).toMatchObject({ id: launch.id, last_seq: later.seq }));
+		await deliverMemberStates(launch.id);
+		expect((await joined(bot))[0]).toMatchObject({ id: launch.id, last_seq: later.seq });
 		expect(shown(await addressed(bot))[0]).toEqual(["Launch", "chat.message.deleted", "author", note.id]);
 
 		// A room that the agent leaves goes out of the list. A new join starts with no entry.

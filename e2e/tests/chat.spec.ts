@@ -523,7 +523,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	const editBox = page.getByRole("textbox", { name: "New text of the message" });
 	await editorReady(editBox);
 	await editBox.fill("refused text");
-	await page.getByRole("button", { name: "Save" }).click();
+	await page.getByRole("button", { name: "Save", exact: true }).click();
 	await expect(editBox).toHaveText("refused text");
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
 
@@ -531,7 +531,7 @@ test("a change and a delete show at once, and come back after a refusal, and an 
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 	const editAnswer = await hold(page, "**/api/v1/chat/rooms/*/messages/*/edit", "POST");
 	await editBox.fill("changed text");
-	await page.getByRole("button", { name: "Save" }).click();
+	await page.getByRole("button", { name: "Save", exact: true }).click();
 	const changed = page.locator(".chat-message").filter({ hasText: "changed text" });
 	await expect(changed.locator(".chat-edited")).toBeVisible();
 	expect((await newest(tomasz, roomId)).find((entry) => entry.id === message.id)?.text).toBe(first);
@@ -1074,7 +1074,7 @@ test("a message shows its formats, shows HTML as text, and the box makes formats
 	await editBox.pressSequentially(" ");
 	await tools.getByRole("button", { name: "Italic" }).click();
 	await editBox.pressSequentially("now");
-	await page.getByRole("button", { name: "Save" }).click();
+	await page.getByRole("button", { name: "Save", exact: true }).click();
 	const edited = page.locator(".chat-message").filter({ hasText: "I can do that now" });
 	await expect(edited.locator(".chat-text em")).toHaveText("now");
 	await expect(edited.locator(".chat-text strong")).toHaveText("that");

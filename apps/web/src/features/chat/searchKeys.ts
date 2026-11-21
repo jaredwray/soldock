@@ -1,28 +1,24 @@
 import { useEffect, useRef } from "react";
 
-/**
- * Calls `onSearch` for Ctrl+F and ⌘F, the keys that open the search of Chat. A search of the browser finds
- * only the messages that show, so Chat takes these keys. While a dialog is open, the keys stay with the
- * browser. `null` takes no key: a different part of the page handles them.
- */
-export function useSearchKeys(onSearch: (() => void) | null): void {
-	const handler = useRef(onSearch);
+/** Handle a chat shortcut while its view is active. A modal dialog keeps control of the keyboard. */
+export function useChatShortcut(key: "f" | "k", action: (() => void) | null): void {
+	const handler = useRef(action);
 
 	useEffect(() => {
-		handler.current = onSearch;
+		handler.current = action;
 	});
 
-	const active = onSearch !== null;
+	const active = action !== null;
 	useEffect(() => {
 		if (!active) return;
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.defaultPrevented || event.altKey || event.shiftKey || event.isComposing) return;
-			if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") return;
+			if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== key) return;
 			if (document.querySelector("dialog[open]")) return;
 			event.preventDefault();
 			handler.current?.();
 		}
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [active]);
+	}, [active, key]);
 }

@@ -1,6 +1,5 @@
 import {
 	CHAT_LIMITS,
-	type ChatRoom,
 	type ChatSearchResult,
 	type ChatSearchRoom,
 	type ChatThreadFollow,
@@ -10,25 +9,14 @@ import {
 	RoomId,
 } from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
-import {
-	type CallContext,
-	chatPresenceHandlers,
-	getPrincipals,
-	isAdmin,
-	mentionCandidates,
-} from "../identity/index.ts";
-import {
-	audit,
-	decodeCursor,
-	encodeCursor,
-	type HandlerMap,
-	log,
-	newId,
-	OperationError,
-	sha256Hex,
-} from "../platform/index.ts";
+import { type CallContext, chatPresenceHandlers, isAdmin, mentionCandidates } from "../identity/index.ts";
+import { audit, decodeCursor, encodeCursor, type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
+import { chatBotHandlers } from "./bots.ts";
+import { chatEmojiHandlers, requireKnownEmoji } from "./custom-emoji.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
+import { messageToolHandlers } from "./message-tools.ts";
+import { chatNavigationHandlers } from "./navigation.ts";
 import { chatNotificationHandlers } from "./notification-handlers.ts";
 import {
 	joinedRoomRefs,
@@ -37,17 +25,10 @@ import {
 	listJoinedRooms,
 	withOwnState,
 } from "./principal-rooms.ts";
-import {
-	type ActorRecord,
-	messageOutput,
-	nameKey,
-	type Refusal,
-	type RoomCall,
-	type RoomRecord,
-	type SearchHitRecord,
-	type ThreadFollowRecord,
-} from "./room.ts";
+import { type ActorRecord, messageOutput, nameKey, type SearchHitRecord, type ThreadFollowRecord } from "./room.ts";
+import { accept, actorsOf, auditOk, dmRoomId, idempotencyOf, iso, openRoom, roomStub, toRoom } from "./room-call.ts";
 import { listPublicRooms } from "./room-index.ts";
+import { roomManagementHandlers } from "./room-management.ts";
 import { type ParsedSearch, parseSearch, type SearchFilter } from "./search.ts";
 import { type SearchHit, searchIndex } from "./search-index.ts";
 import { chatWebhookHandlers } from "./webhooks.ts";
@@ -62,31 +43,6 @@ const SEARCH_PARALLEL = 25;
 /** The most times that one search asks the index: again after a room refused the caller. */
 const SEARCH_ATTEMPTS = 3;
 const PrincipalId = prefixedId("prn");
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-function roomStub(env: Pick<Env, "CHAT_ROOM">, roomId: string) {
-	return env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
-}
-
-function actorOf(call: CallContext): ActorRecord {
-	const { principal } = call.caller;
-	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
-}
-
-/** The object of a room, with the caller for it. The object decides what the caller can do. */
-function openRoom(call: CallContext, roomId: string): { room: ReturnType<typeof roomStub>; ctx: RoomCall } {
-	return { room: roomStub(call.env, roomId), ctx: { roomId, actor: actorOf(call) } };
-}
-
-/** Turns a refusal from an object into an OperationError, and returns any other result. */
-function accept<T extends object>(value: T): Exclude<T, { error: unknown }> {
-	if ("error" in value) {
-		const { error } = value as unknown as Refusal;
-		throw new OperationError(error.code, error.message);
-	}
-	return value as Exclude<T, { error: unknown }>;
-}
-
 /** The content of a new or changed message. A message with files can have no text. */
 function contentOf(input: {
 	text?: string | undefined;
@@ -100,77 +56,6 @@ function contentOf(input: {
 /** The state of a thread for the caller, as the operations return it. */
 function followOutput(follow: ThreadFollowRecord): ChatThreadFollow {
 	return { following: follow.following, last_read_seq: follow.lastReadSeq, unread_count: follow.unreadCount };
-}
-
-function iso(ms: number): string {
-	return new Date(ms).toISOString();
-}
-
-function toRoom(record: RoomRecord): ChatRoom {
-	return {
-		...record,
-		created_at: iso(record.created_at),
-		last_message_at: record.last_message_at === null ? null : iso(record.last_message_at),
-	};
-}
-
-function auditOk(call: CallContext, op: string, target: string): void {
-	audit({
-		op,
-		actor: call.caller.id,
-		actorKind: call.caller.kind,
-		credential: call.caller.credential,
-		target,
-		result: "ok",
-		requestId: call.requestId,
-	});
-}
-
-/** The principals of a list of ids, as a room stores its members. Each id must be in the directory. */
-async function actorsOf(call: CallContext, ids: readonly string[]): Promise<ActorRecord[]> {
-	const principals = await getPrincipals(call.env.DIRECTORY, ids);
-	const known = new Set(principals.map((principal) => principal.id));
-	const unknown = ids.find((id) => !known.has(id));
-	if (unknown !== undefined) throw new OperationError("not_found", `No person or agent has the id ${unknown}.`);
-	return principals.map((principal) => ({
-		principal_id: principal.id,
-		kind: principal.kind,
-		display_name: principal.display_name,
-	}));
-}
-
-/**
- * The id of the direct message room of two principals: `dm_` and 26 characters from the SHA-256 of
- * the two ids in order. Two principals have one such id, so they have one such room, and two first
- * calls at the same time reach the same object.
- */
-export async function dmRoomId(a: string, b: string): Promise<string> {
-	const [low, high] = a < b ? [a, b] : [b, a];
-	let value = BigInt(`0x${(await sha256Hex(`chat-dm:${low}:${high}`)).slice(0, 32)}`);
-	let out = "";
-	for (let i = 0; i < 26; i++) {
-		out = CROCKFORD[Number(value & 31n)] + out;
-		value >>= 5n;
-	}
-	return `dm_${out}`;
-}
-
-/**
- * The idempotency key of a call, for the object of a room. Each key belongs to its caller, so the key
- * of one principal can never return the message of a different principal. The hash binds the key to
- * the request, so a reused key with another request is a conflict.
- */
-async function idempotencyOf(
-	call: CallContext,
-	operation: string,
-	input: { idempotency_key?: string | undefined },
-): Promise<{ key: string; requestHash: string } | undefined> {
-	if (input.idempotency_key === undefined) return undefined;
-	const { idempotency_key: key, ...request } = input;
-	return {
-		key: `${call.caller.id}:${key}`,
-		requestHash: await sha256Hex(JSON.stringify([operation, request])),
-	};
 }
 
 /** The input of chat.search_messages, after its checks. */
@@ -451,6 +336,11 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatWebhookHandlers,
 	...chatNotificationHandlers,
 	...chatPresenceHandlers,
+	...chatBotHandlers,
+	...chatNavigationHandlers,
+	...roomManagementHandlers,
+	...chatEmojiHandlers,
+	...messageToolHandlers,
 	async "chat.list_rooms"(call, input) {
 		const list = {
 			query: input.query ?? null,
@@ -541,7 +431,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		const [peer] = await actorsOf(call, [input.principal_id]);
 		const opened = openRoom(call, await dmRoomId(call.caller.id, input.principal_id));
-		const result = accept(await opened.room.openDm(opened.ctx, peer as ActorRecord));
+		const result = accept(await opened.room.openDm(opened.ctx, [peer as ActorRecord]));
 		if (result.created) auditOk(call, "chat.open_dm", result.room.id);
 		return { room: toRoom(result.room) };
 	},
@@ -551,6 +441,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const found = accept(await opened.room.get(opened.ctx));
 		return {
 			room: toRoom(found.room),
+			policy: found.policy,
 			members: found.members.map((member) => ({ ...member, joined_at: iso(member.joined_at) })),
 		};
 	},
@@ -736,6 +627,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.add_reaction"(call, input) {
+		await requireKnownEmoji(call.env.DIRECTORY, input.emoji);
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, true));
 		if (result.changed) auditOk(call, "chat.add_reaction", `${input.room_id}:${input.message_id}`);

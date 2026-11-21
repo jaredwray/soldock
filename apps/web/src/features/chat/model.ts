@@ -22,7 +22,7 @@ export function inRoomList(message: Pick<ChatMessage, "parent_id" | "also_in_roo
 
 /** The name that a room shows: its name, or the name of the other member for a direct message. */
 export function roomTitle(room: Pick<ChatRoom, "kind" | "name" | "peer">): string {
-	if (room.kind === "dm") return room.peer?.display_name ?? "Direct message";
+	if (room.kind === "dm") return room.peer?.display_name ?? room.name ?? "Direct message";
 	return room.name ?? "Room";
 }
 

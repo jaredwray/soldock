@@ -14,18 +14,22 @@ const PREFIX = "soldock:chat-drafts:";
 /** The largest number of rooms with a draft for one person. Above it, the oldest draft goes away. */
 const MAX_DRAFTS = 100;
 
-interface Draft {
-	/** The body in the box. */
-	body: ChatBody;
+export interface DraftCopy {
+	body: ChatBody | null;
+	revision: number;
+	dirty: boolean;
+}
+
+interface Draft extends DraftCopy {
 	/** The time of the last change, in milliseconds. */
 	at: number;
 }
 
 export interface DraftStore {
-	/** The draft of a room, or null. */
-	get(roomId: string): ChatBody | null;
-	/** Keeps the draft of a room. Null removes it. */
-	set(roomId: string, body: ChatBody | null): void;
+	/** The local copy, including the revision it came from. */
+	get(key: string): DraftCopy | null;
+	/** A null copy removes the cache entry. A copy with a null body records a clear. */
+	set(key: string, copy: DraftCopy | null): void;
 }
 
 /**
@@ -56,7 +60,14 @@ function stored(storage: DraftStorage | null, owner: string): Map<string, Draft>
 					: typeof draft.text === "string" && draft.text !== ""
 						? textToBody(draft.text)
 						: undefined;
-			if (body) drafts.set(roomId, { body, at: draft.at });
+			if (body || (draft.body === null && typeof draft.revision === "number")) {
+				drafts.set(roomId, {
+					body: body ?? null,
+					at: draft.at,
+					revision: typeof draft.revision === "number" ? draft.revision : 0,
+					dirty: draft.dirty !== false,
+				});
+			}
 		}
 	} catch {
 		// The browser refused the read, or the value is not from this app. The person has no drafts then.
@@ -110,20 +121,25 @@ function write(storage: DraftStorage | null, owner: string, drafts: Map<string, 
  * write that failed. Two tabs that change the draft of the same room keep the last change.
  */
 export function createDraftStore(storage: DraftStorage | null, owner: string): DraftStore {
+	function put(roomId: string, copy: DraftCopy | null) {
+		const drafts = read(storage, owner);
+		const changed = [roomId];
+		if (copy === null) drafts.delete(roomId);
+		else drafts.set(roomId, { ...copy, at: Date.now() });
+		while (drafts.size > MAX_DRAFTS) {
+			const entries = [...drafts];
+			const synced = entries.filter(([, draft]) => !draft.dirty);
+			const oldest = (synced.length ? synced : entries).reduce((first, entry) =>
+				entry[1].at < first[1].at ? entry : first,
+			);
+			drafts.delete(oldest[0]);
+			changed.push(oldest[0]);
+		}
+		write(storage, owner, drafts, changed);
+	}
 	return {
-		get: (roomId) => read(storage, owner).get(roomId)?.body ?? null,
-		set(roomId, body) {
-			const drafts = read(storage, owner);
-			const changed = [roomId];
-			if (body === null) drafts.delete(roomId);
-			else drafts.set(roomId, { body, at: Date.now() });
-			while (drafts.size > MAX_DRAFTS) {
-				const oldest = [...drafts].reduce((first, entry) => (entry[1].at < first[1].at ? entry : first));
-				drafts.delete(oldest[0]);
-				changed.push(oldest[0]);
-			}
-			write(storage, owner, drafts, changed);
-		},
+		get: (key) => read(storage, owner).get(key) ?? null,
+		set: put,
 	};
 }
 

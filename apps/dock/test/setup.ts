@@ -21,6 +21,7 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare("DELETE FROM oauth_clients"),
 		env.DIRECTORY.prepare("DELETE FROM chat_members"),
 		env.DIRECTORY.prepare("DELETE FROM chat_rooms"),
+		env.DIRECTORY.prepare("DELETE FROM chat_emoji"),
 		env.DIRECTORY.prepare("DELETE FROM shared_drive_members"),
 		env.DIRECTORY.prepare("DELETE FROM shared_drives"),
 		env.DIRECTORY.prepare("DELETE FROM team_mailbox_members"),

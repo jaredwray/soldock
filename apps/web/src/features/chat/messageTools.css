@@ -1,0 +1,34 @@
+.message-library-filters {
+	display: flex;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+.message-library-filters button[aria-pressed="true"] {
+	font-weight: 700;
+	outline: 1px solid currentColor;
+}
+
+.message-library-list {
+	padding: 0;
+	margin: 0;
+	list-style: none;
+}
+
+.message-library-list li {
+	display: flex;
+	align-items: start;
+	justify-content: space-between;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.message-library-list li div {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.message-library-list li small {
+	display: block;
+	color: var(--muted-foreground);
+}

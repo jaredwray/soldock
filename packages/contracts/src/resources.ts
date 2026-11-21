@@ -75,7 +75,7 @@ export const chatRoom = defineResource({
 				vars: { room_id: room.id },
 				title:
 					room.kind === "dm"
-						? `Direct message with ${room.peer?.display_name ?? "a member"}`
+						? `Direct message with ${room.peer?.display_name ?? room.name ?? "a member"}`
 						: `Messages of #${room.name ?? "room"}`,
 			})),
 	},

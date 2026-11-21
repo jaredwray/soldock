@@ -1,22 +1,17 @@
 # `chat` module
 
-> Status: **started**. The first layer has public and private rooms, direct
-> messages, messages with plain text, the read marker, and access for people and agents. The
-> second layer has the live socket of a room. Outbound webhooks notify members of new messages. The
-> third layer starts with the state of each principal in its `PrincipalDO`: the joined rooms, the
-> read markers and the unread counts. Layer 5 has files in messages, through Drive, and link
-> previews. Layer 6 has search: in one room, and in each room of the caller with the index of the
-> organization. Layer 7 adds notifications, presence and typing. Layer 8 starts with stars: a member can put its star on a room. Keep this README current as the module grows. It is
-> the module's contract. The plan for the next layers is in
-> [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69).
+> **Status:** Chat supports live rooms and direct messages for people and agents. Members can use
+> threads, search, files, reactions and scheduled messages. They can see who is typing or available and
+> choose which activity sends a device notification. Room owners set posting rules and retention periods.
+> See the [Chat roadmap](https://github.com/jaredwray/soldock/issues/69).
 
 | | |
 | --- | --- |
-| **Purpose** | Chat backend: rooms, direct messages, members and roles, messages, read markers, stars, the room lists, the live socket of a room, replies in threads, follows and read markers of threads, the list of followed threads, files in messages (through Drive), link previews, search in one room and in each room of the caller. It also supports browser notifications, presence and typing. |
-| **Owns** | `ChatRoomDO` (the room, its members with their read markers, its messages with their files and link previews, the outbox, idempotency keys, its live sockets); the pictures of link previews in R2 `blobs`; the cache of link previews in D1 (`link_previews`); the queue `soldock-chat-previews`; the tables `chat_rooms` and `chat_members` in D1 `DIRECTORY` (the index for the public list); the tables `chat_rooms` and `chat_threads` in each `PrincipalDO` (the joined rooms and the followed threads of the principal), which `identity` keeps for it; `ChatSearchDO` (the search index of the organization: the plain text and the filter values of each message). |
+| **Purpose** | Conversations in rooms and direct messages. Members can track activity, organize rooms and save messages. Agents can receive changes and send interactive cards. |
+| **Owns** | Each `ChatRoomDO` owns its messages, members, policy, live sockets and pending writes. Each `PrincipalDO` keeps personal lists, sidebar sections, reminders and notification settings. `ChatSearchDO` indexes messages across rooms. D1 stores the room index, organization emoji and link preview cache. R2 stores preview pictures. A queue processes preview jobs. |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/`). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
-| **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room` and `chat.rooms`. See [The socket of a room](#the-socket-of-a-room). |
+| **Operations** | See the [operation registry](../../../../packages/contracts/src/registry.ts) and the [contracts guide](../../../../packages/contracts/README.md) for Chat schemas, routes and scopes. REST and MCP use the same operations. |
+| **Live surface** | `GET /ws/chat/rooms/{room_id}` streams room changes. MCP clients can subscribe to `chat.room`, `chat.rooms` and `chat.addressed`. See [The socket of a room](#the-socket-of-a-room). |
 | **Downloads** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture) and `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview). See [Files in messages](#files-in-messages) and [Link previews](#link-previews). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -34,6 +29,11 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `room-index.ts` | The reads of the index in D1: the public rooms |
 | `principal-rooms.ts` | The joined rooms of a principal, from its `PrincipalDO`, and the first fill of that object |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the room object of the call, and read the index for the lists |
+| `room-management.ts`, `room-policy.ts` | Group direct messages, archive, retention, export and admin operations |
+| `message-tools.ts`, `message-state.ts`, `scheduled-messages.ts` | Pins, saved messages, reminders, drafts, scheduled messages and forwards |
+| `navigation.ts`, `activity.ts` | Sidebar sections and the activity feed for each member |
+| `bots.ts`, `incoming-route.ts`, `incoming-hooks.ts`, `slack-payload.ts` | Agent cards and signed incoming webhooks |
+| `custom-emoji.ts` | The emoji catalog of the organization |
 | `body.ts` | The body of a message from each form of a call (text, Markdown, JSON tree), its plain text, its Markdown and its limits |
 | `mentions.ts` | The mention nodes of a body: from the handles and name aliases in its text, with the directory |
 | `socket.ts` | The route of the room socket in the Worker: it authenticates the request and asks the room object for the socket |
@@ -53,17 +53,28 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 | --- | --- | --- | --- |
 | `public` | `rm_…` | Each person and each agent | Each principal that joins, or that a member adds |
 | `private` | `rm_…` | Its members | Each principal that a member adds |
-| `dm` | `dm_…` | Its two members | The two principals of the direct message |
+| `dm` | `dm_…` | Its members | The fixed set of participants |
 
 - `chat.create_room` creates a public or a private room. The caller becomes its owner. Two rooms
   can have the same name. A name has at most 80 characters, and a topic has at most 250.
 - `chat.open_dm` returns the direct message room of the caller and one other principal. The first
   call creates it. The id is `dm_` and 26 characters from the SHA-256 of the two principal ids, so
   two principals have one room, and two first calls at the same time reach the same object.
-- A `dm` room has no name, no topic and no owner. Its output has the other member as `peer`.
+- `chat.open_group_dm` opens one direct message for the caller and two to eight other principals.
+  The sorted participant IDs determine its ID. The name lists the participants and `peer` is null.
+- A two-person direct message has no name and returns the other member as `peer`.
+  All direct messages have no topic and no room owner.
 - An object that nobody created has no tables. A call with an id that is no room gets `not_found`
   and stores nothing, so a caller cannot make data with random ids.
-- No operation deletes a room yet.
+- The room owner can use `chat.set_room_policy` to limit posts and replies to the owner.
+  Archive a room to hide it from public discovery and stop new posts, replies, edits, pins and members.
+  Members keep their history. A member can still delete their messages, remove their previews and withdraw their reactions.
+- A retention period of 1 to 3,650 days applies from the original time of a post. Null keeps messages indefinitely. The organization owner can set retention in a direct message that they belong to.
+  The room alarm erases expired messages in bounded batches. It removes edits, attachments, previews, and search content through the normal deletion path.
+- `chat.delete_room` closes sockets and revokes membership immediately. The outbox removes room projections, file grants and search rows.
+  The room removes its message rows in batches. A deletion marker lets it remove pictures from preview jobs that finish later.
+- An organization owner can export current messages and replies from a joined room with `chat.export_room`.
+  Each page checks membership. It excludes deleted messages.
 
 ## Members and access
 
@@ -92,11 +103,11 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   owner. A public room without members stays in the public list, and the first principal that
   joins it becomes its owner.
 - The last member of a private room cannot leave: nobody could then reach the room.
-- Known limit: a deleted principal (`directory.delete_principal`) stays a member of its rooms, and a
-  room that it owned keeps it as the owner. The index writes no new row for a deleted principal. A
-  later change removes the principal from its rooms through the outbox.
-- A direct message keeps its two members. `chat.add_members`, `chat.remove_member` and
-  `chat.update_room` refuse it with `invalid`.
+- Organization owners and admins can list room metadata and memberships. They can remove deleted principals and assign an active owner to an ownerless room.
+  Select an existing member if the room has members. An empty room accepts a new member as its owner.
+  The admin role grants no message access.
+- Direct messages keep their participants. To start a conversation with different people, open a new direct message.
+  An admin can remove a deleted participant.
 - The scopes of the credential apply first: `chat.read` and `chat.write`. An agent key can hold
   the two scopes. An agent is a member like a person, with the same roles.
 
@@ -350,9 +361,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   second add, and a remove of a reaction that is not there, change nothing.
 - An emoji is one emoji of the Unicode list of emoji for general use (RGI), in its full form: 👍,
   👍🏽, ❤️, 1️⃣, 🇳🇴 or 👨‍👩‍👧 (`Emoji` of the contracts). Each emoji has one form only, so two
-  values never show the same emoji. A name such as `:thumbsup:`, text, two emoji, a form without
+  values never show the same emoji. An unknown name, text, two emoji, a form without
   U+FE0F (❤), a text symbol (©), a flag of no country, and an emoji with a joiner, marks or tags
   after it get `invalid`.
+- An organization owner or admin can add a custom PNG with `chat.create_emoji`. Use `chat.list_emoji` to find its name.
+  The catalog holds up to 256 names. Each PNG can have up to 32 KiB and 128 pixels per side.
+  A reaction stores the name between colons. Removal from the catalog leaves existing reactions available for removal.
 - A message has reactions with 20 different emoji at most (`CHAT_LIMITS.reactionEmoji`). A new emoji
   above that gets `conflict`. An emoji that the message has takes more principals.
 - `reactions` of a message has one entry for each emoji: the emoji, the count and the principal ids,
@@ -449,12 +463,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 | `public` | The index in D1 `DIRECTORY`, with the state of the caller from its `PrincipalDO` for each room that it joined | The names, in the order of their NFC lowercase form |
 
 The three views use keyset pages (`next_cursor`). `query` keeps the rooms whose name has that text. A
-direct message has no name, so it never matches.
+two-person direct message has no name, so it never matches.
 
 ### The state of a principal
 
 The `PrincipalDO` of a principal has one row for each room of the principal: the room fields, the
-role, `last_read_seq`, `unread_count`, `mention_count`, the star and the other member of a `dm` room.
+role, `last_read_seq`, `unread_count`, `mention_count`, the star and the peer of a two-person direct message.
 
 - The room object is the only writer of these rows. After each change, it records in its `outbox`
   which targets are behind: `principal:<principal id>`.
@@ -542,7 +556,8 @@ Known limits:
 - The list has one entry for each room. A client reads the room from the version that it has, to
   get each earlier change.
 - The list is at most `MEMBER_DELAY_MS` behind a change, as the list of rooms is.
-- The web app has no view of this list yet.
+- The **Activity** view reads `chat.list_activity` for its history of mentions, replies and reactions.
+  Agents can use `chat.list_addressed` to read the latest addressed change per room.
 
 ### The index in D1
 
@@ -551,7 +566,7 @@ The public view reads an index in D1 `DIRECTORY`:
 | Table | One row for | Columns |
 | --- | --- | --- |
 | `chat_rooms` | Each room | Kind, name, topic, creator, member count, `last_seq`, `last_message_at`, `version` |
-| `chat_members` | Each member of each room | Role, `last_read_seq` at the time of the join, and the other member of a `dm` room |
+| `chat_members` | Each member of each room | Role, `last_read_seq` at the time of the join, and the peer of a two-person direct message |
 
 - The room object is the only writer of its rows. After each change, it records in its `outbox`
   table which rows are behind (`room`, or `member:<principal id>`). Then it writes the current
@@ -1084,15 +1099,39 @@ Known limits:
   member of them, so no search reads them.
 - The search has no rate limit of its own.
 
+## Incoming webhooks and agent cards
+
+A member can create a hook with `chat.create_incoming_hook`. The call needs both `chat.write` and `chat.webhooks`.
+The response has a public URL and a secret. Only this response shows the secret.
+Use `chat.list_incoming_hooks` to find your hooks. Use `chat.delete_incoming_hook` to revoke one.
+
+Send a POST request to the URL with a Slack JSON payload such as `{"text":"The build passed."}`.
+Set `X-Slack-Request-Timestamp` to the Unix time in seconds.
+Sign the UTF-8 bytes of `v0:<timestamp>:` followed by the exact request bytes with HMAC-SHA256.
+Use the UTF-8 bytes of the secret as the key.
+Set `X-Slack-Signature` to `v0=` followed by the lowercase hex digest.
+
+The room accepts a signature within five minutes of the timestamp. A repeated signed request adds one message.
+The hook uses the room, principal and credential that created it. A payload cannot change the author or room.
+The handler accepts plain text, text from Slack sections, headers and context blocks, image descriptions and legacy attachment text.
+It uses the top-level text when it cannot display a block. It never executes Slack actions.
+Each message has `untrusted: true`. Its text cannot mention a person or group.
+The hook stops if its credential ends or its member leaves.
+
+An agent calls `chat.post_card` with message text and up to five buttons.
+Each button has an action ID and a label.
+A member calls `chat.click_button` with the message ID, action ID and an idempotency key.
+The room validates the button and commits the choice as a thread reply.
+The agent receives its normal thread event. It reads the reply with `chat.list_replies`.
+Only a validated click has an `action_id`. The reply records the member who clicked.
+
 ## Safety
 
 - Each change writes an audit line (`audit: true`): the room, and the message or the principal. The
   line has no text of a message. `chat.mark_read`, `chat.star_room`, `chat.follow_thread` and `chat.mark_thread_read` write no line: they change
   the view of the member, not the data of the room. A call that changed nothing writes no line. The operation invoker audits a change that got `forbidden`. A change on a room
   that the caller cannot see gets `not_found`, which has no line.
-- Chat holds text that principals of this organization wrote. A link preview is content from outside:
-  each one has `untrusted: true`. When a bot or a webhook can post text from outside, those messages
-  must get the mark too.
+- Messages from incoming webhooks and link previews contain external content. Both carry `untrusted: true`.
 - The fetch of a link preview never reaches a private address. See [The fetch](#the-fetch).
 - A file never runs as active content on this origin. See [A download](#a-download). Each download has a
   log line (`chat file download`) with the principal, the credential, the room, the message and the
@@ -1109,20 +1148,53 @@ Known limits:
   The index gives no rank, so the order of the results has no data of a room that the caller is not in.
   See [The order and the pages](#the-order-and-the-pages).
 
+## Activity and sidebar sections
+
+- Each room stores up to 50 recent activity entries per member in `member_activity`. A new mention, a followed reply, or a reaction to the member's message adds an entry. The actor receives no entry for its own change.
+- The entry has the actor's name, time, room version, message sequence, parent sequence, and reaction emoji. It stores no message body. Removal of a reaction, message, or member removes its entries.
+- The room sends activity references with its normal member snapshot through the outbox. The principal object indexes the room ID, version, and time in `chat_activity_refs`.
+- `chat.list_activity` reads one page of references in reverse time order. It checks each room for current membership and reads the entries from that room. A cursor uses the time, room ID, and version.
+- The principal object keeps the caller's section name in `chat_rooms.section`. A membership removal clears the section. The room decides access when the caller assigns a section or reads a page.
+- `chat.set_room_section` creates a section when the first room enters it. An empty section disappears. A change sends `chat.sections` to the caller's other open clients.
+
+## Message tools
+
+Each room owns its pins, its thread and room drafts, and its scheduled sends. Each member can change a pin.
+Only the author can read a draft. A write uses the revision of the last read. A clear keeps a revision
+so that a late write from another device cannot restore the old draft.
+
+A scheduled send reserves a message id. The room alarm checks the credential, membership and posting rules at delivery.
+A send and its removal from the schedule commit together. Revocation, departure or a new posting restriction cancels the send.
+The room accepts the same scheduling key until one day after the delivery time.
+
+Each principal owns its bookmarks and reminders. Both store references. A list reads current messages from their rooms
+after a membership check. Each due reminder stays in the list until the principal dismisses it.
+
+A forward copies plain text and source attribution. Destination members can read this copy. Only source members can open
+the original message and its files. The copy keeps the external content flag. Mentions and buttons in the source cause
+no action in the destination.
+
 ## Data inventory
 
 | State | Where | Notes |
 | --- | --- | --- |
-| The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
+| Pins | `ChatRoomDO.message_pins` | A message position. Removal of the source clears the pin. |
+| Drafts | `ChatRoomDO.chat_drafts` | Private body and revision for a member and an optional thread. Departure clears both. |
+| Scheduled messages | `ChatRoomDO.scheduled_messages`, `schedule_receipts` | Pending body, parent, time and credential reference. A receipt binds a key to a request hash and message id. |
+| Forward attribution | `ChatRoomDO.messages.forwarded_from_json` | Original room, message position, parent position and author. Deletion clears this field. |
+| Bookmarks and reminders | `PrincipalDO.chat_marks` | Message and room ids, position and time. This table contains no message content. |
+| The room (kind, name, topic, creator, `last_seq`, `version`, archive status, posting rule, retention days, deletion status) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
+| Public discovery | D1 table `chat_rooms`, column `archived` | The public browser omits archived rooms. The room object checks each join |
 | Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key. A reply has `parent_id` and `also_in_room`. A parent keeps the summary of its replies (`reply_count`, `last_reply_at`, `reply_authors_json`) |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
 | Earlier versions | `ChatRoomDO` table `message_edits` | One row for each edit of a message: the text and the body before the edit, the version of the room, the time of the write and the time of the edit. The 100 newest rows of each message stay. A delete of the message removes its rows |
+| Organization emoji | D1 `DIRECTORY.chat_emoji` | The unique name and PNG bytes in base64. A fresh directory clears the catalog. Migration `0021_chat_emoji.sql` |
 | Reactions | `ChatRoomDO` table `reactions` | One row for each message, emoji and principal, with the time and the version of the room at the reaction, which gives the order. A delete of the message removes its rows |
 | Outbox | `ChatRoomDO` table `outbox` | The index rows and the `PrincipalDO`s that are behind, the grants of the room in Drive (`grant:<space id>:<item id>`), the R2 objects to delete (`blob:<key>`), and the messages that the search index of the organization does not have yet (`search:<seq>`, `search:room` for the room, and `search:filled` at the end of a fill). A row goes away after its write |
 | Search rows of a room | `ChatRoomDO` tables `messages_fts` (FTS5) and `search_mentions`, column `messages.has_link` | The plain text of each message that stays, one row for each principal that it mentions, and 1 for a message with a link. A second copy of the text of a message, in the same object. A delete of the message removes its rows. Rebuildable from the table `messages`: the migration that adds the tables fills them |
-| The search index of the organization | `ChatSearchDO` (name `org:0`) tables `rooms`, `messages`, `messages_fts` (FTS5) and `mentions` | A copy that the rooms can build again. For each message that stays: the room, the `seq`, the author id, the time, three filter values, the mentioned principal ids, and the plain text. A third copy of the text of a message, in a different object. No body and no name. The index removes the rows of a deleted message when it gets the delete, about one second later, or after the retries of a send that failed. `rooms` has the stamp of the newest batch of each room, and `filled` after the room sent each stored message. A restore of a room object must not make its `search_stamp` lower: the index ignores each batch with a lower stamp. To build the index again, delete its rows: each room sends each message again with its next batch, and a search asks the rooms of its caller that sent no batch |
+| The search index of the organization | `ChatSearchDO` (name `org:0`) tables `rooms`, `messages`, `messages_fts` (FTS5) and `mentions` | A copy that the rooms can build again. For each message that stays: the room, the `seq`, the author id, the time, three filter values, the mentioned principal ids, and the plain text. A third copy of the text of a message, in a different object. No body and no name. The index removes the rows of a deleted message when it gets the delete, about one second later, or after the retries of a send that failed. `rooms` has the stamp of the newest batch of each room, and `filled` after the room sent each stored message. A restore of a room object must not make its `search_stamp` lower: the index ignores each batch with a lower stamp. To build the index again, delete its rows: each room sends each message again with its next batch, and a search asks the rooms of its caller that did not finish their first fill |
 | Files of messages | `ChatRoomDO` table `message_files` | One row for each file of a message that stays: the position, the drive, the item and the facts of the file at the time of the post. No bytes. A delete of the message, and an edit that removes the file, remove the row |
 | Link previews | `ChatRoomDO` column `messages.links_json` | The state of each link that gets a preview, with the plain text of the preview and the R2 key of its picture. A deleted message has null |
 | Jobs of link previews | `ChatRoomDO` table `link_jobs` | The message, the origin of the post, the sends and the time of the next send. A row goes away when no link waits |
@@ -1131,10 +1203,12 @@ Known limits:
 | Jobs of the queue of previews | Queue `soldock-chat-previews` | A room id and a message id. No text |
 | The budget of fetches of each author | D1 `DIRECTORY` table `link_preview_budget` | The principal, the start of its window and the fetches in it. One row for each author of a link. Migration `0015_link_previews.sql` |
 | Idempotency keys | `ChatRoomDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
+| Incoming webhooks | `ChatRoomDO.incoming_hooks` | Public ID, label, signing secret, owner and credential binding. Membership removal deletes the hook |
+| Card and origin fields | `ChatRoomDO.messages` | Buttons, selected action ID and the external content flag. Message deletion clears the buttons and action ID |
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `search_stamp` grows with each batch that the room sends to the search index. `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
-| The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
+| The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the peer of a two-person direct message, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
 | Notification settings and unread total | `PrincipalDO` metadata and `chat_notification_levels` | One default, quiet hours, a sound setting, room overrides and the aggregate unread count |
 | Devices and live alerts | `PrincipalDO` tables `chat_push_devices` and `chat_notification_sounds` | Each device has its endpoint, encryption keys and credential reference. Recent sound events suppress duplicates |
@@ -1150,7 +1224,5 @@ files of messages are items of Drive: the room holds no reference to their bytes
 
 ## Later layers
 
-Not built yet: files of a shared drive in a message, the files of a moved
-item in a message, group direct messages, room deletion and archive, incoming webhooks for bots,
-sections in the sidebar that a person makes, and admin tools for rooms. [jaredwray/soldock#69](https://github.com/jaredwray/soldock/issues/69) has
-the order and the decisions.
+Future work includes support for shared or moved Drive items in messages. Backups depend on the backup layer of the project.
+See the [Chat roadmap](https://github.com/jaredwray/soldock/issues/69).

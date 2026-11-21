@@ -17,7 +17,7 @@ export {
 	type EventSubscriptionRef,
 	type EventSubscriptions,
 } from "./events/subscriptions.ts";
-export { MAX_REQUEST_BYTES, readBodyText } from "./http/body.ts";
+export { MAX_REQUEST_BYTES, readBodyBytes, readBodyText } from "./http/body.ts";
 export { decodeCursor, encodeCursor } from "./http/cursor.ts";
 export {
 	type ByteRange,

@@ -16,6 +16,7 @@ export {
 	ChatMessageEdit,
 	ChatReaction,
 	ChatRoom,
+	ChatRoomPolicy,
 	ChatSearchResult,
 	ChatSearchRoom,
 	ChatSocketEvent,
@@ -30,6 +31,8 @@ export {
 	type RoomKind,
 	type RoomRole,
 } from "./chat.ts";
+export { CUSTOM_EMOJI_LIMITS } from "./chat-emoji.ts";
+export { ChatActivityEntry, chatNavigationOperations, RoomSection } from "./chat-navigation.ts";
 export {
 	CHAT_PRESENCE_LIMITS,
 	ChatActivity,

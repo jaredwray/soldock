@@ -34,29 +34,30 @@ function jsonSchema(schema: z.ZodType, io: "input" | "output"): Record<string, u
 	return rest;
 }
 
-// Built once for each isolate: the registry does not change at run time.
-const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
-	operationList.map((operation) => [
-		toolName(operation),
-		{
-			operation,
-			tool: {
-				name: toolName(operation),
-				title: operation.summary,
-				description: operation.description,
-				inputSchema: jsonSchema(operation.input, "input"),
-				outputSchema: jsonSchema(operation.output, "output"),
-				annotations: {
-					title: operation.summary,
-					readOnlyHint: operation.annotations.readOnly,
-					destructiveHint: operation.annotations.destructive,
-					idempotentHint: operation.annotations.idempotent,
-					openWorldHint: operation.annotations.openWorld,
-				},
-			},
+const operationsByTool = new Map(operationList.map((operation) => [toolName(operation), operation]));
+const descriptions = new Map<Operation, Tool>();
+
+/** Only tools/list needs JSON Schema. Keep each description for later calls in this isolate. */
+function describeTool(operation: Operation): Tool {
+	const cached = descriptions.get(operation);
+	if (cached) return cached;
+	const tool = {
+		name: toolName(operation),
+		title: operation.summary,
+		description: operation.description,
+		inputSchema: jsonSchema(operation.input, "input"),
+		outputSchema: jsonSchema(operation.output, "output"),
+		annotations: {
+			title: operation.summary,
+			readOnlyHint: operation.annotations.readOnly,
+			destructiveHint: operation.annotations.destructive,
+			idempotentHint: operation.annotations.idempotent,
+			openWorldHint: operation.annotations.openWorld,
 		},
-	]),
-);
+	};
+	descriptions.set(operation, tool);
+	return tool;
+}
 
 /** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
@@ -65,7 +66,7 @@ export function canCall(caller: AuthContext, operation: Operation): boolean {
 
 /** The tools that this credential can call, in the order of the registry. */
 export function listTools(caller: AuthContext): Tool[] {
-	return [...TOOLS.values()].filter((entry) => canCall(caller, entry.operation)).map((entry) => entry.tool);
+	return operationList.filter((operation) => canCall(caller, operation)).map(describeTool);
 }
 
 /** True when serialized output holds content marked `untrusted: true`. */
@@ -95,11 +96,11 @@ export async function callTool(
 	params: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
 	const { name, arguments: args } = params;
-	const entry = typeof name === "string" ? TOOLS.get(name) : undefined;
-	if (!entry || !canCall(call.caller, entry.operation)) return null;
-	const handler = handlers[entry.operation.name as OperationName];
+	const operation = typeof name === "string" ? operationsByTool.get(name) : undefined;
+	if (!operation || !canCall(call.caller, operation)) return null;
+	const handler = handlers[operation.name as OperationName];
 	try {
-		return toolResult(await invokeOperation(entry.operation, handler, call, args ?? {}));
+		return toolResult(await invokeOperation(operation, handler, call, args ?? {}));
 	} catch (error) {
 		if (error instanceof OperationError) return toolError(error);
 		throw error;

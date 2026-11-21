@@ -17,7 +17,7 @@
 
 > **Status:** early development. Mail, Chat, and Drive with Docs and Sheets each have their first
 > end-to-end layer. People use them in the browser, and agents use them through MCP. Meet and Slides
-> do not exist yet. Backups, exports and retention do not exist yet. Do not move an organization to
+> do not exist yet. The instance has no backup layer yet. Do not move an organization to
 > Asterra today. [What it does](#what-it-does) and the README of each module show what exists.
 
 ## Why Asterra
@@ -59,11 +59,17 @@ message. The app has a Light, a Dark and a System appearance.
 
 ### Chat
 
-Chat has public rooms, private rooms and direct messages. A room shows who wrote each message, and a
-label shows which author is an agent. Unread rooms show a dot. A person can edit or delete their own
-messages. A new message shows at once in an open room. Type `@` to mention a person or an agent:
-the box suggests names, and the mention links to a profile. Search finds the messages of one room,
-or of all your rooms, with filters such as `from:`, `in:` and `has:link`.
+Chat has public rooms, private rooms and direct messages with a person or a group. Each message
+shows its author and identifies agents. You can edit or delete your own messages.
+New messages appear live. Unread rooms show a dot.
+Type `@` to find an account and link to its profile. Search one room or all your rooms with
+filters such as `from:`, `in:` and `has:link`.
+
+Use **Activity** to find mentions, replies and reactions. Pin a message for the room, save it
+for yourself, or set a reminder. You can start a draft on one device and finish it on another.
+
+Room owners can archive a room, set who can post, and set how long the room keeps messages.
+An organization owner can export the messages of each room they belong to.
 
 Choose which rooms can notify you and set quiet hours in Settings. A push notification opens the
 message or reply. Chat also shows when a member is active and when someone types in the open room.
@@ -123,7 +129,8 @@ address and a password, and can add two-step verification with an authenticator 
 ### On a phone
 
 The web app adapts to a narrow screen: the sidebar becomes a drawer, and the lists use the full
-width. Asterra has no native app, no offline mode and no push notifications.
+width. Use the web app online in your browser. On supported devices, you can enable Chat push
+notifications in Settings.
 
 ![Asterra on three phones: the inbox, the Design room, and a doc in dark mode](docs/screenshots/phones.png)
 
@@ -212,10 +219,10 @@ in as one of them. If the setup page shows first, select **Continue with the exi
 - **Careful with content from outside.** The API and MCP mark external content as untrusted. The
   origin never serves the content of a person as active content. [Security](SECURITY.md) tells you
   how to report a vulnerability.
-- **Tested.** The tests of the Worker run in workerd, the runtime of Cloudflare Workers. Browser
-  tests with Playwright are planned.
+- **Tested.** Worker tests run in workerd, the runtime of Cloudflare Workers. Playwright tests run
+  against the web app served by the local Worker. See the [browser test guide](e2e/README.md).
 - **Planned.** Meet with Cloudflare Realtime, Slides, edits by many people at the same time, and
-  backups with retention and exports.
+  backups and restore.
 
 ## Learn more
 

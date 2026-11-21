@@ -57,6 +57,7 @@ export type Route =
 			replySeq?: number;
 			profileId?: string;
 			threads?: true;
+			activity?: true;
 			search?: { query: string; roomId: string | null };
 	  }
 	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
@@ -118,6 +119,8 @@ export function parseRoute(location: string): Route {
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
+		if (second === "activity")
+			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, activity: true } : { page: "not-found" };
 		if (second === "threads") {
 			return parts.length === 2 ? { page: "chat", roomId: null, seq: null, threads: true } : { page: "not-found" };
 		}
@@ -295,6 +298,10 @@ export function chatPath(
 	const room = `${CHAT_PATH}/${encodeURIComponent(roomId)}`;
 	if (seq === null) return room;
 	return replySeq === null ? `${room}/${seq}` : `${room}/${seq}/${replySeq}`;
+}
+
+export function chatActivityPath(): string {
+	return `${CHAT_PATH}/activity`;
 }
 
 /** The path of the Threads view of Chat: the threads that the person follows. */

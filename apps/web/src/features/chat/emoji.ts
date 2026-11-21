@@ -87,12 +87,12 @@ export const EMOJI: readonly EmojiChoice[] = [
  * The emoji whose name or words have the text of the search, in the order of the list. An emoji
  * whose name starts with the text comes first. An empty search gives the whole list.
  */
-export function findEmoji(query: string): EmojiChoice[] {
+export function findEmoji(query: string, choices: readonly EmojiChoice[] = EMOJI): EmojiChoice[] {
 	const text = query.trim().toLowerCase();
-	if (text === "") return [...EMOJI];
+	if (text === "") return [...choices];
 	const starts: EmojiChoice[] = [];
 	const others: EmojiChoice[] = [];
-	for (const choice of EMOJI) {
+	for (const choice of choices) {
 		if (choice.name.startsWith(text)) starts.push(choice);
 		else if (choice.name.includes(text) || choice.words.some((word) => word.includes(text))) others.push(choice);
 	}
@@ -106,6 +106,7 @@ export function emojiName(emoji: string): string {
 
 /** The code of an emoji in a message box: its name in lowercase, with "_" for each space and "-". `:thumbs_up:` */
 export function emojiCode(choice: EmojiChoice): string {
+	if (choice.emoji.startsWith(":")) return choice.name;
 	return choice.name.toLowerCase().replace(/[\s-]+/g, "_");
 }
 
@@ -131,11 +132,11 @@ const EMOJI_SUGGESTIONS = 8;
  * text comes first, then an emoji whose code or one of its words has it. A word is compared in the form
  * of a code too, with "_" for each space.
  */
-export function emojiSuggestions(query: string): EmojiChoice[] {
+export function emojiSuggestions(query: string, choices: readonly EmojiChoice[] = EMOJI): EmojiChoice[] {
 	const typed = query.toLowerCase();
 	const starts: EmojiChoice[] = [];
 	const others: EmojiChoice[] = [];
-	for (const choice of EMOJI) {
+	for (const choice of choices) {
 		const code = emojiCode(choice);
 		if (code.startsWith(typed)) starts.push(choice);
 		else if (code.includes(typed) || choice.words.some((word) => word.replace(/\s+/g, "_").includes(typed))) {

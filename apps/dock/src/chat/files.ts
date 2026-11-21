@@ -5,7 +5,9 @@ import { type ApiEnv, callOf, unauthenticatedResponse } from "../api/index.ts";
 import { contentOf, roomFile, versionResponse } from "../drive/index.ts";
 import type { CallContext } from "../identity/index.ts";
 import { bytesToBase64, downloadResponse, invokeOperation, log, OperationError } from "../platform/index.ts";
-import type { Refusal, RoomCall } from "./room.ts";
+import { mountCustomEmoji } from "./custom-emoji.ts";
+import type { Refusal } from "./room.ts";
+import { openRoom } from "./room-call.ts";
 
 // The files of a message. Each download makes two checks: the room checks that the caller is a member
 // and that the message holds the file, and the drive of the file checks that it has a grant for the room
@@ -27,27 +29,18 @@ const rawDownload = {
 	output: z.custom<Response>((value) => value instanceof Response),
 };
 
-function actorOf(call: CallContext) {
-	const { principal } = call.caller;
-	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
-}
-
 /** The current version of a file of a message, for a member of the room. */
 async function messageFile(call: CallContext, roomId: string, messageId: string, itemId: string) {
-	const ctx: RoomCall = { roomId, actor: actorOf(call) };
-	const ref = (await call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId)).fileRef(ctx, messageId, itemId)) as
-		| { spaceId: string; itemId: string }
-		| Refusal;
+	const { room, ctx } = openRoom(call, roomId);
+	const ref = (await room.fileRef(ctx, messageId, itemId)) as { spaceId: string; itemId: string } | Refusal;
 	if ("error" in ref) throw new OperationError(ref.error.code, ref.error.message);
 	return roomFile(call.env, { spaceId: ref.spaceId, itemId: ref.itemId, roomId });
 }
 
 /** The picture of a link preview of a message, for a member of the room. */
 async function linkImage(call: CallContext, roomId: string, messageId: string, url: string) {
-	const ctx: RoomCall = { roomId, actor: actorOf(call) };
-	const found = (await call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId)).linkImage(ctx, messageId, url)) as
-		| { key: string; type: string; size: number }
-		| Refusal;
+	const { room, ctx } = openRoom(call, roomId);
+	const found = (await room.linkImage(ctx, messageId, url)) as { key: string; type: string; size: number } | Refusal;
 	if ("error" in found) throw new OperationError(found.error.code, found.error.message);
 	return found;
 }
@@ -102,6 +95,7 @@ export async function downloadChatFile(
 }
 
 export function mountChatFiles(app: Hono<ApiEnv>): void {
+	mountCustomEmoji(app);
 	// The picture of a link preview. It comes before the route of a file: its path has one more part.
 	app.on(["GET", "HEAD"], "/dl/chat/:room_id/:message_id/links/image", async (c) => {
 		const call = await callOf(c, { change: false, ownSiteRead: true });

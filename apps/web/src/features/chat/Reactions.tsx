@@ -1,6 +1,8 @@
 import type { ChatReaction } from "@asterra/contracts";
-import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { EmojiText, ManageEmoji, useCustomEmoji } from "./CustomEmoji.tsx";
 import { emojiName, findEmoji } from "./emoji.ts";
+import { RoomArchiveContext } from "./roomPolicy.ts";
 
 /** The names in the title of a reaction. More names than this show as "and N more". */
 export const TITLE_NAMES = 10;
@@ -25,6 +27,7 @@ export function Reactions({
 	nameOf: (principalId: string) => string;
 	onToggle: (emoji: string, add: boolean) => void;
 }) {
+	const archived = useContext(RoomArchiveContext);
 	if (reactions.length === 0) return null;
 	return (
 		<ul className="chat-reactions">
@@ -40,9 +43,12 @@ export function Reactions({
 							aria-pressed={mine}
 							aria-label={`${emojiName(reaction.emoji)}: ${countText(reaction.count)}${mine ? ", with yours" : ""}`}
 							title={more > 0 ? `${names.join(", ")} and ${more} more` : names.join(", ")}
+							disabled={archived && !mine}
 							onClick={() => onToggle(reaction.emoji, !mine)}
 						>
-							<span aria-hidden="true">{reaction.emoji}</span>
+							<span aria-hidden="true">
+								<EmojiText text={reaction.emoji} />
+							</span>
 							<span aria-hidden="true" className="chat-reaction-count">
 								{reaction.count}
 							</span>
@@ -78,7 +84,8 @@ export function ReactionPicker({
 	const [up, setUp] = useState(false);
 	const searchId = useId();
 	const root = useRef<HTMLDivElement>(null);
-	const choices = useMemo(() => findEmoji(query), [query]);
+	const catalog = useCustomEmoji();
+	const choices = useMemo(() => findEmoji(query, catalog.choices), [query, catalog.choices]);
 
 	useLayoutEffect(() => {
 		const picker = root.current;
@@ -151,12 +158,13 @@ export function ReactionPicker({
 								title={choice.name}
 								onClick={() => onPick(choice.emoji)}
 							>
-								{choice.emoji}
+								<EmojiText text={choice.emoji} />
 							</button>
 						</li>
 					))}
 				</ul>
 			)}
+			<ManageEmoji />
 		</div>
 	);
 }

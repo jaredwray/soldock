@@ -207,15 +207,15 @@ export class ChatSearchDO extends DurableObject<Env> {
 	 * A page of the hits of a filter in the rooms of the list, the newest first. One hit more than `limit`
 	 * tells that a next page exists. The index gives no rank: `bm25` reads how many rows of the whole table
 	 * have a word, so its order would tell a caller about the words of rooms that it cannot read. Each room
-	 * ranks its own messages (`searchHits` of the room). `unknown` has the rooms of the list that sent no batch yet, at most `UNKNOWN_MAX`: the
-	 * caller asks each of them to send a batch (`fillSearch`).
+	 * ranks its own messages (`searchHits` of the room). `unknown` includes rooms whose first fill is incomplete.
+	 * The caller asks up to `UNKNOWN_MAX` rooms to send their pending rows before it reads again.
 	 */
 	search(query: SearchIndexQuery): { hits: SearchHit[]; unknown: string[] } {
 		const rooms = JSON.stringify(query.rooms);
 		const unknown = this.sql
 			.exec<{ value: string }>(
 				`SELECT wanted.value FROM json_each(?) wanted
-				WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE room_id = wanted.value) LIMIT ?`,
+				WHERE NOT EXISTS (SELECT 1 FROM rooms WHERE room_id = wanted.value AND filled = 1) LIMIT ?`,
 				rooms,
 				UNKNOWN_MAX,
 			)

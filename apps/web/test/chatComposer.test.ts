@@ -290,7 +290,7 @@ describe("the commands of the box", () => {
 	});
 });
 
-const rulesPlugin = inputRules({ rules: [...markdownRules] });
+const rulesPlugin = inputRules({ rules: markdownRules((name) => name === "smile") });
 
 /** A state of the box with the Markdown shortcuts, and the caret at the end, or at `at`. */
 function typingState(box: Node, at?: number): EditorState {
@@ -382,7 +382,7 @@ describe("an emoji code in the box", () => {
 	});
 
 	it("turns a full code into its emoji when the person types the closing ':', and keeps other text", () => {
-		expect(type(typingState(doc(p())), "done :tada: :+1:").doc.textContent).toBe("done 🎉 👍");
+		expect(type(typingState(doc(p())), "done :tada: :+1: :smile:").doc.textContent).toBe("done 🎉 👍 :smile:");
 		expect(type(typingState(doc(p())), "a :no_such_emoji: at 10:30:").doc.textContent).toBe(
 			"a :no_such_emoji: at 10:30:",
 		);

@@ -3,6 +3,7 @@ import {
 	type ChatMember,
 	type ChatMessage,
 	type ChatRoom,
+	type ChatRoomPolicy,
 	chatSocketPath,
 	DIRECTORY_LIMITS,
 	type DirectoryEntry,
@@ -20,6 +21,7 @@ import { loadSaved, putSaved, removeSaved } from "./outboxStore.ts";
 import { createRoomPager, type PagerState, type RoomPager } from "./pager.ts";
 import { createRoomCache } from "./roomCache.ts";
 import { forgetChangesUpTo, type RoomChange, withChangesSince, withRoom, withStarred } from "./roomList.ts";
+import { postingNotice } from "./roomPolicy.ts";
 import { fromSaved, savedChanges, toSaved } from "./saved.ts";
 import { type Connection, createRoomSocket, type RoomSocket, type SocketHandlers } from "./socket.ts";
 import { createRoomSync } from "./sync.ts";
@@ -130,6 +132,7 @@ export function useRooms() {
 	 * focus). The Threads view and its count in the sidebar read the threads again when it changes.
 	 */
 	const [threadsTick, setThreadsTick] = useState(0);
+	const [sectionsTick, setSectionsTick] = useState(0);
 	const started = useRef(0);
 	const applied = useRef(0);
 	/** True while the events socket is connected. Then the list polls each minute only. */
@@ -163,6 +166,7 @@ export function useRooms() {
 			forgetChangesUpTo(changes.current, since);
 			setState((current) => ({ status: "ready", rooms, error: null, tick: current.tick + 1 }));
 			setThreadsTick((current) => current + 1);
+			setSectionsTick((current) => current + 1);
 		} catch (caught) {
 			// A list that shows stays as it is. The next poll tries again.
 			setState((current) =>
@@ -190,6 +194,11 @@ export function useRooms() {
 				setThreadsTick((current) => current + 1);
 				return;
 			}
+			if (event.type === "chat.sections") {
+				setSectionsTick((current) => current + 1);
+				return;
+			}
+			if (event.type === "chat.room_removed") setSectionsTick((current) => current + 1);
 			// A change for the principal: the list of rooms has it with its `chat.room` event.
 			if (event.type !== "chat.room" && event.type !== "chat.room_removed") return;
 			const roomId = event.type === "chat.room" ? event.room.id : event.room_id;
@@ -222,7 +231,7 @@ export function useRooms() {
 		};
 	}, [refresh]);
 
-	return { ...state, refresh, threadsTick };
+	return { ...state, refresh, threadsTick, sectionsTick };
 }
 
 /**
@@ -231,6 +240,7 @@ export function useRooms() {
  * room closes the socket of the old one.
  */
 export function useRoomWatch(roomId: string | null) {
+	const [posting, setPosting] = useState<{ id: string; archived: boolean; notice: string | null } | null>(null);
 	const watchers = useRef(new Set<(event: MessageWatch) => void>());
 	const watch = useCallback((listener: (event: MessageWatch) => void) => {
 		watchers.current.add(listener);
@@ -240,10 +250,29 @@ export function useRoomWatch(roomId: string | null) {
 	}, []);
 	useEffect(() => {
 		if (roomId === null) return;
+		let latest = 0;
+		let connected = false;
+		function refreshPolicy(id: string) {
+			const request = ++latest;
+			api.call("chat.get_room", { room_id: id }).then(
+				({ room, policy }) => {
+					if (request === latest)
+						setPosting({ id, archived: policy.archived, notice: postingNotice(policy, room.role) });
+				},
+				(error: unknown) => {
+					if (request === latest) setPosting({ id, archived: true, notice: errorMessage(error) });
+				},
+			);
+		}
+		refreshPolicy(roomId);
 		const socket = createRoomSocket({
 			connect: (handlers) => connectRoom(roomId, handlers),
 			onEvent(event) {
-				if (event.type === "hello") {
+				if (event.type === "room") {
+					refreshPolicy(roomId);
+				} else if (event.type === "hello") {
+					if (connected) refreshPolicy(roomId);
+					connected = true;
 					for (const watcher of watchers.current) watcher({ type: "catch-up" });
 				} else if (event.type === "message" || event.type === "reply") {
 					for (const watcher of watchers.current) watcher({ type: "message", message: event.message });
@@ -258,12 +287,17 @@ export function useRoomWatch(roomId: string | null) {
 		document.addEventListener("visibilitychange", wake);
 		window.addEventListener("online", wake);
 		return () => {
+			latest++;
 			document.removeEventListener("visibilitychange", wake);
 			window.removeEventListener("online", wake);
 			socket.close();
 		};
 	}, [roomId]);
-	return watch;
+	return {
+		watch,
+		archived: posting?.archived ?? false,
+		readOnly: posting?.id === roomId ? posting.notice : "Loading room settings…",
+	};
 }
 
 /** One WebSocket connection to the socket of a room. The session cookie authenticates it. */
@@ -473,6 +507,9 @@ export interface RoomState extends PagerState {
 	status: "loading" | "ready" | "error";
 	/** The room as the room itself gave it, at the time of the load. */
 	room: ChatRoom | null;
+	policy: ChatRoomPolicy | null;
+	/** The read that supplied the members and policy. A slow history read must preserve newer values. */
+	metadataRead: number;
 	/** The members of the room. The suggestions of a mention show them first. */
 	members: ChatMember[];
 	/**
@@ -486,6 +523,8 @@ export interface RoomState extends PagerState {
 const ROOM_LOADING: RoomState = {
 	status: "loading",
 	room: null,
+	policy: null,
+	metadataRead: 0,
 	members: [],
 	messages: [],
 	hasOlder: false,
@@ -580,7 +619,7 @@ export function useRoom(
 		// Two loads can run at the same time, for example after a reload. Only the last one applies, so
 		// an older answer never replaces newer messages or moves the version of the sync back.
 		const request = ++loads.current;
-		memberReads.current += 1;
+		const metadataRead = ++memberReads.current;
 		const current = () => alive.current && request === loads.current;
 		// The answer of the server decides if the room keeps its list in the cache. This runs also when
 		// the page left the room before the answer: a room that does not load, and a room that the person
@@ -591,14 +630,29 @@ export function useRoom(
 			if (owner !== null && currentAccount() === owner) roomCache.remove(owner, roomId, started);
 		};
 		try {
-			const { room, members } = await api.call("chat.get_room", { room_id: roomId });
+			const { room, members, policy } = await api.call("chat.get_room", { room_id: roomId });
 			if (room.role === null) forget();
 			// A public room that the person did not join shows without its messages.
 			const page = room.role === null ? null : await api.call("chat.list_messages", { room_id: roomId });
 			if (!current()) return;
 			loadMark.current = started;
 			// The load replaces the list. The pager starts the sync at the version of the list.
-			setState({ status: "ready", room, members, ...pager.replace(page), fresh: true, error: null });
+			const history = pager.replace(page);
+			setState((previous) => ({
+				status: "ready",
+				room,
+				members,
+				policy,
+				metadataRead,
+				...history,
+				fresh: true,
+				error: null,
+				...(previous.metadataRead > metadataRead && {
+					metadataRead: previous.metadataRead,
+					members: previous.members,
+					policy: previous.policy,
+				}),
+			}));
 			// A sync can show newer messages during a load. The load then puts an older list on the page.
 			// One read after each load gets the changes after that list at once, in each order of the answers.
 			if (page) void sync.run();
@@ -623,7 +677,7 @@ export function useRoom(
 		const { status, fresh, room, messages, hasOlder, hasNewer } = state;
 		if (owner === null || currentAccount() !== owner) return;
 		if (status !== "ready" || !fresh || !room || room.role === null || hasNewer) return;
-		roomCache.put(owner, roomId, { room, messages, hasOlder }, loadMark.current);
+		roomCache.put(owner, roomId, { room, policy: state.policy, messages, hasOlder }, loadMark.current);
 	}, [state, owner, roomId]);
 
 	// The views of a thread watch the messages of the socket. A new connect and a new room list tell
@@ -654,9 +708,11 @@ export function useRoom(
 	const loadMembers = useCallback(async () => {
 		const request = ++memberReads.current;
 		try {
-			const { members } = await api.call("chat.get_room", { room_id: roomId });
+			const { members, policy } = await api.call("chat.get_room", { room_id: roomId });
 			if (!alive.current || request !== memberReads.current) return;
-			setState((current) => (current.status === "ready" ? { ...current, members } : current));
+			setState((current) =>
+				current.status === "ready" ? { ...current, metadataRead: request, members, policy } : current,
+			);
 		} catch {
 			// The members are only for the suggestions of a mention. The next load of the room gets them.
 		}

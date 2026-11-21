@@ -1,18 +1,21 @@
 import { CHAT_LIMITS, type ChatBody, type ChatFile, type ChatMessage } from "@asterra/contracts";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { fullDate, initials, plural, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
-import { profilePath } from "../../routes.ts";
+import { chatPath, profilePath } from "../../routes.ts";
 import { ChatComposer } from "./ChatComposer.tsx";
 import { bodyText } from "./composerSchema.ts";
 import { emojiName } from "./emoji.ts";
+import { MessageActionButton } from "./MessageActions.tsx";
 import { MessageBody } from "./MessageBody.tsx";
 import { EditFiles, LinkPreviews, MessageFiles } from "./MessageFiles.tsx";
 import type { MentionContext } from "./mentions.ts";
 import { sameFileIds, timeLabel } from "./model.ts";
 import type { PendingMessage } from "./outbox.ts";
 import { ReactionPicker, Reactions, TITLE_NAMES } from "./Reactions.tsx";
+import { CardActions } from "./RoomBots.tsx";
+import { RoomArchiveContext } from "./roomPolicy.ts";
 import { useWantPeople } from "./usePeople.ts";
 
 // One message with its actions: the rows of the room list, and the messages of the view of a thread.
@@ -140,6 +143,7 @@ export function MessageItem({
 	className,
 	fullDates,
 }: MessageItemProps) {
+	const archived = useContext(RoomArchiveContext);
 	const editId = useId();
 	const [picking, setPicking] = useState(false);
 	const pickerId = useId();
@@ -249,9 +253,28 @@ export function MessageItem({
 					<p className="chat-text chat-text-deleted">This message was deleted.</p>
 				) : (
 					<>
+						{message.forwarded_from && (
+							<p className="chat-time">
+								Forwarded from{" "}
+								<Link
+									to={
+										message.forwarded_from.parent_seq
+											? chatPath(
+													message.forwarded_from.room_id,
+													message.forwarded_from.parent_seq,
+													message.forwarded_from.seq,
+												)
+											: chatPath(message.forwarded_from.room_id, message.forwarded_from.seq)
+									}
+								>
+									{message.forwarded_from.author.display_name}
+								</Link>
+							</p>
+						)}
 						{/* A message with only files has no text to show. */}
 						{(message.text !== "" || message.files.length === 0 || message.edited_at) && (
 							<div className="chat-text">
+								{message.untrusted && <small className="kind">External content</small>}
 								<MessageBody body={message.body} text={message.text} mentions={mentions} />
 								{message.edited_at &&
 									(onShowEdits ? (
@@ -271,6 +294,7 @@ export function MessageItem({
 									))}
 							</div>
 						)}
+						{!archived && message.buttons && <CardActions message={message} />}
 						<MessageFiles
 							files={message.files}
 							roomId={message.room_id}
@@ -321,7 +345,7 @@ export function MessageItem({
 					</p>
 				)}
 			</div>
-			{picking && (
+			{!archived && picking && (
 				<ReactionPicker
 					id={pickerId}
 					trigger={reactButton}
@@ -338,6 +362,7 @@ export function MessageItem({
 			)}
 			{hasActions && (
 				<span className="chat-message-actions">
+					<MessageActionButton message={message} />
 					{quickEmoji.map((emoji) => {
 						const mine = message.reactions.some(
 							(reaction) => reaction.emoji === emoji && reaction.principal_ids.includes(ownId),
@@ -350,6 +375,7 @@ export function MessageItem({
 								aria-label={`React with ${emojiName(emoji)}`}
 								aria-pressed={mine}
 								title={emojiName(emoji)}
+								disabled={archived && !mine}
 								onClick={() => onReact(emoji, !mine)}
 							>
 								<span aria-hidden="true">{emoji}</span>
@@ -359,6 +385,7 @@ export function MessageItem({
 					<span className="chat-actions-divider" aria-hidden="true" />
 					<button
 						type="button"
+						disabled={archived}
 						ref={reactButton}
 						className="icon-button icon-button-small"
 						aria-label={`Add a reaction to the message of ${author} from ${shortDate(message.created_at)}`}
@@ -390,7 +417,7 @@ export function MessageItem({
 							<Icon name="reply" size={16} />
 						</button>
 					)}
-					{own && (
+					{own && !archived && !message.untrusted && !message.action_id && !message.forwarded_from && (
 						<button
 							type="button"
 							className="icon-button icon-button-small"

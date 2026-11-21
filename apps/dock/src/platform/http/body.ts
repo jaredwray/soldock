@@ -9,16 +9,16 @@ import { OperationError } from "../operations/errors.ts";
 export const MAX_REQUEST_BYTES = Math.ceil(MAIL_LIMITS.messageBytes / 3) * 4 + MAIL_LIMITS.messageBytes;
 
 /**
- * Reads a request body as text, and stops with `payload_too_large` as soon as it passes `maxBytes`.
+ * Reads the original request bytes, and stops with `payload_too_large` as soon as it passes `maxBytes`.
  * A declared Content-Length is checked first. A body without one is counted while it streams, so an
  * oversized request never fills the isolate's memory.
  */
-export async function readBodyText(request: Request, maxBytes: number): Promise<string> {
+export async function readBodyBytes(request: Request, maxBytes: number): Promise<Uint8Array> {
 	const declared = Number(request.headers.get("content-length") ?? Number.NaN);
 	if (Number.isFinite(declared) && declared > maxBytes) {
 		throw new OperationError("payload_too_large", `The request body can be at most ${maxBytes} bytes.`);
 	}
-	if (!request.body) return "";
+	if (!request.body) return new Uint8Array();
 	const reader = request.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let total = 0;
@@ -38,5 +38,9 @@ export async function readBodyText(request: Request, maxBytes: number): Promise<
 		bytes.set(chunk, offset);
 		offset += chunk.byteLength;
 	}
-	return new TextDecoder().decode(bytes);
+	return bytes;
+}
+
+export async function readBodyText(request: Request, maxBytes: number): Promise<string> {
+	return new TextDecoder().decode(await readBodyBytes(request, maxBytes));
 }

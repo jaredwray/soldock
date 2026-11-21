@@ -35,7 +35,12 @@ export function saveBytes(
 	filename: string,
 	type: SavedType = "application/octet-stream",
 ): void {
-	const url = URL.createObjectURL(new Blob([bytes], { type }));
+	saveParts([bytes], filename, type);
+}
+
+/** Saves pages of a generated file without a second copy of the whole file in memory. */
+export function saveParts(parts: BlobPart[], filename: string, type: SavedType = "application/octet-stream"): void {
+	const url = URL.createObjectURL(new Blob(parts, { type }));
 	const anchor = document.createElement("a");
 	anchor.href = url;
 	anchor.download = filename || "attachment";

@@ -82,7 +82,7 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 		.prepare(
 			`SELECT ${COLUMNS} FROM chat_rooms r
 			LEFT JOIN chat_members m ON m.room_id = r.id AND m.principal_id = ?1
-			WHERE r.kind = 'public'
+			WHERE r.kind = 'public' AND r.archived = 0
 				AND (?2 IS NULL OR instr(r.name_key, ?2) > 0)
 				AND (?3 IS NULL OR r.name_key > ?3 OR (r.name_key = ?3 AND r.id > ?4))
 			ORDER BY r.name_key, r.id LIMIT ?5`,

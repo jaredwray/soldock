@@ -10,14 +10,16 @@ import { chatPath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { canSendWith, filesNote } from "./attachments.ts";
 import { ChatComposer, type ChatComposerHandle } from "./ChatComposer.tsx";
+import { messageKeys } from "./ChatNavigation.tsx";
 import { AttachButton, AttachmentChips } from "./ComposerFiles.tsx";
 import { createCallLine, createToggleLine } from "./callLine.ts";
 import { bodyText, sameInBox, textToBody } from "./composerSchema.ts";
 import { type MessageWatch, newAttachments, useAttachments, usePageVisible } from "./data.ts";
-import { createDraftStore, draftStorage, threadDraftKey } from "./drafts.ts";
+import { draftStorage } from "./drafts.ts";
 import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { useFileDrop } from "./fileDrop.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
+import { ScheduleButton } from "./MessageActions.tsx";
 import { type Editing, editedBody, editSavable, MessageItem, startEditing } from "./MessageItem.tsx";
 import type { MentionContext } from "./mentions.ts";
 import { sameFileIds } from "./model.ts";
@@ -32,6 +34,7 @@ import {
 	type ThreadState,
 	type ThreadView,
 } from "./thread.ts";
+import { useRoomDraft } from "./useRoomDraft.tsx";
 
 type LoadState = { status: "loading" } | { status: "ready"; thread: ThreadState } | { status: "error"; error: string };
 
@@ -63,6 +66,7 @@ const LINK_PAGES = 20;
 export function ThreadPanel({
 	roomId,
 	roomTitle,
+	readOnly = null,
 	parentId,
 	focus = null,
 	mentions,
@@ -73,6 +77,7 @@ export function ThreadPanel({
 }: {
 	roomId: string;
 	roomTitle: string;
+	readOnly?: string | null;
 	parentId: string;
 	/**
 	 * The reply that a link points to, or null. The view goes to that reply and marks it. Each visit of a
@@ -91,19 +96,13 @@ export function ThreadPanel({
 	const self = useSession().whoami.principal;
 	const ownId = self.id;
 	// The reply in the box stays after a close and a reload, in the store of the drafts of the rooms.
-	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
-	const draftKey = threadDraftKey(roomId, parentId);
-	const [draft, setDraft] = useState<ChatBody | null>(() => drafts.get(draftKey));
-	/** The body in the box now, for the end of a send: text typed during the send stays. */
-	const draftNow = useRef<ChatBody | null>(draft);
-	const changeDraft = useCallback(
-		(next: ChatBody | null) => {
-			draftNow.current = next;
-			setDraft(next);
-			drafts.set(draftKey, next);
-		},
-		[drafts, draftKey],
-	);
+	const composer = useRef<ChatComposerHandle>(null);
+	const {
+		draft,
+		change: changeDraft,
+		status: draftStatus,
+		clearSent,
+	} = useRoomDraft(ownId, roomId, parentId, composer, state.status === "ready");
 	const [alsoInRoom, setAlsoInRoom] = useState(false);
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
@@ -114,7 +113,6 @@ export function ThreadPanel({
 	 * later refusal, also of a send with a different key, never puts them in the trash.
 	 */
 	const uncertainFiles = useRef(new Set<string>());
-	const composer = useRef<ChatComposerHandle>(null);
 	const body = useRef<HTMLDivElement>(null);
 	/** True when the list shows its end, or after an own send: the next reply then moves the list to its end. */
 	const stick = useRef(true);
@@ -409,7 +407,7 @@ export function ThreadPanel({
 	/** The characters of the reply above the limit of a message, or 0. */
 	const replyOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
 	/** True when the reply has text or files, and each file is in the drive. */
-	const canSend = canSendWith(draft !== null, files.list) && replyOver === 0;
+	const canSend = !readOnly && canSendWith(draft !== null, files.list) && replyOver === 0;
 
 	/** Removes the preview of a link of an own reply. The link stays in the text. */
 	function removePreview(id: string, url: string) {
@@ -455,15 +453,7 @@ export function ThreadPanel({
 			setAlsoInRoom(false);
 			attachments.release(sentFiles);
 			// Text that the person typed during the send stays in the box.
-			if (draftNow.current === sent) {
-				composer.current?.clear();
-				draftNow.current = null;
-				setDraft(null);
-			}
-			// The store loses the draft only while it has the sent reply. The view can close during the send, and
-			// a view of the thread that opened after it can have a newer draft.
-			const stored = drafts.get(draftKey);
-			if (sent && stored && sameInBox(stored, sent)) drafts.set(draftKey, null);
+			clearSent(sent);
 		} catch (error) {
 			// The box keeps the reply. A second send of the same reply keeps the key, so it posts one time.
 			// A refusal is an answer: that attempt stored nothing. A file that no send with a lost answer took is
@@ -586,7 +576,7 @@ export function ThreadPanel({
 	return (
 		<aside
 			className={dropping ? "chat-thread chat-thread-drop" : "chat-thread"}
-			data-file-drop="thread"
+			data-file-drop={readOnly ? undefined : "thread"}
 			aria-labelledby={headingId}
 			onKeyDown={(event) => {
 				// Escape in a dialog of the view (a delete, the earlier versions, the list of emoji) closes that dialog only.
@@ -684,7 +674,12 @@ export function ThreadPanel({
 							</p>
 						)}
 						<div role="log" aria-label="Replies">
-							<ol className="chat-thread-replies">
+							<ol
+								className="chat-thread-replies"
+								// biome-ignore lint/a11y/noNoninteractiveTabindex: The list is the entry point for arrow key navigation.
+								tabIndex={0}
+								onKeyDown={messageKeys}
+							>
 								{thread.replies.map((reply) => (
 									<Fragment key={reply.id}>
 										{reply.seq === newFrom && (
@@ -698,7 +693,9 @@ export function ThreadPanel({
 							</ol>
 						</div>
 					</div>
-					{thread.parent.deleted ? (
+					{readOnly ? (
+						<p className="chat-thread-closed">{readOnly}</p>
+					) : thread.parent.deleted ? (
 						<p className="chat-thread-closed">The message was deleted, so the thread takes no new reply.</p>
 					) : (
 						<form
@@ -734,6 +731,13 @@ export function ThreadPanel({
 									}
 								>
 									<span className="chat-composer-actions">
+										<ScheduleButton
+											roomId={roomId}
+											parentId={parentId}
+											body={draft}
+											disabled={!canSend || files.list.length > 0 || sending || alsoInRoom}
+											onSent={clearSent}
+										/>
 										<AttachButton count={files.list.length} onFiles={addFiles} />
 										<button
 											type="submit"
@@ -747,6 +751,7 @@ export function ThreadPanel({
 									</span>
 								</ChatComposer>
 							</div>
+							{draftStatus}
 							{filesNote(files.list) !== null && (
 								<p className="chat-composer-files-note" role="status">
 									{filesNote(files.list)}

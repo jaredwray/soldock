@@ -1,6 +1,11 @@
 import type { z } from "zod";
 import { chatOperations } from "./chat.ts";
+import { chatBotOperations } from "./chat-bots.ts";
+import { chatEmojiOperations } from "./chat-emoji.ts";
+import { messageToolsOperations } from "./chat-message-tools.ts";
+import { chatNavigationOperations } from "./chat-navigation.ts";
 import { chatNotificationOperations } from "./chat-notifications.ts";
+import { roomManagementOperations } from "./chat-room-management.ts";
 import { directoryOperations } from "./directory.ts";
 import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
@@ -23,6 +28,11 @@ export const operations = {
 	...sheetsOperations,
 	...chatOperations,
 	...chatNotificationOperations,
+	...chatBotOperations,
+	...chatNavigationOperations,
+	...messageToolsOperations,
+	...roomManagementOperations,
+	...chatEmojiOperations,
 	...oauthOperations,
 	...webhookOperations,
 } as const;

@@ -1335,6 +1335,25 @@ a.chat-author:hover {
 	box-shadow: var(--shadow-menu);
 }
 
+.chat-emoji-image {
+	object-fit: contain;
+	vertical-align: middle;
+}
+
+.chat-custom-emoji {
+	font-size: 0.875rem;
+}
+
+.chat-custom-emoji summary {
+	cursor: pointer;
+}
+
+.chat-custom-emoji label {
+	display: grid;
+	gap: 4px;
+	margin: 8px 0;
+}
+
 .chat-picker-up {
 	top: auto;
 	bottom: calc(100% - 4px);
@@ -2296,4 +2315,14 @@ a.chat-author:hover {
 
 .chat-presence-away {
 	background: var(--warning);
+}
+
+.chat-shortcuts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.75rem 1rem;
+}
+
+.chat-shortcuts dd {
+	margin: 0;
 }

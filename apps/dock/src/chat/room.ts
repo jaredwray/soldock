@@ -10,12 +10,14 @@ import {
 	type ChatLinkPreview,
 	type ChatMessage,
 	type ChatReaction,
+	type ChatRoomPolicy,
 	type ChatSocketEvent,
 	type ChatWebhookEvent,
 	type GroupMention,
 	type RoomKind,
 	type RoomRole,
 } from "@asterra/contracts";
+import type { CredentialBinding } from "../identity/index.ts";
 import {
 	type ChatAddressedState,
 	type ChatRoomState,
@@ -28,10 +30,16 @@ import {
 } from "../identity/index.ts";
 import { log, OperationError } from "../platform/index.ts";
 import { type ChatWebhookEventJob, chatWebhookBoundary } from "../webhooks/index.ts";
+import { type ActivityRow, activitySchema, addActivity } from "./activity.ts";
 import { bodyMarkdown, groupMentions, type MessageContent, mentionIds, textBody } from "./body.ts";
+import { authorizeHook, createHook, type IncomingDelivery, incomingHookMigration } from "./incoming-hooks.ts";
 import { extractLinks, type LinkFacts, type LinkState, linkPreviews, mergeLinks, parseLinks } from "./links.ts";
 import { storedGroups, withMentions } from "./mentions.ts";
+import { roomMessageTables, type ScheduledInput } from "./message-state.ts";
 import { type ChatPushFanout, enqueuePushFanout } from "./push-fanout.ts";
+import { type Refusal, refuse } from "./room-errors.ts";
+import { type PolicyUpdate, ROOM_DAY_MS, roomPolicy, roomPolicySchema, type StoredPolicy } from "./room-policy.ts";
+import { queueScheduled, scheduledFor, sendScheduled } from "./scheduled-messages.ts";
 import {
 	HAS_LINK_SQL,
 	hasLink,
@@ -43,13 +51,7 @@ import {
 } from "./search.ts";
 import { type SearchEntry, searchIndex } from "./search-index.ts";
 
-/** An expected failure, returned instead of thrown, because RPC does not keep error classes. */
-export type Refusal = {
-	error: {
-		code: "invalid" | "not_found" | "conflict" | "forbidden" | "rate_limited" | "payload_too_large";
-		message: string;
-	};
-};
+export type { Refusal } from "./room-errors.ts";
 
 /** The person or agent of a change, with the name at that time. */
 export interface ActorRecord {
@@ -97,6 +99,10 @@ export interface MemberRecord extends ActorRecord {
 }
 
 export interface MessageRecord {
+	forwarded_from?: NonNullable<ChatMessage["forwarded_from"]>;
+	untrusted?: true;
+	buttons?: NonNullable<ChatMessage["buttons"]>;
+	action_id?: string;
 	id: string;
 	room_id: string;
 	seq: number;
@@ -208,7 +214,7 @@ function socketTag(principalId: string): string {
 
 type Row = Record<string, SqlStorageValue>;
 
-interface RoomRow extends Row {
+interface RoomRow extends Row, StoredPolicy {
 	room_id: string;
 	kind: RoomKind;
 	name: string | null;
@@ -255,6 +261,10 @@ export interface SearchRoomRecord {
 }
 
 interface MessageRow extends Row {
+	untrusted: number;
+	forwarded_from_json: string | null;
+	buttons_json: string | null;
+	action_id: string | null;
 	seq: number;
 	id: string;
 	author_id: string;
@@ -521,6 +531,10 @@ const MIGRATIONS: string[][] = [
 	) WITHOUT ROWID`,
 		"ALTER TABLE members ADD COLUMN last_typed_at INTEGER",
 	],
+	roomPolicySchema,
+	activitySchema,
+	roomMessageTables,
+	incomingHookMigration,
 ];
 
 /**
@@ -611,8 +625,11 @@ function groupRow(group: GroupMention): string {
 	return `group:${group}`;
 }
 
-function refuse(code: Refusal["error"]["code"], message: string): Refusal {
-	return { error: { code, message } };
+function postRefusal(room: RoomRow, member: MemberRow): Refusal | null {
+	if (room.archived) return refuse("conflict", "This room is archived.");
+	if (room.posting === "owners" && member.role !== "owner")
+		return refuse("forbidden", "Only room owners can post here.");
+	return null;
 }
 
 function backoff(attempts: number): number {
@@ -626,6 +643,12 @@ export function nameKey(name: string): string {
 
 function toMessage(roomId: string, row: MessageRow, reactions: ChatReaction[], files: ChatFile[]): MessageRecord {
 	return {
+		...(row.forwarded_from_json
+			? { forwarded_from: JSON.parse(row.forwarded_from_json) as NonNullable<ChatMessage["forwarded_from"]> }
+			: {}),
+		...(row.untrusted ? { untrusted: true as const } : {}),
+		...(row.buttons_json ? { buttons: JSON.parse(row.buttons_json) as NonNullable<ChatMessage["buttons"]> } : {}),
+		...(row.action_id ? { action_id: row.action_id } : {}),
 		id: row.id,
 		room_id: roomId,
 		seq: row.seq,
@@ -737,11 +760,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.migrate();
 				// A change sets the alarm after its transaction commits. If the object stopped between the
 				// two, the outbox has rows and no alarm: set one now.
-				const pending =
-					this.one<{ n: number }>(
-						"SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM webhook_outbox) + (SELECT COUNT(*) FROM chat_notification_outbox) AS n",
-					)?.n ?? 0;
-				if (pending > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+				if ((await ctx.storage.getAlarm()) === null) await this.schedule();
 			});
 		}
 	}
@@ -793,9 +812,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 */
 	private open(call: RoomCall, need: "visible" | "member"): { room: RoomRow; member: MemberRow | null } | Refusal {
 		const room = this.room();
-		if (!room) return refuse("not_found", NOT_FOUND);
+		if (!room || room.deleted) return refuse("not_found", NOT_FOUND);
 		const member = this.member(call.actor.principal_id);
-		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (!member && (room.kind !== "public" || room.archived)) return refuse("not_found", NOT_FOUND);
 		if (!member && need === "member") return refuse("forbidden", NOT_MEMBER);
 		return { room, member };
 	}
@@ -809,7 +828,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** The other member of a direct message, as JSON, or null for each other kind of room. */
 	private peerJson(room: RoomRow, principalId: string): string | null {
-		if (room.kind !== "dm") return null;
+		if (room.kind !== "dm" || room.name !== null) return null;
 		return (
 			this.one<{ actor_json: string }>("SELECT actor_json FROM members WHERE principal_id <> ? LIMIT 1", principalId)
 				?.actor_json ?? null
@@ -945,9 +964,36 @@ export class ChatRoomDO extends DurableObject<Env> {
 				version: room.version,
 				starred: member.starred === 1,
 				threads: this.followedThreads(principalId),
+				activity: this.all<{ version: number; at: number }>(
+					"SELECT version, at FROM member_activity WHERE principal_id = ?",
+					principalId,
+				),
 				addressed: member.addressed_json === null ? null : (JSON.parse(member.addressed_json) as ChatAddressedState),
 			},
 		};
+	}
+
+	joinedRoom(call: RoomCall): RoomRecord | null {
+		return "error" in this.openAsMember(call) ? null : this.record(call.actor.principal_id);
+	}
+
+	/** Recheck membership and read the current entries before a page can disclose them. */
+	activityEntries(call: RoomCall, versions: number[]) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return [];
+		const title = this.record(call.actor.principal_id);
+		const entries = this.all<ActivityRow>(
+			`SELECT version, at, kind, actor_name, seq, parent_seq, emoji FROM member_activity
+			WHERE principal_id = ? AND version IN (SELECT value FROM json_each(?))`,
+			call.actor.principal_id,
+			JSON.stringify(versions),
+		);
+		return entries.map((entry) => ({
+			...entry,
+			room_id: call.roomId,
+			room_name: title.name ?? title.peer?.display_name ?? "Direct message",
+			at: new Date(entry.at).toISOString(),
+		}));
 	}
 
 	/**
@@ -1031,13 +1077,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	/** The direct message room of the caller and `peer`. The first call creates it. */
-	async openDm(call: RoomCall, peer: ActorRecord): Promise<{ room: RoomRecord; created: boolean } | Refusal> {
+	async openDm(call: RoomCall, peers: ActorRecord[]): Promise<{ room: RoomRecord; created: boolean } | Refusal> {
 		const existing = this.room();
 		if (existing) {
 			if (existing.kind !== "dm" || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
 			return { room: this.record(call.actor.principal_id), created: false };
 		}
-		this.createRoom(call, "dm", null, "", [peer]);
+		const name =
+			peers.length === 1
+				? null
+				: [...peers, call.actor]
+						.sort((a, b) => a.principal_id.localeCompare(b.principal_id))
+						.map((actor) => actor.display_name)
+						.join(", ");
+		this.createRoom(call, "dm", name, "", peers);
 		await this.flush();
 		return { room: this.record(call.actor.principal_id), created: true };
 	}
@@ -1053,7 +1106,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return row !== null;
 	}
 
-	async get(call: RoomCall): Promise<{ room: RoomRecord; members: MemberRecord[] } | Refusal> {
+	async get(call: RoomCall): Promise<{ room: RoomRecord; members: MemberRecord[]; policy: ChatRoomPolicy } | Refusal> {
 		const opened = this.open(call, "visible");
 		if ("error" in opened) return opened;
 		if (!opened.member && !(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
@@ -1062,12 +1115,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 			role: row.role,
 			joined_at: row.joined_at,
 		}));
-		return { room: this.record(call.actor.principal_id), members };
+		const current = this.open(call, "visible");
+		if ("error" in current) return current;
+		return { room: this.record(call.actor.principal_id), members, policy: roomPolicy(current.room) };
 	}
 
 	async update(call: RoomCall, input: { name?: string | undefined; topic?: string | undefined }) {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
+		if (opened.room.archived) return refuse("conflict", "This room is archived.");
 		if (opened.room.kind === "dm") return refuse("invalid", "A direct message has no name and no topic.");
 		if (opened.member.role !== "owner") {
 			return refuse("forbidden", "Only the owner of the room can change its name and its topic.");
@@ -1091,7 +1147,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (opened.member) return { room: this.record(call.actor.principal_id), joined: false };
 		if (!(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
 		// A different call can run during the read of the directory. Read the state of the room again.
-		if (this.member(call.actor.principal_id)) return { room: this.record(call.actor.principal_id), joined: false };
+		const current = this.open(call, "visible");
+		if ("error" in current) return current;
+		if (current.member) return { room: this.record(call.actor.principal_id), joined: false };
 		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 		const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
 		const lastSeq = (this.room() as RoomRow).last_seq;
@@ -1110,8 +1168,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 	checkAddMembers(call: RoomCall): { ok: true } | Refusal {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
+		if (opened.room.archived) return refuse("conflict", "This room is archived.");
 		if (opened.room.kind === "dm") {
-			return refuse("invalid", "A direct message keeps its two members. Create a room for more people.");
+			return refuse(
+				"invalid",
+				"A direct message has a fixed membership. Open a new direct message for a different group.",
+			);
 		}
 		return { ok: true };
 	}
@@ -1120,8 +1182,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async addMembers(call: RoomCall, actors: ActorRecord[]): Promise<{ added: string[]; room: RoomRecord } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
+		if (opened.room.archived) return refuse("conflict", "This room is archived.");
 		if (opened.room.kind === "dm") {
-			return refuse("invalid", "A direct message keeps its two members. Create a room for more people.");
+			return refuse("invalid", "A direct message has a fixed membership. Create a room for more people.");
 		}
 		const fresh = new Map<string, ActorRecord>();
 		for (const actor of actors) if (!this.member(actor.principal_id)) fresh.set(actor.principal_id, actor);
@@ -1144,7 +1207,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async removeMember(call: RoomCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
-		if (opened.room.kind === "dm") return refuse("invalid", "A direct message keeps its two members.");
+		if (opened.room.kind === "dm") return refuse("invalid", "A direct message has a fixed membership.");
 		const self = principalId === call.actor.principal_id;
 		if (!self && opened.member.role !== "owner") {
 			return refuse("forbidden", "Only the owner of the room can remove a different member.");
@@ -1154,6 +1217,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (self && opened.room.kind === "private" && this.memberCount() === 1) {
 			return refuse("conflict", "You are the last member of this private room, so you cannot leave it.");
 		}
+		return this.dropMember(call, target);
+	}
+
+	private async dropMember(call: RoomCall, target: MemberRow) {
+		const principalId = target.principal_id;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
@@ -1176,6 +1244,123 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		await this.publish({ type: "room" });
 		return { removed: true };
+	}
+
+	getPolicy(call: RoomCall) {
+		const opened = this.openAsMember(call);
+		return "error" in opened ? opened : roomPolicy(opened.room);
+	}
+
+	async setPolicy(call: RoomCall, updates: PolicyUpdate, organizationOwner: boolean) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if (opened.room.kind === "dm") {
+			if (!organizationOwner)
+				return refuse("forbidden", "Only the organization owner can set direct message retention.");
+			if (updates.posting !== undefined || updates.archived !== undefined) {
+				return refuse("invalid", "Only retention can change for a direct message.");
+			}
+		} else if (opened.member.role !== "owner") {
+			return refuse("forbidden", "Only the room owner can change its policy.");
+		}
+		const before = roomPolicy(opened.room);
+		const policy = {
+			archived: updates.archived ?? before.archived,
+			posting: updates.posting ?? before.posting,
+			retention_days: updates.retention_days === undefined ? before.retention_days : updates.retention_days,
+		};
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				"UPDATE room SET archived = ?, posting = ?, retention_days = ? WHERE id = 1",
+				Number(policy.archived),
+				policy.posting,
+				policy.retention_days,
+			);
+			this.roomChanged(call.actor.principal_id);
+		});
+		await this.publish({ type: "room" });
+		return policy;
+	}
+
+	async deleteRoom(call: RoomCall) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if (opened.room.kind === "dm") return refuse("invalid", "A direct message has no room owner.");
+		if (opened.member.role !== "owner") return refuse("forbidden", "Only the room owner can delete it.");
+		this.ctx.storage.transactionSync(() => {
+			// Capture every projection before membership goes away. Its next state is a tombstone.
+			this.roomChanged(call.actor.principal_id);
+			for (const { principal_id } of this.all<MemberRow>("SELECT principal_id FROM members"))
+				this.touch(`member:${principal_id}`);
+			this.sql.exec("DELETE FROM thread_follows");
+			this.sql.exec("DELETE FROM members");
+			this.sql.exec("DELETE FROM idempotency");
+			this.sql.exec("DELETE FROM webhook_outbox");
+			this.sql.exec("DELETE FROM chat_notification_outbox");
+			this.sql.exec("DELETE FROM link_jobs");
+			this.sql.exec(
+				"UPDATE room SET deleted = 1, archived = 1, retention_days = 0, name = NULL, topic = '', created_by_json = '{}' WHERE id = 1",
+			);
+		});
+		for (const socket of this.ctx.getWebSockets()) this.end(socket, CHAT_SOCKET_CLOSE.ended, "The room was deleted.");
+		await this.flush();
+		return { deleted: true };
+	}
+
+	exportPage(call: RoomCall, after: number, limit: number, upper: number | null) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const through = upper ?? this.one<{ seq: number | null }>("SELECT MAX(seq) AS seq FROM messages")?.seq ?? 0;
+		const rows = this.all<MessageRow>(
+			"SELECT * FROM messages WHERE seq > ? AND seq <= ? AND deleted_at IS NULL ORDER BY seq LIMIT ?",
+			after,
+			through,
+			limit + 1,
+		);
+		const page = rows.slice(0, limit);
+		return {
+			through,
+			messages: this.messageRecords(call.roomId, page),
+			next_after: rows.length > limit ? (page.at(-1)?.seq ?? null) : null,
+		};
+	}
+
+	adminMembers() {
+		const room = this.room();
+		if (!room || room.deleted) return refuse("not_found", NOT_FOUND);
+		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) => ({
+			principal_id: row.principal_id,
+			display_name: (JSON.parse(row.actor_json) as ActorRecord).display_name,
+			role: row.role,
+		}));
+		return { members };
+	}
+
+	async assignOwner(call: RoomCall, actor: ActorRecord) {
+		const room = this.room();
+		if (!room || room.deleted) return refuse("not_found", NOT_FOUND);
+		if (room.kind === "dm") return refuse("invalid", "A direct message has no owner.");
+		const member = this.member(actor.principal_id);
+		if (member?.role === "owner") return { assigned: false };
+		if (this.one("SELECT 1 FROM members WHERE role = 'owner' LIMIT 1"))
+			return refuse("conflict", "The room already has an owner.");
+		if (!member && this.memberCount() > 0) return refuse("invalid", "Select an existing member of this room.");
+		this.ctx.storage.transactionSync(() => {
+			if (member) {
+				this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", actor.principal_id);
+				this.touch(`member:${actor.principal_id}`);
+			} else this.insertMember(actor, "owner", Date.now(), room.last_seq);
+			this.roomChanged(call.actor.principal_id);
+		});
+		await this.publish({ type: "room" });
+		return { assigned: true };
+	}
+
+	async removeDeletedMember(call: RoomCall, principalId: string) {
+		const room = this.room();
+		if (!room || room.deleted) return refuse("not_found", NOT_FOUND);
+		const target = this.member(principalId);
+		return target ? this.dropMember(call, target) : { removed: false };
 	}
 
 	// --- Messages -------------------------------------------------------------------------------
@@ -1379,7 +1564,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** The links of a message whose preview waits for a fetch, with the author and the origin of the post. */
 	linkJob(messageId: string): { authorId: string; origin: string; urls: string[] } | null {
-		if (!this.hasTables) return null;
+		if (!this.hasTables || this.room()?.deleted) return null;
 		const row = this.message(messageId);
 		const job = this.one<{ origin: string }>("SELECT origin FROM link_jobs WHERE message_id = ?", messageId);
 		if (!row || !job || row.deleted_at !== null) return null;
@@ -1699,14 +1884,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 *   replies are new for it: they are the context of the mention.
 	 * - The author of the parent follows, unless it stopped. A row with a read marker only is no stop.
 	 */
-	private followOnReply(parent: MessageRow, authorId: string, seq: number, mentioned: readonly string[]): void {
+	private followOnReply(parent: MessageRow, authorId: string, readSeq: number, mentioned: readonly string[]): void {
 		this.sql.exec(
 			`INSERT INTO thread_follows (parent_id, principal_id, following, last_read_seq) VALUES (?, ?, 1, ?)
 			ON CONFLICT (parent_id, principal_id) DO UPDATE SET following = 1,
 				last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`,
 			parent.id,
 			authorId,
-			seq,
+			readSeq,
 		);
 		for (const principalId of new Set(mentioned)) {
 			if (principalId === authorId) continue;
@@ -1861,6 +2046,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
+		if (add && opened.room.archived) return refuse("conflict", "This room is archived.");
 		const row = this.message(messageId);
 		if (!row) return refuse("not_found", NO_MESSAGE);
 		const roomId = opened.room.room_id;
@@ -1903,6 +2089,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 					Date.now(),
 					version,
 				);
+				if (row.author_id !== principalId) {
+					addActivity(this.sql, [row.author_id], {
+						version,
+						at: Date.now(),
+						kind: "reaction",
+						actor_name: call.actor.display_name,
+						seq: row.seq,
+						parent_seq: row.parent_id === null ? null : (this.message(row.parent_id)?.seq ?? null),
+						emoji,
+					});
+				}
 			} else {
 				this.sql.exec(
 					"DELETE FROM reactions WHERE message_id = ? AND emoji = ? AND principal_id = ?",
@@ -1971,11 +2168,168 @@ export class ChatRoomDO extends DurableObject<Env> {
 	folderName(call: RoomCall): { name: string } | Refusal {
 		const room = this.room();
 		if (!room || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
-		if (room.kind === "dm") {
+		if (room.kind === "dm" && room.name === null) {
 			const peer = this.peerJson(room, call.actor.principal_id);
 			return { name: peer ? (JSON.parse(peer) as ActorRecord).display_name : "Direct message" };
 		}
 		return { name: room.name ?? "Room" };
+	}
+
+	/** Return only live messages the caller can read, with the parent positions for links to replies. */
+	markedMessages(call: RoomCall, ids: string[]) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const rows = this.all<MessageRow>(
+			"SELECT m.* FROM messages m JOIN json_each(?) ids ON m.id = ids.value WHERE m.deleted_at IS NULL",
+			JSON.stringify(ids),
+		);
+		return this.markedPage(call.roomId, rows);
+	}
+
+	private markedPage(roomId: string, rows: MessageRow[]) {
+		const parents = this.all<{ id: string; seq: number }>(
+			"SELECT id, seq FROM messages WHERE id IN (SELECT value FROM json_each(?))",
+			JSON.stringify(rows.flatMap((row) => (row.parent_id ? [row.parent_id] : []))),
+		);
+		return {
+			messages: this.messageRecords(roomId, rows),
+			parent_seqs: Object.fromEntries(parents.map((parent) => [parent.id, parent.seq])) as Record<string, number>,
+		};
+	}
+
+	pinMessage(call: RoomCall, id: string, pinned: boolean) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if (opened.room.archived) return refuse("conflict", "This room is archived.");
+		const row = this.message(id);
+		if (!row || row.deleted_at !== null) return refuse("not_found", NO_MESSAGE);
+		if (pinned) this.sql.exec("INSERT OR IGNORE INTO message_pins(seq) VALUES(?)", row.seq);
+		else this.sql.exec("DELETE FROM message_pins WHERE seq = ?", row.seq);
+		return { ok: true as const };
+	}
+
+	listPins(call: RoomCall, before: number, limit: number) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		const rows = this.all<MessageRow>(
+			`SELECT m.* FROM message_pins p JOIN messages m ON m.seq = p.seq
+			 WHERE p.seq < ? AND m.deleted_at IS NULL ORDER BY p.seq DESC LIMIT ?`,
+			before,
+			limit + 1,
+		);
+		return { ...this.markedPage(call.roomId, rows.slice(0, limit)), has_more: rows.length > limit };
+	}
+
+	private checkComposer(call: RoomCall, parent: string | null) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		if (parent !== null) {
+			const thread = this.threadParent(parent);
+			if ("error" in thread) return thread;
+			if (thread.parent.deleted_at !== null) return refuse("not_found", NO_MESSAGE);
+		}
+		return opened;
+	}
+
+	getDraft(call: RoomCall, parent: string | null) {
+		const opened = this.checkComposer(call, parent);
+		if ("error" in opened) return opened;
+		const row = this.one<{ revision: number; body_json: string | null }>(
+			"SELECT revision,body_json FROM chat_drafts WHERE principal_id=? AND parent_id=?",
+			call.actor.principal_id,
+			parent ?? "",
+		);
+		return { revision: row?.revision ?? 0, body: row?.body_json ? (JSON.parse(row.body_json) as ChatBody) : null };
+	}
+
+	setDraft(call: RoomCall, parent: string | null, body: ChatBody | null, revision: number) {
+		const current = this.getDraft(call, parent);
+		if ("error" in current) return current;
+		const json = JSON.stringify(body);
+		if (json === JSON.stringify(current.body)) return current;
+		if (revision !== current.revision)
+			return refuse("conflict", "Another device changed the draft. Read the current revision.");
+		this.sql.exec(
+			`INSERT INTO chat_drafts(principal_id,parent_id,revision,body_json) VALUES(?,?,?,?)
+			ON CONFLICT(principal_id,parent_id) DO UPDATE SET revision=excluded.revision,body_json=excluded.body_json`,
+			call.actor.principal_id,
+			parent ?? "",
+			revision + 1,
+			body === null ? null : json,
+		);
+		return { body, revision: revision + 1 };
+	}
+
+	async scheduleMessage(call: RoomCall, input: ScheduledInput) {
+		const opened = this.checkComposer(call, input.parentId);
+		if ("error" in opened) return opened;
+		const result = queueScheduled(
+			this.ctx.storage,
+			call.actor.principal_id,
+			input,
+			postRefusal(opened.room, opened.member),
+		);
+		if (!("error" in result)) await this.schedule();
+		return result;
+	}
+
+	listScheduled(call: RoomCall) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return scheduledFor(this.sql, call.actor.principal_id);
+	}
+
+	cancelScheduled(call: RoomCall, id: string) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return {
+			canceled:
+				this.sql.exec(
+					"DELETE FROM scheduled_messages WHERE message_id=? AND principal_id=?",
+					id,
+					call.actor.principal_id,
+				).rowsWritten > 0,
+		};
+	}
+
+	createIncomingHook(call: RoomCall, binding: CredentialBinding, label: string) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return createHook(this.sql, binding, label) ?? refuse("conflict", "Remove one of your ten incoming hooks first.");
+	}
+
+	listIncomingHooks(call: RoomCall) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return {
+			hooks: this.all<{ id: string; label: string }>(
+				"SELECT id, label FROM incoming_hooks WHERE owner = ? ORDER BY id",
+				call.actor.principal_id,
+			),
+		};
+	}
+
+	deleteIncomingHook(call: RoomCall, id: string) {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return {
+			deleted:
+				this.sql.exec("DELETE FROM incoming_hooks WHERE id = ? AND owner = ?", id, call.actor.principal_id)
+					.rowsWritten > 0,
+		};
+	}
+
+	/** The Worker uses the secret only to verify the signature. */
+	incomingHook(id: string) {
+		if (!this.hasTables) return null;
+		const hook = this.one<{ secret: string; actor_json: string; credential_kind: CredentialBinding["kind"] }>(
+			`SELECT h.secret, m.actor_json, json_extract(h.binding_json,'$.kind') AS credential_kind
+			FROM incoming_hooks h JOIN members m ON m.principal_id = h.owner WHERE h.id = ?`,
+			id,
+		);
+		return hook
+			? { secret: hook.secret, actor: JSON.parse(hook.actor_json) as ActorRecord, credential: hook.credential_kind }
+			: null;
 	}
 
 	/** Adds a message. The room is then read for its author. */
@@ -1983,6 +2337,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		input: {
 			id: string;
+			scheduled?: boolean;
+			forwardedFrom?: NonNullable<ChatMessage["forwarded_from"]>;
+			untrusted?: true | undefined;
+			buttons?: NonNullable<ChatMessage["buttons"]>;
+			actionId?: string;
+			incomingHook?: IncomingDelivery;
 			content: MessageContent;
 			/** The key of the room for a retry: the caller and the key of the client. */
 			idempotency?: { key: string; requestHash: string } | undefined;
@@ -2000,8 +2360,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 	): Promise<{ message: MessageRecord; parent: MessageRecord | null; duplicate: boolean } | Refusal> {
 		// Hold room calls until the subscription boundary and message commit agree on their order.
 		const posted = await this.ctx.blockConcurrencyWhile(async () => {
+			if (
+				input.scheduled &&
+				!this.one(
+					"SELECT 1 FROM scheduled_messages WHERE message_id=? AND principal_id=?",
+					input.id,
+					call.actor.principal_id,
+				)
+			)
+				return refuse("not_found", "The scheduled message was canceled.");
 			const opened = this.openAsMember(call);
 			if ("error" in opened) return opened;
+			const hook = input.incomingHook
+				? await authorizeHook(this.sql, this.env.DIRECTORY, input.incomingHook, call.actor.principal_id)
+				: null;
+			if (input.incomingHook && !hook) return refuse("unauthenticated", "The incoming hook is no longer valid.");
 			const now = Date.now();
 			if (input.idempotency) {
 				const earlier = this.one<{ request_hash: string; message_id: string }>(
@@ -2017,6 +2390,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 					return { message: this.messageRecord(opened.room.room_id, row), parent: null, duplicate: true };
 				}
 			}
+			const blocked = postRefusal(opened.room, opened.member);
+			if (blocked) return blocked;
 			// A thread has one level, and a deleted message takes no new reply.
 			const parent = input.parentId === null ? null : this.message(input.parentId);
 			if (input.parentId !== null && !parent)
@@ -2026,12 +2401,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 			}
 			if (parent && parent.deleted_at !== null)
 				return refuse("invalid", "The message is deleted, so it takes no reply.");
+			const button =
+				input.actionId && parent?.buttons_json
+					? (JSON.parse(parent.buttons_json) as NonNullable<ChatMessage["buttons"]>).find(
+							(item) => item.id === input.actionId,
+						)
+					: null;
+			if (input.actionId && (!button || !parent || !this.member(parent.author_id))) {
+				return refuse("invalid", "This card cannot receive that action.");
+			}
 			const inRoomList = parent === null || input.alsoInRoom;
-			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
+			const subscriptionSequence = hook?.boundary ?? (await chatWebhookBoundary(this.env.DIRECTORY));
 			// A retry with the same key returned above: it adds no message, so it uses no allowance.
 			const limited = this.spendAllowance(call, now);
 			if (limited) return limited;
-			const content = await this.mentionedContent(opened.room, input.content);
+			// External text and button labels cannot notify a person or a group.
+			const content = button
+				? { text: button.label, body: textBody(button.label) }
+				: input.incomingHook || input.forwardedFrom
+					? input.content
+					: await this.mentionedContent(opened.room, input.content);
 			if ("error" in content) return content;
 			const files = input.files ?? [];
 			if (content.text.trim() === "" && files.length === 0) return refuse("invalid", EMPTY_MESSAGE);
@@ -2041,14 +2430,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 			// client that gets the two events in that order has each version of the room.
 			const version = opened.room.version + (parent ? 2 : 1);
 			const bodyJson = JSON.stringify(content.body);
+			const authorRead = !input.incomingHook && !input.scheduled;
 			this.ctx.storage.transactionSync(() => {
+				if (input.scheduled) this.sql.exec("DELETE FROM scheduled_messages WHERE message_id=?", input.id);
 				const seq = this.one<{ seq: number }>(
 					`INSERT INTO messages (id, author_id, author_json, text, body_json, created_at, version, idempotency_key,
-						parent_id, also_in_room, has_link)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+						parent_id, also_in_room, has_link, untrusted, buttons_json, action_id, forwarded_from_json)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 					input.id,
 					call.actor.principal_id,
-					JSON.stringify(call.actor),
+					JSON.stringify(hook?.author ?? call.actor),
 					content.text,
 					bodyJson,
 					now,
@@ -2057,26 +2448,32 @@ export class ChatRoomDO extends DurableObject<Env> {
 					parent?.id ?? null,
 					parent && input.alsoInRoom ? 1 : 0,
 					hasLink(content.text, bodyJson) ? 1 : 0,
+					input.incomingHook || input.untrusted ? 1 : 0,
+					input.buttons ? JSON.stringify(input.buttons) : null,
+					input.actionId ?? null,
+					input.forwardedFrom ? JSON.stringify(input.forwardedFrom) : null,
 				)?.seq as number;
 				this.indexMessage(seq, content);
 				// A reply that is not in the room list leaves the room list as it was: its last message, its
 				// activity and the read markers.
 				if (inRoomList) {
 					this.sql.exec("UPDATE room SET last_seq = ?, last_message_at = ? WHERE id = 1", seq, now);
-					this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
+					// A signed webhook can post for its owner. Only an interactive post advances the read marker.
+					if (authorRead)
+						this.sql.exec("UPDATE members SET last_read_seq = ? WHERE principal_id = ?", seq, call.actor.principal_id);
 				}
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", version);
 				if (parent) {
 					this.addToThread(parent, call.actor, now, version - 1);
 					// The first reply makes the parent a message of a thread, which a search filter reads.
 					if (parent.reply_count === 0) this.touchSearch(parent.seq);
-					this.followOnReply(parent, call.actor.principal_id, seq, mentionIds(content.body));
+					this.followOnReply(parent, call.actor.principal_id, authorRead ? seq : 0, mentionIds(content.body));
 					// Each follow of the thread keeps the time of its newest reply, for `followedThreads`.
 					this.sql.exec("UPDATE thread_follows SET last_reply_at = ? WHERE parent_id = ?", now, parent.id);
 				}
 				this.setMentions(seq, call.actor.principal_id, content.body, inRoomList);
 				if (files.length > 0) this.setFiles(input.id, files);
-				this.setLinks(input.id, [], extractLinks(content.body), input.linkOrigin ?? null);
+				if (!input.forwardedFrom) this.setLinks(input.id, [], extractLinks(content.body), input.linkOrigin ?? null);
 				if (input.idempotency) {
 					this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
 					this.sql.exec(
@@ -2135,6 +2532,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
 			const opened = this.openAsMember(call);
 			if ("error" in opened) return opened;
+			if (opened.room.archived) return refuse("conflict", "This room is archived.");
 			const subscriptionSequence = await chatWebhookBoundary(this.env.DIRECTORY);
 			const row = this.message(messageId);
 			const room = this.room();
@@ -2143,6 +2541,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("forbidden", "You can change only a message that you wrote.");
 			}
 			if (row.deleted_at !== null) return refuse("invalid", "The message is deleted, so it cannot change.");
+			if (row.forwarded_from_json) return refuse("forbidden", "A forwarded copy keeps the text of its source.");
+			if (row.untrusted || row.action_id)
+				return refuse("forbidden", "An incoming message or a recorded button click cannot change.");
 			const storedBody = row.body_json ?? JSON.stringify(textBody(row.text));
 			const content =
 				input === null
@@ -2201,6 +2602,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					actorId: call.actor.principal_id,
 					authorId: row.author_id,
 					body: content.body,
+					previousBody: JSON.parse(storedBody) as ChatBody,
 					version,
 					now,
 					subscriptionSequence,
@@ -2253,6 +2655,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		// A non-member reads a public room only while the directory has it, as for `get`. A fresh start of
 		// the directory leaves old room objects, and they stay closed.
 		if (!opened.member && !(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
+		const current = this.open(call, "visible");
+		if ("error" in current) return current;
 		if (!this.message(messageId)) return refuse("not_found", NO_MESSAGE);
 		const rows = this.sql
 			.exec<{ version: number; text: string; body_json: string | null; written_at: number; replaced_at: number }>(
@@ -2269,6 +2673,66 @@ export class ChatRoomDO extends DurableObject<Env> {
 				replaced_at: row.replaced_at,
 			})),
 		};
+	}
+
+	/** Clear all copies of a message in the same transaction as the change to its version. */
+	private eraseMessage(row: MessageRow, now: number, version: number): number {
+		const messageId = row.id;
+		this.sql.exec(
+			// The key goes with the text: an author can make a key from the content of the message.
+			`UPDATE messages SET forwarded_from_json = NULL, text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ?,
+						has_link = 0 WHERE id = ?`,
+			now,
+			version,
+			messageId,
+		);
+		this.indexMessage(row.seq, null);
+		if (row.parent_id !== null) {
+			this.refreshThread(row.parent_id, version + 1);
+			// A parent without replies is no message of a thread now, which a search filter reads.
+			const parent = this.message(row.parent_id);
+			if (parent && parent.reply_count === 0) this.touchSearch(parent.seq);
+		}
+		// A deleted message keeps no reaction, no mention, no file, no link preview and no earlier version.
+		this.setFiles(messageId, []);
+		this.setLinks(messageId, parseLinks(row.links_json), [], null);
+		this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
+		this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
+		this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
+		this.sql.exec("UPDATE room SET version = ? WHERE id = 1", row.parent_id === null ? version : version + 1);
+		return row.parent_id === null ? version : version + 1;
+	}
+
+	/** A bounded pass lets a busy room accept calls between retention batches. */
+	private async expireMessages(): Promise<void> {
+		const room = this.room();
+		if (!room || room.retention_days === null) return;
+		const now = Date.now();
+		const rows = room.deleted
+			? this.all<MessageRow>("SELECT * FROM messages ORDER BY seq LIMIT 25")
+			: this.all<MessageRow>(
+					"SELECT * FROM messages WHERE deleted_at IS NULL AND created_at <= ? ORDER BY created_at, seq LIMIT 25",
+					now - room.retention_days * ROOM_DAY_MS,
+				);
+		if (!rows.length) return;
+		const changed = new Set<string>();
+		this.ctx.storage.transactionSync(() => {
+			let version = room.version;
+			for (const row of rows) {
+				if (row.deleted_at === null) version = this.eraseMessage(row, now, version + 1);
+				if (room.deleted) {
+					this.sql.exec("DELETE FROM messages WHERE seq = ?", row.seq);
+					continue;
+				}
+				changed.add(row.id);
+				if (row.parent_id) changed.add(row.parent_id);
+			}
+			if (!room.deleted) this.roomChanged("");
+		});
+		if (this.ctx.getWebSockets().length) {
+			const events = [...changed].map((id) => this.message(id) as MessageRow).sort((a, b) => a.version - b.version);
+			for (const row of events) await this.publish(messageEvent(this.messageRecord(room.room_id, row)));
+		}
 	}
 
 	/** Deletes the text of a message. Its author and the owner of the room can do this. */
@@ -2291,28 +2755,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			const version = room.version + 1;
 			const now = Date.now();
 			this.ctx.storage.transactionSync(() => {
-				this.sql.exec(
-					// The key goes with the text: an author can make a key from the content of the message.
-					`UPDATE messages SET text = '', body_json = NULL, idempotency_key = NULL, deleted_at = ?, version = ?,
-						has_link = 0 WHERE id = ?`,
-					now,
-					version,
-					messageId,
-				);
-				this.indexMessage(row.seq, null);
-				if (row.parent_id !== null) {
-					this.refreshThread(row.parent_id, version + 1);
-					// A parent without replies is no message of a thread now, which a search filter reads.
-					const parent = this.message(row.parent_id);
-					if (parent && parent.reply_count === 0) this.touchSearch(parent.seq);
-				}
-				// A deleted message keeps no reaction, no mention, no file, no link preview and no earlier version.
-				this.setFiles(messageId, []);
-				this.setLinks(messageId, parseLinks(row.links_json), [], null);
-				this.sql.exec("DELETE FROM reactions WHERE message_id = ?", messageId);
-				this.sql.exec("DELETE FROM mentions WHERE seq = ?", row.seq);
-				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
-				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", row.parent_id === null ? version : version + 1);
+				this.eraseMessage(row, now, version);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent({
 					room,
@@ -2625,6 +3068,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const at = Date.now();
 		const sent = this.sql.exec(
 			`UPDATE members SET last_typed_at = ? WHERE principal_id = ?
+			AND EXISTS (SELECT 1 FROM room WHERE archived = 0 AND (posting = 'members' OR members.role = 'owner'))
 			AND (last_typed_at IS NULL OR last_typed_at <= ?)`,
 			at,
 			member,
@@ -2809,14 +3253,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** Sets the alarm to the first row of the outbox, or removes the alarm when the outbox is empty. */
 	private async schedule(): Promise<void> {
-		const next =
-			this.one<{ at: number | null }>(
-				`SELECT MIN(next_attempt_at) AS at FROM (SELECT next_attempt_at FROM outbox
-				UNION ALL SELECT next_attempt_at FROM webhook_outbox UNION ALL SELECT next_attempt_at FROM chat_notification_outbox
-				UNION ALL SELECT next_attempt_at FROM link_jobs)`,
-			)?.at ?? null;
-		if (next === null) await this.ctx.storage.deleteAlarm();
-		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+		const queued = this.one<{ at: number | null }>(`SELECT MIN(due) AS at FROM (
+			SELECT MIN(next_attempt_at) AS due FROM outbox UNION ALL
+			SELECT MIN(next_attempt_at) FROM scheduled_messages UNION ALL
+			SELECT MIN(next_attempt_at) FROM webhook_outbox UNION ALL
+			SELECT MIN(next_attempt_at) FROM chat_notification_outbox UNION ALL
+			SELECT MIN(next_attempt_at) FROM link_jobs)`)?.at;
+		const retention = this.one<{ at: number | null }>(`SELECT CASE
+			WHEN deleted = 1 AND EXISTS (SELECT 1 FROM messages) THEN 0
+			WHEN deleted = 0 AND retention_days IS NOT NULL THEN retention_days * ${ROOM_DAY_MS}
+				+ (SELECT MIN(created_at) FROM messages WHERE deleted_at IS NULL)
+			END AS at FROM room`)?.at;
+		const next = Math.min(queued ?? Infinity, retention ?? Infinity);
+		if (Number.isFinite(next)) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+		else await this.ctx.storage.deleteAlarm();
 	}
 
 	/**
@@ -2859,10 +3309,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 	}
 
 	override async alarm(): Promise<void> {
+		if (!this.hasTables) return;
+		await this.expireMessages();
 		await this.flush();
 		await Promise.all([this.sendEventJobs("webhook_outbox"), this.sendEventJobs("chat_notification_outbox")]);
 		const room = this.room();
-		if (room) await this.sendLinkJobs(room.room_id);
+		if (room) {
+			await sendScheduled(this.sql, this.env.DIRECTORY, room.room_id, this);
+			await this.sendLinkJobs(room.room_id);
+		}
 		await this.sendSearchRows();
 		await this.schedule();
 	}
@@ -2927,12 +3382,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * a different member deleted the message: its reason is `author`, and never a mention of its own
 	 * message. Call this after the follows of a new reply are stored.
 	 */
-	private chatEventReasons(
-		kind: RoomKind,
-		body: ChatBody,
-		authorId: string,
-		parentId: string | null,
-	): (principalId: string) => ChatEventReason {
+	private chatEventAudience(kind: RoomKind, body: ChatBody, authorId: string, parentId: string | null) {
 		const mentioned = new Set(mentionIds(body));
 		const group = groupMentions(body).length > 0;
 		const followers = new Set(
@@ -2943,12 +3393,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 						parentId,
 					).map((row) => row.principal_id),
 		);
-		return (principalId) => {
+		const reasonOf = (principalId: string): ChatEventReason => {
 			if (principalId === authorId) return "author";
 			if (group || mentioned.has(principalId)) return "mention";
 			if (kind === "dm") return "dm";
 			return followers.has(principalId) ? "thread_reply" : "room";
 		};
+		return { reasonOf, followers };
 	}
 
 	/**
@@ -2965,12 +3416,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 		actorId: string;
 		authorId: string;
 		body: ChatBody;
+		previousBody?: ChatBody;
 		version: number;
 		now: number;
 		subscriptionSequence: number;
 		parentId: string | null;
 	}): void {
-		const reasonOf = this.chatEventReasons(event.room.kind, event.body, event.authorId, event.parentId);
+		const { reasonOf, followers } = this.chatEventAudience(event.room.kind, event.body, event.authorId, event.parentId);
 		const members = this.all<{ principal_id: string; membership_id: string; kind: ActorRecord["kind"] }>(
 			"SELECT principal_id, membership_id, json_extract(actor_json, '$.kind') AS kind FROM members WHERE principal_id != ?",
 			event.actorId,
@@ -3023,6 +3475,44 @@ export class ChatRoomDO extends DurableObject<Env> {
 				JSON.stringify(ids),
 			);
 		}
+		if (event.eventType !== "chat.message.deleted") {
+			const message = this.message(event.messageId) as MessageRow;
+			const parentSeq = event.parentId === null ? null : (this.message(event.parentId)?.seq ?? null);
+			const base = {
+				version: event.version,
+				at: event.now,
+				seq: message.seq,
+				parent_seq: parentSeq,
+				actor_name: (JSON.parse(message.author_json) as ActorRecord).display_name,
+				emoji: null,
+			};
+			const mentions = addressed.get("mention") ?? [];
+			if (event.previousBody) {
+				const previous = new Set(mentionIds(event.previousBody));
+				this.sql.exec(
+					`DELETE FROM member_activity WHERE seq = ? AND kind = 'mention'
+					AND principal_id NOT IN (SELECT value FROM json_each(?))`,
+					message.seq,
+					JSON.stringify(mentions),
+				);
+				if (groupMentions(event.previousBody).length === 0) {
+					addActivity(
+						this.sql,
+						mentions.filter((id) => !previous.has(id)),
+						{ ...base, kind: "mention" },
+					);
+				}
+			} else {
+				addActivity(this.sql, mentions, { ...base, kind: "mention" });
+				const replies = recipients.filter((member) => member.reason !== "mention" && followers.has(member.id));
+				addActivity(
+					this.sql,
+					replies.map((member) => member.id),
+					{ ...base, kind: "reply" },
+				);
+			}
+		}
+
 		const job: ChatWebhookEventJob = {
 			v: 1,
 			kind: "chat_event",
@@ -3277,24 +3767,24 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * The statement that brings one row of the index to the current state. A row is written only while
-	 * its principal is in the directory and not deleted: the creator for the room, the member for a
-	 * member. After a fresh start of the directory, the rooms from before have no such principal, so
-	 * they stay out of the new index.
+	 * its principal belongs to the current directory. Keep deleted principals in the index until
+	 * an administrator removes their memberships. A fresh directory contains none of the old principals.
 	 */
 	private indexStatement(room: RoomRow, target: string): D1PreparedStatement {
 		const db = this.env.DIRECTORY;
 		if (target === "room") {
+			if (room.deleted) return db.prepare("DELETE FROM chat_rooms WHERE id = ?").bind(room.room_id);
 			const creator = (JSON.parse(room.created_by_json) as ActorRecord).principal_id;
 			return db
 				.prepare(
 					`INSERT INTO chat_rooms (id, kind, name, name_key, topic, created_at, created_by_json, member_count,
-						last_seq, last_message_at, activity_at, version)
-					SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
-					WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?13 AND deleted_at IS NULL)
+						last_seq, last_message_at, activity_at, version, archived)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14
+					WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?13)
 					ON CONFLICT (id) DO UPDATE SET name = excluded.name, name_key = excluded.name_key,
 						topic = excluded.topic, member_count = excluded.member_count, last_seq = excluded.last_seq,
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
-						version = excluded.version`,
+						version = excluded.version, archived = excluded.archived`,
 				)
 				.bind(
 					room.room_id,
@@ -3310,6 +3800,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					room.last_message_at ?? room.created_at,
 					room.version,
 					creator,
+					room.archived,
 				);
 		}
 		const principalId = target.slice("member:".length);
@@ -3319,17 +3810,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 				.prepare("DELETE FROM chat_members WHERE principal_id = ? AND room_id = ?")
 				.bind(principalId, room.room_id);
 		}
-		const peer =
-			room.kind === "dm"
-				? (this.one<{ actor_json: string }>(
-						"SELECT actor_json FROM members WHERE principal_id <> ? LIMIT 1",
-						principalId,
-					)?.actor_json ?? null)
-				: null;
+		const peer = this.peerJson(room, principalId);
 		return db
 			.prepare(
 				`INSERT INTO chat_members (principal_id, room_id, role, last_read_seq, peer_json)
-				SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND deleted_at IS NULL)
+				SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?1)
 				ON CONFLICT (principal_id, room_id) DO UPDATE SET role = excluded.role,
 					last_read_seq = excluded.last_read_seq, peer_json = excluded.peer_json`,
 			)

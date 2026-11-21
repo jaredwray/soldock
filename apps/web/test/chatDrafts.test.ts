@@ -32,10 +32,11 @@ function textStore(storage: DraftStorage | null, owner: string) {
 	const store = createDraftStore(storage, owner);
 	return {
 		get: (roomId: string) => {
-			const body = store.get(roomId);
+			const body = store.get(roomId)?.body;
 			return body ? bodyText(body) : "";
 		},
-		set: (roomId: string, text: string) => store.set(roomId, text === "" ? null : textToBody(text)),
+		set: (roomId: string, text: string) =>
+			store.set(roomId, text === "" ? null : { body: textToBody(text), revision: 0, dirty: true }),
 	};
 }
 
@@ -214,8 +215,8 @@ describe("the drafts of the rooms", () => {
 			],
 		};
 		const storage = fakeStorage();
-		createDraftStore(storage, ADA).set("rm_1", body);
-		expect(createDraftStore(storage, ADA).get("rm_1")).toEqual(body);
+		createDraftStore(storage, ADA).set("rm_1", { body, revision: 2, dirty: true });
+		expect(createDraftStore(storage, ADA).get("rm_1")).toMatchObject({ body, revision: 2, dirty: true });
 		const old = fakeStorage({
 			[key]: JSON.stringify({
 				rm_1: { text: "Line one\nLine two", at: 1 },
@@ -228,11 +229,11 @@ describe("the drafts of the rooms", () => {
 		});
 		// A draft above the limit of a message stays, so the person can shorten it. Only the send waits.
 		const long = docToBody(bodyToDoc(textToBody(`${"a".repeat(8000)}😀b`)));
-		createDraftStore(storage, ADA).set("rm_2", long);
-		const kept = createDraftStore(storage, ADA).get("rm_2");
+		createDraftStore(storage, ADA).set("rm_2", { body: long, revision: 0, dirty: true });
+		const kept = createDraftStore(storage, ADA).get("rm_2")?.body;
 		expect(kept && bodyText(kept)).toBe(`${"a".repeat(8000)}😀b`);
 		const drafts = createDraftStore(old, ADA);
-		expect([drafts.get("rm_1"), drafts.get("rm_2"), drafts.get("rm_3")]).toEqual([
+		expect(["rm_1", "rm_2", "rm_3"].map((key) => drafts.get(key)?.body ?? null)).toEqual([
 			textToBody("Line one\nLine two"),
 			null,
 			null,

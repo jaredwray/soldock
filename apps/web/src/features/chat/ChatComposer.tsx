@@ -22,6 +22,7 @@ import { initials, plural } from "../../lib/format.ts";
 import { FormatToolbar, LinkDialog, placeholderPlugin, shortcut, type Tool } from "../mail/RichTextEditor.tsx";
 import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
 import { pasteTakesFiles } from "./attachments.ts";
+import { EmojiText, useCustomEmoji } from "./CustomEmoji.tsx";
 import {
 	composerKeys,
 	insertTypedEmoji,
@@ -90,7 +91,7 @@ const TOOLS: readonly Tool[] = [
 		run: toggleMark(marks.code),
 		pressed: (s) => isMarkActive(s, marks.code),
 	},
-	{ name: "Link", icon: "link", ...shortcut("K"), run: "link", groupStart: true },
+	{ name: "Link", icon: "link", ...shortcut("K", true), run: "link", groupStart: true },
 	{
 		name: "Bulleted list",
 		icon: "listBulleted",
@@ -117,9 +118,13 @@ const TOOLS: readonly Tool[] = [
 	},
 ];
 
+/** The shortcut list and the toolbar show the same keys on each operating system. */
+export const chatFormatShortcuts = TOOLS.map((tool) => [tool.hint, tool.name] as const);
+
 export interface ChatComposerHandle {
 	/** Empties the box. */
 	clear(): void;
+	replace(body: ChatBody | null): void;
 	focus(): void;
 }
 
@@ -196,9 +201,10 @@ export function ChatComposer({
 	const [linkTarget, setLinkTarget] = useState<LinkTarget | null>(null);
 	const [refocus, setRefocus] = useState(0);
 	// The callbacks of the newest render, for the keys and the changes of the view.
-	const callbacks = useRef({ onChange, onSubmit, onCancel, onFiles });
+	const catalog = useCustomEmoji();
+	const callbacks = useRef({ onChange, onSubmit, onCancel, onFiles, customEmoji: catalog.names });
 	useEffect(() => {
-		callbacks.current = { onChange, onSubmit, onCancel, onFiles };
+		callbacks.current = { onChange, onSubmit, onCancel, onFiles, customEmoji: catalog.names };
 	});
 
 	// The first props make the view once. Later changes to them do not make a new view.
@@ -208,7 +214,7 @@ export function ChatComposer({
 			doc: bodyToDoc(initial),
 			plugins: [
 				history(),
-				inputRules({ rules: [...markdownRules] }),
+				inputRules({ rules: markdownRules((name) => callbacks.current.customEmoji.has(name)) }),
 				keymap(
 					composerKeys(
 						() => {
@@ -245,7 +251,7 @@ export function ChatComposer({
 		: [];
 	// The groups come after the people, so the list keeps their place for one typed name.
 	const groups = typed ? groupSuggestions(typed.query, mentions.groups) : [];
-	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query) : [];
+	const emojiChoices = typedCode ? emojiSuggestions(typedCode.query, catalog.choices) : [];
 	const count = suggestions.length + groups.length + emojiChoices.length;
 	const open = count > 0;
 	// A typed mention whose list did not come yet: a plain Enter waits for it, so it takes the best suggestion
@@ -431,20 +437,18 @@ export function ChatComposer({
 		if (refocus > 0) viewRef.current?.focus();
 	}, [refocus]);
 
-	useImperativeHandle(ref, () => ({
-		clear() {
+	useImperativeHandle(ref, () => {
+		function replace(body: ChatBody | null) {
 			const view = viewRef.current;
 			if (!view) return;
-			const empty = EditorState.create({ doc: bodyToDoc(null), plugins: view.state.plugins });
+			const empty = EditorState.create({ doc: bodyToDoc(body), plugins: view.state.plugins });
 			view.updateState(empty);
 			stateRef.current = empty;
 			setEditorState(empty);
 			setListOpen(false);
-		},
-		focus() {
-			viewRef.current?.focus();
-		},
-	}));
+		}
+		return { replace, clear: () => replace(null), focus: () => viewRef.current?.focus() };
+	});
 
 	function run(tool: Tool) {
 		const view = viewRef.current;
@@ -572,7 +576,7 @@ export function ChatComposer({
 							onClick={() => choose(index)}
 						>
 							<span className="emoji-option-glyph" aria-hidden="true">
-								{choice.emoji}
+								<EmojiText text={choice.emoji} />
 							</span>
 							<span className="mention-name">{choice.name}</span>
 							<span className="mention-handle">:{emojiCode(choice)}:</span>

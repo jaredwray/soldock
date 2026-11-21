@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRoom } from "@asterra/contracts";
+import type { ChatMessage, ChatRoom, ChatRoomPolicy } from "@asterra/contracts";
 
 // The last list of each room that the page showed. A room that opens again shows that list at once,
 // before the answer of the server. It has no DOM and no network, so apps/web/test checks it.
@@ -9,6 +9,7 @@ const ROOMS_MAX = 20;
 /** The newest messages of a room, as the page showed them last. */
 export interface CachedRoom {
 	room: ChatRoom;
+	policy?: ChatRoomPolicy | null;
 	messages: ChatMessage[];
 	/** True when the room has messages before the first message of the list. */
 	hasOlder: boolean;
