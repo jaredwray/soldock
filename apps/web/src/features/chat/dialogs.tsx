@@ -533,9 +533,8 @@ export function RoomSettingsDialog({
 	onDetailsSaved(): void;
 }) {
 	const canEdit = room.kind !== "dm" && room.role === "owner";
-	const [acknowledged, setAcknowledged] = useState<{ before: ChatRoom; after: ChatRoom } | null>(null);
-	// The room version counts messages. Use the response until the room list supplies a new snapshot.
-	const saved = acknowledged?.before === room ? acknowledged.after : room;
+	const [confirmed, setConfirmed] = useState<{ details: ChatRoom; checked: ChatRoom } | null>(null);
+	const saved = confirmed?.details ?? room;
 	const [details, setDetails] = useState<{ initial: ChatRoom; name: string; topic: string } | null>(null);
 	const [session] = useState(accountChangeCount);
 	const mounted = useRef(false);
@@ -545,6 +544,25 @@ export function RoomSettingsDialog({
 			mounted.current = false;
 		};
 	}, []);
+	// A list can still have the old details after a save. Ask the room if a different name or topic is current.
+	// Check each new snapshot, because a later rename can restore the same name as an old snapshot.
+	useEffect(() => {
+		if (!confirmed || confirmed.checked === room) return;
+		if (room.name === confirmed.details.name && room.topic === confirmed.details.topic) return;
+		let obsolete = false;
+		void api.call("chat.get_room", { room_id: room.id }).then(
+			({ room: details }) => {
+				if (obsolete || !mounted.current || accountChangeCount() !== session) return;
+				setConfirmed((latest) => (latest === confirmed ? { details, checked: room } : latest));
+			},
+			() => {
+				// Keep the last confirmed details. The next room list starts another check.
+			},
+		);
+		return () => {
+			obsolete = true;
+		};
+	}, [confirmed, room, session]);
 	const { data, loading } = useNotificationSettings();
 	const [level, setLevel] = useState<RoomNotificationChoice>();
 	const [busy, setBusy] = useState(false);
@@ -586,7 +604,7 @@ export function RoomSettingsDialog({
 			if (detailsChanged) {
 				const result = await api.call("chat.update_room", { room_id: room.id, ...changes });
 				if (!current()) return;
-				setAcknowledged({ before: room, after: result.room });
+				setConfirmed({ details: result.room, checked: room });
 				setDetails(null);
 				detailsSaved = true;
 				onDetailsSaved();

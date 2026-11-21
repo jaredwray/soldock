@@ -121,3 +121,82 @@ test("a member sets personal notifications in a joined room and in a direct mess
 	expect(await read(member)).toMatchObject({ [room]: "none", [dm.id]: "none" });
 	expect(await read(owner)).not.toHaveProperty(room);
 });
+
+test("a delayed room list cannot undo a saved name, and a later rename can restore the previous name", async ({
+	device,
+}) => {
+	const person = await device("ingrid");
+	const first = unique("Initial name");
+	const earlier = unique("Name before save");
+	const saved = unique("Name after save");
+	const room = await createRoom(person, first);
+	const page = await person.newPage();
+	// Without the principal socket, the sidebar gets each snapshot from its list request.
+	await page.routeWebSocket("**/ws/events", () => {});
+	await openRoom(page, room);
+	await expect(
+		page.getByRole("navigation", { name: "Rooms" }).getByRole("link", { name: first }).first(),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Room settings" }).click();
+	const dialog = page.getByRole("dialog", { name: "Room settings" });
+	await dialog.getByRole("button", { name: "Edit room details" }).click();
+	await dialog.getByLabel("Room name", { exact: true }).fill(saved);
+	await dialog.getByRole("radio", { name: "Mentions only" }).check();
+
+	const readEarlier = Promise.withResolvers<void>();
+	const captured = Promise.withResolvers<void>();
+	const showEarlier = Promise.withResolvers<void>();
+	const resume = Promise.withResolvers<void>();
+	let waiting = true;
+	await page.route(
+		(url) => url.pathname === "/api/v1/chat/rooms",
+		async (route) => {
+			if (waiting) {
+				waiting = false;
+				await readEarlier.promise;
+				const response = await route.fetch();
+				captured.resolve();
+				await showEarlier.promise;
+				await route.fulfill({ response });
+			} else {
+				await resume.promise;
+				await route.continue();
+			}
+		},
+	);
+	const rename = async () => {
+		const response = await person.request.post(`/api/v1/chat/rooms/${room}/update`, {
+			headers: { origin: BASE_URL },
+			data: { name: earlier },
+		});
+		expect(response.ok()).toBe(true);
+		// Wait until the principal's list projects the rename before the browser reads that list.
+		await expect
+			.poll(async () => {
+				const list = await person.request.get("/api/v1/chat/rooms?limit=100");
+				const { rooms } = (await list.json()) as { rooms: Array<{ id: string; name: string | null }> };
+				return rooms.find((entry) => entry.id === room)?.name;
+			})
+			.toBe(earlier);
+	};
+	try {
+		await rename();
+		readEarlier.resolve();
+		await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+		await captured.promise;
+		await page.route(`**/api/v1/chat/rooms/${room}/notifications`, (route) => route.abort(), { times: 1 });
+		await dialog.getByRole("button", { name: "Save changes" }).click();
+		await expect(dialog.getByRole("alert")).toContainText("Room details saved.");
+		await expect(dialog.getByText(saved, { exact: true })).toBeVisible();
+		showEarlier.resolve();
+		await expect(page.locator(".chat-title")).toHaveText(earlier);
+		await expect(dialog.getByText(saved, { exact: true })).toBeVisible();
+		await rename();
+		resume.resolve();
+		await expect(dialog.getByText(earlier, { exact: true })).toBeVisible();
+	} finally {
+		readEarlier.resolve();
+		showEarlier.resolve();
+		resume.resolve();
+	}
+});
