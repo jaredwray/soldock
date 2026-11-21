@@ -132,6 +132,14 @@
 	font-size: 10px;
 }
 
+.chat-peer-detail,
+.chat-room-heading {
+	display: flex;
+	align-items: center;
+	gap: inherit;
+	min-width: 0;
+}
+
 .chat-title {
 	flex: 0 1 auto;
 	min-width: 0;
@@ -143,8 +151,7 @@
 	white-space: nowrap;
 }
 
-.chat-header > .kind,
-.chat-header > .icon-button {
+.chat-peer-detail {
 	flex: none;
 }
 
@@ -1183,36 +1190,57 @@ a.chat-author:hover {
 	}
 }
 
-/* A phone: the topic is under the name of the room, so the two have the full width. */
+/* Keep the title and its star together. The topic or peer status fits below them. */
 @media (max-width: 600px) {
-	.chat-header:has(.chat-topic) {
+	.chat-header:has(.chat-room-heading) {
 		display: grid;
 		grid-template-columns: auto minmax(0, 1fr) auto;
-		grid-template-rows: auto auto;
+		grid-template-areas:
+			"mark heading actions"
+			"mark detail actions";
 		align-content: center;
 		column-gap: 8px;
 		row-gap: 0;
 	}
 
-	.chat-header:has(.chat-topic) > .icon,
-	.chat-header:has(.chat-topic) > .chat-header-actions {
-		grid-row: 1 / span 2;
-		align-self: center;
+	.chat-header > .icon,
+	.chat-header-avatar {
+		grid-area: mark;
 	}
 
-	.chat-header:has(.chat-topic) > .chat-title {
-		grid-area: 1 / 2;
-		line-height: 22px;
+	.chat-room-heading {
+		grid-area: heading;
 	}
 
-	.chat-header:has(.chat-topic) > .chat-topic {
-		grid-area: 2 / 2;
+	.chat-peer-detail,
+	.chat-topic {
+		grid-area: detail;
+	}
+
+	.chat-topic {
 		font-size: 12px;
 		line-height: 16px;
 	}
 
-	.chat-header:has(.chat-topic) > .chat-header-actions {
-		grid-column: 3;
+	.chat-header-actions {
+		grid-area: actions;
+	}
+}
+
+/* Give the name of a peer the full first row on small phones. */
+@media (max-width: 440px) {
+	.chat-header:has(.chat-peer-detail) {
+		grid-template-areas:
+			"mark heading heading"
+			"detail detail actions";
+	}
+}
+
+@media (max-width: 359px) {
+	.chat-header:has(.chat-room-heading) {
+		grid-template-areas:
+			"mark heading heading"
+			"detail detail actions";
 	}
 }
 
@@ -2325,4 +2353,162 @@ a.chat-author:hover {
 
 .chat-shortcuts dd {
 	margin: 0;
+}
+
+.dialog.room-settings {
+	--room-inset: clamp(20px, 5vw, 24px);
+	width: min(472px, calc(100vw - 32px));
+}
+
+.room-settings .dialog-header {
+	align-items: center;
+	padding: var(--room-inset) var(--room-inset) 0;
+}
+
+.room-settings .dialog-title {
+	font-size: 20px;
+}
+
+.room-settings .dialog-body {
+	padding: 18px var(--room-inset) 0;
+}
+
+.room-detail-summary {
+	display: grid;
+	grid-template-columns: 18px minmax(0, 1fr) auto;
+	align-items: start;
+	gap: 10px;
+}
+
+.room-detail-summary > .icon {
+	margin-top: 2px;
+	color: var(--muted-foreground);
+}
+
+.room-detail-text {
+	overflow-wrap: anywhere;
+}
+
+.room-detail-text strong {
+	font-weight: 600;
+}
+
+.room-setting-hint {
+	display: block;
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+.room-detail-text .room-setting-hint {
+	margin-top: 4px;
+	white-space: pre-wrap;
+}
+
+.room-detail-summary .button {
+	margin-top: -5px;
+}
+
+.room-detail-fields {
+	display: grid;
+	gap: 14px;
+}
+
+.room-detail-fields .input {
+	padding: 9px 12px;
+	box-shadow: none;
+}
+
+.room-detail-fields .input:focus-visible {
+	border-color: transparent;
+	outline: 2px solid var(--ring);
+	outline-offset: -1px;
+	box-shadow: none;
+}
+
+.room-detail-fields textarea {
+	resize: vertical;
+}
+
+.room-setting-notifications {
+	margin-top: 20px;
+	padding-top: 20px;
+	border-top: 1px solid var(--border);
+}
+
+.room-setting-notifications h3 {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 4px;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 22px;
+}
+
+.room-setting-notifications > .room-setting-hint {
+	padding-inline-start: 26px;
+}
+
+.room-notification-choices {
+	min-width: 0;
+	margin: 12px 0 0;
+	padding: 0;
+	border: 0;
+}
+
+.room-notification-choice {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	min-height: 44px;
+	padding: 10px 0;
+	cursor: pointer;
+}
+
+.room-notification-choice input {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	margin: 0;
+	align-self: flex-start;
+	margin-top: 2px;
+	accent-color: var(--primary);
+}
+
+.room-notification-choice .room-setting-hint {
+	margin-top: 2px;
+}
+
+@media (min-width: 480px) {
+	.room-notification-default {
+		display: flex;
+		flex: 1;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.room-notification-default .room-setting-hint {
+		margin-top: 0;
+	}
+}
+
+.room-settings .button-primary:disabled {
+	background: var(--hover);
+	color: var(--muted-foreground);
+	opacity: 1;
+}
+
+.room-settings .dialog-actions {
+	padding: 24px var(--room-inset) var(--room-inset);
+}
+
+@media (pointer: coarse) {
+	.room-settings .button,
+	.room-settings .dialog-header .icon-button {
+		min-width: 44px;
+		min-height: 44px;
+	}
 }

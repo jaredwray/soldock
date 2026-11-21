@@ -58,7 +58,6 @@ import {
 import { Presence } from "./Presence.tsx";
 import { CommandHelp, IncomingHooks } from "./RoomBots.tsx";
 import { RoomControls } from "./RoomControls.tsx";
-import { RoomNotificationButton } from "./RoomNotifications.tsx";
 import { roomCommand, runRoomCommand } from "./roomCommands.ts";
 import { postingNotice, RoomArchiveContext } from "./roomPolicy.ts";
 import { useChatShortcut } from "./searchKeys.ts";
@@ -866,18 +865,23 @@ export function RoomView({
 				) : (
 					<Icon name={room.kind === "private" ? "lock" : "hash"} size={22} />
 				)}
-				<h1 className="chat-title">
-					{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
-					{title}
-				</h1>
-				{room.peer && <Presence id={room.peer.principal_id} compact />}
-				{room.kind === "dm" && room.peer?.kind === "agent" && <span className="kind kind-agent">agent</span>}
-				{room.role !== null && (
-					<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
+				<div className="chat-room-heading">
+					<h1 className="chat-title">
+						{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
+						{title}
+					</h1>
+					{room.role !== null && (
+						<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
+					)}
+				</div>
+				{room.peer && (
+					<span className="chat-peer-detail">
+						<Presence id={room.peer.principal_id} compact />
+						{room.peer.kind === "agent" && <span className="kind kind-agent">agent</span>}
+					</span>
 				)}
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
-					{isMember && <RoomNotificationButton roomId={roomId} />}
 					{view.policy && isMember && (
 						<button
 							type="button"
@@ -886,7 +890,7 @@ export function RoomView({
 							aria-label="Room controls"
 							onClick={() => setDialog({ type: "controls" })}
 						>
-							<Icon name="settings" />
+							<Icon name="shield" />
 						</button>
 					)}
 					{isMember && <RoomMessagesButton roomId={roomId} />}
@@ -912,15 +916,15 @@ export function RoomView({
 						<Icon name="team" />
 						{room.member_count}
 					</button>
-					{room.role === "owner" && !view.policy?.archived && (
+					{isMember && (
 						<button
 							type="button"
 							className="icon-button"
-							aria-label="Change the name and the topic"
-							title="Change the name and the topic"
+							aria-label="Room settings"
+							title="Room settings"
 							onClick={() => setDialog({ type: "settings" })}
 						>
-							<Icon name="pencil" />
+							<Icon name="settings" />
 						</button>
 					)}
 				</span>
@@ -1212,15 +1216,8 @@ export function RoomView({
 					}}
 				/>
 			)}
-			{dialog?.type === "settings" && (
-				<RoomSettingsDialog
-					room={room}
-					onClose={() => setDialog(null)}
-					onSaved={() => {
-						setDialog(null);
-						void onRoomsChanged();
-					}}
-				/>
+			{dialog?.type === "settings" && isMember && (
+				<RoomSettingsDialog room={room} onClose={() => setDialog(null)} onDetailsSaved={() => void onRoomsChanged()} />
 			)}
 			{dialog?.type === "edits" &&
 				(() => {
