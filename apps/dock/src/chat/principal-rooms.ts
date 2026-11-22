@@ -10,8 +10,6 @@ import type { ListInput, RoomPage } from "./room-index.ts";
 const SEED_PARALLEL = 25;
 /** The most rooms that the first fill asks in one request. */
 const SEED_MAX = 200;
-/** The parts of the fill that the list of a limited token does before its page: at most 1,000 rooms. */
-const LIMITED_FILL_PARTS = 5;
 
 function principalStub(env: Pick<Env, "PRINCIPAL">, principalId: string) {
 	return env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId));
@@ -73,9 +71,24 @@ export async function seedJoinedRooms(env: Env, principalId: string): Promise<Po
 	const activity = new Map(results.map((row) => [row.room_id, row.activity_at]));
 	const unknown = await principal.unknownChatRooms(results.map((row) => row.room_id));
 	const asked = unknown.slice(0, SEED_MAX);
+	const failed = await askRooms(env, principalId, asked);
+	if (failed === 0 && asked.length === unknown.length) {
+		await principal.seedChat([], true);
+		return null;
+	}
+	const last = asked[asked.length - 1] as string;
+	return { activityAt: activity.get(last) ?? 0, roomId: last };
+}
+
+/**
+ * Asks each room for the state of the principal, and keeps the answers in its `PrincipalDO`. A room that
+ * does not answer stays unknown, and a later fill asks it again. Returns the count of those rooms.
+ */
+async function askRooms(env: Env, principalId: string, roomIds: readonly string[]): Promise<number> {
+	const principal = principalStub(env, principalId);
 	let failed = 0;
-	for (let start = 0; start < asked.length; start += SEED_PARALLEL) {
-		const part = asked.slice(start, start + SEED_PARALLEL);
+	for (let start = 0; start < roomIds.length; start += SEED_PARALLEL) {
+		const part = roomIds.slice(start, start + SEED_PARALLEL);
 		const answers = await Promise.allSettled(
 			part.map((roomId) => env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).stateFor(principalId)),
 		);
@@ -87,12 +100,17 @@ export async function seedJoinedRooms(env: Env, principalId: string): Promise<Po
 		await principal.seedChat(states, false);
 	}
 	if (failed > 0) log("warn", "chat principal fill: rooms did not answer", { rooms: failed });
-	if (failed === 0 && asked.length === unknown.length) {
-		await principal.seedChat([], true);
-		return null;
-	}
-	const last = asked[asked.length - 1] as string;
-	return { activityAt: activity.get(last) ?? 0, roomId: last };
+	return failed;
+}
+
+/**
+ * The fill for the list of a token with resource limits: only the listed rooms that the object does not
+ * have yet, at most `TOKEN_RESOURCE_LIMITS.perKind` calls. The list of the token has no other room, so the
+ * page needs no other state, and gives no cursor to a place of the whole fill.
+ */
+async function seedListedRooms(env: Env, principalId: string, roomIds: readonly string[]): Promise<void> {
+	const unknown = await principalStub(env, principalId).unknownChatRooms(roomIds);
+	await askRooms(env, principalId, unknown);
 }
 
 /** A place in the joined list: the newest activity first, then the highest id. */
@@ -135,11 +153,8 @@ export async function listJoinedRooms(
 	let reached: Position | null = null;
 	if (!listed.seeded && input.ids != null) {
 		// The place of the fill can be a room outside the list of a limited token, so a limited list gives no
-		// cursor to it. It does the fill first, in a few parts. A room that the fill did not reach in these
-		// parts shows in a later list.
-		for (let part = 0; part < LIMITED_FILL_PARTS; part++) {
-			if ((await seedJoinedRooms(env, principalId)) === null) break;
-		}
+		// cursor to it. It fills its listed rooms only, and lists them all.
+		await seedListedRooms(env, principalId, input.ids);
 		listed = await principal.listChatRooms(query);
 	} else if (!listed.seeded) {
 		reached = await seedJoinedRooms(env, principalId);

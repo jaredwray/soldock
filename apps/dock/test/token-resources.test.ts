@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { EVENTS_SOCKET_PATH, type TokenResources } from "@asterra/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -217,6 +218,24 @@ describe("a limited token", () => {
 			rooms: [{ id: r1.id }],
 			next_cursor: null,
 		});
+		// Before the first fill of the object of the account, the list asks only its listed room, so one request
+		// stays inside the subrequest limit. The page still has the room, and no cursor.
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(service.id));
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM chat_rooms");
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'chat_seeded'");
+		});
+		expect(await token.call("chat.list_rooms", { limit: 1 })).toMatchObject({
+			rooms: [{ id: r1.id }],
+			next_cursor: null,
+		});
+		const filled = await runInDurableObject(principal, (_instance, state) =>
+			state.storage.sql
+				.exec<{ room_id: string }>("SELECT room_id FROM chat_rooms")
+				.toArray()
+				.map((row) => row.room_id),
+		);
+		expect(filled).toEqual([r1.id]);
 		await token.call("chat.post_message", { room_id: r1.id, text: "Build 1 passed." });
 		await token.call("chat.list_messages", { room_id: r1.id });
 		expect(await codeOf(token.call("chat.list_messages", { room_id: r2.id }))).toBe("forbidden");
