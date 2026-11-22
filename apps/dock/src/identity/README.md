@@ -356,8 +356,9 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   - The log orders the entries by the order of the writes. So two calls close together can show their
     times out of order.
   - A token that opens the events socket (`/ws/events`) or a room socket adds one entry with the surface
-    `rest`: `events.open_socket`, or `chat.open_room_socket` with the room as the resource. Only a
-    service account gets this entry. The events on the socket add no entry.
+    `rest`: `events.open_socket`, or `chat.open_room_socket` with the room as the resource. A feed that
+    MCP `subscriptions/listen` opens to the same sockets adds the same entry with the surface `mcp`
+    (`chat/watch.ts`). Only a service account gets this entry. The events on the socket add no entry.
   - `directory.list_service_account_activity` reads it, the newest first, in pages with a cursor, and can
     keep the entries of one token.
   - A download under `/dl/` and an upload part under `/blob/` run their operation with the same call

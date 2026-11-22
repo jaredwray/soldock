@@ -64,6 +64,23 @@ function addressedFacts(event: Record<string, unknown>): ChangeFacts {
 	return Object.fromEntries(ADDRESSED_FACTS.map((name) => [name, event[name] ?? null])) as ChangeFacts;
 }
 
+/**
+ * Records a feed that a service account opened through MCP `subscriptions/listen`, in its activity log, with
+ * the surface `mcp`. The routes of `/ws/` record their own opens, so an open is recorded one time. A failure
+ * never stops the feed.
+ */
+function recordFeedOpen(
+	call: CallContext,
+	op: "chat.open_room_socket" | "events.open_socket",
+	input: { room_id?: string },
+): void {
+	try {
+		call.record?.({ op, result: "ok", code: null, input });
+	} catch {
+		// The record of an open is best effort. The feed stays open.
+	}
+}
+
 const roomWatcher: ResourceWatcher<CallContext> = {
 	async allowed(call, resources) {
 		const ids = resources.map((vars) => vars.room_id);
@@ -85,6 +102,7 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 			if (error instanceof OperationError && REFUSALS.has(error.code)) return null;
 			throw error;
 		}
+		recordFeedOpen(call, "chat.open_room_socket", { room_id: vars.room_id as string });
 		const socket = response.webSocket as WebSocket;
 		socket.accept();
 		let closed = false;
@@ -141,6 +159,7 @@ function eventsWatcher(
 				if (error instanceof OperationError && error.code === "conflict") return null;
 				throw error;
 			}
+			recordFeedOpen(call, "events.open_socket", {});
 			const socket = response.webSocket as WebSocket;
 			socket.accept();
 			let closed = false;

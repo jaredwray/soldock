@@ -13,8 +13,10 @@ import {
 	consumeWebhooks,
 	createActor,
 	mcp,
+	modernRequest,
 	PASSWORD,
 	readSocket,
+	readSse,
 	receiveWebhooks,
 	request,
 	seedOrg,
@@ -514,7 +516,7 @@ describe("the activity log of a service account", () => {
 		).toBe("invalid");
 	});
 
-	it("records the open of the events socket and of a room socket", async () => {
+	it("records the open of the events socket and of a room socket, also as a feed of MCP", async () => {
 		const { owner, admin, service } = await seedService();
 		const token = await serviceToken(admin, service.id, ["chat.read"]);
 		const { room } = await owner.call("chat.create_room", {
@@ -538,6 +540,33 @@ describe("the activity log of a service account", () => {
 		]);
 		events.socket.close();
 		roomSocket.socket.close();
+
+		// subscriptions/listen opens the same sockets as feeds. Each feed adds one entry with the surface mcp.
+		const feeds = readSse(
+			await modernRequest(
+				token.key,
+				"subscriptions/listen",
+				{ notifications: { resourceSubscriptions: [`asterra://chat/${room.id}/messages`, "asterra://chat/rooms"] } },
+				{ id: "feeds" },
+			),
+		);
+		expect(await feeds.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		const opens = await vi.waitFor(async () => {
+			const listed = await admin.call("directory.list_service_account_activity", {
+				principal_id: service.id,
+				key_id: token.keyId,
+			});
+			const mcpOpens = listed.entries.filter((entry) => entry.surface === "mcp" && entry.operation.includes("socket"));
+			expect(mcpOpens).toHaveLength(2);
+			return mcpOpens;
+		});
+		expect(opens.map((entry) => [entry.operation, entry.resource_id])).toEqual(
+			expect.arrayContaining([
+				["chat.open_room_socket", room.id],
+				["events.open_socket", null],
+			]),
+		);
+		await feeds.cancel();
 	});
 
 	it("keeps the newest calls of the limit and each change by an admin, and drops entries older than the days of the limit", async () => {
