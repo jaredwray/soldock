@@ -217,6 +217,14 @@ const LISTS: Record<ResourceKind, keyof TokenResources> = {
 	room: "room_ids",
 };
 
+/**
+ * The ids of one kind that a token with these limits can reach, or null for a token without limits. A list
+ * operation gives these ids to its query, so its page and its cursor never name a resource outside them.
+ */
+export function listedIds(restriction: TokenResources | null, kind: ResourceKind): readonly string[] | null {
+	return restriction === null ? null : restriction[LISTS[kind]];
+}
+
 /** True when a token with these limits can reach the resource. A token without limits (null) can. */
 export function allowsResource(restriction: TokenResources | null, kind: ResourceKind, id: string): boolean {
 	return restriction === null || restriction[LISTS[kind]].includes(id);

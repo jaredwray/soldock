@@ -113,7 +113,8 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
    (`account.revoke_api_key`).
 
 **Rotate a token.** **Rotate** gives a token a new secret (`account.rotate_api_key`). The token keeps
-its scopes, its limits and its end. The old secret works for `overlap_minutes` more: 60 by default, at
+its scopes, its limits and its end. The caller must hold each scope of the token. A rotation does not
+extend the end. Before the end, create a new token and put it in each script. The old secret works for `overlap_minutes` more: 60 by default, at
 most 1,440, or 0 to stop it at once.
 
 1. Rotate the token, and copy the new secret.
@@ -136,8 +137,8 @@ with a lifetime of seven days or less gets no notice.
 
 - A call with a revoked, expired or rotated secret of the account (`auth.refused_token`).
 - A socket or a feed that a token opens, also when the open fails.
-- A change of the rooms, the direct messages and the shared drives of the account, by the account or
-  by a different member.
+- A change of the rooms, the direct messages and the shared drives of the account by a different
+  principal: **Admin change** for an owner or an admin, and **Member change** for each other member.
 - The notice before the end of a token (`account.token_expiry_notice`).
 - A change of a token or of the account by an owner or an admin.
 

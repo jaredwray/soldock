@@ -33,6 +33,7 @@ export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export {
 	type DueNotice,
 	dueExpiryNotices,
+	isNoticeDue,
 	markExpiryNotice,
 	type NoticeRecipient,
 	noticeRecipients,

@@ -508,12 +508,13 @@ export const rotateApiKey = defineOperation({
 		"Gives the key a new secret and returns it once. The key keeps its id, label, scopes and end.",
 		`The old secret works for overlap_minutes more (default ${API_KEY_LIMITS.rotationOverlapMinutes.default}, at most ${API_KEY_LIMITS.rotationOverlapMinutes.max}; 0 stops it at once), so a script can change to the new secret first.`,
 		"A key has one rotation at a time: a rotation while the old secret still works gets conflict. account.end_api_key_rotation stops the old secret before its time.",
-		"The same principals that can revoke a key can rotate it. A revoked or expired key cannot rotate.",
+		"The same principals that can revoke a key can rotate it, and the credential of the call must hold each scope of the key. A revoked or expired key cannot rotate.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate" },
 	scopes: ["account.keys"],
 	callers: ["human"],
-	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	// The old secret stops, at once with overlap_minutes 0, as a revoke stops a key.
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		key_id: prefixedId("key"),
 		overlap_minutes: z.number().int().min(0).max(API_KEY_LIMITS.rotationOverlapMinutes.max).optional(),
@@ -640,6 +641,12 @@ export const SERVICE_ACTIVITY_LIMITS = {
 	 * remove an entry of an owner or an admin (surface `admin`). Only the days limit removes it.
 	 */
 	entries: 10_000,
+	/**
+	 * The membership changes by members (surface `member`) that the log keeps, at most. The oldest go first.
+	 * A member can repeat a change, so this cap keeps those entries from the place of the calls and of the
+	 * changes by owners and admins.
+	 */
+	memberChanges: 1_000,
 	/** The days that the log keeps an entry. */
 	days: 90,
 } as const;
@@ -662,11 +669,12 @@ export const ServiceActivityEntry = z.object({
 	/** The error code of a call that did not work. */
 	code: z.string().nullable(),
 	/**
-	 * `rest` and `mcp`: a call of the service account. `admin`: a change by a different principal to the
-	 * account, its tokens or its memberships (an owner or an admin, or a member who adds it to a room or
-	 * shares an item with it). `system`: a step of Asterra itself, such as the notice before a token ends.
+	 * `rest` and `mcp`: a call of the service account. `admin`: a change by an owner or an admin to the
+	 * account, its tokens or its memberships. `member`: a membership change by a member or an agent, for
+	 * example a room that it adds the account to, or an item that it shares with the account. `system`: a
+	 * step of Asterra itself, such as the notice before a token ends.
 	 */
-	surface: z.enum(["rest", "mcp", "admin", "system"]),
+	surface: z.enum(["rest", "mcp", "admin", "member", "system"]),
 	/** The token of the call, or the token that the change was about. */
 	key_id: z.string().nullable(),
 	/** Who made the call or the change. */
@@ -748,7 +756,16 @@ export const getServiceAccountAccess = defineOperation({
 		principal_id: z.string(),
 		team_mailboxes: z.array(z.object({ id: z.string(), display_name: z.string(), address: z.string() })),
 		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
-		chat_rooms: z.array(z.object({ id: z.string(), kind: z.string(), name: z.string().nullable(), role: z.string() })),
+		// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
+		chat_rooms: z.array(
+			z.object({
+				id: z.string(),
+				kind: z.string(),
+				name: z.string().nullable(),
+				peer_name: z.string().nullable(),
+				role: z.string(),
+			}),
+		),
 		chat_rooms_truncated: z.boolean(),
 		/** The items that others shared directly with the account in Drive, with its role, the newest share first. */
 		drive_shared_items: z.array(

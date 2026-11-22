@@ -15,6 +15,13 @@ export interface ResourceChoices {
 
 type Access = OutputOf<"directory.get_service_account_access">;
 
+/** The name of a room: `#name`, or the other member of a direct message. */
+export function roomLabel(room: Access["chat_rooms"][number]): string {
+	if (room.name) return `#${room.name}`;
+	if (room.peer_name) return `Direct message with ${room.peer_name}`;
+	return room.kind === "group_dm" ? "Group message" : "Direct message";
+}
+
 /**
  * The choices for the limits of a new token, from the access of the account: its own mailbox and drive
  * (the id of the account), its team mailboxes, its shared drives and its rooms.
@@ -29,7 +36,7 @@ export function resourceChoicesOf(account: Pick<Principal, "id" | "address">, ac
 			{ id: account.id, label: "Own drive" },
 			...access.shared_drives.map((drive) => ({ id: drive.id, label: drive.name })),
 		],
-		rooms: access.chat_rooms.map((room) => ({ id: room.id, label: room.name ? `#${room.name}` : "Direct message" })),
+		rooms: access.chat_rooms.map((room) => ({ id: room.id, label: roomLabel(room) })),
 	};
 }
 

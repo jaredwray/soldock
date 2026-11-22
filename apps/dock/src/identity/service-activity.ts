@@ -100,18 +100,23 @@ export class ServiceActivityStore {
 	}
 
 	/**
-	 * Removes the entries older than the days of the limit, and each call after the newest `entries` calls.
-	 * The count limit counts calls only (surface `rest` or `mcp`) and keeps each change (surface `admin` or
-	 * `system`), so calls cannot push a change out, and a change does not take the place of a call.
+	 * Removes the entries older than the days of the limit, each call after the newest `entries` calls, and
+	 * each change by a member after the newest `memberChanges` of them. The count limit of the calls counts
+	 * calls only (surface `rest` or `mcp`). The changes of members (surface `member`) have their own limit.
+	 * Only the days limit removes a change of an owner or an admin (`admin`) or of Asterra (`system`). So
+	 * calls and members cannot push such a change out, and a change does not take the place of a call.
 	 */
 	prune(now: number): void {
 		this.sql.exec(
 			`DELETE FROM service_activity
 			WHERE (surface IN ('rest', 'mcp') AND seq <= (
 				SELECT seq FROM service_activity WHERE surface IN ('rest', 'mcp') ORDER BY seq DESC LIMIT 1 OFFSET ?1))
+			OR (surface = 'member' AND seq <= (
+				SELECT seq FROM service_activity WHERE surface = 'member' ORDER BY seq DESC LIMIT 1 OFFSET ?3))
 			OR at < ?2`,
 			SERVICE_ACTIVITY_LIMITS.entries,
 			now - SERVICE_ACTIVITY_LIMITS.days * DAY_MS,
+			SERVICE_ACTIVITY_LIMITS.memberChanges,
 		);
 	}
 

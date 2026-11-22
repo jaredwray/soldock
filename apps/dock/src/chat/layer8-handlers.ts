@@ -49,7 +49,7 @@ import {
 	type RoomCall,
 	type RoomRecord,
 } from "./room.ts";
-import { adminListRooms, removeDeletedPrincipalFromRooms } from "./room-index.ts";
+import { adminListRooms, removeDeletedPrincipalFromRooms, serviceMemberIds } from "./room-index.ts";
 import { createSlashCommand, deleteSlashCommand, listSlashCommands } from "./slash-commands.ts";
 
 export type Layer8ChatOperation = Extract<
@@ -753,13 +753,18 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			);
 		}
 		const opened = openRoom(call, input.room_id);
+		// The service accounts of the room lose it. The index names them before the delete, for their logs.
+		const services = input.dry_run === true ? [] : await serviceMemberIds(call.env.DIRECTORY, input.room_id);
 		const res = accept(
 			await opened.room.deleteRoom(opened.ctx, {
 				dryRun: input.dry_run === true,
 				allowAdmin: isAdmin(call.caller),
 			}),
 		);
-		if (res.deleted) auditOk(call, "chat.delete_room", input.room_id);
+		if (res.deleted) {
+			auditOk(call, "chat.delete_room", input.room_id);
+			recordServiceMemberships(call, services, "chat.delete_room", input.room_id);
+		}
 		return res;
 	},
 
@@ -828,6 +833,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const opened = openRoom(call, input.room_id);
 		accept(await opened.room.adminAssignOwner(call.caller.id, target as ActorRecord));
 		auditOk(call, "chat.admin_assign_owner", `${input.room_id}:${input.principal_id}`);
+		recordServiceMemberships(call, [input.principal_id], "chat.admin_assign_owner", input.room_id);
 		return { room_id: input.room_id, principal_id: input.principal_id, role: "owner" as const };
 	},
 

@@ -1,11 +1,11 @@
 import {
-	allowsResource,
 	CHAT_LIMITS,
 	type ChatRoom,
 	type ChatSearchResult,
 	type ChatSearchRoom,
 	type ChatThreadFollow,
 	isCustomEmoji,
+	listedIds,
 	mentionDirectory,
 	type OperationName,
 	prefixedId,
@@ -470,10 +470,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatPresenceHandlers,
 	...chatLayer8Handlers,
 	async "chat.list_rooms"(call, input) {
+		// A token with resource limits sees only its listed rooms. The queries keep only those, so the cursor
+		// never names a different room.
 		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
 			limit: input.limit ?? DEFAULT_PAGE,
+			ids: listedIds(call.caller.restriction, "room"),
 		};
 		const page =
 			input.view === "public"
@@ -486,9 +489,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			);
 		}
 		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
-		// A token with resource limits sees only its listed rooms. A page can then have fewer rooms than its limit.
-		const rooms = shown.rooms.filter((room) => allowsResource(call.caller.restriction, "room", room.id));
-		return { rooms: rooms.map(toRoom), next_cursor: shown.nextCursor };
+		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
 	},
 
 	async "chat.list_threads"(call, input) {

@@ -251,9 +251,10 @@ export function recordServiceChange(
 /**
  * Records a membership change that a different principal made for service accounts: a room, a shared
  * drive or a share of a Drive item. Each listed id that is a service account gets one entry with the
- * surface `admin`, the caller as the actor, and the room, the drive or the item as the resource. The own
- * id of the caller is left out, because its own call is in its log already. The write does not wait, and a
- * failure only writes a warning.
+ * caller as the actor, and the room, the drive or the item as the resource. The surface is `admin` for an
+ * owner or an admin, and `member` for each other caller, which has its own count limit. The own id of the
+ * caller is left out, because its own call is in its log already. The write does not wait, and a failure
+ * only writes a warning.
  */
 export function recordServiceMemberships(
 	call: CallContext,
@@ -263,6 +264,7 @@ export function recordServiceMemberships(
 ): void {
 	const ids = [...new Set(principalIds)].filter((id) => id !== call.caller.principal.id);
 	if (ids.length === 0) return;
+	const surface = isAdmin(call.caller) ? "admin" : "member";
 	call.waitUntil(
 		(async () => {
 			try {
@@ -280,7 +282,7 @@ export function recordServiceMemberships(
 							op,
 							result: "ok",
 							code: null,
-							surface: "admin",
+							surface,
 							keyId: null,
 							actorId: call.caller.principal.id,
 							resourceId,

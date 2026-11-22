@@ -3,8 +3,10 @@ import {
 	type ApiKey,
 	type CreatedApiKey,
 	type Principal,
+	type ResourceKind,
 	SCOPES,
 	type Scope,
+	TOKEN_RESOURCE_LIMITS,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -396,11 +398,9 @@ function CreateKeyForm({
 				...(resourceChoices && limit
 					? {
 							resources: {
-								mailbox_ids: resourceChoices.mailboxes
-									.filter((choice) => picked.has(choice.id))
-									.map((choice) => choice.id),
-								drive_ids: resourceChoices.drives.filter((choice) => picked.has(choice.id)).map((choice) => choice.id),
-								room_ids: resourceChoices.rooms.filter((choice) => picked.has(choice.id)).map((choice) => choice.id),
+								mailbox_ids: pickedIds("mailbox", resourceChoices.mailboxes),
+								drive_ids: pickedIds("drive", resourceChoices.drives),
+								room_ids: pickedIds("room", resourceChoices.rooms),
 							},
 						}
 					: {}),
@@ -408,6 +408,9 @@ function CreateKeyForm({
 			});
 			setLabel("");
 			setDescription("");
+			// The next token starts without limits, as it starts without a label.
+			setLimit(false);
+			setPicked(new Set());
 			onCreated(result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -416,35 +419,53 @@ function CreateKeyForm({
 		}
 	}
 
-	function pick(id: string) {
+	// The own mailbox and the own drive have the same id (the id of the account). So a selection key has
+	// the kind too, and a selection of the own mailbox does not select the own drive.
+	const pickKey = (kind: ResourceKind, id: string) => `${kind}:${id}`;
+
+	function pickedIds(kind: ResourceKind, choices: readonly ResourceChoice[]): string[] {
+		return choices.filter((choice) => picked.has(pickKey(kind, choice.id))).map((choice) => choice.id);
+	}
+
+	function pick(key: string) {
 		setPicked((current) => {
 			const next = new Set(current);
-			if (next.has(id)) next.delete(id);
-			else next.add(id);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
 			return next;
 		});
 	}
 
 	/** The check boxes of one kind of resource, for the limits of a new token. */
-	function pickList(legend: string, product: string, choices: readonly ResourceChoice[]) {
-		const none = !choices.some((choice) => picked.has(choice.id));
+	function pickList(kind: ResourceKind, legend: string, product: string, choices: readonly ResourceChoice[]) {
+		const count = pickedIds(kind, choices).length;
+		// The server takes at most this many ids of one kind. A full list stops a further selection.
+		const max = TOKEN_RESOURCE_LIMITS.perKind;
 		return (
 			<fieldset className="scope-list">
 				<legend className="field-label">{legend}</legend>
 				{choices.length === 0 && <p className="field-hint">The account is a member of none.</p>}
-				{choices.map((choice) => (
-					<label key={choice.id} className="check-row">
-						<input
-							type="checkbox"
-							className="checkbox"
-							checked={picked.has(choice.id)}
-							onChange={() => pick(choice.id)}
-							disabled={busy}
-						/>
-						<span>{choice.label}</span>
-					</label>
-				))}
-				{none && <p className="field-hint">With none selected, the token reaches nothing of {product}.</p>}
+				{choices.map((choice) => {
+					const checked = picked.has(pickKey(kind, choice.id));
+					return (
+						<label key={choice.id} className="check-row">
+							<input
+								type="checkbox"
+								className="checkbox"
+								checked={checked}
+								onChange={() => pick(pickKey(kind, choice.id))}
+								disabled={busy || (!checked && count >= max)}
+							/>
+							<span>{choice.label}</span>
+						</label>
+					);
+				})}
+				{count === 0 && <p className="field-hint">With none selected, the token reaches nothing of {product}.</p>}
+				{choices.length > max && (
+					<p className="field-hint">
+						{count} of at most {max} selected.
+					</p>
+				)}
 			</fieldset>
 		);
 	}
@@ -542,9 +563,9 @@ function CreateKeyForm({
 					</p>
 				</div>
 			)}
-			{resourceChoices && limit && pickList("Mailboxes", "Mail", resourceChoices.mailboxes)}
-			{resourceChoices && limit && pickList("Drives", "Drive", resourceChoices.drives)}
-			{resourceChoices && limit && pickList("Rooms", "Chat", resourceChoices.rooms)}
+			{resourceChoices && limit && pickList("mailbox", "Mailboxes", "Mail", resourceChoices.mailboxes)}
+			{resourceChoices && limit && pickList("drive", "Drives", "Drive", resourceChoices.drives)}
+			{resourceChoices && limit && pickList("room", "Rooms", "Chat", resourceChoices.rooms)}
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes</legend>
 				{narrowed && (

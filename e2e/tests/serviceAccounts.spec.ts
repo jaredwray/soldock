@@ -80,7 +80,13 @@ test("an admin creates a service account and a 7-day token, sees its activity, r
 		await card.getByLabel(/^Own mailbox/).check();
 		await card.getByRole("button", { name: "Create token" }).click();
 		await page.getByRole("dialog", { name: "Copy the new token" }).getByRole("button", { name: "Done" }).click();
-		await expect(tokens.getByRole("row").filter({ hasText: "Mailer" })).toContainText("Limited to: Own mailbox");
+		// The exact text proves that the own mailbox did not also select the own drive, which has the same id.
+		await expect(
+			tokens
+				.getByRole("row")
+				.filter({ hasText: "Mailer" })
+				.getByText(/^Limited to:/),
+		).toHaveText(`Limited to: Own mailbox (${local}@example.com)`);
 
 		await card.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();

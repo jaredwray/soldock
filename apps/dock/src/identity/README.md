@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_service_account_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, and `resources` for the [resource limits](#resource-limits-of-a-token) of a token), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, and `resources` for the [resource limits](#resource-limits-of-a-token) of a token), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -347,18 +347,22 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   - Each change by an owner or an admin adds an entry with the surface `admin`: the creation, a change,
     a policy change, an archive, a restore, a delete, a token create, a token revoke, and a team mailbox
     membership.
-  - A membership change that a different principal makes for the account also adds an entry with the
-    surface `admin` (`recordServiceMemberships`), with that principal as the actor: a room (create,
-    add, remove, a new direct message or group message), a shared drive (create, add, remove), and the
-    share of a Drive item (share, unshare). The room, the drive or the item is the resource. A member who
-    is not an admin can make such a change, for example add the account to a room. A change that the
-    account makes itself is its own call, with the surface `rest` or `mcp`, and adds no `admin` entry.
+  - A membership change that a different principal makes for the account also adds an entry
+    (`recordServiceMemberships`), with that principal as the actor: a room (create, add, remove, a new
+    direct message or group message, delete, an owner that an admin assigns), a shared drive (create,
+    add, remove, delete), and the share of a Drive item (share, unshare). The room, the drive or the item
+    is the resource. The surface is `admin` for an owner or an admin, and `member` for each other
+    principal, for example a member who adds the account to a room. A delete reads the service accounts
+    of the room or the drive from the index before the delete. A change that the account makes itself is
+    its own call, with the surface `rest` or `mcp`, and adds no other entry.
   - The invoker reports each call to the `record` hook of the call context (`activityRecorder`). The
     write goes through `waitUntil`, so it never slows or fails the call. A failed write logs a warning.
-  - Each 100th entry removes the calls after the newest 10,000 calls, and the entries older than 90 days
-    (`SERVICE_ACTIVITY_LIMITS`). The count limit counts calls only and keeps each entry with the surface
-    `admin`. So calls cannot push a change by an owner or an admin out of the log, and a change does not
-    take the place of a call. Only the 90 days remove a change.
+  - Each 100th entry removes the calls after the newest 10,000 calls, the `member` entries after the
+    newest 1,000, and the entries older than 90 days (`SERVICE_ACTIVITY_LIMITS`). The count limit of the
+    calls counts calls only. A member can repeat a change, for example a share with the same role, so the
+    `member` entries have their own limit. So calls and members cannot push a change by an owner or an
+    admin out of the log, and a change does not take the place of a call. Only the 90 days remove an
+    `admin` or a `system` entry.
   - An entry older than 90 days stays in storage until the next prune. A read leaves it out.
   - The log orders the entries by the order of the writes. So two calls close together can show their
     times out of order.
@@ -409,11 +413,12 @@ sockets close at the next check (`checkCredentials`), and a lasting effect that 
 `account.rotate_api_key` gives a key a new secret and returns it once. The key keeps its id, label,
 description, scopes and end. It works for each key: of a person, of an agent and of a service account.
 The principals that can revoke the key can rotate it, so only owners and admins rotate the token of a
-service account.
+service account. The new secret gives each scope of the key, so the caller must hold each one, as for a
+new key (`forbidden`). A narrow key with `account.keys` cannot rotate a wider key.
 
 - The old secret works for `overlap_minutes` more: 60 by default, at most 1,440, and 0 stops it at once.
   A script changes to the new secret in that time. `account.end_api_key_rotation` stops the old secret
-  before its time.
+  before its time. It writes an audit line and a log entry only when an old secret still worked.
 - A key has one rotation at a time. A rotation while the old secret still works gets `conflict`. A
   revoked or an expired key cannot rotate (`conflict`).
 - The store keeps the SHA-256 of the old secret in `prev_key_hash` until `prev_expires_at`, and counts
@@ -425,6 +430,8 @@ service account.
   So a socket that the old secret opened closes with `ended` at its next check after the overlap, at
   most 60 seconds later. A revoke closes the sockets of each secret at once.
 - A webhook keeps the id of its key, so it keeps working after a rotation.
+- A push device keeps the reference of the secret that registered it. A device of the old secret stops
+  after the overlap, as a socket does.
 - The old secret after its overlap is refused like each stopped token. For a service account, the log
   gets `auth.refused_token` with the code `rotated`.
 - `account.list_api_keys` shows `rotated_at`, `rotated_by` and `previous_secret_expires_at` (only while
@@ -447,10 +454,14 @@ hourly cron runs the job (`runScheduled` in `src/scheduled.ts`).
   sponsor who is a member gets none, because a member has no right to see the tokens.
 - The mail goes through `deliverSystemNotice` of [`mail`](../mail/README.md#mailboxes), with a fixed
   Message-ID (`<token-expiry.{key id}@{domain}>`) and a fixed date, so its bytes are the same in each run.
-- After the mail, `markExpiryNotice` sets `api_keys.expiry_notice_at` (migration `0025`). A token gets the
-  mark when at least one mail arrived, or when there is nobody to tell. When each mail failed, it stays
-  without a mark, and the next run tries again. A run that stops between the mail and the mark sends the
-  same bytes again, and each mailbox keeps one copy.
+- Just before the mails of a token, `isNoticeDue` reads the token again. A token that an owner or an
+  admin revoked, or whose account was archived, after the first read gets no mail.
+- After the mails, `markExpiryNotice` sets `api_keys.expiry_notice_at` (migration `0025`). A token gets
+  the mark when each mail arrived, or when there is nobody to tell. When a mail failed, it stays without
+  a mark, and the next run sends each mail again. The same bytes go again, so each mailbox keeps one
+  copy. The tries stop at the end of the token, because an ended token is not due.
+- One run sends at most 200 mails (`DELIVERIES_PER_RUN`), to stay inside the subrequest limit of a
+  Worker. A token whose mails do not fit waits for the next run.
 - The notice adds `account.token_expiry_notice` to the activity log of the account, with the surface
   `system`. The count limit of the log does not count it as a call.
 - The key list of the web app shows **Expires soon** for a key that ends within seven days.
@@ -485,8 +496,10 @@ before.
      `directory.list_team_mailboxes`, `chat.list_custom_emoji`, `chat.list_slash_commands` and
      `chat.get_presence`. The directory is not narrowed: leave `directory.read` off a token to stop it.
    - `filter`: `mail.list_mailboxes`, `drive.list_shared_drives` and `chat.list_rooms` leave out each
-     resource outside the list. A page can then have fewer entries than its limit. The shared and the
-     starred views of `drive.list_items` leave out each drive outside the list.
+     resource outside the list. The shared and the starred views of `drive.list_items` leave out each
+     drive outside the list. Each list that has pages gives the ids of the list to its query
+     (`listedIds`), so the page and its `next_cursor` come only from listed resources. A cursor holds the
+     name or the id of its last entry, so it never names a resource outside the list.
    - `check`: `mailbox_id` (the own mailbox when it is not set) for each other mail operation, `space_id`
      (the own drive when it is not set) for Drive, Docs and Sheets, `drive_id`, `room_id` (required) for
      Chat, and the second field of a copy, a move or a forward (`target_space_id`, `from_space_id`,

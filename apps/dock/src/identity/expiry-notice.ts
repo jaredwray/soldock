@@ -26,6 +26,20 @@ export interface NoticeRecipient {
 	address: string;
 }
 
+/** The conditions of a due token, with `?1` now, `?2` the end of the notice days and `?3` those days. */
+const DUE = `k.expires_at IS NOT NULL AND k.revoked_at IS NULL AND k.expiry_notice_at IS NULL
+	AND k.expires_at > ?1 AND k.expires_at <= ?2
+	AND julianday(k.expires_at) - julianday(k.created_at) > ?3
+	AND p.service = 1 AND p.archived_at IS NULL AND p.deleted_at IS NULL`;
+
+function dueParams(now: number): [string, string, number] {
+	return [
+		new Date(now).toISOString(),
+		new Date(now + API_KEY_LIMITS.expiryNoticeDays * DAY_MS).toISOString(),
+		API_KEY_LIMITS.expiryNoticeDays,
+	];
+}
+
 /**
  * The live tokens of live service accounts that end within `API_KEY_LIMITS.expiryNoticeDays` days of
  * `now` and have no notice yet, the soonest first. A token whose whole lifetime was not longer than that
@@ -39,20 +53,24 @@ export async function dueExpiryNotices(db: D1Database, now: number): Promise<Due
 			FROM api_keys k
 			JOIN principals p ON p.id = k.principal_id
 			JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
-			WHERE k.expires_at IS NOT NULL AND k.revoked_at IS NULL AND k.expiry_notice_at IS NULL
-				AND k.expires_at > ?1 AND k.expires_at <= ?2
-				AND julianday(k.expires_at) - julianday(k.created_at) > ?3
-				AND p.service = 1 AND p.archived_at IS NULL AND p.deleted_at IS NULL
+			WHERE ${DUE}
 			ORDER BY k.expires_at LIMIT ?4`,
 		)
-		.bind(
-			new Date(now).toISOString(),
-			new Date(now + API_KEY_LIMITS.expiryNoticeDays * DAY_MS).toISOString(),
-			API_KEY_LIMITS.expiryNoticeDays,
-			NOTICES_PER_RUN,
-		)
+		.bind(...dueParams(now), NOTICES_PER_RUN)
 		.all<DueNotice>();
 	return results;
+}
+
+/**
+ * True when the token still needs its notice: an owner or an admin did not revoke it, and did not archive
+ * its account, after the job read the due tokens. The job asks just before the mails of a token.
+ */
+export async function isNoticeDue(db: D1Database, keyId: string, now: number): Promise<boolean> {
+	const row = await db
+		.prepare(`SELECT 1 AS due FROM api_keys k JOIN principals p ON p.id = k.principal_id WHERE k.id = ?4 AND ${DUE}`)
+		.bind(...dueParams(now), keyId)
+		.first<{ due: number }>();
+	return row !== null;
 }
 
 /**

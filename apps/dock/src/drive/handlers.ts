@@ -2,6 +2,7 @@ import {
 	allowsResource,
 	DRIVE_LIMITS,
 	driveDownloadPath,
+	listedIds,
 	type OperationName,
 	type SharedDrive,
 	type SharedDriveMember,
@@ -42,7 +43,7 @@ import {
 } from "./access.ts";
 import { setPreview, toVersion } from "./preview.ts";
 import { chatFolderFor } from "./rooms.ts";
-import { listSharedDriveRows, sharedDriveState } from "./shared-index.ts";
+import { listSharedDriveRows, serviceMembersOfDrive, sharedDriveState } from "./shared-index.ts";
 import {
 	type ItemRecord,
 	type ItemRef,
@@ -290,7 +291,16 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		if (input.view === "starred" || input.view === "shared") {
 			const own = await ownSpace(call);
-			const page = accept(await own.space.listRefs(own.ctx, { list: input.view, cursor, limit }));
+			// A token with resource limits gets the pointers into its listed drives only, so the cursor never names
+			// a different drive. `hydrate` checks each drive again.
+			const page = accept(
+				await own.space.listRefs(own.ctx, {
+					list: input.view,
+					cursor,
+					limit,
+					spaceIds: listedIds(call.caller.restriction, "drive"),
+				}),
+			);
 			const records = (await hydrate(call, page.items)).filter((record) => kind === null || record.kind === kind);
 			return { items: await toItems(call, records), next_cursor: page.nextCursor };
 		}
@@ -707,24 +717,24 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			throw new OperationError("forbidden", "Only owners and admins of the organization can list each shared drive.");
 		}
 		const limit = input.limit ?? DEFAULT_PAGE;
+		// A token with resource limits sees only its listed drives. The query keeps only those, so the cursor
+		// never names a different drive.
 		const rows = await listSharedDriveRows(call.env.DIRECTORY, call.caller.id, {
 			all,
 			after: input.cursor === undefined ? null : decodeDriveCursor(input.cursor),
 			limit: limit + 1,
+			ids: listedIds(call.caller.restriction, "drive"),
 		});
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
 		return {
-			// A token with resource limits sees only its listed drives. A page can then have fewer drives.
-			shared_drives: page
-				.filter((row) => allowsResource(call.caller.restriction, "drive", row.id))
-				.map((row) => ({
-					id: row.id,
-					name: row.name,
-					role: row.role,
-					member_count: row.member_count,
-					created_at: new Date(row.created_at).toISOString(),
-				})),
+			shared_drives: page.map((row) => ({
+				id: row.id,
+				name: row.name,
+				role: row.role,
+				member_count: row.member_count,
+				created_at: new Date(row.created_at).toISOString(),
+			})),
 			next_cursor: rows.length > limit && last ? encodeDriveCursor(last.name_key, last.id) : null,
 		};
 	},
@@ -778,8 +788,13 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		// The index has the delete only after the object did it. A second call has nothing to do.
 		if (state === "deleted") return { deleted: false };
 		const opened = spaceOf(call, input.drive_id);
+		// The service accounts of the drive lose it. The index names them before the delete, for their logs.
+		const services = await serviceMembersOfDrive(call.env.DIRECTORY, input.drive_id);
 		const result = accept(await opened.space.deleteSharedDrive(opened.ctx));
-		if (result.deleted) auditOk(call, opened, "drive.delete_shared_drive", input.drive_id);
+		if (result.deleted) {
+			auditOk(call, opened, "drive.delete_shared_drive", input.drive_id);
+			recordServiceMemberships(call, services, "drive.delete_shared_drive", input.drive_id);
+		}
 		return result;
 	},
 };

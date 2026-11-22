@@ -112,8 +112,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   `chat.webhooks`. Push, notification settings and a status are not open to it.
 - A token of a service account with resource limits opens the socket of a listed room only, gets no events
   socket, and sees only its listed rooms in `chat.list_rooms`
-  ([identity](../identity/README.md#resource-limits-of-a-token)). A room membership that a different
-  principal changes for a service account is an `admin` entry in its activity log.
+  ([identity](../identity/README.md#resource-limits-of-a-token)). Both views give the ids of the list to
+  their query, so `next_cursor` never names a different room. The joined view of a limited token does the
+  first fill of the `PrincipalDO` before its page, in at most 5 parts, and gives no cursor to the place of
+  the fill. A room membership that a different principal changes for a service account is an entry in its
+  activity log: `admin` for an owner or an admin, and `member` for each other principal. A delete of a
+  room, and an owner that an admin assigns, are entries too.
 
 ## Messages
 

@@ -1,7 +1,7 @@
 import type { OutputOf, Principal } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { limitText, resourceChoicesOf } from "../settings/resourceChoices.ts";
+import { limitText, resourceChoicesOf, roomLabel } from "../settings/resourceChoices.ts";
 import { expiryPhrase } from "../settings/ttl.ts";
 
 type Access = OutputOf<"directory.get_service_account_access">;
@@ -142,7 +142,7 @@ export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAcco
 							<ul>
 								{access.chat_rooms.map((room) => (
 									<li key={room.id}>
-										{room.name ? `#${room.name}` : (ROOM_KINDS[room.kind] ?? room.kind)}{" "}
+										{roomLabel(room)}{" "}
 										<span className="muted">
 											{ROOM_KINDS[room.kind] && room.name ? `${ROOM_KINDS[room.kind]}, ` : ""}
 											{room.role}

@@ -110,8 +110,9 @@ export async function authenticate(
 			credential: "api_key",
 			keyId: found.key.id,
 			keyGeneration: found.generation,
-			// Only a token of a service account can have limits. A limit on a different key is ignored.
-			restriction: found.principal.service ? found.key.resources : null,
+			// Only a token of a service account gets limits through the API. A stored limit on a different key
+			// applies too, so a limit never fails open.
+			restriction: found.key.resources,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,

@@ -70,6 +70,11 @@ export interface ListInput {
 	query: string | null;
 	cursor: string | null;
 	limit: number;
+	/**
+	 * Keep only these rooms: the list of a token with resource limits. The page and its cursor then come from
+	 * these rooms only, so the cursor never names a different room. Null for no filter.
+	 */
+	ids?: readonly string[] | null;
 }
 
 function page(rows: IndexRow[], limit: number, cursorOf: (row: IndexRow) => (string | number)[]): RoomPage {
@@ -95,6 +100,7 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 			WHERE r.kind = 'public' AND r.archived_at IS NULL
 				AND (?2 IS NULL OR instr(r.name_key, ?2) > 0)
 				AND (?3 IS NULL OR r.name_key > ?3 OR (r.name_key = ?3 AND r.id > ?4))
+				AND (?6 IS NULL OR r.id IN (SELECT value FROM json_each(?6)))
 			ORDER BY r.name_key, r.id LIMIT ?5`,
 		)
 		.bind(
@@ -103,6 +109,7 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 			cursor?.[0] ?? null,
 			cursor?.[1] ?? null,
 			input.limit + 1,
+			input.ids == null ? null : JSON.stringify(input.ids),
 		)
 		.all<IndexRow>();
 	return page(results, input.limit, (row) => [row.name_key ?? "", row.id]);
@@ -267,6 +274,30 @@ export async function joinedRoomIds(
 }
 
 /**
+ * The service accounts that the index has as members of a room. A delete of the room reads them first,
+ * for the activity log of each account.
+ */
+export async function serviceMemberIds(db: D1Database, roomId: string): Promise<string[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT m.principal_id FROM chat_members m JOIN principals p ON p.id = m.principal_id
+			WHERE m.room_id = ? AND p.service = 1 AND p.deleted_at IS NULL`,
+		)
+		.bind(roomId)
+		.all<{ principal_id: string }>();
+	return results.map((row) => row.principal_id);
+}
+
+/** A room of a principal for the access view: `peer_name` is the other member of a direct message. */
+interface PrincipalRoom {
+	id: string;
+	kind: string;
+	name: string | null;
+	peer_name: string | null;
+	role: string;
+}
+
+/**
  * The rooms that the index has the principal as a member of, with its role: the named rooms first, in the
  * order of their names, then the direct messages. At most `limit` rooms. `truncated` is true when the
  * principal has more. The access view of a service account reads it. The index can be a moment behind a
@@ -276,13 +307,14 @@ export async function roomsOfPrincipal(
 	db: D1Database,
 	principalId: string,
 	limit: number,
-): Promise<{ rooms: { id: string; kind: string; name: string | null; role: string }[]; truncated: boolean }> {
+): Promise<{ rooms: PrincipalRoom[]; truncated: boolean }> {
 	const { results } = await db
 		.prepare(
-			`SELECT r.id, r.kind, r.name, m.role FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
+			`SELECT r.id, r.kind, r.name, json_extract(m.peer_json, '$.display_name') AS peer_name, m.role
+			FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
 			WHERE m.principal_id = ?1 ORDER BY r.name_key IS NULL, r.name_key, r.id LIMIT ?2`,
 		)
 		.bind(principalId, limit + 1)
-		.all<{ id: string; kind: string; name: string | null; role: string }>();
+		.all<PrincipalRoom>();
 	return { rooms: results.slice(0, limit), truncated: results.length > limit };
 }

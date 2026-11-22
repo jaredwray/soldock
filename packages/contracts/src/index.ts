@@ -209,6 +209,7 @@ export {
 } from "./resources.ts";
 export {
 	allowsResource,
+	listedIds,
 	RESOURCE_RULES,
 	type ResourceField,
 	type ResourceKind,

@@ -282,7 +282,9 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
   the identity handler does that first.
 - A token of a service account with resource limits gets no item of a drive outside its list in the
   `shared` and the `starred` views, and `drive.list_shared_drives` leaves out each drive outside the list
-  ([identity](../identity/README.md#resource-limits-of-a-token)).
+  ([identity](../identity/README.md#resource-limits-of-a-token)). The queries keep only the listed drives
+  (`spaceIds` of `listRefs`, `ids` of `listSharedDriveRows`), so `next_cursor` never names a different
+  drive.
 - A star is in the own drive of the principal that set it (`stars`), also for an item of somebody
   else. Nobody else sees it. A star can go away after the access ended.
 - A page of the `shared` or `starred` view can have fewer items than `limit`, because a pointer

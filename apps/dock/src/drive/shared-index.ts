@@ -41,10 +41,25 @@ export async function sharedDriveState(db: D1Database, id: string): Promise<"liv
  * or each drive with `all`. The member count leaves out the principals that the directory deleted.
  * `after` is the name key and the id of the last drive of the page before.
  */
+/**
+ * The service accounts that the index has as members of a shared drive. A delete of the drive reads them
+ * first, for the activity log of each account.
+ */
+export async function serviceMembersOfDrive(db: D1Database, driveId: string): Promise<string[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT m.principal_id FROM shared_drive_members m JOIN principals p ON p.id = m.principal_id
+			WHERE m.drive_id = ? AND p.service = 1 AND p.deleted_at IS NULL`,
+		)
+		.bind(driveId)
+		.all<{ principal_id: string }>();
+	return results.map((row) => row.principal_id);
+}
+
 export async function listSharedDriveRows(
 	db: D1Database,
 	principalId: string,
-	input: { all: boolean; after: [string, string] | null; limit: number },
+	input: { all: boolean; after: [string, string] | null; limit: number; ids?: readonly string[] | null },
 ): Promise<SharedDriveRow[]> {
 	const { results } = await db
 		.prepare(
@@ -56,9 +71,17 @@ export async function listSharedDriveRows(
 			WHERE d.deleted_at IS NULL
 				AND (?2 = 1 OR m.role IS NOT NULL)
 				AND (?3 IS NULL OR d.name_key > ?3 OR (d.name_key = ?3 AND d.id > ?4))
+				AND (?6 IS NULL OR d.id IN (SELECT value FROM json_each(?6)))
 			ORDER BY d.name_key, d.id LIMIT ?5`,
 		)
-		.bind(principalId, input.all ? 1 : 0, input.after?.[0] ?? null, input.after?.[1] ?? null, input.limit)
+		.bind(
+			principalId,
+			input.all ? 1 : 0,
+			input.after?.[0] ?? null,
+			input.after?.[1] ?? null,
+			input.limit,
+			input.ids == null ? null : JSON.stringify(input.ids),
+		)
 		.all<SharedDriveRow>();
 	return results;
 }

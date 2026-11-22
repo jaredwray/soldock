@@ -699,6 +699,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
 		const owner = await credentialOwner(call, key.principal_id);
+		// The new secret gives each scope of the key. So the caller must hold each one, as for a new key.
+		const notHeld = key.scopes.filter((scope) => !call.caller.scopes.has(scope));
+		if (notHeld.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`Your credential does not hold ${notHeld.join(", ")}, so it cannot rotate this key.`,
+			);
+		}
 		const overlapMinutes = input.overlap_minutes ?? API_KEY_LIMITS.rotationOverlapMinutes.default;
 		const rotated = await rotateApiKey(call.env.DIRECTORY, key.id, call.caller.principal.id, overlapMinutes * 60_000);
 		if (!rotated) {
@@ -721,10 +729,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
 		const owner = await credentialOwner(call, key.principal_id);
+		// Only a call that stops a live old secret is a change, as only a revoke of a live key is.
+		const live = key.prev_expires_at !== null && Date.parse(key.prev_expires_at) > Date.now();
 		const ended = await endApiKeyRotation(call.env.DIRECTORY, key.id);
 		if (!ended) throw new OperationError("not_found", "No API key has that id.");
-		auditOk(call, "account.end_api_key_rotation", key.id);
-		recordServiceChange(call, owner, "account.end_api_key_rotation", key.id);
+		if (live) {
+			auditOk(call, "account.end_api_key_rotation", key.id);
+			recordServiceChange(call, owner, "account.end_api_key_rotation", key.id);
+		}
 		return { api_key: toApiKeyOutput(ended) };
 	},
 

@@ -332,11 +332,15 @@ MCP clients. The app has no UI-only path.
       The scope texts are the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`), without "your".
       The form has **Limit this token to specific mailboxes, drives and rooms**.
       It shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms (`resources` of `account.create_api_key`).
+      A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
+      A list stops a further selection at 20 (`TOKEN_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
+      A direct message shows the name of its other member (`peer_name`).
+      A create clears the limits for the next token.
       The choices come from the access of the account (`settings/resourceChoices.ts`), so the form shows the check box after the access loads.
       A limited token shows "Limited to: …" in its row and "limited to …" in the access. A token without limits shows neither.
       **Access** (`directory.get_service_account_access`): the scopes and the limits of each live token, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the account).
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
-      The surface `system` shows as "Asterra", for example for the notice before a token ends.
+      The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
       A create, a rotation or a revoke of a token loads the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
     - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.

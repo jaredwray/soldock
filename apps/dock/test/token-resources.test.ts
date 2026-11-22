@@ -165,6 +165,12 @@ describe("a limited token", () => {
 		// A copy goes to the own drive by default, which the list does not name.
 		expect(await codeOf(token.call("drive.copy_item", { space_id: d1.id, item_id: inD1.id }))).toBe("forbidden");
 		expect((await token.call("drive.list_shared_drives", {})).shared_drives.map((drive) => drive.id)).toEqual([d1.id]);
+		// "Archive" (d2) comes before "Releases" (d1) in the order of names. A page of one drive still holds the
+		// listed drive, and has no cursor, which would name the drive outside the list.
+		expect(await token.call("drive.list_shared_drives", { limit: 1 })).toMatchObject({
+			shared_drives: [{ id: d1.id }],
+			next_cursor: null,
+		});
 		// A download under /dl/ runs the same check.
 		const download = await request(`/dl/drive/${service.id}/${inD1.id}`, { headers: bearer(token.key) });
 		expect(download.status).toBe(403);
@@ -181,11 +187,36 @@ describe("a limited token", () => {
 		});
 		const all = await api(full.api_key.secret)("drive.list_items", { view: "shared" });
 		expect(all.items.map((item) => item.id)).toEqual([file.id]);
+		// The newest star is in d2, outside the list. A page of one star holds the star in d1, and no cursor.
+		const inD2 = (
+			await owner.call("drive.upload_file", { space_id: d2.id, name: "a.txt", content_base64: base64("a") })
+		).item;
+		const asFull = api(full.api_key.secret);
+		const editor = await admin.call("account.create_api_key", {
+			principal_id: service.id,
+			label: "editor",
+			scopes: ["drive.read", "drive.write"],
+		});
+		await api(editor.api_key.secret)("drive.star_items", { space_id: d1.id, item_ids: [inD1.id], starred: true });
+		await api(editor.api_key.secret)("drive.star_items", { space_id: d2.id, item_ids: [inD2.id], starred: true });
+		expect((await asFull("drive.list_items", { view: "starred", limit: 1 })).items.map((item) => item.id)).toEqual([
+			inD2.id,
+		]);
+		expect(await own.call("drive.list_items", { view: "starred", limit: 1 })).toMatchObject({
+			items: [{ id: inD1.id }],
+			next_cursor: null,
+		});
 	});
 
 	it("reaches only its rooms, and no operation that reads or writes across rooms", async () => {
 		const { admin, service, r1, r2 } = await seed();
 		const token = await limited(admin, service.id, { room_ids: [r1.id] });
+		// "ops" (r2) is newer than "builds" (r1), so it comes first. A page of one room still holds the listed
+		// room, and has no cursor, which would name the room outside the list.
+		expect(await token.call("chat.list_rooms", { limit: 1 })).toMatchObject({
+			rooms: [{ id: r1.id }],
+			next_cursor: null,
+		});
 		await token.call("chat.post_message", { room_id: r1.id, text: "Build 1 passed." });
 		await token.call("chat.list_messages", { room_id: r1.id });
 		expect(await codeOf(token.call("chat.list_messages", { room_id: r2.id }))).toBe("forbidden");

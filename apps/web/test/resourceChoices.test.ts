@@ -7,8 +7,9 @@ const access = {
 	team_mailboxes: [{ id: "tmb_1", display_name: "Support", address: "support@example.com" }],
 	shared_drives: [{ id: "drv_1", name: "Releases", role: "editor" }],
 	chat_rooms: [
-		{ id: "rm_1", kind: "private", name: "builds", role: "member" },
-		{ id: "rm_2", kind: "dm", name: null, role: "member" },
+		{ id: "rm_1", kind: "private", name: "builds", peer_name: null, role: "member" },
+		{ id: "rm_2", kind: "dm", name: null, peer_name: "Ada Lovelace", role: "member" },
+		{ id: "rm_3", kind: "group_dm", name: null, peer_name: null, role: "member" },
 	],
 	chat_rooms_truncated: false,
 	drive_shared_items: [],
@@ -23,7 +24,12 @@ describe("the limits of a token of a service account", () => {
 		const choices = resourceChoicesOf(account, access);
 		expect(choices.mailboxes.map((choice) => choice.id)).toEqual(["prn_ci", "tmb_1"]);
 		expect(choices.drives.map((choice) => choice.id)).toEqual(["prn_ci", "drv_1"]);
-		expect(choices.rooms.map((choice) => choice.label)).toEqual(["#builds", "Direct message"]);
+		// A direct message names its other member, so two direct messages differ in the list.
+		expect(choices.rooms.map((choice) => choice.label)).toEqual([
+			"#builds",
+			"Direct message with Ada Lovelace",
+			"Group message",
+		]);
 	});
 
 	// An empty list reaches nothing. A token without limits reaches each membership.

@@ -1210,25 +1210,33 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		};
 	}
 
-	/** The pointers of one list of the owner as a user: the stars, or what others shared. Newest first. */
+	/**
+	 * The pointers of one list of the owner as a user: the stars, or what others shared. Newest first.
+	 * With `spaceIds`, only the pointers into those drives: the list of a token with resource limits. The
+	 * page and its cursor then come from those pointers only, so the cursor never names a different drive.
+	 */
 	listRefs(
 		call: SpaceCall,
-		input: { list: "starred" | "shared"; cursor: string | null; limit: number },
+		input: { list: "starred" | "shared"; cursor: string | null; limit: number; spaceIds?: readonly string[] | null },
 	): Page<ItemRef> | Refusal {
 		this.enter(call);
 		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
 		const [table, time] = input.list === "starred" ? ["stars", "created_at"] : ["shared_with_me", "shared_at"];
 		const params: SqlStorageValue[] = [];
-		let where = "";
+		const where: string[] = [];
 		if (input.cursor !== null) {
 			const values = decodeCursor(input.cursor, ["number", "string", "string"]);
 			if (!values) return BAD_CURSOR;
 			params.push(...values);
-			where = `WHERE (${time}, space_id, item_id) < (?1, ?2, ?3)`;
+			where.push(`(${time}, space_id, item_id) < (?1, ?2, ?3)`);
+		}
+		if (input.spaceIds != null) {
+			params.push(JSON.stringify(input.spaceIds));
+			where.push(`space_id IN (SELECT value FROM json_each(?${params.length}))`);
 		}
 		params.push(input.limit + 1);
 		const rows = this.all<{ space_id: string; item_id: string; time: number }>(
-			`SELECT space_id, item_id, ${time} AS time FROM ${table} ${where}
+			`SELECT space_id, item_id, ${time} AS time FROM ${table} ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
 			ORDER BY ${time} DESC, space_id DESC, item_id DESC LIMIT ?${params.length}`,
 			...params,
 		);
