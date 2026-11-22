@@ -1,4 +1,4 @@
-import { operationList, operationNeedsScope, SCOPES, type Scope } from "@asterra/contracts";
+import { operationList, operationNeedsScope, type Scope, scopeDescription } from "@asterra/contracts";
 import { audit, log, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
@@ -78,7 +78,7 @@ export function missingScopes(caller: AuthContext): MissingScope[] {
 		.filter((scope) => !caller.scopes.has(scope))
 		.map((scope) => ({
 			scope,
-			description: SCOPES[scope],
+			description: scopeDescription(scope, caller.kind),
 			operations: operationList
 				.filter((operation) => operationNeedsScope(operation, scope, caller.scopes, caller.kind))
 				.map((operation) => operation.name),

@@ -1,4 +1,4 @@
-import { type Principal, SERVICE_SCOPES } from "@asterra/contracts";
+import { type Principal, SERVICE_SCOPE_DESCRIPTIONS, SERVICE_SCOPES } from "@asterra/contracts";
 import { useState } from "react";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
@@ -47,6 +47,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 			<ApiKeyManager
 				principalId={account.id}
 				allowedScopes={SERVICE_SCOPES}
+				scopeDescriptions={SERVICE_SCOPE_DESCRIPTIONS}
 				heading={`Tokens of ${account.display_name}`}
 				note="Each token has its own scopes and lifetime. A script sends it as a bearer token to REST or MCP."
 				noun="token"

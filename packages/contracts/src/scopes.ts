@@ -56,7 +56,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
  * access through the API. It cannot manage keys or the directory, so it can never widen its own access.
  * It cannot create a webhook. Its outbound policy limits its mail, as for an agent.
  */
-export const SERVICE_SCOPES: readonly Scope[] = [
+const SERVICE_SCOPE_LIST = [
 	"account.read",
 	"directory.read",
 	"mail.read",
@@ -67,7 +67,40 @@ export const SERVICE_SCOPES: readonly Scope[] = [
 	"drive.share",
 	"chat.read",
 	"chat.write",
-];
+] as const satisfies readonly Scope[];
+
+export type ServiceScope = (typeof SERVICE_SCOPE_LIST)[number];
+
+export const SERVICE_SCOPES: readonly Scope[] = SERVICE_SCOPE_LIST;
+
+/**
+ * The text of each scope for a token of a service account. `SCOPES` is written for a person ("your
+ * mail") and names rights of owners and admins, which a service account never has. These texts name the
+ * service account instead.
+ */
+export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> = {
+	"account.read": "Read the account of the service account",
+	"directory.read": "Read the directory: the people, agents and service accounts of the organization",
+	"mail.read": "Read the mail and labels of the service account, and those of its team mailboxes",
+	"mail.modify":
+		"Change labels, archive, trash, star and mark the mail of the service account and of its team mailboxes",
+	"mail.send": "Send mail from the address of the service account and from the addresses of its team mailboxes",
+	"drive.read":
+		"Read the drive of the service account, the items that others shared with it, and the shared drives that it is a member of",
+	"drive.write":
+		"Create, change, move and delete the items of its drive and of the shared drives where its role lets it, and change the items that others let it edit",
+	"drive.share": "Give and remove access to the items of its drive",
+	"chat.read": "Read the rooms and direct messages of the service account, and find the public rooms",
+	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what it read",
+};
+
+/** The text of a scope for a caller of this kind: the service text for a service account. */
+export function scopeDescription(scope: Scope, kind: "human" | "agent" | "service"): string {
+	if (kind === "service" && Object.hasOwn(SERVICE_SCOPE_DESCRIPTIONS, scope)) {
+		return SERVICE_SCOPE_DESCRIPTIONS[scope as ServiceScope];
+	}
+	return SCOPES[scope];
+}
 
 export function isScope(value: string): value is Scope {
 	return Object.hasOwn(SCOPES, value);

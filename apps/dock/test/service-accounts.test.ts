@@ -1,6 +1,11 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { EVENTS_SOCKET_PATH, SERVICE_ACTIVITY_LIMITS, SERVICE_SCOPES } from "@asterra/contracts";
+import {
+	EVENTS_SOCKET_PATH,
+	SERVICE_ACTIVITY_LIMITS,
+	SERVICE_SCOPE_DESCRIPTIONS,
+	SERVICE_SCOPES,
+} from "@asterra/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkCredentials, credentialState } from "../src/identity/index.ts";
 import {
@@ -321,6 +326,12 @@ describe("calls of a service account", () => {
 		const whoami = await token.call("account.whoami");
 		expect(whoami).toMatchObject({ principal: { kind: "service" }, credential: "api_key", sign_in: null });
 		expect(whoami.missing_scopes).toEqual([]);
+		// A narrow token learns what it misses, with the text of a service account, not of a person.
+		const narrow = await serviceToken(admin, service.id, ["account.read"]);
+		const missing = (await narrow.call("account.whoami")).missing_scopes;
+		expect(missing.find((entry) => entry.scope === "mail.read")?.description).toBe(
+			SERVICE_SCOPE_DESCRIPTIONS["mail.read"],
+		);
 
 		expect(await codeOf(token.call("account.create_api_key", { label: "x", scopes: ["mail.read"] }))).toBe("forbidden");
 		expect(

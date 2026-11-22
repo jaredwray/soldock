@@ -10,7 +10,9 @@ import {
 	pathParams,
 	resourceList,
 	resources,
+	SERVICE_SCOPE_DESCRIPTIONS,
 	SERVICE_SCOPES,
+	scopeDescription,
 	templateVars,
 	toolName,
 } from "../src/index.ts";
@@ -108,6 +110,18 @@ describe("the operation registry", () => {
 				[...op.scopes, ...(op.anyOfScopes ?? [])].every((scope) => SERVICE_SCOPES.includes(scope)),
 		);
 		expect(missed.map((op) => op.name)).toEqual([]);
+	});
+
+	// The token form of a service account and `missing_scopes` show these texts. A text for a person ("your
+	// mail", rights of owners and admins) would tell a wrong story about the account.
+	it("names the service account, and no right of a person, in the scope text of a service token", () => {
+		for (const scope of SERVICE_SCOPES) {
+			const text = scopeDescription(scope, "service");
+			expect(text, scope).toBe(SERVICE_SCOPE_DESCRIPTIONS[scope as keyof typeof SERVICE_SCOPE_DESCRIPTIONS]);
+			expect(text, scope).not.toMatch(/\byour?\b/i);
+			expect(text, scope).not.toMatch(/owners and admins/i);
+		}
+		expect(scopeDescription("mail.read", "human")).toMatch(/your mail/);
 	});
 
 	it("takes a lifetime for a new API key in days or as a time, never both, within the limit", () => {

@@ -47,6 +47,8 @@ interface ApiKeyManagerProps {
 	people?: readonly Principal[];
 	/** Called after a key is created or revoked, so a view next to the list can load again. */
 	onChange?: () => void;
+	/** The text of each scope in the form, in place of the text for a person. A service account uses it. */
+	scopeDescriptions?: Partial<Record<Scope, string>>;
 }
 
 /** The name of a principal of the directory, or a note for a principal that is not in it. */
@@ -65,6 +67,7 @@ export function ApiKeyManager({
 	defaultTtl = "never",
 	people,
 	onChange,
+	scopeDescriptions,
 }: ApiKeyManagerProps) {
 	const headingId = useId();
 	const toast = useToast();
@@ -178,6 +181,7 @@ export function ApiKeyManager({
 					principalId={principalId}
 					allowedScopes={offeredScopes}
 					narrowed={offeredScopes.length < allowedScopes.length}
+					scopeDescriptions={scopeDescriptions}
 					noun={noun}
 					defaultTtl={defaultTtl}
 					onCreated={(key) => {
@@ -222,6 +226,7 @@ function CreateKeyForm({
 	narrowed,
 	noun,
 	defaultTtl,
+	scopeDescriptions,
 	onCreated,
 }: {
 	principalId: string | undefined;
@@ -230,6 +235,7 @@ function CreateKeyForm({
 	narrowed: boolean;
 	noun: "key" | "token";
 	defaultTtl: TtlChoice;
+	scopeDescriptions: Partial<Record<Scope, string>> | undefined;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
 	const [label, setLabel] = useState("");
@@ -371,7 +377,7 @@ function CreateKeyForm({
 						/>
 						<span>
 							<code>{scope}</code>
-							<span className="check-hint">{SCOPES[scope]}</span>
+							<span className="check-hint">{scopeDescriptions?.[scope] ?? SCOPES[scope]}</span>
 						</span>
 					</label>
 				))}

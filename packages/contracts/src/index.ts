@@ -206,7 +206,17 @@ export {
 	resources,
 	templateVars,
 } from "./resources.ts";
-export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope, SERVICE_SCOPES } from "./scopes.ts";
+export {
+	AGENT_SCOPES,
+	ALL_SCOPES,
+	isScope,
+	SCOPES,
+	type Scope,
+	SERVICE_SCOPE_DESCRIPTIONS,
+	SERVICE_SCOPES,
+	type ServiceScope,
+	scopeDescription,
+} from "./scopes.ts";
 export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
 export {
 	CELL_ALIGNS,
