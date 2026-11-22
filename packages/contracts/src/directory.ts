@@ -90,6 +90,8 @@ export const API_KEY_LIMITS = {
 	labelChars: 100,
 	/** The characters of a description of a key or of a service account. */
 	descriptionChars: 500,
+	/** The minutes that the old secret works after a rotation: the default, and the most. */
+	rotationOverlapMinutes: { default: 60, max: 1440 },
 } as const;
 
 export const ApiKey = z.object({
@@ -111,6 +113,12 @@ export const ApiKey = z.object({
 	revoked_at: Timestamp.nullable(),
 	/** The principal who revoked the key. Null for a key that is not revoked, or that a delete of its principal revoked. */
 	revoked_by: z.string().nullable(),
+	/** When the secret of the key last changed (`account.rotate_api_key`). Null for a key that never rotated. */
+	rotated_at: Timestamp.nullable(),
+	/** The principal who made the last rotation. */
+	rotated_by: z.string().nullable(),
+	/** Until when the secret before the last rotation also works. Null when no old secret works. */
+	previous_secret_expires_at: Timestamp.nullable(),
 });
 export type ApiKey = z.infer<typeof ApiKey>;
 
@@ -479,6 +487,41 @@ export const revokeApiKey = defineOperation({
 	errors: ["not_found"],
 });
 
+export const rotateApiKey = defineOperation({
+	name: "account.rotate_api_key",
+	summary: "Give an API key a new secret",
+	description: [
+		"Gives the key a new secret and returns it once. The key keeps its id, label, scopes and end.",
+		`The old secret works for overlap_minutes more (default ${API_KEY_LIMITS.rotationOverlapMinutes.default}, at most ${API_KEY_LIMITS.rotationOverlapMinutes.max}; 0 stops it at once), so a script can change to the new secret first.`,
+		"A key has one rotation at a time: a rotation while the old secret still works gets conflict. account.end_api_key_rotation stops the old secret before its time.",
+		"The same principals that can revoke a key can rotate it. A revoked or expired key cannot rotate.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		key_id: prefixedId("key"),
+		overlap_minutes: z.number().int().min(0).max(API_KEY_LIMITS.rotationOverlapMinutes.max).optional(),
+	}),
+	output: z.object({ api_key: CreatedApiKey }),
+	errors: ["not_found", "conflict"],
+});
+
+export const endApiKeyRotation = defineOperation({
+	name: "account.end_api_key_rotation",
+	summary: "Stop the old secret of an API key",
+	description:
+		"Stops the secret that the last rotation replaced, before the end of its overlap. The current secret keeps working. A key without an old secret does not change. The same principals that can revoke a key can call it.",
+	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate/end" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ key_id: prefixedId("key") }),
+	output: z.object({ api_key: ApiKey }),
+	errors: ["not_found"],
+});
+
 /** A credential that holds every human scope can call these, because a sign-in gives every human scope. */
 const FULL_CREDENTIAL =
 	"The credential must hold every human scope, because a sign-in gives a session with every human scope.";
@@ -718,6 +761,8 @@ export const directoryOperations = {
 	"account.list_api_keys": listApiKeys,
 	"account.create_api_key": createApiKey,
 	"account.revoke_api_key": revokeApiKey,
+	"account.rotate_api_key": rotateApiKey,
+	"account.end_api_key_rotation": endApiKeyRotation,
 	"account.set_password": setPassword,
 	"account.create_totp_secret": createTotpSecret,
 	"account.enable_totp": enableTotp,

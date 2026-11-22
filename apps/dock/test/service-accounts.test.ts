@@ -283,6 +283,94 @@ describe("tokens of a service account", () => {
 	});
 });
 
+describe("rotation of a token", () => {
+	it("gives a new secret and keeps the old one for its overlap, for owners and admins only", async () => {
+		const { owner, admin, ada, bot, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["account.read", "chat.read"], { expires_in_days: 30 });
+		const before = (await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys[0];
+		// The sponsor, a member, an agent and the token itself cannot rotate it.
+		const rotate = { key_id: token.keyId };
+		expect(await codeOf(ada.call("account.rotate_api_key", rotate))).toBe("forbidden");
+		expect(await codeOf(bot.call("account.rotate_api_key", rotate))).toBe("forbidden");
+		expect(await codeOf(token.call("account.rotate_api_key", rotate))).toBe("forbidden");
+
+		const { api_key } = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 60 });
+		expect(api_key).toMatchObject({
+			id: token.keyId,
+			scopes: ["account.read", "chat.read"],
+			expires_at: before?.expires_at,
+			rotated_by: admin.id,
+		});
+		expect(Date.parse(api_key.previous_secret_expires_at ?? "")).toBeGreaterThan(Date.now() + 59 * 60_000);
+		const fresh = api(api_key.secret);
+		// Both secrets work during the overlap. A second rotation must wait for its end.
+		await token.call("account.whoami");
+		await fresh("account.whoami");
+		expect(await codeOf(owner.call("account.rotate_api_key", rotate))).toBe("conflict");
+		// A live connection of each secret is live. The old one ends with the overlap.
+		const ref = (gen?: number) => ({
+			principalId: service.id,
+			kind: "api_key" as const,
+			id: token.keyId,
+			...(gen ? { gen } : {}),
+		});
+		expect(await checkCredentials(env.DIRECTORY, [ref(), ref(1)])).toEqual(["live", "live"]);
+
+		await owner.call("account.end_api_key_rotation", rotate);
+		expect(await codeOf(token.call("account.whoami"))).toBe("unauthenticated");
+		await fresh("account.whoami");
+		expect(await checkCredentials(env.DIRECTORY, [ref(), ref(1)])).toEqual(["ended", "live"]);
+		const listed = (await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys[0];
+		expect(listed?.previous_secret_expires_at).toBeNull();
+
+		// Rotation and its end are changes of an admin in the log.
+		const page = await activityOf(admin, service.id, 4, token.keyId);
+		const changes = page.entries.filter((entry) => entry.surface === "admin");
+		expect(changes.map((entry) => entry.operation).slice(0, 2)).toEqual([
+			"account.end_api_key_rotation",
+			"account.rotate_api_key",
+		]);
+	});
+
+	it("stops the old secret after its overlap or at once, and refuses a revoked or expired key", async () => {
+		const { admin, ada, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["account.read"]);
+		const first = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 30 });
+		// The overlap ends: the old secret is refused with the reason rotated.
+		await env.DIRECTORY.prepare("UPDATE api_keys SET prev_expires_at = ? WHERE id = ?").bind(PAST, token.keyId).run();
+		expect(await codeOf(token.call("account.whoami"))).toBe("unauthenticated");
+		await api(first.api_key.secret)("account.whoami");
+		await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", {
+				principal_id: service.id,
+				key_id: token.keyId,
+			});
+			expect(page.entries.find((entry) => entry.operation === "auth.refused_token")).toMatchObject({
+				code: "rotated",
+				surface: "rest",
+			});
+		});
+		// An overlap of 0 stops the old secret at once. The overlap of the last rotation ended, so it may rotate.
+		const second = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 0 });
+		expect(second.api_key.previous_secret_expires_at).toBeNull();
+		expect(await codeOf(api(first.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		await api(second.api_key.secret)("account.whoami");
+		// A revoke stops each secret. A revoked key, and an expired key, cannot rotate.
+		const third = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 60 });
+		await admin.call("account.revoke_api_key", { key_id: token.keyId });
+		expect(await codeOf(api(second.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(api(third.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(admin.call("account.rotate_api_key", { key_id: token.keyId }))).toBe("conflict");
+		const other = await serviceToken(admin, service.id, ["account.read"]);
+		await expire(other.keyId);
+		expect(await codeOf(admin.call("account.rotate_api_key", { key_id: other.keyId }))).toBe("conflict");
+		// A person rotates their own key.
+		const own = await ada.call("account.create_api_key", { label: "laptop", scopes: ["account.read"] });
+		const rotated = await ada.call("account.rotate_api_key", { key_id: own.api_key.id });
+		await api(rotated.api_key.secret)("account.whoami");
+	});
+});
+
 describe("the lifetime of an API key", () => {
 	it("ends a token of a service account, and a key of a person, on REST, on MCP and for live connections", async () => {
 		const { owner, admin, ada, service } = await seedService();
@@ -498,7 +586,7 @@ describe("the activity log of a service account", () => {
 		const { room } = await owner.call("chat.create_room", { kind: "private", name: "secret" });
 		expect((await upgradeRoomSocket(room.id, bearer(reader.key))).status).toBeGreaterThanOrEqual(400);
 
-		const interesting = (entries: { operation: string }[]) =>
+		const interesting = <T extends { operation: string }>(entries: T[]) =>
 			entries.filter((entry) => entry.operation === "auth.refused_token" || entry.operation.endsWith("_socket"));
 		const entries = await vi.waitFor(async () => {
 			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });

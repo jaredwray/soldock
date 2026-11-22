@@ -18,6 +18,11 @@ export interface AuthContext extends Caller {
 	/** `oauth`: an access token that an MCP client got through OAuth. */
 	credential: "session" | "api_key" | "oauth";
 	keyId: string | null;
+	/**
+	 * The number of the secret of an API key: 0 for the first secret, one more for each rotation. A live
+	 * connection keeps it, so the old secret stops with its overlap. Null for each other credential.
+	 */
+	keyGeneration: number | null;
 	/** The OAuth grant of an `oauth` credential. A lasting effect, such as a webhook, stops with the grant. */
 	grantId: string | null;
 	/** The SHA-256 of the session cookie, for a session. A change can end the other sessions and keep this one. */
@@ -82,6 +87,7 @@ export async function authenticate(
 				kind: granted.principal.kind,
 				credential: "oauth",
 				keyId: null,
+				keyGeneration: null,
 				grantId: granted.grant.id,
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
@@ -102,6 +108,7 @@ export async function authenticate(
 			kind: found.principal.service ? "service" : found.principal.kind,
 			credential: "api_key",
 			keyId: found.key.id,
+			keyGeneration: found.generation,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,
@@ -120,6 +127,7 @@ export async function authenticate(
 		kind: "human",
 		credential: "session",
 		keyId: null,
+		keyGeneration: null,
 		grantId: null,
 		sessionHash: session.tokenHash,
 		accessHash: null,

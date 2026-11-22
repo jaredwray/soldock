@@ -51,6 +51,16 @@ interface ApiKeyManagerProps {
 	scopeDescriptions?: Partial<Record<Scope, string>>;
 }
 
+/** How long the old secret works after a rotation, in minutes. */
+type OverlapChoice = "0" | "15" | "60" | "1440";
+
+const OVERLAP_OPTIONS: readonly { value: OverlapChoice; label: string }[] = [
+	{ value: "0", label: "Now" },
+	{ value: "15", label: "In 15 minutes" },
+	{ value: "60", label: "In 1 hour" },
+	{ value: "1440", label: "In 24 hours" },
+];
+
 /** The name of a principal of the directory, or a note for a principal that is not in it. */
 function personName(people: readonly Principal[], id: string | null): string {
 	if (id === null) return "Unknown";
@@ -77,6 +87,21 @@ export function ApiKeyManager({
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
 	const [revoking, setRevoking] = useState<ApiKey | null>(null);
+	const [rotating, setRotating] = useState<ApiKey | null>(null);
+	const [overlap, setOverlap] = useState<OverlapChoice>("60");
+	const [rotated, setRotated] = useState<CreatedApiKey | null>(null);
+	const overlapId = useId();
+
+	async function endRotation(key: ApiKey) {
+		try {
+			await api.call("account.end_api_key_rotation", { key_id: key.id });
+			toast({ message: `The old secret of “${key.label}” stopped.` });
+			await load();
+			onChange?.();
+		} catch (caught) {
+			toast({ message: `The old secret did not stop. ${errorMessage(caught)}`, tone: "error" });
+		}
+	}
 
 	const load = useCallback(async () => {
 		try {
@@ -148,6 +173,17 @@ export function ApiKeyManager({
 											{people && key.revoked && key.revoked_by && (
 												<div className="row-note">Revoked by {personName(people, key.revoked_by)}</div>
 											)}
+											{key.rotated_at && (
+												<div className="row-note" title={fullDate(key.rotated_at)}>
+													Rotated {shortDate(key.rotated_at)}
+													{people && key.rotated_by ? ` by ${personName(people, key.rotated_by)}` : ""}
+												</div>
+											)}
+											{key.previous_secret_expires_at && (
+												<div className="row-note" title={fullDate(key.previous_secret_expires_at)}>
+													Old secret works until {fullDate(key.previous_secret_expires_at)}
+												</div>
+											)}
 										</td>
 										<td className="cell-date col-optional" title={fullDate(key.created_at)}>
 											{shortDate(key.created_at)}
@@ -160,16 +196,41 @@ export function ApiKeyManager({
 											{key.last_used_at ? shortDate(key.last_used_at) : "Never"}
 										</td>
 										<td className="cell-actions">
-											{!key.revoked && (
-												<button
-													type="button"
-													className="button button-small button-danger-outline"
-													onClick={() => setRevoking(key)}
-													aria-label={`Revoke ${noun} ${key.label}`}
-												>
-													Revoke
-												</button>
-											)}
+											<div className="row-actions">
+												{key.previous_secret_expires_at && (
+													<button
+														type="button"
+														className="button button-small"
+														onClick={() => void endRotation(key)}
+														aria-label={`Stop the old secret of ${noun} ${key.label} now`}
+													>
+														Stop old secret now
+													</button>
+												)}
+												{!key.revoked && !key.expired && !key.previous_secret_expires_at && (
+													<button
+														type="button"
+														className="button button-small"
+														onClick={() => {
+															setOverlap("60");
+															setRotating(key);
+														}}
+														aria-label={`Rotate ${noun} ${key.label}`}
+													>
+														Rotate
+													</button>
+												)}
+												{!key.revoked && (
+													<button
+														type="button"
+														className="button button-small button-danger-outline"
+														onClick={() => setRevoking(key)}
+														aria-label={`Revoke ${noun} ${key.label}`}
+													>
+														Revoke
+													</button>
+												)}
+											</div>
 										</td>
 									</tr>
 								))}
@@ -197,6 +258,46 @@ export function ApiKeyManager({
 					title={noun === "token" ? "Copy the new token" : undefined}
 					onClose={() => setCreated(null)}
 				/>
+			)}
+			{rotating && (
+				<ConfirmDialog
+					title={`Rotate this ${noun}?`}
+					confirmLabel="Rotate"
+					onClose={() => setRotating(null)}
+					onConfirm={async () => {
+						const result = await api.call("account.rotate_api_key", {
+							key_id: rotating.id,
+							overlap_minutes: Number(overlap),
+						});
+						setRotated(result.api_key);
+						await load();
+						onChange?.();
+					}}
+				>
+					<p>
+						<strong>{rotating.label}</strong> gets a new secret. It keeps its scopes and its end. Change the secret in
+						each script before the old one stops.
+					</p>
+					<div className="field">
+						<label htmlFor={overlapId} className="field-label">
+							The old secret stops
+						</label>
+						<Select id={overlapId} value={overlap} options={OVERLAP_OPTIONS} onChange={setOverlap} />
+					</div>
+				</ConfirmDialog>
+			)}
+			{rotated && (
+				<SecretDialog
+					apiKey={rotated}
+					title={noun === "token" ? "Copy the new secret of the token" : "Copy the new secret of the key"}
+					onClose={() => setRotated(null)}
+				>
+					<p className="field-hint">
+						{rotated.previous_secret_expires_at
+							? `The old secret works until ${fullDate(rotated.previous_secret_expires_at)}.`
+							: "The old secret stopped."}
+					</p>
+				</SecretDialog>
 			)}
 			{revoking && (
 				<ConfirmDialog

@@ -33,10 +33,12 @@ import {
 	disableTotp,
 	domainOf,
 	enableTotp,
+	endApiKeyRotation,
 	getApiKey,
 	getDirectoryRecords,
 	getPrincipal,
 	getPrincipals,
+	keyExpired,
 	listApiKeys,
 	listPrincipalPage,
 	liveApiKeys,
@@ -47,6 +49,7 @@ import {
 	removeMailDomain,
 	restorePrincipal,
 	revokeApiKey,
+	rotateApiKey,
 	setPassword,
 	setPendingTotpSecret,
 	unknownPrincipalIds,
@@ -70,6 +73,8 @@ type IdentityOperation =
 	| "account.list_api_keys"
 	| "account.create_api_key"
 	| "account.revoke_api_key"
+	| "account.rotate_api_key"
+	| "account.end_api_key_rotation"
 	| "account.set_password"
 	| "account.create_totp_secret"
 	| "account.enable_totp"
@@ -653,6 +658,39 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		auditOk(call, "account.revoke_api_key", key.id);
 		if (changed) recordServiceChange(call, owner, "account.revoke_api_key", key.id);
 		return { revoked: true };
+	},
+
+	async "account.rotate_api_key"(call, input) {
+		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
+		if (!key) throw new OperationError("not_found", "No API key has that id.");
+		const owner = await credentialOwner(call, key.principal_id);
+		const overlapMinutes = input.overlap_minutes ?? API_KEY_LIMITS.rotationOverlapMinutes.default;
+		const rotated = await rotateApiKey(call.env.DIRECTORY, key.id, call.caller.principal.id, overlapMinutes * 60_000);
+		if (!rotated) {
+			const now = await getApiKey(call.env.DIRECTORY, key.id);
+			throw new OperationError(
+				"conflict",
+				!now || now.revoked_at !== null
+					? "This key is revoked. Create a new key."
+					: keyExpired(now)
+						? "This key expired. Create a new key."
+						: "The old secret of the last rotation still works. Wait for its end, or call account.end_api_key_rotation first.",
+			);
+		}
+		auditOk(call, "account.rotate_api_key", key.id);
+		recordServiceChange(call, owner, "account.rotate_api_key", key.id);
+		return { api_key: { ...toApiKeyOutput(rotated.key), secret: rotated.secret } };
+	},
+
+	async "account.end_api_key_rotation"(call, input) {
+		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
+		if (!key) throw new OperationError("not_found", "No API key has that id.");
+		const owner = await credentialOwner(call, key.principal_id);
+		const ended = await endApiKeyRotation(call.env.DIRECTORY, key.id);
+		if (!ended) throw new OperationError("not_found", "No API key has that id.");
+		auditOk(call, "account.end_api_key_rotation", key.id);
+		recordServiceChange(call, owner, "account.end_api_key_rotation", key.id);
+		return { api_key: toApiKeyOutput(ended) };
 	},
 
 	async "account.set_password"(call, input) {

@@ -386,6 +386,11 @@ export interface CredentialRef {
 	kind: AuthContext["credential"];
 	id: string;
 	grantId?: string;
+	/**
+	 * The number of the secret of an API key, when the key rotated before the open (1 or more). A ref
+	 * without it names the first secret (0), so the refs of keys that never rotated do not change.
+	 */
+	gen?: number;
 }
 
 /** The same credential can open several sockets and register a push device. */
@@ -403,6 +408,7 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 	if (id === null) throw new Error(`a ${caller.credential} credential without an id`);
 	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
 	if (caller.grantId !== null) ref.grantId = caller.grantId;
+	if (caller.keyGeneration !== null && caller.keyGeneration > 0) ref.gen = caller.keyGeneration;
 	return ref;
 }
 
@@ -425,11 +431,14 @@ export type CredentialCheck = "live" | "renew" | "ended";
  */
 export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
-	const keys = refs.map(credentialKey);
+	// Two secrets of one key are two credentials here: the old one stops with its overlap. The key of a
+	// ref has the number of its secret. `credentialKey` stays as it is, because push devices match on it.
+	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}`);
 	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(
-			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') AS key,
+			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') || ':'
+					|| COALESCE(json_extract(ref.value, '$.gen'), 0) AS key,
 				CASE json_extract(ref.value, '$.kind')
 					WHEN 'session' THEN CASE WHEN p.kind = 'human' AND EXISTS (
 						SELECT 1 FROM sessions s
@@ -438,7 +447,9 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 					WHEN 'api_key' THEN CASE WHEN EXISTS (
 						SELECT 1 FROM api_keys k
 						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL
-							AND ${keyNotExpired(2, "k")})
+							AND ${keyNotExpired(2, "k")}
+							AND (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation
+								OR (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation - 1 AND k.prev_expires_at > ?2)))
 						THEN 'live' END
 					WHEN 'oauth' THEN CASE
 						WHEN EXISTS (

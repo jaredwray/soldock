@@ -47,6 +47,12 @@ export interface ApiKeyRecord {
 	expires_at: string | null;
 	revoked_at: string | null;
 	revoked_by: string | null;
+	/** The number of rotations. The secret of each rotation has its number: 0 for the first secret. */
+	rotation: number;
+	rotated_at: string | null;
+	rotated_by: string | null;
+	/** Until when the secret before the last rotation also works. Null: no old secret works. */
+	prev_expires_at: string | null;
 }
 
 interface PrincipalRow
@@ -75,8 +81,11 @@ const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 /** The start of a select of principals with their primary address: the tables and the joins follow. */
 const PRINCIPAL_SELECT_FROM = `SELECT ${PRINCIPAL_COLUMNS}, a.address FROM`;
 
-const API_KEY_SELECT = `SELECT id, principal_id, label, description, scopes, created_by, created_at, last_used_at, expires_at,
-	revoked_at, revoked_by FROM api_keys`;
+/** The columns of an ApiKeyRecord. The hashes of the secrets never leave the store. */
+const API_KEY_COLUMNS = `id, principal_id, label, description, scopes, created_by, created_at, last_used_at, expires_at,
+	revoked_at, revoked_by, rotation, rotated_at, rotated_by, prev_expires_at`;
+
+const API_KEY_SELECT = `SELECT ${API_KEY_COLUMNS} FROM api_keys`;
 
 /** The condition of a key that did not expire, with the time of now as parameter `?n`. */
 export function keyNotExpired(n: number, table = ""): string {
@@ -681,6 +690,10 @@ export async function createPrincipal(
 			expires_at: null,
 			revoked_at: null,
 			revoked_by: null,
+			rotation: 0,
+			rotated_at: null,
+			rotated_by: null,
+			prev_expires_at: null,
 		},
 		secret,
 	};
@@ -1004,6 +1017,10 @@ export async function createApiKey(
 			expires_at: expiresAt,
 			revoked_at: null,
 			revoked_by: null,
+			rotation: 0,
+			rotated_at: null,
+			rotated_by: null,
+			prev_expires_at: null,
 		},
 		secret,
 	};
@@ -1045,29 +1062,82 @@ export async function liveApiKeys(db: D1Database, principalId: string): Promise<
 	return results.map(toApiKey);
 }
 
-/** The live key with this secret, and its principal. A revoked key and an expired key are not live. */
+/**
+ * The live key with this secret, its principal, and the number of the secret: `rotation` for the current
+ * secret, and `rotation - 1` for the secret before the last rotation while its overlap lasts. A revoked
+ * key and an expired key are not live.
+ */
 export async function findApiKey(
 	db: D1Database,
 	secret: string,
-): Promise<{ key: ApiKeyRecord; principal: PrincipalRecord } | null> {
+): Promise<{ key: ApiKeyRecord; principal: PrincipalRecord; generation: number } | null> {
 	if (!secret.startsWith(API_KEY_PREFIX)) return null;
 	const row = await db
-		.prepare(`${API_KEY_SELECT} WHERE key_hash = ?1 AND revoked_at IS NULL AND ${keyNotExpired(2)}`)
+		.prepare(
+			`SELECT ${API_KEY_COLUMNS}, CASE WHEN key_hash = ?1 THEN rotation ELSE rotation - 1 END AS generation
+			FROM api_keys
+			WHERE (key_hash = ?1 OR (prev_key_hash = ?1 AND prev_expires_at > ?2))
+				AND revoked_at IS NULL AND ${keyNotExpired(2)}`,
+		)
 		.bind(await sha256Hex(secret), new Date().toISOString())
-		.first<ApiKeyRow>();
+		.first<ApiKeyRow & { generation: number }>();
 	if (!row) return null;
 	const principal = await getPrincipal(db, row.principal_id);
-	return principal ? { key: toApiKey(row), principal } : null;
+	const { generation, ...key } = row;
+	return principal ? { key: toApiKey(key), principal, generation } : null;
+}
+
+/**
+ * Gives a key a new secret. The old secret works until `overlapMs` from now, or stops at once for 0. The
+ * update matches only a live key without a running overlap, so a key has one rotation at a time. Returns
+ * null when it matched no key: revoked, expired, unknown, or in an overlap.
+ */
+export async function rotateApiKey(
+	db: D1Database,
+	id: string,
+	rotatedBy: string,
+	overlapMs: number,
+): Promise<{ key: ApiKeyRecord; secret: string } | null> {
+	const now = Date.now();
+	const secret = `${API_KEY_PREFIX}${randomToken(32)}`;
+	const row = await db
+		.prepare(
+			`UPDATE api_keys SET prev_key_hash = CASE WHEN ?3 IS NULL THEN NULL ELSE key_hash END,
+				prev_expires_at = ?3, key_hash = ?4, rotation = rotation + 1, rotated_at = ?2, rotated_by = ?5
+			WHERE id = ?1 AND revoked_at IS NULL AND ${keyNotExpired(2)}
+				AND (prev_expires_at IS NULL OR prev_expires_at <= ?2)
+			RETURNING ${API_KEY_COLUMNS}`,
+		)
+		.bind(
+			id,
+			new Date(now).toISOString(),
+			overlapMs > 0 ? new Date(now + overlapMs).toISOString() : null,
+			await sha256Hex(secret),
+			rotatedBy,
+		)
+		.first<ApiKeyRow>();
+	return row ? { key: toApiKey(row), secret } : null;
+}
+
+/** Stops the secret that the last rotation replaced. Returns the key, or null for an unknown key. */
+export async function endApiKeyRotation(db: D1Database, id: string): Promise<ApiKeyRecord | null> {
+	const row = await db
+		.prepare(
+			`UPDATE api_keys SET prev_key_hash = NULL, prev_expires_at = NULL WHERE id = ? RETURNING ${API_KEY_COLUMNS}`,
+		)
+		.bind(id)
+		.first<ApiKeyRow>();
+	return row ? toApiKey(row) : null;
 }
 
 /** Why a token of a service account did not authenticate. */
-export type StoppedReason = "revoked" | "expired" | "archived";
+export type StoppedReason = "revoked" | "expired" | "archived" | "rotated";
 
 /**
  * The token of a service account with this secret, when it exists and does not work now: revoked,
  * expired, or of an archived account. Null for each other secret: an unknown secret, a live token, a key
- * of a person or an agent, and a token of a deleted account. The activity log of the account records the
- * refusal.
+ * of a person or an agent, and a token of a deleted account. The secret that a rotation replaced gives
+ * `rotated` after its overlap. The activity log of the account records the refusal.
  */
 export async function findStoppedServiceKey(
 	db: D1Database,
@@ -1076,9 +1146,9 @@ export async function findStoppedServiceKey(
 	if (!secret.startsWith(API_KEY_PREFIX)) return null;
 	const row = await db
 		.prepare(
-			`SELECT k.id, k.principal_id, k.revoked_at, k.expires_at, p.archived_at
+			`SELECT k.id, k.principal_id, k.revoked_at, k.expires_at, p.archived_at, k.key_hash = ?1 AS current
 			FROM api_keys k JOIN principals p ON p.id = k.principal_id
-			WHERE k.key_hash = ?1 AND p.service = 1 AND p.deleted_at IS NULL`,
+			WHERE (k.key_hash = ?1 OR k.prev_key_hash = ?1) AND p.service = 1 AND p.deleted_at IS NULL`,
 		)
 		.bind(await sha256Hex(secret))
 		.first<{
@@ -1087,6 +1157,7 @@ export async function findStoppedServiceKey(
 			revoked_at: string | null;
 			expires_at: string | null;
 			archived_at: string | null;
+			current: number;
 		}>();
 	if (!row) return null;
 	const reason: StoppedReason | null =
@@ -1096,7 +1167,9 @@ export async function findStoppedServiceKey(
 				? "expired"
 				: row.archived_at !== null
 					? "archived"
-					: null;
+					: row.current === 0
+						? "rotated"
+						: null;
 	return reason ? { keyId: row.id, principalId: row.principal_id, reason } : null;
 }
 
