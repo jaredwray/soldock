@@ -47,6 +47,12 @@ interface ActivityRow extends Record<string, SqlStorageValue> {
 	request_id: string | null;
 }
 
+/** The operation of a refused token in the log. */
+const REFUSED_TOKEN_OP = "auth.refused_token";
+
+/** A refused token adds at most one entry in this time. */
+const REFUSAL_WINDOW_MS = 60_000;
+
 /** The log removes old rows after each `PRUNE_EVERY` inserts. */
 const PRUNE_EVERY = 100;
 
@@ -59,8 +65,22 @@ export class ServiceActivityStore {
 		this.sql = sql;
 	}
 
-	/** Adds one entry. Each `PRUNE_EVERY`th entry also removes the entries above the limits. */
+	/**
+	 * Adds one entry. Each `PRUNE_EVERY`th entry also removes the entries above the limits. A refused token
+	 * adds at most one entry in each `REFUSAL_WINDOW_MS` for each token, so a script that keeps a dead token
+	 * cannot push the real calls out of the log.
+	 */
 	record(entry: ServiceActivityInput): void {
+		if (entry.op === REFUSED_TOKEN_OP && entry.keyId !== null) {
+			const newest = this.sql
+				.exec<{ at: number }>(
+					"SELECT at FROM service_activity WHERE key_id = ? AND op = ? ORDER BY seq DESC LIMIT 1",
+					entry.keyId,
+					REFUSED_TOKEN_OP,
+				)
+				.toArray()[0];
+			if (newest && newest.at > entry.at - REFUSAL_WINDOW_MS) return;
+		}
 		const seq = this.sql
 			.exec<{ seq: number }>(
 				`INSERT INTO service_activity (at, op, result, code, surface, key_id, actor_id, resource_id, request_id)

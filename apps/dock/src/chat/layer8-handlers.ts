@@ -19,6 +19,7 @@ import {
 	getPrincipals,
 	isAdmin,
 	type ReminderRecord,
+	recordServiceMemberships,
 	type ScheduledRecord,
 	type SectionRecord,
 } from "../identity/index.ts";
@@ -712,13 +713,19 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			const peer = peers[0] as ActorRecord;
 			const opened = openRoom(call, await dmRoomId(call.caller.id, peer.principal_id));
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
-			if (res.created) auditOk(call, "chat.open_dm", res.room.id);
+			if (res.created) {
+				auditOk(call, "chat.open_dm", res.room.id);
+				recordServiceMemberships(call, [peer.principal_id], "chat.open_dm", res.room.id);
+			}
 			return { room: toRoom(res.room) };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
 		const opened = openRoom(call, roomId);
 		const res = accept(await opened.room.openGroupDm(opened.ctx, peers));
-		if (res.created) auditOk(call, "chat.open_group_dm", res.room.id);
+		if (res.created) {
+			auditOk(call, "chat.open_group_dm", res.room.id);
+			recordServiceMemberships(call, uniqueOthers, "chat.open_group_dm", res.room.id);
+		}
 		return { room: toRoom(res.room) };
 	},
 

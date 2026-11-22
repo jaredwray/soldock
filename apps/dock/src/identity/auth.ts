@@ -1,5 +1,6 @@
 import { ALL_SCOPES, type PrincipalKind, type Scope } from "@asterra/contracts";
 import { type Caller, type InvokeOutcome, sha256Hex } from "../platform/index.ts";
+import { type RequestTrace, recordRefusedToken } from "./access.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";
 
@@ -59,7 +60,11 @@ export async function authenticate(
 	request: Request,
 	env: Env,
 	waitUntil: (promise: Promise<unknown>) => void,
-	options: { allowSession: boolean },
+	options: {
+		allowSession: boolean;
+		/** Where the request came from. A refused token of a service account goes into its activity log. */
+		trace: RequestTrace;
+	},
 ): Promise<AuthContext | null> {
 	const authorization = request.headers.get("authorization");
 	if (authorization !== null) {
@@ -84,7 +89,10 @@ export async function authenticate(
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
-		if (!found || found.principal.archived_at !== null) return null;
+		if (!found || found.principal.archived_at !== null) {
+			waitUntil(recordRefusedToken(env, match[1], options.trace));
+			return null;
+		}
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
 		const ceiling = new Set<Scope>(scopeCeiling(found.principal));

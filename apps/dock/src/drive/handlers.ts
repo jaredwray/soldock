@@ -6,7 +6,13 @@ import {
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
-import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import {
+	type CallContext,
+	getPrincipals,
+	isAdmin,
+	recordServiceMemberships,
+	unknownPrincipalIds,
+} from "../identity/index.ts";
 import {
 	base64ToBytes,
 	bytesToBase64,
@@ -632,13 +638,17 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		const permission = accept(await own.space.share(own.ctx, input.item_id, input.principal_id, input.role));
 		auditOk(call, own, "drive.share_item", `${input.item_id}:${input.principal_id}:${input.role}`);
+		recordServiceMemberships(call, [input.principal_id], "drive.share_item", input.item_id);
 		return { permission: { ...permission, created_at: new Date(permission.created_at).toISOString() } };
 	},
 
 	async "drive.unshare_item"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		const result = accept(await opened.space.unshare(opened.ctx, input.item_id, input.principal_id));
-		if (result.removed) auditOk(call, opened, "drive.unshare_item", `${input.item_id}:${input.principal_id}`);
+		if (result.removed) {
+			auditOk(call, opened, "drive.unshare_item", `${input.item_id}:${input.principal_id}`);
+			recordServiceMemberships(call, [input.principal_id], "drive.unshare_item", input.item_id);
+		}
 		return result;
 	},
 
@@ -676,6 +686,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			for (const member of members) {
 				auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
 			}
+			recordServiceMemberships(
+				call,
+				members.map((member) => member.principalId),
+				"drive.create_shared_drive",
+				driveId,
+			);
 		}
 		return toSharedDrive(call, created.drive);
 	},
@@ -725,6 +741,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		for (const member of result.changed) {
 			auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
 		}
+		recordServiceMemberships(
+			call,
+			result.changed.map((member) => member.principalId),
+			"drive.add_shared_drive_members",
+			input.drive_id,
+		);
 		return toSharedDrive(call, result.drive);
 	},
 
@@ -733,6 +755,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const result = accept(await opened.space.removeMember(opened.ctx, input.principal_id));
 		if (result.removed) {
 			auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
+			recordServiceMemberships(call, [input.principal_id], "drive.remove_shared_drive_member", input.drive_id);
 			await loseDriveAccess(call.env.DIRECTORY, input.drive_id, input.principal_id);
 		}
 		return result;

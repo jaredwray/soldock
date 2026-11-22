@@ -604,7 +604,11 @@ export const ServiceActivityEntry = z.object({
 	result: z.enum(["ok", "denied", "error"]),
 	/** The error code of a call that did not work. */
 	code: z.string().nullable(),
-	/** `rest` and `mcp`: a call of the service account. `admin`: a change by an owner or an admin. */
+	/**
+	 * `rest` and `mcp`: a call of the service account. `admin`: a change by a different principal to the
+	 * account, its tokens or its memberships (an owner or an admin, or a member who adds it to a room or
+	 * shares an item with it).
+	 */
 	surface: z.enum(["rest", "mcp", "admin"]),
 	/** The token of the call, or the token that the change was about. */
 	key_id: z.string().nullable(),

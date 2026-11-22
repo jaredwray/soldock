@@ -1060,6 +1060,46 @@ export async function findApiKey(
 	return principal ? { key: toApiKey(row), principal } : null;
 }
 
+/** Why a token of a service account did not authenticate. */
+export type StoppedReason = "revoked" | "expired" | "archived";
+
+/**
+ * The token of a service account with this secret, when it exists and does not work now: revoked,
+ * expired, or of an archived account. Null for each other secret: an unknown secret, a live token, a key
+ * of a person or an agent, and a token of a deleted account. The activity log of the account records the
+ * refusal.
+ */
+export async function findStoppedServiceKey(
+	db: D1Database,
+	secret: string,
+): Promise<{ keyId: string; principalId: string; reason: StoppedReason } | null> {
+	if (!secret.startsWith(API_KEY_PREFIX)) return null;
+	const row = await db
+		.prepare(
+			`SELECT k.id, k.principal_id, k.revoked_at, k.expires_at, p.archived_at
+			FROM api_keys k JOIN principals p ON p.id = k.principal_id
+			WHERE k.key_hash = ?1 AND p.service = 1 AND p.deleted_at IS NULL`,
+		)
+		.bind(await sha256Hex(secret))
+		.first<{
+			id: string;
+			principal_id: string;
+			revoked_at: string | null;
+			expires_at: string | null;
+			archived_at: string | null;
+		}>();
+	if (!row) return null;
+	const reason: StoppedReason | null =
+		row.revoked_at !== null
+			? "revoked"
+			: row.expires_at !== null && Date.parse(row.expires_at) <= Date.now()
+				? "expired"
+				: row.archived_at !== null
+					? "archived"
+					: null;
+	return reason ? { keyId: row.id, principalId: row.principal_id, reason } : null;
+}
+
 /** Records the use of a key, at most once an hour, so a busy agent does not write on each call. */
 export async function touchApiKey(db: D1Database, key: ApiKeyRecord): Promise<void> {
 	const now = new Date();

@@ -157,7 +157,11 @@ export function mountMcp(
 			});
 		}
 		const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
-		const reauthenticate = () => authenticate(c.req.raw, c.env, waitUntil, { allowSession: false });
+		const reauthenticate = () =>
+			authenticate(c.req.raw, c.env, waitUntil, {
+				allowSession: false,
+				trace: { requestId: c.var.requestId, surface: "mcp" },
+			});
 		const caller = await reauthenticate();
 		if (!caller) {
 			const response = new OperationError(

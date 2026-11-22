@@ -347,6 +347,12 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   - Each change by an owner or an admin adds an entry with the surface `admin`: the creation, a change,
     a policy change, an archive, a restore, a delete, a token create, a token revoke, and a team mailbox
     membership.
+  - A membership change that a different principal makes for the account also adds an entry with the
+    surface `admin` (`recordServiceMemberships`), with that principal as the actor: a room (create,
+    add, remove, a new direct message or group message), a shared drive (create, add, remove), and the
+    share of a Drive item (share, unshare). The room, the drive or the item is the resource. A member who
+    is not an admin can make such a change, for example add the account to a room. A change that the
+    account makes itself is its own call, with the surface `rest` or `mcp`, and adds no `admin` entry.
   - The invoker reports each call to the `record` hook of the call context (`activityRecorder`). The
     write goes through `waitUntil`, so it never slows or fails the call. A failed write logs a warning.
   - Each 100th entry removes the calls after the newest 10,000 calls, and the entries older than 90 days
@@ -360,13 +366,20 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
     `rest`: `events.open_socket`, or `chat.open_room_socket` with the room as the resource. A feed that
     MCP `subscriptions/listen` opens to the same sockets adds the same entry with the surface `mcp`
     (`chat/watch.ts`). Only a service account gets this entry. The events on the socket add no entry.
+  - A refused socket open adds the same entry with the result `denied` (for `forbidden`) or `error`, and
+    the code, for example a token without `chat.read`, or a room of which the account is not a member.
+  - A refused token adds `auth.refused_token` with the result `denied` and the reason as the code:
+    `revoked`, `expired` or `archived` (`recordRefusedToken`, from `authenticate`). It has the surface of
+    the request and the token. A secret of no token names no account, so it adds nothing. A token adds
+    at most one such entry in each minute, so a script that keeps a dead token cannot push the real
+    calls out of the log.
   - `directory.list_service_account_activity` reads it, the newest first, in pages with a cursor, and can
     keep the entries of one token.
   - A download under `/dl/` and an upload part under `/blob/` run their operation with the same call
     context, so they add an entry with the surface `rest`. A slash command adds an entry for itself and
     one for the operation that it runs.
-  - Not recorded yet: a refused token (`401`), a refused socket open, and an event of an MCP
-    subscription.
+  - An event of an MCP subscription or of a socket adds no entry, by design. It gives no access beyond
+    the open of its feed, which is in the log, and its count would push the real calls out of the log.
 - **Access.** `directory.get_service_account_access` returns its team mailboxes, its shared drives and
   its rooms with its role, the Drive items that others shared directly with it, with its role, and the
   scopes of each live token. The memberships come from the index tables in D1 (`team_mailbox_members`,

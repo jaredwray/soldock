@@ -14,7 +14,9 @@ export {
 	isAdmin,
 	type MissingScope,
 	missingScopes,
+	recordServiceMemberships,
 	recordSocketOpen,
+	refusedOutcome,
 } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export type {

@@ -478,6 +478,103 @@ describe("the life of a service account", () => {
 });
 
 describe("the activity log of a service account", () => {
+	it("records a refused token at most once a minute, with the reason, and a refused socket open", async () => {
+		const { owner, admin, service } = await seedService();
+		const revoked = await serviceToken(admin, service.id, ["account.read"]);
+		const expired = await serviceToken(admin, service.id, ["account.read"]);
+		const narrow = await serviceToken(admin, service.id, ["account.read"]);
+		const reader = await serviceToken(admin, service.id, ["chat.read"]);
+		await admin.call("account.revoke_api_key", { key_id: revoked.keyId });
+		await expire(expired.keyId);
+		// Two refusals of one token within a minute add one entry.
+		expect(await codeOf(revoked.call("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(revoked.call("account.whoami"))).toBe("unauthenticated");
+		expect((await mcp(expired.key, "tools/list")).status).toBe(401);
+		// A secret of no token names no account, so it adds nothing.
+		expect((await request("/api/v1/account", { headers: bearer(`sdk_${"x".repeat(43)}`) })).status).toBe(401);
+		// A socket that the credential cannot open, and a room of which the account is not a member.
+		const events = await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(narrow.key) } });
+		expect(events.status).toBe(403);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "secret" });
+		expect((await upgradeRoomSocket(room.id, bearer(reader.key))).status).toBeGreaterThanOrEqual(400);
+
+		const interesting = (entries: { operation: string }[]) =>
+			entries.filter((entry) => entry.operation === "auth.refused_token" || entry.operation.endsWith("_socket"));
+		const entries = await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
+			const found = interesting(page.entries);
+			expect(found).toHaveLength(4);
+			return found;
+		});
+		expect(entries.map((entry) => [entry.operation, entry.result, entry.code, entry.surface, entry.key_id])).toEqual(
+			expect.arrayContaining([
+				["auth.refused_token", "denied", "revoked", "rest", revoked.keyId],
+				["auth.refused_token", "denied", "expired", "mcp", expired.keyId],
+				["events.open_socket", "denied", "forbidden", "rest", narrow.keyId],
+			]),
+		);
+		const roomEntry = entries.find((entry) => entry.operation === "chat.open_room_socket");
+		expect(roomEntry).toMatchObject({ resource_id: room.id, key_id: reader.keyId, surface: "rest" });
+		expect(["denied", "error"]).toContain(roomEntry?.result);
+
+		// The token of an archived account is refused with the reason archived.
+		await admin.call("directory.archive_principal", { principal_id: service.id });
+		expect(await codeOf(narrow.call("account.whoami"))).toBe("unauthenticated");
+		await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", {
+				principal_id: service.id,
+				key_id: narrow.keyId,
+			});
+			expect(page.entries[0]).toMatchObject({ operation: "auth.refused_token", code: "archived" });
+		});
+	});
+
+	it("records the membership changes that others make for it, and not its own", async () => {
+		const { owner, admin, ada, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["chat.read", "chat.write"]);
+		const { shared_drive: drive } = await admin.call("drive.create_shared_drive", {
+			name: "Ops",
+			members: [
+				{ principal_id: admin.id, role: "manager" },
+				{ principal_id: service.id, role: "viewer" },
+			],
+		});
+		await admin.call("drive.remove_shared_drive_member", { drive_id: drive.id, principal_id: service.id });
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "ada-room" });
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [service.id] });
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: service.id });
+		const file = (await ada.call("drive.upload_file", { name: "a.txt", content_base64: base64("a") })).item;
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: service.id, role: "viewer" });
+		const { room: lobby } = await owner.call("chat.create_room", { kind: "public", name: "lobby" });
+		await token.call("chat.join_room", { room_id: lobby.id });
+
+		const memberships = new Set([
+			"drive.create_shared_drive",
+			"drive.remove_shared_drive_member",
+			"chat.add_members",
+			"chat.remove_member",
+			"drive.share_item",
+			"chat.join_room",
+		]);
+		const entries = await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
+			const found = page.entries.filter((entry) => memberships.has(entry.operation));
+			expect(found).toHaveLength(6);
+			return found;
+		});
+		expect(entries.map((entry) => [entry.operation, entry.surface, entry.actor_id, entry.resource_id])).toEqual(
+			expect.arrayContaining([
+				["drive.create_shared_drive", "admin", admin.id, drive.id],
+				["drive.remove_shared_drive_member", "admin", admin.id, drive.id],
+				["chat.add_members", "admin", ada.id, room.id],
+				["chat.remove_member", "admin", ada.id, room.id],
+				["drive.share_item", "admin", ada.id, file.id],
+				// Its own join is its own call: one entry with the surface rest, and no admin entry.
+				["chat.join_room", "rest", service.id, lobby.id],
+			]),
+		);
+	});
+
 	it("records each call with its token, surface, result and request id, and each change by an admin", async () => {
 		const { admin, service } = await seedService();
 		const token = await serviceToken(admin, service.id, ["account.read", "mail.read", "mail.send"]);
