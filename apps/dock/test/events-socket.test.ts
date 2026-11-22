@@ -44,13 +44,34 @@ const checkedSockets = (principalId: string) =>
 				.length,
 	);
 
+/** The states for the objects of the members that wait in the outbox of a room and are due. */
+const dueMemberStates = (room: DurableObjectStub) =>
+	runInDurableObject(
+		room,
+		(_instance, state) =>
+			state.storage.sql
+				.exec<{ n: number }>(
+					"SELECT COUNT(*) AS n FROM outbox WHERE target LIKE 'principal:%' AND next_attempt_at <= ?",
+					Date.now(),
+				)
+				.one().n,
+	);
+
 /**
  * With a fake clock, the alarm of a room is far in the future: the room sends the states of the other
  * members after `MEMBER_DELAY_MS`. This moves the clock past it, and runs the alarm.
+ *
+ * A row that is due by the fake clock is in the past for the runtime, so the runtime can run the alarm
+ * at the same time. Then `runDurableObjectAlarm` finds no alarm and returns before the send. So try
+ * again until no due state waits.
  */
 async function sendToMembers(roomId: string): Promise<void> {
 	vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
-	await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)));
+	const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId));
+	await vi.waitFor(async () => {
+		await runDurableObjectAlarm(room);
+		expect(await dueMemberStates(room)).toBe(0);
+	});
 }
 
 /** Start the socket scenario after the room sent its initial membership state. */
@@ -101,12 +122,10 @@ describe("the events socket", () => {
 
 	// A star is the view of one member. The other members must not get a state for it.
 	it("sends a star to the sockets of its member only", async () => {
-		const room = await privateRoom(ada, "Launch", [bot.id]);
+		// The room sends the join state before the sockets open. A slow runner cannot send it before the open.
+		const room = await roomAfterJoin(ada, "Launch", bot);
 		const person = await connect(bearer(ada.key));
 		const agent = await connect(bearer(bot.key));
-		// The agent gets the new room after the delay of the other members. Only then does the clock stop.
-		expect(await agent.next()).toMatchObject({ type: "chat.room", room: { id: room.id, last_seq: 0 } });
-		vi.useFakeTimers({ toFake: ["Date"] });
 
 		await ada.call("chat.star_room", { room_id: room.id, starred: true });
 		expect(await person.next()).toMatchObject({ type: "chat.room", room: { id: room.id, starred: true } });
