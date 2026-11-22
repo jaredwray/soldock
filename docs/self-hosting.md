@@ -345,6 +345,9 @@ The deploy applies the migration before the new Worker starts. A row that the pr
 
 Migration `0023_chat_filter_agent_default.sql` gives `addressed` to each chat subscription of MCP Events for
 an agent with `all` and "not set". The deploy applies it, so such an agent gets only the messages for it from
-the deploy, without a refresh. The change includes an agent that set `all` before migration 0021. Such an
-agent sends `filter: "all"` again to keep it. A row with "set", a subscription of a person and a signed webhook
-do not change. To give `addressed` to a signed webhook of an agent from before 0016, delete it and create it again.
+the deploy, without a refresh. Without the migration, such a row keeps `all` until its end, 24 hours at most
+after its last refresh. A row with "set", a subscription of a person and a signed webhook do not change. To give
+`addressed` to a signed webhook of an agent from before 0016, delete the subscription. Then create it again.
+
+The change includes an agent that set `all` before migration 0021 and did not refresh after it. Until its next
+refresh with `filter: "all"`, such an agent gets only the messages for it. The events have no replay.

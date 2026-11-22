@@ -698,9 +698,9 @@ To set it up:
 6. Tell ChatGPT what to monitor, for example: "Monitor the room Support. Answer each question."
    A new subscription of an agent gets only the messages for it by default: a direct message, a mention
    and a reply in a thread that it follows. To answer each message of a room, the subscription needs
-   `filter: "all"`. The description of the argument tells this to the model. A subscription from before
-   the filter also has `addressed`. The upgrade with migration 0023 changes it, without a refresh. To
-   keep each message, refresh it once with `filter: "all"`.
+   `filter: "all"`. The description of the argument tells this to the model. A subscription of an agent
+   from before the filter also has `addressed`. The upgrade with migration 0023 changes it, without a
+   refresh. To keep each message, refresh it once with `filter: "all"`.
 
 The events:
 
