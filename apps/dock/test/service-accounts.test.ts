@@ -343,12 +343,17 @@ describe("the activity log of a service account", () => {
 		expect(await codeOf(token.call("chat.list_rooms", {}))).toBe("forbidden");
 		expect(await codeOf(token.call("mail.send", { to: [], text: "x" }))).toBe("invalid");
 		await callTool(token.key, "mail_list_mailboxes");
+		// MCP refuses a tool outside the scopes before the invoker runs. The log still gets the refusal.
+		expect((await mcp(token.key, "tools/call", { name: "chat_list_rooms", arguments: {} })).body).toHaveProperty(
+			"error",
+		);
 		await admin.call("account.revoke_api_key", { key_id: token.keyId });
 
-		const page = await activityOf(admin, service.id, 7);
+		const page = await activityOf(admin, service.id, 8);
 		// The newest entry first.
 		expect(page.entries.map((entry) => [entry.operation, entry.result, entry.surface])).toEqual([
 			["account.revoke_api_key", "ok", "admin"],
+			["chat.list_rooms", "denied", "mcp"],
 			["mail.list_mailboxes", "ok", "mcp"],
 			["mail.send", "error", "rest"],
 			["chat.list_rooms", "denied", "rest"],
@@ -356,7 +361,7 @@ describe("the activity log of a service account", () => {
 			["account.create_api_key", "ok", "admin"],
 			["directory.create_service_account", "ok", "admin"],
 		]);
-		const [revoke, , invalid, refused, whoami] = page.entries;
+		const [revoke, , , invalid, refused, whoami] = page.entries;
 		expect(whoami).toMatchObject({ key_id: token.keyId, actor_id: service.id, code: null });
 		expect(whoami?.request_id).toMatch(/\S/);
 		expect(refused).toMatchObject({ code: "forbidden", key_id: token.keyId });

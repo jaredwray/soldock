@@ -96,7 +96,16 @@ export async function callTool(
 ): Promise<Record<string, unknown> | null> {
 	const { name, arguments: args } = params;
 	const entry = typeof name === "string" ? TOOLS.get(name) : undefined;
-	if (!entry || !canCall(call.caller, entry.operation)) return null;
+	if (!entry) return null;
+	if (!canCall(call.caller, entry.operation)) {
+		// The activity log of a service account gets a refused tool, as it gets a refused REST call.
+		try {
+			call.record?.({ op: entry.operation.name, result: "denied", code: "forbidden", input: undefined });
+		} catch {
+			// The record of a call is best effort. The answer stays the same.
+		}
+		return null;
+	}
 	const handler = handlers[entry.operation.name as OperationName];
 	try {
 		return toolResult(await invokeOperation(entry.operation, handler, call, args ?? {}));

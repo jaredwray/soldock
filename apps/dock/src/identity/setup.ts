@@ -18,7 +18,7 @@ import directoryOrderSchema from "../../migrations/0019_directory_order.sql";
 import chatPresenceSchema from "../../migrations/0020_chat_presence.sql";
 import chatFilterExplicitSchema from "../../migrations/0021_chat_filter_explicit.sql";
 import chatLayer8Schema from "../../migrations/0022_chat_layer8.sql";
-import serviceAccountSchema from "../../migrations/0023_service_accounts.sql";
+import serviceAccountSchema from "../../migrations/0024_service_accounts.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -169,5 +169,5 @@ const BUNDLED_MIGRATIONS = [
 	"0020_chat_presence.sql",
 	"0021_chat_filter_explicit.sql",
 	"0022_chat_layer8.sql",
-	"0023_service_accounts.sql",
+	"0024_service_accounts.sql",
 ] as const;

@@ -10,7 +10,7 @@ import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
 import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw";
-import serviceAccountMigration from "../migrations/0023_service_accounts.sql?raw";
+import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -241,7 +241,7 @@ describe("first-run setup", () => {
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
-		// The fresh directory has the columns of 0023: a service account and a key with an end.
+		// The fresh directory has the columns of 0024: a service account and a key with an end.
 		const fresh = api(result.api_key.secret);
 		const service = await fresh("directory.create_service_account", { display_name: "CI", address: "ci@new.example" });
 		const token = await fresh("account.create_api_key", {
@@ -861,7 +861,7 @@ describe("directory upgrade", () => {
 		});
 		const cookie = `__Host-soldock_session=${session}`;
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
-		// 0023 keeps each agent an agent and each key without an end.
+		// 0024 keeps each agent an agent and each key without an end.
 		expect((await owner("directory.list_principals")).principals).toMatchObject([
 			{ id: "prn_bot", kind: "agent", sponsor_id: "prn_owner", description: null, created_by: null },
 			{ id: "prn_owner", kind: "human" },

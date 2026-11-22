@@ -303,7 +303,7 @@ can act on another admin. Only the owner is out of reach, as for credentials.
 A service account is a member for a script or a system, for example a CI pipeline. It acts only through
 the API, with tokens. Nobody signs in as it, and it never connects through OAuth.
 
-- **Storage.** The directory stores it as an agent row with `service = 1` (migration `0023`). A `CHECK`
+- **Storage.** The directory stores it as an agent row with `service = 1` (migration `0024`). A `CHECK`
   lets only an agent row have `service = 1`. In mail, Drive and Chat it is an agent: its outbound policy
   applies to mail, it cannot be a manager of a shared drive, and its chat messages and mail show an agent
   author. A product record has no third kind yet.
@@ -356,7 +356,7 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   (`team_mailbox_members`, `shared_drive_members` and `chat_members`), and no object. At
   most 200 rooms, with `chat_rooms_truncated`. Items that a person shared directly with it in Drive are
   not in the list: their pointers are in the drive objects, and D1 has no index of them.
-- **Rollback.** A Worker from before migration `0023` sees a service account as an agent. It ignores
+- **Rollback.** A Worker from before migration `0024` sees a service account as an agent. It ignores
   the end of a key, and it lets the sponsor manage the tokens. The stored scopes stay inside
   `SERVICE_SCOPES`, so a rollback gives no scope beyond them. Revoke the tokens before a rollback to stop
   them.
@@ -455,7 +455,7 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
-  (`0001`, then each later migration except `0002` and `0015`, up to `0023`, in that order), so a fresh directory has the schema of an upgraded one.
+  (`0001`, then each later migration except `0002` and `0015`, in that order), so a fresh directory has the schema of an upgraded one.
   It records these migrations and `0002` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
