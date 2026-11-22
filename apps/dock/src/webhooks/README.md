@@ -126,6 +126,7 @@ The web app does not list endpoints on Settings.
 An agent card lists the subscriptions of that agent.
 A shared mailbox card and a shared drive card do the same for their target.
 The sponsor creates a webhook on the agent card, or selects a webhook that the sponsor already has.
+An endpoint with no subscription stays on that card, so the sponsor can delete it.
 
 ## Delivery
 

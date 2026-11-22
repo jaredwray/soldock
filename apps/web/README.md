@@ -335,7 +335,8 @@ MCP clients. The app has no UI-only path.
       Only the sponsor sees **Add webhook**. It creates a webhook for the agent, or selects a webhook that the sponsor already has.
       A new webhook asks for the URL, an optional label and an optional auth key, then the events.
       The signing secret shows once. A custom header is set with `webhooks.create_endpoint`.
-      The sponsor can delete a webhook that the sponsor created. Settings does not list webhooks.
+      The sponsor can delete a webhook that the sponsor created. An endpoint with no events stays in the list, so the sponsor can delete it.
+      Settings does not list webhooks.
       At 500px and below, **Edit events** and **Delete** are one above the other.
       Chat has the menu **Messages**. **Each message** sends each message of the agent.
       **Direct messages, mentions and followed threads** sends only the messages for the agent.

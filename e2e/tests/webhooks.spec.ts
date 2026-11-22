@@ -44,8 +44,10 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	await page.goto("/admin/members");
 	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
 
-	await page.getByRole("button", { name: "Add webhook" }).click();
-	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
+	// An endpoint with no events stays in the list. Edit events adds the first events.
+	const pending = page.getByRole("row").filter({ hasText: label });
+	await pending.getByRole("button", { name: `Edit events of ${label}` }).click();
+	const add = page.getByRole("dialog", { name: `Events of ${label}` });
 	// An agent starts with only the messages for it, so a busy room does not send a POST for each message.
 	const addressed = "Direct messages, mentions and followed threads";
 	await expect(add.getByRole("combobox", { name: "Messages" })).toContainText(addressed);
@@ -172,10 +174,9 @@ test("a save that fails in part stays open, and a second save sends only the rem
 	await page.goto("/admin/members");
 	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
 
-	await page.getByRole("button", { name: "Add webhook" }).click();
-	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
-	await add.getByRole("combobox", { name: "Webhook" }).click();
-	await page.getByRole("option", { name: label }).click();
+	const pending = page.getByRole("row").filter({ hasText: label });
+	await pending.getByRole("button", { name: `Edit events of ${label}` }).click();
+	const add = page.getByRole("dialog", { name: `Events of ${label}` });
 	await add.getByRole("group", { name: "Send a POST for" }).getByLabel("An edited message").check();
 	await add.getByLabel("A new item").check();
 	await add.getByRole("button", { name: "Save" }).click();
@@ -192,5 +193,83 @@ test("a save that fails in part stays open, and a second save sends only the rem
 	expect(await chatFiltersOf(sponsor, id)).toEqual(["chat.message.updated addressed"]);
 
 	await sponsor.request.delete(`/api/v1/webhooks/endpoints/${id}`, { headers: { origin: BASE_URL } });
+	await sponsor.close();
+});
+
+test("a new webhook shows its secret when an event fails", async ({ browser }) => {
+	const sponsor = await signIn(browser, "chidi");
+	const page = await sponsor.newPage();
+	const label = unique("Secret hook");
+	let refuse = true;
+	await page.route("**/api/v1/chat/webhook-subscriptions", async (route) => {
+		if (route.request().method() !== "POST" || !refuse) return route.continue();
+		refuse = false;
+		await route.fulfill({
+			status: 409,
+			contentType: "application/problem+json",
+			body: JSON.stringify({ title: "Conflict", detail: "A test refused this event.", code: "conflict" }),
+		});
+	});
+	await page.goto("/admin/members");
+	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+
+	await page.getByRole("button", { name: "Add webhook" }).click();
+	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
+	const picker = add.getByRole("combobox", { name: "Webhook" });
+	if (await picker.isVisible()) {
+		await picker.click();
+		await page.getByRole("option", { name: "New webhook", exact: true }).click();
+	}
+	await add.getByLabel("Receiver URL").fill("https://hooks.example.com/secret");
+	await add.getByLabel("Label (optional)").fill(label);
+	await add.getByRole("group", { name: "Send a POST for" }).getByLabel("An edited message").check();
+	await add.getByLabel("A new item").check();
+	await add.getByRole("button", { name: "Add webhook" }).click();
+
+	const secret = page.getByRole("dialog", { name: "Copy the signing secret" });
+	await expect(secret.getByLabel(/Signing secret/)).toHaveValue(/^whsec_/);
+	await expect(secret.getByRole("alert")).toContainText(
+		"Asterra created the webhook, but did not add each event. A test refused this event.",
+	);
+	await secret.getByRole("button", { name: "Done" }).click();
+
+	const row = page.getByRole("row").filter({ hasText: label });
+	await expect(row).toContainText("A new item");
+	await expect(row).not.toContainText("An edited message");
+	const id = await endpointId(sponsor, label);
+	await sponsor.request.delete(`/api/v1/webhooks/endpoints/${id}`, { headers: { origin: BASE_URL } });
+	await sponsor.close();
+});
+
+test("an endpoint with no events stays on the agent card until the sponsor deletes it", async ({ browser }) => {
+	const sponsor = await signIn(browser, "chidi");
+	const page = await sponsor.newPage();
+	const label = unique("Empty hook");
+	await page.goto("/admin/members");
+	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+
+	await page.getByRole("button", { name: "Add webhook" }).click();
+	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
+	const picker = add.getByRole("combobox", { name: "Webhook" });
+	if (await picker.isVisible()) {
+		await picker.click();
+		await page.getByRole("option", { name: "New webhook", exact: true }).click();
+	}
+	await add.getByLabel("Receiver URL").fill("https://hooks.example.com/empty");
+	await add.getByLabel("Label (optional)").fill(label);
+	await add.getByRole("button", { name: "Add webhook" }).click();
+	await page.getByRole("dialog", { name: "Copy the signing secret" }).getByRole("button", { name: "Done" }).click();
+
+	const row = page.getByRole("row").filter({ hasText: label });
+	await expect(row).toContainText("No events");
+	await row.getByRole("button", { name: `Delete webhook ${label}` }).click();
+	await page
+		.getByRole("dialog", { name: "Delete this webhook?" })
+		.getByRole("button", { name: "Delete webhook" })
+		.click();
+	await expect(page.getByRole("row").filter({ hasText: label })).toHaveCount(0);
+	const listed = await sponsor.request.get("/api/v1/webhooks/endpoints");
+	const { endpoints } = (await listed.json()) as { endpoints: { label: string }[] };
+	expect(endpoints.some((endpoint) => endpoint.label === label)).toBe(false);
 	await sponsor.close();
 });

@@ -50,6 +50,22 @@ function rowsOf(subscriptions: readonly ListedSubscription[]): TargetRow[] {
 }
 
 /**
+ * Adds each endpoint of the sponsor that has no subscription. The row stays after the last event is
+ * cleared, and after a create whose events all fail, so the sponsor can delete it.
+ */
+function withUnused(
+	rows: readonly TargetRow[],
+	endpoints: readonly WebhookEndpoint[],
+	used: ReadonlySet<string>,
+): TargetRow[] {
+	const seen = new Set(rows.map((row) => row.endpoint.id));
+	const unused = endpoints
+		.filter((endpoint) => !seen.has(endpoint.id) && !used.has(endpoint.id))
+		.map((endpoint) => ({ endpoint, subscriptions: [] }));
+	return [...rows, ...unused];
+}
+
+/**
  * The webhooks that get the events of one target that a person manages: an agent, a team mailbox or a
  * shared drive. **Edit events** opens the check boxes of one webhook. A person who did not create the
  * webhook can clear an event, but cannot add one. **Add webhook** creates a webhook for this target,
@@ -68,8 +84,10 @@ export function TargetWebhooks({
 	const { whoami } = useSession();
 	const me = whoami.principal.id;
 	const allowed = useWebhookDomains(domains);
+	const held = useWebhookDomains();
 	const [subscriptions, setSubscriptions] = useState<ListedSubscription[] | null>(null);
 	const [own, setOwn] = useState<WebhookEndpoint[]>([]);
+	const [used, setUsed] = useState<ReadonlySet<string>>(new Set());
 	const [error, setError] = useState<string | null>(null);
 	const [dialog, setDialog] = useState<{ row: TargetRow | null } | null>(null);
 	const [deleting, setDeleting] = useState<WebhookEndpoint | null>(null);
@@ -80,23 +98,34 @@ export function TargetWebhooks({
 		async () => (await Promise.all(allowed.map((domain) => listSubscriptions(domain, targetId)))).flat(),
 		[allowed, targetId],
 	);
+	// Subscriptions of every endpoint this person created, so an endpoint with none can stay in the list.
+	const listUsed = useCallback(
+		async () => (await Promise.all(held.map((domain) => listSubscriptions(domain)))).flat(),
+		[held],
+	);
 	const fetchAll = useCallback(
 		() =>
-			Promise.all([listAll(), canCreate ? api.call("webhooks.list_endpoints").then((result) => result.endpoints) : []]),
-		[listAll, canCreate],
+			Promise.all([
+				listAll(),
+				canCreate ? api.call("webhooks.list_endpoints").then((result) => result.endpoints) : [],
+				canCreate ? listUsed() : [],
+			]),
+		[listAll, canCreate, listUsed],
 	);
 	// The buttons are off while the list loads, so a dialog never opens with the events of an old list.
 	const { load, loading } = useLatest(
 		fetchAll,
-		([listed, endpoints]) => {
+		([listed, endpoints, owned]) => {
 			setSubscriptions(listed);
 			setOwn(endpoints);
+			setUsed(new Set(owned.map((row) => row.endpoint.id)));
 			setError(null);
 		},
 		// An old list must not stay after a load that failed. Edit on old events sends wrong changes.
 		(caught) => {
 			setSubscriptions(null);
 			setOwn([]);
+			setUsed(new Set());
 			setError(errorMessage(caught));
 		},
 	);
@@ -105,7 +134,7 @@ export function TargetWebhooks({
 		void load();
 	}, [load]);
 
-	const rows = subscriptions === null ? null : rowsOf(subscriptions);
+	const rows = subscriptions === null ? null : withUnused(rowsOf(subscriptions), canCreate ? own : [], used);
 	// A webhook that already sends events of this target has a row. The person changes it there.
 	const addable = own.filter(
 		(endpoint) => endpoint.status === "active" && !rows?.some((row) => row.endpoint.id === endpoint.id),
