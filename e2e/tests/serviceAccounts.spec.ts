@@ -27,7 +27,7 @@ test("an admin creates a service account, a token for 7 days, sees its activity 
 		await page.getByRole("button", { name: /^Service accounts/ }).click();
 		const card = page.locator("details.admin-card").filter({ hasText: name });
 		await card.locator("summary").click();
-		await expect(card.getByLabel("Description")).toHaveValue("Posts build results");
+		await expect(card.getByLabel("Description", { exact: true })).toHaveValue("Posts build results");
 		await expect(card.getByText("by Tomasz Wieczorek").first()).toBeVisible();
 		const tokens = card.getByRole("table", { name: /^Tokens of/ });
 		const activity = card.getByRole("table", { name: /^Activity of/ });
