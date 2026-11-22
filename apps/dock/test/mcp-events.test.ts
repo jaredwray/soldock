@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { MCP_EVENT_LIMITS, mcpEvents, WEBHOOK_LIMITS } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import filterMigration from "../migrations/0021_chat_filter_explicit.sql?raw";
+import agentFilterMigration from "../migrations/0023_chat_filter_agent_default.sql?raw";
 import {
 	type Actor,
 	api,
@@ -604,7 +605,10 @@ describe("events/subscribe", () => {
 });
 
 describe("event delivery", () => {
-	/** Posts in the room, then runs the fan-out and the deliveries. `reasons` gives the message id and the reason of each event POST. */
+	/**
+	 * Posts in the room, then runs the fan-out and the deliveries. `reasons` gives the message id and the reason
+	 * of each event POST. `deliveries` gives the URL too, so a test can tell the subscriptions apart.
+	 */
 	async function chatFeed(roomId: string) {
 		const { events } = receiver();
 		const queue = await roomQueue(roomId);
@@ -616,6 +620,8 @@ describe("event delivery", () => {
 				return message;
 			},
 			reasons: () => events().map((post) => [JSON.parse(post.body).data.message_id, JSON.parse(post.body).data.reason]),
+			deliveries: () =>
+				events().map((post) => [post.url, JSON.parse(post.body).data.message_id, JSON.parse(post.body).data.reason]),
 		};
 	}
 
@@ -667,6 +673,50 @@ describe("event delivery", () => {
 			[before.id, "room"],
 			[named.id, "mention"],
 		]);
+	});
+
+	// ChatGPT sends the refresh on its own schedule, and the row of an old OAuth connection or an old URL
+	// has no refresh. Migration 0023 gives `addressed` to each such row of an agent at the deploy. A filter
+	// that the client set, a subscription of a person and a signed webhook keep `all`.
+	it("gives an agent with the default filter only the messages for it after migration 0023, with no refresh", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const room = await privateRoom("Launch");
+		const { say, deliveries } = await chatFeed(room.id);
+		const each = `${CALLBACK}/each`;
+		const person = `${CALLBACK}/person`;
+		const signed = "https://receiver.example.com/webhook";
+		const { id } = resultOf(await subscribe(bot.key, "chat.message.created"));
+		await subscribe(bot.key, "chat.message.created", { url: each, arguments: { filter: "all" } });
+		await subscribe(ada.key, "chat.message.created", { url: person });
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: signed });
+		const webhook = await ada.call("chat.create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			principal_id: bot.id,
+			event: "chat.message.created",
+		});
+		// The rows of an MCP Events subscription and a signed webhook from before the filter.
+		await env.DIRECTORY.prepare("UPDATE webhook_subscriptions SET chat_filter = 'all' WHERE id IN (?, ?)")
+			.bind(id, webhook.subscription.id)
+			.run();
+		await env.DIRECTORY.prepare(agentFilterMigration).run();
+
+		const plain = await say(ada, "Lunch is at noon");
+		expect(deliveries().sort()).toEqual(
+			[
+				[each, plain.id, "room"],
+				[signed, plain.id, "room"],
+			].sort(),
+		);
+		const named = await say(ada, "@bot send the invoice");
+		expect(deliveries().slice(2).sort()).toEqual(
+			[
+				[CALLBACK, named.id, "mention"],
+				[each, named.id, "mention"],
+				[signed, named.id, "mention"],
+			].sort(),
+		);
+		const answer = await say(bot, "The invoice is sent");
+		expect(deliveries().slice(5)).toEqual([[person, answer.id, "room"]]);
 	});
 
 	// The default of a person is `all`, so a person set each `addressed` from before migration 0021. The

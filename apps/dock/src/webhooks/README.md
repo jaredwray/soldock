@@ -69,8 +69,10 @@ The fan-out applies the filter, so a message that is not for the target makes no
 Without `filter`, a new subscription for an agent gets `addressed`, and one for a person gets `all` (`defaultChatWebhookFilter`).
 A subscription records if its creator set the filter (column `chat_filter_explicit`).
 A refresh of MCP Events without `filter` keeps a filter that the client set, and gives each other subscription the default of the caller.
-So a subscription of MCP Events for an agent from before the filter gets `addressed` at its next refresh.
-A signed webhook has no refresh, so a signed webhook from before the filter keeps `all`.
+The client sends a refresh on its own schedule, and the row of an old OAuth connection or an old URL has no refresh.
+So migration `0023` gives `addressed` to each subscription of MCP Events for an agent with `all` and a filter that is not set.
+Such a subscription from before the filter has `addressed` from the deploy, without a refresh.
+A signed webhook has no refresh, and migration `0023` does not change it. So a signed webhook from before the filter keeps `all`.
 Before each POST, the consumer also checks the notification level and quiet hours of the target.
 This applies to signed webhooks and MCP Events callbacks, including retries.
 For example, a room set to `mentions` sends only events with the `mention` reason, even with an `all` subscription.
@@ -239,7 +241,7 @@ not read the end of a subscription.
 | State | Where | Notes |
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
-| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter |
+| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter. Migration `0023` gives `addressed` to each MCP Events subscription of an agent with a filter that is not set |
 | Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
