@@ -212,7 +212,7 @@ function ChatWorkspace({
 					) : view === "saved" ? (
 						<SavedView />
 					) : view === "drafts" ? (
-						<DraftsView rooms={rooms.rooms} />
+						<DraftsView rooms={rooms.rooms} ownId={ownId} />
 					) : roomId === null ? (
 						<>
 							<PageHeader title="Chat" icon="chat" />

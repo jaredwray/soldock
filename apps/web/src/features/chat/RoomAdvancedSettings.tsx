@@ -241,7 +241,7 @@ export function RoomAdvancedSettings({
 			const pages: unknown[] = [];
 			let afterSeq = 0;
 			let firstMeta: Record<string, unknown> | null = null;
-			for (let i = 0; i < 50; i++) {
+			while (true) {
 				const page = await api.call("chat.export_room", { room_id: room.id, after_seq: afterSeq });
 				if (!firstMeta) {
 					firstMeta = {
@@ -253,6 +253,9 @@ export function RoomAdvancedSettings({
 				}
 				pages.push(...page.messages);
 				if (page.next_after_seq === null) break;
+				if (page.next_after_seq <= afterSeq) {
+					throw new Error("Export pagination did not advance.");
+				}
 				afterSeq = page.next_after_seq;
 			}
 			const blob = new Blob([JSON.stringify({ ...firstMeta, messages: pages }, null, 2)], {

@@ -8,9 +8,11 @@ import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
+import { textToBody } from "./composerSchema.ts";
+import { createDraftStore, draftStorage, threadDraftKey } from "./drafts.ts";
 import { roomTitle } from "./model.ts";
 
-export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
+export function DraftsView({ rooms, ownId }: { rooms: readonly ChatRoom[]; ownId: string }) {
 	const toast = useToast();
 	const [tab, setTab] = useState<"drafts" | "scheduled">("drafts");
 	const [drafts, setDrafts] = useState<ChatDraft[]>([]);
@@ -49,12 +51,22 @@ export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
 		void load();
 	}, [load]);
 
+	function openDraft(draft: ChatDraft) {
+		const store = createDraftStore(draftStorage(), ownId);
+		const key = draft.parent_id ? threadDraftKey(draft.room_id, draft.parent_id) : draft.room_id;
+		store.set(key, draft.body ?? textToBody(draft.text));
+		navigate(chatPath(draft.room_id));
+	}
+
 	async function deleteDraft(draft: ChatDraft) {
 		try {
 			await api.call("chat.delete_draft", {
 				room_id: draft.room_id,
 				...(draft.parent_id ? { parent_id: draft.parent_id } : {}),
 			});
+			const store = createDraftStore(draftStorage(), ownId);
+			const key = draft.parent_id ? threadDraftKey(draft.room_id, draft.parent_id) : draft.room_id;
+			store.set(key, null);
 			setDrafts((current) => current.filter((d) => !(d.room_id === draft.room_id && d.parent_id === draft.parent_id)));
 			toast({ message: "Draft deleted." });
 		} catch (caught) {
@@ -154,11 +166,7 @@ export function DraftsView({ rooms }: { rooms: readonly ChatRoom[] }) {
 									</div>
 									<p className="chat-feed-preview">{draft.text}</p>
 									<div className="chat-feed-actions">
-										<button
-											type="button"
-											className="button button-small"
-											onClick={() => navigate(chatPath(draft.room_id))}
-										>
+										<button type="button" className="button button-small" onClick={() => openDraft(draft)}>
 											Open room
 										</button>
 										<button type="button" className="button button-small" onClick={() => void deleteDraft(draft)}>

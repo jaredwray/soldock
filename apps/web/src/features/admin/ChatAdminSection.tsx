@@ -160,11 +160,14 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 			const messages: unknown[] = [];
 			let afterSeq = 0;
 			let meta: Record<string, unknown> | null = null;
-			for (let i = 0; i < 50; i++) {
+			while (true) {
 				const page = await api.call("chat.export_room", { room_id: roomId, after_seq: afterSeq });
 				if (!meta) meta = { room: page.room, members: page.members, pins: page.pins, exported_at: page.exported_at };
 				messages.push(...page.messages);
 				if (page.next_after_seq === null) break;
+				if (page.next_after_seq <= afterSeq) {
+					throw new Error("Export pagination did not advance.");
+				}
 				afterSeq = page.next_after_seq;
 			}
 			const blob = new Blob([JSON.stringify({ ...meta, messages }, null, 2)], { type: "application/json" });

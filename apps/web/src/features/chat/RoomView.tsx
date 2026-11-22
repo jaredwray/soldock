@@ -197,7 +197,29 @@ export function RoomView({
 	/** The reaction calls of each "message id" and "emoji": see `createToggleLine`. */
 	const reactions = useMemo(() => createToggleLine(), []);
 	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
+	const draftRef = useRef<ChatBody | null>(draft);
+	draftRef.current = draft;
+	const [composerVersion, setComposerVersion] = useState(0);
 	const serverDraftTimer = useRef<number | null>(null);
+	useEffect(() => {
+		if (drafts.get(roomId) !== null) return;
+		let stopped = false;
+		api
+			.call("chat.list_drafts")
+			.then((res) => {
+				if (stopped || draftRef.current !== null) return;
+				const match = res.drafts.find((d) => d.room_id === roomId && d.parent_id === null);
+				if (!match || !match.text.trim()) return;
+				const hydrated = match.body ?? textToBody(match.text);
+				drafts.set(roomId, hydrated);
+				setDraftBody(hydrated);
+				setComposerVersion((v) => v + 1);
+			})
+			.catch(() => {});
+		return () => {
+			stopped = true;
+		};
+	}, [drafts, roomId]);
 	function setDraft(body: ChatBody | null) {
 		if (body !== null) view.typing();
 		setDraftBody(body);
@@ -1193,6 +1215,7 @@ export function RoomView({
 							})()}
 							<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
 								<ChatComposer
+									key={composerVersion}
 									ref={composer}
 									id={draftId}
 									label={`Message to ${title}`}
@@ -1386,13 +1409,20 @@ export function RoomView({
 					<p>
 						This command runs <code>{dialog.command.operation}</code> with your permissions.
 					</p>
-					<pre className="chat-slash-preview">
-						{renderSlashPreview(dialog.command.input_template, {
-							text: dialog.text,
-							room_id: roomId,
-							caller_id: ownId,
-						})}
-					</pre>
+					{Object.keys(dialog.command.input_template).length > 0 ? (
+						<pre className="chat-slash-preview">
+							{renderSlashPreview(dialog.command.input_template, {
+								text: dialog.text,
+								room_id: roomId,
+								caller_id: ownId,
+							})}
+						</pre>
+					) : (
+						<p>
+							{dialog.command.description}
+							{dialog.text ? ` Input: ${dialog.text}` : ""}
+						</p>
+					)}
 				</ConfirmDialog>
 			)}
 			{dialog?.type === "slashResult" && (
