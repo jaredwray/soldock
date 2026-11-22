@@ -1,8 +1,9 @@
 import { operationList, operationNeedsScope, SCOPES, type Scope } from "@asterra/contracts";
-import { audit, OperationError } from "../platform/index.ts";
+import { audit, log, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
-import { getApiKey, getPrincipal, type PrincipalRecord, scopeCeiling } from "./store.ts";
+import type { ServiceActivityInput } from "./service-activity.ts";
+import { getApiKey, getPrincipal, keyExpired, keyNotExpired, type PrincipalRecord, scopeCeiling } from "./store.ts";
 
 // The access rules that the API key and the OAuth handlers share.
 
@@ -23,10 +24,12 @@ export function canReadAgentMailboxes(caller: AuthContext): boolean {
 /**
  * A human manages their own credentials (keys, password and two-step verification), the keys of the
  * agents that they sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
- * credentials, so an admin can never act as the owner.
+ * credentials, so an admin can never act as the owner. Only owners and admins manage the tokens of a
+ * service account: its sponsor and its creator get no right from that role.
  */
 export function canManageCredentialsOf(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human") return false;
+	if (target.service) return isAdmin(caller);
 	if (target.id === caller.principal.id) return true;
 	if (target.org_role === "owner") return false;
 	if (target.kind === "agent" && target.sponsor_id === caller.principal.id) return true;
@@ -39,13 +42,14 @@ export function canManageCredentialsOf(caller: AuthContext, target: PrincipalRec
  */
 export function grantableScopes(
 	caller: AuthContext,
-	target: Pick<PrincipalRecord, "kind">,
+	target: Pick<PrincipalRecord, "kind" | "service">,
 	requested: readonly Scope[],
 ): Scope[] {
-	const ceiling = new Set(scopeCeiling(target.kind));
+	const ceiling = new Set(scopeCeiling(target));
 	const outside = requested.filter((scope) => !ceiling.has(scope));
 	if (outside.length > 0) {
-		throw new OperationError("invalid", `A key for an ${target.kind} cannot hold ${outside.join(", ")}.`);
+		const kind = target.service ? "a service account" : `an ${target.kind}`;
+		throw new OperationError("invalid", `A key for ${kind} cannot hold ${outside.join(", ")}.`);
 	}
 	const notHeld = requested.filter((scope) => !caller.scopes.has(scope));
 	if (notHeld.length > 0) {
@@ -70,7 +74,7 @@ export interface MissingScope {
  * lists only the tools that a credential can call, so this tells an agent which tools it cannot see.
  */
 export function missingScopes(caller: AuthContext): MissingScope[] {
-	return scopeCeiling(caller.kind)
+	return scopeCeiling(caller.principal)
 		.filter((scope) => !caller.scopes.has(scope))
 		.map((scope) => ({
 			scope,
@@ -80,6 +84,117 @@ export function missingScopes(caller: AuthContext): MissingScope[] {
 				.map((operation) => operation.name),
 		}))
 		.filter((missing) => missing.operations.length > 0);
+}
+
+/** Where a call of a service account came from, for its activity log. */
+export type ActivitySurface = "rest" | "mcp";
+
+/** The outcome of one operation, as the invoker reports it to a recorder. */
+export interface CallOutcome {
+	op: string;
+	result: "ok" | "denied" | "error";
+	code: string | null;
+	/** The validated input, or undefined when the input was not valid. */
+	input: unknown;
+}
+
+/** The input fields that name the resource of a call, in the order of preference. */
+const RESOURCE_FIELDS = ["mailbox_id", "space_id", "room_id", "principal_id", "item_id", "thread_id"] as const;
+
+/** The mailbox, drive, room, principal, item or thread that the input of a call names, or null. */
+function resourceOf(input: unknown): string | null {
+	if (typeof input !== "object" || input === null) return null;
+	for (const field of RESOURCE_FIELDS) {
+		const value = (input as Record<string, unknown>)[field];
+		if (typeof value === "string" && value.length <= 100) return value;
+	}
+	return null;
+}
+
+/** Adds one entry to the activity log of a service account. A failure only writes a warning. */
+async function appendServiceActivity(env: Env, principalId: string, entry: ServiceActivityInput): Promise<void> {
+	try {
+		await env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId)).recordServiceActivity(entry);
+	} catch (error) {
+		log("warn", "service activity: the write failed", {
+			op: entry.op,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/**
+ * The recorder of the calls of a service account, or undefined for each other caller. The invoker calls it
+ * after each call of an operation. The write does not wait: `waitUntil` holds it, so a slow or failed
+ * write never slows or fails the call.
+ */
+export function activityRecorder(
+	caller: AuthContext,
+	env: Env,
+	waitUntil: (promise: Promise<unknown>) => void,
+	requestId: string,
+	surface: ActivitySurface,
+): ((outcome: CallOutcome) => void) | undefined {
+	if (caller.kind !== "service") return undefined;
+	return (outcome) =>
+		waitUntil(
+			appendServiceActivity(env, caller.principal.id, {
+				at: Date.now(),
+				op: outcome.op,
+				result: outcome.result,
+				code: outcome.code,
+				surface,
+				keyId: caller.keyId,
+				actorId: caller.principal.id,
+				resourceId: resourceOf(outcome.input),
+				requestId,
+			}),
+		);
+}
+
+/**
+ * Records a socket that a service account opened, in its activity log. Nothing is recorded for each other
+ * caller. A failure never fails the open.
+ */
+export function recordSocketOpen(
+	caller: AuthContext,
+	env: Env,
+	waitUntil: (promise: Promise<unknown>) => void,
+	requestId: string,
+	op: "events.open_socket" | "chat.open_room_socket",
+	input: { room_id?: string } = {},
+): void {
+	try {
+		activityRecorder(caller, env, waitUntil, requestId, "rest")?.({ op, result: "ok", code: null, input });
+	} catch {
+		// The record of an open is best effort. The socket stays open.
+	}
+}
+
+/**
+ * Records a change that an owner or an admin made to a service account or to one of its tokens, in the
+ * activity log of that account. Nothing is recorded for a principal that is not a service account.
+ */
+export function recordServiceChange(
+	call: CallContext,
+	target: Pick<PrincipalRecord, "id" | "service">,
+	op: string,
+	keyId: string | null = null,
+): void {
+	if (!target.service) return;
+	call.waitUntil(
+		appendServiceActivity(call.env, target.id, {
+			at: Date.now(),
+			op,
+			result: "ok",
+			code: null,
+			surface: "admin",
+			keyId,
+			actorId: call.caller.principal.id,
+			resourceId: target.id,
+			requestId: call.requestId,
+		}),
+	);
 }
 
 export function auditOk(call: CallContext, op: string, target: string): void {
@@ -141,7 +256,9 @@ export async function credentialState(
 	if (!principal) return { state: "ended" };
 	if (binding.kind === "api_key") {
 		const key = binding.id ? await getApiKey(db, binding.id) : null;
-		if (!key || key.revoked_at !== null || key.principal_id !== principal.id) return { state: "ended" };
+		if (!key || key.revoked_at !== null || key.principal_id !== principal.id || keyExpired(key)) {
+			return { state: "ended" };
+		}
 	} else if (binding.kind === "oauth") {
 		const grant = binding.id ? await getGrant(db, binding.id) : null;
 		if (
@@ -200,7 +317,7 @@ export type CredentialCheck = "live" | "renew" | "ended";
 /**
  * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
- * not revoked, and an OAuth access token is the current token of a grant that is not revoked, and did
+ * not revoked and did not expire, and an OAuth access token is the current token of a grant that is not revoked, and did
  * not expire. So a refresh of a grant, which replaces its access token, stops the old token here too.
  * One query reads the whole list, and a credential that the list has many times is read one time. So
  * a room with many sockets makes one read.
@@ -219,7 +336,8 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 						THEN 'live' END
 					WHEN 'api_key' THEN CASE WHEN EXISTS (
 						SELECT 1 FROM api_keys k
-						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL)
+						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL
+							AND ${keyNotExpired(2, "k")})
 						THEN 'live' END
 					WHEN 'oauth' THEN CASE
 						WHEN EXISTS (

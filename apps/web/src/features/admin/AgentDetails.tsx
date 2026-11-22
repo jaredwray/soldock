@@ -75,7 +75,16 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 	);
 }
 
-function PolicyForm({ agent, policy, onChanged }: { agent: Principal; policy: OutboundPolicy; onChanged: () => void }) {
+/** The outbound policy of an agent or a service account (`directory.update_agent_policy`). */
+export function PolicyForm({
+	agent,
+	policy,
+	onChanged,
+}: {
+	agent: Principal;
+	policy: OutboundPolicy;
+	onChanged: () => void;
+}) {
 	const toast = useToast();
 	const [draft, setDraft] = useState(() => policyDraftFrom(policy));
 	const [baseline, setBaseline] = useState(policy);

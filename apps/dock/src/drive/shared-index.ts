@@ -62,3 +62,23 @@ export async function listSharedDriveRows(
 		.all<SharedDriveRow>();
 	return results;
 }
+
+/**
+ * The live shared drives that a principal is a member of, with its role, in the order of their names.
+ * The access view of a service account reads it. The index is a copy, so the drive object still decides
+ * each access.
+ */
+export async function sharedDrivesOfPrincipal(
+	db: D1Database,
+	principalId: string,
+): Promise<{ id: string; name: string; role: SharedDriveRole }[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT d.id, d.name, m.role FROM shared_drive_members m
+			JOIN shared_drives d ON d.id = m.drive_id AND d.deleted_at IS NULL
+			WHERE m.principal_id = ? ORDER BY d.name_key, d.id`,
+		)
+		.bind(principalId)
+		.all<{ id: string; name: string; role: SharedDriveRole }>();
+	return results;
+}

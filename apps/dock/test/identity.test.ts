@@ -10,6 +10,7 @@ import lifecycleMigration from "../migrations/0008_principal_lifecycle.sql?raw";
 import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
 import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw";
+import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -211,6 +212,13 @@ describe("first-run setup", () => {
 
 	it("replaces the directory and invalidates old keys, sessions, and passwords", async () => {
 		const { owner, ada, bot } = await seedOrg();
+		// A service account names its creator. The reset must still drop the principals.
+		const old = await owner.call("directory.create_service_account", { display_name: "CI", address: "ci@dock.test" });
+		const oldToken = await owner.call("account.create_api_key", {
+			principal_id: old.principal.id,
+			label: "ci",
+			scopes: ["account.read"],
+		});
 		const cookie = await signIn(owner.address);
 		const res = await setup(
 			SETUP_TOKEN,
@@ -223,6 +231,7 @@ describe("first-run setup", () => {
 		expect(result.principal.id).not.toBe(owner.id);
 		expect(await denied(api(owner.key)("account.whoami"))).toBe("unauthenticated");
 		expect(await denied(api(bot.key)("account.whoami"))).toBe("unauthenticated");
+		expect(await denied(api(oldToken.api_key.secret)("account.whoami"))).toBe("unauthenticated");
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
 		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(res) } })).status).toBe(200);
 		expect(await api(result.api_key.secret)("account.whoami")).toMatchObject({
@@ -232,6 +241,16 @@ describe("first-run setup", () => {
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
+		// The fresh directory has the columns of 0024: a service account and a key with an end.
+		const fresh = api(result.api_key.secret);
+		const service = await fresh("directory.create_service_account", { display_name: "CI", address: "ci@new.example" });
+		const token = await fresh("account.create_api_key", {
+			principal_id: service.principal.id,
+			label: "ci",
+			scopes: ["account.read"],
+			expires_in_days: 1,
+		});
+		expect(await api(token.api_key.secret)("account.whoami")).toMatchObject({ principal: { kind: "service" } });
 		await refusal(await submitSignIn(ada.address, PASSWORD));
 		await signIn("owner@new.example");
 		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
@@ -833,6 +852,7 @@ describe("directory upgrade", () => {
 		await run(mentionAliasMigration.split("--> statement-breakpoint"));
 		await run(nameFoldedMigration.split("--> statement-breakpoint"));
 		await run(directoryOrderMigration.split("--> statement-breakpoint"));
+		await run(serviceAccountMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -841,10 +861,18 @@ describe("directory upgrade", () => {
 		});
 		const cookie = `__Host-soldock_session=${session}`;
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
+		// 0024 keeps each agent an agent and each key without an end.
 		expect((await owner("directory.list_principals")).principals).toMatchObject([
-			{ id: "prn_bot", sponsor_id: "prn_owner" },
-			{ id: "prn_owner" },
+			{ id: "prn_bot", kind: "agent", sponsor_id: "prn_owner", description: null, created_by: null },
+			{ id: "prn_owner", kind: "human" },
 		]);
+		expect((await owner("account.list_api_keys")).api_keys).toMatchObject([
+			{ id: "key_owner", expires_at: null, expired: false, created_by: "prn_owner", description: null },
+		]);
+		// Only an agent row can be a service account.
+		await expect(db.prepare("UPDATE principals SET service = 1 WHERE id = 'prn_owner'").run()).rejects.toThrow(
+			/CHECK constraint/,
+		);
 		expect(await db.prepare("PRAGMA foreign_key_check").all()).toMatchObject({ results: [] });
 		// The deploy migrates while the old Worker runs. It reads the sign-in email and writes codes, so
 		// the column and the table stay until a later migration, empty. A kept address could receive codes

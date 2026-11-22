@@ -21,7 +21,7 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
-import { toPrincipalOutput } from "./output.ts";
+import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
 import { endEventSockets } from "./principal.ts";
 import { prepareFreshDirectory } from "./setup.ts";
@@ -179,7 +179,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		}
 		const result: SetupResult = {
 			principal: toPrincipalOutput(created.principal),
-			api_key: { ...created.key, revoked: false, secret: created.secret },
+			api_key: { ...toApiKeyOutput(created.key), secret: created.secret },
 		};
 		return c.json(result, 201, headers);
 	});

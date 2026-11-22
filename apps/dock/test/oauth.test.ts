@@ -309,6 +309,7 @@ describe("OAuth approval", () => {
 			kind: "agent",
 			address: "claude@dock.test",
 			sponsor_id: owner.id,
+			created_by: owner.id,
 			outbound_policy: { mode: "internal-only" },
 		});
 		const redirect = new URL(approved.redirect_to);
@@ -402,6 +403,27 @@ describe("OAuth approval", () => {
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(approve)).toBe("not_found");
+		// A request that expires during the approval, after the read of the handler: the insert of the
+		// agent checks the request again in its transaction, so it writes nothing.
+		const late = await startAuthorization(await registerClient());
+		const res = await withEnv(
+			{
+				DIRECTORY: racing(
+					"UPDATE oauth_requests SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+					late.requestId,
+				),
+			},
+			`/api/v1/oauth/authorizations/${late.requestId}/approve`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
+				body: JSON.stringify({
+					new_agent: { display_name: "Late", address: "late@dock.test" },
+					scopes: ["mail.read"],
+				}),
+			},
+		);
+		expect(res.status).toBe(409);
 		const { principals } = await owner.call("directory.list_principals");
 		expect(principals.map((p) => p.address)).not.toContain("late@dock.test");
 	});

@@ -5,6 +5,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { kindTag } from "../../lib/principalKind.ts";
 import { Link } from "../../lib/router.tsx";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -295,7 +296,7 @@ function CreateSharedDriveDialog({ principals, selfId, onClose, onCreated }: Cre
 											{principal.id === selfId ? " (you)" : ""}
 											<span className="check-hint">
 												{principal.address}
-												{principal.kind === "agent" ? " · agent" : ""}
+												{kindTag(principal.kind) && ` · ${kindTag(principal.kind)}`}
 											</span>
 										</span>
 									</label>

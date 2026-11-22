@@ -3,6 +3,7 @@ import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
+import { kindTag } from "../../lib/principalKind.ts";
 import { useToast } from "../../lib/toast.tsx";
 import { byName, SharedMailboxPanel } from "./SharedMailboxPanel.tsx";
 
@@ -193,7 +194,7 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 									{principal.display_name}
 									<span className="check-hint">
 										{principal.address}
-										{principal.kind === "agent" ? " · agent" : ""}
+										{kindTag(principal.kind) && ` · ${kindTag(principal.kind)}`}
 									</span>
 								</span>
 							</label>

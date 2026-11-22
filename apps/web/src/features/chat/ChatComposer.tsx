@@ -19,6 +19,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { initials, plural } from "../../lib/format.ts";
+import { isAutomated, kindTag } from "../../lib/principalKind.ts";
 import { FormatToolbar, LinkDialog, placeholderPlugin, shortcut, type Tool } from "../mail/RichTextEditor.tsx";
 import { isMarkActive, type LinkTarget } from "../mail/richTextCommands.ts";
 import { pasteTakesFiles } from "./attachments.ts";
@@ -518,14 +519,16 @@ export function ChatComposer({
 						>
 							<span
 								className={
-									suggestion.person.kind === "agent" ? "mention-avatar mention-avatar-agent" : "mention-avatar"
+									isAutomated(suggestion.person.kind) ? "mention-avatar mention-avatar-agent" : "mention-avatar"
 								}
 								aria-hidden="true"
 							>
 								{initials(suggestion.person.display_name)}
 							</span>
 							<span className="mention-name">{suggestion.person.display_name}</span>
-							{suggestion.person.kind === "agent" && <span className="kind kind-agent">agent</span>}
+							{isAutomated(suggestion.person.kind) && (
+								<span className="kind kind-agent">{kindTag(suggestion.person.kind)}</span>
+							)}
 							<span className="mention-handle">@{suggestion.handle}</span>
 							{!suggestion.member && <span className="mention-note">Not in this room</span>}
 						</div>

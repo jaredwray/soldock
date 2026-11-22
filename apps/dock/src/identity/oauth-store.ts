@@ -225,14 +225,6 @@ export async function getPendingRequest(db: D1Database, id: string): Promise<OAu
 	};
 }
 
-/**
- * The condition of a principal insert that request `?` still waits, for `createPrincipal`. Pass the same
- * `now` to `approveStatement`, so that the insert and the approval in one transaction agree.
- */
-export function pendingRequestCondition(requestId: string, now: string): { sql: string; params: unknown[] } {
-	return { sql: `EXISTS (SELECT 1 FROM oauth_requests WHERE id = ? AND ${PENDING})`, params: [requestId, now] };
-}
-
 /** A new authorization code and the time after which it stops. */
 export async function newCode(now: number): Promise<{ code: string; hash: string; expires_at: string }> {
 	const code = `${CODE_PREFIX}${randomToken(32)}`;

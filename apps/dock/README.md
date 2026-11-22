@@ -119,7 +119,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals with their password hashes and TOTP secrets, addresses, API keys, sessions, reset lock, mail domains, team mailboxes and their members, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals with their password hashes and TOTP secrets, service accounts, addresses, API keys with their end, sessions, reset lock, mail domains, team mailboxes and their members, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, event outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<mailbox id>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
@@ -137,6 +137,7 @@ with injected inbound mail.
 | Web Push jobs | [`chat`](src/chat/README.md) | Queue `soldock-chat-push`. Each job holds ids, an event reason and the event time. The subscription keys stay in the principal object |
 | Jobs of link previews | [`chat`](src/chat/README.md#link-previews) | Queue `soldock-chat-previews` |
 | The room index of Chat (a copy for the lists) | [`chat`](src/chat/README.md) | D1 `DIRECTORY`, tables `chat_rooms` and `chat_members` |
+| The activity log of each service account (calls of its tokens and changes by admins, at most 10,000 entries and 90 days) | [`identity`](src/identity/README.md#service-accounts) | `PrincipalDO` SQLite, table `service_activity` |
 
 `MailboxDO`, `DriveSpaceDO` and `ChatRoomDO` do not extend a `AsterraObject` base class yet. Each has its own
 migrations, outbox and idempotency table. When `AsterraObject` exists, they move onto it. Backups:

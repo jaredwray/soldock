@@ -22,7 +22,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 4. The input is the JSON body (or the query string for GET), plus the path parameters. The
    `Idempotency-Key` header fills `idempotency_key` when the operation has that field.
 5. The shared invoker (`platform`) checks the caller kind and the scopes, validates the input,
-   runs the handler and validates the output.
+   runs the handler and validates the output. For a token of a service account, the call context
+   records each call in the activity log of the account, with the surface `rest`.
 6. Errors are `application/problem+json` (RFC 9457) with the `code` from the error catalogue.
    A missing or bad credential gets `401` with `WWW-Authenticate: Bearer`.
 

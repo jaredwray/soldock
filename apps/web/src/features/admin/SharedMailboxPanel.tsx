@@ -2,6 +2,7 @@ import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@asterra/
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { actorKind, KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
@@ -190,7 +191,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 											<div className="row-note">{member.address}</div>
 										</td>
 										<td>
-											<span className={`kind kind-${member.kind}`}>{member.kind === "agent" ? "Agent" : "Person"}</span>
+											<span className={`kind kind-${actorKind(member.kind)}`}>{KIND_NAMES[member.kind]}</span>
 										</td>
 										<td className="cell-actions">
 											<button

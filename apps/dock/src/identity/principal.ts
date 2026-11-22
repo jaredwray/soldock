@@ -41,6 +41,7 @@ import {
 	type PushDevice,
 	SOUND_WINDOW_MS,
 } from "./notifications.ts";
+import { SERVICE_ACTIVITY_MIGRATION, type ServiceActivityInput, ServiceActivityStore } from "./service-activity.ts";
 import {
 	type EventsSocketState,
 	listensForSound,
@@ -51,8 +52,9 @@ import {
 	viewsRoom,
 } from "./socket-presence.ts";
 
-// Each person and agent has one PrincipalDO. It holds their room state, notification settings,
-// registered push devices and events sockets. Its name is the principal id.
+// Each person, agent and service account has one PrincipalDO. It holds their room state, notification
+// settings, registered push devices and events sockets, and the activity log of a service account. Its
+// name is the principal id.
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -347,6 +349,7 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE chat_rooms ADD COLUMN retention_days INTEGER",
 		...CHAT_PERSONAL_MIGRATION,
 	],
+	SERVICE_ACTIVITY_MIGRATION,
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -376,6 +379,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private readonly notifications: ChatNotifications;
 	private readonly personal: ChatPersonalStore;
+	private readonly activity: ServiceActivityStore;
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
 
@@ -384,6 +388,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		this.notifications = new ChatNotifications(this.sql);
 		this.personal = new ChatPersonalStore(this.sql);
+		this.activity = new ServiceActivityStore(this.sql);
 		this.migrate();
 	}
 
@@ -962,6 +967,19 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.ctx.waitUntil(this.enqueue([]));
 		await schedulePresence(this.ctx);
 		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/**
+	 * Adds one entry to the activity log of a service account. The Worker calls it after a call of the
+	 * service account, or after a change to it. It checks no access: only the Worker calls it.
+	 */
+	recordServiceActivity(entry: ServiceActivityInput): void {
+		this.activity.record(entry);
+	}
+
+	/** One page of the activity log, with the newest entry first. The handler checks the access first. */
+	listServiceActivity(options: { before: number | null; keyId: string | null; limit: number }) {
+		return this.activity.list({ ...options, now: Date.now() });
 	}
 
 	/**

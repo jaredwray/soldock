@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
+import { isAutomated, kindTag } from "../../lib/principalKind.ts";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { chatPath, profilePath } from "../../routes.ts";
@@ -113,7 +114,7 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 		);
 	}
 
-	const agent = person.kind === "agent";
+	const agent = isAutomated(person.kind);
 	return (
 		<>
 			<header className="chat-header">
@@ -127,14 +128,14 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 				</span>
 				<h2 className="chat-profile-name">
 					{person.display_name}
-					{agent && <span className="kind kind-agent">agent</span>}
+					{agent && <span className="kind kind-agent">{kindTag(person.kind)}</span>}
 				</h2>
 				{handle && <p className="chat-profile-handle">@{handle}</p>}
 				<div className="chat-profile-status">
 					<Presence id={person.id} agent={agent} editable={person.id === ownId} />
 				</div>
 				{person.archived_at !== null && (
-					<p className="chat-profile-note">An owner or an admin archived this {agent ? "agent" : "person"}.</p>
+					<p className="chat-profile-note">An owner or an admin archived this {kindTag(person.kind) || "person"}.</p>
 				)}
 				{person.id !== ownId && person.archived_at === null && (
 					<p className="chat-start">

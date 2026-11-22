@@ -124,7 +124,10 @@ export async function creatableTarget(
 	}
 	const target = await getPrincipal(call.env.DIRECTORY, targetId);
 	if (!target) throw new OperationError("not_found", "No principal has that id.");
-	if (target.kind === "agent" && caller.kind === "human" && target.sponsor_id === caller.id) return target.id;
+	// The sponsor of a service account gets no right from that role: a service account has no webhooks.
+	if (target.kind === "agent" && !target.service && caller.kind === "human" && target.sponsor_id === caller.id) {
+		return target.id;
+	}
 	throw new OperationError(
 		"forbidden",
 		domain === "chat"
@@ -232,7 +235,8 @@ export function createSubscriptionHandlers(
 			// A chat target is the caller, or an agent that the caller sponsors. Mail and Drive have no filter.
 			const filter =
 				domain === "chat"
-					? (input.filter ?? defaultChatWebhookFilter(targetId === call.caller.id ? call.caller.kind : "agent"))
+					? (input.filter ??
+						defaultChatWebhookFilter(targetId === call.caller.id ? call.caller.principal.kind : "agent"))
 					: "all";
 			const binding = credentialBinding(call.caller);
 			const id = newId("whk");

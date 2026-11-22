@@ -1,8 +1,8 @@
 import { EVENTS_SOCKET_PATH, operations } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
-import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
-import { credentialRef } from "./access.ts";
+import { CALLER_NAMES, log, OperationError, type RequestIdVariables } from "../platform/index.ts";
+import { credentialRef, recordSocketOpen } from "./access.ts";
 import { type AuthContext, authenticate, isSameOrigin } from "./auth.ts";
 import { EVENTS_SOCKET_HEADER, type EventsSocketOpen } from "./principal.ts";
 
@@ -54,13 +54,15 @@ export function mountEventsSocket(app: Hono<SocketEnv>): void {
 			throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
 		}
 		if (!READ_OPERATION.callers.includes(caller.kind)) {
-			throw new OperationError("forbidden", `An ${caller.kind} cannot open the events socket.`);
+			throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open the events socket.`);
 		}
 		const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
 		if (missing.length > 0) {
 			throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
 		}
 		const response = await openEventsSocket(c.env, caller, { feed: false });
+		// A service account gets one entry in its activity log for each socket that it opens.
+		recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "events.open_socket");
 		log("info", "events socket opened", {
 			principalId: caller.principal.id,
 			credential: caller.credential,

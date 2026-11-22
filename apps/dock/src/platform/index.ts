@@ -43,5 +43,12 @@ export { audit, log } from "./log/log.ts";
 export { type ImageInfo, readImageInfo } from "./media/image.ts";
 export { INLINE_TYPES, SNIFF_BYTES, sniffType } from "./media/sniff.ts";
 export { OperationError } from "./operations/errors.ts";
-export { type AnyHandler, type Caller, type HandlerMap, invokeOperation } from "./operations/invoke.ts";
+export {
+	type AnyHandler,
+	CALLER_NAMES,
+	type Caller,
+	type HandlerMap,
+	type InvokeOutcome,
+	invokeOperation,
+} from "./operations/invoke.ts";
 export type { ChangeFacts, ResourceWatcher, Watch, WatcherMap, WatchListener } from "./resources/watch.ts";

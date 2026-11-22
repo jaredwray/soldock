@@ -3,7 +3,7 @@
 import { type Operation, type OperationName, operationList, pathParams } from "@asterra/contracts";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { authenticate, type CallContext, isSameOrigin } from "../identity/index.ts";
+import { activityRecorder, authenticate, type CallContext, isSameOrigin } from "../identity/index.ts";
 import {
 	type HandlerMap,
 	invokeOperation,
@@ -80,7 +80,14 @@ export async function callOf(
 			throw new OperationError("forbidden", "A request with the session cookie must come from this origin.");
 		}
 	}
-	return { caller, env: c.env, requestId: c.var.requestId, origin: new URL(c.req.url).origin, waitUntil };
+	return {
+		caller,
+		env: c.env,
+		requestId: c.var.requestId,
+		origin: new URL(c.req.url).origin,
+		waitUntil,
+		record: activityRecorder(caller, c.env, waitUntil, c.var.requestId, "rest"),
+	};
 }
 
 /**

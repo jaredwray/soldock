@@ -5,6 +5,7 @@ import {
 	type SharedDriveMember,
 	type SharedDriveRole,
 } from "@asterra/contracts";
+import { isAutomated } from "../../lib/principalKind.ts";
 
 // The rules of the members of a shared drive that need no DOM. The Admin section, the Drive pages
 // and the Node tests use them. The server applies the same rules, and it has the last word.
@@ -20,9 +21,12 @@ export const ROLE_NAMES: Record<DriveRole, string> = {
 export const ROLE_HINT =
 	"A manager also changes the members, shares items and deletes items forever. An editor adds and changes items. A viewer reads and copies.";
 
-/** The roles that a person or an agent can have. An agent is never a manager: a manager is a person. */
+/**
+ * The roles that a person, an agent or a service account can have. An agent and a service account are
+ * never a manager: a manager is a person.
+ */
 export function memberRoles(kind: Principal["kind"]): readonly SharedDriveRole[] {
-	return kind === "agent" ? SHARED_DRIVE_ROLES.filter((role) => role !== "manager") : SHARED_DRIVE_ROLES;
+	return isAutomated(kind) ? SHARED_DRIVE_ROLES.filter((role) => role !== "manager") : SHARED_DRIVE_ROLES;
 }
 
 /** The roles as the options of a role control. */
@@ -34,8 +38,8 @@ export function roleOptions(roles: readonly SharedDriveRole[]): { value: SharedD
 export function membersProblem(
 	members: readonly { kind: Principal["kind"]; role: SharedDriveRole; name: string }[],
 ): string | null {
-	const agent = members.find((member) => member.kind === "agent" && member.role === "manager");
-	if (agent) return `${agent.name} is an agent, and an agent cannot be a manager.`;
+	const agent = members.find((member) => isAutomated(member.kind) && member.role === "manager");
+	if (agent) return `${agent.name} is not a person, and only a person can be a manager.`;
 	if (!members.some((member) => member.kind === "human" && member.role === "manager")) {
 		return "Give the manager role to at least one person.";
 	}

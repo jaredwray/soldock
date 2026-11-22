@@ -13,6 +13,7 @@ export {
 } from "./access.ts";
 export { contentOf, driveHandlers } from "./handlers.ts";
 export { filesForMessage, roomFile } from "./rooms.ts";
+export { sharedDrivesOfPrincipal } from "./shared-index.ts";
 export { DriveSpaceDO, type FileSnapshot, type ItemRecord } from "./space.ts";
 export { mountDriveTransfer, versionResponse } from "./transfer.ts";
 export { driveWatchers } from "./watch.ts";

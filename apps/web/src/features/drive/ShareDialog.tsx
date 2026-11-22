@@ -4,6 +4,7 @@ import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { kindTag } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
 import { isSharedDriveId } from "../../routes.ts";
@@ -299,7 +300,7 @@ function AccessRow({
 				<strong>
 					{name}
 					{principalId === ownId && " (you)"}
-					{principal?.kind === "agent" && " (agent)"}
+					{principal && kindTag(principal.kind) && ` (${kindTag(principal.kind)})`}
 				</strong>
 				<span className="muted">{principal?.address ?? principalId}</span>
 			</span>

@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { isLastManager, memberRoles, membersProblem } from "../src/features/drive/sharedDrives.ts";
 
 describe("the members of a shared drive", () => {
-	// A manager is a person. The server refuses an agent with the manager role.
+	// A manager is a person. The server refuses an agent or a service account with the manager role.
 	it("offers the manager role to a person only", () => {
 		expect(memberRoles("human")).toEqual(["manager", "editor", "viewer"]);
 		expect(memberRoles("agent")).toEqual(["editor", "viewer"]);
+		expect(memberRoles("service")).toEqual(["editor", "viewer"]);
 	});
 
 	// The server refuses a new shared drive without a person as a manager.
@@ -31,6 +32,12 @@ describe("the members of a shared drive", () => {
 				{ ...agent, role: "manager" },
 			]),
 		).toMatch(/Research Agent/);
+		expect(
+			membersProblem([
+				{ ...person, role: "manager" },
+				{ kind: "service", name: "CI Pipeline", role: "manager" },
+			]),
+		).toMatch(/CI Pipeline is not a person/);
 	});
 
 	// The server refuses a change that leaves a drive without a manager, so the control of that member is off.

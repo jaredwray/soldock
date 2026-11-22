@@ -24,6 +24,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
+import { actorKind } from "../../lib/principalKind.ts";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useViewedRoom } from "../../lib/usePrincipalActivity.ts";
@@ -394,7 +395,7 @@ export function RoomView({
 	}, [unreadSeq, roomId, listTick]);
 
 	const own = useMemo(
-		() => ({ principal_id: ownId, kind: self.kind, display_name: self.display_name }),
+		() => ({ principal_id: ownId, kind: actorKind(self.kind), display_name: self.display_name }),
 		[ownId, self.kind, self.display_name],
 	);
 	const members = view.members;
@@ -464,7 +465,7 @@ export function RoomView({
 	const settler = useMemo(
 		() =>
 			createSendSettler({
-				own: { principal_id: ownId, kind: self.kind, display_name: self.display_name },
+				own: { principal_id: ownId, kind: actorKind(self.kind), display_name: self.display_name },
 				state: outbox.getState,
 				settle: outbox.settle,
 				onSettled: (count) => {

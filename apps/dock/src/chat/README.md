@@ -107,6 +107,9 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   `chat.remove_member` and `chat.update_room` refuse it with `invalid`.
 - The scopes of the credential apply first: `chat.read` and `chat.write`. An agent key can hold
   the two scopes. An agent is a member like a person, with the same roles.
+- A [service account](../identity/README.md#service-accounts) is an agent here: a member, an author
+  and a mention show the kind `agent`. Its token can hold `chat.read` and `chat.write`, and not
+  `chat.webhooks`. Push, notification settings and a status are not open to it.
 
 ## Messages
 

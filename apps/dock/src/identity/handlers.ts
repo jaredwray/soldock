@@ -1,17 +1,19 @@
 import {
 	AGENT_SCOPES,
 	ALL_SCOPES,
+	API_KEY_LIMITS,
 	commaListEntries,
 	DIRECTORY_LIMITS,
 	type DirectoryEntry,
 	mentionDirectory,
 	mentionHandle,
+	SERVICE_ACTIVITY_LIMITS,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
-import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes } from "./access.ts";
+import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes, recordServiceChange } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
@@ -34,9 +36,10 @@ import {
 	getApiKey,
 	getDirectoryRecords,
 	getPrincipal,
+	getPrincipals,
 	listApiKeys,
 	listPrincipalPage,
-	liveSponsorCondition,
+	liveApiKeys,
 	mailDomains,
 	mentionCandidates,
 	type PrincipalRecord,
@@ -58,6 +61,7 @@ import {
 	removeTeamMailboxMember,
 	renameTeamMailbox,
 	type TeamMailboxRecord,
+	teamMailboxesOf,
 } from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
@@ -85,12 +89,67 @@ type IdentityOperation =
 	| "directory.create_team_mailbox"
 	| "directory.update_team_mailbox"
 	| "directory.add_team_mailbox_member"
-	| "directory.remove_team_mailbox_member";
+	| "directory.remove_team_mailbox_member"
+	| "directory.create_service_account"
+	| "directory.list_service_account_activity"
+	| "directory.get_service_account_access";
 
-/** Only the sponsor of an agent, an owner or an admin can change the agent's policy. Never the agent. */
+/**
+ * Only the sponsor of an agent, an owner or an admin can change the agent's policy. Never the agent. Only
+ * an owner or an admin changes the policy of a service account.
+ */
 function canChangePolicyOf(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human" || target.kind !== "agent") return false;
+	if (target.service) return isAdmin(caller);
 	return target.sponsor_id === caller.principal.id || isAdmin(caller);
+}
+
+/**
+ * The service account that an owner or an admin reads. Throws `forbidden` for each other caller, and
+ * `not_found` for a principal that is not a service account.
+ */
+async function serviceAccountToRead(call: CallContext, principalId: string): Promise<PrincipalRecord> {
+	if (!isAdmin(call.caller)) {
+		throw new OperationError("forbidden", "Only owners and admins can read the details of a service account.");
+	}
+	const target = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (!target?.service) throw new OperationError("not_found", "No service account has that id.");
+	return target;
+}
+
+/** The sponsor of a new agent or service account: a person who is not archived. */
+async function liveSponsor(call: CallContext, sponsorId: string): Promise<PrincipalRecord> {
+	const sponsor = await getPrincipal(call.env.DIRECTORY, sponsorId);
+	if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
+	if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor must be a person.");
+	if (sponsor.archived_at !== null) throw new OperationError("invalid", "The sponsor is archived.");
+	return sponsor;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The end of a new key as an ISO time, or null for a key without an end. A custom end must be at least
+ * `API_KEY_LIMITS.minSeconds` after now, and at most `API_KEY_LIMITS.maxDays` days after now.
+ */
+function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: string | undefined }): string | null {
+	const now = Date.now();
+	if (input.expires_in_days !== undefined) return new Date(now + input.expires_in_days * DAY_MS).toISOString();
+	if (input.expires_at === undefined) return null;
+	const end = Date.parse(input.expires_at);
+	if (Number.isNaN(end) || end < now + API_KEY_LIMITS.minSeconds * 1000) {
+		throw new OperationError("invalid", `expires_at must be at least ${API_KEY_LIMITS.minSeconds} seconds from now.`);
+	}
+	if (end > now + API_KEY_LIMITS.maxDays * DAY_MS) {
+		throw new OperationError("invalid", `expires_at must be at most ${API_KEY_LIMITS.maxDays} days from now.`);
+	}
+	return new Date(end).toISOString();
+}
+
+/** The text for the agents and service accounts that a person sponsors, for a refused archive or delete. */
+function sponsoredText(name: string, count: number, action: "archive" | "delete"): string {
+	const what = count === 1 ? "an agent or a service account" : `${count} agents or service accounts`;
+	return `${name} sponsors ${what}. Give each one a different sponsor, or ${action} it, first.`;
 }
 
 /**
@@ -118,9 +177,13 @@ function assertRemovable(call: CallContext, target: PrincipalRecord, action: "ar
 	assertFullCredential(call.caller);
 }
 
-/** A principal of the directory list, with the handle of a mention in Chat. */
-function toDirectoryEntry(record: DirectoryRecord): DirectoryEntry {
-	return { ...toPrincipalOutput(record), handle: mentionHandle(record.address, record.sharedLocal) };
+/**
+ * A principal of the directory list, with the handle of a mention in Chat. Only an owner or an admin reads
+ * `description` and `created_by` in the directory. Each other caller gets null for the two fields.
+ */
+function toDirectoryEntry(caller: AuthContext, record: DirectoryRecord): DirectoryEntry {
+	const entry = { ...toPrincipalOutput(record), handle: mentionHandle(record.address, record.sharedLocal) };
+	return isAdmin(caller) ? entry : { ...entry, description: null, created_by: null };
 }
 
 const DIRECTORY_CHANGED = "The directory changed during the request. Load it again and try again.";
@@ -223,12 +286,13 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			folded: input.query === undefined ? null : searchFold(input.query),
 			activeOnly: input.active_only === "true",
 			sponsorId: input.sponsor_id ?? null,
+			kind: input.kind ?? null,
 			byMatch: input.order === "match" && input.query !== undefined,
 			after,
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});
 		return {
-			principals: page.principals.map(toDirectoryEntry),
+			principals: page.principals.map((record) => toDirectoryEntry(call.caller, record)),
 			next_cursor: page.next === null ? null : encodeCursor(page.next),
 		};
 	},
@@ -246,7 +310,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			...commaListEntries(input.ids),
 			...mentions.map((mention) => mention.principal_id),
 		]);
-		return { principals: records.map(toDirectoryEntry), mentions };
+		return { principals: records.map((record) => toDirectoryEntry(call.caller, record)), mentions };
 	},
 
 	async "directory.create_principal"(call, input) {
@@ -261,16 +325,13 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (input.org_role) throw new OperationError("invalid", "An agent has no organization role.");
 			if (input.password) throw new OperationError("invalid", "An agent has no password.");
 			sponsorId = input.sponsor_id ?? call.caller.principal.id;
-			const sponsor = await getPrincipal(call.env.DIRECTORY, sponsorId);
-			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
-			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
-			if (sponsor.archived_at !== null) throw new OperationError("invalid", "The sponsor is archived.");
+			await liveSponsor(call, sponsorId);
 		} else {
 			if (input.sponsor_id) throw new OperationError("invalid", "Only an agent has a sponsor.");
 			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
 			assertFullCredential(call.caller);
 		}
-		const target = { kind: input.kind, sponsor_id: sponsorId } as PrincipalRecord;
+		const target = { kind: input.kind, sponsor_id: sponsorId, service: false } as PrincipalRecord;
 		const scopes = grantableScopes(
 			call.caller,
 			target,
@@ -285,10 +346,11 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				org_role: input.kind === "human" ? (input.org_role ?? "member") : null,
 				sponsor_id: sponsorId,
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
+				created_by: call.caller.principal.id,
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 			// A sponsor archived or deleted during the request must not get a new agent.
-			sponsorId ? { condition: liveSponsorCondition(sponsorId) } : {},
+			sponsorId ? { liveSponsorId: sponsorId } : {},
 		);
 		if (!created) {
 			throw new OperationError(
@@ -303,13 +365,95 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		};
 	},
 
+	async "directory.create_service_account"(call, input) {
+		if (!isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins can create service accounts.");
+		}
+		const domains = await mailDomains(call.env.DIRECTORY);
+		if (!domains.has(domainOf(input.address))) {
+			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
+		}
+		assertPrimaryAddress(input.address);
+		const sponsorId = input.sponsor_id ?? call.caller.principal.id;
+		await liveSponsor(call, sponsorId);
+		const created = await createPrincipal(
+			call.env.DIRECTORY,
+			{
+				kind: "agent",
+				service: true,
+				display_name: input.display_name,
+				address: input.address,
+				org_role: null,
+				sponsor_id: sponsorId,
+				password_hash: null,
+				description: input.description ?? null,
+				created_by: call.caller.principal.id,
+			},
+			null,
+			// A sponsor archived or deleted during the request must not get a new service account.
+			{ liveSponsorId: sponsorId },
+		);
+		if (!created) {
+			throw new OperationError(
+				"conflict",
+				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
+			);
+		}
+		auditOk(call, "directory.create_service_account", created.principal.id);
+		recordServiceChange(call, created.principal, "directory.create_service_account");
+		return { principal: toPrincipalOutput(created.principal) };
+	},
+
+	async "directory.list_service_account_activity"(call, input) {
+		const target = await serviceAccountToRead(call, input.principal_id);
+		const before = input.cursor === undefined ? null : decodeCursor<[number]>(input.cursor, ["number"]);
+		if (input.cursor !== undefined && before === null) {
+			throw new OperationError("invalid", "The cursor is not valid. Use next_cursor from the last page.");
+		}
+		const page = await call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(target.id)).listServiceActivity({
+			before: before?.[0] ?? null,
+			keyId: input.key_id ?? null,
+			limit: input.limit ?? SERVICE_ACTIVITY_LIMITS.defaultPageSize,
+		});
+		return { entries: page.entries, next_cursor: page.next === null ? null : encodeCursor([page.next]) };
+	},
+
+	// The composition root adds the shared drives and the rooms (`src/handlers.ts`).
+	async "directory.get_service_account_access"(call, input) {
+		const target = await serviceAccountToRead(call, input.principal_id);
+		const [mailboxes, keys] = await Promise.all([
+			teamMailboxesOf(call.env.DIRECTORY, target.id),
+			liveApiKeys(call.env.DIRECTORY, target.id),
+		]);
+		return {
+			principal_id: target.id,
+			team_mailboxes: mailboxes.map((mailbox) => ({
+				id: mailbox.id,
+				display_name: mailbox.display_name,
+				address: mailbox.address,
+			})),
+			shared_drives: [],
+			chat_rooms: [],
+			chat_rooms_truncated: false,
+			tokens: keys.map((key) => ({
+				key_id: key.id,
+				label: key.label,
+				scopes: key.scopes,
+				expires_at: key.expires_at,
+			})),
+			scopes: [...new Set(keys.flatMap((key) => key.scopes))].sort(),
+		};
+	},
+
 	async "directory.update_agent_policy"(call, input) {
 		const target = await getPrincipal(call.env.DIRECTORY, input.principal_id);
 		if (target?.kind !== "agent") throw new OperationError("not_found", "No agent has that id.");
 		if (!canChangePolicyOf(call.caller, target)) {
 			throw new OperationError(
 				"forbidden",
-				"Only the sponsor of the agent, an owner or an admin can change its policy.",
+				target.service
+					? "Only an owner or an admin can change the policy of a service account."
+					: "Only the sponsor of the agent, an owner or an admin can change its policy.",
 			);
 		}
 		const previousMode = await updateOutboundPolicy(call.env.DIRECTORY, target.id, input.mode, input.allowlist);
@@ -326,6 +470,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			previousOutboundMode: previousMode,
 			allowlistSize: input.mode === "allowlist" ? input.allowlist.length : 0,
 		});
+		recordServiceChange(call, target, "directory.update_agent_policy");
 		const updated = await getPrincipal(call.env.DIRECTORY, target.id);
 		if (!updated) throw new Error(`agent ${target.id} missing after update`);
 		return { principal: toPrincipalOutput(updated) };
@@ -342,17 +487,25 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			assertFullCredential(call.caller);
 		}
 		if (input.sponsor_id !== undefined) {
-			if (target.kind !== "agent") throw new OperationError("invalid", "Only an agent has a sponsor.");
-			const sponsor = await getPrincipal(call.env.DIRECTORY, input.sponsor_id);
-			if (!sponsor) throw new OperationError("not_found", "The sponsor does not exist.");
-			if (sponsor.kind !== "human") throw new OperationError("invalid", "The sponsor of an agent must be a human.");
-			if (sponsor.archived_at !== null) throw new OperationError("invalid", "The sponsor is archived.");
+			if (target.kind !== "agent") {
+				throw new OperationError("invalid", "Only an agent or a service account has a sponsor.");
+			}
+			await liveSponsor(call, input.sponsor_id);
 		}
-		const changes = { display_name: input.display_name, org_role: input.org_role, sponsor_id: input.sponsor_id };
+		if (input.description !== undefined && !target.service) {
+			throw new OperationError("invalid", "Only a service account has a description.");
+		}
+		const changes = {
+			display_name: input.display_name,
+			org_role: input.org_role,
+			sponsor_id: input.sponsor_id,
+			description: input.description,
+		};
 		if (!(await updatePrincipal(call.env.DIRECTORY, target.id, changes))) {
 			throw new OperationError("conflict", DIRECTORY_CHANGED);
 		}
 		auditOk(call, "directory.update_principal", target.id);
+		recordServiceChange(call, target, "directory.update_principal");
 		return { principal: toPrincipalOutput(await principalAfterChange(call, target.id)) };
 	},
 
@@ -361,16 +514,12 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		assertRemovable(call, target, "archive");
 		// An archived person could still act through the keys of an agent that they sponsor.
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id, { activeOnly: true });
-		if (agents > 0) {
-			throw new OperationError(
-				"conflict",
-				`${target.display_name} sponsors ${agents === 1 ? "an agent" : `${agents} agents`}. Give each agent a different sponsor, or archive it, first.`,
-			);
-		}
+		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "archive"));
 		await archivePrincipal(call.env.DIRECTORY, target.id);
 		const archived = await principalAfterChange(call, target.id);
 		if (archived.archived_at === null) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		auditOk(call, "directory.archive_principal", target.id);
+		recordServiceChange(call, target, "directory.archive_principal");
 		return { principal: toPrincipalOutput(archived) };
 	},
 
@@ -382,7 +531,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (!sponsor || sponsor.archived_at !== null) {
 				throw new OperationError(
 					"invalid",
-					"The sponsor of this agent is archived. Give it a different sponsor first.",
+					`The sponsor of this ${target.service ? "service account" : "agent"} is archived. Give it a different sponsor first.`,
 				);
 			}
 		}
@@ -390,6 +539,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const restored = await principalAfterChange(call, target.id);
 		if (restored.archived_at !== null) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		auditOk(call, "directory.restore_principal", target.id);
+		recordServiceChange(call, target, "directory.restore_principal");
 		return { principal: toPrincipalOutput(restored) };
 	},
 
@@ -397,15 +547,11 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const target = await principalToManage(call, input.principal_id, "delete");
 		assertRemovable(call, target, "delete");
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id);
-		if (agents > 0) {
-			throw new OperationError(
-				"conflict",
-				`${target.display_name} sponsors ${agents === 1 ? "an agent" : `${agents} agents`}. Give each agent a different sponsor, or delete it, first.`,
-			);
-		}
+		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "delete"));
 		if (!(await deletePrincipal(call.env.DIRECTORY, target.id)))
 			throw new OperationError("conflict", DIRECTORY_CHANGED);
 		auditOk(call, "directory.delete_principal", target.id);
+		recordServiceChange(call, target, "directory.delete_principal");
 		return { principal_id: target.id };
 	},
 
@@ -437,6 +583,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		for (const memberId of created.member_ids) {
 			auditOk(call, "directory.add_team_mailbox_member", `${created.id}:${memberId}`);
 		}
+		for (const member of await getPrincipals(call.env.DIRECTORY, created.member_ids)) {
+			recordServiceChange(call, member, "directory.add_team_mailbox_member");
+		}
 		return { team_mailbox: created };
 	},
 
@@ -460,6 +609,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
 		}
 		auditOk(call, "directory.add_team_mailbox_member", `${input.mailbox_id}:${member.id}`);
+		recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
 	},
 
@@ -467,12 +617,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		await teamMailboxToManage(call, input.mailbox_id, "change the members of");
 		await removeTeamMailboxMember(call.env.DIRECTORY, input.mailbox_id, input.principal_id);
 		auditOk(call, "directory.remove_team_mailbox_member", `${input.mailbox_id}:${input.principal_id}`);
+		const member = await getPrincipal(call.env.DIRECTORY, input.principal_id);
+		if (member) recordServiceChange(call, member, "directory.remove_team_mailbox_member");
 		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
 	},
 
 	async "account.list_api_keys"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
-		return { api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map(toApiKeyOutput) };
+		return { api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map((key) => toApiKeyOutput(key)) };
 	},
 
 	async "account.create_api_key"(call, input) {
@@ -482,18 +634,22 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			label: input.label,
 			scopes,
 			created_by: call.caller.principal.id,
+			description: input.description ?? null,
+			expires_at: keyExpiry(input),
 		});
 		auditOk(call, "account.create_api_key", created.key.id);
+		recordServiceChange(call, target, "account.create_api_key", created.key.id);
 		return { api_key: { ...toApiKeyOutput(created.key), secret: created.secret } };
 	},
 
 	async "account.revoke_api_key"(call, input) {
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
-		await credentialOwner(call, key.principal_id);
-		await revokeApiKey(call.env.DIRECTORY, key.id);
+		const owner = await credentialOwner(call, key.principal_id);
+		const changed = await revokeApiKey(call.env.DIRECTORY, key.id, call.caller.principal.id);
 		await endEventSockets(call.env, key.principal_id, { kind: "api_key", id: key.id });
 		auditOk(call, "account.revoke_api_key", key.id);
+		if (changed) recordServiceChange(call, owner, "account.revoke_api_key", key.id);
 		return { revoked: true };
 	},
 

@@ -34,7 +34,7 @@ export const listTeamMailboxes = defineOperation({
 		"Returns each team mailbox with its address and the ids of its members. A team mailbox is a shared mailbox: each member can read it, change it and send from its address. To get only the mailboxes that you can use, call mail.list_mailboxes.",
 	http: { method: "GET", path: "/api/v1/directory/team-mailboxes" },
 	scopes: ["directory.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({}),
 	output: z.object({ team_mailboxes: z.array(TeamMailbox) }),

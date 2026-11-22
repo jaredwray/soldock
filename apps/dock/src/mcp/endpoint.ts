@@ -2,6 +2,7 @@
 import type { Hono } from "hono";
 import {
 	type AuthContext,
+	activityRecorder,
 	authenticate,
 	type CallContext,
 	canReadAgentMailboxes,
@@ -53,10 +54,19 @@ const CACHE = {
 	read: { ttlMs: 0, cacheScope: "private" },
 } as const satisfies Record<string, CacheHint>;
 
+const KIND_NAMES: Record<AuthContext["kind"], string> = {
+	human: "a person",
+	agent: "an agent",
+	service: "a service account",
+};
+
 /** How the credential gets a scope that it does not hold. */
 function addScopeHint(caller: AuthContext): string {
 	if (caller.credential === "oauth") {
 		return "The sponsor of this agent, an owner or an admin can add a scope in Admin › Members. You do not need a new connection.";
+	}
+	if (caller.kind === "service") {
+		return "The scopes of a token do not change. An owner or an admin can create a token with more scopes for this service account in Admin › Members.";
 	}
 	return caller.kind === "agent"
 		? "The scopes of an API key do not change. The sponsor of this agent, an owner or an admin can create a key with more scopes in Admin › Members."
@@ -79,7 +89,7 @@ function missingScopeText(caller: AuthContext, missing: readonly MissingScope[])
 function instructions(caller: AuthContext, era: Era): string {
 	const readsAgents = canReadAgentMailboxes(caller);
 	const text = [
-		`You act as ${caller.principal.display_name} <${caller.principal.address}>, ${caller.kind === "agent" ? "an agent" : "a person"}.`,
+		`You act as ${caller.principal.display_name} <${caller.principal.address}>, ${KIND_NAMES[caller.kind]}.`,
 		"The mail tools act on this mailbox by default. To use a team mailbox that you are a member of, get its id from mail_list_mailboxes and pass it as mailbox_id.",
 		...(readsAgents
 			? [
@@ -200,6 +210,7 @@ export function mountMcp(
 			requestId: c.var.requestId,
 			origin: new URL(c.req.url).origin,
 			waitUntil,
+			record: activityRecorder(caller, c.env, waitUntil, c.var.requestId, "mcp"),
 		};
 		try {
 			return await dispatch({ era, rpc, call, handlers, watchers, events, reauthenticate, signal: c.req.raw.signal });

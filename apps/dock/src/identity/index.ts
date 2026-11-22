@@ -1,5 +1,6 @@
 // Public surface of the identity module. Other modules import from here, never from its files.
 export {
+	activityRecorder,
 	auditOk,
 	type CredentialBinding,
 	type CredentialCheck,
@@ -13,6 +14,7 @@ export {
 	isAdmin,
 	type MissingScope,
 	missingScopes,
+	recordSocketOpen,
 } from "./access.ts";
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export type {

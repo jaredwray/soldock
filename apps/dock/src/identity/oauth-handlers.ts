@@ -11,22 +11,13 @@ import {
 	newCode,
 	type OAuthGrantRecord,
 	type OAuthRequestRecord,
-	pendingRequestCondition,
 	revokeGrant,
 	setGrantScopes,
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
 import { endEventSockets } from "./principal.ts";
-import {
-	assertPrimaryAddress,
-	createPrincipal,
-	domainOf,
-	getPrincipal,
-	liveSponsorCondition,
-	mailDomains,
-	scopeCeiling,
-} from "./store.ts";
+import { assertPrimaryAddress, createPrincipal, domainOf, getPrincipal, mailDomains, scopeCeiling } from "./store.ts";
 
 type OAuthOperation =
 	| "oauth.get_authorization"
@@ -115,11 +106,9 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
 			}
 			assertPrimaryAddress(input.new_agent.address);
-			const scopes = grantableScopes(call.caller, { kind: "agent" }, input.scopes);
+			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes);
 			const { code, approval } = await approvalAt();
 			// The request must still wait, and the approver, who becomes the sponsor, must still be active.
-			const pending = pendingRequestCondition(request.id, approval.now);
-			const sponsor = liveSponsorCondition(call.caller.principal.id);
 			const created = await createPrincipal(
 				call.env.DIRECTORY,
 				{
@@ -129,10 +118,12 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 					org_role: null,
 					sponsor_id: call.caller.principal.id,
 					password_hash: null,
+					created_by: call.caller.principal.id,
 				},
 				null,
 				{
-					condition: { sql: `${pending.sql} AND ${sponsor.sql}`, params: [...pending.params, ...sponsor.params] },
+					pendingRequest: { id: request.id, now: approval.now },
+					liveSponsorId: call.caller.principal.id,
 					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes })],
 				},
 			);
@@ -142,7 +133,8 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			return { principal: toPrincipalOutput(created.principal), redirect_to: codeRedirect(request, code.code) };
 		}
 		const agent = input.agent_id ? await getPrincipal(call.env.DIRECTORY, input.agent_id) : null;
-		if (agent?.kind !== "agent") throw new OperationError("not_found", "No agent has that id.");
+		// A service account works with tokens only: OAuth never connects an app to it.
+		if (agent?.kind !== "agent" || agent.service) throw new OperationError("not_found", "No agent has that id.");
 		if (agent.archived_at !== null) throw new OperationError("invalid", "This agent is archived. Restore it first.");
 		if (!canManageCredentialsOf(call.caller, agent)) {
 			throw new OperationError(
@@ -200,7 +192,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		if (added.length === 0) return { grant: toGrantOutput(grant) };
 		// The order of the ceiling, so each grant lists its scopes in the same order. A stored scope outside
 		// the ceiling stays at the end: this operation never removes a scope, and authenticate ignores it.
-		const ceiling = scopeCeiling(principal.kind);
+		const ceiling = scopeCeiling(principal);
 		const scopes = [
 			...ceiling.filter((scope) => grant.scopes.includes(scope) || added.includes(scope)),
 			...grant.scopes.filter((scope) => !ceiling.includes(scope)),

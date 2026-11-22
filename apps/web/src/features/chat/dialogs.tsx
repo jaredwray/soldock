@@ -16,6 +16,7 @@ import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx"
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials, plural } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { isAutomated, kindTag } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
@@ -378,7 +379,9 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 									<span className="chat-row-text">
 										<span className="chat-row-name">
 											<strong>{principal.display_name}</strong>
-											{principal.kind === "agent" && <span className="kind kind-agent">agent</span>}
+											{isAutomated(principal.kind) && (
+												<span className="kind kind-agent">{kindTag(principal.kind)}</span>
+											)}
 										</span>
 										<span className="muted">{principal.address}</span>
 									</span>

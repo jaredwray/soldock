@@ -9,6 +9,7 @@ import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
@@ -239,7 +240,9 @@ export function SharedDriveMembersPart({
 												<div className="member-name">
 													{name}
 													{self && <span className="chip chip-small">You</span>}
-													{principal?.kind === "agent" && <span className="chip chip-small">Agent</span>}
+													{principal && principal.kind !== "human" && (
+														<span className="chip chip-small">{KIND_NAMES[principal.kind]}</span>
+													)}
 													{principal?.archived_at && <span className="chip chip-small">Archived</span>}
 												</div>
 												<div className="row-note">{principal?.address ?? member.principal_id}</div>

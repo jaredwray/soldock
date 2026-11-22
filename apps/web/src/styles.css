@@ -3872,6 +3872,75 @@ fieldset {
 	margin: 2px 0 0;
 }
 
+/* The access of a service account: a term, then its list. */
+.access-list {
+	display: grid;
+	grid-template-columns: minmax(140px, max-content) 1fr;
+	gap: 8px 16px;
+	margin: 8px 0 0;
+}
+
+.access-list dt {
+	font-weight: 500;
+}
+
+.access-list dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.access-list ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+@media (max-width: 600px) {
+	.access-list {
+		grid-template-columns: 1fr;
+	}
+
+	.access-list dd {
+		margin-bottom: 8px;
+	}
+}
+
+/* The heading of the activity log of a service account, with the token filter. */
+.activity-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin-bottom: 8px;
+}
+
+.activity-tools {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.activity-tools .select-trigger {
+	width: auto;
+	min-width: 160px;
+	max-width: 260px;
+}
+
+/* The filter of the member list: all, people, agents or service accounts. */
+.member-filter {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.member-filter .button[aria-pressed="true"] {
+	border-color: var(--foreground);
+	background: var(--hover);
+}
+
 .admin-card-form {
 	display: flex;
 	flex-direction: column;
