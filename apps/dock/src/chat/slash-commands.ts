@@ -28,14 +28,14 @@ interface SlashRow {
 	created_at: number;
 }
 
-function toSlashCommand(row: SlashRow): ChatSlashCommand {
+function toSlashCommand(row: SlashRow, includeTemplate: boolean): ChatSlashCommand {
 	return {
 		id: row.id,
 		command: row.command,
 		description: row.description,
 		usage_hint: row.usage_hint,
 		operation: row.operation,
-		input_template: JSON.parse(row.input_template_json) as Record<string, unknown>,
+		input_template: includeTemplate ? (JSON.parse(row.input_template_json) as Record<string, unknown>) : {},
 		created_by: row.created_by,
 		created_at: new Date(row.created_at).toISOString(),
 	};
@@ -87,13 +87,13 @@ function substituteTemplate(
 	return value;
 }
 
-export async function listSlashCommands(db: D1Database): Promise<ChatSlashCommand[]> {
+export async function listSlashCommands(db: D1Database, includeTemplate = false): Promise<ChatSlashCommand[]> {
 	const { results } = await db
 		.prepare(
 			"SELECT id, command, description, usage_hint, operation, input_template_json, created_by, created_at FROM chat_slash_commands ORDER BY command",
 		)
 		.all<SlashRow>();
-	return results.map(toSlashCommand);
+	return results.map((row) => toSlashCommand(row, includeTemplate));
 }
 
 export async function createSlashCommand(

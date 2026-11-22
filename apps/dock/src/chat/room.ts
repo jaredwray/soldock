@@ -2708,6 +2708,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 							card_id: stored.card_id,
 							action_id: stored.action_id,
 							value: stored.value,
+							untrusted: row.untrusted === 1,
 							actor: JSON.parse(stored.actor_json) as ActorRecord,
 							created_at: iso(stored.created_at),
 						},
@@ -2725,6 +2726,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			card_id: card.id,
 			action_id: button.action_id,
 			value,
+			untrusted: row.untrusted === 1,
 			actor: call.actor,
 			created_at: iso(now),
 		};
@@ -2829,6 +2831,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				card_id: r.card_id,
 				action_id: r.action_id,
 				value: r.value,
+				untrusted: row.untrusted === 1,
 				actor: JSON.parse(r.actor_json) as ActorRecord,
 				created_at: iso(r.created_at),
 			})),

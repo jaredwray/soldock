@@ -163,7 +163,7 @@ export const CHAT_PERSONAL_MIGRATION: string[] = [
 		markdown TEXT NOT NULL,
 		send_at INTEGER NOT NULL,
 		created_at INTEGER NOT NULL,
-		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+		status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sending', 'sent', 'failed')),
 		sent_message_id TEXT,
 		error TEXT,
 		credential_binding_json TEXT,
@@ -222,7 +222,7 @@ interface ScheduledRow extends Row {
 	markdown: string;
 	send_at: number;
 	created_at: number;
-	status: "pending" | "sent" | "failed";
+	status: "pending" | "sending" | "sent" | "failed";
 	sent_message_id: string | null;
 	error: string | null;
 	credential_binding_json: string | null;
@@ -266,7 +266,11 @@ function toActivity(row: ActivityRow): ActivityRecord {
 }
 
 function toScheduled(row: ScheduledRow): ScheduledRecord {
-	return { ...row, also_in_room: row.also_in_room === 1 };
+	return {
+		...row,
+		status: row.status === "sending" ? "pending" : row.status,
+		also_in_room: row.also_in_room === 1,
+	};
 }
 
 function toReminder(row: ReminderRow): ReminderRecord {
@@ -640,7 +644,9 @@ export class ChatPersonalStore {
 			conditions.push("room_id = ?");
 			params.push(roomId);
 		}
-		if (status !== "all") {
+		if (status === "pending") {
+			conditions.push("status IN ('pending', 'sending')");
+		} else if (status !== "all") {
 			conditions.push("status = ?");
 			params.push(status);
 		}
@@ -663,19 +669,28 @@ export class ChatPersonalStore {
 		const markdown = patch.markdown ?? row.markdown;
 		const sendAt = patch.sendAt ?? row.send_at;
 		this.sql.exec(
-			"UPDATE chat_scheduled_messages SET text = ?, body_json = ?, markdown = ?, send_at = ? WHERE id = ?",
+			"UPDATE chat_scheduled_messages SET text = ?, body_json = ?, markdown = ?, send_at = ?, attempts = 0, next_attempt_at = NULL, error = NULL WHERE id = ?",
 			text,
 			bodyJson,
 			markdown,
 			sendAt,
 			id,
 		);
-		return toScheduled({ ...row, text, body_json: bodyJson, markdown, send_at: sendAt });
+		return toScheduled({
+			...row,
+			text,
+			body_json: bodyJson,
+			markdown,
+			send_at: sendAt,
+			attempts: 0,
+			next_attempt_at: null,
+			error: null,
+		});
 	}
 
 	cancelScheduled(id: string): boolean {
 		const removed = this.sql
-			.exec<{ id: string }>("DELETE FROM chat_scheduled_messages WHERE id = ? RETURNING id", id)
+			.exec<{ id: string }>("DELETE FROM chat_scheduled_messages WHERE id = ? AND status = 'pending' RETURNING id", id)
 			.toArray();
 		return removed.length > 0;
 	}
@@ -684,17 +699,51 @@ export class ChatPersonalStore {
 		return this.sql
 			.exec<ScheduledRow>(
 				`SELECT * FROM chat_scheduled_messages
-				WHERE status = 'pending' AND COALESCE(next_attempt_at, send_at) <= ?
+				WHERE (status = 'pending' AND COALESCE(next_attempt_at, send_at) <= ?)
+				   OR (status = 'sending' AND next_attempt_at <= ?)
 				ORDER BY COALESCE(next_attempt_at, send_at) ASC LIMIT 25`,
+				now,
 				now,
 			)
 			.toArray()
 			.map(toScheduled);
 	}
 
+	/**
+	 * Atomically claims a due scheduled row immediately before posting to `ChatRoomDO` so a
+	 * concurrent cancel or edit during preceding awaits stops delivery.
+	 */
+	claimScheduledForSend(
+		id: string,
+		expectedSendAt: number,
+		expectedText: string,
+		expectedBodyJson: string,
+		now: number,
+	): boolean {
+		const claimed = this.sql
+			.exec<{ id: string }>(
+				`UPDATE chat_scheduled_messages
+				SET status = 'sending', next_attempt_at = ?
+				WHERE id = ?
+				  AND ((status = 'pending' AND COALESCE(next_attempt_at, send_at) <= ?)
+				       OR (status = 'sending' AND next_attempt_at <= ?))
+				  AND send_at = ? AND text = ? AND body_json = ?
+				RETURNING id`,
+				now + 60_000,
+				id,
+				now,
+				now,
+				expectedSendAt,
+				expectedText,
+				expectedBodyJson,
+			)
+			.toArray();
+		return claimed.length > 0;
+	}
+
 	markScheduledRetry(id: string, attempts: number, nextAttemptAt: number, error: string): void {
 		this.sql.exec(
-			"UPDATE chat_scheduled_messages SET attempts = ?, next_attempt_at = ?, error = ? WHERE id = ?",
+			"UPDATE chat_scheduled_messages SET status = 'pending', attempts = ?, next_attempt_at = ?, error = ? WHERE id = ?",
 			attempts,
 			nextAttemptAt,
 			error.slice(0, 300),
@@ -844,7 +893,7 @@ export class ChatPersonalStore {
 	nextAlarmAt(): number | null {
 		const sched = this.sql
 			.exec<{ t: number | null }>(
-				"SELECT MIN(COALESCE(next_attempt_at, send_at)) AS t FROM chat_scheduled_messages WHERE status = 'pending'",
+				"SELECT MIN(COALESCE(next_attempt_at, send_at)) AS t FROM chat_scheduled_messages WHERE status IN ('pending', 'sending')",
 			)
 			.one().t;
 		const rem = this.sql

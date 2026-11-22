@@ -1249,13 +1249,15 @@ export class PrincipalDO extends DurableObject<Env> {
 				const binding = JSON.parse(item.credential_binding_json) as CredentialBinding;
 				const checked = await credentialState(this.env.DIRECTORY, binding);
 				if (checked.state !== "live") {
-					this.personal.markScheduledFailed(
-						item.id,
-						checked.state === "archived"
-							? "Principal is archived."
-							: "The credential that scheduled this message is no longer valid.",
-					);
-					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(
+							item.id,
+							checked.state === "archived"
+								? "Principal is archived."
+								: "The credential that scheduled this message is no longer valid.",
+						);
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
 					continue;
 				}
 				actor = {
@@ -1270,11 +1272,17 @@ export class PrincipalDO extends DurableObject<Env> {
 					.bind(item.principal_id)
 					.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
 				if (!principal) {
-					this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
-					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
 					continue;
 				}
 				actor = { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
+			}
+			// Re-verify and atomically claim after the credential await so a concurrent cancel or edit stops delivery.
+			if (!this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+				continue;
 			}
 			try {
 				const room = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(item.room_id));

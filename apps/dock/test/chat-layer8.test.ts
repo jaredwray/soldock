@@ -224,6 +224,31 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 			"Edited after send",
 		]);
 
+		// Updating send_at clears any stale retry deadline so the message is not delivered early.
+		const retried = (
+			await ada.call("chat.schedule_message", {
+				room_id: room.id,
+				text: "Deferred after retry",
+				send_at: new Date(Date.now() + 120_000).toISOString(),
+			})
+		).scheduled;
+		await runInDurableObject(principal, async (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE chat_scheduled_messages SET attempts = 1, next_attempt_at = ?, error = 'Rate limited' WHERE id = ?",
+				Date.now() - 1000,
+				retried.id,
+			);
+		});
+		await ada.call("chat.update_scheduled_message", {
+			scheduled_id: retried.id,
+			send_at: new Date(Date.now() + 600_000).toISOString(),
+		});
+		await runDurableObjectAlarm(principal);
+		expect((await ada.call("chat.list_messages", { room_id: room.id })).messages.map((m) => m.text)).toEqual([
+			"Edited after send",
+		]);
+		await ada.call("chat.cancel_scheduled_message", { scheduled_id: retried.id });
+
 		expect(
 			await codeOf(
 				ada.call("chat.schedule_message", {
@@ -314,6 +339,13 @@ describe("custom emoji, forwarding, and group DMs", () => {
 			await codeOf(ada.call("chat.add_reaction", { room_id: room.id, message_id: msg.id, emoji: ":missing:" })),
 		).toBe("invalid");
 
+		// Non-member reacting on a private room receives not_found before custom emoji lookup.
+		const priv = await createRoom(ada, "private", "SecretEmoji");
+		const privMsg = await post(ada, priv.id, "Hidden");
+		expect(
+			await codeOf(bot.call("chat.add_reaction", { room_id: priv.id, message_id: privMsg.id, emoji: ":missing:" })),
+		).toBe("not_found");
+
 		// Delete removes emoji and download 404s.
 		await owner.call("chat.delete_custom_emoji", { name: "shipit" });
 		expect((await ada.call("chat.list_custom_emoji")).emoji).toEqual([]);
@@ -350,6 +382,18 @@ describe("lifecycle, posting rules, retention, admin tools, and export", () => {
 		});
 		expect((await bot.call("chat.get_room", { room_id: room.id })).post_allowed_ids).toEqual([bot.id]);
 		await post(bot, room.id, "Allowed now");
+
+		// Non-member probing a private room with an unknown principal gets not_found before directory lookup.
+		const privRules = await createRoom(ada, "private", "HiddenRules");
+		expect(
+			await codeOf(
+				bot.call("chat.set_posting_rules", {
+					room_id: privRules.id,
+					policy: "allowlist",
+					allowed_principal_ids: ["prn_01ZZZZZZZZZZZZZZZZZZZZZZZZ"],
+				}),
+			),
+		).toBe("not_found");
 
 		// Archive blocks everyone and hides from public list.
 		await ada.call("chat.archive_room", { room_id: room.id });
@@ -517,16 +561,48 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		const mcpList = await callTool(bot.key, "chat_list_messages", { room_id: room.id });
 		expect(mcpList.content[0]?.text).toContain("untrusted: true");
 
-		// Forwarding an untrusted message preserves untrusted: true.
+		// Triggering and listing card actions on a webhook message preserves untrusted: true (including MCP notice).
+		const webhookAction = (
+			await ada.call("chat.trigger_card_action", {
+				room_id: room.id,
+				message_id: posted.message_id,
+				card_id: "alert-1",
+				action_id: "ack",
+			})
+		).action;
+		expect(webhookAction.untrusted).toBe(true);
+		const listedWebhookActions = (
+			await ada.call("chat.list_card_actions", { room_id: room.id, message_id: posted.message_id })
+		).actions;
+		expect(listedWebhookActions[0]?.untrusted).toBe(true);
+		const mcpActions = await callTool(bot.key, "chat_list_card_actions", {
+			room_id: room.id,
+			message_id: posted.message_id,
+		});
+		expect(mcpActions.content[0]?.text).toContain("untrusted: true");
+
+		// Forwarding an untrusted message preserves untrusted: true, and idempotency covers formatting changes.
 		const forwarded = (
 			await ada.call("chat.forward_message", {
 				room_id: room.id,
 				message_id: posted.message_id,
 				target_room_id: dest.id,
 				text: "Look into this",
+				idempotency_key: "fwd-fmt-1",
 			})
 		).message;
 		expect(forwarded.untrusted).toBe(true);
+		expect(
+			await codeOf(
+				ada.call("chat.forward_message", {
+					room_id: room.id,
+					message_id: posted.message_id,
+					target_room_id: dest.id,
+					markdown: "**Look into this**",
+					idempotency_key: "fwd-fmt-1",
+				}),
+			),
+		).toBe("conflict");
 		expect(forwarded.forwarded).toMatchObject({
 			source_room_id: room.id,
 			source_message_id: posted.message_id,
@@ -606,6 +682,12 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 				input_template: { room_id: "{{room_id}}", text: "SHOUT: {{text}}" },
 			})
 		).command;
+		// Non-admins do not see admin-configured input_template constants when listing slash commands.
+		const memberList = (await ada.call("chat.list_slash_commands")).commands.find((c) => c.command === "shout");
+		expect(memberList?.input_template).toEqual({});
+		const adminList = (await owner.call("chat.list_slash_commands")).commands.find((c) => c.command === "shout");
+		expect(adminList?.input_template).toEqual({ room_id: "{{room_id}}", text: "SHOUT: {{text}}" });
+
 		await ada.call("chat.invoke_slash_command", { room_id: room.id, command: "shout", text: "deploying" });
 		const msgs = (await ada.call("chat.list_messages", { room_id: room.id })).messages;
 		expect(msgs.map((m) => m.text)).toEqual(["SHOUT: deploying"]);

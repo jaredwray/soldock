@@ -762,13 +762,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.add_reaction"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		accept(await opened.room.checkMember(opened.ctx));
 		if (isCustomEmoji(input.emoji)) {
 			const name = input.emoji.slice(1, -1);
 			if (!(await hasCustomEmoji(call.env.DIRECTORY, name))) {
 				throw new OperationError("invalid", `No custom emoji ${input.emoji} exists.`);
 			}
 		}
-		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.react(opened.ctx, input.message_id, input.emoji, true));
 		if (result.changed) auditOk(call, "chat.add_reaction", `${input.room_id}:${input.message_id}`);
 		return { message: messageOutput(result.message) };

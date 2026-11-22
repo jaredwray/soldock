@@ -545,6 +545,7 @@ export const ChatCardAction = z.object({
 	action_id: z.string(),
 	actor: Actor,
 	value: z.string().nullable(),
+	untrusted: z.boolean().default(false),
 	created_at: Timestamp,
 });
 export type ChatCardAction = z.infer<typeof ChatCardAction>;

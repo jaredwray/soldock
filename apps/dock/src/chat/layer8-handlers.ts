@@ -668,6 +668,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 								input.message_id,
 								input.target_room_id,
 								content.text,
+								content.body,
 							]),
 						),
 					};
@@ -756,11 +757,16 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 	},
 
 	async "chat.set_posting_rules"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const found = accept(await opened.room.get(opened.ctx));
+		const canManage = found.room.role === "owner" || (isAdmin(call.caller) && found.room.kind === "public");
+		if (!canManage) {
+			throw new OperationError("forbidden", "Only the room owner or an organization admin can change posting rules.");
+		}
 		const allowedIds = input.allowed_principal_ids ?? [];
 		if (input.policy === "allowlist" && allowedIds.length > 0) {
 			await actorsOf(call, allowedIds);
 		}
-		const opened = openRoom(call, input.room_id);
 		const res = accept(
 			await opened.room.setPostingRules(opened.ctx, {
 				policy: input.policy,
@@ -893,7 +899,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 
 	// --- Slash commands -------------------------------------------------------------------------
 	async "chat.list_slash_commands"(call) {
-		return { commands: await listSlashCommands(call.env.DIRECTORY) };
+		return { commands: await listSlashCommands(call.env.DIRECTORY, isAdmin(call.caller)) };
 	},
 
 	async "chat.create_slash_command"(call, input) {
