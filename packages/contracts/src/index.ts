@@ -124,6 +124,7 @@ export {
 	SHARED_DRIVE_LIMITS,
 	SHARED_DRIVE_ROLES,
 	SharedDrive,
+	SharedDriveId,
 	SharedDriveMember,
 	type SharedDriveRole,
 	UploadId,
@@ -206,6 +207,17 @@ export {
 	resources,
 	templateVars,
 } from "./resources.ts";
+export {
+	allowsResource,
+	RESOURCE_RULES,
+	type ResourceField,
+	type ResourceKind,
+	type ResourceRule,
+	resourceRefusal,
+	resourceRuleOf,
+	TOKEN_RESOURCE_LIMITS,
+	TokenResources,
+} from "./restrictions.ts";
 export {
 	AGENT_SCOPES,
 	ALL_SCOPES,

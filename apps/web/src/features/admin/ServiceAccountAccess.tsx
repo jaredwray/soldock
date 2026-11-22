@@ -1,6 +1,7 @@
 import type { OutputOf, Principal } from "@asterra/contracts";
 import { useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
+import { limitText, resourceChoicesOf } from "../settings/resourceChoices.ts";
 import { expiryPhrase } from "../settings/ttl.ts";
 
 type Access = OutputOf<"directory.get_service_account_access">;
@@ -16,6 +17,8 @@ interface ServiceAccountAccessProps {
 	account: Principal;
 	/** A new value loads the access again, for example after a token change. */
 	version: number;
+	/** Called with each loaded access, so the token form can offer the limits without a second read. */
+	onLoaded?: (access: Access) => void;
 }
 
 /**
@@ -23,7 +26,7 @@ interface ServiceAccountAccessProps {
  * the team mailboxes, shared drives and rooms that it is a member of, and the scopes of each live token.
  * A token decides what the account can do with each of them.
  */
-export function ServiceAccountAccess({ account, version }: ServiceAccountAccessProps) {
+export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAccountAccessProps) {
 	const headingId = useId();
 	const [access, setAccess] = useState<Access | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -31,11 +34,13 @@ export function ServiceAccountAccess({ account, version }: ServiceAccountAccessP
 	const load = useCallback(async () => {
 		setError(null);
 		try {
-			setAccess(await api.call("directory.get_service_account_access", { principal_id: account.id }));
+			const loaded = await api.call("directory.get_service_account_access", { principal_id: account.id });
+			setAccess(loaded);
+			onLoaded?.(loaded);
 		} catch (caught) {
 			setError(errorMessage(caught));
 		}
-	}, [account.id]);
+	}, [account.id, onLoaded]);
 
 	useEffect(() => {
 		void version;
@@ -71,6 +76,12 @@ export function ServiceAccountAccess({ account, version }: ServiceAccountAccessP
 									<li key={token.key_id}>
 										<strong>{token.label}</strong> ({expiryPhrase(token.expires_at)}):{" "}
 										<span className="cell-scopes">{token.scopes.join(", ")}</span>
+										{token.resources && (
+											<span className="muted">
+												{" "}
+												· limited to {limitText(token.resources, resourceChoicesOf(account, access))}
+											</span>
+										)}
 									</li>
 								))}
 							</ul>

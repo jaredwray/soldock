@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_service_account_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, and `expiry_notice_at` for the notice before a token ends), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, and `resources` for the [resource limits](#resource-limits-of-a-token) of a token), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -454,6 +454,59 @@ hourly cron runs the job (`runScheduled` in `src/scheduled.ts`).
 - The notice adds `account.token_expiry_notice` to the activity log of the account, with the surface
   `system`. The count limit of the log does not count it as a call.
 - The key list of the web app shows **Expires soon** for a key that ends within seven days.
+
+## Resource limits of a token
+
+A token of a service account can name the mailboxes, the drives and the rooms that it reaches
+(`resources` of `account.create_api_key`). The limits apply on top of the memberships of the account: a
+listed room that the account left gives nothing. A token without `resources` reaches each membership, as
+before.
+
+- `resources` has three lists: `mailbox_ids`, `drive_ids` and `room_ids`, each at most 20 ids
+  (`TOKEN_RESOURCE_LIMITS`). Each list is complete: an empty list allows nothing of that product. The own
+  mailbox and the own drive have the id of the account, and a list names them like each other id.
+- Only a token of a service account can have limits. A mailbox id is the account or a team mailbox that
+  exists, a drive id is the account or a shared drive, and a room id is a room id. Each other id gets
+  `invalid` (also the id of a person: a limited token does not reach items that a person shared directly
+  with the account). An unknown team mailbox gets `not_found`.
+- The limits do not change after the create. A rotation keeps them. `api_keys.resources` stores them as
+  JSON (migration `0025`). Stored text that is not valid limits gives a token that reaches nothing.
+- `account.whoami`, `account.list_api_keys` and the tokens of `directory.get_service_account_access` show
+  `resources`.
+
+**Where the limits apply.** Each one fails closed.
+
+1. The invoker (`platform/operations/invoke.ts`) checks `Caller.restriction` after the input check and
+   before the handler (`resourceRefusal` of the contracts). So REST, the MCP tools, the MCP resource reads,
+   `/dl/`, `/blob/` and the operation of a slash command all get the check. A refusal is `forbidden`, a
+   `denied` entry in the activity log, and an audit line.
+2. `RESOURCE_RULES` of the contracts has one rule for each operation that a service account can call:
+   - `none` (the scope decides): `account.whoami`, `directory.list_principals`, `directory.get_principals`,
+     `directory.list_team_mailboxes`, `chat.list_custom_emoji`, `chat.list_slash_commands` and
+     `chat.get_presence`. The directory is not narrowed: leave `directory.read` off a token to stop it.
+   - `filter`: `mail.list_mailboxes`, `drive.list_shared_drives` and `chat.list_rooms` leave out each
+     resource outside the list. A page can then have fewer entries than its limit. The shared and the
+     starred views of `drive.list_items` leave out each drive outside the list.
+   - `check`: `mailbox_id` (the own mailbox when it is not set) for each other mail operation, `space_id`
+     (the own drive when it is not set) for Drive, Docs and Sheets, `drive_id`, `room_id` (required) for
+     Chat, and the second field of a copy, a move or a forward (`target_space_id`, `from_space_id`,
+     `target_room_id`). The files of a chat message come from the own drive, so `file_ids` needs the own
+     drive in the list. `chat.search_messages` needs a listed `room_id`.
+   - `refuse`: a new room or direct message, and the personal views of Chat (threads, addressed changes,
+     activity, sections, saved messages, scheduled messages, reminders and drafts), which read or write
+     state across rooms.
+   An operation without a rule is refused, so a new operation cannot bypass the limits. The registry test
+   keeps the map complete and makes each rule name each input field that names a mailbox, a drive or a room.
+3. MCP: `tools/list` hides each tool with no rule or the rule `refuse`. Each resource kind says how a
+   limited token treats it (`restricted`). `chat.rooms` and `chat.addressed` are hidden, and a URI of a
+   mailbox, a room, a drive or an item outside the list names no resource, for `resources/read` and for
+   `subscriptions/listen`.
+4. Sockets: `openEventsSocket` refuses a limited token, because the events socket carries each room.
+   `openRoomSocket` opens only a listed room. The routes and the feeds of MCP both call them.
+5. `/dl/chat/emoji/{name}` is data of the organization, so a limited token with `chat.read` reads it.
+
+Rollback: a Worker from before migration `0025` does not read `resources`, so a limited token is not
+limited there. Revoke the limited tokens before a rollback.
 
 ## Team mailboxes
 

@@ -1,4 +1,5 @@
 import {
+	allowsResource,
 	CHAT_LIMITS,
 	type ChatRoom,
 	type ChatSearchResult,
@@ -485,7 +486,9 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			);
 		}
 		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
-		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
+		// A token with resource limits sees only its listed rooms. A page can then have fewer rooms than its limit.
+		const rooms = shown.rooms.filter((room) => allowsResource(call.caller.restriction, "room", room.id));
+		return { rooms: rooms.map(toRoom), next_cursor: shown.nextCursor };
 	},
 
 	async "chat.list_threads"(call, input) {

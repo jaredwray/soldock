@@ -1,4 +1,12 @@
-import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, SERVICE_SCOPES, searchFold } from "@asterra/contracts";
+import {
+	AGENT_SCOPES,
+	ALL_SCOPES,
+	nameAliasParts,
+	type Scope,
+	SERVICE_SCOPES,
+	searchFold,
+	TokenResources,
+} from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 /** The kind that the directory stores. A service account is an agent row with `service`. */
@@ -53,6 +61,8 @@ export interface ApiKeyRecord {
 	rotated_by: string | null;
 	/** Until when the secret before the last rotation also works. Null: no old secret works. */
 	prev_expires_at: string | null;
+	/** The mailboxes, drives and rooms that a token of a service account is limited to. Null: not limited. */
+	resources: TokenResources | null;
 }
 
 interface PrincipalRow
@@ -63,8 +73,9 @@ interface PrincipalRow
 	service: number;
 }
 
-interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
+interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes" | "resources"> {
 	scopes: string;
+	resources: string | null;
 }
 
 /**
@@ -83,7 +94,7 @@ const PRINCIPAL_SELECT_FROM = `SELECT ${PRINCIPAL_COLUMNS}, a.address FROM`;
 
 /** The columns of an ApiKeyRecord. The hashes of the secrets never leave the store. */
 const API_KEY_COLUMNS = `id, principal_id, label, description, scopes, created_by, created_at, last_used_at, expires_at,
-	revoked_at, revoked_by, rotation, rotated_at, rotated_by, prev_expires_at`;
+	revoked_at, revoked_by, rotation, rotated_at, rotated_by, prev_expires_at, resources`;
 
 const API_KEY_SELECT = `SELECT ${API_KEY_COLUMNS} FROM api_keys`;
 
@@ -114,8 +125,27 @@ function toPrincipal(row: PrincipalRow): PrincipalRecord {
 	};
 }
 
+/** No mailbox, no drive and no room: the limits of a token whose stored limits are not valid. */
+const NOTHING: TokenResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
+
+/**
+ * The stored limits of a token. Null: not limited. Stored text that is not valid limits gives a token that
+ * reaches nothing, never a token without limits.
+ */
+function parseResources(id: string, text: string | null): TokenResources | null {
+	if (text === null) return null;
+	try {
+		const parsed = TokenResources.safeParse(JSON.parse(text));
+		if (parsed.success) return parsed.data;
+	} catch {
+		// Not JSON. The next lines fail closed.
+	}
+	log("error", "api key: the stored resource limits are not valid; the key reaches nothing", { keyId: id });
+	return NOTHING;
+}
+
 function toApiKey(row: ApiKeyRow): ApiKeyRecord {
-	return { ...row, scopes: JSON.parse(row.scopes) as Scope[] };
+	return { ...row, scopes: JSON.parse(row.scopes) as Scope[], resources: parseResources(row.id, row.resources) };
 }
 
 /**
@@ -533,6 +563,8 @@ export interface NewApiKey {
 	description?: string | null;
 	/** When the key stops, as an ISO time. Null or missing: it has no end. */
 	expires_at?: string | null;
+	/** The resource limits of a token of a service account. Null or missing: not limited. */
+	resources?: TokenResources | null;
 }
 
 /** Options of `createPrincipal`. */
@@ -694,6 +726,7 @@ export async function createPrincipal(
 			rotated_at: null,
 			rotated_by: null,
 			prev_expires_at: null,
+			resources: null,
 		},
 		secret,
 	};
@@ -987,10 +1020,12 @@ export async function createApiKey(
 	const description = key.description || null;
 	const expiresAt = key.expires_at ?? null;
 	const createdBy = key.created_by ?? principalId;
+	const resources = key.resources ?? null;
 	await db
 		.prepare(
-			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, description, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, description, expires_at,
+				resources)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 		.bind(
 			id,
@@ -1002,6 +1037,7 @@ export async function createApiKey(
 			now,
 			description,
 			expiresAt,
+			resources === null ? null : JSON.stringify(resources),
 		)
 		.run();
 	return {
@@ -1021,6 +1057,7 @@ export async function createApiKey(
 			rotated_at: null,
 			rotated_by: null,
 			prev_expires_at: null,
+			resources,
 		},
 		secret,
 	};

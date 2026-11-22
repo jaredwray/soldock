@@ -1,5 +1,6 @@
 // MCP resources: made from the resource registry. An operation reads each resource, and an operation lists them.
 import {
+	allowsResource,
 	expandTemplate,
 	matchTemplate,
 	operations,
@@ -21,9 +22,21 @@ export interface ResolvedResource {
 	vars: Record<string, string>;
 }
 
-/** A resource kind is visible only when the credential can call its read and its list operations. */
+/**
+ * A resource kind is visible only when the credential can call its read and its list operations. A token
+ * with resource limits does not see a kind that reads across rooms (`restricted: "refuse"`).
+ */
 export function canRead(caller: AuthContext, resource: ResourceDefinition): boolean {
+	if (caller.restriction !== null && resource.restricted === "refuse") return false;
 	return canCall(caller, operations[resource.read.operation]) && canCall(caller, operations[resource.list.operation]);
+}
+
+/** True when a token with resource limits can reach the resource that these URI variables name. */
+function allowsVars(caller: AuthContext, resource: ResourceDefinition, vars: Record<string, string>): boolean {
+	if (caller.restriction === null) return true;
+	if (resource.restricted === "refuse") return false;
+	const id = vars[resource.restricted.var];
+	return id !== undefined && allowsResource(caller.restriction, resource.restricted.resource, id);
 }
 
 function describe(resource: ResourceDefinition): string {
@@ -50,6 +63,8 @@ export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource 
 		const vars = matchTemplate(resource.uriTemplate, canonical);
 		if (!vars) continue;
 		if (expandTemplate(resource.uriTemplate, vars) !== canonical) return null;
+		// A limited token names no resource outside its list, so it cannot read or watch one.
+		if (!allowsVars(caller, resource, vars)) return null;
 		const input = operations[resource.read.operation].input.safeParse(resource.read.input(vars));
 		return input.success ? { uri, resource, vars } : null;
 	}
@@ -77,8 +92,17 @@ export async function listResources(
 	for (const resource of resourceList) {
 		if (!canRead(call.caller, resource)) continue;
 		const operation = operations[resource.list.operation];
-		const output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
+		let output: unknown;
+		try {
+			output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
+		} catch (error) {
+			// A token with resource limits can be refused the list of a kind, for example the own drive. That kind
+			// then has no resources for it.
+			if (call.caller.restriction !== null && error instanceof OperationError && error.code === "forbidden") continue;
+			throw error;
+		}
 		for (const item of resource.list.items(output as never)) {
+			if (!allowsVars(call.caller, resource, item.vars)) continue;
 			listed.push({
 				uri: expandTemplate(resource.uriTemplate, item.vars),
 				name: [resource.name, ...Object.values(item.vars)].join("/"),

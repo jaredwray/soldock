@@ -4,7 +4,7 @@ import { BASE_URL } from "../support/server.ts";
 
 // An admin makes a service account in Admin › Members, gives it a token with a lifetime, sees the call of
 // the token in the activity log, and revokes the token.
-test("an admin creates a service account, a token for 7 days, sees its activity and revokes it", async ({
+test("an admin creates a service account and a 7-day token, sees its activity, rotates it, limits a token and revokes it", async ({
 	browser,
 }) => {
 	const context = await signIn(browser, "tomasz");
@@ -55,11 +55,37 @@ test("an admin creates a service account, a token for 7 days, sees its activity 
 		}).toPass();
 		await expect(card.getByText("Scopes of live tokens")).toBeVisible();
 
+		// A rotation gives a new secret. The old one works for the overlap, until somebody stops it.
+		await card.getByRole("button", { name: "Rotate token GitHub Actions" }).click();
+		await page.getByRole("dialog").getByRole("button", { name: "Rotate" }).click();
+		const rotatedDialog = page.getByRole("dialog", { name: "Copy the new secret of the token" });
+		await expect(rotatedDialog.getByText(/The old secret works until/)).toBeVisible();
+		const rotated = await rotatedDialog.getByLabel("API key “GitHub Actions”").inputValue();
+		await rotatedDialog.getByRole("button", { name: "Done" }).click();
+		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).toContainText("Old secret works until");
+		const both = await Promise.all(
+			[secret, rotated].map((value) =>
+				context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${value}` } }),
+			),
+		);
+		expect(both.map((response) => response.status())).toEqual([200, 200]);
+		await card.getByRole("button", { name: "Stop the old secret of token GitHub Actions now" }).click();
+		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).not.toContainText("Old secret works");
+		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
+		expect(old.status()).toBe(401);
+
+		// A token limited to the own mailbox shows its limit.
+		await card.getByLabel("New token label").fill("Mailer");
+		await card.getByLabel("Limit this token to specific mailboxes, drives and rooms").check();
+		await card.getByLabel(/^Own mailbox/).check();
+		await card.getByRole("button", { name: "Create token" }).click();
+		await page.getByRole("dialog", { name: "Copy the new token" }).getByRole("button", { name: "Done" }).click();
+		await expect(tokens.getByRole("row").filter({ hasText: "Mailer" })).toContainText("Limited to: Own mailbox");
+
 		await card.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();
 		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).toContainText("Revoked");
-		await expect(card.getByText("No live token. The account cannot call the API.")).toBeVisible();
-		const after = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
+		const after = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
 		expect(after.status()).toBe(401);
 	} finally {
 		if (accountId) {

@@ -912,7 +912,9 @@ describe("the access of a service account", () => {
 			chat_rooms_truncated: false,
 			drive_shared_items: [{ space_id: ada.id, item_id: kept.id, name: "kept.txt", kind: "file", role: "viewer" }],
 			drive_shared_items_truncated: false,
-			tokens: [{ key_id: live.keyId, label: "deploy", scopes: ["mail.read", "chat.read"], expires_at: null }],
+			tokens: [
+				{ key_id: live.keyId, label: "deploy", scopes: ["mail.read", "chat.read"], expires_at: null, resources: null },
+			],
 			scopes: ["chat.read", "mail.read"],
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_service_account_access", { principal_id: service.id });

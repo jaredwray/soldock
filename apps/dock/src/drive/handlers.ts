@@ -1,4 +1,5 @@
 import {
+	allowsResource,
 	DRIVE_LIMITS,
 	driveDownloadPath,
 	type OperationName,
@@ -92,6 +93,10 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
+	// A token with resource limits gets no item of a drive outside its list.
+	for (const spaceId of [...bySpace.keys()]) {
+		if (!allowsResource(call.caller.restriction, "drive", spaceId)) bySpace.delete(spaceId);
+	}
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
@@ -710,13 +715,16 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
 		return {
-			shared_drives: page.map((row) => ({
-				id: row.id,
-				name: row.name,
-				role: row.role,
-				member_count: row.member_count,
-				created_at: new Date(row.created_at).toISOString(),
-			})),
+			// A token with resource limits sees only its listed drives. A page can then have fewer drives.
+			shared_drives: page
+				.filter((row) => allowsResource(call.caller.restriction, "drive", row.id))
+				.map((row) => ({
+					id: row.id,
+					name: row.name,
+					role: row.role,
+					member_count: row.member_count,
+					created_at: new Date(row.created_at).toISOString(),
+				})),
 			next_cursor: rows.length > limit && last ? encodeDriveCursor(last.name_key, last.id) : null,
 		};
 	},

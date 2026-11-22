@@ -7,10 +7,13 @@ import {
 	type DirectoryEntry,
 	mentionDirectory,
 	mentionHandle,
+	RoomId,
 	SERVICE_ACTIVITY_LIMITS,
+	SharedDriveId,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
+	type TokenResources,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes, recordServiceChange } from "./access.ts";
@@ -60,6 +63,7 @@ import {
 	addTeamMailboxMember,
 	createTeamMailbox,
 	getTeamMailbox,
+	isTeamMailboxId,
 	listTeamMailboxes,
 	removeTeamMailboxMember,
 	renameTeamMailbox,
@@ -149,6 +153,33 @@ function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: s
 		throw new OperationError("invalid", `expires_at must be at most ${API_KEY_LIMITS.maxDays} days from now.`);
 	}
 	return new Date(end).toISOString();
+}
+
+/**
+ * Checks the resource limits of a new token. Only a token of a service account can have them. A mailbox is
+ * the own mailbox of the account (its id) or a team mailbox that exists. A drive is the own drive of the
+ * account or a shared drive. A room is a room id. Any other id is refused, also the id of a different
+ * principal: a limited token does not reach items that a person shared directly with the account.
+ */
+async function assertTokenResources(call: CallContext, target: PrincipalRecord, resources: TokenResources) {
+	if (!target.service) throw new OperationError("invalid", "Only a token of a service account can have resources.");
+	for (const id of resources.mailbox_ids) {
+		if (id === target.id) continue;
+		if (!isTeamMailboxId(id)) {
+			throw new OperationError("invalid", `${id} is not the own mailbox of the account or a team mailbox.`);
+		}
+		if (!(await getTeamMailbox(call.env.DIRECTORY, id))) {
+			throw new OperationError("not_found", `No team mailbox has the id ${id}.`);
+		}
+	}
+	for (const id of resources.drive_ids) {
+		if (id !== target.id && !SharedDriveId.safeParse(id).success) {
+			throw new OperationError("invalid", `${id} is not the own drive of the account or a shared drive.`);
+		}
+	}
+	for (const id of resources.room_ids) {
+		if (!RoomId.safeParse(id).success) throw new OperationError("invalid", `${id} is not a room id.`);
+	}
 }
 
 /** The text for the agents and service accounts that a person sponsors, for a refused archive or delete. */
@@ -265,6 +296,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes: [...call.caller.scopes],
 			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
+			resources: call.caller.restriction,
 			sign_in:
 				call.caller.kind === "human"
 					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }
@@ -447,6 +479,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				label: key.label,
 				scopes: key.scopes,
 				expires_at: key.expires_at,
+				resources: key.resources,
 			})),
 			scopes: [...new Set(keys.flatMap((key) => key.scopes))].sort(),
 		};
@@ -637,12 +670,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "account.create_api_key"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		const scopes = grantableScopes(call.caller, target, input.scopes);
+		if (input.resources !== undefined) await assertTokenResources(call, target, input.resources);
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
 			label: input.label,
 			scopes,
 			created_by: call.caller.principal.id,
 			description: input.description ?? null,
 			expires_at: keyExpiry(input),
+			resources: input.resources ?? null,
 		});
 		auditOk(call, "account.create_api_key", created.key.id);
 		recordServiceChange(call, target, "account.create_api_key", created.key.id);

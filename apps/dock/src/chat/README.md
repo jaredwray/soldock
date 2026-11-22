@@ -110,6 +110,10 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A [service account](../identity/README.md#service-accounts) is an agent here: a member, an author
   and a mention show the kind `agent`. Its token can hold `chat.read` and `chat.write`, and not
   `chat.webhooks`. Push, notification settings and a status are not open to it.
+- A token of a service account with resource limits opens the socket of a listed room only, gets no events
+  socket, and sees only its listed rooms in `chat.list_rooms`
+  ([identity](../identity/README.md#resource-limits-of-a-token)). A room membership that a different
+  principal changes for a service account is an `admin` entry in its activity log.
 
 ## Messages
 

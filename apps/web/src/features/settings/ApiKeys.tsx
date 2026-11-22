@@ -13,6 +13,7 @@ import { fullDate, shortDate } from "../../lib/format.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
+import { limitText, type ResourceChoice, type ResourceChoices } from "./resourceChoices.ts";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { customDateBounds, expiresSoon, expiryLabel, TTL_OPTIONS, type TtlChoice, ttlInput } from "./ttl.ts";
 
@@ -49,6 +50,11 @@ interface ApiKeyManagerProps {
 	onChange?: () => void;
 	/** The text of each scope in the form, in place of the text for a person. A service account uses it. */
 	scopeDescriptions?: Partial<Record<Scope, string>>;
+	/**
+	 * The mailboxes, drives and rooms that a new token can be limited to. Set for a service account only:
+	 * the form then offers the limits, and each row shows them.
+	 */
+	resourceChoices?: ResourceChoices | undefined;
 }
 
 /** How long the old secret works after a rotation, in minutes. */
@@ -78,6 +84,7 @@ export function ApiKeyManager({
 	people,
 	onChange,
 	scopeDescriptions,
+	resourceChoices,
 }: ApiKeyManagerProps) {
 	const headingId = useId();
 	const toast = useToast();
@@ -173,6 +180,9 @@ export function ApiKeyManager({
 											</div>
 											{key.description && <div className="row-note">{key.description}</div>}
 											<div className="row-note cell-scopes">{key.scopes.join(", ")}</div>
+											{key.resources && (
+												<div className="row-note">Limited to: {limitText(key.resources, resourceChoices)}</div>
+											)}
 											{people && key.revoked && key.revoked_by && (
 												<div className="row-note">Revoked by {personName(people, key.revoked_by)}</div>
 											)}
@@ -246,6 +256,7 @@ export function ApiKeyManager({
 					allowedScopes={offeredScopes}
 					narrowed={offeredScopes.length < allowedScopes.length}
 					scopeDescriptions={scopeDescriptions}
+					resourceChoices={resourceChoices}
 					noun={noun}
 					defaultTtl={defaultTtl}
 					onCreated={(key) => {
@@ -331,6 +342,7 @@ function CreateKeyForm({
 	noun,
 	defaultTtl,
 	scopeDescriptions,
+	resourceChoices,
 	onCreated,
 }: {
 	principalId: string | undefined;
@@ -340,11 +352,15 @@ function CreateKeyForm({
 	noun: "key" | "token";
 	defaultTtl: TtlChoice;
 	scopeDescriptions: Partial<Record<Scope, string>> | undefined;
+	resourceChoices: ResourceChoices | undefined;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
 	const [label, setLabel] = useState("");
 	const [description, setDescription] = useState("");
 	const [ttl, setTtl] = useState<TtlChoice>(defaultTtl);
+	const [limit, setLimit] = useState(false);
+	const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+	const limitHintId = useId();
 	const [customDate, setCustomDate] = useState("");
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(
 		() => new Set(allowedScopes.filter((scope) => !PRIVILEGED.includes(scope))),
@@ -377,6 +393,17 @@ function CreateKeyForm({
 				scopes: allowedScopes.filter((scope) => scopes.has(scope)),
 				...(description.trim() ? { description: description.trim() } : {}),
 				...lifetime,
+				...(resourceChoices && limit
+					? {
+							resources: {
+								mailbox_ids: resourceChoices.mailboxes
+									.filter((choice) => picked.has(choice.id))
+									.map((choice) => choice.id),
+								drive_ids: resourceChoices.drives.filter((choice) => picked.has(choice.id)).map((choice) => choice.id),
+								room_ids: resourceChoices.rooms.filter((choice) => picked.has(choice.id)).map((choice) => choice.id),
+							},
+						}
+					: {}),
 				...(principalId ? { principal_id: principalId } : {}),
 			});
 			setLabel("");
@@ -387,6 +414,39 @@ function CreateKeyForm({
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	function pick(id: string) {
+		setPicked((current) => {
+			const next = new Set(current);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}
+
+	/** The check boxes of one kind of resource, for the limits of a new token. */
+	function pickList(legend: string, product: string, choices: readonly ResourceChoice[]) {
+		const none = !choices.some((choice) => picked.has(choice.id));
+		return (
+			<fieldset className="scope-list">
+				<legend className="field-label">{legend}</legend>
+				{choices.length === 0 && <p className="field-hint">The account is a member of none.</p>}
+				{choices.map((choice) => (
+					<label key={choice.id} className="check-row">
+						<input
+							type="checkbox"
+							className="checkbox"
+							checked={picked.has(choice.id)}
+							onChange={() => pick(choice.id)}
+							disabled={busy}
+						/>
+						<span>{choice.label}</span>
+					</label>
+				))}
+				{none && <p className="field-hint">With none selected, the token reaches nothing of {product}.</p>}
+			</fieldset>
+		);
 	}
 
 	function toggle(scope: Scope) {
@@ -463,6 +523,28 @@ function CreateKeyForm({
 					/>
 				</div>
 			)}
+			{resourceChoices && (
+				<div className="field">
+					<label className="check-row">
+						<input
+							type="checkbox"
+							className="checkbox"
+							checked={limit}
+							onChange={() => setLimit((current) => !current)}
+							aria-describedby={limitHintId}
+							disabled={busy}
+						/>
+						<span>Limit this token to specific mailboxes, drives and rooms</span>
+					</label>
+					<p id={limitHintId} className="field-hint">
+						Without a limit, the token reaches each mailbox, drive and room of the account. With a limit, it reaches
+						only the selected ones, and it cannot use the views that read across rooms.
+					</p>
+				</div>
+			)}
+			{resourceChoices && limit && pickList("Mailboxes", "Mail", resourceChoices.mailboxes)}
+			{resourceChoices && limit && pickList("Drives", "Drive", resourceChoices.drives)}
+			{resourceChoices && limit && pickList("Rooms", "Chat", resourceChoices.rooms)}
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes</legend>
 				{narrowed && (

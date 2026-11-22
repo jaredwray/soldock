@@ -1,5 +1,6 @@
 import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { TokenResources } from "./restrictions.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
@@ -121,6 +122,8 @@ export const ApiKey = z.object({
 	rotated_by: z.string().nullable(),
 	/** Until when the secret before the last rotation also works. Null when no old secret works. */
 	previous_secret_expires_at: Timestamp.nullable(),
+	/** The mailboxes, drives and rooms that a token of a service account is limited to. Null: not limited. */
+	resources: TokenResources.nullable(),
 });
 export type ApiKey = z.infer<typeof ApiKey>;
 
@@ -159,6 +162,8 @@ export const whoami = defineOperation({
 		),
 		/** `oauth`: an access token that an MCP client got through OAuth. */
 		credential: z.enum(["session", "api_key", "oauth"]),
+		/** The mailboxes, drives and rooms that this token is limited to. Null: not limited. */
+		resources: TokenResources.nullable(),
 		/** How a human signs in to the web app. Null for an agent and a service account, which never sign in. */
 		sign_in: z
 			.object({
@@ -451,6 +456,7 @@ export const createApiKey = defineOperation({
 		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner, and they alone create the tokens of a service account.",
 		"An agent key can hold only agent scopes, and a service account token only service account scopes. The secret is shown only once.",
 		`Set expires_in_days (1 to ${API_KEY_LIMITS.maxDays}), or expires_at for a custom end, to make the key stop at that time. Without them, the key has no end.`,
+		"For a token of a service account, set resources to limit it to listed mailboxes (the id of the account for its own, or team mailboxes), drives (the id of the account, or shared drives) and rooms. A limited token cannot call the operations that read across rooms.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys" },
 	scopes: ["account.keys"],
@@ -466,6 +472,12 @@ export const createApiKey = defineOperation({
 			expires_in_days: z.number().int().min(1).max(API_KEY_LIMITS.maxDays).optional(),
 			/** A custom end of the key. */
 			expires_at: Timestamp.optional(),
+			/**
+			 * For a token of a service account only: the mailboxes, drives and rooms that it is limited to. Each
+			 * list is complete, and an empty list allows nothing of that product. The own mailbox and drive have
+			 * the id of the account.
+			 */
+			resources: TokenResources.optional(),
 		})
 		.refine((input) => input.expires_in_days === undefined || input.expires_at === undefined, {
 			message: "send expires_in_days or expires_at, not both",
@@ -750,6 +762,7 @@ export const getServiceAccountAccess = defineOperation({
 				label: z.string(),
 				scopes: z.array(z.string()),
 				expires_at: Timestamp.nullable(),
+				resources: TokenResources.nullable(),
 			}),
 		),
 		/** Each scope that a live token holds. */

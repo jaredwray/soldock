@@ -113,6 +113,8 @@ who can.
   mailbox, not the query, because a query can hold private words. `mail.get_profile` and
   `mail.list_labels` write no line: the web app polls them, and they return no mail content.
 - The access check reads the directory on each call, so a role change applies to the next call.
+- `mail.list_mailboxes` leaves out each mailbox outside the list of a token with resource limits
+  ([identity](../identity/README.md#resource-limits-of-a-token)).
 - A [service account](../identity/README.md#service-accounts) is an agent here. Owners and admins read
   its mailbox with these rules, its outbound policy limits its mail, and its mail shows the kind `agent`
   in `sent_by`.

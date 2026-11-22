@@ -1,4 +1,5 @@
--- The rotation of an API key secret, and the notice before the end of a token. Each new column is
+-- The rotation of an API key secret, the notice before the end of a token, and the resource limits of a
+-- token. Each new column is
 -- nullable or has a default, so the Worker from before this migration still reads and writes the
 -- directory while the deploy applies it. That Worker knows only `key_hash`, so a secret that a rotation
 -- replaced stops at once there.
@@ -25,3 +26,8 @@ ALTER TABLE api_keys ADD COLUMN expiry_notice_at TEXT;
 -- The hourly job reads the keys that end soon and have no notice yet.
 CREATE INDEX api_keys_expiry_due ON api_keys (expires_at)
 	WHERE expires_at IS NOT NULL AND revoked_at IS NULL AND expiry_notice_at IS NULL;
+--> statement-breakpoint
+-- The mailboxes, drives and rooms that a token of a service account is limited to, as JSON. Null: not
+-- limited. The Worker from before this migration does not read it, so a limited token is not limited
+-- there: revoke the limited tokens before a rollback.
+ALTER TABLE api_keys ADD COLUMN resources TEXT;

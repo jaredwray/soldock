@@ -1,7 +1,8 @@
-import { type Principal, SERVICE_SCOPE_DESCRIPTIONS, SERVICE_SCOPES } from "@asterra/contracts";
-import { useState } from "react";
+import { type OutputOf, type Principal, SERVICE_SCOPE_DESCRIPTIONS, SERVICE_SCOPES } from "@asterra/contracts";
+import { useCallback, useState } from "react";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
+import { type ResourceChoices, resourceChoicesOf } from "../settings/resourceChoices.ts";
 import { PolicyForm } from "./AgentDetails.tsx";
 import { ServiceAccountAccess } from "./ServiceAccountAccess.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
@@ -21,6 +22,15 @@ interface ServiceAccountDetailsProps {
 export function ServiceAccountDetails({ account, principals, onChanged }: ServiceAccountDetailsProps) {
 	// Each change of a token gives a new number, so the access and the activity load again.
 	const [version, setVersion] = useState(0);
+	// The access of the account gives the choices for the limits of a new token. The Access part loads it.
+	const [choices, setChoices] = useState<ResourceChoices | undefined>(undefined);
+	// The ids keep the callback the same when the directory loads again, so the access does not load again.
+	const { id, address } = account;
+	const onAccess = useCallback(
+		(access: OutputOf<"directory.get_service_account_access">) =>
+			setChoices(resourceChoicesOf({ id, address }, access)),
+		[id, address],
+	);
 	const nameOf = (id: string | null) =>
 		id === null ? null : (principals.find((principal) => principal.id === id)?.display_name ?? "A deleted member");
 	const creator = nameOf(account.created_by);
@@ -54,8 +64,9 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				defaultTtl="90"
 				people={principals}
 				onChange={() => setVersion((current) => current + 1)}
+				resourceChoices={choices}
 			/>
-			<ServiceAccountAccess account={account} version={version} />
+			<ServiceAccountAccess account={account} version={version} onLoaded={onAccess} />
 			<ServiceAccountActivity account={account} principals={principals} version={version} />
 		</>
 	);
