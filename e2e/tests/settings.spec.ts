@@ -6,14 +6,13 @@ test("the settings page scrolls inside its main area and never scrolls the docum
 	browser,
 }) => {
 	const context = await signIn(browser, "meiling");
-	// The table of API keys has a visually hidden caption and column label, at the end of the page.
 	const label = unique("Scroll key");
 	const created = await context.request.post("/api/v1/account/api-keys", {
 		headers: { origin: BASE_URL, "content-type": "application/json" },
-		data: { label, scopes: ["chat.read"] },
+		data: { label, scopes: ["account.read"] },
 	});
-	expect(created.ok(), `API key: ${await created.text()}`).toBe(true);
-	const { api_key } = (await created.json()) as { api_key: { id: string } };
+	expect(created.ok(), `key: ${await created.text()}`).toBe(true);
+	const { api_key: apiKey } = (await created.json()) as { api_key: { id: string } };
 
 	try {
 		const page = await context.newPage();
@@ -45,9 +44,8 @@ test("the settings page scrolls inside its main area and never scrolls the docum
 		expect(metrics.scrollYAfterWindowScroll).toBe(0);
 		expect(metrics.railBottom).toBe(metrics.docClientHeight);
 	} finally {
-		await context.request.post(`/api/v1/account/api-keys/${api_key.id}/revoke`, {
-			headers: { origin: BASE_URL, "content-type": "application/json" },
-			data: {},
+		await context.request.post(`/api/v1/account/api-keys/${apiKey.id}/revoke`, {
+			headers: { origin: BASE_URL },
 		});
 		await context.close();
 	}
