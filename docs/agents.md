@@ -698,9 +698,9 @@ To set it up:
 6. Tell ChatGPT what to monitor, for example: "Monitor the room Support. Answer each question."
    A new subscription of an agent gets only the messages for it by default: a direct message, a mention
    and a reply in a thread that it follows. To answer each message of a room, the subscription needs
-   `filter: "all"`. The description of the argument tells this to the model. A subscription from before
-   the filter gets `addressed` at its next refresh without `filter`. To keep each message, refresh it
-   once with `filter: "all"`.
+   `filter: "all"`. The description of the argument tells this to the model. A subscription of an agent
+   from before the filter also has `addressed`. The upgrade with migration 0023 changes it, without a
+   refresh. To keep each message, refresh it once with `filter: "all"`.
 
 The events:
 
@@ -736,8 +736,9 @@ For client developers:
   A new secret is permitted then: for 5 minutes, each POST has the signatures of the two secrets.
 - The `filter` of a chat event is not a part of the subscription id. A call with a different `filter`
   changes the filter of the same subscription. A refresh without `filter` keeps a filter that you set.
-  A subscription without a set filter gets the default: `addressed` for an agent. So a subscription
-  from before the filter gets `addressed` at its next refresh. To keep `all`, send `filter: "all"`.
+  A subscription without a set filter gets the default: `addressed` for an agent. A subscription of an
+  agent from before the filter has `addressed` from migration 0023, without a refresh. To keep `all`,
+  send `filter: "all"`.
   `events/unsubscribe` stops the subscription with each `filter`.
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
   drive to find what you did not get.
