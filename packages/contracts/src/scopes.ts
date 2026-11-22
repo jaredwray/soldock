@@ -53,8 +53,8 @@ export const AGENT_SCOPES: readonly Scope[] = [
 
 /**
  * The most that a token of a service account can hold. A service account gives a script or a system
- * access through the API. It cannot manage keys, the directory or webhooks, so it can never widen its
- * own access or send data to a URL outside the organization.
+ * access through the API. It cannot manage keys or the directory, so it can never widen its own access.
+ * It cannot create a webhook. Its outbound policy limits its mail, as for an agent.
  */
 export const SERVICE_SCOPES: readonly Scope[] = [
 	"account.read",

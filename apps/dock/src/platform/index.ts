@@ -45,6 +45,7 @@ export { INLINE_TYPES, SNIFF_BYTES, sniffType } from "./media/sniff.ts";
 export { OperationError } from "./operations/errors.ts";
 export {
 	type AnyHandler,
+	CALLER_NAMES,
 	type Caller,
 	type HandlerMap,
 	type InvokeOutcome,

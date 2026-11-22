@@ -1,8 +1,8 @@
 import { isErrorCode, operations, RoomId } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
-import { type AuthContext, authenticate, credentialRef, isSameOrigin } from "../identity/index.ts";
-import { log, OperationError, type RequestIdVariables } from "../platform/index.ts";
+import { type AuthContext, authenticate, credentialRef, isSameOrigin, recordSocketOpen } from "../identity/index.ts";
+import { CALLER_NAMES, log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { type Refusal, SOCKET_HEADER, type SocketOpen } from "./room.ts";
 
 type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
@@ -68,7 +68,7 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 			throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
 		}
 		if (!READ_OPERATION.callers.includes(caller.kind)) {
-			throw new OperationError("forbidden", `An ${caller.kind} cannot open a room socket.`);
+			throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open a room socket.`);
 		}
 		const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
 		if (missing.length > 0) {
@@ -78,6 +78,8 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 		const roomId = RoomId.safeParse(c.req.param("room_id"));
 		if (!roomId.success) throw new OperationError("not_found", "No room has that id, or you have no access to it.");
 		const response = await openRoomSocket(c.env, caller, roomId.data, { feed: false });
+		// A service account gets one entry in its activity log for each socket that it opens.
+		recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "chat.open_room_socket", { room_id: roomId.data });
 		log("info", "chat socket opened", {
 			principalId: caller.id,
 			credential: caller.credential,

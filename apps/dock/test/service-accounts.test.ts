@@ -1,14 +1,36 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { SERVICE_ACTIVITY_LIMITS, SERVICE_SCOPES } from "@asterra/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { EVENTS_SOCKET_PATH, SERVICE_ACTIVITY_LIMITS, SERVICE_SCOPES } from "@asterra/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkCredentials, credentialState } from "../src/identity/index.ts";
-import { type Actor, api, callTool, codeOf, createActor, mcp, PASSWORD, seedOrg, sendMemberStates } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	base64,
+	bearer,
+	callTool,
+	codeOf,
+	consumeWebhooks,
+	createActor,
+	mcp,
+	PASSWORD,
+	readSocket,
+	receiveWebhooks,
+	request,
+	seedOrg,
+	sendMemberStates,
+	upgradeRoomSocket,
+} from "./helpers.ts";
 
 // Service accounts: a third kind of member. Owners and admins create one, give it tokens with a lifetime,
 // read its activity and see what it can reach. In mail, Drive and Chat it is an agent.
 
 const PAST = "2020-01-01T00:00:00.000Z";
+const HOOK = "https://hooks.example.com/asterra";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 /** The owner, an admin, a member (Ada), the agent of Ada, and a service account that Ada sponsors. */
 async function seedService() {
@@ -123,6 +145,25 @@ describe("service accounts", () => {
 			"invalid",
 		);
 	});
+
+	it("show their description and their creator in the directory to owners and admins only", async () => {
+		const { owner, admin, ada, bot, service } = await seedService();
+		const token = await serviceToken(admin, service.id);
+		const shown = { description: "Posts build results", created_by: admin.id };
+		const hidden = { description: null, created_by: null };
+		for (const [caller, fields] of [
+			[owner, shown],
+			[admin, shown],
+			[ada, hidden],
+			[bot, hidden],
+			[token, hidden],
+		] as const) {
+			const listed = await caller.call("directory.list_principals", { kind: "service" });
+			expect(listed.principals[0]).toMatchObject({ id: service.id, ...fields });
+			const lookup = await caller.call("directory.get_principals", { ids: service.id });
+			expect(lookup.principals[0]).toMatchObject({ id: service.id, ...fields });
+		}
+	});
 });
 
 describe("tokens of a service account", () => {
@@ -197,6 +238,11 @@ describe("tokens of a service account", () => {
 		const end = new Date(Date.now() + 3 * 3_600_000);
 		const { api_key } = await create(end.toISOString());
 		expect(api_key.expires_at).toBe(end.toISOString());
+		// A time without milliseconds is stored in the full form, so a compare of two ends as text is correct.
+		const whole = new Date(Math.floor(end.getTime() / 1000) * 1000);
+		const short = whole.toISOString().replace(".000Z", "Z");
+		expect(short).not.toBe(whole.toISOString());
+		expect((await create(short)).api_key.expires_at).toBe(whole.toISOString());
 	});
 
 	it("stop at once when revoked, record who revoked them, and leave the other tokens working", async () => {
@@ -309,6 +355,73 @@ describe("calls of a service account", () => {
 	});
 });
 
+describe("webhooks for a service account", () => {
+	it("are refused for its sponsor, through REST and through MCP Events", async () => {
+		const { ada, service } = await seedService();
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
+		expect(
+			await codeOf(ada.call("mail.create_webhook_subscription", { endpoint_id: endpoint.id, mailbox_id: service.id })),
+		).toBe("forbidden");
+		expect(
+			await codeOf(
+				ada.call("chat.create_webhook_subscription", {
+					endpoint_id: endpoint.id,
+					event: "chat.message.created",
+					principal_id: service.id,
+				}),
+			),
+		).toBe("forbidden");
+		expect(
+			await codeOf(
+				ada.call("drive.create_webhook_subscription", {
+					endpoint_id: endpoint.id,
+					event: "drive.item.created",
+					space_id: service.id,
+				}),
+			),
+		).toBe("forbidden");
+		// MCP Events uses the same check of the target. No request goes to the callback.
+		const posts = receiveWebhooks();
+		const answer = await mcp(ada.key, "events/subscribe", {
+			name: "mail.inbox.updated",
+			arguments: { mailbox_id: service.id },
+			delivery: { mode: "webhook", url: `${HOOK}/events`, secret: `whsec_${base64("k".repeat(32))}` },
+			cursor: null,
+		});
+		expect(answer.body?.error).toMatchObject({ data: { code: "forbidden" } });
+		expect(posts).toEqual([]);
+	});
+
+	it("stop with access_lost at the next delivery, when the target became a service account", async () => {
+		const { ada, bot } = await seedService();
+		// Ada subscribes for the agent that she sponsors. Then the row of the agent becomes a service account,
+		// as a subscription from before the rule, or from a Worker of an earlier version.
+		const { endpoint } = await ada.call("webhooks.create_endpoint", { url: HOOK });
+		const { subscription } = await ada.call("mail.create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			mailbox_id: bot.id,
+		});
+		await env.DIRECTORY.prepare("UPDATE principals SET service = 1 WHERE id = ?").bind(bot.id).run();
+		const posts = receiveWebhooks();
+		await consumeWebhooks([
+			{
+				v: 1,
+				kind: "delivery",
+				webhookId: subscription.id,
+				mailboxId: bot.id,
+				eventId: "evt_01JC0000000000000000000000",
+				occurredAt: Date.now(),
+				attempt: 1,
+			},
+		]);
+		expect(posts).toEqual([]);
+		const stored = await env.DIRECTORY.prepare("SELECT status, disabled_reason FROM webhook_subscriptions WHERE id = ?")
+			.bind(subscription.id)
+			.first();
+		expect(stored).toEqual({ status: "disabled", disabled_reason: "access_lost" });
+	});
+});
+
 describe("the life of a service account", () => {
 	it("stops its tokens while archived, revokes them on delete, and holds its sponsor until reassigned", async () => {
 		const { owner, admin, ada, bot, service } = await seedService();
@@ -401,7 +514,33 @@ describe("the activity log of a service account", () => {
 		).toBe("invalid");
 	});
 
-	it("keeps at most the newest entries of the limit, and drops entries older than the days of the limit", async () => {
+	it("records the open of the events socket and of a room socket", async () => {
+		const { owner, admin, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["chat.read"]);
+		const { room } = await owner.call("chat.create_room", {
+			kind: "private",
+			name: "builds",
+			member_ids: [service.id],
+		});
+		const events = readSocket(
+			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(token.key) } }),
+		);
+		expect(await events.next()).toMatchObject({ type: "hello" });
+		const roomSocket = readSocket(await upgradeRoomSocket(room.id, bearer(token.key)));
+		expect(await roomSocket.next()).toMatchObject({ type: "hello" });
+		const page = await activityOf(admin, service.id, 2, token.keyId);
+		expect(
+			page.entries.map((entry) => [entry.operation, entry.result, entry.surface, entry.resource_id]).reverse(),
+		).toEqual([
+			["account.create_api_key", "ok", "admin", service.id],
+			["events.open_socket", "ok", "rest", null],
+			["chat.open_room_socket", "ok", "rest", room.id],
+		]);
+		events.socket.close();
+		roomSocket.socket.close();
+	});
+
+	it("keeps the newest calls of the limit and each change by an admin, and drops entries older than the days of the limit", async () => {
 		const { admin, service } = await seedService();
 		// The entry of the creation reaches the object first, so it cannot land between the rows below.
 		await activityOf(admin, service.id, 1);
@@ -410,13 +549,19 @@ describe("the activity log of a service account", () => {
 		await runInDurableObject(stub, (_instance, state) => {
 			const sql = state.storage.sql;
 			sql.exec("DELETE FROM service_activity");
-			// One old entry, then entries up to the limit. The next insert is a multiple of 100, so it prunes.
+			// Two changes by an admin: one older than the days of the limit, and one inside them. Then calls up
+			// to the limit. The next insert is a multiple of 100, so it prunes.
 			sql.exec(
-				"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (1, ?, 'old', 'ok', 'rest', ?)",
+				"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (1, ?, 'old', 'ok', 'admin', ?)",
 				now - (SERVICE_ACTIVITY_LIMITS.days + 1) * 86_400_000,
 				service.id,
 			);
-			for (let seq = 2; seq < SERVICE_ACTIVITY_LIMITS.entries + 100; seq++) {
+			sql.exec(
+				"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (2, ?, 'change', 'ok', 'admin', ?)",
+				now - 86_400_000,
+				service.id,
+			);
+			for (let seq = 3; seq < SERVICE_ACTIVITY_LIMITS.entries + 100; seq++) {
 				sql.exec(
 					"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (?, ?, 'seed', 'ok', 'rest', ?)",
 					seq,
@@ -437,10 +582,16 @@ describe("the activity log of a service account", () => {
 			requestId: null,
 		});
 		const count = await runInDurableObject(stub, (_instance, state) => ({
-			rows: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM service_activity").one().n,
-			old: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM service_activity WHERE op = 'old'").one().n,
+			calls: state.storage.sql
+				.exec<{ n: number }>("SELECT COUNT(*) AS n FROM service_activity WHERE surface = 'rest'")
+				.one().n,
+			admin: state.storage.sql
+				.exec<{ op: string }>("SELECT op FROM service_activity WHERE surface = 'admin'")
+				.toArray()
+				.map((row) => row.op),
 		}));
-		expect(count).toEqual({ rows: SERVICE_ACTIVITY_LIMITS.entries, old: 0 });
+		// The count limit removed the oldest calls and kept the change by an admin. The days limit removed `old`.
+		expect(count).toEqual({ calls: SERVICE_ACTIVITY_LIMITS.entries, admin: ["change"] });
 	});
 
 	it("is for owners and admins only, and for a service account only", async () => {

@@ -79,10 +79,13 @@ export class ServiceActivityStore {
 		if (seq % PRUNE_EVERY === 0) this.prune(seq, entry.at);
 	}
 
-	/** Removes the entries older than the days of the limit, and the entries before the newest `entries`. */
+	/**
+	 * Removes the entries older than the days of the limit, and the entries before the newest `entries`. The
+	 * count limit keeps each entry of an owner or an admin (surface `admin`): calls cannot push it out.
+	 */
 	prune(newestSeq: number, now: number): void {
 		this.sql.exec(
-			"DELETE FROM service_activity WHERE seq <= ? OR at < ?",
+			"DELETE FROM service_activity WHERE (seq <= ? AND surface <> 'admin') OR at < ?",
 			newestSeq - SERVICE_ACTIVITY_LIMITS.entries,
 			now - SERVICE_ACTIVITY_LIMITS.days * DAY_MS,
 		);

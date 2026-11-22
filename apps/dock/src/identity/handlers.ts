@@ -178,9 +178,13 @@ function assertRemovable(call: CallContext, target: PrincipalRecord, action: "ar
 	assertFullCredential(call.caller);
 }
 
-/** A principal of the directory list, with the handle of a mention in Chat. */
-function toDirectoryEntry(record: DirectoryRecord): DirectoryEntry {
-	return { ...toPrincipalOutput(record), handle: mentionHandle(record.address, record.sharedLocal) };
+/**
+ * A principal of the directory list, with the handle of a mention in Chat. Only an owner or an admin reads
+ * `description` and `created_by` in the directory. Each other caller gets null for the two fields.
+ */
+function toDirectoryEntry(caller: AuthContext, record: DirectoryRecord): DirectoryEntry {
+	const entry = { ...toPrincipalOutput(record), handle: mentionHandle(record.address, record.sharedLocal) };
+	return isAdmin(caller) ? entry : { ...entry, description: null, created_by: null };
 }
 
 const DIRECTORY_CHANGED = "The directory changed during the request. Load it again and try again.";
@@ -289,7 +293,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			limit: input.limit ?? DIRECTORY_LIMITS.defaultPageSize,
 		});
 		return {
-			principals: page.principals.map(toDirectoryEntry),
+			principals: page.principals.map((record) => toDirectoryEntry(call.caller, record)),
 			next_cursor: page.next === null ? null : encodeCursor(page.next),
 		};
 	},
@@ -307,7 +311,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			...commaListEntries(input.ids),
 			...mentions.map((mention) => mention.principal_id),
 		]);
-		return { principals: records.map(toDirectoryEntry), mentions };
+		return { principals: records.map((record) => toDirectoryEntry(call.caller, record)), mentions };
 	},
 
 	async "directory.create_principal"(call, input) {

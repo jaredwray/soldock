@@ -58,6 +58,7 @@ describe("the people and agents of the organization", () => {
 describe("the admin link of a member", () => {
 	// Each page of the app asks if the person sponsors an agent. A read of the whole directory for this
 	// answer is a slow read on each page of a large organization.
+	// The sponsor of a service account manages nothing, so the list must keep only the kind `agent`.
 	it("asks for one agent of the sponsor, in one call", async () => {
 		const asked: string[] = [];
 		let agents = [principal("bot")];
@@ -71,8 +72,8 @@ describe("the admin link of a member", () => {
 		agents = [];
 		expect(await sponsorsAgent("prn_ada")).toBe(false);
 		expect(asked).toEqual([
-			"/api/v1/directory/principals?sponsor_id=prn_ada&limit=1",
-			"/api/v1/directory/principals?sponsor_id=prn_ada&limit=1",
+			"/api/v1/directory/principals?sponsor_id=prn_ada&kind=agent&limit=1",
+			"/api/v1/directory/principals?sponsor_id=prn_ada&kind=agent&limit=1",
 		]);
 	});
 });

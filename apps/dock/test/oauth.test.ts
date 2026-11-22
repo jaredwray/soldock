@@ -309,6 +309,7 @@ describe("OAuth approval", () => {
 			kind: "agent",
 			address: "claude@dock.test",
 			sponsor_id: owner.id,
+			created_by: owner.id,
 			outbound_policy: { mode: "internal-only" },
 		});
 		const redirect = new URL(approved.redirect_to);

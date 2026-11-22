@@ -578,7 +578,10 @@ export const SERVICE_ACTIVITY_LIMITS = {
 	pageSize: 200,
 	/** The entries of a page when the call gives no limit. */
 	defaultPageSize: 50,
-	/** The entries that the log of one service account keeps, at most. The oldest go first. */
+	/**
+	 * The calls that the log of one service account keeps, at most. The oldest go first. This limit does not
+	 * remove an entry of an owner or an admin (surface `admin`). Only the days limit removes it.
+	 */
 	entries: 10_000,
 	/** The days that the log keeps an entry. */
 	days: 90,

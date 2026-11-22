@@ -129,6 +129,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 					org_role: null,
 					sponsor_id: call.caller.principal.id,
 					password_hash: null,
+					created_by: call.caller.principal.id,
 				},
 				null,
 				{

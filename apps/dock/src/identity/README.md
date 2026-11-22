@@ -180,8 +180,9 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
     directory. The statement has only the conditions of the call, and its join keeps the principals
     first. One statement with a condition for each option, or an order with a `CASE`, hides the index
     from the planner: each page then reads and sorts the whole table.
-  - `sponsor_id` keeps the agents of one sponsor, from the index `principals_sponsor`. The web app asks
-    with a limit of 1 for the admin link of a member (`sponsorsAgent`): "does this person sponsor an agent".
+  - `sponsor_id` keeps the principals of one sponsor, also its service accounts, from the index
+    `principals_sponsor`. The web app asks with the kind `agent` and a limit of 1 for the admin link of a
+    member (`sponsorsAgent`): "does this person sponsor an agent".
   - `query` keeps the principals whose display name or address has the text. The match is in each
     letter case of A to Z only: `lower` of SQLite changes no other letter. The handler changes only A
     to Z of the query too, so an exact copy (`Élodie`) finds it.
@@ -321,6 +322,10 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   different sponsor first. A service account whose sponsor is archived cannot be restored.
 - **Description.** `description` says what the account is for, at most 500 characters.
   `directory.update_principal` changes it for a service account only. An empty text removes it.
+- **Who reads the description and the creator.** In the directory (`directory.list_principals` and
+  `directory.get_principals`), only owners and admins read `description` and `created_by`. Each other
+  caller gets null for the two fields, also a service token and an agent. The operations of owners and
+  admins return them, and `account.whoami` returns them for the record of the caller.
 - **Tokens.** A token is an API key of the service account (`account.create_api_key` with its
   `principal_id`). It has a label, an optional description, its scopes, its creator, an optional end,
   and, after a revoke, who revoked it. A service account can have many tokens. `account.revoke_api_key`
@@ -328,7 +333,7 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
 - **Scopes.** A token can hold only `SERVICE_SCOPES`: `account.read`, `directory.read`, `mail.read`,
   `mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`.
   It never holds `account.keys`, `directory.write` or a webhook scope, so it cannot widen its own access
-  or send data to a URL outside the organization.
+  and it cannot create a webhook. Its outbound policy limits its mail, as for an agent.
 - **Operations.** The invoker gives a service account the caller kind `service`. An operation that it
   can call names `"service"` in its callers. So a new operation refuses a service account until its
   callers name it. The registry test keeps the rule: an operation names `"service"` only when it names
@@ -336,7 +341,8 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
 - **Activity log.** The `PrincipalDO` of the service account keeps its log in table `service_activity`.
   - Each call of a token through REST or MCP adds one entry: the operation, the result (`ok`, `denied`
     or `error`), the error code, the token, the surface (`rest` or `mcp`), the resource of the input
-    (`mailbox_id`, `space_id`, `room_id` or `principal_id`) and the request id. A call that the input
+    (`mailbox_id`, `space_id`, `room_id`, `principal_id`, `item_id` or `thread_id`, the first that the
+    input has) and the request id. A call that the input
     check refused has no resource.
   - Each change by an owner or an admin adds an entry with the surface `admin`: the creation, a change,
     a policy change, an archive, a restore, a delete, a token create, a token revoke, and a team mailbox
@@ -344,13 +350,21 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   - The invoker reports each call to the `record` hook of the call context (`activityRecorder`). The
     write goes through `waitUntil`, so it never slows or fails the call. A failed write logs a warning.
   - Each 100th entry removes the entries after the newest 10,000, and the entries older than 90 days
-    (`SERVICE_ACTIVITY_LIMITS`). A read also leaves out the entries older than 90 days.
+    (`SERVICE_ACTIVITY_LIMITS`). The count limit keeps each entry with the surface `admin`, so calls
+    cannot push a change by an owner or an admin out of the log. Only the 90 days remove such an entry.
+  - An entry older than 90 days stays in storage until the next prune. A read leaves it out.
+  - The log orders the entries by the order of the writes. So two calls close together can show their
+    times out of order.
+  - A token that opens the events socket (`/ws/events`) or a room socket adds one entry with the surface
+    `rest`: `events.open_socket`, or `chat.open_room_socket` with the room as the resource. Only a
+    service account gets this entry. The events on the socket add no entry.
   - `directory.list_service_account_activity` reads it, the newest first, in pages with a cursor, and can
     keep the entries of one token.
   - A download under `/dl/` and an upload part under `/blob/` run their operation with the same call
     context, so they add an entry with the surface `rest`. A slash command adds an entry for itself and
     one for the operation that it runs.
-  - Not recorded yet: a refused token (`401`), a socket open, and an event of an MCP subscription.
+  - Not recorded yet: a refused token (`401`), a refused socket open, and an event of an MCP
+    subscription.
 - **Access.** `directory.get_service_account_access` returns its team mailboxes, its shared drives and
   its rooms with its role, and the scopes of each live token. It reads the index tables in D1
   (`team_mailbox_members`, `shared_drive_members` and `chat_members`), and no object. At

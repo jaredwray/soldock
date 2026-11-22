@@ -99,9 +99,9 @@ export interface CallOutcome {
 }
 
 /** The input fields that name the resource of a call, in the order of preference. */
-const RESOURCE_FIELDS = ["mailbox_id", "space_id", "room_id", "principal_id"] as const;
+const RESOURCE_FIELDS = ["mailbox_id", "space_id", "room_id", "principal_id", "item_id", "thread_id"] as const;
 
-/** The mailbox, drive, room or principal that the input of a call names, or null. */
+/** The mailbox, drive, room, principal, item or thread that the input of a call names, or null. */
 function resourceOf(input: unknown): string | null {
 	if (typeof input !== "object" || input === null) return null;
 	for (const field of RESOURCE_FIELDS) {
@@ -150,6 +150,25 @@ export function activityRecorder(
 				requestId,
 			}),
 		);
+}
+
+/**
+ * Records a socket that a service account opened, in its activity log. Nothing is recorded for each other
+ * caller. A failure never fails the open.
+ */
+export function recordSocketOpen(
+	caller: AuthContext,
+	env: Env,
+	waitUntil: (promise: Promise<unknown>) => void,
+	requestId: string,
+	op: "events.open_socket" | "chat.open_room_socket",
+	input: { room_id?: string } = {},
+): void {
+	try {
+		activityRecorder(caller, env, waitUntil, requestId, "rest")?.({ op, result: "ok", code: null, input });
+	} catch {
+		// The record of an open is best effort. The socket stays open.
+	}
 }
 
 /**

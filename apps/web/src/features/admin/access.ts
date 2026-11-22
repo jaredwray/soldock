@@ -5,10 +5,11 @@ import { isOrgAdmin } from "../auth/session.tsx";
 
 /**
  * True when the person sponsors an agent. The list of one sponsor with a limit of 1 is one bounded read:
- * each page of the app asks this, so it must not read the directory.
+ * each page of the app asks this, so it must not read the directory. The kind keeps a service account
+ * out: its sponsor manages nothing, so the admin page would be empty.
  */
 export async function sponsorsAgent(principalId: string): Promise<boolean> {
-	const page = await api.call("directory.list_principals", { sponsor_id: principalId, limit: 1 });
+	const page = await api.call("directory.list_principals", { sponsor_id: principalId, kind: "agent", limit: 1 });
 	return page.principals.length > 0;
 }
 

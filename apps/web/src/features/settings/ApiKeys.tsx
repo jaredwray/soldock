@@ -333,7 +333,7 @@ function CreateKeyForm({
 				<p id={ids.ttlHint} className="field-hint">
 					{ttl === "never"
 						? `The ${noun} works until somebody revokes it.`
-						: `The ${noun} stops by itself at that time. You can revoke it before.`}
+						: `The ${noun} stops by itself at that time. The webhooks and other lasting effects that it made stop with it. You can revoke it before.`}
 				</p>
 			</div>
 			{ttl === "custom" && (

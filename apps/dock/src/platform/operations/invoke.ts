@@ -17,6 +17,13 @@ export interface Caller {
 	credential: string;
 }
 
+/** The name of each caller kind at the start of an error text. */
+export const CALLER_NAMES: Record<PrincipalKind, string> = {
+	human: "A person",
+	agent: "An agent",
+	service: "A service account",
+};
+
 /** The outcome of one call, for a recorder such as the activity log of a service account. */
 export interface InvokeOutcome {
 	op: string;
@@ -108,7 +115,7 @@ async function run<C extends { caller: Caller }>(
 	parsedInput: { input: unknown },
 ): Promise<unknown> {
 	if (!operation.callers.includes(call.caller.kind)) {
-		throw new OperationError("forbidden", `An ${call.caller.kind} cannot call ${operation.name}.`);
+		throw new OperationError("forbidden", `${CALLER_NAMES[call.caller.kind]} cannot call ${operation.name}.`);
 	}
 	if (!holdsOperationScopes(operation, call.caller.scopes)) {
 		const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));

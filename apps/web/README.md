@@ -87,8 +87,8 @@ MCP clients. The app has no UI-only path.
     Sheets are part of Drive.
   - Below a rule, the rail has **Admin** for owners, admins and the sponsors of agents. At the
     bottom, the rail has **Settings** and the account button. For a member, the rail asks for one
-    agent of that sponsor (`directory.list_principals` with `sponsor_id` and a limit of 1), not for
-    the directory.
+    agent of that sponsor (`directory.list_principals` with `sponsor_id`, the kind `agent` and a limit
+    of 1), not for the directory. The sponsor of only a service account gets no **Admin**.
   - The account button opens a panel with the name, the address and the role of the person, the
     **Appearance** choice, and **Sign out**. Escape closes the panel, and the focus goes back to
     the button.
