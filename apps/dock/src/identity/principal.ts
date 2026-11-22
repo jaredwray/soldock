@@ -1002,8 +1002,14 @@ export class PrincipalDO extends DurableObject<Env> {
 	/** Records one or more activity items (idempotent by id) and pushes a live count event. */
 	recordChatActivity(items: readonly ActivityInsert[]): void {
 		let added = 0;
+		const seeded =
+			this.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'chat_seeded'").toArray()[0]?.value === "1";
 		this.ctx.storage.transactionSync(() => {
 			for (const item of items) {
+				const roomRow = this.sql
+					.exec<{ joined: number }>("SELECT joined FROM chat_rooms WHERE room_id = ?", item.room_id)
+					.toArray()[0];
+				if (roomRow ? roomRow.joined !== 1 : seeded) continue;
 				if (this.personal.recordActivity(item)) added += 1;
 			}
 		});
@@ -1011,6 +1017,10 @@ export class PrincipalDO extends DurableObject<Env> {
 			const unread = this.personal.activityUnreadCount();
 			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
 		}
+	}
+
+	deleteChatActivities(ids: readonly string[]): number {
+		return this.personal.deleteActivities(ids);
 	}
 
 	listChatActivity(query: {

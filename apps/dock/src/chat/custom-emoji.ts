@@ -151,6 +151,9 @@ export function mountChatCustomEmoji(app: Hono<ApiEnv>): void {
 	app.on(["GET", "HEAD"], "/dl/chat/emoji/:name", async (c) => {
 		const call = await callOf(c, { change: false, ownSiteRead: true });
 		if (!call) return unauthenticatedResponse(c.var.requestId, new URL(c.req.url).pathname);
+		if (!call.caller.scopes.has("chat.read")) {
+			throw new OperationError("forbidden", "Your credential does not hold the chat.read scope.");
+		}
 		const parsed = CustomEmojiName.safeParse(c.req.param("name"));
 		if (!parsed.success) throw new OperationError("not_found", "No custom emoji has that name.");
 		const row = await call.env.DIRECTORY.prepare(

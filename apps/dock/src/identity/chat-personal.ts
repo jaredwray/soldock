@@ -356,6 +356,14 @@ export class ChatPersonalStore {
 		return this.activityUnreadCount();
 	}
 
+	deleteActivities(ids: readonly string[]): number {
+		if (ids.length === 0) return this.activityUnreadCount();
+		for (const id of ids) {
+			this.sql.exec("DELETE FROM chat_activity WHERE id = ?", id);
+		}
+		return this.activityUnreadCount();
+	}
+
 	removeRoomPersonalState(roomId: string): void {
 		this.sql.exec("DELETE FROM chat_activity WHERE room_id = ?", roomId);
 		this.sql.exec("DELETE FROM chat_section_rooms WHERE room_id = ?", roomId);

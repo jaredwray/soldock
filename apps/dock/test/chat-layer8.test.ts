@@ -65,6 +65,19 @@ describe("activity feed and sidebar sections", () => {
 		const all = await ada.call("chat.mark_activity_read", {});
 		expect(all.unread_count).toBe(0);
 		expect((await ada.call("chat.list_activity", { filter: "unread" })).items).toEqual([]);
+
+		// Deleting a private message removes its preview from recipients' Activity feeds.
+		await ada.call("chat.delete_message", { room_id: room.id, message_id: parent.id });
+		const botAfterDelete = await bot.call("chat.list_activity");
+		expect(botAfterDelete.items.some((i) => i.message_id === parent.id)).toBe(false);
+		expect(botAfterDelete.unread_count).toBe(0);
+
+		// Leaving a private room cancels queued activity delivery and removes previews.
+		const secret = await post(ada, room.id, "Secret for @bot before removal");
+		await bot.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)));
+		const botAfterLeave = await bot.call("chat.list_activity");
+		expect(botAfterLeave.items.some((i) => i.message_id === secret.id)).toBe(false);
 	});
 
 	it("creates, updates, assigns rooms to, and deletes custom sidebar sections", async () => {
@@ -280,11 +293,18 @@ describe("custom emoji, forwarding, and group DMs", () => {
 			.emoji;
 		expect(created).toMatchObject({ name: "shipit", url_path: "/dl/chat/emoji/shipit", mime_type: "image/png" });
 
-		// Download serves the PNG safely.
+		// Download serves the PNG safely for credentials with chat.read, and refuses credentials without chat.read.
 		const dl = await request(created.url_path, { headers: bearer(ada.key) });
 		expect(dl.status).toBe(200);
 		expect(dl.headers.get("content-type")).toBe("image/png");
 		expect(dl.headers.get("x-content-type-options")).toBe("nosniff");
+
+		const { api_key: mailOnly } = await ada.call("account.create_api_key", {
+			label: "mail-only-emoji",
+			scopes: ["mail.read"],
+		});
+		const deniedDl = await request(created.url_path, { headers: bearer(mailOnly.secret) });
+		expect(deniedDl.status).toBe(403);
 
 		// Custom emoji works as a reaction, while unknown :missing: fails.
 		const room = await createRoom(ada, "public", "EmojiTest");

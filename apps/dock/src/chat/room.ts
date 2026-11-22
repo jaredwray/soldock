@@ -1441,6 +1441,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM post_allowed WHERE principal_id = ?", principalId);
+			this.sql.exec("DELETE FROM activity_outbox WHERE target_principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
@@ -1639,6 +1640,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 					this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", row.id);
 					this.sql.exec("DELETE FROM pins WHERE message_id = ?", row.id);
 					this.sql.exec("DELETE FROM card_actions WHERE message_id = ?", row.id);
+					this.sql.exec("DELETE FROM activity_outbox WHERE json_extract(payload_json, '$.message_id') = ?", row.id);
 					this.queueChatEvent({
 						room,
 						eventType: "chat.message.deleted",
@@ -1768,6 +1770,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM post_allowed WHERE principal_id = ?", principalId);
+			this.sql.exec("DELETE FROM activity_outbox WHERE target_principal_id = ?", principalId);
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
@@ -3526,6 +3529,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM message_edits WHERE message_id = ?", messageId);
 				this.sql.exec("DELETE FROM pins WHERE message_id = ?", messageId);
 				this.sql.exec("DELETE FROM card_actions WHERE message_id = ?", messageId);
+				this.sql.exec("DELETE FROM activity_outbox WHERE json_extract(payload_json, '$.message_id') = ?", messageId);
 				this.sql.exec("UPDATE room SET version = ? WHERE id = 1", row.parent_id === null ? version : version + 1);
 				this.roomChanged(call.actor.principal_id);
 				this.queueChatEvent({
@@ -4290,23 +4294,37 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * others.
 	 */
 	private async sendActivities(): Promise<boolean> {
+		const room = this.room();
+		if (!room) {
+			this.sql.exec("DELETE FROM activity_outbox");
+			return false;
+		}
 		const rows = this.all<{ id: string; target_principal_id: string; payload_json: string; attempts: number }>(
 			"SELECT id, target_principal_id, payload_json, attempts FROM activity_outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ?",
 			Date.now(),
 			OUTBOX_BATCH,
 		);
 		if (rows.length === 0) return false;
-		const grouped = new Map<string, typeof rows>();
+		const grouped = new Map<string, Array<{ row: (typeof rows)[number]; payload: ActivityInsert }>>();
 		for (const row of rows) {
+			const payload = JSON.parse(row.payload_json) as ActivityInsert;
+			const isMember = this.member(row.target_principal_id) !== null;
+			const messageLive =
+				this.one("SELECT 1 AS found FROM messages WHERE id = ? AND deleted_at IS NULL", payload.message_id) !== null;
+			if (!isMember || !messageLive) {
+				this.sql.exec("DELETE FROM activity_outbox WHERE id = ?", row.id);
+				continue;
+			}
 			const list = grouped.get(row.target_principal_id);
-			if (list) list.push(row);
-			else grouped.set(row.target_principal_id, [row]);
+			if (list) list.push({ row, payload });
+			else grouped.set(row.target_principal_id, [{ row, payload }]);
 		}
 		const entries = [...grouped.entries()];
+		if (entries.length === 0) return false;
 		const results = await Promise.allSettled(
 			entries.map(([principalId, group]) =>
 				this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(principalId)).recordChatActivity(
-					group.map((r) => JSON.parse(r.payload_json) as ActivityInsert),
+					group.map((g) => g.payload),
 				),
 			),
 		);
@@ -4314,16 +4332,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 		results.forEach((res, idx) => {
 			const group = entries[idx]?.[1] ?? [];
 			if (res.status === "fulfilled") {
-				for (const r of group) this.sql.exec("DELETE FROM activity_outbox WHERE id = ?", r.id);
+				for (const { row } of group) this.sql.exec("DELETE FROM activity_outbox WHERE id = ?", row.id);
 			} else {
 				failed = true;
-				for (const r of group) {
-					const attempts = r.attempts + 1;
+				for (const { row } of group) {
+					const attempts = row.attempts + 1;
 					this.sql.exec(
 						"UPDATE activity_outbox SET attempts = ?, next_attempt_at = ? WHERE id = ?",
 						attempts,
 						Date.now() + backoff(attempts),
-						r.id,
+						row.id,
 					);
 				}
 			}

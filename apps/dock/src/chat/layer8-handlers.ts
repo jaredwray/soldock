@@ -317,9 +317,42 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		});
 		const shown = listed.items.slice(0, limit);
 		const last = shown[shown.length - 1];
+
+		// Verify current room membership and message liveness against each authoritative ChatRoomDO
+		// so previews from left rooms or deleted/retention-pruned messages are never exposed.
+		const byRoom = new Map<string, string[]>();
+		for (const item of shown) {
+			const list = byRoom.get(item.room_id);
+			if (list) list.push(item.message_id);
+			else byRoom.set(item.room_id, [item.message_id]);
+		}
+		const liveByRoom = new Map<string, Set<string>>();
+		await Promise.all(
+			[...byRoom.entries()].map(async ([roomId, msgIds]) => {
+				const opened = openRoom(call, roomId);
+				const res = await opened.room.getMessagesByIds(opened.ctx, [...new Set(msgIds)]);
+				if (!("error" in res)) {
+					liveByRoom.set(roomId, new Set(res.messages.map((m) => m.id)));
+				}
+			}),
+		);
+		const liveItems: ActivityRecord[] = [];
+		const staleIds: string[] = [];
+		for (const item of shown) {
+			const live = liveByRoom.get(item.room_id);
+			if (live?.has(item.message_id)) {
+				liveItems.push(item);
+			} else {
+				staleIds.push(item.id);
+			}
+		}
+		let unreadCount = listed.unreadCount;
+		if (staleIds.length > 0) {
+			unreadCount = await principal.deleteChatActivities(staleIds);
+		}
 		return {
-			items: shown.map(toActivity),
-			unread_count: listed.unreadCount,
+			items: liveItems.map(toActivity),
+			unread_count: unreadCount,
 			next_cursor: listed.items.length > limit && last ? encodeCursor([last.created_at, last.id]) : null,
 		};
 	},
